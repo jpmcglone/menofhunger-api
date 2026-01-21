@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16
+    container_name: menofhunger-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: menofhunger
+    ports:
+      - "5432:5432"
+    volumes:
+      - menofhunger_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d menofhunger"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  menofhunger_pgdata:
+
