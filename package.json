@@ -5,12 +5,12 @@
   "description": "Men of Hunger API (NestJS + Prisma) intended for consumption by a Next.js app.",
   "type": "commonjs",
   "engines": {
-    "node": ">=20"
+    "node": "20.x"
   },
   "scripts": {
     "dev": "nest start --watch",
     "start": "node dist/main.js",
-    "build": "nest build",
+    "build": "tsc -p tsconfig.build.json",
     "postinstall": "prisma generate",
     "lint": "eslint .",
     "format": "prettier --write .",
