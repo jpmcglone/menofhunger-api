@@ -11,6 +11,7 @@
     "dev": "nest start --watch",
     "start": "node dist/main.js",
     "build": "nest build",
+    "postinstall": "prisma generate",
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "jest",
@@ -18,6 +19,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio"
   },
   "dependencies": {
