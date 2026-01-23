@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -57,6 +57,19 @@ export class AuthService {
     }
 
     const code = generateNumericCode();
+
+    // In production, we require successful SMS delivery before we create/store the OTP.
+    // This avoids creating OTPs that cannot be delivered when Twilio isn't configured yet.
+    if (this.isProd()) {
+      try {
+        await this.sendOtpSms(phone, code);
+      } catch (err) {
+        throw new ServiceUnavailableException(
+          'SMS login is not configured yet. Please try again later.',
+        );
+      }
+    }
+
     const otpSecret = this.getEnv().OTP_HMAC_SECRET;
     const codeHash = hmacSha256Hex(otpSecret, `${phone}:${code}`);
 
@@ -71,10 +84,6 @@ export class AuthService {
         resendAfterAt,
       },
     });
-
-    if (this.isProd()) {
-      await this.sendOtpSms(phone, code);
-    }
 
     return { ok: true as const, retryAfterSeconds: OTP_RESEND_SECONDS };
   }

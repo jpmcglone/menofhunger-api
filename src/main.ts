@@ -5,11 +5,13 @@ import helmet from 'helmet';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import * as cookieParser from 'cookie-parser';
 import { AppModule } from './modules/app/app.module';
+import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.use(helmet());
   app.use(cookieParser());
+  app.useGlobalInterceptors(new ApiResponseInterceptor());
   app.enableShutdownHooks();
 
   const config = app.get(ConfigService);

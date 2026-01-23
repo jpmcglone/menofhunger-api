@@ -42,16 +42,6 @@ export const envSchema = z.object({
       message: 'SESSION_HMAC_SECRET is required in production (min 16 chars)',
     });
   }
-
-  for (const key of ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER'] as const) {
-    if (!env[key]) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [key],
-        message: `${key} is required in production`,
-      });
-    }
-  }
 });
 
 export type Env = z.infer<typeof envSchema>;
