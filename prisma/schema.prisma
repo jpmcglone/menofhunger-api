@@ -14,3 +14,47 @@ model Example {
   name      String
 }
 
+model User {
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  phone     String    @unique
+  // Username stored as entered (case preserved). Uniqueness is enforced case-insensitively
+  // via a functional unique index on LOWER(username) in a migration.
+  username String?
+  // Public profile fields.
+  name String?
+  bio  String?
+  // True when the user has explicitly chosen a username.
+  usernameIsSet Boolean @default(false)
+  sessions  Session[]
+
+  @@index([phone])
+}
+
+model PhoneOtp {
+  id            String    @id @default(cuid())
+  createdAt     DateTime  @default(now())
+  phone         String
+  codeHash      String
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  resendAfterAt DateTime?
+
+  @@index([phone, createdAt])
+  @@index([expiresAt])
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  tokenHash String    @unique
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+

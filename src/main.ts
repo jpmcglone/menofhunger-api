@@ -3,15 +3,32 @@ import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import * as cookieParser from 'cookie-parser';
 import { AppModule } from './modules/app/app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { cors: true });
+  const app = await NestFactory.create(AppModule);
   app.use(helmet());
+  app.use(cookieParser());
   app.enableShutdownHooks();
 
   const config = app.get(ConfigService);
   const port = Number(config.get<string>('PORT') ?? '3001');
+
+  const allowedOrigins = (config.get<string>('ALLOWED_ORIGINS') ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  app.enableCors({
+    credentials: true,
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      // Allow non-browser clients (no Origin header)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error(`Origin not allowed by CORS: ${origin}`), false);
+    },
+  });
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('Men of Hunger API')
