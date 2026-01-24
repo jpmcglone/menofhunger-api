@@ -1,10 +1,11 @@
-import { Body, Controller, Get, NotFoundException, Param, Patch, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Get, NotFoundException, Param, Patch, Query, UseGuards } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUserId } from './users.decorator';
 import { validateUsername } from './users.utils';
+import { toUserDto } from './user.dto';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -42,11 +43,11 @@ export class UsersController {
   async setMyUsername(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsedBody = setUsernameSchema.parse(body);
     const parsed = validateUsername(parsedBody.username);
-    if (!parsed.ok) return { ok: false, error: parsed.error };
+    if (!parsed.ok) throw new BadRequestException(parsed.error);
 
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return { ok: false, error: 'User not found.' };
-    if (user.usernameIsSet) return { ok: false, error: 'Username is already set.' };
+    if (!user) throw new NotFoundException('User not found.');
+    if (user.usernameIsSet) throw new ConflictException('Username is already set.');
 
     try {
       const updated = await this.prisma.user.update({
@@ -58,19 +59,11 @@ export class UsersController {
       });
 
       return {
-        ok: true as const,
-        user: {
-          id: updated.id,
-          phone: updated.phone,
-          username: updated.username,
-          usernameIsSet: updated.usernameIsSet,
-          name: updated.name,
-          bio: updated.bio,
-        },
+        user: toUserDto(updated),
       };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        return { ok: false as const, error: 'That username is taken.' };
+        throw new ConflictException('That username is taken.');
       }
       throw err;
     }
@@ -111,15 +104,7 @@ export class UsersController {
     });
 
     return {
-      ok: true as const,
-      user: {
-        id: updated.id,
-        phone: updated.phone,
-        username: updated.username,
-        usernameIsSet: updated.usernameIsSet,
-        name: updated.name,
-        bio: updated.bio,
-      },
+      user: toUserDto(updated),
     };
   }
 }

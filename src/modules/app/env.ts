@@ -18,22 +18,51 @@ export const envSchema = z.object({
   ),
 
   // Secrets (recommended in all envs; required in production)
-  OTP_HMAC_SECRET: z.string().optional(),
-  SESSION_HMAC_SECRET: z.string().optional(),
+  // Note: treat empty strings as unset; provide dev defaults so app code never reads process.env directly.
+  OTP_HMAC_SECRET: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('dev-otp-secret-change-me'),
+  ),
+  SESSION_HMAC_SECRET: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('dev-session-secret-change-me'),
+  ),
 
   // Cookie domain. In production you likely want `.menofhunger.com`.
-  COOKIE_DOMAIN: z.string().optional(),
+  COOKIE_DOMAIN: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
 
   // Dev-only: if true, do not attempt to send SMS via Twilio (use 000000 bypass flow).
-  DISABLE_TWILIO_IN_DEV: z.string().optional(),
+  DISABLE_TWILIO_IN_DEV: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
 
   // Twilio (production only)
-  TWILIO_ACCOUNT_SID: z.string().optional(),
-  TWILIO_AUTH_TOKEN: z.string().optional(),
+  TWILIO_ACCOUNT_SID: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  TWILIO_AUTH_TOKEN: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
   // Twilio Verify Service SID (starts with VA...)
-  TWILIO_VERIFY_SERVICE_SID: z.string().optional(),
-  TWILIO_FROM_NUMBER: z.string().optional(),
-  TWILIO_MESSAGING_SERVICE_SID: z.string().optional(),
+  TWILIO_VERIFY_SERVICE_SID: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  // Legacy (not used when TWILIO_VERIFY_SERVICE_SID is set)
+  TWILIO_FROM_NUMBER: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  TWILIO_MESSAGING_SERVICE_SID: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
 }).superRefine((env, ctx) => {
   if (env.NODE_ENV !== 'production') return;
 

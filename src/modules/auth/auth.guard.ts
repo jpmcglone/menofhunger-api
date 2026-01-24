@@ -12,9 +12,9 @@ export class AuthGuard implements CanActivate {
     const req = context.switchToHttp().getRequest<AuthedRequest>();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const token = (req as any).cookies?.moh_session as string | undefined;
-    const result = await this.auth.meFromSessionToken(token);
-    if (!result?.user) throw new UnauthorizedException();
-    req.user = { id: result.user.id };
+    const user = await this.auth.meFromSessionToken(token);
+    if (!user) throw new UnauthorizedException();
+    req.user = { id: user.id };
     return true;
   }
 }
