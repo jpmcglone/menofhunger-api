@@ -90,15 +90,22 @@ export class AuthService {
 
     const canSendSms = !disableTwilioInDev && (hasVerifyConfig || hasMessagingConfig);
 
+    const sendMode: 'verify' | 'messaging' | 'none' =
+      canSendSms && hasVerifyConfig
+        ? 'verify'
+        : canSendSms && hasMessagingConfig
+          ? 'messaging'
+          : 'none';
+
     this.logger.log(
       `startPhoneAuth phone=${this.maskPhone(phone)} env=${env.NODE_ENV} twilio=${
-        canSendSms
-          ? hasVerifyConfig
-            ? 'verify_enabled'
-            : 'messaging_enabled'
-          : disableTwilioInDev
-            ? 'disabled_in_dev'
-            : 'not_configured'
+        sendMode === 'verify'
+          ? 'verify_enabled'
+          : sendMode === 'messaging'
+            ? 'messaging_enabled'
+            : disableTwilioInDev
+              ? 'disabled_in_dev'
+              : 'not_configured'
       }`,
     );
 
@@ -110,15 +117,28 @@ export class AuthService {
       );
     }
 
-    if (canSendSms) {
+    // Store a hash so we can enforce resend cooldown and ensure there is an “active code”
+    // when verifying. For Verify mode we don't know the code, so we store a random value.
+    let valueToHashForOtp: string;
+
+    if (sendMode === 'verify') {
       try {
-        if (hasVerifyConfig) {
-          await this.startVerifySms(phone);
-        } else {
-          // Fallback path (older setup): send our own OTP via Messaging.
-          const code = generateNumericCode();
-          await this.sendOtpSms(phone, code);
-        }
+        await this.startVerifySms(phone);
+        valueToHashForOtp = randomSessionToken();
+      } catch (err) {
+        this.logger.error(
+          `Twilio SMS send failed for phone=${this.maskPhone(phone)}`,
+          (err as Error)?.stack,
+        );
+        throw new ServiceUnavailableException(
+          'SMS login is not configured yet. Please try again later.',
+        );
+      }
+    } else if (sendMode === 'messaging') {
+      const code = generateNumericCode();
+      try {
+        await this.sendOtpSms(phone, code);
+        valueToHashForOtp = code;
       } catch (err) {
         this.logger.error(
           `Twilio SMS send failed for phone=${this.maskPhone(phone)}`,
@@ -131,14 +151,11 @@ export class AuthService {
     } else {
       // Useful when you expect SMS but it's not configured (or disabled in dev).
       this.logger.warn(`Skipping SMS send for phone=${this.maskPhone(phone)}`);
+      valueToHashForOtp = randomSessionToken();
     }
 
-    // We keep a DB row so we can enforce resend cooldown and ensure there is an “active code”
-    // when verifying. If using Twilio Verify, we don't know the code; store a random hash.
     const otpSecret = this.getEnv().OTP_HMAC_SECRET;
-    const codeHash = canSendSms && hasVerifyConfig
-      ? hmacSha256Hex(otpSecret, `${phone}:${randomSessionToken()}`)
-      : hmacSha256Hex(otpSecret, `${phone}:${generateNumericCode()}`);
+    const codeHash = hmacSha256Hex(otpSecret, `${phone}:${valueToHashForOtp}`);
 
     const expiresAt = new Date(now.getTime() + OTP_TTL_MINUTES * 60_000);
     const resendAfterAt = new Date(now.getTime() + OTP_RESEND_SECONDS * 1000);
