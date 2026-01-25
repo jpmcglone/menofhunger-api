@@ -2,10 +2,11 @@ export type UsernameValidationResult =
   | { ok: true; username: string; usernameLower: string }
   | { ok: false; error: string };
 
-export function validateUsername(input: string): UsernameValidationResult {
+export function validateUsername(input: string, opts?: { minLen?: number }): UsernameValidationResult {
   const raw = input.trim();
+  const minLen = opts?.minLen ?? 6;
   if (!raw) return { ok: false, error: 'Username is required.' };
-  if (raw.length < 6) return { ok: false, error: 'Username must be at least 6 characters.' };
+  if (raw.length < minLen) return { ok: false, error: `Username must be at least ${minLen} characters.` };
   if (raw.length > 15) return { ok: false, error: 'Username must be 15 characters or fewer.' };
 
   // Must start with a letter. Allowed chars are letters, numbers, underscore.

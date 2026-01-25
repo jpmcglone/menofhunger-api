@@ -10,15 +10,22 @@ const DEFAULT_USER = {
   usernameIsSet: true,
   name: 'John McGlone',
   bio: 'Christian husband and CEO of Men of Hunger',
+  siteAdmin: true,
 };
 
 async function main() {
   // Idempotent: if it exists by id, username (case-insensitive), or phone, do nothing.
   const byId = await prisma.user.findUnique({ where: { id: DEFAULT_USER.id }, select: { id: true } });
-  if (byId) return;
+  if (byId) {
+    await prisma.user.update({ where: { id: DEFAULT_USER.id }, data: { siteAdmin: true } });
+    return;
+  }
 
   const byPhone = await prisma.user.findFirst({ where: { phone: DEFAULT_USER.phone }, select: { id: true } });
-  if (byPhone) return;
+  if (byPhone) {
+    await prisma.user.update({ where: { id: byPhone.id }, data: { siteAdmin: true } });
+    return;
+  }
 
   const normalized = DEFAULT_USER.username.toLowerCase();
   const byUsername =
@@ -30,7 +37,10 @@ async function main() {
         LIMIT 1
       `
     )[0] ?? null;
-  if (byUsername) return;
+  if (byUsername) {
+    await prisma.user.update({ where: { id: byUsername.id }, data: { siteAdmin: true } });
+    return;
+  }
 
   await prisma.user.create({ data: DEFAULT_USER });
   console.log('Seeded default prod user:', DEFAULT_USER.username);

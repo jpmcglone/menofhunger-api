@@ -7,6 +7,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum VerifiedStatus {
+  none
+  identity
+  manual
+}
+
 // Start minimal. Add real domain models as you solidify your product.
 model Example {
   id        String   @id @default(cuid())
@@ -26,6 +32,12 @@ model User {
   bio  String?
   // True when the user has explicitly chosen a username.
   usernameIsSet Boolean @default(false)
+  // Minimal admin flag (will be replaced by real roles later).
+  siteAdmin Boolean @default(false)
+  // Verified badge (more roles/permissions later).
+  verifiedStatus VerifiedStatus @default(none)
+  verifiedAt DateTime?
+  unverifiedAt DateTime?
   sessions  Session[]
 
   @@index([phone])

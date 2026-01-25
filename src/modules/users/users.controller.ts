@@ -47,7 +47,18 @@ export class UsersController {
 
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found.');
-    if (user.usernameIsSet) throw new ConflictException('Username is already set.');
+    if (user.usernameIsSet) {
+      const currentLower = (user.username ?? '').trim().toLowerCase();
+      // Allow updating ONLY capitalization of the existing username.
+      if (currentLower && currentLower === parsed.usernameLower) {
+        const updated = await this.prisma.user.update({
+          where: { id: userId },
+          data: { username: parsed.username },
+        });
+        return { user: toUserDto(updated) };
+      }
+      throw new ConflictException('Username is already set.');
+    }
 
     try {
       const updated = await this.prisma.user.update({
@@ -77,9 +88,15 @@ export class UsersController {
     const user =
       (
         await this.prisma.$queryRaw<
-          Array<{ id: string; username: string | null; name: string | null; bio: string | null }>
+          Array<{
+            id: string;
+            username: string | null;
+            name: string | null;
+            bio: string | null;
+            verifiedStatus: string;
+          }>
         >`
-          SELECT "id", "username", "name", "bio"
+          SELECT "id", "username", "name", "bio", "verifiedStatus"
           FROM "User"
           WHERE LOWER("username") = ${normalized}
           LIMIT 1
