@@ -93,6 +93,10 @@ export class AuthService {
     const disableTwilioInDev = !isProd && this.appConfig.disableTwilioInDev();
     const hasTwilioVerify = Boolean(this.appConfig.twilioVerify());
 
+    const isDevBypass = !isProd && code === '000000';
+
+    // In dev, allow bypass even if /auth/phone/start was never called.
+    // (Still safe: production does not allow this path.)
     const otp = await this.prisma.phoneOtp.findFirst({
       where: {
         phone,
@@ -102,11 +106,10 @@ export class AuthService {
       orderBy: { createdAt: 'desc' },
     });
 
-    if (!otp) {
+    if (!otp && !isDevBypass) {
       throw new BadRequestException('No active code found. Please resend.');
     }
 
-    const isDevBypass = !isProd && code === '000000';
     if (!isDevBypass) {
       if (!disableTwilioInDev && hasTwilioVerify) {
         try {
@@ -122,10 +125,12 @@ export class AuthService {
       }
     }
 
-    await this.prisma.phoneOtp.update({
-      where: { id: otp.id },
-      data: { consumedAt: now },
-    });
+    if (otp) {
+      await this.prisma.phoneOtp.update({
+        where: { id: otp.id },
+        data: { consumedAt: now },
+      });
+    }
 
     const existing = await this.prisma.user.findUnique({ where: { phone } });
     const isNewUser = !existing;

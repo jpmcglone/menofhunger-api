@@ -96,9 +96,11 @@ export class UsersController {
             verifiedStatus: string;
             avatarKey: string | null;
             avatarUpdatedAt: Date | null;
+            bannerKey: string | null;
+            bannerUpdatedAt: Date | null;
           }>
         >`
-          SELECT "id", "username", "name", "bio", "verifiedStatus", "avatarKey", "avatarUpdatedAt"
+          SELECT "id", "username", "name", "bio", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt"
           FROM "User"
           WHERE LOWER("username") = ${normalized}
           LIMIT 1

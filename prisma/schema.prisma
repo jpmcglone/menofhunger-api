@@ -41,6 +41,8 @@ model User {
   // Public media (stored in object storage; API stores keys only).
   avatarKey String?
   avatarUpdatedAt DateTime?
+  bannerKey String?
+  bannerUpdatedAt DateTime?
   sessions  Session[]
 
   @@index([phone])

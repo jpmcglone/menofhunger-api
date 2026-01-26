@@ -12,6 +12,14 @@ const commitAvatarSchema = z.object({
   key: z.string().min(1),
 });
 
+const initBannerSchema = z.object({
+  contentType: z.string().min(1),
+});
+
+const commitBannerSchema = z.object({
+  key: z.string().min(1),
+});
+
 @UseGuards(AuthGuard)
 @Controller('uploads')
 export class UploadsController {
@@ -27,6 +35,18 @@ export class UploadsController {
   async commitAvatar(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = commitAvatarSchema.parse(body);
     return await this.uploads.commitAvatarUpload(userId, parsed.key);
+  }
+
+  @Post('banner/init')
+  async initBanner(@Body() body: unknown, @CurrentUserId() userId: string) {
+    const parsed = initBannerSchema.parse(body);
+    return await this.uploads.initBannerUpload(userId, parsed.contentType);
+  }
+
+  @Post('banner/commit')
+  async commitBanner(@Body() body: unknown, @CurrentUserId() userId: string) {
+    const parsed = commitBannerSchema.parse(body);
+    return await this.uploads.commitBannerUpload(userId, parsed.key);
   }
 }
 

@@ -14,6 +14,8 @@ export type UserDto = {
   unverifiedAt: string | null;
   avatarKey: string | null;
   avatarUpdatedAt: string | null;
+  bannerKey: string | null;
+  bannerUpdatedAt: string | null;
 };
 
 export function toUserDto(user: User): UserDto {
@@ -31,6 +33,8 @@ export function toUserDto(user: User): UserDto {
     unverifiedAt: user.unverifiedAt ? user.unverifiedAt.toISOString() : null,
     avatarKey: user.avatarKey ?? null,
     avatarUpdatedAt: user.avatarUpdatedAt ? user.avatarUpdatedAt.toISOString() : null,
+    bannerKey: user.bannerKey ?? null,
+    bannerUpdatedAt: user.bannerUpdatedAt ? user.bannerUpdatedAt.toISOString() : null,
   };
 }
 
