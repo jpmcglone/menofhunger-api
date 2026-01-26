@@ -10,6 +10,15 @@ export type TwilioVerifyConfig = {
   verifyServiceSid: string;
 };
 
+export type R2Config = {
+  accountId: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  bucket: string;
+  // Optional: used by clients to render public asset URLs (often set in WWW env instead).
+  publicBaseUrl?: string;
+};
+
 @Injectable()
 export class AppConfigService {
   private readonly logger = new Logger(AppConfigService.name);
@@ -78,6 +87,20 @@ export class AppConfigService {
     return { accountSid, authToken, verifyServiceSid };
   }
 
+  r2(): R2Config | null {
+    const accountId = this.config.get<string>('R2_ACCOUNT_ID')?.trim() ?? '';
+    const accessKeyId = this.config.get<string>('R2_ACCESS_KEY_ID')?.trim() ?? '';
+    const secretAccessKey = this.config.get<string>('R2_SECRET_ACCESS_KEY')?.trim() ?? '';
+    const bucket = this.config.get<string>('R2_BUCKET')?.trim() ?? '';
+    const publicBaseUrl = this.config.get<string>('R2_PUBLIC_BASE_URL')?.trim() ?? '';
+
+    // Uploads only require S3-compatible credentials + bucket. Public base URL is optional.
+    if (!accountId || !accessKeyId || !secretAccessKey || !bucket) return null;
+    const cfg: R2Config = { accountId, accessKeyId, secretAccessKey, bucket };
+    if (publicBaseUrl) cfg.publicBaseUrl = publicBaseUrl;
+    return cfg;
+  }
+
   // Optional: typed access to full validated env object if needed later.
   envSnapshot(): Partial<Env> {
     return {
@@ -90,6 +113,11 @@ export class AppConfigService {
       TWILIO_ACCOUNT_SID: this.config.get<string>('TWILIO_ACCOUNT_SID') as Env['TWILIO_ACCOUNT_SID'],
       TWILIO_AUTH_TOKEN: this.config.get<string>('TWILIO_AUTH_TOKEN') as Env['TWILIO_AUTH_TOKEN'],
       TWILIO_VERIFY_SERVICE_SID: this.config.get<string>('TWILIO_VERIFY_SERVICE_SID') as Env['TWILIO_VERIFY_SERVICE_SID'],
+      R2_ACCOUNT_ID: this.config.get<string>('R2_ACCOUNT_ID') as Env['R2_ACCOUNT_ID'],
+      R2_ACCESS_KEY_ID: this.config.get<string>('R2_ACCESS_KEY_ID') as Env['R2_ACCESS_KEY_ID'],
+      R2_SECRET_ACCESS_KEY: this.config.get<string>('R2_SECRET_ACCESS_KEY') as Env['R2_SECRET_ACCESS_KEY'],
+      R2_BUCKET: this.config.get<string>('R2_BUCKET') as Env['R2_BUCKET'],
+      R2_PUBLIC_BASE_URL: this.config.get<string>('R2_PUBLIC_BASE_URL') as Env['R2_PUBLIC_BASE_URL'],
     };
   }
 }

@@ -63,6 +63,29 @@ export const envSchema = z.object({
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
   ),
+
+  // Cloudflare R2 (S3-compatible) for public assets (avatars/banners).
+  R2_ACCOUNT_ID: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  R2_ACCESS_KEY_ID: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  R2_SECRET_ACCESS_KEY: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  R2_BUCKET: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  // Public base URL for reading objects, e.g. https://moh-assets.<accountId>.r2.dev
+  R2_PUBLIC_BASE_URL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
 }).superRefine((env, ctx) => {
   if (env.NODE_ENV !== 'production') return;
 

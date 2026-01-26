@@ -38,6 +38,9 @@ model User {
   verifiedStatus VerifiedStatus @default(none)
   verifiedAt DateTime?
   unverifiedAt DateTime?
+  // Public media (stored in object storage; API stores keys only).
+  avatarKey String?
+  avatarUpdatedAt DateTime?
   sessions  Session[]
 
   @@index([phone])

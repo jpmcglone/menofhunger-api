@@ -12,6 +12,8 @@ export type UserDto = {
   verifiedStatus: VerifiedStatus;
   verifiedAt: string | null;
   unverifiedAt: string | null;
+  avatarKey: string | null;
+  avatarUpdatedAt: string | null;
 };
 
 export function toUserDto(user: User): UserDto {
@@ -27,6 +29,8 @@ export function toUserDto(user: User): UserDto {
     verifiedStatus: user.verifiedStatus,
     verifiedAt: user.verifiedAt ? user.verifiedAt.toISOString() : null,
     unverifiedAt: user.unverifiedAt ? user.unverifiedAt.toISOString() : null,
+    avatarKey: user.avatarKey ?? null,
+    avatarUpdatedAt: user.avatarUpdatedAt ? user.avatarUpdatedAt.toISOString() : null,
   };
 }
 
