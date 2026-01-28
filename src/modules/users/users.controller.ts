@@ -16,6 +16,10 @@ const profileSchema = z.object({
   bio: z.string().trim().max(160).optional(),
 });
 
+const settingsSchema = z.object({
+  followVisibility: z.enum(['all', 'verified', 'premium', 'none']).optional(),
+});
+
 @Controller('users')
 export class UsersController {
   constructor(private readonly prisma: PrismaService) {}
@@ -104,6 +108,7 @@ export class UsersController {
           SELECT "id", "username", "name", "bio", "premium", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt"
           FROM "User"
           WHERE LOWER("username") = ${normalized}
+            AND "usernameIsSet" = true
           LIMIT 1
         `
       )[0] ?? null;
@@ -128,6 +133,21 @@ export class UsersController {
     return {
       user: toUserDto(updated),
     };
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch('me/settings')
+  async updateMySettings(@Body() body: unknown, @CurrentUserId() userId: string) {
+    const parsed = settingsSchema.parse(body);
+
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        followVisibility: parsed.followVisibility,
+      },
+    });
+
+    return { user: toUserDto(updated) };
   }
 }
 

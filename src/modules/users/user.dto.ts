@@ -1,4 +1,4 @@
-import type { User, VerifiedStatus } from '@prisma/client';
+import type { FollowVisibility, User, VerifiedStatus } from '@prisma/client';
 
 export type UserDto = {
   id: string;
@@ -13,6 +13,7 @@ export type UserDto = {
   verifiedStatus: VerifiedStatus;
   verifiedAt: string | null;
   unverifiedAt: string | null;
+  followVisibility: FollowVisibility;
   avatarKey: string | null;
   avatarUpdatedAt: string | null;
   bannerKey: string | null;
@@ -33,6 +34,7 @@ export function toUserDto(user: User): UserDto {
     verifiedStatus: user.verifiedStatus,
     verifiedAt: user.verifiedAt ? user.verifiedAt.toISOString() : null,
     unverifiedAt: user.unverifiedAt ? user.unverifiedAt.toISOString() : null,
+    followVisibility: user.followVisibility,
     avatarKey: user.avatarKey ?? null,
     avatarUpdatedAt: user.avatarUpdatedAt ? user.avatarUpdatedAt.toISOString() : null,
     bannerKey: user.bannerKey ?? null,

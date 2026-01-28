@@ -10,6 +10,7 @@ import { UsersModule } from '../users/users.module';
 import { AdminModule } from '../admin/admin.module';
 import { UploadsModule } from '../uploads/uploads.module';
 import { PostsModule } from '../posts/posts.module';
+import { FollowsModule } from '../follows/follows.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { PostsModule } from '../posts/posts.module';
     AdminModule,
     UploadsModule,
     PostsModule,
+    FollowsModule,
   ],
   controllers: [AppController],
 })

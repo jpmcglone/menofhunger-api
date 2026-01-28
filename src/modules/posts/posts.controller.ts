@@ -11,6 +11,7 @@ const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
+  followingOnly: z.coerce.boolean().optional(),
 });
 
 const userListSchema = listSchema.extend({
@@ -41,6 +42,7 @@ export class PostsController {
       limit,
       cursor,
       visibility: parsed.visibility ?? 'all',
+      followingOnly: parsed.followingOnly ?? false,
     });
 
     return {

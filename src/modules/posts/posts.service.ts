@@ -28,8 +28,14 @@ export class PostsService {
     return allowed;
   }
 
-  async listFeed(params: { viewerUserId: string | null; limit: number; cursor: string | null; visibility: 'all' | PostVisibility }) {
-    const { viewerUserId, limit, cursor, visibility } = params;
+  async listFeed(params: {
+    viewerUserId: string | null;
+    limit: number;
+    cursor: string | null;
+    visibility: 'all' | PostVisibility;
+    followingOnly: boolean;
+  }) {
+    const { viewerUserId, limit, cursor, visibility, followingOnly } = params;
 
     const viewer = await this.viewerById(viewerUserId);
 
@@ -42,13 +48,35 @@ export class PostsService {
       if (!viewer || !viewer.premium) throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
     }
 
+    if (followingOnly && !viewerUserId) {
+      return { posts: [], nextCursor: null };
+    }
+
+    const visibilityWhere =
+      visibility === 'all'
+        ? ({ visibility: { in: allowed } } as const)
+        : visibility === 'public'
+          ? ({ visibility: 'public' } as const)
+          : ({ visibility } as const);
+
+    const where = followingOnly
+      ? {
+          AND: [
+            visibilityWhere,
+            {
+              OR: [
+                // Include the viewer's own posts.
+                { userId: viewerUserId as string },
+                // Include posts from users the viewer follows.
+                { user: { followers: { some: { followerId: viewerUserId as string } } } },
+              ],
+            },
+          ],
+        }
+      : visibilityWhere;
+
     const posts = await this.prisma.post.findMany({
-      where:
-        visibility === 'all'
-          ? { visibility: { in: allowed } }
-          : visibility === 'public'
-            ? { visibility: 'public' }
-            : { visibility },
+      where,
       include: { user: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,

@@ -19,6 +19,13 @@ enum PostVisibility {
   premiumOnly
 }
 
+enum FollowVisibility {
+  all
+  verified
+  premium
+  none
+}
+
 // Start minimal. Add real domain models as you solidify your product.
 model Example {
   id        String   @id @default(cuid())
@@ -46,6 +53,8 @@ model User {
   verifiedStatus VerifiedStatus @default(none)
   verifiedAt DateTime?
   unverifiedAt DateTime?
+  // Follow list privacy (controls counts + follower/following lists).
+  followVisibility FollowVisibility @default(all)
   // Public media (stored in object storage; API stores keys only).
   avatarKey String?
   avatarUpdatedAt DateTime?
@@ -53,8 +62,28 @@ model User {
   bannerUpdatedAt DateTime?
   sessions  Session[]
   posts     Post[]
+  // Social graph (self-referential via Follow).
+  // `following`: users this user follows (outgoing edges)
+  // `followers`: users who follow this user (incoming edges)
+  following Follow[] @relation("Follow_follower")
+  followers Follow[] @relation("Follow_following")
 
   @@index([phone])
+}
+
+model Follow {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  followerId  String
+  followingId String
+
+  follower  User @relation("Follow_follower", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("Follow_following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followerId, createdAt])
+  @@index([followingId, createdAt])
 }
 
 model Post {
