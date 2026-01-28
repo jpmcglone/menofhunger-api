@@ -33,6 +33,7 @@ const updateUserSchema = z.object({
   username: z.union([z.string().trim().min(1), z.null()]).optional(),
   name: z.string().trim().max(50).nullable().optional(),
   bio: z.string().trim().max(160).nullable().optional(),
+  premium: z.boolean().optional(),
   verifiedStatus: z.enum(['none', 'identity', 'manual']).optional(),
 });
 
@@ -134,6 +135,10 @@ export class AdminUsersController {
 
     if (parsed.bio !== undefined) {
       data.bio = parsed.bio === null ? null : (parsed.bio || null);
+    }
+
+    if (parsed.premium !== undefined) {
+      data.premium = parsed.premium;
     }
 
     if (parsed.verifiedStatus !== undefined) {

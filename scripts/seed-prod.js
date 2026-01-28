@@ -11,6 +11,9 @@ const DEFAULT_USER = {
   name: 'John McGlone',
   bio: 'Christian husband and CEO of Men of Hunger',
   siteAdmin: true,
+  verifiedStatus: 'identity',
+  verifiedAt: new Date(),
+  unverifiedAt: null,
 };
 
 async function main() {

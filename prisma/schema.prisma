@@ -13,6 +13,12 @@ enum VerifiedStatus {
   manual
 }
 
+enum PostVisibility {
+  public
+  verifiedOnly
+  premiumOnly
+}
+
 // Start minimal. Add real domain models as you solidify your product.
 model Example {
   id        String   @id @default(cuid())
@@ -34,6 +40,8 @@ model User {
   usernameIsSet Boolean @default(false)
   // Minimal admin flag (will be replaced by real roles later).
   siteAdmin Boolean @default(false)
+  // Premium flag (paid product access; used for visibility gating).
+  premium Boolean @default(false)
   // Verified badge (more roles/permissions later).
   verifiedStatus VerifiedStatus @default(none)
   verifiedAt DateTime?
@@ -44,8 +52,22 @@ model User {
   bannerKey String?
   bannerUpdatedAt DateTime?
   sessions  Session[]
+  posts     Post[]
 
   @@index([phone])
+}
+
+model Post {
+  id         String         @id @default(cuid())
+  createdAt  DateTime       @default(now())
+  body       String
+  visibility PostVisibility @default(public)
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
 }
 
 model PhoneOtp {

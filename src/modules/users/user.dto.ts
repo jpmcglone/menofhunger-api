@@ -9,6 +9,7 @@ export type UserDto = {
   name: string | null;
   bio: string | null;
   siteAdmin: boolean;
+  premium: boolean;
   verifiedStatus: VerifiedStatus;
   verifiedAt: string | null;
   unverifiedAt: string | null;
@@ -28,6 +29,7 @@ export function toUserDto(user: User): UserDto {
     name: user.name,
     bio: user.bio,
     siteAdmin: user.siteAdmin,
+    premium: user.premium,
     verifiedStatus: user.verifiedStatus,
     verifiedAt: user.verifiedAt ? user.verifiedAt.toISOString() : null,
     unverifiedAt: user.unverifiedAt ? user.unverifiedAt.toISOString() : null,
