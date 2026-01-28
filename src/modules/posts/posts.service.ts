@@ -253,7 +253,10 @@ export class PostsService {
       select: { verifiedStatus: true, premium: true },
     });
     if (!user) throw new NotFoundException('User not found.');
-    if (user.verifiedStatus === 'none') throw new ForbiddenException('You must be verified to post.');
+    // Unverified members can post to "Only me" (private drafts / journaling), but nothing else.
+    if (user.verifiedStatus === 'none' && visibility !== 'onlyMe') {
+      throw new ForbiddenException('Verify your account to post publicly.');
+    }
     if (visibility === 'premiumOnly' && !user.premium) {
       throw new ForbiddenException('Upgrade to premium to create premium-only posts.');
     }
