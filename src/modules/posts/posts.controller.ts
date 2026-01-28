@@ -10,10 +10,12 @@ import { toPostDto } from './post.dto';
 const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
+  visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
 });
 
 const userListSchema = listSchema.extend({
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
+  includeCounts: z.coerce.boolean().optional(),
 });
 
 const createSchema = z.object({
@@ -34,7 +36,12 @@ export class PostsController {
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
 
-    const res = await this.posts.listFeed({ viewerUserId, limit, cursor });
+    const res = await this.posts.listFeed({
+      viewerUserId,
+      limit,
+      cursor,
+      visibility: parsed.visibility ?? 'all',
+    });
 
     return {
       posts: res.posts.map(toPostDto),
@@ -57,13 +64,23 @@ export class PostsController {
       limit,
       cursor,
       visibility: parsed.visibility ?? 'all',
+      includeCounts: parsed.includeCounts ?? true,
     });
 
     return {
       posts: res.posts.map(toPostDto),
       nextCursor: res.nextCursor,
-      counts: res.counts,
+      counts: res.counts ?? null,
     };
+  }
+
+  @UseGuards(OptionalAuthGuard)
+  @Get(':id')
+  async getById(@Req() req: Request, @Param('id') id: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+    const res = await this.posts.getById({ viewerUserId, id });
+    return { post: toPostDto(res) };
   }
 
   @UseGuards(AuthGuard)

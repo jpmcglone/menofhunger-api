@@ -4,6 +4,7 @@ export type PostAuthorDto = {
   id: string;
   username: string | null;
   name: string | null;
+  premium: boolean;
   verifiedStatus: VerifiedStatus;
   avatarKey: string | null;
   avatarUpdatedAt: string | null;
@@ -29,6 +30,7 @@ export function toPostDto(post: PostWithAuthor): PostDto {
       id: post.user.id,
       username: post.user.username,
       name: post.user.name,
+      premium: post.user.premium,
       verifiedStatus: post.user.verifiedStatus,
       avatarKey: post.user.avatarKey ?? null,
       avatarUpdatedAt: post.user.avatarUpdatedAt ? post.user.avatarUpdatedAt.toISOString() : null,
