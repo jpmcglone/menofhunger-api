@@ -17,6 +17,7 @@ enum PostVisibility {
   public
   verifiedOnly
   premiumOnly
+  onlyMe
 }
 
 enum FollowVisibility {
@@ -37,12 +38,19 @@ model User {
   id        String    @id @default(cuid())
   createdAt DateTime  @default(now())
   phone     String    @unique
+  email     String?   @unique
   // Username stored as entered (case preserved). Uniqueness is enforced case-insensitively
   // via a functional unique index on LOWER(username) in a migration.
   username String?
   // Public profile fields.
   name String?
   bio  String?
+  // Required onboarding fields (gates app access).
+  // Stored as DateTime (UTC midnight) to keep Prisma portable.
+  birthdate DateTime?
+  interests String[] @default([])
+  // Required onboarding acknowledgement (app store friendly wording; enforced in app).
+  menOnlyConfirmed Boolean @default(false)
   // True when the user has explicitly chosen a username.
   usernameIsSet Boolean @default(false)
   // Minimal admin flag (will be replaced by real roles later).
@@ -89,6 +97,7 @@ model Follow {
 model Post {
   id         String         @id @default(cuid())
   createdAt  DateTime       @default(now())
+  deletedAt  DateTime?
   body       String
   visibility PostVisibility @default(public)
 
@@ -97,6 +106,17 @@ model Post {
 
   @@index([userId, createdAt])
   @@index([createdAt])
+}
+
+// Singleton-ish table: holds site-wide configurable settings.
+// Use `id=1` row as the canonical config.
+model SiteConfig {
+  id        Int      @id
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  postsPerWindow     Int @default(5)
+  windowSeconds      Int @default(300)
 }
 
 model PhoneOtp {

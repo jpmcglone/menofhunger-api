@@ -201,7 +201,7 @@ export class UploadsService {
       }
     }
 
-    return { user: toUserDto(updated) };
+    return { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
   }
 
   async commitBannerUpload(userId: string, key: string) {
@@ -276,7 +276,7 @@ export class UploadsService {
       }
     }
 
-    return { user: toUserDto(updated) };
+    return { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
   }
 }
 

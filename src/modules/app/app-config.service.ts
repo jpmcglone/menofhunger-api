@@ -98,7 +98,28 @@ export class AppConfigService {
     if (!accountId || !accessKeyId || !secretAccessKey || !bucket) return null;
     const cfg: R2Config = { accountId, accessKeyId, secretAccessKey, bucket };
     if (publicBaseUrl) cfg.publicBaseUrl = publicBaseUrl;
+    // IMPORTANT:
+    // Cloudflare public bucket URLs are NOT always derivable from bucket/account id.
+    // When using the Cloudflare-managed "Public Development URL", the base looks like:
+    //   https://pub-<random>.r2.dev
+    // So if R2_PUBLIC_BASE_URL isn't provided, we cannot safely guess a working URL.
+    if (!cfg.publicBaseUrl) {
+      this.logger.warn('R2_PUBLIC_BASE_URL is not set; public asset URLs will be null.');
+    }
     return cfg;
+  }
+
+  rateLimitTtlSeconds(): number {
+    const raw = this.config.get<string>('RATE_LIMIT_TTL_SECONDS') ?? '';
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 60;
+  }
+
+  rateLimitLimit(): number {
+    const raw = this.config.get<string>('RATE_LIMIT_LIMIT') ?? '';
+    const n = Number(raw);
+    // Pretty generous default.
+    return Number.isFinite(n) && n > 0 ? n : 600;
   }
 
   // Optional: typed access to full validated env object if needed later.
@@ -118,6 +139,8 @@ export class AppConfigService {
       R2_SECRET_ACCESS_KEY: this.config.get<string>('R2_SECRET_ACCESS_KEY') as Env['R2_SECRET_ACCESS_KEY'],
       R2_BUCKET: this.config.get<string>('R2_BUCKET') as Env['R2_BUCKET'],
       R2_PUBLIC_BASE_URL: this.config.get<string>('R2_PUBLIC_BASE_URL') as Env['R2_PUBLIC_BASE_URL'],
+      RATE_LIMIT_TTL_SECONDS: this.config.get<string>('RATE_LIMIT_TTL_SECONDS') as Env['RATE_LIMIT_TTL_SECONDS'],
+      RATE_LIMIT_LIMIT: this.config.get<string>('RATE_LIMIT_LIMIT') as Env['RATE_LIMIT_LIMIT'],
     };
   }
 }

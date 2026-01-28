@@ -2,6 +2,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import type { FollowVisibility, VerifiedStatus } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { AppConfigService } from '../app/app-config.service';
+import { publicAssetUrl } from '../../common/assets/public-asset-url';
 
 export type FollowRelationship = {
   viewerFollowsUser: boolean;
@@ -20,8 +22,7 @@ export type FollowListUser = {
   name: string | null;
   premium: boolean;
   verifiedStatus: string;
-  avatarKey: string | null;
-  avatarUpdatedAt: Date | null;
+  avatarUrl: string | null;
   relationship: FollowRelationship;
 };
 
@@ -31,7 +32,10 @@ function isVerified(status: VerifiedStatus | string | null | undefined) {
 
 @Injectable()
 export class FollowsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly appConfig: AppConfigService,
+  ) {}
 
   private async viewerById(viewerUserId: string | null) {
     if (!viewerUserId) return null;
@@ -166,6 +170,15 @@ export class FollowsService {
     };
   }
 
+  async myFollowingCount(params: { viewerUserId: string }): Promise<number> {
+    const { viewerUserId } = params;
+    // Follow targets always require `usernameIsSet=true` at creation time, but keep the filter
+    // here anyway so the count matches the intent everywhere.
+    return await this.prisma.follow.count({
+      where: { followerId: viewerUserId, following: { usernameIsSet: true } },
+    });
+  }
+
   private async batchRelationshipForUserIds(params: { viewerUserId: string | null; userIds: string[] }) {
     const { viewerUserId, userIds } = params;
     if (!viewerUserId || userIds.length === 0) {
@@ -241,8 +254,11 @@ export class FollowsService {
       name: r.follower.name,
       premium: r.follower.premium,
       verifiedStatus: r.follower.verifiedStatus,
-      avatarKey: r.follower.avatarKey,
-      avatarUpdatedAt: r.follower.avatarUpdatedAt,
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
+        key: r.follower.avatarKey,
+        updatedAt: r.follower.avatarUpdatedAt,
+      }),
       relationship: {
         viewerFollowsUser: rel.viewerFollows.has(r.follower.id),
         userFollowsViewer: rel.followsViewer.has(r.follower.id),
@@ -301,8 +317,11 @@ export class FollowsService {
       name: r.following.name,
       premium: r.following.premium,
       verifiedStatus: r.following.verifiedStatus,
-      avatarKey: r.following.avatarKey,
-      avatarUpdatedAt: r.following.avatarUpdatedAt,
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
+        key: r.following.avatarKey,
+        updatedAt: r.following.avatarUpdatedAt,
+      }),
       relationship: {
         viewerFollowsUser: rel.viewerFollows.has(r.following.id),
         userFollowsViewer: rel.followsViewer.has(r.following.id),

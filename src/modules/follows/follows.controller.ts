@@ -16,6 +16,13 @@ export class FollowsController {
   constructor(private readonly follows: FollowsService) {}
 
   @UseGuards(AuthGuard)
+  @Get('me/following-count')
+  async myFollowingCount(@CurrentUserId() viewerUserId: string) {
+    const followingCount = await this.follows.myFollowingCount({ viewerUserId });
+    return { followingCount };
+  }
+
+  @UseGuards(AuthGuard)
   @Post(':username')
   async follow(@Param('username') username: string, @CurrentUserId() viewerUserId: string) {
     return await this.follows.follow({ viewerUserId, username });

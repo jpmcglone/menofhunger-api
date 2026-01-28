@@ -13,6 +13,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { normalizePhone } from '../auth/auth.utils';
+import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { toUserDto } from '../users/user.dto';
 import { validateUsername } from '../users/users.utils';
@@ -40,7 +41,10 @@ const updateUserSchema = z.object({
 @UseGuards(AdminGuard)
 @Controller('admin/users')
 export class AdminUsersController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly appConfig: AppConfigService,
+  ) {}
 
   @Get('search')
   async search(@Query() query: unknown) {
@@ -69,9 +73,10 @@ export class AdminUsersController {
 
     const slice = users.slice(0, take);
     const nextCursor = users.length > take ? slice[slice.length - 1]?.id ?? null : null;
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
     return {
-      users: slice.map(toUserDto),
+      users: slice.map((u) => toUserDto(u, publicBaseUrl)),
       nextCursor,
     };
   }
@@ -99,7 +104,7 @@ export class AdminUsersController {
   async getUser(@Param('id') id: string) {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found.');
-    return { user: toUserDto(user) };
+    return { user: toUserDto(user, this.appConfig.r2()?.publicBaseUrl ?? null) };
   }
 
   @Patch(':id/profile')
@@ -159,7 +164,7 @@ export class AdminUsersController {
         data,
       });
 
-      return { user: toUserDto(updated) };
+      return { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
         throw new NotFoundException('User not found.');

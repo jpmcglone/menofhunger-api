@@ -86,6 +86,16 @@ export const envSchema = z.object({
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
   ),
+
+  // Global API rate limiting (generous defaults if unset).
+  RATE_LIMIT_TTL_SECONDS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_TTL_SECONDS must be a number'),
+  RATE_LIMIT_LIMIT: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_LIMIT must be a number'),
 }).superRefine((env, ctx) => {
   if (env.NODE_ENV !== 'production') return;
 

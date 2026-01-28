@@ -87,6 +87,14 @@ export class AuthService {
     return { retryAfterSeconds: OTP_RESEND_SECONDS };
   }
 
+  async phoneExists(phone: string): Promise<boolean> {
+    const existing = await this.prisma.user.findUnique({
+      where: { phone },
+      select: { id: true },
+    });
+    return Boolean(existing);
+  }
+
   async verifyPhoneCode(phone: string, code: string, res: Response) {
     const now = new Date();
     const isProd = this.appConfig.isProd();
@@ -147,9 +155,10 @@ export class AuthService {
 
     const session = await this.createSessionAndSetCookie(user.id, res);
 
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     return {
       isNewUser,
-      user: toUserDto(user),
+      user: toUserDto(user, publicBaseUrl),
       sessionId: session.id,
     };
   }
@@ -169,7 +178,7 @@ export class AuthService {
     });
 
     if (!session) return null;
-    return toUserDto(session.user);
+    return toUserDto(session.user, this.appConfig.r2()?.publicBaseUrl ?? null);
   }
 
   async logout(token: string | undefined, res: Response) {

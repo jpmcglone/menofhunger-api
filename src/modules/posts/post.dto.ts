@@ -1,4 +1,5 @@
 import type { Post, PostVisibility, User, VerifiedStatus } from '@prisma/client';
+import { publicAssetUrl } from '../../common/assets/public-asset-url';
 
 export type PostAuthorDto = {
   id: string;
@@ -6,8 +7,7 @@ export type PostAuthorDto = {
   name: string | null;
   premium: boolean;
   verifiedStatus: VerifiedStatus;
-  avatarKey: string | null;
-  avatarUpdatedAt: string | null;
+  avatarUrl: string | null;
 };
 
 export type PostDto = {
@@ -20,7 +20,7 @@ export type PostDto = {
 
 type PostWithAuthor = Post & { user: User };
 
-export function toPostDto(post: PostWithAuthor): PostDto {
+export function toPostDto(post: PostWithAuthor, publicAssetBaseUrl: string | null = null): PostDto {
   return {
     id: post.id,
     createdAt: post.createdAt.toISOString(),
@@ -32,8 +32,11 @@ export function toPostDto(post: PostWithAuthor): PostDto {
       name: post.user.name,
       premium: post.user.premium,
       verifiedStatus: post.user.verifiedStatus,
-      avatarKey: post.user.avatarKey ?? null,
-      avatarUpdatedAt: post.user.avatarUpdatedAt ? post.user.avatarUpdatedAt.toISOString() : null,
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl: publicAssetBaseUrl,
+        key: post.user.avatarKey ?? null,
+        updatedAt: post.user.avatarUpdatedAt ?? null,
+      }),
     },
   };
 }

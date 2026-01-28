@@ -18,6 +18,10 @@ const verifySchema = z.object({
     .regex(/^\d+$/, 'Code must be numeric'),
 });
 
+const existsSchema = z.object({
+  phone: z.string().min(1),
+});
+
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
@@ -32,6 +36,19 @@ export class AuthController {
       throw new BadRequestException('Invalid phone number format');
     }
     return await this.auth.startPhoneAuth(phone);
+  }
+
+  @Get('phone/exists')
+  async exists(@Req() req: Request) {
+    const parsed = existsSchema.parse(req.query);
+    let phone: string;
+    try {
+      phone = normalizePhone(parsed.phone);
+    } catch {
+      throw new BadRequestException('Invalid phone number format');
+    }
+    const exists = await this.auth.phoneExists(phone);
+    return { exists };
   }
 
   @Post('phone/verify')
