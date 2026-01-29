@@ -70,6 +70,7 @@ model User {
   bannerUpdatedAt DateTime?
   sessions  Session[]
   posts     Post[]
+  boosts    Boost[]
   // Social graph (self-referential via Follow).
   // `following`: users this user follows (outgoing edges)
   // `followers`: users who follow this user (incoming edges)
@@ -100,12 +101,32 @@ model Post {
   deletedAt  DateTime?
   body       String
   visibility PostVisibility @default(public)
+  boostCount Int            @default(0)
+  boostScore Float?
+  boostScoreUpdatedAt DateTime?
 
   userId String
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  boosts Boost[]
+
   @@index([userId, createdAt])
   @@index([createdAt])
+}
+
+model Boost {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  postId String
+  userId String
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([postId, createdAt])
+  @@index([userId, createdAt])
 }
 
 // Singleton-ish table: holds site-wide configurable settings.

@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
-import type { PostVisibility, Prisma, VerifiedStatus } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 export type PostCounts = {
@@ -21,6 +22,73 @@ export class PostsService {
     return { deletedAt: null };
   }
 
+  private static boostScoreTtlMs = 10 * 60 * 1000;
+
+  async ensureBoostScoresFresh(postIds: string[]) {
+    const ids = (postIds ?? []).filter(Boolean);
+    if (ids.length === 0) return new Map<string, { boostScore: number | null; boostScoreUpdatedAt: Date | null }>();
+
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - PostsService.boostScoreTtlMs);
+
+    const posts = await this.prisma.post.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, boostScoreUpdatedAt: true },
+    });
+
+    const staleIds = posts
+      .filter((p) => !p.boostScoreUpdatedAt || p.boostScoreUpdatedAt < staleBefore)
+      .map((p) => p.id);
+
+    if (staleIds.length > 0) {
+      const rows = await this.prisma.$queryRaw<Array<{ postId: string; score: number | null }>>(Prisma.sql`
+        SELECT
+          b."postId" as "postId",
+          CAST(
+            SUM(
+              (
+                CASE
+                  WHEN u."premium" THEN 3
+                  WHEN u."verifiedStatus" <> 'none' THEN 2
+                  ELSE 1
+                END
+              )
+              * POWER(
+                0.5,
+                EXTRACT(EPOCH FROM (NOW() - b."createdAt")) / (24 * 60 * 60)
+              )
+            ) AS DOUBLE PRECISION
+          ) as "score"
+        FROM "Boost" b
+        JOIN "User" u ON u."id" = b."userId"
+        WHERE b."postId" IN (${Prisma.join(staleIds)})
+        GROUP BY b."postId"
+      `);
+
+      const scoreByPostId = new Map<string, number>();
+      for (const r of rows) scoreByPostId.set(r.postId, r.score ?? 0);
+
+      const tuples = staleIds.map((id) => Prisma.sql`(${id}, ${scoreByPostId.get(id) ?? 0})`);
+      await this.prisma.$executeRaw(Prisma.sql`
+        UPDATE "Post" AS p
+        SET
+          "boostScore" = v.score,
+          "boostScoreUpdatedAt" = ${now}
+        FROM (VALUES ${Prisma.join(tuples)}) AS v(id, score)
+        WHERE p."id" = v.id
+      `);
+    }
+
+    const refreshed = await this.prisma.post.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, boostScore: true, boostScoreUpdatedAt: true },
+    });
+
+    const out = new Map<string, { boostScore: number | null; boostScoreUpdatedAt: Date | null }>();
+    for (const p of refreshed) out.set(p.id, { boostScore: p.boostScore ?? null, boostScoreUpdatedAt: p.boostScoreUpdatedAt });
+    return out;
+  }
+
   private async getSiteConfig() {
     const cfg = await this.prisma.siteConfig.findUnique({ where: { id: 1 } });
     // If missing (shouldn't happen after migrations), use safe defaults.
@@ -33,6 +101,23 @@ export class PostsService {
       where: { id: viewerUserId },
       select: { id: true, verifiedStatus: true, premium: true, siteAdmin: true },
     });
+  }
+
+  async viewerContext(viewerUserId: string | null) {
+    return await this.viewerById(viewerUserId);
+  }
+
+  async viewerBoostedPostIds(params: { viewerUserId: string; postIds: string[] }) {
+    const { viewerUserId, postIds } = params;
+    if (!viewerUserId) return new Set<string>();
+    const ids = (postIds ?? []).filter(Boolean);
+    if (ids.length === 0) return new Set<string>();
+
+    const boosts = await this.prisma.boost.findMany({
+      where: { userId: viewerUserId, postId: { in: ids } },
+      select: { postId: true },
+    });
+    return new Set(boosts.map((b) => b.postId));
   }
 
   private allowedVisibilitiesForViewer(
@@ -292,6 +377,94 @@ export class PostsService {
       },
       include: { user: true },
     });
+  }
+
+  private async ensureUserCanBoost(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, usernameIsSet: true },
+    });
+    if (!user) throw new NotFoundException('User not found.');
+    if (!user.usernameIsSet) throw new ForbiddenException('Set a username to boost posts.');
+  }
+
+  async boostPost(params: { userId: string; postId: string }) {
+    const { userId, postId } = params;
+    const id = (postId ?? '').trim();
+    if (!id) throw new NotFoundException('Post not found.');
+
+    await this.ensureUserCanBoost(userId);
+
+    const post = await this.getById({ viewerUserId: userId, id });
+    if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be boosted.');
+
+    const res = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.boost.createMany({
+        data: [{ postId: id, userId }],
+        skipDuplicates: true,
+      });
+
+      if (created.count === 1) {
+        await tx.post.update({
+          where: { id },
+          data: {
+            boostCount: { increment: 1 },
+            boostScore: null,
+            boostScoreUpdatedAt: null,
+          },
+        });
+      }
+
+      const updated = await tx.post.findUnique({
+        where: { id },
+        select: { boostCount: true },
+      });
+
+      return {
+        boostCount: updated?.boostCount ?? 0,
+      };
+    });
+
+    return { success: true, viewerHasBoosted: true, boostCount: res.boostCount };
+  }
+
+  async unboostPost(params: { userId: string; postId: string }) {
+    const { userId, postId } = params;
+    const id = (postId ?? '').trim();
+    if (!id) throw new NotFoundException('Post not found.');
+
+    await this.ensureUserCanBoost(userId);
+
+    const post = await this.getById({ viewerUserId: userId, id });
+    if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be boosted.');
+
+    const res = await this.prisma.$transaction(async (tx) => {
+      const deleted = await tx.boost.deleteMany({
+        where: { postId: id, userId },
+      });
+
+      if (deleted.count === 1) {
+        await tx.post.update({
+          where: { id },
+          data: {
+            boostCount: { decrement: 1 },
+            boostScore: null,
+            boostScoreUpdatedAt: null,
+          },
+        });
+      }
+
+      const updated = await tx.post.findUnique({
+        where: { id },
+        select: { boostCount: true },
+      });
+
+      return {
+        boostCount: updated?.boostCount ?? 0,
+      };
+    });
+
+    return { success: true, viewerHasBoosted: false, boostCount: res.boostCount };
   }
 }
 

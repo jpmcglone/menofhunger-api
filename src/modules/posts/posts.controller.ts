@@ -49,8 +49,24 @@ export class PostsController {
       followingOnly: parsed.followingOnly ?? false,
     });
 
+    const viewer = await this.posts.viewerContext(viewerUserId);
+    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const boosted = viewerUserId
+      ? await this.posts.viewerBoostedPostIds({
+          viewerUserId,
+          postIds: res.posts.map((p) => p.id),
+        })
+      : new Set<string>();
+    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(res.posts.map((p) => p.id)) : null;
+
     return {
-      posts: res.posts.map((p) => toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null)),
+      posts: res.posts.map((p) =>
+        toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
+          viewerHasBoosted: boosted.has(p.id),
+          includeInternal: viewerHasAdmin,
+          internalOverride: internalByPostId?.get(p.id),
+        }),
+      ),
       nextCursor: res.nextCursor,
     };
   }
@@ -73,8 +89,24 @@ export class PostsController {
       includeCounts: parsed.includeCounts ?? true,
     });
 
+    const viewer = await this.posts.viewerContext(viewerUserId);
+    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const boosted = viewerUserId
+      ? await this.posts.viewerBoostedPostIds({
+          viewerUserId,
+          postIds: res.posts.map((p) => p.id),
+        })
+      : new Set<string>();
+    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(res.posts.map((p) => p.id)) : null;
+
     return {
-      posts: res.posts.map((p) => toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null)),
+      posts: res.posts.map((p) =>
+        toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
+          viewerHasBoosted: boosted.has(p.id),
+          includeInternal: viewerHasAdmin,
+          internalOverride: internalByPostId?.get(p.id),
+        }),
+      ),
       nextCursor: res.nextCursor,
       counts: res.counts ?? null,
     };
@@ -93,8 +125,17 @@ export class PostsController {
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
     const res = await this.posts.listOnlyMe({ userId, limit, cursor });
+    const viewer = await this.posts.viewerContext(userId);
+    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(res.posts.map((p) => p.id)) : null;
     return {
-      posts: res.posts.map((p) => toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null)),
+      posts: res.posts.map((p) =>
+        toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
+          viewerHasBoosted: false,
+          includeInternal: viewerHasAdmin,
+          internalOverride: internalByPostId?.get(p.id),
+        }),
+      ),
       nextCursor: res.nextCursor,
     };
   }
@@ -105,7 +146,21 @@ export class PostsController {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
     const res = await this.posts.getById({ viewerUserId, id });
-    return { post: toPostDto(res, this.appConfig.r2()?.publicBaseUrl ?? null) };
+
+    const viewer = await this.posts.viewerContext(viewerUserId);
+    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const boosted = viewerUserId
+      ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds: [res.id] })
+      : new Set<string>();
+    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh([res.id]) : null;
+
+    return {
+      post: toPostDto(res, this.appConfig.r2()?.publicBaseUrl ?? null, {
+        viewerHasBoosted: boosted.has(res.id),
+        includeInternal: viewerHasAdmin,
+        internalOverride: internalByPostId?.get(res.id),
+      }),
+    };
   }
 
   @UseGuards(AuthGuard)
@@ -118,13 +173,32 @@ export class PostsController {
       visibility: parsed.visibility ?? 'public',
     });
 
-    return { post: toPostDto(created, this.appConfig.r2()?.publicBaseUrl ?? null) };
+    const viewer = await this.posts.viewerContext(userId);
+    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    return {
+      post: toPostDto(created, this.appConfig.r2()?.publicBaseUrl ?? null, {
+        viewerHasBoosted: false,
+        includeInternal: viewerHasAdmin,
+      }),
+    };
   }
 
   @UseGuards(AuthGuard)
   @Delete(':id')
   async delete(@Param('id') id: string, @CurrentUserId() userId: string) {
     return await this.posts.deletePost({ userId, postId: id });
+  }
+
+  @UseGuards(AuthGuard)
+  @Post(':id/boost')
+  async boost(@Param('id') id: string, @CurrentUserId() userId: string) {
+    return await this.posts.boostPost({ userId, postId: id });
+  }
+
+  @UseGuards(AuthGuard)
+  @Delete(':id/boost')
+  async unboost(@Param('id') id: string, @CurrentUserId() userId: string) {
+    return await this.posts.unboostPost({ userId, postId: id });
   }
 }
 
