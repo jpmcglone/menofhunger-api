@@ -9,7 +9,9 @@ import { toUserDto } from '../users/user.dto';
 
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_BANNER_BYTES = 8 * 1024 * 1024; // 8MB
+const MAX_POST_MEDIA_BYTES = 12 * 1024 * 1024; // 12MB per attachment
 const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const ALLOWED_POST_MEDIA_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const BANNER_ASPECT_RATIO = 3; // 3:1
 const BANNER_ASPECT_TOLERANCE = 0.03; // +/- 3%
 const MIN_BANNER_WIDTH = 600;
@@ -21,6 +23,7 @@ function extForContentType(contentType: string) {
   if (contentType === 'image/jpeg') return 'jpg';
   if (contentType === 'image/png') return 'png';
   if (contentType === 'image/webp') return 'webp';
+  if (contentType === 'image/gif') return 'gif';
   return null;
 }
 
@@ -154,6 +157,39 @@ export class UploadsService {
     };
   }
 
+  async initPostMediaUpload(userId: string, contentType: string) {
+    const { s3, bucket } = this.requireR2();
+
+    const ct = contentType.trim().toLowerCase();
+    if (!ALLOWED_POST_MEDIA_CONTENT_TYPES.has(ct)) {
+      throw new BadRequestException('Unsupported media type. Please upload a JPG, PNG, WebP, or GIF.');
+    }
+    const ext = extForContentType(ct);
+    if (!ext) throw new BadRequestException('Unsupported media type.');
+
+    const key = `${this.objectKeyPrefix()}uploads/${userId}/images/${randomUUID()}.${ext}`;
+
+    const uploadUrl = await getSignedUrl(
+      s3,
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: ct,
+        CacheControl: 'public, max-age=31536000, immutable',
+      }),
+      { expiresIn: 300 },
+    );
+
+    return {
+      key,
+      uploadUrl,
+      headers: {
+        'Content-Type': ct,
+      },
+      maxBytes: MAX_POST_MEDIA_BYTES,
+    };
+  }
+
   async commitAvatarUpload(userId: string, key: string) {
     const { s3, bucket } = this.requireR2();
 
@@ -277,6 +313,53 @@ export class UploadsService {
     }
 
     return { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+  }
+
+  async commitPostMediaUpload(userId: string, key: string) {
+    const { s3, bucket } = this.requireR2();
+
+    const cleaned = (key ?? '').trim();
+    const expectedPrefix = `${this.objectKeyPrefix()}uploads/${userId}/images/`;
+    if (!cleaned.startsWith(expectedPrefix)) {
+      throw new BadRequestException('Invalid media key.');
+    }
+
+    const head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: cleaned }));
+    const contentType = (head.ContentType ?? '').toLowerCase();
+    const size = head.ContentLength ?? 0;
+
+    if (!ALLOWED_POST_MEDIA_CONTENT_TYPES.has(contentType)) {
+      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
+      throw new BadRequestException('Uploaded file is not a supported image/GIF.');
+    }
+
+    if (size > MAX_POST_MEDIA_BYTES) {
+      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
+      throw new BadRequestException('Uploaded file is too large.');
+    }
+
+    // Best-effort dimension extraction (used for rendering aspect ratios / layout).
+    let width: number | null = null;
+    let height: number | null = null;
+    try {
+      const obj = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: cleaned }));
+      const body = (obj as any).Body;
+      if (body) {
+        const buf = await streamToBuffer(body, MAX_POST_MEDIA_BYTES);
+        const dims = imageSize(buf);
+        const w = (dims as any).width ?? 0;
+        const h = (dims as any).height ?? 0;
+        if (w && h) {
+          width = Math.max(1, Math.floor(w));
+          height = Math.max(1, Math.floor(h));
+        }
+      }
+    } catch {
+      // ignore; dims optional
+    }
+
+    const kind = contentType === 'image/gif' ? 'gif' : 'image';
+    return { key: cleaned, contentType, kind, width, height };
   }
 }
 

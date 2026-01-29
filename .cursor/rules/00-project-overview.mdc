@@ -21,8 +21,12 @@ description: Core engineering conventions for menofhunger-api (NestJS + Prisma).
 ## Prisma / DB rules (high priority)
 - Any schema change requires:
   - update `prisma/schema.prisma`
-  - add a **SQL migration** under `prisma/migrations/YYYYMMDDHHMMSS_name/migration.sql`
-  - run `npx prisma migrate deploy` (local) and `npx prisma generate`
+  - generate migration SQL via a script (preferred):
+    - `npm run prisma:migrate:create -- <name>` (generates SQL diff from current DB → `schema.prisma`)
+    - then apply with `npm run prisma:migrate:deploy`
+  - **avoid manually editing migration SQL** unless absolutely necessary (migration hygiene matters for prod)
+    - if you must edit: keep changes minimal and make SQL **idempotent** where possible (`IF EXISTS`, etc.)
+  - run `npx prisma generate` after schema/migration changes
 - Prefer DB-enforced constraints:
   - add indices for query paths (filter/sort keys)
   - use unique constraints for identity fields (phone, username)

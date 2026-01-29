@@ -27,6 +27,16 @@ enum FollowVisibility {
   none
 }
 
+enum PostMediaKind {
+  image
+  gif
+}
+
+enum PostMediaSource {
+  upload
+  giphy
+}
+
 // Start minimal. Add real domain models as you solidify your product.
 model Example {
   id        String   @id @default(cuid())
@@ -109,9 +119,31 @@ model Post {
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   boosts Boost[]
+  media  PostMedia[]
 
   @@index([userId, createdAt])
   @@index([createdAt])
+}
+
+model PostMedia {
+  id        String         @id @default(cuid())
+  createdAt DateTime       @default(now())
+  kind      PostMediaKind
+  source    PostMediaSource
+  // For "upload" sources, `r2Key` is set; `url` is computed server-side from R2 base URL.
+  r2Key     String?
+  // For "giphy" sources, `url` is set (and optional mp4Url for better performance later).
+  url       String?
+  mp4Url    String?
+  width     Int?
+  height    Int?
+  position  Int            @default(0)
+
+  postId String
+  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId, position])
+  @@index([postId, createdAt])
 }
 
 model Boost {

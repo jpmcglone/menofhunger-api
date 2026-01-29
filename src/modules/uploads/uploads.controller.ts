@@ -22,6 +22,14 @@ const commitBannerSchema = z.object({
   key: z.string().min(1),
 });
 
+const initPostMediaSchema = z.object({
+  contentType: z.string().min(1),
+});
+
+const commitPostMediaSchema = z.object({
+  key: z.string().min(1),
+});
+
 @UseGuards(AuthGuard)
 @Controller('uploads')
 export class UploadsController {
@@ -73,6 +81,30 @@ export class UploadsController {
   async commitBanner(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = commitBannerSchema.parse(body);
     return await this.uploads.commitBannerUpload(userId, parsed.key);
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('upload', 60),
+      ttl: rateLimitTtl('upload', 60),
+    },
+  })
+  @Post('post-media/init')
+  async initPostMedia(@Body() body: unknown, @CurrentUserId() userId: string) {
+    const parsed = initPostMediaSchema.parse(body);
+    return await this.uploads.initPostMediaUpload(userId, parsed.contentType);
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('upload', 60),
+      ttl: rateLimitTtl('upload', 60),
+    },
+  })
+  @Post('post-media/commit')
+  async commitPostMedia(@Body() body: unknown, @CurrentUserId() userId: string) {
+    const parsed = commitPostMediaSchema.parse(body);
+    return await this.uploads.commitPostMediaUpload(userId, parsed.key);
   }
 }
 

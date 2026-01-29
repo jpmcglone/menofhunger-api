@@ -87,6 +87,12 @@ export const envSchema = z.object({
     z.string().optional(),
   ),
 
+  // Giphy (server-side proxy for GIF search)
+  GIPHY_API_KEY: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+
   // Global API rate limiting (generous defaults if unset).
   RATE_LIMIT_TTL_SECONDS: z
     .string()

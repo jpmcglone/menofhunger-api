@@ -24,6 +24,31 @@ export class PostsService {
   }
 
   private static boostScoreTtlMs = 10 * 60 * 1000;
+  private static popularHalfLifeSeconds = 24 * 60 * 60;
+  private static popularLookbackDays = 30;
+  private static popularWarmupTake = 200;
+
+  private encodePopularCursor(cursor: { asOf: string; score: number; createdAt: string; id: string }) {
+    return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+  }
+
+  private decodePopularCursor(token: string | null): { asOf: string; score: number; createdAt: string; id: string } | null {
+    const t = (token ?? '').trim();
+    if (!t) return null;
+    try {
+      const raw = Buffer.from(t, 'base64url').toString('utf8');
+      const parsed = JSON.parse(raw) as Partial<{ asOf: string; score: number; createdAt: string; id: string }>;
+      const asOf = typeof parsed.asOf === 'string' ? parsed.asOf : '';
+      const createdAt = typeof parsed.createdAt === 'string' ? parsed.createdAt : '';
+      const id = typeof parsed.id === 'string' ? parsed.id : '';
+      const score = typeof parsed.score === 'number' && Number.isFinite(parsed.score) ? parsed.score : NaN;
+      if (!asOf || !createdAt || !id) return null;
+      if (!Number.isFinite(score)) return null;
+      return { asOf, score, createdAt, id };
+    } catch {
+      return null;
+    }
+  }
 
   async ensureBoostScoresFresh(postIds: string[]) {
     const ids = (postIds ?? []).filter(Boolean);
@@ -142,7 +167,7 @@ export class PostsService {
       where: {
         AND: [{ userId, visibility: 'onlyMe', ...this.notDeletedWhere() }, ...(cursorWhere ? [cursorWhere] : [])],
       },
-      include: { user: true },
+      include: { user: true, media: { orderBy: { position: 'asc' } } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -208,7 +233,7 @@ export class PostsService {
 
     const posts = await this.prisma.post.findMany({
       where: whereWithCursor,
-      include: { user: true },
+      include: { user: true, media: { orderBy: { position: 'asc' } } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -217,6 +242,140 @@ export class PostsService {
     const nextCursor = posts.length > limit ? slice[slice.length - 1]?.id ?? null : null;
 
     return { posts: slice, nextCursor };
+  }
+
+  async listPopularFeed(params: { viewerUserId: string | null; limit: number; cursor: string | null; visibility: 'all' | PostVisibility }) {
+    const { viewerUserId, limit, cursor, visibility } = params;
+
+    const viewer = await this.viewerById(viewerUserId);
+    const allowed = this.allowedVisibilitiesForViewer(viewer);
+
+    if (visibility === 'verifiedOnly') {
+      if (!viewer || viewer.verifiedStatus === 'none') throw new ForbiddenException('Verify to view verified-only posts.');
+    }
+    if (visibility === 'premiumOnly') {
+      if (!viewer || !viewer.premium) throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+    }
+
+    const visibilityWhere =
+      visibility === 'all'
+        ? ({ visibility: { in: allowed } } as Prisma.PostWhereInput)
+        : visibility === 'public'
+          ? ({ visibility: 'public' } as Prisma.PostWhereInput)
+          : ({ visibility } as Prisma.PostWhereInput);
+
+    const visibilitiesForQuery: PostVisibility[] =
+      visibility === 'all' ? allowed : visibility === 'public' ? (['public'] as PostVisibility[]) : ([visibility] as PostVisibility[]);
+    const visibilitiesForQuerySql = visibilitiesForQuery.map((v) => Prisma.sql`${v}::"PostVisibility"`);
+
+    const decoded = this.decodePopularCursor(cursor);
+
+    // Stable pagination: keep a consistent "as-of" timestamp across pages.
+    // First page: we warm up scores for likely-top posts, then snapshot `asOf`.
+    const asOf = decoded ? new Date(decoded.asOf) : new Date();
+    const asOfMs = asOf.getTime();
+    const lookbackMs = PostsService.popularLookbackDays * 24 * 60 * 60 * 1000;
+    const minCreatedAt = new Date(asOfMs - lookbackMs);
+
+    if (!decoded) {
+      const staleBefore = new Date(asOfMs - PostsService.boostScoreTtlMs);
+      const warmup = await this.prisma.post.findMany({
+        where: {
+          AND: [
+            visibilityWhere,
+            this.notDeletedWhere(),
+            { createdAt: { gte: minCreatedAt } },
+            { boostCount: { gt: 0 } },
+            { OR: [{ boostScoreUpdatedAt: null }, { boostScoreUpdatedAt: { lt: staleBefore } }] },
+          ],
+        },
+        orderBy: [{ boostCount: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        take: PostsService.popularWarmupTake,
+        select: { id: true },
+      });
+
+      await this.ensureBoostScoresFresh(warmup.map((p) => p.id));
+    }
+
+    // Snapshot `asOf` *after* any warmup updates, so we never "amplify" scores.
+    const snapshotAsOf = decoded ? asOf : new Date();
+    const snapshotMinCreatedAt = new Date(snapshotAsOf.getTime() - lookbackMs);
+
+    const cursorCreatedAt = decoded ? new Date(decoded.createdAt) : null;
+    const cursorScore = decoded?.score ?? null;
+    const cursorId = decoded?.id ?? null;
+
+    const rows = await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date; score: number }>>(Prisma.sql`
+      WITH scored AS (
+        SELECT
+          p."id" as "id",
+          p."createdAt" as "createdAt",
+          CAST(
+            CASE
+              WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
+              ELSE p."boostScore" * POWER(
+                0.5,
+                GREATEST(
+                  0,
+                  EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."boostScoreUpdatedAt"))
+                ) / ${PostsService.popularHalfLifeSeconds}
+              )
+            END
+            AS DOUBLE PRECISION
+          ) as "score"
+        FROM "Post" p
+        WHERE
+          p."deletedAt" IS NULL
+          AND p."createdAt" >= ${snapshotMinCreatedAt}
+          AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+      )
+      SELECT "id", "createdAt", "score"
+      FROM scored
+      WHERE
+        ${
+          decoded && cursorCreatedAt && cursorScore != null && cursorId
+            ? Prisma.sql`
+              (
+                "score" < ${cursorScore}
+                OR (
+                  "score" = ${cursorScore}
+                  AND (
+                    "createdAt" < ${cursorCreatedAt}
+                    OR ("createdAt" = ${cursorCreatedAt} AND "id" < ${cursorId})
+                  )
+                )
+              )
+            `
+            : Prisma.sql`TRUE`
+        }
+      ORDER BY "score" DESC, "createdAt" DESC, "id" DESC
+      LIMIT ${limit + 1}
+    `);
+
+    const sliceRows = rows.slice(0, limit);
+    const ids = sliceRows.map((r) => r.id);
+    const nextRow = rows.length > limit ? sliceRows[sliceRows.length - 1] ?? null : null;
+
+    const posts = ids.length
+      ? await this.prisma.post.findMany({
+          where: { id: { in: ids } },
+          include: { user: true, media: { orderBy: { position: 'asc' } } },
+        })
+      : [];
+    const byId = new Map(posts.map((p) => [p.id, p] as const));
+    const ordered = ids.map((id) => byId.get(id)).filter((p): p is (typeof posts)[number] => Boolean(p));
+
+    const nextCursor =
+      rows.length > limit && nextRow
+        ? this.encodePopularCursor({
+            asOf: snapshotAsOf.toISOString(),
+            score: nextRow.score,
+            createdAt: nextRow.createdAt.toISOString(),
+            id: nextRow.id,
+          })
+        : null;
+
+    return { posts: ordered, nextCursor };
   }
 
   async listForUsername(params: {
@@ -288,7 +447,7 @@ export class PostsService {
 
     const posts = await this.prisma.post.findMany({
       where: { AND: [baseWhere, ...(cursorWhere ? [cursorWhere] : [])] },
-      include: { user: true },
+      include: { user: true, media: { orderBy: { position: 'asc' } } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -310,7 +469,7 @@ export class PostsService {
     // Guardrail: deleted posts should behave as "not found" everywhere.
     const post = await this.prisma.post.findFirst({
       where: { id: postId, ...this.notDeletedWhere() },
-      include: { user: true },
+      include: { user: true, media: { orderBy: { position: 'asc' } } },
     });
     if (!post) throw new NotFoundException('Post not found.');
 
@@ -318,7 +477,7 @@ export class PostsService {
     const isSelf = Boolean(viewer && viewer.id === post.userId);
     if (!isSelf) {
       // Only-me posts are private. Allow site admins to view for support/moderation.
-      if (post.visibility === 'onlyMe' && !viewer?.siteAdmin) throw new NotFoundException('Post not found.');
+      if (post.visibility === 'onlyMe' && !viewer?.siteAdmin) throw new ForbiddenException('This post is private.');
       if (!allowed.includes(post.visibility)) {
         if (post.visibility === 'verifiedOnly') throw new ForbiddenException('Verify to view verified-only posts.');
         if (post.visibility === 'premiumOnly') throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
@@ -349,7 +508,20 @@ export class PostsService {
     return { success: true };
   }
 
-  async createPost(params: { userId: string; body: string; visibility: PostVisibility }) {
+  async createPost(params: {
+    userId: string;
+    body: string;
+    visibility: PostVisibility;
+    media: Array<{
+      source: 'upload' | 'giphy';
+      kind: 'image' | 'gif';
+      r2Key?: string;
+      url?: string;
+      mp4Url?: string;
+      width?: number;
+      height?: number;
+    }> | null;
+  }) {
     const { userId, body, visibility } = params;
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -387,13 +559,48 @@ export class PostsService {
       );
     }
 
+    const media = (params.media ?? []).filter(Boolean);
+    if (media.length > 4) throw new BadRequestException('You can attach up to 4 images/GIFs.');
+
+    const cleanedMedia = media
+      .map((m, idx) => {
+        const source = m.source;
+        const kind = m.kind;
+        const r2Key = (m.r2Key ?? '').trim();
+        const url = (m.url ?? '').trim();
+        const mp4Url = (m.mp4Url ?? '').trim();
+        const width = typeof m.width === 'number' && Number.isFinite(m.width) ? Math.max(1, Math.floor(m.width)) : null;
+        const height = typeof m.height === 'number' && Number.isFinite(m.height) ? Math.max(1, Math.floor(m.height)) : null;
+
+        if (source === 'upload') {
+          if (!r2Key) throw new BadRequestException('Invalid uploaded media key.');
+          // Best-effort guardrail: uploaded post media keys must be namespaced by user.
+          const allowedPrefixes = [`uploads/${userId}/images/`, `dev/uploads/${userId}/images/`];
+          if (!allowedPrefixes.some((p) => r2Key.startsWith(p))) {
+            throw new BadRequestException('Invalid uploaded media key.');
+          }
+          return { source, kind, r2Key, url: null, mp4Url: null, width, height, position: idx };
+        }
+
+        if (!url) throw new BadRequestException('Invalid Giphy media URL.');
+        return { source, kind, r2Key: null, url, mp4Url: mp4Url || null, width, height, position: idx };
+      })
+      .filter(Boolean);
+
     return await this.prisma.post.create({
       data: {
         body,
         visibility,
         userId,
+        ...(cleanedMedia.length
+          ? {
+              media: {
+                create: cleanedMedia,
+              },
+            }
+          : {}),
       },
-      include: { user: true },
+      include: { user: true, media: { orderBy: { position: 'asc' } } },
     });
   }
 

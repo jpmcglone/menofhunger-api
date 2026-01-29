@@ -109,6 +109,11 @@ export class AppConfigService {
     return cfg;
   }
 
+  giphyApiKey(): string | null {
+    const v = this.config.get<string>('GIPHY_API_KEY')?.trim() ?? '';
+    return v ? v : null;
+  }
+
   rateLimitTtlSeconds(): number {
     const raw = this.config.get<string>('RATE_LIMIT_TTL_SECONDS') ?? '';
     const n = Number(raw);
@@ -215,6 +220,7 @@ export class AppConfigService {
       R2_SECRET_ACCESS_KEY: this.config.get<string>('R2_SECRET_ACCESS_KEY') as Env['R2_SECRET_ACCESS_KEY'],
       R2_BUCKET: this.config.get<string>('R2_BUCKET') as Env['R2_BUCKET'],
       R2_PUBLIC_BASE_URL: this.config.get<string>('R2_PUBLIC_BASE_URL') as Env['R2_PUBLIC_BASE_URL'],
+      GIPHY_API_KEY: this.config.get<string>('GIPHY_API_KEY') as Env['GIPHY_API_KEY'],
       RATE_LIMIT_TTL_SECONDS: this.config.get<string>('RATE_LIMIT_TTL_SECONDS') as Env['RATE_LIMIT_TTL_SECONDS'],
       RATE_LIMIT_LIMIT: this.config.get<string>('RATE_LIMIT_LIMIT') as Env['RATE_LIMIT_LIMIT'],
       RATE_LIMIT_AUTH_START_TTL_SECONDS: this.config.get<string>(

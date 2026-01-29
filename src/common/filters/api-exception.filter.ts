@@ -82,6 +82,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
     }
 
     // Unknown
+    // IMPORTANT: We still return a safe error envelope, but log the underlying error for debugging.
+    // eslint-disable-next-line no-console
+    console.error('[API] Unhandled exception', { requestId }, exception);
     const payload: ErrorEnvelope = {
       meta: {
         status: HttpStatus.INTERNAL_SERVER_ERROR,

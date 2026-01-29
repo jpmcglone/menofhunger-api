@@ -15,6 +15,9 @@ const listSchema = z.object({
   cursor: z.string().optional(),
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
   followingOnly: z.coerce.boolean().optional(),
+  // "trending" is the UI-friendly name for our half-life boost scoring feed.
+  // Keep "popular" for backwards compatibility / internal naming.
+  sort: z.enum(['new', 'popular', 'trending']).optional(),
 });
 
 const userListSchema = listSchema.extend({
@@ -25,6 +28,22 @@ const userListSchema = listSchema.extend({
 const createSchema = z.object({
   body: z.string().trim().min(1).max(500),
   visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly', 'onlyMe']).optional(),
+  media: z
+    .array(
+      z.object({
+        source: z.enum(['upload', 'giphy']),
+        kind: z.enum(['image', 'gif']),
+        // upload
+        r2Key: z.string().min(1).optional(),
+        // giphy
+        url: z.string().url().optional(),
+        mp4Url: z.string().url().optional(),
+        width: z.coerce.number().int().min(1).max(20000).optional(),
+        height: z.coerce.number().int().min(1).max(20000).optional(),
+      }),
+    )
+    .max(4)
+    .optional(),
 });
 
 @Controller('posts')
@@ -43,13 +62,23 @@ export class PostsController {
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
 
-    const res = await this.posts.listFeed({
-      viewerUserId,
-      limit,
-      cursor,
-      visibility: parsed.visibility ?? 'all',
-      followingOnly: parsed.followingOnly ?? false,
-    });
+    const sort = parsed.sort ?? 'new';
+    const sortKind = sort === 'trending' ? 'popular' : sort;
+    const res =
+      sortKind === 'popular'
+        ? await this.posts.listPopularFeed({
+            viewerUserId,
+            limit,
+            cursor,
+            visibility: parsed.visibility ?? 'all',
+          })
+        : await this.posts.listFeed({
+            viewerUserId,
+            limit,
+            cursor,
+            visibility: parsed.visibility ?? 'all',
+            followingOnly: parsed.followingOnly ?? false,
+          });
 
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
@@ -179,6 +208,7 @@ export class PostsController {
       userId,
       body: parsed.body,
       visibility: parsed.visibility ?? 'public',
+      media: parsed.media ?? null,
     });
 
     const viewer = await this.posts.viewerContext(userId);

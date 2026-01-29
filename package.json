@@ -21,6 +21,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:create": "node scripts/create-migration-from-db.js",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio"
   },
