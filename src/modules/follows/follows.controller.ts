@@ -1,10 +1,12 @@
 import { Controller, Delete, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { z } from 'zod';
+import { Throttle } from '@nestjs/throttler';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { FollowsService } from './follows.service';
+import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 
 const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -23,12 +25,24 @@ export class FollowsController {
   }
 
   @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
   @Post(':username')
   async follow(@Param('username') username: string, @CurrentUserId() viewerUserId: string) {
     return await this.follows.follow({ viewerUserId, username });
   }
 
   @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
   @Delete(':username')
   async unfollow(@Param('username') username: string, @CurrentUserId() viewerUserId: string) {
     return await this.follows.unfollow({ viewerUserId, username });

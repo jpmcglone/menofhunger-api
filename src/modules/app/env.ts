@@ -96,6 +96,87 @@ export const envSchema = z.object({
     .string()
     .optional()
     .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_LIMIT must be a number'),
+
+  // Route-specific throttles (all optional; defaults are reasonable).
+  RATE_LIMIT_AUTH_START_TTL_SECONDS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_AUTH_START_TTL_SECONDS must be a number'),
+  RATE_LIMIT_AUTH_START_LIMIT: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_AUTH_START_LIMIT must be a number'),
+
+  RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS must be a number'),
+  RATE_LIMIT_AUTH_VERIFY_LIMIT: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_AUTH_VERIFY_LIMIT must be a number'),
+
+  RATE_LIMIT_POST_CREATE_TTL_SECONDS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_POST_CREATE_TTL_SECONDS must be a number'),
+  RATE_LIMIT_POST_CREATE_LIMIT: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_POST_CREATE_LIMIT must be a number'),
+
+  RATE_LIMIT_INTERACT_TTL_SECONDS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_INTERACT_TTL_SECONDS must be a number'),
+  RATE_LIMIT_INTERACT_LIMIT: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_INTERACT_LIMIT must be a number'),
+
+  RATE_LIMIT_UPLOAD_TTL_SECONDS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_UPLOAD_TTL_SECONDS must be a number'),
+  RATE_LIMIT_UPLOAD_LIMIT: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_UPLOAD_LIMIT must be a number'),
+
+  // Express / proxy settings (recommended in production behind a reverse proxy / Cloudflare).
+  // When enabled, Express will respect X-Forwarded-* headers for req.ip / req.protocol.
+  TRUST_PROXY: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+
+  // Body size limits (protects memory + prevents accidental huge payloads).
+  BODY_JSON_LIMIT: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('1mb'),
+  ),
+  BODY_URLENCODED_LIMIT: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('25kb'),
+  ),
+
+  // CSRF hardening (cookie auth): require Origin/Referer on unsafe methods in production.
+  REQUIRE_CSRF_ORIGIN_IN_PROD: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('true'),
+  ),
+
+  // Dev-only: log every request (method, path, status, ms, request-id).
+  LOG_REQUESTS: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+
+  // Dev-only: print startup config summary (opt-in).
+  LOG_STARTUP_INFO: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
 }).superRefine((env, ctx) => {
   if (env.NODE_ENV !== 'production') return;
 

@@ -1,9 +1,11 @@
 import { BadRequestException, Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { AuthService } from './auth.service';
 import { OTP_CODE_LENGTH } from './auth.constants';
 import { normalizePhone } from './auth.utils';
+import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 
 const startSchema = z.object({
   phone: z.string().min(1),
@@ -26,6 +28,12 @@ const existsSchema = z.object({
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('authStart', 8),
+      ttl: rateLimitTtl('authStart', 60),
+    },
+  })
   @Post('phone/start')
   async start(@Body() body: unknown) {
     const parsed = startSchema.parse(body);
@@ -51,6 +59,12 @@ export class AuthController {
     return { exists };
   }
 
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('authVerify', 20),
+      ttl: rateLimitTtl('authVerify', 60),
+    },
+  })
   @Post('phone/verify')
   async verify(@Body() body: unknown, @Res({ passthrough: true }) res: Response) {
     const parsed = verifySchema.parse(body);

@@ -12,6 +12,7 @@ type ErrorEnvelope = {
   meta: {
     status: number;
     errors: ApiError[];
+    requestId?: string;
   };
 };
 
@@ -40,6 +41,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const res = ctx.getResponse<Response>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const req = ctx.getRequest<any>();
+    const requestId = (req?.requestId as string | undefined) ?? (req?.headers?.['x-request-id'] as string | undefined) ?? null;
 
     // Zod validation errors
     if (exception instanceof ZodError) {
@@ -73,7 +77,8 @@ export class ApiExceptionFilter implements ExceptionFilter {
           ],
         },
       };
-      return res.status(status).json(payload);
+      const withReqId = requestId ? ({ ...payload, meta: { ...payload.meta, requestId } } as any) : payload;
+      return res.status(status).json(withReqId);
     }
 
     // Unknown
@@ -89,7 +94,8 @@ export class ApiExceptionFilter implements ExceptionFilter {
         ],
       },
     };
-    return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json(payload);
+    const withReqId = requestId ? ({ ...payload, meta: { ...payload.meta, requestId } } as any) : payload;
+    return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json(withReqId);
   }
 }
 

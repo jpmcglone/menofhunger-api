@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Inj
 import { Prisma } from '@prisma/client';
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 
 export type PostCounts = {
   all: number;
@@ -132,12 +133,18 @@ export class PostsService {
   async listOnlyMe(params: { userId: string; limit: number; cursor: string | null }) {
     const { userId, limit, cursor } = params;
 
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor,
+      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+    });
+
     const posts = await this.prisma.post.findMany({
-      where: { userId, visibility: 'onlyMe', ...this.notDeletedWhere() },
+      where: {
+        AND: [{ userId, visibility: 'onlyMe', ...this.notDeletedWhere() }, ...(cursorWhere ? [cursorWhere] : [])],
+      },
       include: { user: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
 
     const slice = posts.slice(0, limit);
@@ -171,10 +178,10 @@ export class PostsService {
 
     const visibilityWhere =
       visibility === 'all'
-        ? ({ visibility: { in: allowed } } as const)
+        ? ({ visibility: { in: allowed } } as Prisma.PostWhereInput)
         : visibility === 'public'
-          ? ({ visibility: 'public' } as const)
-          : ({ visibility } as const);
+          ? ({ visibility: 'public' } as Prisma.PostWhereInput)
+          : ({ visibility } as Prisma.PostWhereInput);
 
     const where = followingOnly
       ? {
@@ -193,12 +200,17 @@ export class PostsService {
         }
       : { AND: [visibilityWhere, this.notDeletedWhere()] };
 
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor,
+      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+    });
+    const whereWithCursor = cursorWhere ? ({ AND: [where, cursorWhere] } as Prisma.PostWhereInput) : where;
+
     const posts = await this.prisma.post.findMany({
-      where,
+      where: whereWithCursor,
       include: { user: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
 
     const slice = posts.slice(0, limit);
@@ -264,15 +276,21 @@ export class PostsService {
       if (!viewer || !viewer.premium) throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
     }
 
+    const baseWhere =
+      visibility === 'all'
+        ? ({ userId: user.id, visibility: { in: allowed }, ...this.notDeletedWhere() } as Prisma.PostWhereInput)
+        : ({ userId: user.id, visibility, ...this.notDeletedWhere() } as Prisma.PostWhereInput);
+
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor,
+      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+    });
+
     const posts = await this.prisma.post.findMany({
-      where:
-        visibility === 'all'
-          ? { userId: user.id, visibility: { in: allowed }, ...this.notDeletedWhere() }
-          : { userId: user.id, visibility, ...this.notDeletedWhere() },
+      where: { AND: [baseWhere, ...(cursorWhere ? [cursorWhere] : [])] },
       include: { user: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
 
     const slice = posts.slice(0, limit);

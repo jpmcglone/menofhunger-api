@@ -122,6 +122,82 @@ export class AppConfigService {
     return Number.isFinite(n) && n > 0 ? n : 600;
   }
 
+  private readPositiveInt(key: string, fallback: number) {
+    const raw = this.config.get<string>(key) ?? '';
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+  }
+
+  rateLimitAuthStartTtlSeconds(): number {
+    return this.readPositiveInt('RATE_LIMIT_AUTH_START_TTL_SECONDS', 60);
+  }
+  rateLimitAuthStartLimit(): number {
+    return this.readPositiveInt('RATE_LIMIT_AUTH_START_LIMIT', 8);
+  }
+
+  rateLimitAuthVerifyTtlSeconds(): number {
+    return this.readPositiveInt('RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS', 60);
+  }
+  rateLimitAuthVerifyLimit(): number {
+    return this.readPositiveInt('RATE_LIMIT_AUTH_VERIFY_LIMIT', 20);
+  }
+
+  rateLimitPostCreateTtlSeconds(): number {
+    return this.readPositiveInt('RATE_LIMIT_POST_CREATE_TTL_SECONDS', 60);
+  }
+  rateLimitPostCreateLimit(): number {
+    return this.readPositiveInt('RATE_LIMIT_POST_CREATE_LIMIT', 30);
+  }
+
+  rateLimitInteractTtlSeconds(): number {
+    return this.readPositiveInt('RATE_LIMIT_INTERACT_TTL_SECONDS', 60);
+  }
+  rateLimitInteractLimit(): number {
+    return this.readPositiveInt('RATE_LIMIT_INTERACT_LIMIT', 180);
+  }
+
+  rateLimitUploadTtlSeconds(): number {
+    return this.readPositiveInt('RATE_LIMIT_UPLOAD_TTL_SECONDS', 60);
+  }
+  rateLimitUploadLimit(): number {
+    return this.readPositiveInt('RATE_LIMIT_UPLOAD_LIMIT', 60);
+  }
+
+  trustProxy(): boolean {
+    const raw = this.config.get<string>('TRUST_PROXY') ?? '';
+    const v = raw.trim().toLowerCase();
+    return ['1', 'true', 'yes', 'on'].includes(v);
+  }
+
+  bodyJsonLimit(): string {
+    return (this.config.get<string>('BODY_JSON_LIMIT') ?? '1mb').trim() || '1mb';
+  }
+
+  bodyUrlEncodedLimit(): string {
+    return (this.config.get<string>('BODY_URLENCODED_LIMIT') ?? '25kb').trim() || '25kb';
+  }
+
+  requireCsrfOriginInProd(): boolean {
+    const raw = this.config.get<string>('REQUIRE_CSRF_ORIGIN_IN_PROD') ?? '';
+    const v = raw.trim().toLowerCase();
+    // default true
+    if (!v) return true;
+    return ['1', 'true', 'yes', 'on'].includes(v);
+  }
+
+  logRequests(): boolean {
+    // Only meaningful in non-prod; still allow explicit opt-in elsewhere if needed.
+    const raw = this.config.get<string>('LOG_REQUESTS') ?? '';
+    const v = raw.trim().toLowerCase();
+    return ['1', 'true', 'yes', 'on'].includes(v);
+  }
+
+  logStartupInfo(): boolean {
+    const raw = this.config.get<string>('LOG_STARTUP_INFO') ?? '';
+    const v = raw.trim().toLowerCase();
+    return ['1', 'true', 'yes', 'on'].includes(v);
+  }
+
   // Optional: typed access to full validated env object if needed later.
   envSnapshot(): Partial<Env> {
     return {
@@ -141,6 +217,32 @@ export class AppConfigService {
       R2_PUBLIC_BASE_URL: this.config.get<string>('R2_PUBLIC_BASE_URL') as Env['R2_PUBLIC_BASE_URL'],
       RATE_LIMIT_TTL_SECONDS: this.config.get<string>('RATE_LIMIT_TTL_SECONDS') as Env['RATE_LIMIT_TTL_SECONDS'],
       RATE_LIMIT_LIMIT: this.config.get<string>('RATE_LIMIT_LIMIT') as Env['RATE_LIMIT_LIMIT'],
+      RATE_LIMIT_AUTH_START_TTL_SECONDS: this.config.get<string>(
+        'RATE_LIMIT_AUTH_START_TTL_SECONDS',
+      ) as Env['RATE_LIMIT_AUTH_START_TTL_SECONDS'],
+      RATE_LIMIT_AUTH_START_LIMIT: this.config.get<string>('RATE_LIMIT_AUTH_START_LIMIT') as Env['RATE_LIMIT_AUTH_START_LIMIT'],
+      RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS: this.config.get<string>(
+        'RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS',
+      ) as Env['RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS'],
+      RATE_LIMIT_AUTH_VERIFY_LIMIT: this.config.get<string>('RATE_LIMIT_AUTH_VERIFY_LIMIT') as Env['RATE_LIMIT_AUTH_VERIFY_LIMIT'],
+      RATE_LIMIT_POST_CREATE_TTL_SECONDS: this.config.get<string>(
+        'RATE_LIMIT_POST_CREATE_TTL_SECONDS',
+      ) as Env['RATE_LIMIT_POST_CREATE_TTL_SECONDS'],
+      RATE_LIMIT_POST_CREATE_LIMIT: this.config.get<string>(
+        'RATE_LIMIT_POST_CREATE_LIMIT',
+      ) as Env['RATE_LIMIT_POST_CREATE_LIMIT'],
+      RATE_LIMIT_INTERACT_TTL_SECONDS: this.config.get<string>(
+        'RATE_LIMIT_INTERACT_TTL_SECONDS',
+      ) as Env['RATE_LIMIT_INTERACT_TTL_SECONDS'],
+      RATE_LIMIT_INTERACT_LIMIT: this.config.get<string>('RATE_LIMIT_INTERACT_LIMIT') as Env['RATE_LIMIT_INTERACT_LIMIT'],
+      RATE_LIMIT_UPLOAD_TTL_SECONDS: this.config.get<string>('RATE_LIMIT_UPLOAD_TTL_SECONDS') as Env['RATE_LIMIT_UPLOAD_TTL_SECONDS'],
+      RATE_LIMIT_UPLOAD_LIMIT: this.config.get<string>('RATE_LIMIT_UPLOAD_LIMIT') as Env['RATE_LIMIT_UPLOAD_LIMIT'],
+      TRUST_PROXY: this.config.get<string>('TRUST_PROXY') as Env['TRUST_PROXY'],
+      BODY_JSON_LIMIT: this.config.get<string>('BODY_JSON_LIMIT') as Env['BODY_JSON_LIMIT'],
+      BODY_URLENCODED_LIMIT: this.config.get<string>('BODY_URLENCODED_LIMIT') as Env['BODY_URLENCODED_LIMIT'],
+      REQUIRE_CSRF_ORIGIN_IN_PROD: this.config.get<string>(
+        'REQUIRE_CSRF_ORIGIN_IN_PROD',
+      ) as Env['REQUIRE_CSRF_ORIGIN_IN_PROD'],
     };
   }
 }

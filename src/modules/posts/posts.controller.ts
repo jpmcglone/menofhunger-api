@@ -1,12 +1,14 @@
 import { Body, Controller, Delete, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import type { Request } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
 import { CurrentUserId } from '../users/users.decorator';
 import { PostsService } from './posts.service';
 import { toPostDto } from './post.dto';
+import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 
 const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -164,6 +166,12 @@ export class PostsController {
   }
 
   @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('postCreate', 30),
+      ttl: rateLimitTtl('postCreate', 60),
+    },
+  })
   @Post()
   async create(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = createSchema.parse(body);
@@ -184,18 +192,36 @@ export class PostsController {
   }
 
   @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
   @Delete(':id')
   async delete(@Param('id') id: string, @CurrentUserId() userId: string) {
     return await this.posts.deletePost({ userId, postId: id });
   }
 
   @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
   @Post(':id/boost')
   async boost(@Param('id') id: string, @CurrentUserId() userId: string) {
     return await this.posts.boostPost({ userId, postId: id });
   }
 
   @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
   @Delete(':id/boost')
   async unboost(@Param('id') id: string, @CurrentUserId() userId: string) {
     return await this.posts.unboostPost({ userId, postId: id });

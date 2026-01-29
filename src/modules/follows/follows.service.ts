@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
+import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 
 export type FollowRelationship = {
   viewerFollowsUser: boolean;
@@ -222,8 +223,15 @@ export class FollowsService {
     });
     if (!canView) throw new NotFoundException('Not found.');
 
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor,
+      lookup: async (id) => await this.prisma.follow.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+    });
+
     const rows = await this.prisma.follow.findMany({
-      where: { followingId: target.id, follower: { usernameIsSet: true } },
+      where: {
+        AND: [{ followingId: target.id, follower: { usernameIsSet: true } }, ...(cursorWhere ? [cursorWhere] : [])],
+      },
       include: {
         follower: {
           select: {
@@ -239,7 +247,6 @@ export class FollowsService {
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
 
     const slice = rows.slice(0, limit);
@@ -285,8 +292,15 @@ export class FollowsService {
     });
     if (!canView) throw new NotFoundException('Not found.');
 
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor,
+      lookup: async (id) => await this.prisma.follow.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+    });
+
     const rows = await this.prisma.follow.findMany({
-      where: { followerId: target.id, following: { usernameIsSet: true } },
+      where: {
+        AND: [{ followerId: target.id, following: { usernameIsSet: true } }, ...(cursorWhere ? [cursorWhere] : [])],
+      },
       include: {
         following: {
           select: {
@@ -302,7 +316,6 @@ export class FollowsService {
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
 
     const slice = rows.slice(0, limit);
