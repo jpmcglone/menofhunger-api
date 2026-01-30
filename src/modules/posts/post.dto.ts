@@ -26,6 +26,7 @@ export type PostDto = {
   body: string;
   visibility: PostVisibility;
   boostCount: number;
+  bookmarkCount: number;
   media: PostMediaDto[];
   viewerHasBoosted?: boolean;
   viewerHasBookmarked?: boolean;
@@ -91,6 +92,7 @@ export function toPostDto(
     body: post.body,
     visibility: post.visibility,
     boostCount: post.boostCount,
+    bookmarkCount: (post as any).bookmarkCount ?? 0,
     media,
     ...(typeof opts?.viewerHasBoosted === 'boolean' ? { viewerHasBoosted: opts.viewerHasBoosted } : {}),
     ...(typeof opts?.viewerHasBookmarked === 'boolean' ? { viewerHasBookmarked: opts.viewerHasBookmarked } : {}),

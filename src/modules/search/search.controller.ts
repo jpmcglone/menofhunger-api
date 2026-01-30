@@ -6,6 +6,8 @@ import { AppConfigService } from '../app/app-config.service';
 import { toPostDto } from '../posts/post.dto';
 import { PostsService } from '../posts/posts.service';
 import { SearchService } from './search.service';
+import { Throttle } from '@nestjs/throttler';
+import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 
 const searchSchema = z.object({
   q: z.string().trim().max(200).optional(),
@@ -24,6 +26,12 @@ export class SearchController {
     private readonly appConfig: AppConfigService,
   ) {}
 
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('search', 120),
+      ttl: rateLimitTtl('search', 60),
+    },
+  })
   @Get()
   async searchAll(@Req() req: Request, @Query() query: unknown) {
     const parsed = searchSchema.parse(query);

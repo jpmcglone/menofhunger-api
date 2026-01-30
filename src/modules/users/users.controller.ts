@@ -8,6 +8,8 @@ import { CurrentUserId } from './users.decorator';
 import { validateUsername } from './users.utils';
 import { toUserDto } from './user.dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
+import { Throttle } from '@nestjs/throttler';
+import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -54,6 +56,12 @@ export class UsersController {
     private readonly appConfig: AppConfigService,
   ) {}
 
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 120),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
   @Get('username/available')
   async usernameAvailable(@Query('username') username: string | undefined) {
     const parsed = validateUsername(username ?? '');
@@ -122,6 +130,12 @@ export class UsersController {
     }
   }
 
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 300),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
   @Get(':username')
   async publicProfile(@Param('username') username: string) {
     const raw = (username ?? '').trim();

@@ -141,11 +141,32 @@ export class BookmarksService {
       if (!ok) throw new NotFoundException('Collection not found.');
     }
 
-    const bookmark = await this.prisma.bookmark.upsert({
-      where: { userId_postId: { userId, postId } },
-      create: { userId, postId, collectionId },
-      update: { collectionId },
-      select: { id: true, createdAt: true, collectionId: true },
+    const bookmark = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.bookmark.createMany({
+        data: [{ userId, postId, collectionId }],
+        skipDuplicates: true,
+      });
+
+      // Keep a fast counter on Post for UI + scoring.
+      if (created.count > 0) {
+        await tx.post.update({
+          where: { id: postId },
+          data: { bookmarkCount: { increment: created.count } },
+        });
+      }
+
+      // Always ensure the bookmark is in the requested collection (including null).
+      await tx.bookmark.updateMany({
+        where: { userId, postId },
+        data: { collectionId },
+      });
+
+      const row = await tx.bookmark.findUnique({
+        where: { userId_postId: { userId, postId } },
+        select: { id: true, collectionId: true },
+      });
+      if (!row) throw new Error('Bookmark upsert failed.');
+      return row;
     });
 
     return { success: true, bookmarked: true, bookmarkId: bookmark.id, collectionId: bookmark.collectionId ?? null };
@@ -156,7 +177,15 @@ export class BookmarksService {
     const postId = (params.postId ?? '').trim();
     if (!postId) throw new BadRequestException('Post id is required.');
 
-    await this.prisma.bookmark.deleteMany({ where: { userId, postId } });
+    await this.prisma.$transaction(async (tx) => {
+      const deleted = await tx.bookmark.deleteMany({ where: { userId, postId } });
+      if (deleted.count > 0) {
+        await tx.post.update({
+          where: { id: postId },
+          data: { bookmarkCount: { decrement: deleted.count } },
+        });
+      }
+    });
     return { success: true, bookmarked: false };
   }
 }

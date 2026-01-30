@@ -269,8 +269,31 @@ export class PostsService {
     return { posts: slice, nextCursor };
   }
 
-  async listPopularFeed(params: { viewerUserId: string | null; limit: number; cursor: string | null; visibility: 'all' | PostVisibility }) {
-    const { viewerUserId, limit, cursor, visibility } = params;
+  /**
+   * Returns [viewerUserId, ...userIds the viewer follows] for "following" feed scope.
+   * Used by trending (popular) feed when followingOnly is true.
+   */
+  private async getAuthorIdsForFollowingFilter(viewerUserId: string): Promise<string[]> {
+    const follows = await this.prisma.follow.findMany({
+      where: { followerId: viewerUserId },
+      select: { followingId: true },
+    });
+    const followingIds = follows.map((f) => f.followingId);
+    return [viewerUserId, ...followingIds];
+  }
+
+  /**
+   * Trending feed: same half-life boost + bookmark scoring everywhere.
+   * Scope: site-wide (authorUserIds null), or only from authors [viewer + followed] (home "following"), or one user (profile).
+   */
+  async listPopularFeed(params: {
+    viewerUserId: string | null;
+    limit: number;
+    cursor: string | null;
+    visibility: 'all' | PostVisibility;
+    followingOnly?: boolean;
+  }) {
+    const { viewerUserId, limit, cursor, visibility, followingOnly = false } = params;
 
     const viewer = await this.viewerById(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
@@ -281,6 +304,13 @@ export class PostsService {
     if (visibility === 'premiumOnly') {
       if (!viewer || !viewer.premium) throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
     }
+
+    if (followingOnly && !viewerUserId) {
+      return { posts: [], nextCursor: null };
+    }
+
+    const authorUserIds: string[] | null =
+      followingOnly && viewerUserId ? await this.getAuthorIdsForFollowingFilter(viewerUserId) : null;
 
     const visibilityWhere =
       visibility === 'all'
@@ -302,12 +332,17 @@ export class PostsService {
     const lookbackMs = PostsService.popularLookbackDays * 24 * 60 * 60 * 1000;
     const minCreatedAt = new Date(asOfMs - lookbackMs);
 
+    const warmupAuthorFilter = authorUserIds?.length
+      ? ({ userId: { in: authorUserIds } } as Prisma.PostWhereInput)
+      : undefined;
+
     if (!decoded) {
       const staleBefore = new Date(asOfMs - PostsService.boostScoreTtlMs);
       const warmup = await this.prisma.post.findMany({
         where: {
           AND: [
             visibilityWhere,
+            ...(warmupAuthorFilter ? [warmupAuthorFilter] : []),
             this.notDeletedWhere(),
             { createdAt: { gte: minCreatedAt } },
             { boostCount: { gt: 0 } },
@@ -330,13 +365,19 @@ export class PostsService {
     const cursorScore = decoded?.score ?? null;
     const cursorId = decoded?.id ?? null;
 
+    const authorFilterSql =
+      authorUserIds?.length
+        ? Prisma.sql`AND p."userId" IN (${Prisma.join(authorUserIds.map((id) => Prisma.sql`${id}`))})`
+        : Prisma.sql``;
+
     const rows = await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date; score: number }>>(Prisma.sql`
       WITH scored AS (
         SELECT
           p."id" as "id",
           p."createdAt" as "createdAt",
           CAST(
-            CASE
+            (
+              CASE
               WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
               ELSE p."boostScore" * POWER(
                 0.5,
@@ -345,7 +386,20 @@ export class PostsService {
                   EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."boostScoreUpdatedAt"))
                 ) / ${PostsService.popularHalfLifeSeconds}
               )
-            END
+              END
+            )
+            +
+            (
+              -- Bookmarks are a quieter signal than boosts: they indicate “save for later,”
+              -- so we count them, but decay them by post age so this stays “trending”.
+              (p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(
+                0.5,
+                GREATEST(
+                  0,
+                  EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                ) / ${PostsService.popularHalfLifeSeconds}
+              )
+            )
             AS DOUBLE PRECISION
           ) as "score"
         FROM "Post" p
@@ -353,6 +407,7 @@ export class PostsService {
           p."deletedAt" IS NULL
           AND p."createdAt" >= ${snapshotMinCreatedAt}
           AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+          ${authorFilterSql}
       )
       SELECT "id", "createdAt", "score"
       FROM scored
@@ -410,8 +465,9 @@ export class PostsService {
     cursor: string | null;
     visibility: 'all' | PostVisibility;
     includeCounts: boolean;
+    sort: 'new' | 'popular';
   }) {
-    const { viewerUserId, username, limit, cursor, visibility, includeCounts } = params;
+    const { viewerUserId, username, limit, cursor, visibility, includeCounts, sort } = params;
     const normalized = (username ?? '').trim();
     if (!normalized) throw new NotFoundException('User not found.');
 
@@ -464,6 +520,131 @@ export class PostsService {
       visibility === 'all'
         ? ({ userId: user.id, visibility: { in: allowed }, ...this.notDeletedWhere() } as Prisma.PostWhereInput)
         : ({ userId: user.id, visibility, ...this.notDeletedWhere() } as Prisma.PostWhereInput);
+
+    if (sort === 'popular') {
+      // Trending for profile: same half-life boost + bookmark scoring as home feed, scoped to this user.
+      const visibilitiesForQuery: PostVisibility[] =
+        visibility === 'all' ? allowed : visibility === 'public' ? (['public'] as PostVisibility[]) : ([visibility] as PostVisibility[]);
+      const visibilitiesForQuerySql = visibilitiesForQuery.map((v) => Prisma.sql`${v}::"PostVisibility"`);
+
+      const decoded = this.decodePopularCursor(cursor);
+      const asOf = decoded ? new Date(decoded.asOf) : new Date();
+      const asOfMs = asOf.getTime();
+      const lookbackMs = PostsService.popularLookbackDays * 24 * 60 * 60 * 1000;
+      const minCreatedAt = new Date(asOfMs - lookbackMs);
+
+      if (!decoded) {
+        const staleBefore = new Date(asOfMs - PostsService.boostScoreTtlMs);
+        const warmup = await this.prisma.post.findMany({
+          where: {
+            AND: [
+              { userId: user.id },
+              { visibility: { in: visibilitiesForQuery } },
+              this.notDeletedWhere(),
+              { createdAt: { gte: minCreatedAt } },
+              { boostCount: { gt: 0 } },
+              { OR: [{ boostScoreUpdatedAt: null }, { boostScoreUpdatedAt: { lt: staleBefore } }] },
+            ],
+          },
+          orderBy: [{ boostCount: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          take: PostsService.popularWarmupTake,
+          select: { id: true },
+        });
+        await this.ensureBoostScoresFresh(warmup.map((p) => p.id));
+      }
+
+      const snapshotAsOf = decoded ? asOf : new Date();
+      const snapshotMinCreatedAt = new Date(snapshotAsOf.getTime() - lookbackMs);
+
+      const cursorCreatedAt = decoded ? new Date(decoded.createdAt) : null;
+      const cursorScore = decoded?.score ?? null;
+      const cursorId = decoded?.id ?? null;
+
+      const rows = await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date; score: number }>>(Prisma.sql`
+        WITH scored AS (
+          SELECT
+            p."id" as "id",
+            p."createdAt" as "createdAt",
+            CAST(
+              (
+                CASE
+                WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
+                ELSE p."boostScore" * POWER(
+                  0.5,
+                  GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."boostScoreUpdatedAt"))
+                  ) / ${PostsService.popularHalfLifeSeconds}
+                )
+                END
+              )
+              +
+              (
+                (p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(
+                  0.5,
+                  GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                  ) / ${PostsService.popularHalfLifeSeconds}
+                )
+              )
+              AS DOUBLE PRECISION
+            ) as "score"
+          FROM "Post" p
+          WHERE
+            p."deletedAt" IS NULL
+            AND p."createdAt" >= ${snapshotMinCreatedAt}
+            AND p."userId" = ${user.id}
+            AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+        )
+        SELECT "id", "createdAt", "score"
+        FROM scored
+        WHERE
+          ${
+            decoded && cursorCreatedAt && cursorScore != null && cursorId
+              ? Prisma.sql`
+                (
+                  "score" < ${cursorScore}
+                  OR (
+                    "score" = ${cursorScore}
+                    AND (
+                      "createdAt" < ${cursorCreatedAt}
+                      OR ("createdAt" = ${cursorCreatedAt} AND "id" < ${cursorId})
+                    )
+                  )
+                )
+              `
+              : Prisma.sql`TRUE`
+          }
+        ORDER BY "score" DESC, "createdAt" DESC, "id" DESC
+        LIMIT ${limit + 1}
+      `);
+
+      const sliceRows = rows.slice(0, limit);
+      const ids = sliceRows.map((r) => r.id);
+      const nextRow = rows.length > limit ? sliceRows[sliceRows.length - 1] ?? null : null;
+
+      const posts = ids.length
+        ? await this.prisma.post.findMany({
+            where: { id: { in: ids } },
+            include: { user: true, media: { orderBy: { position: 'asc' } } },
+          })
+        : [];
+      const byId = new Map(posts.map((p) => [p.id, p] as const));
+      const ordered = ids.map((id) => byId.get(id)).filter((p): p is (typeof posts)[number] => Boolean(p));
+
+      const nextCursor =
+        rows.length > limit && nextRow
+          ? this.encodePopularCursor({
+              asOf: snapshotAsOf.toISOString(),
+              score: nextRow.score,
+              createdAt: nextRow.createdAt.toISOString(),
+              id: nextRow.id,
+            })
+          : null;
+
+      return { posts: ordered, nextCursor, counts };
+    }
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,

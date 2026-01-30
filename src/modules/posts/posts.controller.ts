@@ -69,6 +69,12 @@ export class PostsController {
   ) {}
 
   @UseGuards(OptionalAuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 240),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
   @Get()
   async list(@Req() req: Request, @Query() query: unknown) {
     const parsed = listSchema.parse(query);
@@ -86,6 +92,7 @@ export class PostsController {
             limit,
             cursor,
             visibility: parsed.visibility ?? 'all',
+            followingOnly: parsed.followingOnly ?? false,
           })
         : await this.posts.listFeed({
             viewerUserId,
@@ -130,6 +137,8 @@ export class PostsController {
     const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
+    const sort = parsed.sort ?? 'new';
+    const sortKind = sort === 'trending' ? 'popular' : sort;
 
     const res = await this.posts.listForUsername({
       viewerUserId,
@@ -138,6 +147,7 @@ export class PostsController {
       cursor,
       visibility: parsed.visibility ?? 'all',
       includeCounts: parsed.includeCounts ?? true,
+      sort: sortKind === 'popular' ? 'popular' : 'new',
     });
 
     const viewer = await this.posts.viewerContext(viewerUserId);
@@ -197,6 +207,12 @@ export class PostsController {
   }
 
   @UseGuards(OptionalAuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 600),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
   @Get(':id')
   async getById(@Req() req: Request, @Param('id') id: string) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

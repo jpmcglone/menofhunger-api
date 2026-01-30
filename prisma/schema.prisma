@@ -114,6 +114,7 @@ model Post {
   body       String
   visibility PostVisibility @default(public)
   boostCount Int            @default(0)
+  bookmarkCount Int         @default(0)
   boostScore Float?
   boostScoreUpdatedAt DateTime?
 
