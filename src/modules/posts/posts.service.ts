@@ -146,6 +146,31 @@ export class PostsService {
     return new Set(boosts.map((b) => b.postId));
   }
 
+  async viewerBookmarksByPostId(params: { viewerUserId: string; postIds: string[] }) {
+    const { viewerUserId, postIds } = params;
+    if (!viewerUserId) return new Map<string, { collectionId: string | null }>();
+    const ids = (postIds ?? []).filter(Boolean);
+    if (ids.length === 0) return new Map<string, { collectionId: string | null }>();
+
+    let rows: Array<{ postId: string; collectionId: string | null }>;
+    try {
+      rows = await this.prisma.bookmark.findMany({
+        where: { userId: viewerUserId, postId: { in: ids } },
+        select: { postId: true, collectionId: true },
+      });
+    } catch (e: unknown) {
+      // If migrations haven't been applied yet, don't crash the entire feed.
+      // Prisma throws P2021 when the underlying table doesn't exist.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2021') {
+        return new Map<string, { collectionId: string | null }>();
+      }
+      throw e;
+    }
+    const out = new Map<string, { collectionId: string | null }>();
+    for (const r of rows) out.set(r.postId, { collectionId: r.collectionId ?? null });
+    return out;
+  }
+
   private allowedVisibilitiesForViewer(
     viewer: { verifiedStatus: VerifiedStatus; premium: boolean; siteAdmin?: boolean } | null,
   ) {

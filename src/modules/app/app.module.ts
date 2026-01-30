@@ -16,6 +16,8 @@ import { UploadsModule } from '../uploads/uploads.module';
 import { PostsModule } from '../posts/posts.module';
 import { FollowsModule } from '../follows/follows.module';
 import { GiphyModule } from '../giphy/giphy.module';
+import { BookmarksModule } from '../bookmarks/bookmarks.module';
+import { SearchModule } from '../search/search.module';
 
 @Module({
   imports: [
@@ -42,6 +44,8 @@ import { GiphyModule } from '../giphy/giphy.module';
     PostsModule,
     FollowsModule,
     GiphyModule,
+    BookmarksModule,
+    SearchModule,
   ],
   controllers: [AppController],
   providers: [

@@ -81,6 +81,8 @@ model User {
   sessions  Session[]
   posts     Post[]
   boosts    Boost[]
+  bookmarks Bookmark[]
+  bookmarkCollections BookmarkCollection[]
   // Social graph (self-referential via Follow).
   // `following`: users this user follows (outgoing edges)
   // `followers`: users who follow this user (incoming edges)
@@ -120,9 +122,45 @@ model Post {
 
   boosts Boost[]
   media  PostMedia[]
+  bookmarks Bookmark[]
 
   @@index([userId, createdAt])
   @@index([createdAt])
+}
+
+model BookmarkCollection {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name String
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  bookmarks Bookmark[]
+
+  @@unique([userId, name])
+  @@index([userId, createdAt])
+}
+
+model Bookmark {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  postId String
+  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  collectionId String?
+  collection   BookmarkCollection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, postId])
+  @@index([userId, createdAt])
+  @@index([collectionId, createdAt])
+  @@index([postId, createdAt])
 }
 
 model PostMedia {

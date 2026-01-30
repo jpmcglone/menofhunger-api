@@ -25,26 +25,41 @@ const userListSchema = listSchema.extend({
   includeCounts: z.coerce.boolean().optional(),
 });
 
-const createSchema = z.object({
-  body: z.string().trim().min(1).max(500),
-  visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly', 'onlyMe']).optional(),
-  media: z
-    .array(
-      z.object({
-        source: z.enum(['upload', 'giphy']),
-        kind: z.enum(['image', 'gif']),
-        // upload
-        r2Key: z.string().min(1).optional(),
-        // giphy
-        url: z.string().url().optional(),
-        mp4Url: z.string().url().optional(),
-        width: z.coerce.number().int().min(1).max(20000).optional(),
-        height: z.coerce.number().int().min(1).max(20000).optional(),
-      }),
-    )
-    .max(4)
-    .optional(),
-});
+const createMediaItemSchema = z.discriminatedUnion('source', [
+  z.object({
+    source: z.literal('upload'),
+    kind: z.enum(['image', 'gif']),
+    r2Key: z.string().min(1),
+    width: z.coerce.number().int().min(1).max(20000).optional(),
+    height: z.coerce.number().int().min(1).max(20000).optional(),
+  }),
+  z.object({
+    source: z.literal('giphy'),
+    kind: z.literal('gif'),
+    url: z.string().url(),
+    mp4Url: z.string().url().optional(),
+    width: z.coerce.number().int().min(1).max(20000).optional(),
+    height: z.coerce.number().int().min(1).max(20000).optional(),
+  }),
+]);
+
+const createSchema = z
+  .object({
+    body: z.string().trim().max(500).optional(),
+    visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly', 'onlyMe']).optional(),
+    media: z.array(createMediaItemSchema).max(4).optional(),
+  })
+  .superRefine((val, ctx) => {
+    const body = (val.body ?? '').trim();
+    const mediaCount = val.media?.length ?? 0;
+    if (!body && mediaCount === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Post must include text or media.',
+        path: ['body'],
+      });
+    }
+  });
 
 @Controller('posts')
 export class PostsController {
@@ -88,12 +103,17 @@ export class PostsController {
           postIds: res.posts.map((p) => p.id),
         })
       : new Set<string>();
+    const bookmarksByPostId = viewerUserId
+      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: res.posts.map((p) => p.id) })
+      : new Map<string, { collectionId: string | null }>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(res.posts.map((p) => p.id)) : null;
 
     return {
       posts: res.posts.map((p) =>
         toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: boosted.has(p.id),
+          viewerHasBookmarked: bookmarksByPostId.has(p.id),
+          viewerBookmarkCollectionId: bookmarksByPostId.get(p.id)?.collectionId ?? null,
           includeInternal: viewerHasAdmin,
           internalOverride: internalByPostId?.get(p.id),
         }),
@@ -128,12 +148,17 @@ export class PostsController {
           postIds: res.posts.map((p) => p.id),
         })
       : new Set<string>();
+    const bookmarksByPostId = viewerUserId
+      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: res.posts.map((p) => p.id) })
+      : new Map<string, { collectionId: string | null }>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(res.posts.map((p) => p.id)) : null;
 
     return {
       posts: res.posts.map((p) =>
         toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: boosted.has(p.id),
+          viewerHasBookmarked: bookmarksByPostId.has(p.id),
+          viewerBookmarkCollectionId: bookmarksByPostId.get(p.id)?.collectionId ?? null,
           includeInternal: viewerHasAdmin,
           internalOverride: internalByPostId?.get(p.id),
         }),
@@ -183,11 +208,16 @@ export class PostsController {
     const boosted = viewerUserId
       ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds: [res.id] })
       : new Set<string>();
+    const bookmarksByPostId = viewerUserId
+      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: [res.id] })
+      : new Map<string, { collectionId: string | null }>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh([res.id]) : null;
 
     return {
       post: toPostDto(res, this.appConfig.r2()?.publicBaseUrl ?? null, {
         viewerHasBoosted: boosted.has(res.id),
+        viewerHasBookmarked: bookmarksByPostId.has(res.id),
+        viewerBookmarkCollectionId: bookmarksByPostId.get(res.id)?.collectionId ?? null,
         includeInternal: viewerHasAdmin,
         internalOverride: internalByPostId?.get(res.id),
       }),
@@ -206,7 +236,7 @@ export class PostsController {
     const parsed = createSchema.parse(body);
     const created = await this.posts.createPost({
       userId,
-      body: parsed.body,
+      body: (parsed.body ?? '').trim(),
       visibility: parsed.visibility ?? 'public',
       media: parsed.media ?? null,
     });

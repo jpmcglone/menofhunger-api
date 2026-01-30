@@ -28,6 +28,8 @@ export type PostDto = {
   boostCount: number;
   media: PostMediaDto[];
   viewerHasBoosted?: boolean;
+  viewerHasBookmarked?: boolean;
+  viewerBookmarkCollectionId?: string | null;
   internal?: {
     boostScore: number | null;
     boostScoreUpdatedAt: string | null;
@@ -42,6 +44,8 @@ export function toPostDto(
   publicAssetBaseUrl: string | null = null,
   opts?: {
     viewerHasBoosted?: boolean;
+    viewerHasBookmarked?: boolean;
+    viewerBookmarkCollectionId?: string | null;
     includeInternal?: boolean;
     internalOverride?: {
       boostScore: number | null;
@@ -89,6 +93,10 @@ export function toPostDto(
     boostCount: post.boostCount,
     media,
     ...(typeof opts?.viewerHasBoosted === 'boolean' ? { viewerHasBoosted: opts.viewerHasBoosted } : {}),
+    ...(typeof opts?.viewerHasBookmarked === 'boolean' ? { viewerHasBookmarked: opts.viewerHasBookmarked } : {}),
+    ...(typeof opts?.viewerBookmarkCollectionId !== 'undefined'
+      ? { viewerBookmarkCollectionId: opts.viewerBookmarkCollectionId ?? null }
+      : {}),
     ...(opts?.includeInternal
       ? {
           internal: {
