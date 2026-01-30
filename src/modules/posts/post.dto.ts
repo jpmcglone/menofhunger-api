@@ -18,6 +18,8 @@ export type PostMediaDto = {
   mp4Url: string | null;
   width: number | null;
   height: number | null;
+  // When present, the media was hard-deleted from storage and should render as a placeholder.
+  deletedAt: string | null;
 };
 
 export type PostDto = {
@@ -67,8 +69,12 @@ export function toPostDto(
     .slice()
     .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
     .map((m) => {
-      const url =
-        m.source === 'upload'
+      const deletedAt = (m as any).deletedAt ? ((m as any).deletedAt as Date).toISOString() : (m as any).deletedAt ?? null;
+      const isDeleted = Boolean(deletedAt);
+
+      const url = isDeleted
+        ? ''
+        : m.source === 'upload'
           ? publicAssetUrl({
               publicBaseUrl: publicAssetBaseUrl,
               key: m.r2Key ?? null,
@@ -82,9 +88,10 @@ export function toPostDto(
         mp4Url: m.mp4Url ?? null,
         width: typeof (m as any).width === 'number' ? ((m as any).width as number) : m.width ?? null,
         height: typeof (m as any).height === 'number' ? ((m as any).height as number) : m.height ?? null,
+        deletedAt: deletedAt || null,
       };
     })
-    .filter((m) => Boolean(m.url));
+    .filter((m) => Boolean(m.url) || Boolean(m.deletedAt));
 
   return {
     id: post.id,

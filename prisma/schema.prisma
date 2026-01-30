@@ -89,6 +89,10 @@ model User {
   following Follow[] @relation("Follow_follower")
   followers Follow[] @relation("Follow_following")
 
+  // Admin audit relations
+  deletedPostMedia PostMedia[] @relation("PostMedia_deletedByAdmin")
+  deletedMediaAssets MediaAsset[] @relation("MediaAsset_deletedByAdmin")
+
   @@index([phone])
 }
 
@@ -178,11 +182,41 @@ model PostMedia {
   height    Int?
   position  Int            @default(0)
 
+  // Admin tombstone: media can be hard-deleted from storage, but we keep the row so posts can render a placeholder.
+  deletedAt        DateTime?
+  deletedByAdminId String?
+  deletedReason    String?
+  deletedByAdmin   User?    @relation("PostMedia_deletedByAdmin", fields: [deletedByAdminId], references: [id], onDelete: SetNull)
+
   postId String
   post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@index([postId, position])
   @@index([postId, createdAt])
+  @@index([deletedAt])
+}
+
+// Admin indexed view of all R2-backed media objects (including orphans).
+model MediaAsset {
+  id             String   @id @default(cuid())
+  createdAt      DateTime @default(now())
+
+  r2Key          String   @unique
+  r2LastModified DateTime?
+  bytes          Int?
+  contentType    String?
+  kind           PostMediaKind?
+  width          Int?
+  height         Int?
+
+  deletedAt        DateTime?
+  deletedByAdminId String?
+  deleteReason     String?
+  r2DeletedAt      DateTime?
+  deletedByAdmin   User?    @relation("MediaAsset_deletedByAdmin", fields: [deletedByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([r2LastModified, id])
+  @@index([deletedAt])
 }
 
 model Boost {

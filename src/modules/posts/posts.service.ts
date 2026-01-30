@@ -27,6 +27,12 @@ export class PostsService {
   private static popularHalfLifeSeconds = 24 * 60 * 60;
   private static popularLookbackDays = 30;
   private static popularWarmupTake = 200;
+  // Popular feed candidate selection: bias toward recency, but include top engaged.
+  // Keep bounded so we never score/sort an unbounded 30-day set.
+  private static popularRecentWindowHours = 72;
+  private static popularCandidatesRecentTake = 8000;
+  private static popularCandidatesBoostedTake = 1500;
+  private static popularCandidatesBookmarkedTake = 1500;
 
   private encodePopularCursor(cursor: { asOf: string; score: number; createdAt: string; id: string }) {
     return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
@@ -360,6 +366,7 @@ export class PostsService {
     // Snapshot `asOf` *after* any warmup updates, so we never "amplify" scores.
     const snapshotAsOf = decoded ? asOf : new Date();
     const snapshotMinCreatedAt = new Date(snapshotAsOf.getTime() - lookbackMs);
+    const recentCutoff = new Date(snapshotAsOf.getTime() - PostsService.popularRecentWindowHours * 60 * 60 * 1000);
 
     const cursorCreatedAt = decoded ? new Date(decoded.createdAt) : null;
     const cursorScore = decoded?.score ?? null;
@@ -371,7 +378,53 @@ export class PostsService {
         : Prisma.sql``;
 
     const rows = await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date; score: number }>>(Prisma.sql`
-      WITH scored AS (
+      WITH candidates AS (
+        SELECT u."id" as "id"
+        FROM (
+          (
+            -- Recency bucket: include recent posts even with no engagement.
+            SELECT p."id"
+            FROM "Post" p
+            WHERE
+              p."deletedAt" IS NULL
+              AND p."createdAt" >= ${snapshotMinCreatedAt}
+              AND p."createdAt" >= ${recentCutoff}
+              AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+              ${authorFilterSql}
+            ORDER BY p."createdAt" DESC, p."id" DESC
+            LIMIT ${PostsService.popularCandidatesRecentTake}
+          )
+          UNION
+          (
+            -- Engagement buckets: pull top boosted + top bookmarked to ensure true "winners" are included.
+            SELECT p."id"
+            FROM "Post" p
+            WHERE
+              p."deletedAt" IS NULL
+              AND p."createdAt" >= ${snapshotMinCreatedAt}
+              AND p."boostCount" > 0
+              AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+              ${authorFilterSql}
+            ORDER BY p."boostCount" DESC, p."createdAt" DESC, p."id" DESC
+            LIMIT ${PostsService.popularCandidatesBoostedTake}
+          )
+          UNION
+          (
+            SELECT p."id"
+            FROM "Post" p
+            WHERE
+              p."deletedAt" IS NULL
+              AND p."createdAt" >= ${snapshotMinCreatedAt}
+              AND p."bookmarkCount" > 0
+              AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+              ${authorFilterSql}
+            ORDER BY p."bookmarkCount" DESC, p."createdAt" DESC, p."id" DESC
+            LIMIT ${PostsService.popularCandidatesBookmarkedTake}
+          )
+        ) u
+        GROUP BY u."id"
+      ),
+      scored AS (
         SELECT
           p."id" as "id",
           p."createdAt" as "createdAt",
@@ -403,11 +456,7 @@ export class PostsService {
             AS DOUBLE PRECISION
           ) as "score"
         FROM "Post" p
-        WHERE
-          p."deletedAt" IS NULL
-          AND p."createdAt" >= ${snapshotMinCreatedAt}
-          AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
-          ${authorFilterSql}
+        JOIN candidates c ON c."id" = p."id"
       )
       SELECT "id", "createdAt", "score"
       FROM scored
