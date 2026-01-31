@@ -107,6 +107,7 @@ export class PostsController {
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
     // Dedupe: keep only leaf posts (posts that are not an ancestor of any other post). So A→B→C returns only C, not A or B.
+    // O(leaves × max chain depth) in-memory; no extra DB queries or indexes needed.
     const idToPost = new Map(res.posts.map((p) => [p.id, p]));
     const strictAncestorIds = new Set<string>();
     for (const p of res.posts) {
@@ -197,7 +198,7 @@ export class PostsController {
 
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-    // Dedupe: keep only leaf posts (posts that are not an ancestor of any other post). So A→B→C returns only C, not A or B.
+    // Dedupe: keep only leaf posts (same as list()). O(leaves × max chain depth) in-memory.
     const idToPostUser = new Map(res.posts.map((p) => [p.id, p]));
     const strictAncestorIdsUser = new Set<string>();
     for (const p of res.posts) {
