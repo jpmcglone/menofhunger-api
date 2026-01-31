@@ -106,9 +106,18 @@ export class PostsController {
 
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-    // Dedupe: do not return a top-level post as standalone if it is already the parent of a reply in this list.
-    const idsThatAreParents = new Set(res.posts.map((p) => p.parentId).filter(Boolean));
-    const filteredPosts = res.posts.filter((p) => p.parentId != null || !idsThatAreParents.has(p.id));
+    // Dedupe: keep only leaf posts (posts that are not an ancestor of any other post). So A→B→C returns only C, not A or B.
+    const idToPost = new Map(res.posts.map((p) => [p.id, p]));
+    const strictAncestorIds = new Set<string>();
+    for (const p of res.posts) {
+      let currentId = p.parentId ?? null;
+      while (currentId) {
+        strictAncestorIds.add(currentId);
+        const parentPost = idToPost.get(currentId);
+        currentId = parentPost?.parentId ?? null;
+      }
+    }
+    const filteredPosts = res.posts.filter((p) => !strictAncestorIds.has(p.id));
 
     // Collect full ancestor chain (walk parentId until null) and fetch all ancestors.
     const parentMap = new Map<string, (Awaited<ReturnType<typeof this.posts.getById>>)>();
@@ -188,13 +197,22 @@ export class PostsController {
 
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-    // Dedupe: do not return a top-level post as standalone if it is already the parent of a reply in this list.
-    const idsThatAreParents = new Set(res.posts.map((p) => p.parentId).filter(Boolean));
-    const filteredPosts = res.posts.filter((p) => p.parentId != null || !idsThatAreParents.has(p.id));
+    // Dedupe: keep only leaf posts (posts that are not an ancestor of any other post). So A→B→C returns only C, not A or B.
+    const idToPostUser = new Map(res.posts.map((p) => [p.id, p]));
+    const strictAncestorIdsUser = new Set<string>();
+    for (const p of res.posts) {
+      let currentId = p.parentId ?? null;
+      while (currentId) {
+        strictAncestorIdsUser.add(currentId);
+        const parentPost = idToPostUser.get(currentId);
+        currentId = parentPost?.parentId ?? null;
+      }
+    }
+    const filteredPostsUser = res.posts.filter((p) => !strictAncestorIdsUser.has(p.id));
 
     // Collect full ancestor chain (walk parentId until null) and fetch all ancestors.
     const parentMap = new Map<string, (Awaited<ReturnType<typeof this.posts.getById>>)>();
-    let toFetch = new Set<string>(filteredPosts.map((p) => p.parentId).filter(Boolean) as string[]);
+    let toFetch = new Set<string>(filteredPostsUser.map((p) => p.parentId).filter(Boolean) as string[]);
     while (toFetch.size > 0) {
       const batch = [...toFetch].filter((id) => !parentMap.has(id));
       if (batch.length === 0) break;
@@ -213,7 +231,7 @@ export class PostsController {
       toFetch = nextIds;
     }
 
-    const allPostIds = [...filteredPosts.map((p) => p.id), ...parentMap.keys()];
+    const allPostIds = [...filteredPostsUser.map((p) => p.id), ...parentMap.keys()];
     const boosted = viewerUserId
       ? await this.posts.viewerBoostedPostIds({
           viewerUserId,
@@ -223,10 +241,10 @@ export class PostsController {
     const bookmarksByPostId = viewerUserId
       ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
       : new Map<string, { collectionIds: string[] }>();
-    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)) : null;
+    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPostsUser.map((p) => p.id)) : null;
 
     const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const attachParentChain = (post: (typeof filteredPosts)[number]): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } => {
+    const attachParentChain = (post: (typeof filteredPostsUser)[number]): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } => {
       const dto = toPostDto(post, baseUrl, {
         viewerHasBoosted: boosted.has(post.id),
         viewerHasBookmarked: bookmarksByPostId.has(post.id),
@@ -236,13 +254,13 @@ export class PostsController {
       }) as ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> };
       const parent = post.parentId ? parentMap.get(post.parentId) : null;
       if (parent) {
-        dto.parent = attachParentChain(parent as (typeof filteredPosts)[number]);
+        dto.parent = attachParentChain(parent as (typeof filteredPostsUser)[number]);
       }
       return dto;
     };
 
     return {
-      posts: filteredPosts.map((p) => attachParentChain(p)),
+      posts: filteredPostsUser.map((p) => attachParentChain(p)),
       nextCursor: res.nextCursor,
       counts: res.counts ?? null,
     };
