@@ -29,6 +29,9 @@ async function bootstrap() {
   // Make route-specific rate limits available to Throttler resolvers.
   // (Stored on Express app locals so it can be accessed from ExecutionContext without DI.)
   const http = app.getHttpAdapter().getInstance();
+  // API responses should not be conditional-cached via ETag/If-None-Match.
+  // Some clients (Nuxt/$fetch) treat 304 as an error, which can cause retry loops.
+  http.disable?.('etag');
   http.locals = http.locals ?? {};
   http.locals.mohRateLimits = {
     authStart: { limit: appConfig.rateLimitAuthStartLimit(), ttl: appConfig.rateLimitAuthStartTtlSeconds() },
@@ -82,6 +85,17 @@ async function bootstrap() {
 
   // Cookies (auth).
   app.use(cookieParser());
+
+  // Admin endpoints should never be cached (prevents 304 loops in production behind CDNs/proxies).
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const path = String(req.originalUrl || req.url || '');
+    if (path.startsWith('/admin/')) {
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+    next();
+  });
 
   // Request id (for tracing + debugging). Returned as `x-request-id`.
   app.use((req: Request, res: Response, next: NextFunction) => {

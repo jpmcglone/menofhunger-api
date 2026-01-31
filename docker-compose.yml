@@ -7,7 +7,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: menofhunger
     ports:
-      - "5432:5432"
+      # Defaults to host 5432. Override by setting POSTGRES_PORT (e.g. 5433) in a local `.env`.
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - menofhunger_pgdata:/var/lib/postgresql/data
     healthcheck:
