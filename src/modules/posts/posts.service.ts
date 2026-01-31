@@ -33,6 +33,9 @@ export class PostsService {
   private static popularCandidatesRecentTake = 8000;
   private static popularCandidatesBoostedTake = 1500;
   private static popularCandidatesBookmarkedTake = 1500;
+  private static popularCandidatesCommentedTake = 1500;
+  /** Weight for comment score in trending (same as bookmarks: quieter signal than boosts). */
+  private static commentScoreWeight = 0.5;
 
   private encodePopularCursor(cursor: { asOf: string; score: number; createdAt: string; id: string }) {
     return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
@@ -196,7 +199,10 @@ export class PostsService {
 
     const posts = await this.prisma.post.findMany({
       where: {
-        AND: [{ userId, visibility: 'onlyMe', ...this.notDeletedWhere() }, ...(cursorWhere ? [cursorWhere] : [])],
+        AND: [
+          { userId, visibility: 'onlyMe', parentId: null, ...this.notDeletedWhere() },
+          ...(cursorWhere ? [cursorWhere] : []),
+        ],
       },
       include: { user: true, media: { orderBy: { position: 'asc' } } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -348,6 +354,7 @@ export class PostsService {
         where: {
           AND: [
             visibilityWhere,
+            { parentId: null },
             ...(warmupAuthorFilter ? [warmupAuthorFilter] : []),
             this.notDeletedWhere(),
             { createdAt: { gte: minCreatedAt } },
@@ -378,7 +385,29 @@ export class PostsService {
         : Prisma.sql``;
 
     const rows = await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date; score: number }>>(Prisma.sql`
-      WITH candidates AS (
+      WITH
+      comment_scores AS (
+        SELECT
+          p."parentId" as "postId",
+          CAST(
+            SUM(
+              POWER(
+                0.5,
+                GREATEST(
+                  0,
+                  EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                ) / ${PostsService.popularHalfLifeSeconds}
+              )
+            ) AS DOUBLE PRECISION
+          ) as "commentScore"
+        FROM "Post" p
+        WHERE
+          p."parentId" IS NOT NULL
+          AND p."deletedAt" IS NULL
+          AND p."createdAt" >= ${snapshotMinCreatedAt}
+        GROUP BY p."parentId"
+      ),
+      candidates AS (
         SELECT u."id" as "id"
         FROM (
           (
@@ -387,6 +416,7 @@ export class PostsService {
             FROM "Post" p
             WHERE
               p."deletedAt" IS NULL
+              AND p."parentId" IS NULL
               AND p."createdAt" >= ${snapshotMinCreatedAt}
               AND p."createdAt" >= ${recentCutoff}
               AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
@@ -396,11 +426,12 @@ export class PostsService {
           )
           UNION
           (
-            -- Engagement buckets: pull top boosted + top bookmarked to ensure true "winners" are included.
+            -- Engagement buckets: top boosted, bookmarked, and commented.
             SELECT p."id"
             FROM "Post" p
             WHERE
               p."deletedAt" IS NULL
+              AND p."parentId" IS NULL
               AND p."createdAt" >= ${snapshotMinCreatedAt}
               AND p."boostCount" > 0
               AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
@@ -414,12 +445,27 @@ export class PostsService {
             FROM "Post" p
             WHERE
               p."deletedAt" IS NULL
+              AND p."parentId" IS NULL
               AND p."createdAt" >= ${snapshotMinCreatedAt}
               AND p."bookmarkCount" > 0
               AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
               ${authorFilterSql}
             ORDER BY p."bookmarkCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesBookmarkedTake}
+          )
+          UNION
+          (
+            SELECT p."id"
+            FROM "Post" p
+            WHERE
+              p."deletedAt" IS NULL
+              AND p."parentId" IS NULL
+              AND p."createdAt" >= ${snapshotMinCreatedAt}
+              AND p."commentCount" > 0
+              AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+              ${authorFilterSql}
+            ORDER BY p."commentCount" DESC, p."createdAt" DESC, p."id" DESC
+            LIMIT ${PostsService.popularCandidatesCommentedTake}
           )
         ) u
         GROUP BY u."id"
@@ -453,10 +499,15 @@ export class PostsService {
                 ) / ${PostsService.popularHalfLifeSeconds}
               )
             )
+            +
+            (
+              (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight}
+            )
             AS DOUBLE PRECISION
           ) as "score"
         FROM "Post" p
         JOIN candidates c ON c."id" = p."id"
+        LEFT JOIN comment_scores cs ON cs."postId" = p."id"
       )
       SELECT "id", "createdAt", "score"
       FROM scored
@@ -567,7 +618,11 @@ export class PostsService {
 
     const baseWhere =
       visibility === 'all'
-        ? ({ userId: user.id, visibility: { in: allowed }, ...this.notDeletedWhere() } as Prisma.PostWhereInput)
+        ? ({
+            userId: user.id,
+            visibility: { in: allowed },
+            ...this.notDeletedWhere(),
+          } as Prisma.PostWhereInput)
         : ({ userId: user.id, visibility, ...this.notDeletedWhere() } as Prisma.PostWhereInput);
 
     if (sort === 'popular') {
@@ -588,6 +643,7 @@ export class PostsService {
           where: {
             AND: [
               { userId: user.id },
+              { parentId: null },
               { visibility: { in: visibilitiesForQuery } },
               this.notDeletedWhere(),
               { createdAt: { gte: minCreatedAt } },
@@ -610,7 +666,29 @@ export class PostsService {
       const cursorId = decoded?.id ?? null;
 
       const rows = await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date; score: number }>>(Prisma.sql`
-        WITH scored AS (
+        WITH
+        comment_scores AS (
+          SELECT
+            p."parentId" as "postId",
+            CAST(
+              SUM(
+                POWER(
+                  0.5,
+                  GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                  ) / ${PostsService.popularHalfLifeSeconds}
+                )
+              ) AS DOUBLE PRECISION
+            ) as "commentScore"
+          FROM "Post" p
+          WHERE
+            p."parentId" IS NOT NULL
+            AND p."deletedAt" IS NULL
+            AND p."createdAt" >= ${snapshotMinCreatedAt}
+          GROUP BY p."parentId"
+        ),
+        scored AS (
           SELECT
             p."id" as "id",
             p."createdAt" as "createdAt",
@@ -637,11 +715,17 @@ export class PostsService {
                   ) / ${PostsService.popularHalfLifeSeconds}
                 )
               )
+              +
+              (
+                (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight}
+              )
               AS DOUBLE PRECISION
             ) as "score"
           FROM "Post" p
+          LEFT JOIN comment_scores cs ON cs."postId" = p."id"
           WHERE
             p."deletedAt" IS NULL
+            AND p."parentId" IS NULL
             AND p."createdAt" >= ${snapshotMinCreatedAt}
             AND p."userId" = ${user.id}
             AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
@@ -713,6 +797,130 @@ export class PostsService {
     return { posts: slice, nextCursor, counts };
   }
 
+  private encodeCommentCursor(cursor: { createdAt: string; id: string }) {
+    return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+  }
+
+  private decodeCommentCursor(
+    token: string | null,
+  ): { createdAt: string; id: string } | null {
+    const t = (token ?? '').trim();
+    if (!t) return null;
+    try {
+      const raw = Buffer.from(t, 'base64url').toString('utf8');
+      const parsed = JSON.parse(raw) as Partial<{ createdAt: string; id: string }>;
+      const createdAt = typeof parsed.createdAt === 'string' ? parsed.createdAt : '';
+      const id = typeof parsed.id === 'string' ? parsed.id : '';
+      if (!createdAt || !id) return null;
+      return { createdAt, id };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * List comments for a post. Viewer must be able to see the parent (same rule as getById).
+   * Only top-level posts can have comments; only-me parents are unreachable.
+   */
+  async listComments(params: {
+    viewerUserId: string | null;
+    postId: string;
+    limit: number;
+    cursor: string | null;
+  }) {
+    const { viewerUserId, postId, limit, cursor } = params;
+    const parent = await this.getById({ viewerUserId, id: postId });
+    if (parent.visibility === 'onlyMe') {
+      throw new ForbiddenException('This post is private.');
+    }
+
+    const decoded = this.decodeCommentCursor(cursor);
+    const cursorWhere =
+      decoded != null
+        ? ({
+            OR: [
+              { createdAt: { gt: new Date(decoded.createdAt) } },
+              { AND: [{ createdAt: new Date(decoded.createdAt) }, { id: { gt: decoded.id } }] },
+            ],
+          } as Prisma.PostWhereInput)
+        : undefined;
+
+    // Reuse same filters as other post queries: not deleted + visibility the viewer is allowed to see.
+    // Comments are created with parent.visibility, so filter by parent's visibility (viewer already passed getById).
+    const baseWhere = {
+      parentId: postId,
+      visibility: parent.visibility,
+      ...this.notDeletedWhere(),
+    };
+    const comments = await this.prisma.post.findMany({
+      where: cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere,
+      include: {
+        user: true,
+        media: { orderBy: { position: 'asc' } },
+        mentions: { include: { user: { select: { id: true, username: true } } } },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: limit + 1,
+    });
+
+    const slice = comments.slice(0, limit);
+    const nextCursor =
+      comments.length > limit && slice[slice.length - 1]
+        ? this.encodeCommentCursor({
+            createdAt: slice[slice.length - 1].createdAt.toISOString(),
+            id: slice[slice.length - 1].id,
+          })
+        : null;
+
+    return { comments: slice, nextCursor };
+  }
+
+  /**
+   * Thread participants = root post author + all comment authors (one-level threads).
+   * Used to pre-fill mentions when composing a reply.
+   */
+  async getThreadParticipants(params: { viewerUserId: string | null; postId: string }) {
+    const { viewerUserId, postId } = params;
+    const post = await this.getById({ viewerUserId, id: postId });
+    if (post.visibility === 'onlyMe') {
+      throw new ForbiddenException('This post is private.');
+    }
+
+    // Root: walk parentId up (for this phase, comments have parent = top-level, so root = post if parentId null, else parent).
+    let rootId: string;
+    if (post.parentId) {
+      const parent = await this.prisma.post.findUnique({
+        where: { id: post.parentId },
+        select: { id: true, parentId: true },
+      });
+      rootId = parent?.parentId ?? post.parentId;
+    } else {
+      rootId = post.id;
+    }
+
+    const replyAuthors = await this.prisma.post.findMany({
+      where: { parentId: rootId, ...this.notDeletedWhere() },
+      select: { userId: true },
+    });
+    const rootRow = await this.prisma.post.findUnique({
+      where: { id: rootId },
+      select: { userId: true },
+    });
+    const authorIds = new Set<string>();
+    if (rootRow) authorIds.add(rootRow.userId);
+    for (const r of replyAuthors) authorIds.add(r.userId);
+
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: Array.from(authorIds) } },
+      select: { id: true, username: true },
+    });
+    return {
+      participants: users
+        .filter((u) => u.username != null)
+        .map((u) => ({ id: u.id, username: u.username as string })),
+    };
+  }
+
   async getById(params: { viewerUserId: string | null; id: string }) {
     const { viewerUserId, id } = params;
     const postId = (id ?? '').trim();
@@ -724,7 +932,11 @@ export class PostsService {
     // Guardrail: deleted posts should behave as "not found" everywhere.
     const post = await this.prisma.post.findFirst({
       where: { id: postId, ...this.notDeletedWhere() },
-      include: { user: true, media: { orderBy: { position: 'asc' } } },
+      include: {
+        user: true,
+        media: { orderBy: { position: 'asc' } },
+        mentions: { include: { user: { select: { id: true, username: true } } } },
+      },
     });
     if (!post) throw new NotFoundException('Post not found.');
 
@@ -763,10 +975,46 @@ export class PostsService {
     return { success: true };
   }
 
+  /** Resolve usernames to user ids (case-insensitive, usernameIsSet). Invalid usernames ignored. */
+  private async resolveMentionUsernames(usernames: string[]): Promise<string[]> {
+    if (usernames.length === 0) return [];
+    const normalized = [...new Set(usernames.map((u) => u.trim().slice(0, 120)).filter(Boolean))];
+    if (normalized.length === 0) return [];
+    const users = await this.prisma.user.findMany({
+      where: {
+        usernameIsSet: true,
+        OR: normalized.map((u) => ({ username: { equals: u, mode: 'insensitive' as const } })),
+      },
+      select: { id: true, username: true },
+    });
+    const byLower = new Map<string, string>();
+    for (const u of users) {
+      if (u.username) byLower.set(u.username.toLowerCase(), u.id);
+    }
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const name of normalized) {
+      const id = byLower.get(name.toLowerCase());
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+    return ids;
+  }
+
+  /** Parse @username tokens from body (word chars, max 120). */
+  private parseMentionsFromBody(body: string): string[] {
+    const matches = body.matchAll(/@([a-zA-Z0-9_]{1,120})/g);
+    return [...new Set([...matches].map((m) => m[1]))];
+  }
+
   async createPost(params: {
     userId: string;
     body: string;
     visibility: PostVisibility;
+    parentId?: string | null;
+    mentions?: string[] | null;
     media: Array<{
       source: 'upload' | 'giphy';
       kind: 'image' | 'gif';
@@ -777,18 +1025,51 @@ export class PostsService {
       height?: number;
     }> | null;
   }) {
-    const { userId, body, visibility } = params;
+    const { userId, body, visibility: requestedVisibility, parentId, mentions: clientMentions } = params;
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { verifiedStatus: true, premium: true },
     });
     if (!user) throw new NotFoundException('User not found.');
     // Unverified members can post to "Only me" (private drafts / journaling), but nothing else.
-    if (user.verifiedStatus === 'none' && visibility !== 'onlyMe') {
+    if (user.verifiedStatus === 'none' && requestedVisibility !== 'onlyMe') {
       throw new ForbiddenException('Verify your account to post publicly.');
     }
-    if (visibility === 'premiumOnly' && !user.premium) {
+    if (requestedVisibility === 'premiumOnly' && !user.premium) {
       throw new ForbiddenException('Upgrade to premium to create premium-only posts.');
+    }
+
+    let visibility: PostVisibility = requestedVisibility;
+    let threadParticipantIds: string[] = [];
+
+    if (parentId) {
+      const parent = await this.prisma.post.findFirst({
+        where: { id: parentId, ...this.notDeletedWhere() },
+        include: { user: { select: { id: true } } },
+      });
+      if (!parent) throw new NotFoundException('Post not found.');
+      if (parent.visibility === 'onlyMe') {
+        throw new ForbiddenException('Comments are not allowed on only-me posts.');
+      }
+      const viewer = await this.viewerById(userId);
+      const allowed = this.allowedVisibilitiesForViewer(viewer);
+      const isSelf = parent.userId === userId;
+      if (!isSelf) {
+        if (!allowed.includes(parent.visibility)) {
+          if (parent.visibility === 'verifiedOnly') throw new ForbiddenException('Verify to view verified-only posts.');
+          if (parent.visibility === 'premiumOnly') throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+          throw new ForbiddenException('Not allowed to reply to this post.');
+        }
+      }
+      visibility = parent.visibility as PostVisibility;
+      const rootId = parent.parentId ?? parent.id;
+      const replyAuthors = await this.prisma.post.findMany({
+        where: { parentId: rootId, ...this.notDeletedWhere() },
+        select: { userId: true },
+      });
+      const authorIds = new Set<string>([parent.user.id]);
+      for (const r of replyAuthors) authorIds.add(r.userId);
+      threadParticipantIds = Array.from(authorIds);
     }
 
     const cfg = await this.getSiteConfig();
@@ -829,7 +1110,6 @@ export class PostsService {
 
         if (source === 'upload') {
           if (!r2Key) throw new BadRequestException('Invalid uploaded media key.');
-          // Best-effort guardrail: uploaded post media keys must be namespaced by user.
           const allowedPrefixes = [`uploads/${userId}/images/`, `dev/uploads/${userId}/images/`];
           if (!allowedPrefixes.some((p) => r2Key.startsWith(p))) {
             throw new BadRequestException('Invalid uploaded media key.');
@@ -842,21 +1122,56 @@ export class PostsService {
       })
       .filter(Boolean);
 
-    return await this.prisma.post.create({
-      data: {
-        body,
-        visibility,
-        userId,
-        ...(cleanedMedia.length
-          ? {
-              media: {
-                create: cleanedMedia,
-              },
-            }
-          : {}),
-      },
-      include: { user: true, media: { orderBy: { position: 'asc' } } },
+    const fromBody = this.parseMentionsFromBody(body);
+    const clientUsernames = Array.isArray(clientMentions) ? clientMentions.filter((x) => typeof x === 'string' && x.length <= 120) : [];
+    const allUsernames = [...new Set([...clientUsernames, ...fromBody])];
+    const resolvedFromUsernames = await this.resolveMentionUsernames(allUsernames);
+    const mentionUserIds = [...new Set([...threadParticipantIds, ...resolvedFromUsernames])];
+
+    const post = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.post.create({
+        data: {
+          body,
+          visibility,
+          userId,
+          parentId: parentId ?? undefined,
+          ...(cleanedMedia.length
+            ? {
+                media: {
+                  create: cleanedMedia,
+                },
+              }
+            : {}),
+        },
+        include: { user: true, media: { orderBy: { position: 'asc' } } },
+      });
+
+      if (parentId) {
+        await tx.post.update({
+          where: { id: parentId },
+          data: { commentCount: { increment: 1 } },
+        });
+      }
+
+      if (mentionUserIds.length > 0) {
+        await tx.postMention.createMany({
+          data: mentionUserIds.map((uid) => ({ postId: created.id, userId: uid })),
+          skipDuplicates: true,
+        });
+      }
+
+      return created;
     });
+
+    const withMentions = await this.prisma.post.findUnique({
+      where: { id: post.id },
+      include: {
+        user: true,
+        media: { orderBy: { position: 'asc' } },
+        mentions: { include: { user: { select: { id: true, username: true } } } },
+      },
+    });
+    return withMentions!;
   }
 
   private async ensureUserCanBoost(userId: string) {

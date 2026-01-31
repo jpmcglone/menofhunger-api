@@ -92,6 +92,7 @@ model User {
   // Admin audit relations
   deletedPostMedia PostMedia[] @relation("PostMedia_deletedByAdmin")
   deletedMediaAssets MediaAsset[] @relation("MediaAsset_deletedByAdmin")
+  mentionedIn PostMention[] @relation("PostMention_user")
 
   @@index([phone])
 }
@@ -119,18 +120,37 @@ model Post {
   visibility PostVisibility @default(public)
   boostCount Int            @default(0)
   bookmarkCount Int         @default(0)
+  commentCount Int          @default(0)
   boostScore Float?
   boostScoreUpdatedAt DateTime?
 
   userId String
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  boosts Boost[]
-  media  PostMedia[]
+  parentId String?
+  parent   Post?   @relation("Post_replies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies  Post[] @relation("Post_replies")
+
+  boosts   Boost[]
+  media    PostMedia[]
   bookmarks Bookmark[]
+  mentions PostMention[]
 
   @@index([userId, createdAt])
   @@index([createdAt])
+  @@index([parentId])
+  @@index([parentId, createdAt])
+}
+
+model PostMention {
+  postId String
+  userId String
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation("PostMention_user", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([postId, userId])
+  @@index([userId])
 }
 
 model BookmarkCollection {

@@ -47,6 +47,8 @@ const createSchema = z
   .object({
     body: z.string().trim().max(500).optional(),
     visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly', 'onlyMe']).optional(),
+    parent_id: z.string().cuid().optional(),
+    mentions: z.array(z.string().min(1).max(120)).max(20).optional(),
     media: z.array(createMediaItemSchema).max(4).optional(),
   })
   .superRefine((val, ctx) => {
@@ -104,27 +106,61 @@ export class PostsController {
 
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    // Dedupe: do not return a top-level post as standalone if it is already the parent of a reply in this list.
+    const idsThatAreParents = new Set(res.posts.map((p) => p.parentId).filter(Boolean));
+    const filteredPosts = res.posts.filter((p) => p.parentId != null || !idsThatAreParents.has(p.id));
+
+    // Collect full ancestor chain (walk parentId until null) and fetch all ancestors.
+    const parentMap = new Map<string, (Awaited<ReturnType<typeof this.posts.getById>>)>();
+    let toFetch = new Set<string>(filteredPosts.map((p) => p.parentId).filter(Boolean) as string[]);
+    while (toFetch.size > 0) {
+      const batch = [...toFetch].filter((id) => !parentMap.has(id));
+      if (batch.length === 0) break;
+      const results = await Promise.allSettled(
+        batch.map((id) => this.posts.getById({ viewerUserId, id })),
+      );
+      const nextIds = new Set<string>();
+      for (let i = 0; i < batch.length; i++) {
+        const r = results[i];
+        if (r?.status === 'fulfilled' && r.value) {
+          const parent = r.value;
+          parentMap.set(batch[i], parent);
+          if (parent.parentId) nextIds.add(parent.parentId);
+        }
+      }
+      toFetch = nextIds;
+    }
+
+    const allPostIds = [...filteredPosts.map((p) => p.id), ...parentMap.keys()];
     const boosted = viewerUserId
       ? await this.posts.viewerBoostedPostIds({
           viewerUserId,
-          postIds: res.posts.map((p) => p.id),
+          postIds: allPostIds,
         })
       : new Set<string>();
     const bookmarksByPostId = viewerUserId
-      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: res.posts.map((p) => p.id) })
+      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
       : new Map<string, { collectionIds: string[] }>();
-    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(res.posts.map((p) => p.id)) : null;
+    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)) : null;
+
+    const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const attachParentChain = (post: (typeof filteredPosts)[number]): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } => {
+      const dto = toPostDto(post, baseUrl, {
+        viewerHasBoosted: boosted.has(post.id),
+        viewerHasBookmarked: bookmarksByPostId.has(post.id),
+        viewerBookmarkCollectionIds: bookmarksByPostId.get(post.id)?.collectionIds ?? [],
+        includeInternal: viewerHasAdmin,
+        internalOverride: internalByPostId?.get(post.id),
+      }) as ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> };
+      const parent = post.parentId ? parentMap.get(post.parentId) : null;
+      if (parent) {
+        dto.parent = attachParentChain(parent as (typeof filteredPosts)[number]);
+      }
+      return dto;
+    };
 
     return {
-      posts: res.posts.map((p) =>
-        toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
-          viewerHasBoosted: boosted.has(p.id),
-          viewerHasBookmarked: bookmarksByPostId.has(p.id),
-          viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
-          includeInternal: viewerHasAdmin,
-          internalOverride: internalByPostId?.get(p.id),
-        }),
-      ),
+      posts: filteredPosts.map((p) => attachParentChain(p)),
       nextCursor: res.nextCursor,
     };
   }
@@ -152,27 +188,61 @@ export class PostsController {
 
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    // Dedupe: do not return a top-level post as standalone if it is already the parent of a reply in this list.
+    const idsThatAreParents = new Set(res.posts.map((p) => p.parentId).filter(Boolean));
+    const filteredPosts = res.posts.filter((p) => p.parentId != null || !idsThatAreParents.has(p.id));
+
+    // Collect full ancestor chain (walk parentId until null) and fetch all ancestors.
+    const parentMap = new Map<string, (Awaited<ReturnType<typeof this.posts.getById>>)>();
+    let toFetch = new Set<string>(filteredPosts.map((p) => p.parentId).filter(Boolean) as string[]);
+    while (toFetch.size > 0) {
+      const batch = [...toFetch].filter((id) => !parentMap.has(id));
+      if (batch.length === 0) break;
+      const results = await Promise.allSettled(
+        batch.map((id) => this.posts.getById({ viewerUserId, id })),
+      );
+      const nextIds = new Set<string>();
+      for (let i = 0; i < batch.length; i++) {
+        const r = results[i];
+        if (r?.status === 'fulfilled' && r.value) {
+          const parent = r.value;
+          parentMap.set(batch[i], parent);
+          if (parent.parentId) nextIds.add(parent.parentId);
+        }
+      }
+      toFetch = nextIds;
+    }
+
+    const allPostIds = [...filteredPosts.map((p) => p.id), ...parentMap.keys()];
     const boosted = viewerUserId
       ? await this.posts.viewerBoostedPostIds({
           viewerUserId,
-          postIds: res.posts.map((p) => p.id),
+          postIds: allPostIds,
         })
       : new Set<string>();
     const bookmarksByPostId = viewerUserId
-      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: res.posts.map((p) => p.id) })
+      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
       : new Map<string, { collectionIds: string[] }>();
-    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(res.posts.map((p) => p.id)) : null;
+    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)) : null;
+
+    const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const attachParentChain = (post: (typeof filteredPosts)[number]): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } => {
+      const dto = toPostDto(post, baseUrl, {
+        viewerHasBoosted: boosted.has(post.id),
+        viewerHasBookmarked: bookmarksByPostId.has(post.id),
+        viewerBookmarkCollectionIds: bookmarksByPostId.get(post.id)?.collectionIds ?? [],
+        includeInternal: viewerHasAdmin,
+        internalOverride: internalByPostId?.get(post.id),
+      }) as ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> };
+      const parent = post.parentId ? parentMap.get(post.parentId) : null;
+      if (parent) {
+        dto.parent = attachParentChain(parent as (typeof filteredPosts)[number]);
+      }
+      return dto;
+    };
 
     return {
-      posts: res.posts.map((p) =>
-        toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
-          viewerHasBoosted: boosted.has(p.id),
-          viewerHasBookmarked: bookmarksByPostId.has(p.id),
-          viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
-          includeInternal: viewerHasAdmin,
-          internalOverride: internalByPostId?.get(p.id),
-        }),
-      ),
+      posts: filteredPosts.map((p) => attachParentChain(p)),
       nextCursor: res.nextCursor,
       counts: res.counts ?? null,
     };
@@ -204,6 +274,71 @@ export class PostsController {
       ),
       nextCursor: res.nextCursor,
     };
+  }
+
+  @UseGuards(OptionalAuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 600),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get(':id/comments')
+  async listComments(@Req() req: Request, @Param('id') id: string, @Query() query: unknown) {
+    const parsed = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(50).optional(),
+        cursor: z.string().optional(),
+      })
+      .parse(query);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+    const res = await this.posts.listComments({
+      viewerUserId,
+      postId: id,
+      limit: parsed.limit ?? 30,
+      cursor: parsed.cursor ?? null,
+    });
+    const viewer = await this.posts.viewerContext(viewerUserId);
+    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const boosted = viewerUserId
+      ? await this.posts.viewerBoostedPostIds({
+          viewerUserId,
+          postIds: res.comments.map((p) => p.id),
+        })
+      : new Set<string>();
+    const bookmarksByPostId = viewerUserId
+      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: res.comments.map((p) => p.id) })
+      : new Map<string, { collectionIds: string[] }>();
+    const internalByPostId = viewerHasAdmin
+      ? await this.posts.ensureBoostScoresFresh(res.comments.map((p) => p.id))
+      : null;
+    return {
+      comments: res.comments.map((p) =>
+        toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
+          viewerHasBoosted: boosted.has(p.id),
+          viewerHasBookmarked: bookmarksByPostId.has(p.id),
+          viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
+          includeInternal: viewerHasAdmin,
+          internalOverride: internalByPostId?.get(p.id),
+        }),
+      ),
+      nextCursor: res.nextCursor,
+    };
+  }
+
+  @UseGuards(OptionalAuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 600),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get(':id/thread-participants')
+  async getThreadParticipants(@Req() req: Request, @Param('id') id: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+    return await this.posts.getThreadParticipants({ viewerUserId, postId: id });
   }
 
   @UseGuards(OptionalAuthGuard)
@@ -254,6 +389,8 @@ export class PostsController {
       userId,
       body: (parsed.body ?? '').trim(),
       visibility: parsed.visibility ?? 'public',
+      parentId: parsed.parent_id ?? null,
+      mentions: parsed.mentions ?? null,
       media: parsed.media ?? null,
     });
 

@@ -22,6 +22,11 @@ export type PostMediaDto = {
   deletedAt: string | null;
 };
 
+export type PostMentionDto = {
+  id: string;
+  username: string;
+};
+
 export type PostDto = {
   id: string;
   createdAt: string;
@@ -29,6 +34,11 @@ export type PostDto = {
   visibility: PostVisibility;
   boostCount: number;
   bookmarkCount: number;
+  commentCount: number;
+  parentId: string | null;
+  /** When present, this post is a reply and the parent is included for thread display. */
+  parent?: PostDto;
+  mentions: PostMentionDto[];
   media: PostMediaDto[];
   viewerHasBoosted?: boolean;
   viewerHasBookmarked?: boolean;
@@ -40,7 +50,12 @@ export type PostDto = {
   author: PostAuthorDto;
 };
 
-type PostWithAuthorAndMedia = Post & { user: User; media: PostMedia[] };
+type PostMentionWithUser = { user: { id: string; username: string | null } };
+type PostWithAuthorAndMedia = Post & {
+  user: User;
+  media: PostMedia[];
+  mentions?: PostMentionWithUser[];
+};
 
 export function toPostDto(
   post: PostWithAuthorAndMedia,
@@ -93,6 +108,14 @@ export function toPostDto(
     })
     .filter((m) => Boolean(m.url) || Boolean(m.deletedAt));
 
+  const mentions: PostMentionDto[] = ((post as any).mentions ?? [])
+    .map((m: PostMentionWithUser) =>
+      m.user?.id != null && m.user?.username != null
+        ? { id: m.user.id, username: m.user.username }
+        : null,
+    )
+    .filter(Boolean);
+
   return {
     id: post.id,
     createdAt: post.createdAt.toISOString(),
@@ -100,6 +123,9 @@ export function toPostDto(
     visibility: post.visibility,
     boostCount: post.boostCount,
     bookmarkCount: (post as any).bookmarkCount ?? 0,
+    commentCount: (post as any).commentCount ?? 0,
+    parentId: (post as any).parentId ?? null,
+    mentions,
     media,
     ...(typeof opts?.viewerHasBoosted === 'boolean' ? { viewerHasBoosted: opts.viewerHasBoosted } : {}),
     ...(typeof opts?.viewerHasBookmarked === 'boolean' ? { viewerHasBookmarked: opts.viewerHasBookmarked } : {}),
