@@ -154,26 +154,26 @@ export class PostsService {
 
   async viewerBookmarksByPostId(params: { viewerUserId: string; postIds: string[] }) {
     const { viewerUserId, postIds } = params;
-    if (!viewerUserId) return new Map<string, { collectionId: string | null }>();
+    if (!viewerUserId) return new Map<string, { collectionIds: string[] }>();
     const ids = (postIds ?? []).filter(Boolean);
-    if (ids.length === 0) return new Map<string, { collectionId: string | null }>();
+    if (ids.length === 0) return new Map<string, { collectionIds: string[] }>();
 
-    let rows: Array<{ postId: string; collectionId: string | null }>;
+    let rows: Array<{ postId: string; collections: Array<{ collectionId: string }> }>;
     try {
       rows = await this.prisma.bookmark.findMany({
         where: { userId: viewerUserId, postId: { in: ids } },
-        select: { postId: true, collectionId: true },
+        select: { postId: true, collections: { select: { collectionId: true } } },
       });
     } catch (e: unknown) {
       // If migrations haven't been applied yet, don't crash the entire feed.
       // Prisma throws P2021 when the underlying table doesn't exist.
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2021') {
-        return new Map<string, { collectionId: string | null }>();
+        return new Map<string, { collectionIds: string[] }>();
       }
       throw e;
     }
-    const out = new Map<string, { collectionId: string | null }>();
-    for (const r of rows) out.set(r.postId, { collectionId: r.collectionId ?? null });
+    const out = new Map<string, { collectionIds: string[] }>();
+    for (const r of rows) out.set(r.postId, { collectionIds: (r.collections ?? []).map((c) => c.collectionId) });
     return out;
   }
 

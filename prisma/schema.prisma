@@ -139,13 +139,15 @@ model BookmarkCollection {
   updatedAt DateTime @updatedAt
 
   name String
+  slug String
 
   userId String
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  bookmarks Bookmark[]
+  bookmarks BookmarkCollectionItem[]
 
   @@unique([userId, name])
+  @@unique([userId, slug])
   @@index([userId, createdAt])
 }
 
@@ -159,13 +161,26 @@ model Bookmark {
   postId String
   post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
 
-  collectionId String?
-  collection   BookmarkCollection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+  collections BookmarkCollectionItem[]
 
   @@unique([userId, postId])
   @@index([userId, createdAt])
-  @@index([collectionId, createdAt])
   @@index([postId, createdAt])
+}
+
+// Join table: one saved post can be in multiple folders.
+model BookmarkCollectionItem {
+  createdAt DateTime @default(now())
+
+  bookmarkId   String
+  collectionId String
+
+  bookmark   Bookmark          @relation(fields: [bookmarkId], references: [id], onDelete: Cascade)
+  collection BookmarkCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+
+  @@id([bookmarkId, collectionId])
+  @@index([collectionId, createdAt])
+  @@index([bookmarkId, createdAt])
 }
 
 model PostMedia {

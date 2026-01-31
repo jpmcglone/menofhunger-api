@@ -15,6 +15,7 @@ const searchSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
   collectionId: z.string().trim().min(1).optional(),
+  unorganized: z.string().trim().optional(),
 });
 
 @UseGuards(OptionalAuthGuard)
@@ -48,7 +49,8 @@ export class SearchController {
     }
     if (type === 'bookmarks') {
       const collectionId = parsed.collectionId ?? null;
-      const res = await this.search.searchBookmarks({ viewerUserId, q, limit, cursor, collectionId });
+      const unorganized = /^(1|true)$/i.test((parsed.unorganized ?? '').trim());
+      const res = await this.search.searchBookmarks({ viewerUserId, q, limit, cursor, collectionId, unorganized });
 
       const postIds = (res.bookmarks ?? []).map((b) => b.post?.id).filter(Boolean) as string[];
       const boosted = viewerUserId
@@ -56,17 +58,17 @@ export class SearchController {
         : new Set<string>();
       const bookmarksByPostId = viewerUserId
         ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
-        : new Map<string, { collectionId: string | null }>();
+        : new Map<string, { collectionIds: string[] }>();
 
       return {
         bookmarks: (res.bookmarks ?? []).map((b) => ({
           bookmarkId: b.bookmarkId,
           createdAt: b.createdAt,
-          collectionId: b.collectionId ?? null,
+          collectionIds: b.collectionIds ?? [],
           post: toPostDto(b.post as any, this.appConfig.r2()?.publicBaseUrl ?? null, {
             viewerHasBoosted: boosted.has(b.post.id),
             viewerHasBookmarked: bookmarksByPostId.has(b.post.id),
-            viewerBookmarkCollectionId: bookmarksByPostId.get(b.post.id)?.collectionId ?? null,
+            viewerBookmarkCollectionIds: bookmarksByPostId.get(b.post.id)?.collectionIds ?? [],
           }),
         })),
         nextCursor: res.nextCursor ?? null,
@@ -78,13 +80,13 @@ export class SearchController {
     const boosted = viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds }) : new Set<string>();
     const bookmarksByPostId = viewerUserId
       ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
-      : new Map<string, { collectionId: string | null }>();
+      : new Map<string, { collectionIds: string[] }>();
     return {
       posts: (res.posts ?? []).map((p) =>
         toPostDto(p as any, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: boosted.has(p.id),
           viewerHasBookmarked: bookmarksByPostId.has(p.id),
-          viewerBookmarkCollectionId: bookmarksByPostId.get(p.id)?.collectionId ?? null,
+          viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
         }),
       ),
       nextCursor: res.nextCursor ?? null,

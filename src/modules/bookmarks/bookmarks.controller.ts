@@ -15,6 +15,8 @@ const renameCollectionSchema = z.object({
 });
 
 const setBookmarkSchema = z.object({
+  // Multi-folder support: prefer `collectionIds`. Keep `collectionId` for backwards compatibility.
+  collectionIds: z.array(z.string().trim().min(1)).max(40).optional().nullable(),
   collectionId: z.string().trim().min(1).optional().nullable(),
 });
 
@@ -76,7 +78,9 @@ export class BookmarksController {
   @Post(':postId')
   async setBookmark(@CurrentUserId() userId: string, @Param('postId') postId: string, @Body() body: unknown) {
     const parsed = setBookmarkSchema.parse(body ?? {});
-    return await this.bookmarks.setBookmark({ userId, postId, collectionId: parsed.collectionId ?? null });
+    const ids =
+      Array.isArray(parsed.collectionIds) ? parsed.collectionIds : parsed.collectionId ? [parsed.collectionId] : null;
+    return await this.bookmarks.setBookmark({ userId, postId, collectionIds: ids });
   }
 
   @UseGuards(AuthGuard)

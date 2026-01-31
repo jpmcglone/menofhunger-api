@@ -32,7 +32,7 @@ export type PostDto = {
   media: PostMediaDto[];
   viewerHasBoosted?: boolean;
   viewerHasBookmarked?: boolean;
-  viewerBookmarkCollectionId?: string | null;
+  viewerBookmarkCollectionIds?: string[];
   internal?: {
     boostScore: number | null;
     boostScoreUpdatedAt: string | null;
@@ -48,7 +48,7 @@ export function toPostDto(
   opts?: {
     viewerHasBoosted?: boolean;
     viewerHasBookmarked?: boolean;
-    viewerBookmarkCollectionId?: string | null;
+    viewerBookmarkCollectionIds?: string[];
     includeInternal?: boolean;
     internalOverride?: {
       boostScore: number | null;
@@ -103,9 +103,7 @@ export function toPostDto(
     media,
     ...(typeof opts?.viewerHasBoosted === 'boolean' ? { viewerHasBoosted: opts.viewerHasBoosted } : {}),
     ...(typeof opts?.viewerHasBookmarked === 'boolean' ? { viewerHasBookmarked: opts.viewerHasBookmarked } : {}),
-    ...(typeof opts?.viewerBookmarkCollectionId !== 'undefined'
-      ? { viewerBookmarkCollectionId: opts.viewerBookmarkCollectionId ?? null }
-      : {}),
+    ...(Array.isArray(opts?.viewerBookmarkCollectionIds) ? { viewerBookmarkCollectionIds: opts.viewerBookmarkCollectionIds } : {}),
     ...(opts?.includeInternal
       ? {
           internal: {

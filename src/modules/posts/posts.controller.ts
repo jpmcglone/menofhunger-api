@@ -112,7 +112,7 @@ export class PostsController {
       : new Set<string>();
     const bookmarksByPostId = viewerUserId
       ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: res.posts.map((p) => p.id) })
-      : new Map<string, { collectionId: string | null }>();
+      : new Map<string, { collectionIds: string[] }>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(res.posts.map((p) => p.id)) : null;
 
     return {
@@ -120,7 +120,7 @@ export class PostsController {
         toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: boosted.has(p.id),
           viewerHasBookmarked: bookmarksByPostId.has(p.id),
-          viewerBookmarkCollectionId: bookmarksByPostId.get(p.id)?.collectionId ?? null,
+          viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
           includeInternal: viewerHasAdmin,
           internalOverride: internalByPostId?.get(p.id),
         }),
@@ -160,7 +160,7 @@ export class PostsController {
       : new Set<string>();
     const bookmarksByPostId = viewerUserId
       ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: res.posts.map((p) => p.id) })
-      : new Map<string, { collectionId: string | null }>();
+      : new Map<string, { collectionIds: string[] }>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(res.posts.map((p) => p.id)) : null;
 
     return {
@@ -168,7 +168,7 @@ export class PostsController {
         toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: boosted.has(p.id),
           viewerHasBookmarked: bookmarksByPostId.has(p.id),
-          viewerBookmarkCollectionId: bookmarksByPostId.get(p.id)?.collectionId ?? null,
+          viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
           includeInternal: viewerHasAdmin,
           internalOverride: internalByPostId?.get(p.id),
         }),
@@ -226,14 +226,14 @@ export class PostsController {
       : new Set<string>();
     const bookmarksByPostId = viewerUserId
       ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: [res.id] })
-      : new Map<string, { collectionId: string | null }>();
+      : new Map<string, { collectionIds: string[] }>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh([res.id]) : null;
 
     return {
       post: toPostDto(res, this.appConfig.r2()?.publicBaseUrl ?? null, {
         viewerHasBoosted: boosted.has(res.id),
         viewerHasBookmarked: bookmarksByPostId.has(res.id),
-        viewerBookmarkCollectionId: bookmarksByPostId.get(res.id)?.collectionId ?? null,
+        viewerBookmarkCollectionIds: bookmarksByPostId.get(res.id)?.collectionIds ?? [],
         includeInternal: viewerHasAdmin,
         internalOverride: internalByPostId?.get(res.id),
       }),

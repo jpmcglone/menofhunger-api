@@ -141,6 +141,7 @@ export class SearchService {
     limit: number;
     cursor: string | null;
     collectionId: string | null;
+    unorganized: boolean;
   }) {
     if (!params.viewerUserId) throw new ForbiddenException('Log in to view bookmarks.');
     const userId = params.viewerUserId;
@@ -148,13 +149,22 @@ export class SearchService {
     const limit = Math.max(1, Math.min(50, params.limit || 30));
     const cursor = params.cursor ?? null;
     const collectionId = (params.collectionId ?? null) ? String(params.collectionId) : null;
+    const unorganized = Boolean(params.unorganized);
+
+    if (collectionId && unorganized) throw new BadRequestException('Invalid filter combination.');
 
     const cursorWhere = await this.bookmarkCursorWhere({ userId, cursor });
+
+    const folderWhere = unorganized
+      ? ({ collections: { none: {} } } as any)
+      : collectionId
+        ? ({ collections: { some: { collectionId } } } as any)
+        : {};
 
     const where: any = {
       AND: [
         { userId },
-        collectionId ? { collectionId } : {},
+        folderWhere,
         cursorWhere ? cursorWhere : {},
         q
           ? {
@@ -176,7 +186,7 @@ export class SearchService {
         id: true,
         createdAt: true,
         postId: true,
-        collectionId: true,
+        collections: { select: { collectionId: true } },
         post: { include: { user: true, media: { orderBy: { position: 'asc' } } } },
       },
     });
@@ -188,7 +198,7 @@ export class SearchService {
       bookmarks: slice.map((b) => ({
         bookmarkId: b.id,
         createdAt: b.createdAt.toISOString(),
-        collectionId: b.collectionId ?? null,
+        collectionIds: (b.collections ?? []).map((c) => c.collectionId),
         post: b.post,
       })),
       nextCursor,
