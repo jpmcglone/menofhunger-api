@@ -308,15 +308,20 @@ export class PostsController {
       .object({
         limit: z.coerce.number().int().min(1).max(50).optional(),
         cursor: z.string().optional(),
+        visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
+        sort: z.enum(['new', 'popular', 'trending']).optional(),
       })
       .parse(query);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+    const sortKind = parsed.sort === 'trending' ? 'popular' : (parsed.sort ?? 'new');
     const res = await this.posts.listComments({
       viewerUserId,
       postId: id,
       limit: parsed.limit ?? 30,
       cursor: parsed.cursor ?? null,
+      visibility: (parsed.visibility as 'all' | 'public' | 'verifiedOnly' | 'premiumOnly') ?? 'all',
+      sort: sortKind as 'new' | 'popular',
     });
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
@@ -343,6 +348,7 @@ export class PostsController {
         }),
       ),
       nextCursor: res.nextCursor,
+      counts: res.counts ?? null,
     };
   }
 
@@ -375,23 +381,44 @@ export class PostsController {
 
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+
+    // Collect ancestor chain (post + all parents) for boost/bookmark and DTO building
+    const chain: Awaited<ReturnType<typeof this.posts.getById>>[] = [];
+    let current: Awaited<ReturnType<typeof this.posts.getById>> | null = res;
+    while (current) {
+      chain.push(current);
+      const parentId: string | null | undefined = (current as { parentId?: string | null }).parentId;
+      current = parentId ? await this.posts.getById({ viewerUserId, id: parentId }) : null;
+    }
+
+    const postIds = chain.map((p) => p.id);
     const boosted = viewerUserId
-      ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds: [res.id] })
+      ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds })
       : new Set<string>();
     const bookmarksByPostId = viewerUserId
-      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: [res.id] })
+      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
       : new Map<string, { collectionIds: string[] }>();
-    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh([res.id]) : null;
+    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(postIds) : null;
 
-    return {
-      post: toPostDto(res, this.appConfig.r2()?.publicBaseUrl ?? null, {
-        viewerHasBoosted: boosted.has(res.id),
-        viewerHasBookmarked: bookmarksByPostId.has(res.id),
-        viewerBookmarkCollectionIds: bookmarksByPostId.get(res.id)?.collectionIds ?? [],
+    const r2 = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const toDto = (p: (typeof chain)[number], opts: { parent?: ReturnType<typeof toPostDto> }) => {
+      const dto = toPostDto(p, r2, {
+        viewerHasBoosted: boosted.has(p.id),
+        viewerHasBookmarked: bookmarksByPostId.has(p.id),
+        viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
         includeInternal: viewerHasAdmin,
-        internalOverride: internalByPostId?.get(res.id),
-      }),
+        internalOverride: internalByPostId?.get(p.id),
+      });
+      return opts.parent ? { ...dto, parent: opts.parent } : dto;
     };
+
+    // Build from root down: chain[chain.length-1] is root, chain[0] is leaf (the post we're viewing)
+    let dto = toDto(chain[chain.length - 1], {});
+    for (let i = chain.length - 2; i >= 0; i--) {
+      dto = toDto(chain[i], { parent: dto });
+    }
+
+    return { post: dto };
   }
 
   @UseGuards(AuthGuard)

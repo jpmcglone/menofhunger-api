@@ -25,6 +25,8 @@ export type PostMediaDto = {
 export type PostMentionDto = {
   id: string;
   username: string;
+  verifiedStatus?: VerifiedStatus;
+  premium?: boolean;
 };
 
 export type PostDto = {
@@ -50,7 +52,9 @@ export type PostDto = {
   author: PostAuthorDto;
 };
 
-type PostMentionWithUser = { user: { id: string; username: string | null } };
+type PostMentionWithUser = {
+  user: { id: string; username: string | null; verifiedStatus?: VerifiedStatus; premium?: boolean };
+};
 type PostWithAuthorAndMedia = Post & {
   user: User;
   media: PostMedia[];
@@ -111,7 +115,12 @@ export function toPostDto(
   const mentions: PostMentionDto[] = ((post as any).mentions ?? [])
     .map((m: PostMentionWithUser) =>
       m.user?.id != null && m.user?.username != null
-        ? { id: m.user.id, username: m.user.username }
+        ? {
+            id: m.user.id,
+            username: m.user.username,
+            verifiedStatus: m.user.verifiedStatus ?? undefined,
+            premium: m.user.premium ?? undefined,
+          }
         : null,
     )
     .filter(Boolean);

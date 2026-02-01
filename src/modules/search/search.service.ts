@@ -112,7 +112,11 @@ export class SearchService {
 
     const posts = await this.prisma.post.findMany({
       where,
-      include: { user: true, media: { orderBy: { position: 'asc' } } },
+      include: {
+        user: true,
+        media: { orderBy: { position: 'asc' } },
+        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -187,7 +191,13 @@ export class SearchService {
         createdAt: true,
         postId: true,
         collections: { select: { collectionId: true } },
-        post: { include: { user: true, media: { orderBy: { position: 'asc' } } } },
+        post: {
+          include: {
+            user: true,
+            media: { orderBy: { position: 'asc' } },
+            mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+          },
+        },
       },
     });
 

@@ -24,7 +24,8 @@ export class PostsService {
   }
 
   private static boostScoreTtlMs = 10 * 60 * 1000;
-  private static popularHalfLifeSeconds = 24 * 60 * 60;
+  /** 12h half-life so trending favors recent engagement. */
+  private static popularHalfLifeSeconds = 12 * 60 * 60;
   private static popularLookbackDays = 30;
   private static popularWarmupTake = 200;
   // Popular feed candidate selection: bias toward recency, but include top engaged.
@@ -34,8 +35,11 @@ export class PostsService {
   private static popularCandidatesBoostedTake = 1500;
   private static popularCandidatesBookmarkedTake = 1500;
   private static popularCandidatesCommentedTake = 1500;
+  private static popularCandidatesRepliesTake = 1200;
   /** Weight for comment score in trending (same as bookmarks: quieter signal than boosts). */
   private static commentScoreWeight = 0.5;
+  /** Top-level posts get this multiplier so they rank slightly above replies with similar engagement. */
+  private static popularTopLevelScoreBoost = 1.15;
 
   private encodePopularCursor(cursor: { asOf: string; score: number; createdAt: string; id: string }) {
     return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
@@ -204,7 +208,11 @@ export class PostsService {
           ...(cursorWhere ? [cursorWhere] : []),
         ],
       },
-      include: { user: true, media: { orderBy: { position: 'asc' } } },
+      include: {
+        user: true,
+        media: { orderBy: { position: 'asc' } },
+        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -270,7 +278,11 @@ export class PostsService {
 
     const posts = await this.prisma.post.findMany({
       where: whereWithCursor,
-      include: { user: true, media: { orderBy: { position: 'asc' } } },
+      include: {
+        user: true,
+        media: { orderBy: { position: 'asc' } },
+        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -467,6 +479,21 @@ export class PostsService {
             ORDER BY p."commentCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesCommentedTake}
           )
+          UNION
+          (
+            -- Replies with engagement can become popular; top-level posts get a slight boost in scoring.
+            SELECT p."id"
+            FROM "Post" p
+            WHERE
+              p."deletedAt" IS NULL
+              AND p."parentId" IS NOT NULL
+              AND p."createdAt" >= ${snapshotMinCreatedAt}
+              AND (p."boostCount" > 0 OR p."bookmarkCount" > 0)
+              AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+              ${authorFilterSql}
+            ORDER BY (p."boostCount" + p."bookmarkCount") DESC, p."createdAt" DESC, p."id" DESC
+            LIMIT ${PostsService.popularCandidatesRepliesTake}
+          )
         ) u
         GROUP BY u."id"
       ),
@@ -476,13 +503,14 @@ export class PostsService {
           p."createdAt" as "createdAt",
           CAST(
             (
+              -- Decay by post age so score reflects "recent engagement on this post," not cache refresh time.
               CASE
               WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
               ELSE p."boostScore" * POWER(
                 0.5,
                 GREATEST(
                   0,
-                  EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."boostScoreUpdatedAt"))
+                  EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
                 ) / ${PostsService.popularHalfLifeSeconds}
               )
               END
@@ -503,6 +531,7 @@ export class PostsService {
             (
               (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight}
             )
+            * (CASE WHEN p."parentId" IS NULL THEN ${PostsService.popularTopLevelScoreBoost} ELSE 1.0 END)
             AS DOUBLE PRECISION
           ) as "score"
         FROM "Post" p
@@ -539,7 +568,11 @@ export class PostsService {
     const posts = ids.length
       ? await this.prisma.post.findMany({
           where: { id: { in: ids } },
-          include: { user: true, media: { orderBy: { position: 'asc' } } },
+          include: {
+            user: true,
+            media: { orderBy: { position: 'asc' } },
+            mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+          },
         })
       : [];
     const byId = new Map(posts.map((p) => [p.id, p] as const));
@@ -700,7 +733,7 @@ export class PostsService {
                   0.5,
                   GREATEST(
                     0,
-                    EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."boostScoreUpdatedAt"))
+                    EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
                   ) / ${PostsService.popularHalfLifeSeconds}
                 )
                 END
@@ -760,7 +793,11 @@ export class PostsService {
       const posts = ids.length
         ? await this.prisma.post.findMany({
             where: { id: { in: ids } },
-            include: { user: true, media: { orderBy: { position: 'asc' } } },
+            include: {
+              user: true,
+              media: { orderBy: { position: 'asc' } },
+              mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+            },
           })
         : [];
       const byId = new Map(posts.map((p) => [p.id, p] as const));
@@ -786,7 +823,11 @@ export class PostsService {
 
     const posts = await this.prisma.post.findMany({
       where: { AND: [baseWhere, ...(cursorWhere ? [cursorWhere] : [])] },
-      include: { user: true, media: { orderBy: { position: 'asc' } } },
+      include: {
+        user: true,
+        media: { orderBy: { position: 'asc' } },
+        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -827,39 +868,104 @@ export class PostsService {
     postId: string;
     limit: number;
     cursor: string | null;
+    visibility?: 'all' | PostVisibility;
+    sort?: 'new' | 'popular';
   }) {
-    const { viewerUserId, postId, limit, cursor } = params;
+    const { viewerUserId, postId, limit, cursor, visibility = 'all', sort = 'new' } = params;
     const parent = await this.getById({ viewerUserId, id: postId });
     if (parent.visibility === 'onlyMe') {
       throw new ForbiddenException('This post is private.');
     }
 
+    const viewer = await this.viewerById(viewerUserId);
+    const allowed = this.allowedVisibilitiesForViewer(viewer);
+    const visibilityWhere: Prisma.PostWhereInput =
+      visibility === 'all'
+        ? { visibility: { in: allowed } }
+        : visibility === 'public'
+          ? { visibility: 'public' }
+          : { visibility };
+
     const decoded = this.decodeCommentCursor(cursor);
+    const isDesc = sort === 'new';
     const cursorWhere =
       decoded != null
-        ? ({
-            OR: [
-              { createdAt: { gt: new Date(decoded.createdAt) } },
-              { AND: [{ createdAt: new Date(decoded.createdAt) }, { id: { gt: decoded.id } }] },
-            ],
-          } as Prisma.PostWhereInput)
+        ? isDesc
+          ? ({
+              OR: [
+                { createdAt: { lt: new Date(decoded.createdAt) } },
+                { AND: [{ createdAt: new Date(decoded.createdAt) }, { id: { lt: decoded.id } }] },
+              ],
+            } as Prisma.PostWhereInput)
+          : ({
+              OR: [
+                { createdAt: { gt: new Date(decoded.createdAt) } },
+                { AND: [{ createdAt: new Date(decoded.createdAt) }, { id: { gt: decoded.id } }] },
+              ],
+            } as Prisma.PostWhereInput)
         : undefined;
 
-    // Reuse same filters as other post queries: not deleted + visibility the viewer is allowed to see.
-    // Comments are created with parent.visibility, so filter by parent's visibility (viewer already passed getById).
     const baseWhere = {
       parentId: postId,
-      visibility: parent.visibility,
+      ...visibilityWhere,
       ...this.notDeletedWhere(),
     };
+
+    if (sort === 'popular') {
+      const candidateIds = (
+        await this.prisma.post.findMany({
+          where: { ...baseWhere, OR: [{ boostCount: { gt: 0 } }, { bookmarkCount: { gt: 0 } }] },
+          select: { id: true },
+          take: 500,
+        })
+      ).map((p) => p.id);
+      if (candidateIds.length > 0) await this.ensureBoostScoresFresh(candidateIds);
+      const comments = await this.prisma.post.findMany({
+        where: cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere,
+        include: {
+          user: true,
+          media: { orderBy: { position: 'asc' } },
+          mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+        },
+        orderBy: [
+          { boostScore: 'desc' },
+          { boostCount: 'desc' },
+          { createdAt: 'desc' },
+          { id: 'desc' },
+        ],
+        take: limit + 1,
+      });
+      const slice = comments.slice(0, limit);
+      const nextCursor =
+        comments.length > limit && slice[slice.length - 1]
+          ? this.encodeCommentCursor({
+              createdAt: slice[slice.length - 1].createdAt.toISOString(),
+              id: slice[slice.length - 1].id,
+            })
+          : null;
+      const counts = await this.prisma.post.groupBy({
+        by: ['visibility'],
+        where: { parentId: postId, ...this.notDeletedWhere(), visibility: { in: allowed } },
+        _count: { _all: true },
+      });
+      const countMap = { all: 0, public: 0, verifiedOnly: 0, premiumOnly: 0 };
+      for (const g of counts) {
+        countMap.all += g._count._all;
+        if (g.visibility === 'public') countMap.public = g._count._all;
+        if (g.visibility === 'verifiedOnly') countMap.verifiedOnly = g._count._all;
+        if (g.visibility === 'premiumOnly') countMap.premiumOnly = g._count._all;
+      }
+      return { comments: slice, nextCursor, counts: countMap };
+    }
+
     const comments = await this.prisma.post.findMany({
       where: cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere,
       include: {
         user: true,
         media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: { id: true, username: true } } } },
+        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
       },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      orderBy: isDesc ? [{ createdAt: 'desc' }, { id: 'desc' }] : [{ createdAt: 'asc' }, { id: 'asc' }],
       take: limit + 1,
     });
 
@@ -872,7 +978,20 @@ export class PostsService {
           })
         : null;
 
-    return { comments: slice, nextCursor };
+    const counts = await this.prisma.post.groupBy({
+      by: ['visibility'],
+      where: { parentId: postId, ...this.notDeletedWhere(), visibility: { in: allowed } },
+      _count: { _all: true },
+    });
+    const countMap = { all: 0, public: 0, verifiedOnly: 0, premiumOnly: 0 };
+    for (const g of counts) {
+      countMap.all += g._count._all;
+      if (g.visibility === 'public') countMap.public = g._count._all;
+      if (g.visibility === 'verifiedOnly') countMap.verifiedOnly = g._count._all;
+      if (g.visibility === 'premiumOnly') countMap.premiumOnly = g._count._all;
+    }
+
+    return { comments: slice, nextCursor, counts: countMap };
   }
 
   /**
@@ -935,7 +1054,7 @@ export class PostsService {
       include: {
         user: true,
         media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: { id: true, username: true } } } },
+        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
       },
     });
     if (!post) throw new NotFoundException('Post not found.');
@@ -1168,7 +1287,7 @@ export class PostsService {
       include: {
         user: true,
         media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: { id: true, username: true } } } },
+        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
       },
     });
     return withMentions!;
