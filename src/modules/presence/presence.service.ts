@@ -28,6 +28,8 @@ export class PresenceService {
   private readonly userSubscribers = new Map<string, Set<string>>();
   /** socketIds that receive all online/offline events (online page viewers) */
   private readonly onlineFeedListeners = new Set<string>();
+  /** userIds currently marked idle (no activity for X time); still online, shown with clock */
+  private readonly idleUserIds = new Set<string>();
 
   constructor(private readonly appConfig: AppConfigService) {}
 
@@ -37,6 +39,26 @@ export class PresenceService {
 
   recentDisconnectMs(): number {
     return this.appConfig.presenceRecentDisconnectMinutes() * 60 * 1000;
+  }
+
+  idleDisconnectMs(): number {
+    return this.appConfig.presenceIdleDisconnectMinutes() * 60 * 1000;
+  }
+
+  getUserIdForSocket(socketId: string): string | null {
+    return this.socketMeta.get(socketId)?.userId ?? null;
+  }
+
+  setUserIdle(userId: string): void {
+    this.idleUserIds.add(userId);
+  }
+
+  setUserActive(userId: string): void {
+    this.idleUserIds.delete(userId);
+  }
+
+  isUserIdle(userId: string): boolean {
+    return this.idleUserIds.has(userId);
   }
 
   isUserOnline(userId: string): boolean {
@@ -82,6 +104,7 @@ export class PresenceService {
     const meta = this.socketMeta.get(socketId);
     if (!meta) return null;
     this.socketMeta.delete(socketId);
+    this.idleUserIds.delete(meta.userId);
     const set = this.userSockets.get(meta.userId);
     if (set) {
       set.delete(socketId);
@@ -106,6 +129,7 @@ export class PresenceService {
     const meta = this.socketMeta.get(socketId);
     if (!meta) return null;
     this.socketMeta.delete(socketId);
+    this.idleUserIds.delete(meta.userId);
     const set = this.userSockets.get(meta.userId);
     if (set) {
       set.delete(socketId);
@@ -252,5 +276,11 @@ export class PresenceService {
     const set = this.userSockets.get(userId);
     if (!set) return [];
     return Array.from(set).map((socketId) => this.socketMeta.get(socketId)?.client ?? 'unknown');
+  }
+
+  /** Socket IDs for a user (e.g. to disconnect them on idle timeout). */
+  getSocketIdsForUser(userId: string): string[] {
+    const set = this.userSockets.get(userId);
+    return set ? Array.from(set) : [];
   }
 }

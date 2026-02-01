@@ -211,6 +211,11 @@ export class AppConfigService {
     return this.readPositiveInt('PRESENCE_RECENT_DISCONNECT_MINUTES', 6);
   }
 
+  /** If user stays idle this many minutes, disconnect them (socket closed, considered offline). */
+  presenceIdleDisconnectMinutes(): number {
+    return this.readPositiveInt('PRESENCE_IDLE_DISCONNECT_MINUTES', 15);
+  }
+
   // Optional: typed access to full validated env object if needed later.
   envSnapshot(): Partial<Env> {
     return {

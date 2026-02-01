@@ -25,7 +25,11 @@ function parseSessionTokenFromCookie(cookieHeader: string | undefined): string |
   return undefined;
 }
 
-type UserTimers = { graceTimer?: ReturnType<typeof setTimeout>; offlineTimer?: ReturnType<typeof setTimeout> };
+type UserTimers = {
+  graceTimer?: ReturnType<typeof setTimeout>;
+  offlineTimer?: ReturnType<typeof setTimeout>;
+  idleDisconnectTimer?: ReturnType<typeof setTimeout>;
+};
 
 @WebSocketGateway({
   path: '/socket.io',
@@ -88,6 +92,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     if (timers) {
       if (timers.graceTimer) clearTimeout(timers.graceTimer);
       if (timers.offlineTimer) clearTimeout(timers.offlineTimer);
+      if (timers.idleDisconnectTimer) clearTimeout(timers.idleDisconnectTimer);
       this.userTimers.delete(userId);
     }
   }
@@ -145,10 +150,27 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     }
 
     const lastConnectAt = this.presence.getLastConnectAt(userId) ?? Date.now();
+    const idle = this.presence.isUserIdle(userId);
     const payload = userPayload
-      ? { userId, user: userPayload, lastConnectAt }
-      : { userId, lastConnectAt };
+      ? { userId, user: userPayload, lastConnectAt, idle }
+      : { userId, lastConnectAt, idle };
     this.emitToSockets(allTargets, 'presence:online', payload);
+  }
+
+  private emitIdle(userId: string): void {
+    const subs = this.presence.getSubscribers(userId);
+    const feedListeners = this.presence.getOnlineFeedListeners();
+    const allTargets = new Set([...subs, ...feedListeners]);
+    if (allTargets.size === 0) return;
+    this.emitToSockets(allTargets, 'presence:idle', { userId });
+  }
+
+  private emitActive(userId: string): void {
+    const subs = this.presence.getSubscribers(userId);
+    const feedListeners = this.presence.getOnlineFeedListeners();
+    const allTargets = new Set([...subs, ...feedListeners]);
+    if (allTargets.size === 0) return;
+    this.emitToSockets(allTargets, 'presence:active', { userId });
   }
 
   private emitRecentlyDisconnected(userId: string, disconnectAt: number): void {
@@ -180,7 +202,8 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
       const users = added.map((uid) => {
         const online = this.presence.isUserOnline(uid);
         const disconnectAt = !online ? this.presence.getDisconnectAtIfRecent(uid) : undefined;
-        return { userId: uid, online, ...(disconnectAt != null ? { disconnectAt } : {}) };
+        const idle = online ? this.presence.isUserIdle(uid) : false;
+        return { userId: uid, online, idle, ...(disconnectAt != null ? { disconnectAt } : {}) };
       });
       client.emit('presence:subscribed', { users });
     }
@@ -209,9 +232,11 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
         userIds,
       });
       const lastConnectAtById = new Map(userIds.map((id) => [id, this.presence.getLastConnectAt(id) ?? 0]));
+      const idleById = new Map(userIds.map((id) => [id, this.presence.isUserIdle(id)]));
       const payload = users.map((u) => ({
         ...u,
         lastConnectAt: lastConnectAtById.get(u.id),
+        idle: idleById.get(u.id) ?? false,
       }));
       client.emit('presence:onlineFeedSnapshot', { users: payload, totalOnline: userIds.length });
       this.logger.log(`[presence] EMIT_OUT presence:onlineFeedSnapshot to socket=${client.id} users=${userIds.length}`);
@@ -232,5 +257,60 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     if (result?.wasLastConnection) {
       this.emitOffline(result.userId);
     }
+  }
+
+  @SubscribeMessage('presence:idle')
+  handleIdle(client: import('socket.io').Socket): void {
+    const userId = this.presence.getUserIdForSocket(client.id);
+    if (!userId) return;
+    this.presence.setUserIdle(userId);
+    this.logger.log(`[presence] IDLE userId=${userId}`);
+    this.emitIdle(userId);
+    this.scheduleIdleDisconnectTimer(userId);
+  }
+
+  @SubscribeMessage('presence:active')
+  handleActive(client: import('socket.io').Socket): void {
+    const userId = this.presence.getUserIdForSocket(client.id);
+    if (!userId) return;
+    this.presence.setUserActive(userId);
+    this.logger.log(`[presence] ACTIVE userId=${userId}`);
+    this.emitActive(userId);
+    this.cancelIdleDisconnectTimer(userId);
+  }
+
+  private cancelIdleDisconnectTimer(userId: string): void {
+    const timers = this.userTimers.get(userId);
+    if (timers?.idleDisconnectTimer) {
+      clearTimeout(timers.idleDisconnectTimer);
+      const next = { ...timers, idleDisconnectTimer: undefined };
+      if (next.graceTimer ?? next.offlineTimer) {
+        this.userTimers.set(userId, next);
+      } else {
+        this.userTimers.delete(userId);
+      }
+    }
+  }
+
+  private scheduleIdleDisconnectTimer(userId: string): void {
+    this.cancelIdleDisconnectTimer(userId);
+    const idleDisconnectMs = this.presence.idleDisconnectMs();
+    const idleDisconnectTimer = setTimeout(() => {
+      this.userTimers.delete(userId);
+      if (!this.presence.isUserIdle(userId)) return;
+      const socketIds = this.presence.getSocketIdsForUser(userId);
+      this.logger.log(`[presence] IDLE_DISCONNECT userId=${userId} sockets=${socketIds.length}`);
+      for (const socketId of socketIds) {
+        const socket = this.server.sockets.sockets.get(socketId);
+        if (socket) {
+          socket.emit('presence:idleDisconnected', {});
+        }
+        this.presence.forceUnregister(socketId);
+        socket?.disconnect(true);
+      }
+      this.emitOffline(userId);
+    }, idleDisconnectMs);
+    const existing = this.userTimers.get(userId);
+    this.userTimers.set(userId, { ...existing, idleDisconnectTimer });
   }
 }

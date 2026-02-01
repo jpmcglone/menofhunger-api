@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { AppConfigService } from '../app/app-config.service';
+import { FollowsService } from '../follows/follows.service';
 import { CurrentUserId } from './users.decorator';
 import { validateUsername } from './users.utils';
 import { toUserDto } from './user.dto';
@@ -49,12 +50,42 @@ function isAtLeast18(birthdateUtcMidnight: Date): boolean {
   return d.getTime() <= cutoff.getTime();
 }
 
+const JOHN_USERNAME = 'john';
+
 @Controller('users')
 export class UsersController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
+    private readonly followsService: FollowsService,
   ) {}
+
+  /** On production, when a user first sets their username, make them and @john follow each other (unless they are @john). */
+  private async ensureMutualFollowWithJohn(userId: string, newUsername: string): Promise<void> {
+    if (!this.appConfig.isProd()) return;
+    if ((newUsername ?? '').trim().toLowerCase() === JOHN_USERNAME) return;
+
+    try {
+      await this.followsService.follow({ viewerUserId: userId, username: JOHN_USERNAME });
+    } catch {
+      // John may not exist or follow may already exist; ignore.
+    }
+
+    const john = await this.prisma.user.findFirst({
+      where: {
+        usernameIsSet: true,
+        username: { equals: JOHN_USERNAME, mode: 'insensitive' },
+      },
+      select: { id: true },
+    });
+    if (!john) return;
+
+    try {
+      await this.followsService.follow({ viewerUserId: john.id, username: newUsername.trim() });
+    } catch {
+      // Idempotent or visibility; ignore.
+    }
+  }
 
   @Throttle({
     default: {
@@ -118,6 +149,8 @@ export class UsersController {
           usernameIsSet: true,
         },
       });
+
+      await this.ensureMutualFollowWithJohn(userId, updated.username ?? parsed.username);
 
       return {
         user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
@@ -319,6 +352,11 @@ export class UsersController {
         where: { id: userId },
         data,
       });
+
+      if (parsed.username !== undefined && updated.username) {
+        await this.ensureMutualFollowWithJohn(userId, updated.username);
+      }
+
       return { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {

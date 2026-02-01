@@ -1,17 +1,20 @@
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { imageSize } from 'image-size';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { toUserDto } from '../users/user.dto';
+import type { PostMediaKind } from '@prisma/client';
 
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_BANNER_BYTES = 8 * 1024 * 1024; // 8MB
 const MAX_POST_MEDIA_BYTES = 12 * 1024 * 1024; // 12MB per attachment
+const MAX_POST_VIDEO_BYTES = 25 * 1024 * 1024; // 25MB per video
 const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-const ALLOWED_POST_MEDIA_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const ALLOWED_POST_MEDIA_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4']);
+const ALLOWED_THUMBNAIL_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const BANNER_ASPECT_RATIO = 3; // 3:1
 const BANNER_ASPECT_TOLERANCE = 0.03; // +/- 3%
 const MIN_BANNER_WIDTH = 600;
@@ -24,6 +27,7 @@ function extForContentType(contentType: string) {
   if (contentType === 'image/png') return 'png';
   if (contentType === 'image/webp') return 'webp';
   if (contentType === 'image/gif') return 'gif';
+  if (contentType === 'video/mp4') return 'mp4';
   return null;
 }
 
@@ -157,17 +161,51 @@ export class UploadsService {
     };
   }
 
-  async initPostMediaUpload(userId: string, contentType: string) {
+  async initPostMediaUpload(
+    userId: string,
+    contentType: string,
+    opts?: { contentHash?: string; purpose?: 'post' | 'thumbnail' },
+  ) {
     const { s3, bucket } = this.requireR2();
-
     const ct = contentType.trim().toLowerCase();
-    if (!ALLOWED_POST_MEDIA_CONTENT_TYPES.has(ct)) {
-      throw new BadRequestException('Unsupported media type. Please upload a JPG, PNG, WebP, or GIF.');
+    const purpose = opts?.purpose ?? 'post';
+
+    if (purpose === 'thumbnail') {
+      if (!ALLOWED_THUMBNAIL_CONTENT_TYPES.has(ct)) {
+        throw new BadRequestException('Thumbnail must be JPG, PNG, or WebP.');
+      }
+    } else {
+      if (!ALLOWED_POST_MEDIA_CONTENT_TYPES.has(ct)) {
+        throw new BadRequestException('Unsupported media type. Please upload a JPG, PNG, WebP, GIF, or MP4 video.');
+      }
+      if (ct === 'video/mp4') {
+        const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { premium: true } });
+        if (!user?.premium) {
+          throw new ForbiddenException('Video uploads are for premium members only.');
+        }
+      }
     }
+
+    const contentHash = opts?.contentHash?.trim().toLowerCase();
+    if (contentHash && purpose === 'post') {
+      const existing = await this.prisma.mediaContentHash.findUnique({ where: { contentHash } });
+      if (existing) {
+        return {
+          key: existing.r2Key,
+          skipUpload: true,
+          headers: { 'Content-Type': ct },
+          maxBytes: existing.kind === 'video' ? MAX_POST_VIDEO_BYTES : MAX_POST_MEDIA_BYTES,
+        };
+      }
+    }
+
     const ext = extForContentType(ct);
     if (!ext) throw new BadRequestException('Unsupported media type.');
 
-    const key = `${this.objectKeyPrefix()}uploads/${userId}/images/${randomUUID()}.${ext}`;
+    const prefix = this.objectKeyPrefix();
+    const subdir =
+      purpose === 'thumbnail' ? 'thumbnails' : ct === 'video/mp4' ? 'videos' : 'images';
+    const key = `${prefix}uploads/${userId}/${subdir}/${randomUUID()}.${ext}`;
 
     const uploadUrl = await getSignedUrl(
       s3,
@@ -180,13 +218,12 @@ export class UploadsService {
       { expiresIn: 300 },
     );
 
+    const maxBytes = ct === 'video/mp4' ? MAX_POST_VIDEO_BYTES : MAX_POST_MEDIA_BYTES;
     return {
       key,
       uploadUrl,
-      headers: {
-        'Content-Type': ct,
-      },
-      maxBytes: MAX_POST_MEDIA_BYTES,
+      headers: { 'Content-Type': ct },
+      maxBytes,
     };
   }
 
@@ -315,14 +352,48 @@ export class UploadsService {
     return { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
   }
 
-  async commitPostMediaUpload(userId: string, key: string) {
+  async commitPostMediaUpload(
+    userId: string,
+    body: {
+      key: string;
+      contentHash?: string;
+      thumbnailKey?: string;
+      width?: number;
+      height?: number;
+      durationSeconds?: number;
+    },
+  ) {
     const { s3, bucket } = this.requireR2();
+    const cleaned = (body.key ?? '').trim();
+    const prefix = this.objectKeyPrefix();
+    const imagesPrefix = `${prefix}uploads/${userId}/images/`;
+    const videosPrefix = `${prefix}uploads/${userId}/videos/`;
+    const thumbnailsPrefix = `${prefix}uploads/${userId}/thumbnails/`;
 
-    const cleaned = (key ?? '').trim();
-    const expectedPrefix = `${this.objectKeyPrefix()}uploads/${userId}/images/`;
-    if (!cleaned.startsWith(expectedPrefix)) {
+    // Reuse path: key was returned from init with skipUpload: true (existing in MediaContentHash).
+    // Check this first so we accept keys under any user path when reusing by content hash.
+    const existingByKey = await this.prisma.mediaContentHash.findFirst({ where: { r2Key: cleaned } });
+    if (existingByKey) {
+      const thumbnailKey =
+        typeof body.thumbnailKey === 'string' && body.thumbnailKey.trim().startsWith(thumbnailsPrefix)
+          ? body.thumbnailKey.trim()
+          : undefined;
+      return {
+        key: cleaned,
+        contentType: existingByKey.kind === 'video' ? 'video/mp4' : 'image/jpeg',
+        kind: existingByKey.kind as 'image' | 'gif' | 'video',
+        width: existingByKey.width ?? undefined,
+        height: existingByKey.height ?? undefined,
+        durationSeconds: existingByKey.durationSeconds ?? undefined,
+        thumbnailKey: thumbnailKey ?? undefined,
+      };
+    }
+
+    if (!cleaned.startsWith(imagesPrefix) && !cleaned.startsWith(videosPrefix)) {
       throw new BadRequestException('Invalid media key.');
     }
+
+    const isVideo = cleaned.startsWith(videosPrefix);
 
     const head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: cleaned }));
     const contentType = (head.ContentType ?? '').toLowerCase();
@@ -330,36 +401,80 @@ export class UploadsService {
 
     if (!ALLOWED_POST_MEDIA_CONTENT_TYPES.has(contentType)) {
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
-      throw new BadRequestException('Uploaded file is not a supported image/GIF.');
+      throw new BadRequestException('Uploaded file is not a supported image, GIF, or video.');
     }
 
-    if (size > MAX_POST_MEDIA_BYTES) {
+    const maxBytes = isVideo ? MAX_POST_VIDEO_BYTES : MAX_POST_MEDIA_BYTES;
+    if (size > maxBytes) {
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
       throw new BadRequestException('Uploaded file is too large.');
     }
 
-    // Best-effort dimension extraction (used for rendering aspect ratios / layout).
     let width: number | null = null;
     let height: number | null = null;
-    try {
-      const obj = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: cleaned }));
-      const body = (obj as any).Body;
-      if (body) {
-        const buf = await streamToBuffer(body, MAX_POST_MEDIA_BYTES);
-        const dims = imageSize(buf);
-        const w = (dims as any).width ?? 0;
-        const h = (dims as any).height ?? 0;
-        if (w && h) {
-          width = Math.max(1, Math.floor(w));
-          height = Math.max(1, Math.floor(h));
+    let durationSeconds: number | null = null;
+
+    if (isVideo) {
+      width =
+        typeof body.width === 'number' && Number.isFinite(body.width) ? Math.max(1, Math.floor(body.width)) : null;
+      height =
+        typeof body.height === 'number' && Number.isFinite(body.height) ? Math.max(1, Math.floor(body.height)) : null;
+      durationSeconds =
+        typeof body.durationSeconds === 'number' && Number.isFinite(body.durationSeconds) && body.durationSeconds >= 0
+          ? Math.floor(body.durationSeconds)
+          : null;
+    } else {
+      try {
+        const obj = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: cleaned }));
+        const streamBody = (obj as any).Body;
+        if (streamBody) {
+          const buf = await streamToBuffer(streamBody, MAX_POST_MEDIA_BYTES);
+          const dims = imageSize(buf);
+          const w = (dims as any).width ?? 0;
+          const h = (dims as any).height ?? 0;
+          if (w && h) {
+            width = Math.max(1, Math.floor(w));
+            height = Math.max(1, Math.floor(h));
+          }
         }
+      } catch {
+        // ignore; dims optional
       }
-    } catch {
-      // ignore; dims optional
     }
 
-    const kind = contentType === 'image/gif' ? 'gif' : 'image';
-    return { key: cleaned, contentType, kind, width, height };
+    const kind: PostMediaKind = isVideo ? 'video' : contentType === 'image/gif' ? 'gif' : 'image';
+
+    const contentHash = (body.contentHash ?? '').trim().toLowerCase();
+    if (contentHash) {
+      await this.prisma.mediaContentHash.upsert({
+        where: { contentHash },
+        create: {
+          contentHash,
+          r2Key: cleaned,
+          kind,
+          width: width ?? undefined,
+          height: height ?? undefined,
+          durationSeconds: durationSeconds ?? undefined,
+          bytes: size,
+        },
+        update: {},
+      });
+    }
+
+    const thumbnailKey =
+      typeof body.thumbnailKey === 'string' && body.thumbnailKey.trim().startsWith(thumbnailsPrefix)
+        ? body.thumbnailKey.trim()
+        : undefined;
+
+    return {
+      key: cleaned,
+      contentType,
+      kind,
+      width: width ?? undefined,
+      height: height ?? undefined,
+      durationSeconds: durationSeconds ?? undefined,
+      thumbnailKey: thumbnailKey ?? undefined,
+    };
   }
 }
 

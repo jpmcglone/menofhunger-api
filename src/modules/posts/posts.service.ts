@@ -1216,12 +1216,14 @@ export class PostsService {
     mentions?: string[] | null;
     media: Array<{
       source: 'upload' | 'giphy';
-      kind: 'image' | 'gif';
+      kind: 'image' | 'gif' | 'video';
       r2Key?: string;
+      thumbnailR2Key?: string;
       url?: string;
       mp4Url?: string;
       width?: number;
       height?: number;
+      durationSeconds?: number;
     }> | null;
   }) {
     const { userId, body, visibility: requestedVisibility, parentId, mentions: clientMentions } = params;
@@ -1295,29 +1297,95 @@ export class PostsService {
     }
 
     const media = (params.media ?? []).filter(Boolean);
-    if (media.length > 4) throw new BadRequestException('You can attach up to 4 images/GIFs.');
+    if (media.length > 4) throw new BadRequestException('You can attach up to 4 images, GIFs, or videos.');
+
+    const hasVideo = media.some((m) => m.kind === 'video');
+    if (hasVideo && !user.premium) {
+      throw new ForbiddenException('Video posts are for premium members only.');
+    }
+
+    const allowedImagePrefixes = [`uploads/${userId}/images/`, `dev/uploads/${userId}/images/`];
+    const allowedVideoPrefixes = [`uploads/${userId}/videos/`, `dev/uploads/${userId}/videos/`];
+    const allowedThumbnailPrefixes = [`uploads/${userId}/thumbnails/`, `dev/uploads/${userId}/thumbnails/`];
+
+    // Keys that exist in MediaContentHash (reused uploads from any user) are allowed.
+    const uploadKeys = media
+      .filter((m) => m.source === 'upload' && (m.r2Key ?? '').trim())
+      .map((m) => (m.r2Key ?? '').trim());
+    const reusedKeySet = new Set(
+      uploadKeys.length
+        ? (await this.prisma.mediaContentHash.findMany({ where: { r2Key: { in: uploadKeys } }, select: { r2Key: true } })).map((r) => r.r2Key)
+        : [],
+    );
 
     const cleanedMedia = media
       .map((m, idx) => {
         const source = m.source;
         const kind = m.kind;
         const r2Key = (m.r2Key ?? '').trim();
+        const thumbnailR2Key = (m.thumbnailR2Key ?? '').trim() || null;
         const url = (m.url ?? '').trim();
         const mp4Url = (m.mp4Url ?? '').trim();
         const width = typeof m.width === 'number' && Number.isFinite(m.width) ? Math.max(1, Math.floor(m.width)) : null;
         const height = typeof m.height === 'number' && Number.isFinite(m.height) ? Math.max(1, Math.floor(m.height)) : null;
+        const durationSeconds =
+          typeof m.durationSeconds === 'number' && Number.isFinite(m.durationSeconds) && m.durationSeconds >= 0
+            ? Math.floor(m.durationSeconds)
+            : null;
 
         if (source === 'upload') {
           if (!r2Key) throw new BadRequestException('Invalid uploaded media key.');
-          const allowedPrefixes = [`uploads/${userId}/images/`, `dev/uploads/${userId}/images/`];
-          if (!allowedPrefixes.some((p) => r2Key.startsWith(p))) {
+          const isReusedKey = reusedKeySet.has(r2Key);
+          if (kind === 'video') {
+            if (!isReusedKey && !allowedVideoPrefixes.some((p) => r2Key.startsWith(p))) {
+              throw new BadRequestException('Invalid uploaded video key.');
+            }
+            if (thumbnailR2Key && !allowedThumbnailPrefixes.some((p) => thumbnailR2Key.startsWith(p))) {
+              throw new BadRequestException('Invalid thumbnail key.');
+            }
+            return {
+              source,
+              kind,
+              r2Key,
+              thumbnailR2Key: thumbnailR2Key || undefined,
+              url: null,
+              mp4Url: null,
+              width,
+              height,
+              durationSeconds,
+              position: idx,
+            };
+          }
+          if (!isReusedKey && !allowedImagePrefixes.some((p) => r2Key.startsWith(p))) {
             throw new BadRequestException('Invalid uploaded media key.');
           }
-          return { source, kind, r2Key, url: null, mp4Url: null, width, height, position: idx };
+          return {
+            source,
+            kind,
+            r2Key,
+            thumbnailR2Key: undefined,
+            url: null,
+            mp4Url: null,
+            width,
+            height,
+            durationSeconds: null,
+            position: idx,
+          };
         }
 
         if (!url) throw new BadRequestException('Invalid Giphy media URL.');
-        return { source, kind, r2Key: null, url, mp4Url: mp4Url || null, width, height, position: idx };
+        return {
+          source,
+          kind,
+          r2Key: null,
+          thumbnailR2Key: undefined,
+          url,
+          mp4Url: mp4Url || null,
+          width,
+          height,
+          durationSeconds: null,
+          position: idx,
+        };
       })
       .filter(Boolean);
 

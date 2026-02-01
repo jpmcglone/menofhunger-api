@@ -28,10 +28,12 @@ const userListSchema = listSchema.extend({
 const createMediaItemSchema = z.discriminatedUnion('source', [
   z.object({
     source: z.literal('upload'),
-    kind: z.enum(['image', 'gif']),
+    kind: z.enum(['image', 'gif', 'video']),
     r2Key: z.string().min(1),
+    thumbnailR2Key: z.string().min(1).optional(),
     width: z.coerce.number().int().min(1).max(20000).optional(),
     height: z.coerce.number().int().min(1).max(20000).optional(),
+    durationSeconds: z.coerce.number().int().min(0).max(3600).optional(),
   }),
   z.object({
     source: z.literal('giphy'),

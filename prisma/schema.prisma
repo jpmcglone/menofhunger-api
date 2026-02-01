@@ -30,6 +30,7 @@ enum FollowVisibility {
 enum PostMediaKind {
   image
   gif
+  video
 }
 
 enum PostMediaSource {
@@ -210,11 +211,15 @@ model PostMedia {
   source    PostMediaSource
   // For "upload" sources, `r2Key` is set; `url` is computed server-side from R2 base URL.
   r2Key     String?
+  // For video uploads, optional poster image stored in R2.
+  thumbnailR2Key String?
   // For "giphy" sources, `url` is set (and optional mp4Url for better performance later).
   url       String?
   mp4Url    String?
   width     Int?
   height    Int?
+  // For video: duration in seconds.
+  durationSeconds Int?
   position  Int            @default(0)
 
   // Admin tombstone: media can be hard-deleted from storage, but we keep the row so posts can render a placeholder.
@@ -229,6 +234,18 @@ model PostMedia {
   @@index([postId, position])
   @@index([postId, createdAt])
   @@index([deletedAt])
+}
+
+// Dedupe: one row per unique file content (by SHA-256). Reuse existing R2 key when same file uploaded again.
+model MediaContentHash {
+  contentHash     String   @unique
+  r2Key           String
+  kind            PostMediaKind
+  width           Int?
+  height          Int?
+  durationSeconds Int?
+  bytes           Int?
+  createdAt       DateTime @default(now())
 }
 
 // Admin indexed view of all R2-backed media objects (including orphans).

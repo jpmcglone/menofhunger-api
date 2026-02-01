@@ -24,10 +24,17 @@ const commitBannerSchema = z.object({
 
 const initPostMediaSchema = z.object({
   contentType: z.string().min(1),
+  contentHash: z.string().min(1).optional(),
+  purpose: z.enum(['post', 'thumbnail']).optional(),
 });
 
 const commitPostMediaSchema = z.object({
   key: z.string().min(1),
+  contentHash: z.string().min(1).optional(),
+  thumbnailKey: z.string().min(1).optional(),
+  width: z.coerce.number().int().min(1).max(20000).optional(),
+  height: z.coerce.number().int().min(1).max(20000).optional(),
+  durationSeconds: z.coerce.number().int().min(0).max(3600).optional(),
 });
 
 @UseGuards(AuthGuard)
@@ -92,7 +99,10 @@ export class UploadsController {
   @Post('post-media/init')
   async initPostMedia(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = initPostMediaSchema.parse(body);
-    return await this.uploads.initPostMediaUpload(userId, parsed.contentType);
+    return await this.uploads.initPostMediaUpload(userId, parsed.contentType, {
+      contentHash: parsed.contentHash,
+      purpose: parsed.purpose,
+    });
   }
 
   @Throttle({
@@ -104,7 +114,14 @@ export class UploadsController {
   @Post('post-media/commit')
   async commitPostMedia(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = commitPostMediaSchema.parse(body);
-    return await this.uploads.commitPostMediaUpload(userId, parsed.key);
+    return await this.uploads.commitPostMediaUpload(userId, {
+      key: parsed.key,
+      contentHash: parsed.contentHash,
+      thumbnailKey: parsed.thumbnailKey,
+      width: parsed.width,
+      height: parsed.height,
+      durationSeconds: parsed.durationSeconds,
+    });
   }
 }
 

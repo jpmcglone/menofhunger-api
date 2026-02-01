@@ -16,8 +16,12 @@ export type PostMediaDto = {
   source: PostMediaSource;
   url: string;
   mp4Url: string | null;
+  /** Video poster image URL (from thumbnailR2Key). */
+  thumbnailUrl: string | null;
   width: number | null;
   height: number | null;
+  /** Video duration in seconds. */
+  durationSeconds: number | null;
   // When present, the media was hard-deleted from storage and should render as a placeholder.
   deletedAt: string | null;
 };
@@ -102,14 +106,27 @@ export function toPostDto(
               key: m.r2Key ?? null,
             })
           : (m.url ?? '').trim();
+      const thumbnailUrl =
+        isDeleted || !(m as any).thumbnailR2Key
+          ? null
+          : publicAssetUrl({
+              publicBaseUrl: publicAssetBaseUrl,
+              key: (m as any).thumbnailR2Key,
+            });
+      const durationSeconds =
+        typeof (m as any).durationSeconds === 'number' && Number.isFinite((m as any).durationSeconds)
+          ? Math.max(0, Math.floor((m as any).durationSeconds))
+          : null;
       return {
         id: m.id,
         kind: m.kind,
         source: m.source,
         url: url || '',
         mp4Url: m.mp4Url ?? null,
+        thumbnailUrl: thumbnailUrl || null,
         width: typeof (m as any).width === 'number' ? ((m as any).width as number) : m.width ?? null,
         height: typeof (m as any).height === 'number' ? ((m as any).height as number) : m.height ?? null,
+        durationSeconds: durationSeconds ?? null,
         deletedAt: deletedAt || null,
       };
     })
