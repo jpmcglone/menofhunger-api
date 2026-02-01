@@ -7,6 +7,7 @@ import { FollowsService } from './follows.service';
   imports: [AuthModule],
   controllers: [FollowsController],
   providers: [FollowsService],
+  exports: [FollowsService],
 })
 export class FollowsModule {}
 

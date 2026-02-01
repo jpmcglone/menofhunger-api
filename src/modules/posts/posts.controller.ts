@@ -152,15 +152,22 @@ export class PostsController {
       ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
       : new Map<string, { collectionIds: string[] }>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)) : null;
+    const scoreByPostId =
+      viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
 
     const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const attachParentChain = (post: (typeof filteredPosts)[number]): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } => {
+      const internalOverride = internalByPostId?.get(post.id);
+      const score = scoreByPostId?.get(post.id);
       const dto = toPostDto(post, baseUrl, {
         viewerHasBoosted: boosted.has(post.id),
         viewerHasBookmarked: bookmarksByPostId.has(post.id),
         viewerBookmarkCollectionIds: bookmarksByPostId.get(post.id)?.collectionIds ?? [],
         includeInternal: viewerHasAdmin,
-        internalOverride: internalByPostId?.get(post.id),
+        internalOverride:
+          internalOverride || (typeof score === 'number' ? { score } : undefined)
+            ? { ...internalOverride, ...(typeof score === 'number' ? { score } : {}) }
+            : undefined,
       }) as ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> };
       const parent = post.parentId ? parentMap.get(post.parentId) : null;
       if (parent) {
@@ -243,15 +250,22 @@ export class PostsController {
       ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
       : new Map<string, { collectionIds: string[] }>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPostsUser.map((p) => p.id)) : null;
+    const scoreByPostIdUser =
+      viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
 
     const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const attachParentChain = (post: (typeof filteredPostsUser)[number]): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } => {
+      const internalOverride = internalByPostId?.get(post.id);
+      const score = scoreByPostIdUser?.get(post.id);
       const dto = toPostDto(post, baseUrl, {
         viewerHasBoosted: boosted.has(post.id),
         viewerHasBookmarked: bookmarksByPostId.has(post.id),
         viewerBookmarkCollectionIds: bookmarksByPostId.get(post.id)?.collectionIds ?? [],
         includeInternal: viewerHasAdmin,
-        internalOverride: internalByPostId?.get(post.id),
+        internalOverride:
+          internalOverride || (typeof score === 'number' ? { score } : undefined)
+            ? { ...internalOverride, ...(typeof score === 'number' ? { score } : {}) }
+            : undefined,
       }) as ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> };
       const parent = post.parentId ? parentMap.get(post.parentId) : null;
       if (parent) {
@@ -283,12 +297,20 @@ export class PostsController {
     const viewer = await this.posts.viewerContext(userId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(res.posts.map((p) => p.id)) : null;
+    const scoreByPostIdOnlyMe =
+      viewerHasAdmin ? await this.posts.computeScoresForPostIds(res.posts.map((p) => p.id)) : undefined;
     return {
       posts: res.posts.map((p) =>
         toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: false,
           includeInternal: viewerHasAdmin,
-          internalOverride: internalByPostId?.get(p.id),
+          internalOverride: (() => {
+            const base = internalByPostId?.get(p.id);
+            const score = scoreByPostIdOnlyMe?.get(p.id);
+            return base || (typeof score === 'number' ? { score } : undefined)
+              ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
+              : undefined;
+          })(),
         }),
       ),
       nextCursor: res.nextCursor,
@@ -337,6 +359,8 @@ export class PostsController {
     const internalByPostId = viewerHasAdmin
       ? await this.posts.ensureBoostScoresFresh(res.comments.map((p) => p.id))
       : null;
+    const scoreByPostIdComments =
+      viewerHasAdmin ? await this.posts.computeScoresForPostIds(res.comments.map((p) => p.id)) : undefined;
     return {
       comments: res.comments.map((p) =>
         toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
@@ -344,7 +368,13 @@ export class PostsController {
           viewerHasBookmarked: bookmarksByPostId.has(p.id),
           viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
           includeInternal: viewerHasAdmin,
-          internalOverride: internalByPostId?.get(p.id),
+          internalOverride: (() => {
+            const base = internalByPostId?.get(p.id);
+            const score = scoreByPostIdComments?.get(p.id);
+            return base || (typeof score === 'number' ? { score } : undefined)
+              ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
+              : undefined;
+          })(),
         }),
       ),
       nextCursor: res.nextCursor,
@@ -399,15 +429,22 @@ export class PostsController {
       ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
       : new Map<string, { collectionIds: string[] }>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(postIds) : null;
+    const scoreByPostIdGet =
+      viewerHasAdmin ? await this.posts.computeScoresForPostIds(postIds) : undefined;
 
     const r2 = this.appConfig.r2()?.publicBaseUrl ?? null;
     const toDto = (p: (typeof chain)[number], opts: { parent?: ReturnType<typeof toPostDto> }) => {
+      const base = internalByPostId?.get(p.id);
+      const score = scoreByPostIdGet?.get(p.id);
       const dto = toPostDto(p, r2, {
         viewerHasBoosted: boosted.has(p.id),
         viewerHasBookmarked: bookmarksByPostId.has(p.id),
         viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
         includeInternal: viewerHasAdmin,
-        internalOverride: internalByPostId?.get(p.id),
+        internalOverride:
+          base || (typeof score === 'number' ? { score } : undefined)
+            ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
+            : undefined,
       });
       return opts.parent ? { ...dto, parent: opts.parent } : dto;
     };

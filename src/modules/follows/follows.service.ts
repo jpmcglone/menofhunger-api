@@ -343,5 +343,49 @@ export class FollowsService {
 
     return { users, nextCursor };
   }
+
+  /** Get users by IDs as FollowListUser (for presence/online list). */
+  async getFollowListUsersByIds(params: {
+    viewerUserId: string | null;
+    userIds: string[];
+  }): Promise<FollowListUser[]> {
+    const { viewerUserId, userIds } = params;
+    if (userIds.length === 0) return [];
+
+    const users = await this.prisma.user.findMany({
+      where: {
+        id: { in: userIds },
+        usernameIsSet: true,
+      },
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        premium: true,
+        verifiedStatus: true,
+        avatarKey: true,
+        avatarUpdatedAt: true,
+      },
+    });
+
+    const rel = await this.batchRelationshipForUserIds({ viewerUserId, userIds: users.map((u) => u.id) });
+
+    return users.map((u) => ({
+      id: u.id,
+      username: u.username,
+      name: u.name,
+      premium: u.premium,
+      verifiedStatus: u.verifiedStatus,
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
+        key: u.avatarKey,
+        updatedAt: u.avatarUpdatedAt,
+      }),
+      relationship: {
+        viewerFollowsUser: rel.viewerFollows.has(u.id),
+        userFollowsViewer: rel.followsViewer.has(u.id),
+      },
+    }));
+  }
 }
 

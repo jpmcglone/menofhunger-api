@@ -13,6 +13,7 @@ import { AppModule } from './modules/app/app.module';
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
 import { ApiExceptionFilter } from './common/filters/api-exception.filter';
 import { AppConfigService } from './modules/app/app-config.service';
+import { PresenceIoAdapter } from './common/adapters/presence-io.adapter';
 
 function isUnsafeMethod(method: string | undefined) {
   const m = (method ?? '').toUpperCase();
@@ -168,6 +169,8 @@ async function bootstrap() {
   app.useGlobalInterceptors(new ApiResponseInterceptor());
   app.useGlobalFilters(new ApiExceptionFilter());
   app.enableShutdownHooks();
+
+  app.useWebSocketAdapter(new PresenceIoAdapter(app, appConfig));
 
   const port = appConfig.port();
 

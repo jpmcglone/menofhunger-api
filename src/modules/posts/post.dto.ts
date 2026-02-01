@@ -48,6 +48,8 @@ export type PostDto = {
   internal?: {
     boostScore: number | null;
     boostScoreUpdatedAt: string | null;
+    /** Overall popularity score (boost + bookmark + comments, time-decayed). Admin only, from popular feed. */
+    score?: number | null;
   };
   author: PostAuthorDto;
 };
@@ -70,8 +72,9 @@ export function toPostDto(
     viewerBookmarkCollectionIds?: string[];
     includeInternal?: boolean;
     internalOverride?: {
-      boostScore: number | null;
-      boostScoreUpdatedAt: Date | null;
+      boostScore?: number | null;
+      boostScoreUpdatedAt?: Date | null;
+      score?: number | null;
     };
   },
 ): PostDto {
@@ -144,6 +147,9 @@ export function toPostDto(
           internal: {
             boostScore: internalBoostScore,
             boostScoreUpdatedAt: internalBoostScoreUpdatedAt ? internalBoostScoreUpdatedAt.toISOString() : null,
+            ...(typeof opts?.internalOverride?.score === 'number' || opts?.internalOverride?.score === null
+              ? { score: opts.internalOverride.score }
+              : {}),
           },
         }
       : {}),

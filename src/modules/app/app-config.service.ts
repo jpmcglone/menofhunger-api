@@ -203,6 +203,14 @@ export class AppConfigService {
     return ['1', 'true', 'yes', 'on'].includes(v);
   }
 
+  presenceGraceMinutes(): number {
+    return this.readPositiveInt('PRESENCE_GRACE_MINUTES', 3);
+  }
+
+  presenceRecentDisconnectMinutes(): number {
+    return this.readPositiveInt('PRESENCE_RECENT_DISCONNECT_MINUTES', 6);
+  }
+
   // Optional: typed access to full validated env object if needed later.
   envSnapshot(): Partial<Env> {
     return {

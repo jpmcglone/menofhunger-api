@@ -183,6 +183,17 @@ export const envSchema = z.object({
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
   ),
+
+  // Presence: minutes to show user as online after last disconnect.
+  PRESENCE_GRACE_MINUTES: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PRESENCE_GRACE_MINUTES must be a number'),
+  // Presence: minutes to show red dot after grace expires (total from disconnect = red dot window end).
+  PRESENCE_RECENT_DISCONNECT_MINUTES: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PRESENCE_RECENT_DISCONNECT_MINUTES must be a number'),
 }).superRefine((env, ctx) => {
   if (env.NODE_ENV !== 'production') return;
 

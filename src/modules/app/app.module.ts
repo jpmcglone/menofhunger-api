@@ -18,6 +18,7 @@ import { FollowsModule } from '../follows/follows.module';
 import { GiphyModule } from '../giphy/giphy.module';
 import { BookmarksModule } from '../bookmarks/bookmarks.module';
 import { SearchModule } from '../search/search.module';
+import { PresenceModule } from '../presence/presence.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { SearchModule } from '../search/search.module';
     GiphyModule,
     BookmarksModule,
     SearchModule,
+    PresenceModule,
   ],
   controllers: [AppController],
   providers: [

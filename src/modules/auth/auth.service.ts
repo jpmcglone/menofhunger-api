@@ -184,9 +184,8 @@ export class AuthService {
   async logout(token: string | undefined, res: Response) {
     if (token) {
       const tokenHash = hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
-      await this.prisma.session.updateMany({
-        where: { tokenHash, revokedAt: null },
-        data: { revokedAt: new Date() },
+      await this.prisma.session.deleteMany({
+        where: { tokenHash },
       });
     }
 

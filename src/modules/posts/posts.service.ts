@@ -128,6 +128,84 @@ export class PostsService {
     return out;
   }
 
+  /**
+   * Computes the overall popularity score for given post IDs (same formula as popular feed).
+   * Call ensureBoostScoresFresh first so boostScore is up to date.
+   */
+  async computeScoresForPostIds(postIds: string[]): Promise<Map<string, number>> {
+    const ids = [...new Set((postIds ?? []).filter(Boolean))];
+    if (ids.length === 0) return new Map<string, number>();
+
+    const snapshotAsOf = new Date();
+    const lookbackMs = PostsService.popularLookbackDays * 24 * 60 * 60 * 1000;
+    const snapshotMinCreatedAt = new Date(snapshotAsOf.getTime() - lookbackMs);
+
+    const rows = await this.prisma.$queryRaw<Array<{ id: string; score: number }>>(Prisma.sql`
+      WITH
+      comment_scores AS (
+        SELECT
+          p."parentId" as "postId",
+          CAST(
+            SUM(
+              POWER(
+                0.5,
+                GREATEST(
+                  0,
+                  EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                ) / ${PostsService.popularHalfLifeSeconds}
+              )
+            ) AS DOUBLE PRECISION
+          ) as "commentScore"
+        FROM "Post" p
+        WHERE
+          p."parentId" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}`))})
+          AND p."deletedAt" IS NULL
+          AND p."createdAt" >= ${snapshotMinCreatedAt}
+        GROUP BY p."parentId"
+      ),
+      scored AS (
+        SELECT
+          p."id" as "id",
+          CAST(
+            (
+              CASE
+                WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
+                ELSE p."boostScore" * POWER(
+                  0.5,
+                  GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                  ) / ${PostsService.popularHalfLifeSeconds}
+                )
+              END
+            )
+            +
+            (
+              (p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(
+                0.5,
+                GREATEST(
+                  0,
+                  EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                ) / ${PostsService.popularHalfLifeSeconds}
+              )
+            )
+            +
+            (
+              (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight}
+            )
+            * (CASE WHEN p."parentId" IS NULL THEN ${PostsService.popularTopLevelScoreBoost} ELSE 1.0 END)
+            AS DOUBLE PRECISION
+          ) as "score"
+        FROM "Post" p
+        LEFT JOIN comment_scores cs ON cs."postId" = p."id"
+        WHERE p."id" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}`))})
+      )
+      SELECT "id", "score" FROM scored
+    `);
+
+    return new Map(rows.map((r) => [r.id, r.score]));
+  }
+
   private async getSiteConfig() {
     const cfg = await this.prisma.siteConfig.findUnique({ where: { id: 1 } });
     // If missing (shouldn't happen after migrations), use safe defaults.
@@ -588,7 +666,8 @@ export class PostsService {
           })
         : null;
 
-    return { posts: ordered, nextCursor };
+    const scoreByPostId = new Map<string, number>(sliceRows.map((r) => [r.id, r.score]));
+    return { posts: ordered, nextCursor, scoreByPostId };
   }
 
   async listForUsername(params: {
@@ -813,7 +892,8 @@ export class PostsService {
             })
           : null;
 
-      return { posts: ordered, nextCursor, counts };
+      const scoreByPostId = new Map<string, number>(sliceRows.map((r) => [r.id, r.score]));
+      return { posts: ordered, nextCursor, counts, scoreByPostId };
     }
 
     const cursorWhere = await createdAtIdCursorWhere({
