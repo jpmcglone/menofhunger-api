@@ -40,6 +40,10 @@ export class PostsService {
   private static commentScoreWeight = 0.5;
   /** Top-level posts get this multiplier so they rank slightly above replies with similar engagement. */
   private static popularTopLevelScoreBoost = 1.15;
+  /** Pin score: "I think this is important" — premium pinner > verified > neither (same hierarchy as boost weights). */
+  private static pinScorePremium = 0.5;
+  private static pinScoreVerified = 0.3;
+  private static pinScoreBase = 0.15;
 
   private encodePopularCursor(cursor: { asOf: string; score: number; createdAt: string; id: string }) {
     return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
@@ -193,10 +197,23 @@ export class PostsService {
             (
               (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight}
             )
+            +
+            (
+              CASE
+                WHEN u."pinnedPostId" = p."id" THEN
+                  (CASE WHEN u."premium" THEN ${PostsService.pinScorePremium} WHEN u."verifiedStatus" <> 'none' THEN ${PostsService.pinScoreVerified} ELSE ${PostsService.pinScoreBase} END)
+                  * POWER(
+                    0.5,
+                    GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))) / ${PostsService.popularHalfLifeSeconds}
+                  )
+                ELSE 0
+              END
+            )
             * (CASE WHEN p."parentId" IS NULL THEN ${PostsService.popularTopLevelScoreBoost} ELSE 1.0 END)
             AS DOUBLE PRECISION
           ) as "score"
         FROM "Post" p
+        LEFT JOIN "User" u ON u."id" = p."userId"
         LEFT JOIN comment_scores cs ON cs."postId" = p."id"
         WHERE p."id" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}`))})
       )
@@ -624,11 +641,24 @@ export class PostsService {
             (
               (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight}
             )
+            +
+            (
+              CASE
+                WHEN u."pinnedPostId" = p."id" THEN
+                  (CASE WHEN u."premium" THEN ${PostsService.pinScorePremium} WHEN u."verifiedStatus" <> 'none' THEN ${PostsService.pinScoreVerified} ELSE ${PostsService.pinScoreBase} END)
+                  * POWER(
+                    0.5,
+                    GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))) / ${PostsService.popularHalfLifeSeconds}
+                  )
+                ELSE 0
+              END
+            )
             * (CASE WHEN p."parentId" IS NULL THEN ${PostsService.popularTopLevelScoreBoost} ELSE 1.0 END)
             AS DOUBLE PRECISION
           ) as "score"
         FROM "Post" p
         JOIN candidates c ON c."id" = p."id"
+        LEFT JOIN "User" u ON u."id" = p."userId"
         LEFT JOIN comment_scores cs ON cs."postId" = p."id"
       )
       SELECT "id", "createdAt", "score"
@@ -846,9 +876,22 @@ export class PostsService {
               (
                 (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight}
               )
+              +
+              (
+                CASE
+                  WHEN u."pinnedPostId" = p."id" THEN
+                    (CASE WHEN u."premium" THEN ${PostsService.pinScorePremium} WHEN u."verifiedStatus" <> 'none' THEN ${PostsService.pinScoreVerified} ELSE ${PostsService.pinScoreBase} END)
+                    * POWER(
+                      0.5,
+                      GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))) / ${PostsService.popularHalfLifeSeconds}
+                    )
+                  ELSE 0
+                END
+              )
               AS DOUBLE PRECISION
             ) as "score"
           FROM "Post" p
+          LEFT JOIN "User" u ON u."id" = p."userId"
           LEFT JOIN comment_scores cs ON cs."postId" = p."id"
           WHERE
             p."deletedAt" IS NULL
