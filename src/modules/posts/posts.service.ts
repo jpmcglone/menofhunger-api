@@ -348,8 +348,11 @@ export class PostsService {
         : visibility === 'public'
           ? ({ visibility: 'public' } as Prisma.PostWhereInput)
           : ({ visibility } as Prisma.PostWhereInput);
+    
+    // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
+    // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
     const visibilityWhere =
-      viewerUserId
+      viewerUserId && visibility === 'all'
         ? ({ OR: [baseVisibility, { userId: viewerUserId }] } as Prisma.PostWhereInput)
         : baseVisibility;
 
@@ -401,7 +404,9 @@ export class PostsService {
       select: { followingId: true },
     });
     const followingIds = follows.map((f) => f.followingId);
-    return [viewerUserId, ...followingIds];
+    const result = [viewerUserId, ...followingIds];
+    console.log('[posts.service] getAuthorIdsForFollowingFilter - viewerId:', viewerUserId, 'following count:', followingIds.length, 'total author IDs:', result.length);
+    return result;
   }
 
   /**
@@ -458,9 +463,10 @@ export class PostsService {
       ? ({ userId: { in: authorUserIds } } as Prisma.PostWhereInput)
       : undefined;
 
-    // Author always sees own posts in popular feed (e.g. after tier downgrade).
+    // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
+    // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
     const popularVisibilityWhere =
-      viewerUserId
+      viewerUserId && visibility === 'all'
         ? ({ OR: [visibilityWhere, { userId: viewerUserId }] } as Prisma.PostWhereInput)
         : visibilityWhere;
 
@@ -500,9 +506,10 @@ export class PostsService {
         ? Prisma.sql`AND p."userId" IN (${Prisma.join(authorUserIds.map((id) => Prisma.sql`${id}`))})`
         : Prisma.sql``;
 
-    // Author always sees own posts in popular feed (e.g. after tier downgrade).
+    // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
+    // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
     const visibilityFilterSql =
-      viewerUserId
+      viewerUserId && visibility === 'all'
         ? Prisma.sql`AND (p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)}) OR p."userId" = ${viewerUserId})`
         : Prisma.sql`AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})`;
 
