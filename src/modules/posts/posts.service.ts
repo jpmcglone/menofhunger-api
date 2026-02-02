@@ -404,9 +404,7 @@ export class PostsService {
       select: { followingId: true },
     });
     const followingIds = follows.map((f) => f.followingId);
-    const result = [viewerUserId, ...followingIds];
-    console.log('[posts.service] getAuthorIdsForFollowingFilter - viewerId:', viewerUserId, 'following count:', followingIds.length, 'total author IDs:', result.length);
-    return result;
+    return [viewerUserId, ...followingIds];
   }
 
   /**
