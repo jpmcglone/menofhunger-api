@@ -1,4 +1,4 @@
-import { BadRequestException, Body, ConflictException, Controller, Get, NotFoundException, Param, Patch, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, Patch, Put, Query, UseGuards } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { PrismaService } from '../prisma/prisma.service';
@@ -96,7 +96,7 @@ export class UsersController {
   @Get('username/available')
   async usernameAvailable(@Query('username') username: string | undefined) {
     const parsed = validateUsername(username ?? '');
-    if (!parsed.ok) return { available: false, normalized: null, error: parsed.error };
+    if (!parsed.ok) return { data: { available: false, normalized: null, error: parsed.error } };
 
     const exists =
       (
@@ -108,7 +108,7 @@ export class UsersController {
         `
       )[0] ?? null;
 
-    return { available: !exists, normalized: parsed.usernameLower };
+    return { data: { available: !exists, normalized: parsed.usernameLower } };
   }
 
   @UseGuards(AuthGuard)
@@ -130,7 +130,7 @@ export class UsersController {
         where: { id: userId },
         data: { username: desired },
       });
-      return { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+      return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
     }
 
     if (user.usernameIsSet) {
@@ -153,7 +153,7 @@ export class UsersController {
       await this.ensureMutualFollowWithJohn(userId, updated.username ?? parsed.username);
 
       return {
-        user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
+        data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
       };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
@@ -192,9 +192,10 @@ export class UsersController {
             avatarUpdatedAt: Date | null;
             bannerKey: string | null;
             bannerUpdatedAt: Date | null;
+            pinnedPostId: string | null;
           }>
         >`
-          SELECT "id", "username", "name", "bio", "premium", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt"
+          SELECT "id", "username", "name", "bio", "premium", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId"
           FROM "User"
           WHERE (
             (${isUuid || isCuid} = true AND "id" = ${raw})
@@ -209,7 +210,7 @@ export class UsersController {
     if (!user) throw new NotFoundException('User not found');
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     return {
-      user: {
+      data: {
         id: user.id,
         username: user.username,
         name: user.name,
@@ -218,6 +219,7 @@ export class UsersController {
         verifiedStatus: user.verifiedStatus,
         avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
         bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),
+        pinnedPostId: user.pinnedPostId ?? null,
       },
     };
   }
@@ -243,7 +245,7 @@ export class UsersController {
       });
 
       return {
-        user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
+        data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
       };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
@@ -251,6 +253,37 @@ export class UsersController {
       }
       throw err;
     }
+  }
+
+  @UseGuards(AuthGuard)
+  @Put('me/pinned-post')
+  async setPinnedPost(@Body() body: unknown, @CurrentUserId() userId: string) {
+    const parsed = z.object({ postId: z.string().min(1) }).parse(body);
+    const postId = (parsed.postId ?? '').trim();
+    if (!postId) throw new BadRequestException('postId is required.');
+
+    const post = await this.prisma.post.findFirst({
+      where: { id: postId, deletedAt: null },
+      select: { id: true, userId: true },
+    });
+    if (!post) throw new NotFoundException('Post not found.');
+    if (post.userId !== userId) throw new NotFoundException('Post not found.');
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { pinnedPostId: postId },
+    });
+    return { pinnedPostId: postId };
+  }
+
+  @UseGuards(AuthGuard)
+  @Delete('me/pinned-post')
+  async unpinPost(@CurrentUserId() userId: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { pinnedPostId: null },
+    });
+    return { pinnedPostId: null };
   }
 
   @UseGuards(AuthGuard)
@@ -265,7 +298,7 @@ export class UsersController {
       },
     });
 
-    return { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+    return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
   }
 
   @UseGuards(AuthGuard)
@@ -357,7 +390,7 @@ export class UsersController {
         await this.ensureMutualFollowWithJohn(userId, updated.username);
       }
 
-      return { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+      return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
         // Could be username or email unique violations; keep it generic here.

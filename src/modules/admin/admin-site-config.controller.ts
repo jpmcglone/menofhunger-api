@@ -17,7 +17,7 @@ export class AdminSiteConfigController {
   async get() {
     const cfg = await this.prisma.siteConfig.findUnique({ where: { id: 1 } });
     return {
-      config: cfg ?? { id: 1, postsPerWindow: 5, windowSeconds: 300 },
+      data: cfg ?? { id: 1, postsPerWindow: 5, windowSeconds: 300 },
     };
   }
 
@@ -32,7 +32,7 @@ export class AdminSiteConfigController {
         ...(parsed.windowSeconds !== undefined ? { windowSeconds: parsed.windowSeconds } : {}),
       },
     });
-    return { config: updated };
+    return { data: updated };
   }
 }
 

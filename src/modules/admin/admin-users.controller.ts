@@ -76,8 +76,8 @@ export class AdminUsersController {
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
     return {
-      users: slice.map((u) => toUserDto(u, publicBaseUrl)),
-      nextCursor,
+      data: slice.map((u) => toUserDto(u, publicBaseUrl)),
+      pagination: { nextCursor },
     };
   }
 
@@ -85,7 +85,7 @@ export class AdminUsersController {
   async usernameAvailable(@Query() query: unknown) {
     const { username } = adminUsernameSchema.parse(query);
     const parsed = validateUsername(username ?? '', { minLen: 2 });
-    if (!parsed.ok) return { available: false, normalized: null, error: parsed.error };
+    if (!parsed.ok) return { data: { available: false, normalized: null, error: parsed.error } };
 
     const exists =
       (
@@ -97,14 +97,14 @@ export class AdminUsersController {
         `
       )[0] ?? null;
 
-    return { available: !exists, normalized: parsed.usernameLower };
+    return { data: { available: !exists, normalized: parsed.usernameLower } };
   }
 
   @Get(':id')
   async getUser(@Param('id') id: string) {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found.');
-    return { user: toUserDto(user, this.appConfig.r2()?.publicBaseUrl ?? null) };
+    return { data: toUserDto(user, this.appConfig.r2()?.publicBaseUrl ?? null) };
   }
 
   @Patch(':id/profile')
@@ -164,7 +164,7 @@ export class AdminUsersController {
         data,
       });
 
-      return { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+      return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
         throw new NotFoundException('User not found.');

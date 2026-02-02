@@ -21,7 +21,7 @@ export class FollowsController {
   @Get('me/following-count')
   async myFollowingCount(@CurrentUserId() viewerUserId: string) {
     const followingCount = await this.follows.myFollowingCount({ viewerUserId });
-    return { followingCount };
+    return { data: followingCount };
   }
 
   @UseGuards(AuthGuard)
@@ -33,7 +33,8 @@ export class FollowsController {
   })
   @Post(':username')
   async follow(@Param('username') username: string, @CurrentUserId() viewerUserId: string) {
-    return await this.follows.follow({ viewerUserId, username });
+    const result = await this.follows.follow({ viewerUserId, username });
+    return { data: result };
   }
 
   @UseGuards(AuthGuard)
@@ -45,7 +46,8 @@ export class FollowsController {
   })
   @Delete(':username')
   async unfollow(@Param('username') username: string, @CurrentUserId() viewerUserId: string) {
-    return await this.follows.unfollow({ viewerUserId, username });
+    const result = await this.follows.unfollow({ viewerUserId, username });
+    return { data: result };
   }
 
   @UseGuards(OptionalAuthGuard)
@@ -53,7 +55,8 @@ export class FollowsController {
   async status(@Req() req: Request, @Param('username') username: string) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
-    return await this.follows.status({ viewerUserId, username });
+    const result = await this.follows.status({ viewerUserId, username });
+    return { data: result };
   }
 
   @UseGuards(OptionalAuthGuard)
@@ -61,7 +64,8 @@ export class FollowsController {
   async summary(@Req() req: Request, @Param('username') username: string) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
-    return await this.follows.summary({ viewerUserId, username });
+    const result = await this.follows.summary({ viewerUserId, username });
+    return { data: result };
   }
 
   @UseGuards(OptionalAuthGuard)
@@ -72,7 +76,8 @@ export class FollowsController {
     const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
-    return await this.follows.listFollowers({ viewerUserId, username, limit, cursor });
+    const result = await this.follows.listFollowers({ viewerUserId, username, limit, cursor });
+    return { data: result.users, pagination: { nextCursor: result.nextCursor } };
   }
 
   @UseGuards(OptionalAuthGuard)
@@ -83,7 +88,8 @@ export class FollowsController {
     const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
-    return await this.follows.listFollowing({ viewerUserId, username, limit, cursor });
+    const result = await this.follows.listFollowing({ viewerUserId, username, limit, cursor });
+    return { data: result.users, pagination: { nextCursor: result.nextCursor } };
   }
 }
 

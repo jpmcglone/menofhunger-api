@@ -51,7 +51,8 @@ export class UploadsController {
   @Post('avatar/init')
   async initAvatar(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = initAvatarSchema.parse(body);
-    return await this.uploads.initAvatarUpload(userId, parsed.contentType);
+    const result = await this.uploads.initAvatarUpload(userId, parsed.contentType);
+    return { data: result };
   }
 
   @Throttle({
@@ -63,7 +64,8 @@ export class UploadsController {
   @Post('avatar/commit')
   async commitAvatar(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = commitAvatarSchema.parse(body);
-    return await this.uploads.commitAvatarUpload(userId, parsed.key);
+    const result = await this.uploads.commitAvatarUpload(userId, parsed.key);
+    return { data: result };
   }
 
   @Throttle({
@@ -75,7 +77,8 @@ export class UploadsController {
   @Post('banner/init')
   async initBanner(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = initBannerSchema.parse(body);
-    return await this.uploads.initBannerUpload(userId, parsed.contentType);
+    const result = await this.uploads.initBannerUpload(userId, parsed.contentType);
+    return { data: result };
   }
 
   @Throttle({
@@ -87,7 +90,8 @@ export class UploadsController {
   @Post('banner/commit')
   async commitBanner(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = commitBannerSchema.parse(body);
-    return await this.uploads.commitBannerUpload(userId, parsed.key);
+    const result = await this.uploads.commitBannerUpload(userId, parsed.key);
+    return { data: result };
   }
 
   @Throttle({
@@ -99,10 +103,11 @@ export class UploadsController {
   @Post('post-media/init')
   async initPostMedia(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = initPostMediaSchema.parse(body);
-    return await this.uploads.initPostMediaUpload(userId, parsed.contentType, {
+    const result = await this.uploads.initPostMediaUpload(userId, parsed.contentType, {
       contentHash: parsed.contentHash,
       purpose: parsed.purpose,
     });
+    return { data: result };
   }
 
   @Throttle({
@@ -114,7 +119,7 @@ export class UploadsController {
   @Post('post-media/commit')
   async commitPostMedia(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = commitPostMediaSchema.parse(body);
-    return await this.uploads.commitPostMediaUpload(userId, {
+    const result = await this.uploads.commitPostMediaUpload(userId, {
       key: parsed.key,
       contentHash: parsed.contentHash,
       thumbnailKey: parsed.thumbnailKey,
@@ -122,6 +127,7 @@ export class UploadsController {
       height: parsed.height,
       durationSeconds: parsed.durationSeconds,
     });
+    return { data: result };
   }
 }
 

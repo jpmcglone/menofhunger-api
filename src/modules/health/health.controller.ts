@@ -29,25 +29,29 @@ export class HealthController {
       await this.prisma.$queryRaw`SELECT 1`;
       const latencyMs = Date.now() - startedAt;
       return {
-        status: 'ok',
-        nowIso,
-        uptimeSeconds,
-        service: 'menofhunger-api',
-        config,
-        db: { status: 'ok', latencyMs },
+        data: {
+          status: 'ok',
+          nowIso,
+          uptimeSeconds,
+          service: 'menofhunger-api',
+          config,
+          db: { status: 'ok', latencyMs },
+        },
       };
     } catch (err) {
       const latencyMs = Date.now() - startedAt;
       return {
-        status: 'degraded',
-        nowIso,
-        uptimeSeconds,
-        service: 'menofhunger-api',
-        config,
-        db: {
-          status: 'down',
-          latencyMs,
-          error: String((err as Error)?.message ?? err),
+        data: {
+          status: 'degraded',
+          nowIso,
+          uptimeSeconds,
+          service: 'menofhunger-api',
+          config,
+          db: {
+            status: 'down',
+            latencyMs,
+            error: String((err as Error)?.message ?? err),
+          },
         },
       };
     }

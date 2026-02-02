@@ -21,6 +21,7 @@ export type UserDto = {
   followVisibility: FollowVisibility;
   avatarUrl: string | null;
   bannerUrl: string | null;
+  pinnedPostId: string | null;
 };
 
 export function toUserDto(user: User, publicAssetBaseUrl: string | null = null): UserDto {
@@ -52,6 +53,7 @@ export function toUserDto(user: User, publicAssetBaseUrl: string | null = null):
       key: user.bannerKey ?? null,
       updatedAt: user.bannerUpdatedAt ?? null,
     }),
+    pinnedPostId: user.pinnedPostId ?? null,
   };
 }
 

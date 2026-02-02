@@ -85,7 +85,7 @@ export class GiphyController {
       throw new BadRequestException('Failed to search Giphy.');
     }
 
-    return { items: mapGiphyItems(json) };
+    return { data: mapGiphyItems(json) };
   }
 
   @Throttle({
@@ -115,7 +115,7 @@ export class GiphyController {
       throw new BadRequestException('Failed to load trending GIFs.');
     }
 
-    return { items: mapGiphyItems(json) };
+    return { data: mapGiphyItems(json) };
   }
 }
 

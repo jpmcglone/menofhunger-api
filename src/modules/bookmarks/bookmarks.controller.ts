@@ -27,7 +27,8 @@ export class BookmarksController {
   @UseGuards(AuthGuard)
   @Get('collections')
   async listCollections(@CurrentUserId() userId: string) {
-    return await this.bookmarks.listCollections({ userId });
+    const result = await this.bookmarks.listCollections({ userId });
+    return { data: result };
   }
 
   @UseGuards(AuthGuard)
@@ -40,7 +41,8 @@ export class BookmarksController {
   @Post('collections')
   async createCollection(@CurrentUserId() userId: string, @Body() body: unknown) {
     const parsed = createCollectionSchema.parse(body);
-    return await this.bookmarks.createCollection({ userId, name: parsed.name });
+    const result = await this.bookmarks.createCollection({ userId, name: parsed.name });
+    return { data: result };
   }
 
   @UseGuards(AuthGuard)
@@ -53,7 +55,8 @@ export class BookmarksController {
   @Patch('collections/:id')
   async renameCollection(@CurrentUserId() userId: string, @Param('id') id: string, @Body() body: unknown) {
     const parsed = renameCollectionSchema.parse(body);
-    return await this.bookmarks.renameCollection({ userId, id, name: parsed.name });
+    const result = await this.bookmarks.renameCollection({ userId, id, name: parsed.name });
+    return { data: result };
   }
 
   @UseGuards(AuthGuard)
@@ -65,7 +68,8 @@ export class BookmarksController {
   })
   @Delete('collections/:id')
   async deleteCollection(@CurrentUserId() userId: string, @Param('id') id: string) {
-    return await this.bookmarks.deleteCollection({ userId, id });
+    const result = await this.bookmarks.deleteCollection({ userId, id });
+    return { data: result };
   }
 
   @UseGuards(AuthGuard)
@@ -80,7 +84,8 @@ export class BookmarksController {
     const parsed = setBookmarkSchema.parse(body ?? {});
     const ids =
       Array.isArray(parsed.collectionIds) ? parsed.collectionIds : parsed.collectionId ? [parsed.collectionId] : null;
-    return await this.bookmarks.setBookmark({ userId, postId, collectionIds: ids });
+    const result = await this.bookmarks.setBookmark({ userId, postId, collectionIds: ids });
+    return { data: result };
   }
 
   @UseGuards(AuthGuard)
@@ -92,7 +97,8 @@ export class BookmarksController {
   })
   @Delete(':postId')
   async removeBookmark(@CurrentUserId() userId: string, @Param('postId') postId: string) {
-    return await this.bookmarks.removeBookmark({ userId, postId });
+    const result = await this.bookmarks.removeBookmark({ userId, postId });
+    return { data: result };
   }
 }
 

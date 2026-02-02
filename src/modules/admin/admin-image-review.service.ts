@@ -15,6 +15,7 @@ function guessKindFromKey(key: string): PostMediaKind | null {
   const k = (key ?? '').trim().toLowerCase();
   if (k.endsWith('.gif')) return 'gif';
   if (k.endsWith('.jpg') || k.endsWith('.jpeg') || k.endsWith('.png') || k.endsWith('.webp')) return 'image';
+  if (k.endsWith('.mp4') || k.endsWith('.webm') || k.endsWith('.mov') || k.endsWith('.m4v')) return 'video';
   return null;
 }
 
@@ -144,12 +145,14 @@ export class AdminImageReviewService {
     showDeleted?: boolean;
     onlyOrphans?: boolean;
     sync?: boolean;
+    kind?: 'all' | 'image' | 'video' | null;
   }) {
     const take = Math.max(1, Math.min(100, Math.floor(params.limit || 30)));
     const showDeleted = Boolean(params.showDeleted);
     const onlyOrphans = Boolean(params.onlyOrphans);
     const q = (params.q ?? '').trim();
     const sync = Boolean(params.sync);
+    const kindFilter = params.kind ?? 'all';
 
     if (sync) {
       // Admin-triggered incremental sync. Keep bounded so we don't time out.
@@ -160,9 +163,13 @@ export class AdminImageReviewService {
     const cursorLm = decoded ? new Date(decoded.lm) : null;
     const cursorId = decoded ? decoded.id : null;
 
+    const kindWhere: Prisma.MediaAssetWhereInput =
+      kindFilter === 'image' ? { kind: { in: ['image', 'gif'] } } : kindFilter === 'video' ? { kind: 'video' } : {};
+
     const where: Prisma.MediaAssetWhereInput = {
       ...(showDeleted ? {} : { deletedAt: null }),
       ...(q ? { r2Key: { contains: q, mode: 'insensitive' } } : {}),
+      ...kindWhere,
     };
 
     // Scan pagination (supports onlyOrphans without complex SQL by scanning and filtering).
@@ -197,17 +204,37 @@ export class AdminImageReviewService {
       const postMedia = await this.prisma.postMedia.findMany({
         where: { r2Key: { in: keys } },
         select: { r2Key: true, postId: true },
+        orderBy: [{ createdAt: 'desc' }],
       });
       const postKeySet = new Set(postMedia.map((m) => m.r2Key ?? '').filter(Boolean));
+      const postIds = [...new Set(postMedia.map((m) => m.postId))];
+      const postsWithUser = await this.prisma.post.findMany({
+        where: { id: { in: postIds } },
+        select: { id: true, user: { select: { username: true } } },
+      });
+      const usernameByPostId = new Map(postsWithUser.map((p) => [p.id, p.user?.username ?? null]));
+      const postRefByKey = new Map<string, { postId: string; authorUsername: string | null }>();
+      for (const m of postMedia) {
+        const k = (m.r2Key ?? '').trim();
+        if (!k || postRefByKey.has(k)) continue;
+        postRefByKey.set(k, { postId: m.postId, authorUsername: usernameByPostId.get(m.postId) ?? null });
+      }
 
       const userRefs = await this.prisma.user.findMany({
         where: { OR: [{ avatarKey: { in: keys } }, { bannerKey: { in: keys } }] },
-        select: { avatarKey: true, bannerKey: true },
+        select: { id: true, username: true, avatarKey: true, bannerKey: true },
       });
       const userKeySet = new Set<string>();
+      const userRefByKey = new Map<string, { userId: string; username: string | null }>();
       for (const u of userRefs) {
-        if (u.avatarKey) userKeySet.add(u.avatarKey);
-        if (u.bannerKey) userKeySet.add(u.bannerKey);
+        if (u.avatarKey) {
+          userKeySet.add(u.avatarKey);
+          if (!userRefByKey.has(u.avatarKey)) userRefByKey.set(u.avatarKey, { userId: u.id, username: u.username });
+        }
+        if (u.bannerKey) {
+          userKeySet.add(u.bannerKey);
+          if (!userRefByKey.has(u.bannerKey)) userRefByKey.set(u.bannerKey, { userId: u.id, username: u.username });
+        }
       }
 
       for (const a of page) {
@@ -217,13 +244,20 @@ export class AdminImageReviewService {
         const belongsToSummary = inPost ? 'post' : inUser ? 'user' : 'orphan';
         if (onlyOrphans && belongsToSummary !== 'orphan') continue;
 
+        const postRef = postRefByKey.get(a.r2Key);
+        const userRef = userRefByKey.get(a.r2Key);
         out.push({
           id: a.id,
           r2Key: a.r2Key,
+          kind: a.kind ?? null,
           lastModified: (a.r2LastModified ?? a.createdAt).toISOString(),
           publicUrl: this.publicUrlForKey(a.deletedAt ? null : a.r2Key),
           deletedAt: a.deletedAt ? a.deletedAt.toISOString() : null,
           belongsToSummary,
+          postId: postRef?.postId ?? null,
+          authorUsername: postRef?.authorUsername ?? null,
+          userId: userRef?.userId ?? null,
+          profileUsername: userRef?.username ?? null,
         });
         if (out.length >= take) break;
       }

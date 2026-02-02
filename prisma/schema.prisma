@@ -84,6 +84,10 @@ model User {
   boosts    Boost[]
   bookmarks Bookmark[]
   bookmarkCollections BookmarkCollection[]
+  // Pinned post on profile (one per user; must be own post).
+  pinnedPostId String? @unique
+  pinnedPost   Post?   @relation("PinnedPost", fields: [pinnedPostId], references: [id], onDelete: SetNull)
+
   // Social graph (self-referential via Follow).
   // `following`: users this user follows (outgoing edges)
   // `followers`: users who follow this user (incoming edges)
@@ -136,6 +140,7 @@ model Post {
   media    PostMedia[]
   bookmarks Bookmark[]
   mentions PostMention[]
+  pinnedByUser User? @relation("PinnedPost")
 
   @@index([userId, createdAt])
   @@index([createdAt])

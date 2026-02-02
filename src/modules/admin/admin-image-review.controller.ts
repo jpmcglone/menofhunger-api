@@ -11,6 +11,7 @@ const listSchema = z.object({
   showDeleted: z.coerce.boolean().optional(),
   onlyOrphans: z.coerce.boolean().optional(),
   sync: z.coerce.boolean().optional(),
+  kind: z.enum(['all', 'image', 'video']).optional(),
 });
 
 const deleteSchema = z.object({
@@ -18,33 +19,37 @@ const deleteSchema = z.object({
 });
 
 @UseGuards(AdminGuard)
-@Controller('admin/image-review')
+@Controller('admin/media-review')
 export class AdminImageReviewController {
   constructor(private readonly svc: AdminImageReviewService) {}
 
   @Get()
   async list(@Query() query: unknown) {
     const parsed = listSchema.parse(query);
-    return await this.svc.list({
+    const result = await this.svc.list({
       limit: parsed.limit ?? 60,
       cursor: parsed.cursor ?? null,
       q: parsed.q ?? null,
       showDeleted: parsed.showDeleted ?? false,
       onlyOrphans: parsed.onlyOrphans ?? false,
       sync: parsed.sync ?? false,
+      kind: parsed.kind ?? 'all',
     });
+    return { data: result.items, pagination: { nextCursor: result.nextCursor } };
   }
 
-  @Get(':id')
-  async get(@Param('id') id: string) {
-    return await this.svc.getById(id);
+  @Get(':assetId')
+  async get(@Param('assetId') assetId: string) {
+    const result = await this.svc.getById(assetId);
+    return { data: result };
   }
 
-  @Delete(':id')
-  async del(@Req() req: Request, @Param('id') id: string, @Body() body: unknown) {
+  @Delete(':assetId')
+  async del(@Req() req: Request, @Param('assetId') assetId: string, @Body() body: unknown) {
     const parsed = deleteSchema.parse(body);
     const adminUserId = (req as AdminRequest).user?.id ?? '';
-    return await this.svc.deleteById({ id, adminUserId, reason: parsed.reason });
+    const result = await this.svc.deleteById({ id: assetId, adminUserId, reason: parsed.reason });
+    return { data: result };
   }
 }
 

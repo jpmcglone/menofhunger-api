@@ -324,12 +324,17 @@ export class PostsService {
       return { posts: [], nextCursor: null };
     }
 
-    const visibilityWhere =
+    // Author always sees own posts (e.g. after tier downgrade); others filtered by allowed visibility.
+    const baseVisibility =
       visibility === 'all'
         ? ({ visibility: { in: allowed } } as Prisma.PostWhereInput)
         : visibility === 'public'
           ? ({ visibility: 'public' } as Prisma.PostWhereInput)
           : ({ visibility } as Prisma.PostWhereInput);
+    const visibilityWhere =
+      viewerUserId
+        ? ({ OR: [baseVisibility, { userId: viewerUserId }] } as Prisma.PostWhereInput)
+        : baseVisibility;
 
     const where = followingOnly
       ? {
@@ -338,9 +343,7 @@ export class PostsService {
             this.notDeletedWhere(),
             {
               OR: [
-                // Include the viewer's own posts.
                 { userId: viewerUserId as string },
-                // Include posts from users the viewer follows.
                 { user: { followers: { some: { followerId: viewerUserId as string } } } },
               ],
             },
@@ -438,12 +441,18 @@ export class PostsService {
       ? ({ userId: { in: authorUserIds } } as Prisma.PostWhereInput)
       : undefined;
 
+    // Author always sees own posts in popular feed (e.g. after tier downgrade).
+    const popularVisibilityWhere =
+      viewerUserId
+        ? ({ OR: [visibilityWhere, { userId: viewerUserId }] } as Prisma.PostWhereInput)
+        : visibilityWhere;
+
     if (!decoded) {
       const staleBefore = new Date(asOfMs - PostsService.boostScoreTtlMs);
       const warmup = await this.prisma.post.findMany({
         where: {
           AND: [
-            visibilityWhere,
+            popularVisibilityWhere,
             { parentId: null },
             ...(warmupAuthorFilter ? [warmupAuthorFilter] : []),
             this.notDeletedWhere(),
@@ -473,6 +482,12 @@ export class PostsService {
       authorUserIds?.length
         ? Prisma.sql`AND p."userId" IN (${Prisma.join(authorUserIds.map((id) => Prisma.sql`${id}`))})`
         : Prisma.sql``;
+
+    // Author always sees own posts in popular feed (e.g. after tier downgrade).
+    const visibilityFilterSql =
+      viewerUserId
+        ? Prisma.sql`AND (p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)}) OR p."userId" = ${viewerUserId})`
+        : Prisma.sql`AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})`;
 
     const rows = await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date; score: number }>>(Prisma.sql`
       WITH
@@ -509,7 +524,7 @@ export class PostsService {
               AND p."parentId" IS NULL
               AND p."createdAt" >= ${snapshotMinCreatedAt}
               AND p."createdAt" >= ${recentCutoff}
-              AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+              ${visibilityFilterSql}
               ${authorFilterSql}
             ORDER BY p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesRecentTake}
@@ -524,7 +539,7 @@ export class PostsService {
               AND p."parentId" IS NULL
               AND p."createdAt" >= ${snapshotMinCreatedAt}
               AND p."boostCount" > 0
-              AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+              ${visibilityFilterSql}
               ${authorFilterSql}
             ORDER BY p."boostCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesBoostedTake}
@@ -538,7 +553,7 @@ export class PostsService {
               AND p."parentId" IS NULL
               AND p."createdAt" >= ${snapshotMinCreatedAt}
               AND p."bookmarkCount" > 0
-              AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+              ${visibilityFilterSql}
               ${authorFilterSql}
             ORDER BY p."bookmarkCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesBookmarkedTake}
@@ -552,7 +567,7 @@ export class PostsService {
               AND p."parentId" IS NULL
               AND p."createdAt" >= ${snapshotMinCreatedAt}
               AND p."commentCount" > 0
-              AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+              ${visibilityFilterSql}
               ${authorFilterSql}
             ORDER BY p."commentCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesCommentedTake}
@@ -567,7 +582,7 @@ export class PostsService {
               AND p."parentId" IS NOT NULL
               AND p."createdAt" >= ${snapshotMinCreatedAt}
               AND (p."boostCount" > 0 OR p."bookmarkCount" > 0)
-              AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+              ${visibilityFilterSql}
               ${authorFilterSql}
             ORDER BY (p."boostCount" + p."bookmarkCount") DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesRepliesTake}
@@ -959,12 +974,17 @@ export class PostsService {
 
     const viewer = await this.viewerById(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
-    const visibilityWhere: Prisma.PostWhereInput =
+    const baseVisibilityWhere: Prisma.PostWhereInput =
       visibility === 'all'
         ? { visibility: { in: allowed } }
         : visibility === 'public'
           ? { visibility: 'public' }
           : { visibility };
+    // Author always sees own replies (e.g. after tier downgrade).
+    const visibilityWhere: Prisma.PostWhereInput =
+      viewerUserId
+        ? { OR: [baseVisibilityWhere, { userId: viewerUserId }] }
+        : baseVisibilityWhere;
 
     const decoded = this.decodeCommentCursor(cursor);
     const isDesc = sort === 'new';
@@ -1023,9 +1043,13 @@ export class PostsService {
               id: slice[slice.length - 1].id,
             })
           : null;
+      const countsWhere =
+        viewerUserId
+          ? { parentId: postId, ...this.notDeletedWhere(), OR: [{ visibility: { in: allowed } }, { userId: viewerUserId }] }
+          : { parentId: postId, ...this.notDeletedWhere(), visibility: { in: allowed } };
       const counts = await this.prisma.post.groupBy({
         by: ['visibility'],
-        where: { parentId: postId, ...this.notDeletedWhere(), visibility: { in: allowed } },
+        where: countsWhere,
         _count: { _all: true },
       });
       const countMap = { all: 0, public: 0, verifiedOnly: 0, premiumOnly: 0 };
@@ -1058,9 +1082,13 @@ export class PostsService {
           })
         : null;
 
+    const countsWhereNonPopular =
+      viewerUserId
+        ? { parentId: postId, ...this.notDeletedWhere(), OR: [{ visibility: { in: allowed } }, { userId: viewerUserId }] }
+        : { parentId: postId, ...this.notDeletedWhere(), visibility: { in: allowed } };
     const counts = await this.prisma.post.groupBy({
       by: ['visibility'],
-      where: { parentId: postId, ...this.notDeletedWhere(), visibility: { in: allowed } },
+      where: countsWhereNonPopular,
       _count: { _all: true },
     });
     const countMap = { all: 0, public: 0, verifiedOnly: 0, premiumOnly: 0 };
@@ -1232,12 +1260,12 @@ export class PostsService {
       select: { verifiedStatus: true, premium: true },
     });
     if (!user) throw new NotFoundException('User not found.');
-    // Unverified members can post to "Only me" (private drafts / journaling), but nothing else.
-    if (user.verifiedStatus === 'none' && requestedVisibility !== 'onlyMe') {
-      throw new ForbiddenException('Verify your account to post publicly.');
-    }
-    if (requestedVisibility === 'premiumOnly' && !user.premium) {
-      throw new ForbiddenException('Upgrade to premium to create premium-only posts.');
+    // Creation is gated by current tier: downgraded users can only create within their tier.
+    const allowedForCreation = this.allowedVisibilitiesForViewer(user);
+    if (requestedVisibility !== 'onlyMe' && !allowedForCreation.includes(requestedVisibility)) {
+      if (requestedVisibility === 'verifiedOnly') throw new ForbiddenException('Verify your account to create verified-only posts.');
+      if (requestedVisibility === 'premiumOnly') throw new ForbiddenException('Upgrade to premium to create premium-only posts.');
+      throw new ForbiddenException('You cannot create posts with that visibility.');
     }
 
     let visibility: PostVisibility = requestedVisibility;

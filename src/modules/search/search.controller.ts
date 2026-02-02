@@ -45,7 +45,8 @@ export class SearchController {
     const q = (parsed.q ?? '').trim();
 
     if (type === 'users') {
-      return await this.search.searchUsers({ q, limit, cursor });
+      const result = await this.search.searchUsers({ q, limit, cursor });
+      return { data: result.users, pagination: { nextCursor: result.nextCursor } };
     }
     if (type === 'bookmarks') {
       const collectionId = parsed.collectionId ?? null;
@@ -69,28 +70,26 @@ export class SearchController {
         ? await this.posts.computeScoresForPostIds(postIds)
         : undefined;
 
-      return {
-        bookmarks: (res.bookmarks ?? []).map((b) => {
-          const base = internalByPostId?.get(b.post.id);
-          const score = scoreByPostId?.get(b.post.id);
-          return {
-            bookmarkId: b.bookmarkId,
-            createdAt: b.createdAt,
-            collectionIds: b.collectionIds ?? [],
-            post: toPostDto(b.post as any, this.appConfig.r2()?.publicBaseUrl ?? null, {
-              viewerHasBoosted: boosted.has(b.post.id),
-              viewerHasBookmarked: bookmarksByPostId.has(b.post.id),
-              viewerBookmarkCollectionIds: bookmarksByPostId.get(b.post.id)?.collectionIds ?? [],
-              includeInternal: viewerHasAdmin,
-              internalOverride:
-                base || (typeof score === 'number' ? { score } : undefined)
-                  ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
-                  : undefined,
-            }),
-          };
-        }),
-        nextCursor: res.nextCursor ?? null,
-      };
+      const bookmarks = (res.bookmarks ?? []).map((b) => {
+        const base = internalByPostId?.get(b.post.id);
+        const score = scoreByPostId?.get(b.post.id);
+        return {
+          bookmarkId: b.bookmarkId,
+          createdAt: b.createdAt,
+          collectionIds: b.collectionIds ?? [],
+          post: toPostDto(b.post as any, this.appConfig.r2()?.publicBaseUrl ?? null, {
+            viewerHasBoosted: boosted.has(b.post.id),
+            viewerHasBookmarked: bookmarksByPostId.has(b.post.id),
+            viewerBookmarkCollectionIds: bookmarksByPostId.get(b.post.id)?.collectionIds ?? [],
+            includeInternal: viewerHasAdmin,
+            internalOverride:
+              base || (typeof score === 'number' ? { score } : undefined)
+                ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
+                : undefined,
+          }),
+        };
+      });
+      return { data: bookmarks, pagination: { nextCursor: res.nextCursor ?? null } };
     }
     // posts
     const res = await this.search.searchPosts({ viewerUserId, q, limit, cursor });
@@ -109,23 +108,21 @@ export class SearchController {
       ? await this.posts.computeScoresForPostIds(postIds)
       : undefined;
 
-    return {
-      posts: (res.posts ?? []).map((p) => {
-        const base = internalByPostId?.get(p.id);
-        const score = scoreByPostId?.get(p.id);
-        return toPostDto(p as any, this.appConfig.r2()?.publicBaseUrl ?? null, {
-          viewerHasBoosted: boosted.has(p.id),
-          viewerHasBookmarked: bookmarksByPostId.has(p.id),
-          viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
-          includeInternal: viewerHasAdmin,
-          internalOverride:
-            base || (typeof score === 'number' ? { score } : undefined)
-              ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
-              : undefined,
-        });
-      }),
-      nextCursor: res.nextCursor ?? null,
-    };
+    const posts = (res.posts ?? []).map((p) => {
+      const base = internalByPostId?.get(p.id);
+      const score = scoreByPostId?.get(p.id);
+      return toPostDto(p as any, this.appConfig.r2()?.publicBaseUrl ?? null, {
+        viewerHasBoosted: boosted.has(p.id),
+        viewerHasBookmarked: bookmarksByPostId.has(p.id),
+        viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
+        includeInternal: viewerHasAdmin,
+        internalOverride:
+          base || (typeof score === 'number' ? { score } : undefined)
+            ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
+            : undefined,
+      });
+    });
+    return { data: posts, pagination: { nextCursor: res.nextCursor ?? null } };
   }
 }
 

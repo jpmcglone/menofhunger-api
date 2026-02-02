@@ -4,7 +4,7 @@ import { Controller, Get } from '@nestjs/common';
 export class AppController {
   @Get()
   root() {
-    return { service: 'menofhunger-api' };
+    return { data: { service: 'menofhunger-api' } };
   }
 }
 

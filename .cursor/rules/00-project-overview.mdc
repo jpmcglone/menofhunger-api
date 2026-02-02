@@ -8,7 +8,8 @@ description: Core engineering conventions for menofhunger-api (NestJS + Prisma).
 - Always ship changes with **good migration hygiene** and predictable API payloads.
 
 ## API contract (must follow)
-- **Success**: always return `{ data: ... }` (or `{ data, ... }` if extra top-level fields are intentionally included).
+- **Success**: always return `{ data: T }` where `T` is the actual return type (object, array, or primitive). For list endpoints with cursor/counts, use a sibling: `{ data: T[], pagination: { nextCursor?, counts?, totalOnline?, ... } }`.
+- Do **not** add top-level keys such as `user`, `post`, `posts`, `items`, `nextCursor`; only `data` and optionally `pagination`.
 - **Failure**: must be `meta.errors[]` envelope (handled by the global exception filter).
 - Do not reintroduce `ok: true/false` response patterns.
 

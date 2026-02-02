@@ -33,13 +33,11 @@ export class PresenceController {
     users.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
     const lastConnectAtById = new Map(userIds.map((id) => [id, this.presence.getLastConnectAt(id) ?? 0]));
     const idleById = new Map(userIds.map((id) => [id, this.presence.isUserIdle(id)]));
-    return {
-      users: users.map((u) => ({
-        ...u,
-        lastConnectAt: lastConnectAtById.get(u.id),
-        idle: idleById.get(u.id) ?? false,
-      })),
-      totalOnline: userIds.length,
-    };
+    const data = users.map((u) => ({
+      ...u,
+      lastConnectAt: lastConnectAtById.get(u.id),
+      idle: idleById.get(u.id) ?? false,
+    }));
+    return { data, pagination: { totalOnline: userIds.length } };
   }
 }

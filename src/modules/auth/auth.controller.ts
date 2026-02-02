@@ -43,7 +43,8 @@ export class AuthController {
     } catch {
       throw new BadRequestException('Invalid phone number format');
     }
-    return await this.auth.startPhoneAuth(phone);
+    const res = await this.auth.startPhoneAuth(phone);
+    return { data: res };
   }
 
   @Get('phone/exists')
@@ -56,7 +57,7 @@ export class AuthController {
       throw new BadRequestException('Invalid phone number format');
     }
     const exists = await this.auth.phoneExists(phone);
-    return { exists };
+    return { data: exists };
   }
 
   @Throttle({
@@ -74,7 +75,8 @@ export class AuthController {
     } catch {
       throw new BadRequestException('Invalid phone number format');
     }
-    return await this.auth.verifyPhoneCode(phone, parsed.code, res);
+    const result = await this.auth.verifyPhoneCode(phone, parsed.code, res);
+    return { data: result };
   }
 
   @Get('me')
@@ -83,14 +85,15 @@ export class AuthController {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const token = (req as any).cookies?.moh_session as string | undefined;
     const user = await this.auth.meFromSessionToken(token);
-    return { user: user ?? null };
+    return { data: user ?? null };
   }
 
   @Post('logout')
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const token = (req as any).cookies?.moh_session as string | undefined;
-    return await this.auth.logout(token, res);
+    const result = await this.auth.logout(token, res);
+    return { data: result };
   }
 }
 

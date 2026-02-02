@@ -179,8 +179,8 @@ export class PostsController {
     };
 
     return {
-      posts: filteredPosts.map((p) => attachParentChain(p)),
-      nextCursor: res.nextCursor,
+      data: filteredPosts.map((p) => attachParentChain(p)),
+      pagination: { nextCursor: res.nextCursor },
     };
   }
 
@@ -277,9 +277,8 @@ export class PostsController {
     };
 
     return {
-      posts: filteredPostsUser.map((p) => attachParentChain(p)),
-      nextCursor: res.nextCursor,
-      counts: res.counts ?? null,
+      data: filteredPostsUser.map((p) => attachParentChain(p)),
+      pagination: { nextCursor: res.nextCursor, counts: res.counts ?? null },
     };
   }
 
@@ -302,7 +301,7 @@ export class PostsController {
     const scoreByPostIdOnlyMe =
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(res.posts.map((p) => p.id)) : undefined;
     return {
-      posts: res.posts.map((p) =>
+      data: res.posts.map((p) =>
         toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: false,
           includeInternal: viewerHasAdmin,
@@ -315,7 +314,7 @@ export class PostsController {
           })(),
         }),
       ),
-      nextCursor: res.nextCursor,
+      pagination: { nextCursor: res.nextCursor },
     };
   }
 
@@ -364,7 +363,7 @@ export class PostsController {
     const scoreByPostIdComments =
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(res.comments.map((p) => p.id)) : undefined;
     return {
-      comments: res.comments.map((p) =>
+      data: res.comments.map((p) =>
         toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: boosted.has(p.id),
           viewerHasBookmarked: bookmarksByPostId.has(p.id),
@@ -379,8 +378,7 @@ export class PostsController {
           })(),
         }),
       ),
-      nextCursor: res.nextCursor,
-      counts: res.counts ?? null,
+      pagination: { nextCursor: res.nextCursor, counts: res.counts ?? null },
     };
   }
 
@@ -395,7 +393,8 @@ export class PostsController {
   async getThreadParticipants(@Req() req: Request, @Param('id') id: string) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
-    return await this.posts.getThreadParticipants({ viewerUserId, postId: id });
+    const result = await this.posts.getThreadParticipants({ viewerUserId, postId: id });
+    return { data: result.participants };
   }
 
   @UseGuards(OptionalAuthGuard)
@@ -457,7 +456,7 @@ export class PostsController {
       dto = toDto(chain[i], { parent: dto });
     }
 
-    return { post: dto };
+    return { data: dto };
   }
 
   @UseGuards(AuthGuard)
@@ -482,7 +481,7 @@ export class PostsController {
     const viewer = await this.posts.viewerContext(userId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
     return {
-      post: toPostDto(created, this.appConfig.r2()?.publicBaseUrl ?? null, {
+      data: toPostDto(created, this.appConfig.r2()?.publicBaseUrl ?? null, {
         viewerHasBoosted: false,
         includeInternal: viewerHasAdmin,
       }),
@@ -510,7 +509,8 @@ export class PostsController {
   })
   @Post(':id/boost')
   async boost(@Param('id') id: string, @CurrentUserId() userId: string) {
-    return await this.posts.boostPost({ userId, postId: id });
+    const result = await this.posts.boostPost({ userId, postId: id });
+    return { data: result };
   }
 
   @UseGuards(AuthGuard)
@@ -522,7 +522,8 @@ export class PostsController {
   })
   @Delete(':id/boost')
   async unboost(@Param('id') id: string, @CurrentUserId() userId: string) {
-    return await this.posts.unboostPost({ userId, postId: id });
+    const result = await this.posts.unboostPost({ userId, postId: id });
+    return { data: result };
   }
 }
 
