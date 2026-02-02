@@ -6,3 +6,6 @@ dist
 coverage
 .prisma
 
+# Cursor IDE runtime / debug output
+.cursor/debug.log
+
