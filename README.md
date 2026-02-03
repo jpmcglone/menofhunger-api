@@ -58,3 +58,17 @@ Then call:
 
 - `${process.env.NEXT_PUBLIC_API_URL}/health`
 
+## Production env checklist
+
+Before deploying, ensure these are set (API also validates at startup):
+
+- `NODE_ENV=production`
+- `DATABASE_URL` — Postgres connection string
+- `SESSION_HMAC_SECRET` — must be set and not the dev default
+- `OTP_HMAC_SECRET` — must be set and not the dev default
+- `TRUST_PROXY=true` when behind Render/Cloudflare
+- `ALLOWED_ORIGINS` — comma-separated origins (e.g. `https://menofhunger.com`)
+- Optionally: `COOKIE_DOMAIN`, `REQUIRE_CSRF_ORIGIN_IN_PROD=true`
+
+To check required env without starting the server: `node scripts/check-env.mjs` (load `.env` first or set vars in the shell).
+

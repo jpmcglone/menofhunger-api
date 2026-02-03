@@ -6,10 +6,16 @@ import { AdminUsersController } from './admin-users.controller';
 import { AdminSiteConfigController } from './admin-site-config.controller';
 import { AdminImageReviewController } from './admin-image-review.controller';
 import { AdminImageReviewService } from './admin-image-review.service';
+import { AdminSearchController } from './admin-search.controller';
 
 @Module({
   imports: [AuthModule, PrismaModule],
-  controllers: [AdminUsersController, AdminSiteConfigController, AdminImageReviewController],
+  controllers: [
+    AdminUsersController,
+    AdminSiteConfigController,
+    AdminImageReviewController,
+    AdminSearchController,
+  ],
   providers: [AdminGuard, AdminImageReviewService],
 })
 export class AdminModule {}

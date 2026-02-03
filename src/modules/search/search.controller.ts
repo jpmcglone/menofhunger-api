@@ -5,18 +5,38 @@ import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
 import { toPostDto } from '../posts/post.dto';
 import { PostsService } from '../posts/posts.service';
-import { SearchService } from './search.service';
+import { SearchService, type SearchUserRow } from './search.service';
 import { Throttle } from '@nestjs/throttler';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
+import { publicAssetUrl } from '../../common/assets/public-asset-url';
 
 const searchSchema = z.object({
   q: z.string().trim().max(200).optional(),
-  type: z.enum(['posts', 'users', 'bookmarks']).optional(),
+  type: z.enum(['posts', 'users', 'bookmarks', 'all']).optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
+  userCursor: z.string().optional(),
+  postCursor: z.string().optional(),
   collectionId: z.string().trim().min(1).optional(),
   unorganized: z.string().trim().optional(),
 });
+
+function toSearchUserDto(row: SearchUserRow, publicBaseUrl: string | null) {
+  return {
+    id: row.id,
+    createdAt: row.createdAt.toISOString(),
+    username: row.username,
+    name: row.name,
+    premium: row.premium,
+    verifiedStatus: row.verifiedStatus,
+    avatarUrl: publicAssetUrl({
+      publicBaseUrl,
+      key: row.avatarKey ?? null,
+      updatedAt: row.avatarUpdatedAt ?? null,
+    }),
+    relationship: row.relationship,
+  };
+}
 
 @UseGuards(OptionalAuthGuard)
 @Controller('search')
@@ -42,11 +62,63 @@ export class SearchController {
     const type = parsed.type ?? 'posts';
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
+    const userCursor = parsed.userCursor ?? null;
+    const postCursor = parsed.postCursor ?? null;
     const q = (parsed.q ?? '').trim();
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    if (type === 'all') {
+      const userLimit = Math.min(10, limit);
+      const postLimit = Math.min(20, Math.max(limit - userLimit, 10));
+      const res = await this.search.searchMixed({
+        viewerUserId,
+        q,
+        userLimit,
+        postLimit,
+        userCursor,
+        postCursor,
+      });
+      const users = res.users.map((u) => toSearchUserDto(u, publicBaseUrl));
+      const postIds = (res.posts ?? []).map((p) => p.id);
+      const boosted = viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds }) : new Set<string>();
+      const bookmarksByPostId = viewerUserId
+        ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
+        : new Map<string, { collectionIds: string[] }>();
+      const viewer = await this.posts.viewerContext(viewerUserId);
+      const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+      const internalByPostId = viewerHasAdmin && postIds.length > 0
+        ? await this.posts.ensureBoostScoresFresh(postIds)
+        : null;
+      const scoreByPostId = viewerHasAdmin && postIds.length > 0
+        ? await this.posts.computeScoresForPostIds(postIds)
+        : undefined;
+      const posts = (res.posts ?? []).map((p) => {
+        const base = internalByPostId?.get(p.id);
+        const score = scoreByPostId?.get(p.id);
+        return toPostDto(p as any, publicBaseUrl, {
+          viewerHasBoosted: boosted.has(p.id),
+          viewerHasBookmarked: bookmarksByPostId.has(p.id),
+          viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
+          includeInternal: viewerHasAdmin,
+          internalOverride:
+            base || (typeof score === 'number' ? { score } : undefined)
+              ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
+              : undefined,
+        });
+      });
+      if (viewerUserId && q.length >= 2) {
+        void this.search.recordUserSearch({ userId: viewerUserId, query: q }).catch(() => {});
+      }
+      return {
+        data: { users, posts },
+        pagination: { nextUserCursor: res.nextUserCursor, nextPostCursor: res.nextPostCursor },
+      };
+    }
 
     if (type === 'users') {
-      const result = await this.search.searchUsers({ q, limit, cursor });
-      return { data: result.users, pagination: { nextCursor: result.nextCursor } };
+      const result = await this.search.searchUsers({ q, limit, cursor, viewerUserId });
+      const users = result.users.map((u) => toSearchUserDto(u, publicBaseUrl));
+      return { data: users, pagination: { nextCursor: result.nextCursor } };
     }
     if (type === 'bookmarks') {
       const collectionId = parsed.collectionId ?? null;

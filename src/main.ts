@@ -27,6 +27,22 @@ async function bootstrap() {
 
   const appConfig = app.get(AppConfigService);
 
+  // Fail fast if required env is missing (avoids obscure runtime failures on first DB/auth use).
+  const missing: string[] = [];
+  if (!process.env.DATABASE_URL?.trim()) missing.push('DATABASE_URL');
+  if (appConfig.isProd()) {
+    const sessionSecret = process.env.SESSION_HMAC_SECRET?.trim();
+    const otpSecret = process.env.OTP_HMAC_SECRET?.trim();
+    const devSession = 'dev-session-secret-change-me';
+    const devOtp = 'dev-otp-secret-change-me';
+    if (!sessionSecret || sessionSecret === devSession) missing.push('SESSION_HMAC_SECRET (must be set and not dev default in production)');
+    if (!otpSecret || otpSecret === devOtp) missing.push('OTP_HMAC_SECRET (must be set and not dev default in production)');
+  }
+  if (missing.length > 0) {
+    startup.error(`Missing or invalid required env: ${missing.join('; ')}. Exiting.`);
+    process.exit(1);
+  }
+
   // Make route-specific rate limits available to Throttler resolvers.
   // (Stored on Express app locals so it can be accessed from ExecutionContext without DI.)
   const http = app.getHttpAdapter().getInstance();

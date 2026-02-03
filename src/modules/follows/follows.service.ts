@@ -203,7 +203,7 @@ export class FollowsService {
     });
   }
 
-  private async batchRelationshipForUserIds(params: { viewerUserId: string | null; userIds: string[] }) {
+  async batchRelationshipForUserIds(params: { viewerUserId: string | null; userIds: string[] }) {
     const { viewerUserId, userIds } = params;
     if (!viewerUserId || userIds.length === 0) {
       return {

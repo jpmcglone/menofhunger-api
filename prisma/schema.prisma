@@ -110,8 +110,21 @@ model User {
   notificationsAsActor Notification[] @relation("Notification_actor")
   notificationsAsSubjectUser Notification[] @relation("Notification_subjectUser")
   pushSubscriptions PushSubscription[]
+  userSearches     UserSearch[]
 
   @@index([phone])
+}
+
+model UserSearch {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  query     String   @db.VarChar(200)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+  @@index([query])
 }
 
 model PushSubscription {
@@ -387,5 +400,19 @@ model Notification {
   @@index([recipientUserId, createdAt])
   @@index([recipientUserId, deliveredAt])
   @@index([recipientUserId, readAt])
+}
+
+// Cached OpenGraph/link metadata for post previews (Microlink/Jina).
+model LinkMetadata {
+  id          String   @id @default(cuid())
+  url         String   @unique
+  title       String?
+  description String?
+  imageUrl    String?
+  siteName    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([url])
 }
 

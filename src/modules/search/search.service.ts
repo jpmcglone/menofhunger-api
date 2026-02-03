@@ -1,13 +1,73 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { FollowsService } from '../follows/follows.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
+
+/**
+ * Search scoring (higher = better). Used for ranking only; tie-breaks: relationship (users), createdAt (posts).
+ *
+ * Users (profiles):
+ * - Exact username: 100 | Exact display name: 95
+ * - Username starts with query: 85 | Display name starts with: 80
+ * - Username contains: 70 | Display name contains: 65
+ * - Bio contains full query (phrase): 60 | Bio contains all query words: 50 | Bio contains any word: 40
+ *
+ * Posts (mixed feed):
+ * - Post body contains full query (phrase): 90 | Body contains all query words: 75
+ * - Author exact username: 65 | Author exact display name: 60
+ * - Body contains any query word: 45 | Author username contains any word: 35 | Author display name contains any word: 30
+ */
+const USER_SCORE = {
+  exactUsername: 100,
+  exactName: 95,
+  usernameStartsWith: 85,
+  nameStartsWith: 80,
+  usernameContains: 70,
+  nameContains: 65,
+  bioPhrase: 60,
+  bioAllWords: 50,
+  bioAnyWord: 40,
+} as const;
+
+const POST_SCORE = {
+  bodyPhrase: 90,
+  bodyAllWords: 75,
+  authorExactUsername: 65,
+  authorExactName: 60,
+  bodyAnyWord: 45,
+  authorUsernameAnyWord: 35,
+  authorNameAnyWord: 30,
+} as const;
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
 
+export type SearchUserRow = {
+  id: string;
+  createdAt: Date;
+  username: string | null;
+  name: string | null;
+  premium: boolean;
+  verifiedStatus: VerifiedStatus;
+  avatarKey: string | null;
+  avatarUpdatedAt: Date | null;
+  relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean };
+};
+
+/** Unique, non-empty words from query (lowercase). Used for fuzzy author + body matching (e.g. "john steve" → @john or @steve or body). */
+function queryToWords(q: string): string[] {
+  const trimmed = (q ?? '').trim().toLowerCase();
+  if (!trimmed) return [];
+  const words = trimmed.split(/\s+/).filter((w) => w.length > 0);
+  return [...new Set(words)];
+}
+
 @Injectable()
 export class SearchService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly follows: FollowsService,
+  ) {}
 
   private async viewerById(viewerUserId: string | null): Promise<Viewer> {
     if (!viewerUserId) return null;
@@ -24,55 +84,156 @@ export class SearchService {
     return allowed;
   }
 
-  async searchUsers(params: { q: string; limit: number; cursor: string | null }) {
+  async searchUsers(params: {
+    q: string;
+    limit: number;
+    cursor: string | null;
+    viewerUserId: string | null;
+  }): Promise<{ users: SearchUserRow[]; nextCursor: string | null }> {
     const q = (params.q ?? '').trim();
     if (!q) return { users: [], nextCursor: null };
     const limit = Math.max(1, Math.min(50, params.limit || 30));
     const cursor = params.cursor ?? null;
+    const viewerUserId = params.viewerUserId ?? null;
+    const qLower = q.toLowerCase();
+    const words = queryToWords(q);
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,
       lookup: async (id) => await this.prisma.user.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
     });
 
+    const orConditions: any[] = [
+      { username: { contains: q, mode: 'insensitive' as const } },
+      { name: { contains: q, mode: 'insensitive' as const } },
+      { bio: { not: null, contains: q, mode: 'insensitive' as const } },
+    ];
+    for (const w of words) {
+      if (w === qLower) continue;
+      orConditions.push({ username: { contains: w, mode: 'insensitive' as const } });
+      orConditions.push({ name: { contains: w, mode: 'insensitive' as const } });
+      orConditions.push({ bio: { not: null, contains: w, mode: 'insensitive' as const } });
+    }
+    const matchClause = { OR: orConditions };
+    const nameOnlyMatch = {
+      AND: [
+        { name: { not: null } },
+        { name: { contains: q, mode: 'insensitive' as const } },
+      ],
+    };
     const whereWithCursor = cursorWhere
       ? ({
           AND: [
             cursorWhere,
             {
               OR: [
-                { username: { contains: q, mode: 'insensitive' } },
-                { name: { contains: q, mode: 'insensitive' } },
+                { usernameIsSet: true, ...matchClause },
+                nameOnlyMatch,
               ],
             },
           ],
         } as any)
       : ({
-          OR: [{ username: { contains: q, mode: 'insensitive' } }, { name: { contains: q, mode: 'insensitive' } }],
+          OR: [
+            { usernameIsSet: true, ...matchClause },
+            nameOnlyMatch,
+          ],
         } as any);
 
-    const users = await this.prisma.user.findMany({
+    const fetchSize = Math.min(limit * 5, 50);
+    const raw = await this.prisma.user.findMany({
       where: whereWithCursor,
-      select: { id: true, createdAt: true, username: true, name: true, premium: true, verifiedStatus: true, avatarKey: true, avatarUpdatedAt: true },
+      select: {
+        id: true,
+        createdAt: true,
+        username: true,
+        name: true,
+        bio: true,
+        premium: true,
+        verifiedStatus: true,
+        avatarKey: true,
+        avatarUpdatedAt: true,
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: limit + 1,
+      take: fetchSize + 1,
     });
 
-    const slice = users.slice(0, limit);
-    const nextCursor = users.length > limit ? slice[slice.length - 1]?.id ?? null : null;
+    const userIds = raw.map((u) => u.id);
+    const rel = await this.follows.batchRelationshipForUserIds({ viewerUserId, userIds });
 
-    return {
-      users: slice.map((u) => ({
-        id: u.id,
-        username: u.username,
-        name: u.name,
-        premium: u.premium,
-        verifiedStatus: u.verifiedStatus,
-        // avatarUrl is computed client-side in existing flows; keep it null here for now (fast MVP).
-        avatarUrl: null,
-      })),
-      nextCursor,
+    function userScore(u: (typeof raw)[0]): number {
+      const un = (u.username ?? '').trim().toLowerCase();
+      const nm = (u.name ?? '').trim().toLowerCase();
+      const bio = (u.bio ?? '').trim().toLowerCase();
+      if (un === qLower) return USER_SCORE.exactUsername;
+      if (nm === qLower) return USER_SCORE.exactName;
+      if (un && un.startsWith(qLower)) return USER_SCORE.usernameStartsWith;
+      if (nm && nm.startsWith(qLower)) return USER_SCORE.nameStartsWith;
+      if (un && un.includes(qLower)) return USER_SCORE.usernameContains;
+      if (nm && nm.includes(qLower)) return USER_SCORE.nameContains;
+      if (bio && bio.includes(qLower)) return USER_SCORE.bioPhrase;
+      if (words.length > 0 && words.every((w) => bio.includes(w))) return USER_SCORE.bioAllWords;
+      if (words.some((w) => bio.includes(w))) return USER_SCORE.bioAnyWord;
+      return 0;
+    }
+    const relRank = (id: string) => {
+      const vf = rel.viewerFollows.has(id);
+      const fv = rel.followsViewer.has(id);
+      if (vf && fv) return 0;
+      if (vf) return 1;
+      if (fv) return 2;
+      return 3;
     };
+
+    const sorted = [...raw].sort((a, b) => {
+      const sa = userScore(a);
+      const sb = userScore(b);
+      if (sa !== sb) return sb - sa;
+      const ra = relRank(a.id);
+      const rb = relRank(b.id);
+      if (ra !== rb) return ra - rb;
+      const c = b.createdAt.getTime() - a.createdAt.getTime();
+      if (c !== 0) return c;
+      return b.id.localeCompare(a.id);
+    });
+
+    const slice = sorted.slice(0, limit);
+    const nextCursor = raw.length > fetchSize ? raw[fetchSize]?.id ?? null : null;
+
+    const users: SearchUserRow[] = slice.map((u) => ({
+      id: u.id,
+      createdAt: u.createdAt,
+      username: u.username,
+      name: u.name,
+      premium: u.premium,
+      verifiedStatus: u.verifiedStatus,
+      avatarKey: u.avatarKey,
+      avatarUpdatedAt: u.avatarUpdatedAt,
+      relationship: {
+        viewerFollowsUser: rel.viewerFollows.has(u.id),
+        userFollowsViewer: rel.followsViewer.has(u.id),
+      },
+    }));
+
+    return { users, nextCursor };
+  }
+
+  /** Broad match: body or author username/name (phrase + each word) so "john steve" matches @john, @steve, or body. */
+  private postSearchMatchWhere(q: string, words: string[]): object {
+    const trimmed = (q ?? '').trim();
+    if (!trimmed) return {};
+    const orConditions: any[] = [
+      { body: { contains: trimmed, mode: 'insensitive' as const } },
+      { user: { username: { contains: trimmed, mode: 'insensitive' as const } } },
+      { user: { name: { contains: trimmed, mode: 'insensitive' as const } } },
+    ];
+    for (const w of words) {
+      if (w === trimmed.toLowerCase()) continue;
+      orConditions.push({ body: { contains: w, mode: 'insensitive' as const } });
+      orConditions.push({ user: { username: { contains: w, mode: 'insensitive' as const } } });
+      orConditions.push({ user: { name: { contains: w, mode: 'insensitive' as const } } });
+    }
+    return { OR: orConditions };
   }
 
   async searchPosts(params: { viewerUserId: string | null; q: string; limit: number; cursor: string | null }) {
@@ -80,6 +241,8 @@ export class SearchService {
     if (!q) return { posts: [], nextCursor: null };
     const limit = Math.max(1, Math.min(50, params.limit || 30));
     const cursor = params.cursor ?? null;
+    const words = queryToWords(q);
+    const qLower = q.toLowerCase();
 
     const viewer = await this.viewerById(params.viewerUserId ?? null);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
@@ -90,40 +253,105 @@ export class SearchService {
         } as any)
       : ({ visibility: 'public' } as any);
 
-    const cursorWhere = await createdAtIdCursorWhere({
-      cursor,
-      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
-    });
+    const matchWhere = this.postSearchMatchWhere(q, words);
+    const fetchSize = Math.min(200, limit * 10);
+    const offset = cursor ? Math.max(0, parseInt(cursor, 10)) : 0;
 
-    const where = cursorWhere
-      ? ({
-          AND: [
-            { deletedAt: null },
-            visibilityWhere,
-            cursorWhere,
-            {
-              body: { contains: q, mode: 'insensitive' },
-            },
-          ],
-        } as any)
-      : ({
-          AND: [{ deletedAt: null }, visibilityWhere, { body: { contains: q, mode: 'insensitive' } }],
-        } as any);
+    const baseWhere = {
+      AND: [{ deletedAt: null }, visibilityWhere, matchWhere],
+    } as any;
 
-    const posts = await this.prisma.post.findMany({
-      where,
+    const raw = await this.prisma.post.findMany({
+      where: baseWhere,
       include: {
         user: true,
         media: { orderBy: { position: 'asc' } },
         mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: limit + 1,
+      take: fetchSize,
     });
 
-    const slice = posts.slice(0, limit);
-    const nextCursor = posts.length > limit ? slice[slice.length - 1]?.id ?? null : null;
+    function postScore(p: (typeof raw)[0]): number {
+      const body = (p.body ?? '').trim().toLowerCase();
+      const un = (p.user?.username ?? '').trim().toLowerCase();
+      const nm = (p.user?.name ?? '').trim().toLowerCase();
+      let score = 0;
+      if (body.includes(qLower)) score = Math.max(score, POST_SCORE.bodyPhrase);
+      if (words.length > 0 && words.every((w) => body.includes(w))) score = Math.max(score, POST_SCORE.bodyAllWords);
+      if (un === qLower) score = Math.max(score, POST_SCORE.authorExactUsername);
+      if (nm === qLower) score = Math.max(score, POST_SCORE.authorExactName);
+      if (words.some((w) => body.includes(w))) score = Math.max(score, POST_SCORE.bodyAnyWord);
+      if (words.some((w) => un.includes(w))) score = Math.max(score, POST_SCORE.authorUsernameAnyWord);
+      if (words.some((w) => nm.includes(w))) score = Math.max(score, POST_SCORE.authorNameAnyWord);
+      return score;
+    }
+
+    const sorted = [...raw].sort((a, b) => {
+      const sa = postScore(a);
+      const sb = postScore(b);
+      if (sa !== sb) return sb - sa;
+      return b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id);
+    });
+
+    const slice = sorted.slice(offset, offset + limit);
+    const nextCursor = offset + limit < sorted.length ? String(offset + limit) : null;
     return { posts: slice, nextCursor };
+  }
+
+  async searchMixed(params: {
+    viewerUserId: string | null;
+    q: string;
+    userLimit: number;
+    postLimit: number;
+    userCursor: string | null;
+    postCursor: string | null;
+  }): Promise<{
+    users: SearchUserRow[];
+    posts: Awaited<ReturnType<SearchService['searchPosts']>>['posts'];
+    nextUserCursor: string | null;
+    nextPostCursor: string | null;
+  }> {
+    const q = (params.q ?? '').trim();
+    if (q.length < 2) {
+      return {
+        users: [],
+        posts: [],
+        nextUserCursor: null,
+        nextPostCursor: null,
+      };
+    }
+
+    const [userResult, postResult] = await Promise.all([
+      this.searchUsers({
+        q,
+        limit: params.userLimit,
+        cursor: params.userCursor,
+        viewerUserId: params.viewerUserId,
+      }),
+      this.searchPosts({
+        viewerUserId: params.viewerUserId,
+        q,
+        limit: params.postLimit,
+        cursor: params.postCursor,
+      }),
+    ]);
+
+    return {
+      users: userResult.users,
+      posts: postResult.posts,
+      nextUserCursor: userResult.nextCursor,
+      nextPostCursor: postResult.nextCursor,
+    };
+  }
+
+  /** Store a user search for admin/analytics; called when type=all with logged-in user. */
+  async recordUserSearch(params: { userId: string; query: string }) {
+    const query = (params.query ?? '').trim().slice(0, 200);
+    if (!query) return;
+    await this.prisma.userSearch.create({
+      data: { userId: params.userId, query },
+    });
   }
 
   private async bookmarkCursorWhere(params: { userId: string; cursor: string | null }) {

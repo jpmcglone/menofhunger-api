@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { envSchema, validateEnv } from './env';
@@ -20,9 +21,11 @@ import { BookmarksModule } from '../bookmarks/bookmarks.module';
 import { SearchModule } from '../search/search.module';
 import { PresenceModule } from '../presence/presence.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnv(envSchema),
@@ -50,6 +53,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     SearchModule,
     PresenceModule,
     NotificationsModule,
+    LinkMetadataModule,
   ],
   controllers: [AppController],
   providers: [
