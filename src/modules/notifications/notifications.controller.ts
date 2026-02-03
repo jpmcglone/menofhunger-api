@@ -99,6 +99,19 @@ export class NotificationsController {
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
+      limit: rateLimitLimit('interact', 30),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('push-test')
+  async pushTest(@CurrentUserId() userId: string) {
+    const result = await this.notifications.sendTestPush(userId);
+    return { data: result };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
       limit: rateLimitLimit('interact', 180),
       ttl: rateLimitTtl('interact', 60),
     },

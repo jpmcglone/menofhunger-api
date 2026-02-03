@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { NotificationKind } from '@prisma/client';
-import webpush from 'web-push';
+import * as webpush from 'web-push';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
@@ -127,10 +127,31 @@ export class NotificationsService {
     });
   }
 
+  /** Send a single test Web Push to the user (for "Send test notification" in settings). */
+  async sendTestPush(userId: string): Promise<{ sent: boolean; message?: string }> {
+    if (!this.appConfig.vapidConfigured()) {
+      return { sent: false, message: 'Push notifications are not configured (VAPID).' };
+    }
+    const subs = await this.prisma.pushSubscription.findMany({
+      where: { userId },
+      select: { id: true, endpoint: true, p256dh: true, auth: true },
+    });
+    if (subs.length === 0) {
+      return { sent: false, message: 'No push subscription for this account. Enable browser notifications first.' };
+    }
+    await this.sendWebPushToRecipient(userId, {
+      title: 'Test notification',
+      body: 'If you see this, push is working.',
+      subjectPostId: null,
+      test: true,
+    });
+    return { sent: true };
+  }
+
   /** Send Web Push to all of a user's subscriptions; prune expired (410/404). */
   private async sendWebPushToRecipient(
     recipientUserId: string,
-    params: { title: string; body?: string; subjectPostId?: string | null },
+    params: { title: string; body?: string; subjectPostId?: string | null; test?: boolean },
   ): Promise<void> {
     if (!this.appConfig.vapidConfigured()) return;
     if (!this.vapidConfigured) {
@@ -152,13 +173,19 @@ export class NotificationsService {
       title: params.title,
       body: params.body ?? 'You have a new notification.',
       url,
-      tag: `notification-${recipientUserId}`,
+      tag: params.test ? 'notification-test' : `notification-${recipientUserId}`,
+      test: params.test === true,
     });
 
     const subs = await this.prisma.pushSubscription.findMany({
       where: { userId: recipientUserId },
       select: { id: true, endpoint: true, p256dh: true, auth: true },
     });
+
+    if (subs.length === 0) {
+      this.logger.debug(`[push] No subscriptions for user ${recipientUserId}; skipping web push.`);
+      return;
+    }
 
     for (const sub of subs) {
       try {
