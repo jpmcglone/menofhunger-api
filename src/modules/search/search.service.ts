@@ -2,10 +2,12 @@ import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/com
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FollowsService } from '../follows/follows.service';
+import { PostsService } from '../posts/posts.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 
 /**
  * Search scoring (higher = better). Used for ranking only; tie-breaks: relationship (users), createdAt (posts).
+ * Post search: combines text relevance + popularity score (boost + bookmark + comments, time-decayed).
  *
  * Users (profiles):
  * - Exact username: 100 | Exact display name: 95
@@ -67,6 +69,7 @@ export class SearchService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly follows: FollowsService,
+    private readonly posts: PostsService,
   ) {}
 
   private async viewerById(viewerUserId: string | null): Promise<Viewer> {
@@ -272,6 +275,10 @@ export class SearchService {
       take: fetchSize,
     });
 
+    const postIds = raw.map((p) => p.id);
+    await this.posts.ensureBoostScoresFresh(postIds);
+    const popularityByPostId = await this.posts.computeScoresForPostIds(postIds);
+
     function postScore(p: (typeof raw)[0]): number {
       const body = (p.body ?? '').trim().toLowerCase();
       const un = (p.user?.username ?? '').trim().toLowerCase();
@@ -288,9 +295,13 @@ export class SearchService {
     }
 
     const sorted = [...raw].sort((a, b) => {
-      const sa = postScore(a);
-      const sb = postScore(b);
-      if (sa !== sb) return sb - sa;
+      const relA = postScore(a);
+      const relB = postScore(b);
+      const popA = popularityByPostId.get(a.id) ?? 0;
+      const popB = popularityByPostId.get(b.id) ?? 0;
+      const scoreA = relA * 10 + Math.log10(1 + popA);
+      const scoreB = relB * 10 + Math.log10(1 + popB);
+      if (scoreA !== scoreB) return scoreB - scoreA;
       return b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id);
     });
 
