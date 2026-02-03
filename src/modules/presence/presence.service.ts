@@ -8,7 +8,8 @@ const MAX_SUBSCRIPTIONS_PER_SOCKET = 100;
 
 /**
  * In-memory presence: userId -> Set of socketIds, socketId -> { userId, client }.
- * Supports grace period (show online for X min after disconnect) and targeted subscriptions.
+ * No grace period: if no connected clients, user is offline immediately.
+ * Idle = no activity ping for presenceIdleAfterMinutes (default 3).
  */
 @Injectable()
 export class PresenceService {
@@ -18,10 +19,10 @@ export class PresenceService {
   private readonly userSockets = new Map<string, Set<string>>();
   /** socketId -> meta (for cleanup and knowing what client type) */
   private readonly socketMeta = new Map<string, SocketMeta>();
-  /** userId -> last disconnect timestamp (for grace period) */
-  private readonly lastDisconnectAt = new Map<string, number>();
-  /** userId -> when they last came online (for sort order; not updated on grace-reconnect) */
+  /** userId -> when they last came online (for sort order) */
   private readonly lastConnectAt = new Map<string, number>();
+  /** userId -> last activity ping (presence:active); used to mark idle after N min */
+  private readonly lastActivityAt = new Map<string, number>();
   /** socketId -> Set of userIds this socket cares about */
   private readonly socketSubscriptions = new Map<string, Set<string>>();
   /** userId -> Set of socketIds subscribed to this user */
@@ -33,12 +34,9 @@ export class PresenceService {
 
   constructor(private readonly appConfig: AppConfigService) {}
 
-  graceMs(): number {
-    return this.appConfig.presenceGraceMinutes() * 60 * 1000;
-  }
-
-  recentDisconnectMs(): number {
-    return this.appConfig.presenceRecentDisconnectMinutes() * 60 * 1000;
+  /** Minutes of no activity before marking user idle. */
+  presenceIdleAfterMinutes(): number {
+    return this.appConfig.presenceIdleAfterMinutes();
   }
 
   idleDisconnectMs(): number {
@@ -57,26 +55,30 @@ export class PresenceService {
     this.idleUserIds.delete(userId);
   }
 
+  /** Update last activity time (call on presence:active or connect). Resets idle timer. */
+  setLastActivity(userId: string): void {
+    this.lastActivityAt.set(userId, Date.now());
+  }
+
+  getLastActivity(userId: string): number | undefined {
+    return this.lastActivityAt.get(userId);
+  }
+
   isUserIdle(userId: string): boolean {
     return this.idleUserIds.has(userId);
   }
 
+  /** Online only if at least one connected socket. No grace period. */
   isUserOnline(userId: string): boolean {
-    if (this.userSockets.has(userId) && (this.userSockets.get(userId)?.size ?? 0) > 0) {
-      return true;
-    }
-    const last = this.lastDisconnectAt.get(userId);
-    if (last == null) return false;
-    return Date.now() - last < this.graceMs();
+    const set = this.userSockets.get(userId);
+    return (set?.size ?? 0) > 0;
   }
 
   /**
    * Register a socket for a user. Call from gateway after auth.
-   * Clears grace period if user was in it (reconnect).
    */
   register(socketId: string, userId: string, client: string): { isNewlyOnline: boolean } {
-    const wasInGrace = this.lastDisconnectAt.has(userId);
-    this.lastDisconnectAt.delete(userId);
+    this.setLastActivity(userId);
 
     let set = this.userSockets.get(userId);
     if (!set) {
@@ -86,15 +88,14 @@ export class PresenceService {
     const wasEmpty = set.size === 0;
     set.add(socketId);
     this.socketMeta.set(socketId, { userId, client });
-    if (wasEmpty && !wasInGrace) {
+    if (wasEmpty) {
       this.lastConnectAt.set(userId, Date.now());
     }
     return { isNewlyOnline: wasEmpty };
   }
 
   /**
-   * Force-unregister a socket (e.g. on explicit logout). Skips grace period - if this was the last
-   * connection, the user is immediately offline.
+   * Force-unregister a socket (e.g. on explicit logout). If last connection, user is immediately offline.
    */
   forceUnregister(socketId: string): { userId: string; wasLastConnection: boolean } | null {
     this.socketSubscriptions.delete(socketId);
@@ -105,12 +106,14 @@ export class PresenceService {
     if (!meta) return null;
     this.socketMeta.delete(socketId);
     this.idleUserIds.delete(meta.userId);
+    this.lastActivityAt.delete(meta.userId);
     const set = this.userSockets.get(meta.userId);
     if (set) {
       set.delete(socketId);
       if (set.size === 0) {
         this.userSockets.delete(meta.userId);
-        this.clearGrace(meta.userId);
+        this.lastConnectAt.delete(meta.userId);
+        this.lastActivityAt.delete(meta.userId);
         return { userId: meta.userId, wasLastConnection: true };
       }
     }
@@ -118,8 +121,7 @@ export class PresenceService {
   }
 
   /**
-   * Unregister a socket (e.g. on disconnect).
-   * @returns userId and isNowOffline true if that user has no sockets left (enter grace or emit offline).
+   * Unregister a socket (e.g. on disconnect). If no sockets left, user is immediately offline.
    */
   unregister(socketId: string): { userId: string; isNowOffline: boolean } | null {
     this.socketSubscriptions.delete(socketId);
@@ -130,12 +132,13 @@ export class PresenceService {
     if (!meta) return null;
     this.socketMeta.delete(socketId);
     this.idleUserIds.delete(meta.userId);
+    this.lastActivityAt.delete(meta.userId);
     const set = this.userSockets.get(meta.userId);
     if (set) {
       set.delete(socketId);
       if (set.size === 0) {
         this.userSockets.delete(meta.userId);
-        this.lastDisconnectAt.set(meta.userId, Date.now());
+        this.lastConnectAt.delete(meta.userId);
         return { userId: meta.userId, isNowOffline: true };
       }
     }
@@ -149,56 +152,21 @@ export class PresenceService {
     }
   }
 
-  /** Clear grace for userId (call when full offline timer fires at 6 min). */
-  clearGrace(userId: string): void {
-    this.lastDisconnectAt.delete(userId);
-    this.lastConnectAt.delete(userId);
-  }
-
   getLastConnectAt(userId: string): number | undefined {
     return this.lastConnectAt.get(userId);
-  }
-
-  isUserRecentlyDisconnected(userId: string): boolean {
-    const last = this.lastDisconnectAt.get(userId);
-    if (last == null) return false;
-    const elapsed = Date.now() - last;
-    return elapsed >= this.graceMs() && elapsed < this.recentDisconnectMs();
-  }
-
-  getLastDisconnectAt(userId: string): number | undefined {
-    return this.lastDisconnectAt.get(userId);
-  }
-
-  getDisconnectAtIfRecent(userId: string): number | undefined {
-    const last = this.lastDisconnectAt.get(userId);
-    if (last == null) return undefined;
-    const elapsed = Date.now() - last;
-    if (elapsed >= this.graceMs() && elapsed < this.recentDisconnectMs()) {
-      return last;
-    }
-    return undefined;
   }
 
   getOnlineUserIds(): string[] {
     return this.getOnlineUserIdsOrderedByRecent();
   }
 
-  /** Online user IDs sorted by most recent first (lastConnectAt desc). Users in grace keep their connect time. */
+  /** Online user IDs sorted by most recent first (lastConnectAt desc). */
   getOnlineUserIdsOrderedByRecent(): string[] {
     const candidates: { userId: string; lastConnectAt: number }[] = [];
     const now = Date.now();
-    const grace = this.graceMs();
-
     for (const uid of this.userSockets.keys()) {
       const t = this.lastConnectAt.get(uid) ?? now;
       candidates.push({ userId: uid, lastConnectAt: t });
-    }
-    for (const [uid, ts] of this.lastDisconnectAt) {
-      if (now - ts < grace && !this.userSockets.has(uid)) {
-        const t = this.lastConnectAt.get(uid) ?? 0;
-        candidates.push({ userId: uid, lastConnectAt: t });
-      }
     }
     candidates.sort((a, b) => b.lastConnectAt - a.lastConnectAt);
     return candidates.map((c) => c.userId);

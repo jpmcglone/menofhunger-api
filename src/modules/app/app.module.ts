@@ -19,6 +19,7 @@ import { GiphyModule } from '../giphy/giphy.module';
 import { BookmarksModule } from '../bookmarks/bookmarks.module';
 import { SearchModule } from '../search/search.module';
 import { PresenceModule } from '../presence/presence.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { PresenceModule } from '../presence/presence.module';
     BookmarksModule,
     SearchModule,
     PresenceModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [

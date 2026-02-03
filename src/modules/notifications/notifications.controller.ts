@@ -1,0 +1,126 @@
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import { z } from 'zod';
+import { AuthGuard } from '../auth/auth.guard';
+import { CurrentUserId } from '../users/users.decorator';
+import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
+import { NotificationsService } from './notifications.service';
+
+const listQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  cursor: z.string().optional(),
+});
+
+const markReadBodySchema = z.object({
+  post_id: z.string().trim().min(1).optional(),
+  user_id: z.string().trim().min(1).optional(),
+}).refine((d) => d.post_id ?? d.user_id, { message: 'At least one of post_id or user_id is required' });
+
+@Controller('notifications')
+export class NotificationsController {
+  constructor(private readonly notifications: NotificationsService) {}
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 240),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get()
+  async list(
+    @CurrentUserId() userId: string,
+    @Query() query: unknown,
+  ) {
+    const parsed = listQuerySchema.parse(query);
+    const limit = parsed.limit ?? 30;
+    const cursor = parsed.cursor ?? null;
+    const res = await this.notifications.list({
+      recipientUserId: userId,
+      limit,
+      cursor,
+    });
+    return {
+      data: res.notifications,
+      pagination: {
+        nextCursor: res.nextCursor,
+        undeliveredCount: res.undeliveredCount,
+      },
+    };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Get('unread-count')
+  async getUnreadCount(@CurrentUserId() userId: string) {
+    const count = await this.notifications.getUndeliveredCount(userId);
+    return { data: { count } };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('mark-delivered')
+  async markDelivered(@CurrentUserId() userId: string) {
+    await this.notifications.markDelivered(userId);
+    return { data: { ok: true } };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('mark-read')
+  async markReadBySubject(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = markReadBodySchema.parse(body);
+    await this.notifications.markReadBySubject(userId, {
+      postId: parsed.post_id ?? null,
+      userId: parsed.user_id ?? null,
+    });
+    return { data: {} };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('mark-all-read')
+  async markAllRead(@CurrentUserId() userId: string) {
+    await this.notifications.markAllRead(userId);
+    return { data: { ok: true } };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post(':id/mark-read')
+  async markReadById(
+    @CurrentUserId() userId: string,
+    @Param('id') id: string,
+  ) {
+    const updated = await this.notifications.markReadById(userId, id);
+    return { data: { updated } };
+  }
+}

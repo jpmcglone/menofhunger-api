@@ -184,16 +184,11 @@ export const envSchema = z.object({
     z.string().optional(),
   ),
 
-  // Presence: minutes to show user as online after last disconnect.
-  PRESENCE_GRACE_MINUTES: z
+  // Presence: minutes with no activity ping before marking user idle (default 3).
+  PRESENCE_IDLE_AFTER_MINUTES: z
     .string()
     .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PRESENCE_GRACE_MINUTES must be a number'),
-  // Presence: minutes to show red dot after grace expires (total from disconnect = red dot window end).
-  PRESENCE_RECENT_DISCONNECT_MINUTES: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PRESENCE_RECENT_DISCONNECT_MINUTES must be a number'),
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PRESENCE_IDLE_AFTER_MINUTES must be a number'),
   // Presence: if user stays idle this many minutes, disconnect them (consider offline and close socket).
   PRESENCE_IDLE_DISCONNECT_MINUTES: z
     .string()

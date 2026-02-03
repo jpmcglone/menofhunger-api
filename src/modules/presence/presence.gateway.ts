@@ -5,7 +5,7 @@ import {
   OnGatewayDisconnect,
   SubscribeMessage,
 } from '@nestjs/websockets';
-import { Logger } from '@nestjs/common';
+import { Inject, Logger, forwardRef } from '@nestjs/common';
 import { Server } from 'socket.io';
 import { AuthService } from '../auth/auth.service';
 import { AUTH_COOKIE_NAME } from '../auth/auth.constants';
@@ -26,8 +26,7 @@ function parseSessionTokenFromCookie(cookieHeader: string | undefined): string |
 }
 
 type UserTimers = {
-  graceTimer?: ReturnType<typeof setTimeout>;
-  offlineTimer?: ReturnType<typeof setTimeout>;
+  idleMarkTimer?: ReturnType<typeof setTimeout>;
   idleDisconnectTimer?: ReturnType<typeof setTimeout>;
 };
 
@@ -48,6 +47,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
   constructor(
     private readonly auth: AuthService,
     private readonly presence: PresenceService,
+    @Inject(forwardRef(() => FollowsService))
     private readonly follows: FollowsService,
   ) {}
 
@@ -62,7 +62,6 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     }
 
     this.cancelUserTimers(user.id);
-    this.presence.clearGrace(user.id);
 
     const clientType =
       (Array.isArray(client.handshake.query.client)
@@ -77,52 +76,45 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     if (isNewlyOnline) {
       await this.emitOnline(user.id);
     }
+    this.scheduleIdleMarkTimer(user.id);
   }
 
   handleDisconnect(client: import('socket.io').Socket): void {
     const result = this.presence.unregister(client.id);
     this.logger.log(`[presence] DISCONNECT socket=${client.id} userId=${result?.userId ?? '?'} isNowOffline=${result?.isNowOffline ?? false}`);
     if (result?.isNowOffline) {
-      this.scheduleGraceTimer(result.userId);
+      this.cancelUserTimers(result.userId);
+      this.emitOffline(result.userId);
     }
   }
 
   private cancelUserTimers(userId: string): void {
     const timers = this.userTimers.get(userId);
     if (timers) {
-      if (timers.graceTimer) clearTimeout(timers.graceTimer);
-      if (timers.offlineTimer) clearTimeout(timers.offlineTimer);
+      if (timers.idleMarkTimer) clearTimeout(timers.idleMarkTimer);
       if (timers.idleDisconnectTimer) clearTimeout(timers.idleDisconnectTimer);
       this.userTimers.delete(userId);
     }
   }
 
-  private scheduleGraceTimer(userId: string): void {
-    this.cancelUserTimers(userId);
-    const graceMs = this.presence.graceMs();
-    const recentMs = this.presence.recentDisconnectMs();
+  private getTargetsForUser(userId: string): Set<string> {
+    return new Set([
+      ...this.presence.getSubscribers(userId),
+      ...this.presence.getOnlineFeedListeners(),
+    ]);
+  }
 
-    const graceTimer = setTimeout(() => {
-      this.userTimers.delete(userId);
-
-      const disconnectAt = this.presence.getLastDisconnectAt(userId) ?? Date.now() - graceMs;
-      this.emitRecentlyDisconnected(userId, disconnectAt);
-
-      const remainingMs = recentMs - graceMs;
-      const offlineTimer = setTimeout(() => {
-        this.userTimers.delete(userId);
-        this.presence.clearGrace(userId);
-        this.emitOffline(userId);
-      }, remainingMs);
-      this.userTimers.set(userId, { offlineTimer });
-    }, graceMs);
-
-    this.userTimers.set(userId, { graceTimer });
+  /** Emit notifications:updated to a user's sockets (used by NotificationsService). */
+  emitNotificationsUpdated(
+    userId: string,
+    payload: { undeliveredCount: number },
+  ): void {
+    this.presence.emitToUser(this.server, userId, 'notifications:updated', payload);
   }
 
   private emitToSockets(socketIds: Iterable<string>, event: string, payload: unknown): void {
     const ids = [...socketIds];
-    this.logger.log(`[presence] EMIT_OUT event=${event} to ${ids.length} sockets: [${ids.slice(0, 5).join(', ')}${ids.length > 5 ? '...' : ''}] payload=${JSON.stringify(payload)}`);
+    this.logger.debug(`[presence] EMIT_OUT event=${event} to ${ids.length} sockets`);
     for (const id of ids) {
       const socket = this.server.sockets.sockets.get(id);
       socket?.emit(event, payload);
@@ -130,12 +122,11 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   private async emitOnline(userId: string): Promise<void> {
-    const subs = this.presence.getSubscribers(userId);
-    const feedListeners = this.presence.getOnlineFeedListeners();
-    const allTargets = new Set([...subs, ...feedListeners]);
-    this.logger.log(`[presence] emitOnline userId=${userId} subs=${subs.size} feedListeners=${feedListeners.size} totalTargets=${allTargets.size}`);
+    const allTargets = this.getTargetsForUser(userId);
+    this.logger.log(`[presence] emitOnline userId=${userId} totalTargets=${allTargets.size}`);
     if (allTargets.size === 0) return;
 
+    const feedListeners = this.presence.getOnlineFeedListeners();
     let userPayload: FollowListUser | null = null;
     if (feedListeners.size > 0) {
       try {
@@ -158,35 +149,21 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   private emitIdle(userId: string): void {
-    const subs = this.presence.getSubscribers(userId);
-    const feedListeners = this.presence.getOnlineFeedListeners();
-    const allTargets = new Set([...subs, ...feedListeners]);
-    if (allTargets.size === 0) return;
-    this.emitToSockets(allTargets, 'presence:idle', { userId });
+    const targets = this.getTargetsForUser(userId);
+    if (targets.size === 0) return;
+    this.emitToSockets(targets, 'presence:idle', { userId });
   }
 
   private emitActive(userId: string): void {
-    const subs = this.presence.getSubscribers(userId);
-    const feedListeners = this.presence.getOnlineFeedListeners();
-    const allTargets = new Set([...subs, ...feedListeners]);
-    if (allTargets.size === 0) return;
-    this.emitToSockets(allTargets, 'presence:active', { userId });
-  }
-
-  private emitRecentlyDisconnected(userId: string, disconnectAt: number): void {
-    const subs = this.presence.getSubscribers(userId);
-    const feedListeners = this.presence.getOnlineFeedListeners();
-    const allTargets = new Set([...subs, ...feedListeners]);
-    if (allTargets.size === 0) return;
-    this.emitToSockets(allTargets, 'presence:recentlyDisconnected', { userId, disconnectAt });
+    const targets = this.getTargetsForUser(userId);
+    if (targets.size === 0) return;
+    this.emitToSockets(targets, 'presence:active', { userId });
   }
 
   private emitOffline(userId: string): void {
-    const subs = this.presence.getSubscribers(userId);
-    const feedListeners = this.presence.getOnlineFeedListeners();
-    const allTargets = new Set([...subs, ...feedListeners]);
-    if (allTargets.size === 0) return;
-    this.emitToSockets(allTargets, 'presence:offline', { userId });
+    const targets = this.getTargetsForUser(userId);
+    if (targets.size === 0) return;
+    this.emitToSockets(targets, 'presence:offline', { userId });
   }
 
   @SubscribeMessage('presence:subscribe')
@@ -201,9 +178,8 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     if (added.length > 0) {
       const users = added.map((uid) => {
         const online = this.presence.isUserOnline(uid);
-        const disconnectAt = !online ? this.presence.getDisconnectAtIfRecent(uid) : undefined;
         const idle = online ? this.presence.isUserIdle(uid) : false;
-        return { userId: uid, online, idle, ...(disconnectAt != null ? { disconnectAt } : {}) };
+        return { userId: uid, online, idle };
       });
       client.emit('presence:subscribed', { users });
     }
@@ -255,6 +231,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
   handleLogout(client: import('socket.io').Socket): void {
     const result = this.presence.forceUnregister(client.id);
     if (result?.wasLastConnection) {
+      this.cancelUserTimers(result.userId);
       this.emitOffline(result.userId);
     }
   }
@@ -269,14 +246,50 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.scheduleIdleDisconnectTimer(userId);
   }
 
+  /** Activity ping (fire-and-forget). Updates lastActivityAt and resets idle-mark timer. Clears idle if set. */
   @SubscribeMessage('presence:active')
   handleActive(client: import('socket.io').Socket): void {
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
+    this.presence.setLastActivity(userId);
+    const wasIdle = this.presence.isUserIdle(userId);
     this.presence.setUserActive(userId);
-    this.logger.log(`[presence] ACTIVE userId=${userId}`);
-    this.emitActive(userId);
+    this.scheduleIdleMarkTimer(userId);
     this.cancelIdleDisconnectTimer(userId);
+    if (wasIdle) {
+      this.logger.log(`[presence] ACTIVE userId=${userId}`);
+      this.emitActive(userId);
+    }
+  }
+
+  private scheduleIdleMarkTimer(userId: string): void {
+    this.cancelIdleMarkTimer(userId);
+    const idleAfterMs = this.presence.presenceIdleAfterMinutes() * 60 * 1000;
+    const idleMarkTimer = setTimeout(() => {
+      this.userTimers.delete(userId);
+      if (!this.presence.isUserOnline(userId)) return;
+      const last = this.presence.getLastActivity(userId) ?? 0;
+      if (Date.now() - last < idleAfterMs) return;
+      this.presence.setUserIdle(userId);
+      this.logger.log(`[presence] IDLE (no activity) userId=${userId}`);
+      this.emitIdle(userId);
+      this.scheduleIdleDisconnectTimer(userId);
+    }, idleAfterMs);
+    const existing = this.userTimers.get(userId);
+    this.userTimers.set(userId, { ...existing, idleMarkTimer });
+  }
+
+  private cancelIdleMarkTimer(userId: string): void {
+    const timers = this.userTimers.get(userId);
+    if (timers?.idleMarkTimer) {
+      clearTimeout(timers.idleMarkTimer);
+      const next = { ...timers, idleMarkTimer: undefined };
+      if (next.idleDisconnectTimer) {
+        this.userTimers.set(userId, next);
+      } else {
+        this.userTimers.delete(userId);
+      }
+    }
   }
 
   private cancelIdleDisconnectTimer(userId: string): void {
@@ -284,7 +297,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     if (timers?.idleDisconnectTimer) {
       clearTimeout(timers.idleDisconnectTimer);
       const next = { ...timers, idleDisconnectTimer: undefined };
-      if (next.graceTimer ?? next.offlineTimer) {
+      if (next.idleMarkTimer) {
         this.userTimers.set(userId, next);
       } else {
         this.userTimers.delete(userId);

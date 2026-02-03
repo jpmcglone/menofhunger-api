@@ -38,6 +38,14 @@ enum PostMediaSource {
   giphy
 }
 
+enum NotificationKind {
+  comment
+  boost
+  follow
+  mention
+  generic
+}
+
 // Start minimal. Add real domain models as you solidify your product.
 model Example {
   id        String   @id @default(cuid())
@@ -98,6 +106,9 @@ model User {
   deletedPostMedia PostMedia[] @relation("PostMedia_deletedByAdmin")
   deletedMediaAssets MediaAsset[] @relation("MediaAsset_deletedByAdmin")
   mentionedIn PostMention[] @relation("PostMention_user")
+  notificationsReceived Notification[] @relation("Notification_recipient")
+  notificationsAsActor Notification[] @relation("Notification_actor")
+  notificationsAsSubjectUser Notification[] @relation("Notification_subjectUser")
 
   @@index([phone])
 }
@@ -141,6 +152,7 @@ model Post {
   bookmarks Bookmark[]
   mentions PostMention[]
   pinnedByUser User? @relation("PinnedPost")
+  notificationsAsSubject Notification[] @relation("Notification_subjectPost")
 
   @@index([userId, createdAt])
   @@index([createdAt])
@@ -327,5 +339,29 @@ model Session {
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  deliveredAt DateTime?
+  readAt    DateTime?
+
+  recipientUserId String
+  kind      NotificationKind
+  actorUserId    String?
+  subjectPostId  String?
+  subjectUserId  String?
+  title     String?
+  body      String?
+
+  recipient User  @relation("Notification_recipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
+  actor     User? @relation("Notification_actor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  subjectPost Post? @relation("Notification_subjectPost", fields: [subjectPostId], references: [id], onDelete: SetNull)
+  subjectUser User? @relation("Notification_subjectUser", fields: [subjectUserId], references: [id], onDelete: SetNull)
+
+  @@index([recipientUserId, createdAt])
+  @@index([recipientUserId, deliveredAt])
+  @@index([recipientUserId, readAt])
 }
 

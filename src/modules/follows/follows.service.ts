@@ -3,6 +3,7 @@ import type { FollowVisibility, VerifiedStatus } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 
@@ -36,6 +37,7 @@ export class FollowsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private async viewerById(viewerUserId: string | null) {
@@ -81,16 +83,37 @@ export class FollowsService {
     const target = await this.userByUsernameOrThrow(username);
     if (target.id === viewerUserId) throw new BadRequestException('You cannot follow yourself.');
 
+    let created = false;
     try {
       await this.prisma.follow.create({
         data: { followerId: viewerUserId, followingId: target.id },
       });
+      created = true;
     } catch (err: unknown) {
       // Idempotent: ignore unique violations.
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
         // noop
       } else {
         throw err;
+      }
+    }
+
+    if (created) {
+      const followNotifyWithinMs = 24 * 60 * 60 * 1000; // 24h: avoid spam if they unfollow then follow again
+      const alreadyNotified = await this.notifications.hasRecentFollowNotification(
+        target.id,
+        viewerUserId,
+        followNotifyWithinMs,
+      );
+      if (!alreadyNotified) {
+        this.notifications
+          .create({
+            recipientUserId: target.id,
+            kind: 'follow',
+            actorUserId: viewerUserId,
+            subjectUserId: viewerUserId,
+          })
+          .catch(() => {});
       }
     }
 

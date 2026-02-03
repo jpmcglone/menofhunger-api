@@ -11,7 +11,9 @@ export class HealthController {
 
   @Get()
   async health() {
-    const nowIso = new Date().toISOString();
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const serverTime = Math.floor(now.getTime() / 1000);
     const uptimeSeconds = Math.max(0, Math.floor(process.uptime()));
 
     const config = {
@@ -32,6 +34,7 @@ export class HealthController {
         data: {
           status: 'ok',
           nowIso,
+          serverTime,
           uptimeSeconds,
           service: 'menofhunger-api',
           config,
@@ -44,6 +47,7 @@ export class HealthController {
         data: {
           status: 'degraded',
           nowIso,
+          serverTime,
           uptimeSeconds,
           service: 'menofhunger-api',
           config,

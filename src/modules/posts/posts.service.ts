@@ -1,7 +1,8 @@
-import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 
 export type PostCounts = {
@@ -13,7 +14,12 @@ export type PostCounts = {
 
 @Injectable()
 export class PostsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(PostsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   /**
    * Centralized guardrail: any query that *returns posts* should include this.
@@ -1284,6 +1290,39 @@ export class PostsService {
     return [...new Set([...matches].map((m) => m[1]))];
   }
 
+  /** Thread participant role for reply notifications. */
+  private static readonly REPLY_TITLE = {
+    root_author: "Replied to your post",
+    reply_author: "Replied to your comment",
+    mentioned_in_root: "Replied to a post you're mentioned in",
+    mentioned_in_reply: "Replied to a comment you're mentioned in",
+  } as const;
+
+  /**
+   * Walk parent chain from parentId up to root; return map of userId -> role for thread participants.
+   * Used to notify everyone in the thread with the correct label (and to dedupe with @mentions).
+   */
+  private async getThreadParticipantRoles(parentId: string): Promise<Map<string, keyof typeof PostsService.REPLY_TITLE>> {
+    const map = new Map<string, keyof typeof PostsService.REPLY_TITLE>();
+    let currentId: string | null = parentId;
+    while (currentId) {
+      const post = await this.prisma.post.findFirst({
+        where: { id: currentId, ...this.notDeletedWhere() },
+        select: { id: true, parentId: true, userId: true, mentions: { select: { userId: true } } },
+      });
+      if (!post) break;
+      const isRoot = !post.parentId;
+      const authorRole = isRoot ? 'root_author' : 'reply_author';
+      const mentionRole = isRoot ? 'mentioned_in_root' : 'mentioned_in_reply';
+      map.set(post.userId, authorRole);
+      for (const m of post.mentions) {
+        if (!map.has(m.userId)) map.set(m.userId, mentionRole);
+      }
+      currentId = post.parentId;
+    }
+    return map;
+  }
+
   async createPost(params: {
     userId: string;
     body: string;
@@ -1318,6 +1357,7 @@ export class PostsService {
 
     let visibility: PostVisibility = requestedVisibility;
     let threadParticipantIds: string[] = [];
+    let parentAuthorUserId: string | null = null;
 
     if (parentId) {
       const parent = await this.prisma.post.findFirst({
@@ -1325,6 +1365,7 @@ export class PostsService {
         include: { user: { select: { id: true } } },
       });
       if (!parent) throw new NotFoundException('Post not found.');
+      parentAuthorUserId = parent.userId;
       if (parent.visibility === 'onlyMe') {
         throw new ForbiddenException('Comments are not allowed on only-me posts.');
       }
@@ -1506,6 +1547,71 @@ export class PostsService {
       return created;
     });
 
+    // Notifications: parent author + thread participants (with reply titles) and @mentions (one notif per user; mention wins over reply)
+    const bodySnippet = body.trim().slice(0, 150);
+    const mentionSet = new Set(resolvedFromUsernames);
+
+    if (parentId && parentAuthorUserId !== userId) {
+      const threadRoles = await this.getThreadParticipantRoles(parentId);
+      const parentRole = threadRoles.get(parentAuthorUserId ?? '');
+      const parentTitle =
+        parentRole === 'reply_author'
+          ? PostsService.REPLY_TITLE.reply_author
+          : parentRole === 'root_author'
+            ? PostsService.REPLY_TITLE.root_author
+            : PostsService.REPLY_TITLE.reply_author;
+
+      // Parent author: one notification. If they're also @mentioned, they get only the mention (below).
+      if (parentAuthorUserId && !mentionSet.has(parentAuthorUserId)) {
+        this.notifications
+          .create({
+            recipientUserId: parentAuthorUserId,
+            kind: 'comment',
+            actorUserId: userId,
+            subjectPostId: post.id,
+            title: parentTitle,
+            body: bodySnippet || undefined,
+          })
+          .catch((err) => {
+            this.logger.warn(`[notifications] Failed to create comment notification: ${err instanceof Error ? err.message : String(err)}`);
+          });
+      }
+
+      // Other thread participants (excluding parent author and self): one each, unless they're @mentioned (then they get mention only).
+      for (const [uid, role] of threadRoles) {
+        if (uid === userId || uid === parentAuthorUserId || mentionSet.has(uid)) continue;
+        const title = PostsService.REPLY_TITLE[role];
+        this.notifications
+          .create({
+            recipientUserId: uid,
+            kind: 'comment',
+            actorUserId: userId,
+            subjectPostId: post.id,
+            title,
+            body: bodySnippet || undefined,
+          })
+          .catch((err) => {
+            this.logger.warn(`[notifications] Failed to create thread reply notification: ${err instanceof Error ? err.message : String(err)}`);
+          });
+      }
+    }
+
+    // @mentions: one notification each (when both mention and thread apply, we send only mention).
+    for (const uid of resolvedFromUsernames) {
+      if (uid === userId) continue;
+      this.notifications
+        .create({
+          recipientUserId: uid,
+          kind: 'mention',
+          actorUserId: userId,
+          subjectPostId: post.id,
+          body: bodySnippet || undefined,
+        })
+        .catch((err) => {
+          this.logger.warn(`[notifications] Failed to create mention notification: ${err instanceof Error ? err.message : String(err)}`);
+        });
+    }
+
     const withMentions = await this.prisma.post.findUnique({
       where: { id: post.id },
       include: {
@@ -1560,8 +1666,21 @@ export class PostsService {
 
       return {
         boostCount: updated?.boostCount ?? 0,
+        createdCount: created.count,
       };
     });
+
+    if (post.userId !== userId) {
+      const bodySnippet = (post.body ?? '').trim().slice(0, 150) || undefined;
+      this.notifications
+        .upsertBoostNotification({
+          recipientUserId: post.userId,
+          actorUserId: userId,
+          subjectPostId: id,
+          bodySnippet: bodySnippet ?? null,
+        })
+        .catch(() => {});
+    }
 
     return { success: true, viewerHasBoosted: true, boostCount: res.boostCount };
   }
@@ -1601,6 +1720,10 @@ export class PostsService {
         boostCount: updated?.boostCount ?? 0,
       };
     });
+
+    if (post.userId !== userId) {
+      this.notifications.deleteBoostNotification(post.userId, userId, id).catch(() => {});
+    }
 
     return { success: true, viewerHasBoosted: false, boostCount: res.boostCount };
   }
