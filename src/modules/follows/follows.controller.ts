@@ -1,10 +1,9 @@
-import { Controller, Delete, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
-import type { Request } from 'express';
+import { Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { Throttle } from '@nestjs/throttler';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
-import { CurrentUserId } from '../users/users.decorator';
+import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { FollowsService } from './follows.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 
@@ -52,28 +51,25 @@ export class FollowsController {
 
   @UseGuards(OptionalAuthGuard)
   @Get('status/:username')
-  async status(@Req() req: Request, @Param('username') username: string) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+  async status(@OptionalCurrentUserId() userId: string | undefined, @Param('username') username: string) {
+    const viewerUserId = userId ?? null;
     const result = await this.follows.status({ viewerUserId, username });
     return { data: result };
   }
 
   @UseGuards(OptionalAuthGuard)
   @Get('summary/:username')
-  async summary(@Req() req: Request, @Param('username') username: string) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+  async summary(@OptionalCurrentUserId() userId: string | undefined, @Param('username') username: string) {
+    const viewerUserId = userId ?? null;
     const result = await this.follows.summary({ viewerUserId, username });
     return { data: result };
   }
 
   @UseGuards(OptionalAuthGuard)
   @Get(':username/followers')
-  async followers(@Req() req: Request, @Param('username') username: string, @Query() query: unknown) {
+  async followers(@OptionalCurrentUserId() userId: string | undefined, @Param('username') username: string, @Query() query: unknown) {
     const parsed = listSchema.parse(query);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+    const viewerUserId = userId ?? null;
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
     const result = await this.follows.listFollowers({ viewerUserId, username, limit, cursor });
@@ -82,10 +78,9 @@ export class FollowsController {
 
   @UseGuards(OptionalAuthGuard)
   @Get(':username/following')
-  async following(@Req() req: Request, @Param('username') username: string, @Query() query: unknown) {
+  async following(@OptionalCurrentUserId() userId: string | undefined, @Param('username') username: string, @Query() query: unknown) {
     const parsed = listSchema.parse(query);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+    const viewerUserId = userId ?? null;
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
     const result = await this.follows.listFollowing({ viewerUserId, username, limit, cursor });

@@ -71,4 +71,3 @@ Before deploying, ensure these are set (API also validates at startup):
 - Optionally: `COOKIE_DOMAIN`, `REQUIRE_CSRF_ORIGIN_IN_PROD=true`
 
 To check required env without starting the server: `node scripts/check-env.mjs` (load `.env` first or set vars in the shell).
-

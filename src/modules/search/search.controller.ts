@@ -1,5 +1,5 @@
-import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
-import type { Request } from 'express';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { OptionalCurrentUserId } from '../users/users.decorator';
 import { z } from 'zod';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
@@ -54,10 +54,9 @@ export class SearchController {
     },
   })
   @Get()
-  async searchAll(@Req() req: Request, @Query() query: unknown) {
+  async searchAll(@OptionalCurrentUserId() userId: string | undefined, @Query() query: unknown) {
     const parsed = searchSchema.parse(query);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+    const viewerUserId = userId ?? null;
 
     const type = parsed.type ?? 'posts';
     const limit = parsed.limit ?? 30;

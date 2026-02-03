@@ -1,5 +1,5 @@
-import { Controller, Get, Req, UseGuards } from '@nestjs/common';
-import type { Request } from 'express';
+import { Controller, Get, UseGuards } from '@nestjs/common';
+import { OptionalCurrentUserId } from '../users/users.decorator';
 import { Throttle } from '@nestjs/throttler';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { FollowsService } from '../follows/follows.service';
@@ -21,9 +21,8 @@ export class PresenceController {
     },
   })
   @Get('online')
-  async online(@Req() req: Request) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+  async online(@OptionalCurrentUserId() userId: string | undefined) {
+    const viewerUserId = userId ?? null;
     const userIds = this.presence.getOnlineUserIds();
     const users = await this.follows.getFollowListUsersByIds({
       viewerUserId,

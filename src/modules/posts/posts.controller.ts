@@ -1,13 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
-import type { Request } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
-import { CurrentUserId } from '../users/users.decorator';
+import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { PostsService } from './posts.service';
 import { toPostDto } from './post.dto';
+import { buildAttachParentChain } from './posts.utils';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 
 const listSchema = z.object({
@@ -80,10 +80,9 @@ export class PostsController {
     },
   })
   @Get()
-  async list(@Req() req: Request, @Query() query: unknown) {
+  async list(@OptionalCurrentUserId() userId: string | undefined, @Query() query: unknown) {
     const parsed = listSchema.parse(query);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+    const viewerUserId = userId ?? null;
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
 
@@ -158,25 +157,16 @@ export class PostsController {
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
 
     const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const attachParentChain = (post: (typeof filteredPosts)[number]): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } => {
-      const internalOverride = internalByPostId?.get(post.id);
-      const score = scoreByPostId?.get(post.id);
-      const dto = toPostDto(post, baseUrl, {
-        viewerHasBoosted: boosted.has(post.id),
-        viewerHasBookmarked: bookmarksByPostId.has(post.id),
-        viewerBookmarkCollectionIds: bookmarksByPostId.get(post.id)?.collectionIds ?? [],
-        includeInternal: viewerHasAdmin,
-        internalOverride:
-          internalOverride || (typeof score === 'number' ? { score } : undefined)
-            ? { ...internalOverride, ...(typeof score === 'number' ? { score } : {}) }
-            : undefined,
-      }) as ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> };
-      const parent = post.parentId ? parentMap.get(post.parentId) : null;
-      if (parent) {
-        dto.parent = attachParentChain(parent as (typeof filteredPosts)[number]);
-      }
-      return dto;
-    };
+    const attachParentChain = buildAttachParentChain({
+      parentMap,
+      baseUrl,
+      boosted,
+      bookmarksByPostId,
+      viewerHasAdmin,
+      internalByPostId,
+      scoreByPostId,
+      toPostDto,
+    });
 
     return {
       data: filteredPosts.map((p) => attachParentChain(p)),
@@ -186,10 +176,9 @@ export class PostsController {
 
   @UseGuards(OptionalAuthGuard)
   @Get('user/:username')
-  async listForUser(@Req() req: Request, @Param('username') username: string, @Query() query: unknown) {
+  async listForUser(@OptionalCurrentUserId() userId: string | undefined, @Param('username') username: string, @Query() query: unknown) {
     const parsed = userListSchema.parse(query);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+    const viewerUserId = userId ?? null;
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
     const sort = parsed.sort ?? 'new';
@@ -256,25 +245,16 @@ export class PostsController {
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
 
     const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const attachParentChain = (post: (typeof filteredPostsUser)[number]): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } => {
-      const internalOverride = internalByPostId?.get(post.id);
-      const score = scoreByPostIdUser?.get(post.id);
-      const dto = toPostDto(post, baseUrl, {
-        viewerHasBoosted: boosted.has(post.id),
-        viewerHasBookmarked: bookmarksByPostId.has(post.id),
-        viewerBookmarkCollectionIds: bookmarksByPostId.get(post.id)?.collectionIds ?? [],
-        includeInternal: viewerHasAdmin,
-        internalOverride:
-          internalOverride || (typeof score === 'number' ? { score } : undefined)
-            ? { ...internalOverride, ...(typeof score === 'number' ? { score } : {}) }
-            : undefined,
-      }) as ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> };
-      const parent = post.parentId ? parentMap.get(post.parentId) : null;
-      if (parent) {
-        dto.parent = attachParentChain(parent as (typeof filteredPostsUser)[number]);
-      }
-      return dto;
-    };
+    const attachParentChain = buildAttachParentChain({
+      parentMap,
+      baseUrl,
+      boosted,
+      bookmarksByPostId,
+      viewerHasAdmin,
+      internalByPostId,
+      scoreByPostId: scoreByPostIdUser,
+      toPostDto,
+    });
 
     return {
       data: filteredPostsUser.map((p) => attachParentChain(p)),
@@ -326,7 +306,8 @@ export class PostsController {
     },
   })
   @Get(':id/comments')
-  async listComments(@Req() req: Request, @Param('id') id: string, @Query() query: unknown) {
+  async listComments(@OptionalCurrentUserId() userId: string | undefined, @Param('id') id: string, @Query() query: unknown) {
+    const viewerUserId = userId ?? null;
     const parsed = z
       .object({
         limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -335,8 +316,6 @@ export class PostsController {
         sort: z.enum(['new', 'popular', 'trending']).optional(),
       })
       .parse(query);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
     const sortKind = parsed.sort === 'trending' ? 'popular' : (parsed.sort ?? 'new');
     const res = await this.posts.listComments({
       viewerUserId,
@@ -390,9 +369,8 @@ export class PostsController {
     },
   })
   @Get(':id/thread-participants')
-  async getThreadParticipants(@Req() req: Request, @Param('id') id: string) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+  async getThreadParticipants(@OptionalCurrentUserId() userId: string | undefined, @Param('id') id: string) {
+    const viewerUserId = userId ?? null;
     const result = await this.posts.getThreadParticipants({ viewerUserId, postId: id });
     return { data: result.participants };
   }
@@ -405,9 +383,8 @@ export class PostsController {
     },
   })
   @Get(':id')
-  async getById(@Req() req: Request, @Param('id') id: string) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const viewerUserId = ((req as any).user?.id as string | undefined) ?? null;
+  async getById(@OptionalCurrentUserId() userId: string | undefined, @Param('id') id: string) {
+    const viewerUserId = userId ?? null;
     const res = await this.posts.getById({ viewerUserId, id });
 
     const viewer = await this.posts.viewerContext(viewerUserId);
