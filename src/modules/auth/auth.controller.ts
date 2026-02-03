@@ -84,7 +84,7 @@ export class AuthController {
   async me(@Req() req: Request) {
     const token = getSessionCookie(req);
     const user = await this.auth.meFromSessionToken(token);
-    return { data: user ?? null };
+    return { data: { user: user ?? null } };
   }
 
   @Post('logout')

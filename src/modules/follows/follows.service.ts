@@ -4,7 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { publicAssetUrl } from '../../common/assets/public-asset-url';
+import { toUserListDto } from '../users/user.dto';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 
 export type FollowRelationship = {
@@ -277,23 +277,16 @@ export class FollowsService {
 
     const followerIds = slice.map((r) => r.followerId);
     const rel = await this.batchRelationshipForUserIds({ viewerUserId, userIds: followerIds });
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
-    const users: FollowListUser[] = slice.map((r) => ({
-      id: r.follower.id,
-      username: r.follower.username,
-      name: r.follower.name,
-      premium: r.follower.premium,
-      verifiedStatus: r.follower.verifiedStatus,
-      avatarUrl: publicAssetUrl({
-        publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
-        key: r.follower.avatarKey,
-        updatedAt: r.follower.avatarUpdatedAt,
-      }),
-      relationship: {
-        viewerFollowsUser: rel.viewerFollows.has(r.follower.id),
-        userFollowsViewer: rel.followsViewer.has(r.follower.id),
-      },
-    }));
+    const users: FollowListUser[] = slice.map((r) =>
+      toUserListDto(r.follower, publicBaseUrl, {
+        relationship: {
+          viewerFollowsUser: rel.viewerFollows.has(r.follower.id),
+          userFollowsViewer: rel.followsViewer.has(r.follower.id),
+        },
+      }) as FollowListUser,
+    );
 
     return { users, nextCursor };
   }
@@ -346,23 +339,16 @@ export class FollowsService {
 
     const followingIds = slice.map((r) => r.followingId);
     const rel = await this.batchRelationshipForUserIds({ viewerUserId, userIds: followingIds });
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
-    const users: FollowListUser[] = slice.map((r) => ({
-      id: r.following.id,
-      username: r.following.username,
-      name: r.following.name,
-      premium: r.following.premium,
-      verifiedStatus: r.following.verifiedStatus,
-      avatarUrl: publicAssetUrl({
-        publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
-        key: r.following.avatarKey,
-        updatedAt: r.following.avatarUpdatedAt,
-      }),
-      relationship: {
-        viewerFollowsUser: rel.viewerFollows.has(r.following.id),
-        userFollowsViewer: rel.followsViewer.has(r.following.id),
-      },
-    }));
+    const users: FollowListUser[] = slice.map((r) =>
+      toUserListDto(r.following, publicBaseUrl, {
+        relationship: {
+          viewerFollowsUser: rel.viewerFollows.has(r.following.id),
+          userFollowsViewer: rel.followsViewer.has(r.following.id),
+        },
+      }) as FollowListUser,
+    );
 
     return { users, nextCursor };
   }
@@ -392,23 +378,16 @@ export class FollowsService {
     });
 
     const rel = await this.batchRelationshipForUserIds({ viewerUserId, userIds: users.map((u) => u.id) });
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
-    return users.map((u) => ({
-      id: u.id,
-      username: u.username,
-      name: u.name,
-      premium: u.premium,
-      verifiedStatus: u.verifiedStatus,
-      avatarUrl: publicAssetUrl({
-        publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
-        key: u.avatarKey,
-        updatedAt: u.avatarUpdatedAt,
-      }),
-      relationship: {
-        viewerFollowsUser: rel.viewerFollows.has(u.id),
-        userFollowsViewer: rel.followsViewer.has(u.id),
-      },
-    }));
+    return users.map((u) =>
+      toUserListDto(u, publicBaseUrl, {
+        relationship: {
+          viewerFollowsUser: rel.viewerFollows.has(u.id),
+          userFollowsViewer: rel.followsViewer.has(u.id),
+        },
+      }) as FollowListUser,
+    );
   }
 }
 

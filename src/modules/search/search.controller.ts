@@ -9,7 +9,7 @@ import { PostsService } from '../posts/posts.service';
 import { SearchService, type SearchUserRow } from './search.service';
 import { Throttle } from '@nestjs/throttler';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import { publicAssetUrl } from '../../common/assets/public-asset-url';
+import { toUserListDto } from '../users/user.dto';
 
 const searchSchema = z.object({
   q: z.string().trim().max(200).optional(),
@@ -21,23 +21,6 @@ const searchSchema = z.object({
   collectionId: z.string().trim().min(1).optional(),
   unorganized: z.string().trim().optional(),
 });
-
-function toSearchUserDto(row: SearchUserRow, publicBaseUrl: string | null) {
-  return {
-    id: row.id,
-    createdAt: row.createdAt.toISOString(),
-    username: row.username,
-    name: row.name,
-    premium: row.premium,
-    verifiedStatus: row.verifiedStatus,
-    avatarUrl: publicAssetUrl({
-      publicBaseUrl,
-      key: row.avatarKey ?? null,
-      updatedAt: row.avatarUpdatedAt ?? null,
-    }),
-    relationship: row.relationship,
-  };
-}
 
 @UseGuards(OptionalAuthGuard)
 @Controller('search')
@@ -78,7 +61,7 @@ export class SearchController {
         userCursor,
         postCursor,
       });
-      const users = res.users.map((u) => toSearchUserDto(u, publicBaseUrl));
+      const users = res.users.map((u) => toUserListDto(u, publicBaseUrl, { relationship: u.relationship, createdAt: u.createdAt }));
       const postIds = (res.posts ?? []).map((p) => p.id);
       const boosted = viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds }) : new Set<string>();
       const bookmarksByPostId = viewerUserId
@@ -117,7 +100,7 @@ export class SearchController {
 
     if (type === 'users') {
       const result = await this.search.searchUsers({ q, limit, cursor, viewerUserId });
-      const users = result.users.map((u) => toSearchUserDto(u, publicBaseUrl));
+      const users = result.users.map((u) => toUserListDto(u, publicBaseUrl, { relationship: u.relationship, createdAt: u.createdAt }));
       return { data: users, pagination: { nextCursor: result.nextCursor } };
     }
     if (type === 'bookmarks') {

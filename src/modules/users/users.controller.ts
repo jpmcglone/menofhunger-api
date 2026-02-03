@@ -130,7 +130,7 @@ export class UsersController {
         where: { id: userId },
         data: { username: desired },
       });
-      return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+      return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
     }
 
     if (user.usernameIsSet) {
@@ -153,7 +153,7 @@ export class UsersController {
       await this.ensureMutualFollowWithJohn(userId, updated.username ?? parsed.username);
 
       return {
-        data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
+        data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
       };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
@@ -245,7 +245,7 @@ export class UsersController {
       });
 
       return {
-        data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
+        data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
       };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
@@ -298,7 +298,7 @@ export class UsersController {
       },
     });
 
-    return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+    return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
   }
 
   @UseGuards(AuthGuard)
@@ -390,7 +390,7 @@ export class UsersController {
         await this.ensureMutualFollowWithJohn(userId, updated.username);
       }
 
-      return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+      return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
         // Could be username or email unique violations; keep it generic here.

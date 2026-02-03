@@ -1,6 +1,59 @@
 import type { FollowVisibility, User, VerifiedStatus } from '@prisma/client';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 
+/** Relationship fields for list-user DTOs (follows, search). */
+export type UserListRelationship = {
+  viewerFollowsUser: boolean;
+  userFollowsViewer: boolean;
+};
+
+/** Row shape accepted by toUserListDto (e.g. Prisma select or search result). */
+export type UserListRow = {
+  id: string;
+  username: string | null;
+  name: string | null;
+  premium: boolean;
+  verifiedStatus: string;
+  avatarKey: string | null;
+  avatarUpdatedAt: Date | null;
+  createdAt?: Date;
+};
+
+/** List-user DTO (follow lists, search users). Optional relationship and createdAt. */
+export type UserListDto = {
+  id: string;
+  username: string | null;
+  name: string | null;
+  premium: boolean;
+  verifiedStatus: string;
+  avatarUrl: string | null;
+  relationship?: UserListRelationship;
+  createdAt?: string;
+};
+
+export function toUserListDto(
+  row: UserListRow,
+  publicBaseUrl: string | null,
+  opts?: { relationship?: UserListRelationship; createdAt?: Date },
+): UserListDto {
+  const dto: UserListDto = {
+    id: row.id,
+    username: row.username,
+    name: row.name,
+    premium: row.premium,
+    verifiedStatus: row.verifiedStatus,
+    avatarUrl: publicAssetUrl({
+      publicBaseUrl,
+      key: row.avatarKey ?? null,
+      updatedAt: row.avatarUpdatedAt ?? null,
+    }),
+  };
+  if (opts?.relationship) dto.relationship = opts.relationship;
+  if (opts?.createdAt !== undefined) dto.createdAt = opts.createdAt.toISOString();
+  else if (row.createdAt) dto.createdAt = row.createdAt.toISOString();
+  return dto;
+}
+
 export type UserDto = {
   id: string;
   createdAt: string;
