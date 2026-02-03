@@ -194,6 +194,16 @@ export const envSchema = z.object({
     .string()
     .optional()
     .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PRESENCE_IDLE_DISCONNECT_MINUTES must be a number'),
+
+  // Web Push (browser notifications). Generate: npx web-push generate-vapid-keys
+  VAPID_PUBLIC_KEY: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  VAPID_PRIVATE_KEY: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
 }).superRefine((env, ctx) => {
   if (env.NODE_ENV !== 'production') return;
 

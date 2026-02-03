@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import type { NotificationKind } from '@prisma/client';
+import webpush from 'web-push';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
@@ -19,6 +20,9 @@ export type CreateNotificationParams = {
 
 @Injectable()
 export class NotificationsService {
+  private readonly logger = new Logger(NotificationsService.name);
+  private vapidConfigured = false;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
@@ -72,7 +76,107 @@ export class NotificationsService {
       undeliveredCount,
     });
 
+    this.sendWebPushToRecipient(recipientUserId, {
+      title: title ?? 'New notification',
+      body: (body ?? '').trim().slice(0, 150) || undefined,
+      subjectPostId: subjectPostId ?? null,
+    }).catch((err) => {
+      this.logger.warn(`[push] Failed to send web push: ${err instanceof Error ? err.message : String(err)}`);
+    });
+
     return notification;
+  }
+
+  /** Upsert push subscription for a user (idempotent). */
+  async pushSubscribe(
+    userId: string,
+    params: { endpoint: string; keys: { p256dh: string; auth: string }; userAgent?: string | null },
+  ): Promise<void> {
+    const { endpoint, keys, userAgent } = params;
+    const endpointTrim = (endpoint ?? '').trim();
+    const p256dh = (keys?.p256dh ?? '').trim();
+    const auth = (keys?.auth ?? '').trim();
+    if (!endpointTrim || !p256dh || !auth) return;
+
+    await this.prisma.pushSubscription.upsert({
+      where: {
+        userId_endpoint: { userId, endpoint: endpointTrim },
+      },
+      create: {
+        userId,
+        endpoint: endpointTrim,
+        p256dh,
+        auth,
+        userAgent: userAgent?.trim() || undefined,
+      },
+      update: {
+        p256dh,
+        auth,
+        userAgent: userAgent?.trim() || undefined,
+      },
+    });
+  }
+
+  /** Remove push subscription by endpoint (current user only). */
+  async pushUnsubscribe(userId: string, endpoint: string): Promise<void> {
+    const endpointTrim = (endpoint ?? '').trim();
+    if (!endpointTrim) return;
+
+    await this.prisma.pushSubscription.deleteMany({
+      where: { userId, endpoint: endpointTrim },
+    });
+  }
+
+  /** Send Web Push to all of a user's subscriptions; prune expired (410/404). */
+  private async sendWebPushToRecipient(
+    recipientUserId: string,
+    params: { title: string; body?: string; subjectPostId?: string | null },
+  ): Promise<void> {
+    if (!this.appConfig.vapidConfigured()) return;
+    if (!this.vapidConfigured) {
+      const publicKey = this.appConfig.vapidPublicKey();
+      const privateKey = this.appConfig.vapidPrivateKey();
+      if (publicKey && privateKey) {
+        webpush.setVapidDetails('mailto:support@menofhunger.com', publicKey, privateKey);
+        this.vapidConfigured = true;
+      } else return;
+    }
+
+    const origins = this.appConfig.allowedOrigins();
+    const baseUrl = origins[0]?.trim() || 'https://menofhunger.com';
+    const url = params.subjectPostId
+      ? `${baseUrl.replace(/\/$/, '')}/p/${params.subjectPostId}`
+      : `${baseUrl.replace(/\/$/, '')}/notifications`;
+
+    const payload = JSON.stringify({
+      title: params.title,
+      body: params.body ?? 'You have a new notification.',
+      url,
+      tag: `notification-${recipientUserId}`,
+    });
+
+    const subs = await this.prisma.pushSubscription.findMany({
+      where: { userId: recipientUserId },
+      select: { id: true, endpoint: true, p256dh: true, auth: true },
+    });
+
+    for (const sub of subs) {
+      try {
+        await webpush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            keys: { p256dh: sub.p256dh, auth: sub.auth },
+          },
+          payload,
+          { TTL: 60 * 60 * 24 },
+        );
+      } catch (err: unknown) {
+        const statusCode = (err as { statusCode?: number })?.statusCode;
+        if (statusCode === 410 || statusCode === 404) {
+          await this.prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+        }
+      }
+    }
   }
 
   /** Find existing boost notification for (recipient, actor, subject post). */
@@ -315,11 +419,16 @@ export class NotificationsService {
     return result.count > 0;
   }
 
-  /** Mark all of the user's notifications as read (clears highlight on list). */
+  /** Mark all of the user's notifications as read and as seen (clears highlight and badge). */
   async markAllRead(recipientUserId: string): Promise<void> {
+    const now = new Date();
     await this.prisma.notification.updateMany({
       where: { recipientUserId, readAt: null },
-      data: { readAt: new Date() },
+      data: { readAt: now },
+    });
+    await this.prisma.notification.updateMany({
+      where: { recipientUserId, deliveredAt: null },
+      data: { deliveredAt: now },
     });
     const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
     this.presenceGateway.emitNotificationsUpdated(recipientUserId, {

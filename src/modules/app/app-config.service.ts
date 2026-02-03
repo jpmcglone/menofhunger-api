@@ -213,6 +213,23 @@ export class AppConfigService {
     return this.readPositiveInt('PRESENCE_IDLE_DISCONNECT_MINUTES', 15);
   }
 
+  /** Web Push VAPID public key (for browser push subscriptions). Generate: npx web-push generate-vapid-keys */
+  vapidPublicKey(): string | null {
+    const v = this.config.get<string>('VAPID_PUBLIC_KEY')?.trim() ?? '';
+    return v ? v : null;
+  }
+
+  /** Web Push VAPID private key. Required to send push; if unset, subscriptions are stored but no push is sent. */
+  vapidPrivateKey(): string | null {
+    const v = this.config.get<string>('VAPID_PRIVATE_KEY')?.trim() ?? '';
+    return v ? v : null;
+  }
+
+  /** True if both VAPID keys are set (push can be sent). */
+  vapidConfigured(): boolean {
+    return Boolean(this.vapidPublicKey() && this.vapidPrivateKey());
+  }
+
   // Optional: typed access to full validated env object if needed later.
   envSnapshot(): Partial<Env> {
     return {

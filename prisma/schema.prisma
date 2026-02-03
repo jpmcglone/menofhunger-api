@@ -109,8 +109,25 @@ model User {
   notificationsReceived Notification[] @relation("Notification_recipient")
   notificationsAsActor Notification[] @relation("Notification_actor")
   notificationsAsSubjectUser Notification[] @relation("Notification_subjectUser")
+  pushSubscriptions PushSubscription[]
 
   @@index([phone])
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  userId   String
+  endpoint String   @db.Text
+  p256dh   String   @db.Text
+  auth     String   @db.Text
+  userAgent String? @db.Text
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, endpoint])
+  @@index([userId])
 }
 
 model Follow {

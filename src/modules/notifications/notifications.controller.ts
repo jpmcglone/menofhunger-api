@@ -16,6 +16,19 @@ const markReadBodySchema = z.object({
   user_id: z.string().trim().min(1).optional(),
 }).refine((d) => d.post_id ?? d.user_id, { message: 'At least one of post_id or user_id is required' });
 
+const pushSubscribeBodySchema = z.object({
+  endpoint: z.string().trim().min(1),
+  keys: z.object({
+    p256dh: z.string().trim().min(1),
+    auth: z.string().trim().min(1),
+  }),
+  user_agent: z.string().trim().optional(),
+});
+
+const pushUnsubscribeBodySchema = z.object({
+  endpoint: z.string().trim().min(1),
+});
+
 @Controller('notifications')
 export class NotificationsController {
   constructor(private readonly notifications: NotificationsService) {}
@@ -60,6 +73,44 @@ export class NotificationsController {
   async getUnreadCount(@CurrentUserId() userId: string) {
     const count = await this.notifications.getUndeliveredCount(userId);
     return { data: { count } };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('push-subscribe')
+  async pushSubscribe(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = pushSubscribeBodySchema.parse(body);
+    await this.notifications.pushSubscribe(userId, {
+      endpoint: parsed.endpoint,
+      keys: parsed.keys,
+      userAgent: parsed.user_agent ?? null,
+    });
+    return { data: { ok: true } };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('push-unsubscribe')
+  async pushUnsubscribe(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = pushUnsubscribeBodySchema.parse(body);
+    await this.notifications.pushUnsubscribe(userId, parsed.endpoint);
+    return { data: { ok: true } };
   }
 
   @UseGuards(AuthGuard)
