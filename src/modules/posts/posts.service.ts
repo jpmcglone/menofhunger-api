@@ -1305,10 +1305,12 @@ export class PostsService {
   private async getThreadParticipantRoles(parentId: string): Promise<Map<string, keyof typeof PostsService.REPLY_TITLE>> {
     const map = new Map<string, keyof typeof PostsService.REPLY_TITLE>();
     let currentId: string | null = parentId;
+    const select = { id: true, parentId: true, userId: true, mentions: { select: { userId: true } } } as const;
+    type ThreadPost = Prisma.PostGetPayload<{ select: typeof select }>;
     while (currentId) {
-      const post = await this.prisma.post.findFirst({
+      const post: ThreadPost | null = await this.prisma.post.findFirst({
         where: { id: currentId, ...this.notDeletedWhere() },
-        select: { id: true, parentId: true, userId: true, mentions: { select: { userId: true } } },
+        select,
       });
       if (!post) break;
       const isRoot = !post.parentId;
