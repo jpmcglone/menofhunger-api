@@ -474,7 +474,8 @@ export class PostsController {
   })
   @Delete(':id')
   async delete(@Param('id') id: string, @CurrentUserId() userId: string) {
-    return await this.posts.deletePost({ userId, postId: id });
+    const result = await this.posts.deletePost({ userId, postId: id });
+    return { data: result };
   }
 
   @UseGuards(AuthGuard)

@@ -93,7 +93,7 @@ export class NotificationsController {
       keys: parsed.keys,
       userAgent: parsed.user_agent ?? null,
     });
-    return { data: { ok: true } };
+    return { data: {} };
   }
 
   @UseGuards(AuthGuard)
@@ -123,7 +123,7 @@ export class NotificationsController {
   ) {
     const parsed = pushUnsubscribeBodySchema.parse(body);
     await this.notifications.pushUnsubscribe(userId, parsed.endpoint);
-    return { data: { ok: true } };
+    return { data: {} };
   }
 
   @UseGuards(AuthGuard)
@@ -136,7 +136,7 @@ export class NotificationsController {
   @Post('mark-delivered')
   async markDelivered(@CurrentUserId() userId: string) {
     await this.notifications.markDelivered(userId);
-    return { data: { ok: true } };
+    return { data: {} };
   }
 
   @UseGuards(AuthGuard)
@@ -169,7 +169,7 @@ export class NotificationsController {
   @Post('mark-all-read')
   async markAllRead(@CurrentUserId() userId: string) {
     await this.notifications.markAllRead(userId);
-    return { data: { ok: true } };
+    return { data: {} };
   }
 
   @UseGuards(AuthGuard)

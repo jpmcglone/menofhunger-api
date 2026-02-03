@@ -1,6 +1,9 @@
 import type { Post, PostMedia, PostMediaKind, PostMediaSource, PostVisibility, User, VerifiedStatus } from '@prisma/client';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 
+/** PostMedia from Prisma already has thumbnailR2Key, durationSeconds, width, height, deletedAt. */
+export type PostMediaWithOptional = PostMedia;
+
 export type PostAuthorDto = {
   id: string;
   username: string | null;
@@ -58,12 +61,15 @@ export type PostDto = {
   author: PostAuthorDto;
 };
 
-type PostMentionWithUser = {
+/** Mention row with user included (from Prisma include). */
+export type PostMentionWithUser = {
   user: { id: string; username: string | null; verifiedStatus?: VerifiedStatus; premium?: boolean };
 };
-type PostWithAuthorAndMedia = Post & {
+
+/** Post with relations included for DTO mapping. Post has bookmarkCount, commentCount, parentId from schema. */
+export type PostWithAuthorAndMedia = Post & {
   user: User;
-  media: PostMedia[];
+  media: PostMediaWithOptional[];
   mentions?: PostMentionWithUser[];
 };
 
@@ -95,7 +101,7 @@ export function toPostDto(
     .slice()
     .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
     .map((m) => {
-      const deletedAt = (m as any).deletedAt ? ((m as any).deletedAt as Date).toISOString() : (m as any).deletedAt ?? null;
+      const deletedAt = m.deletedAt ? (m.deletedAt instanceof Date ? m.deletedAt.toISOString() : String(m.deletedAt)) : null;
       const isDeleted = Boolean(deletedAt);
 
       const url = isDeleted
@@ -107,15 +113,15 @@ export function toPostDto(
             })
           : (m.url ?? '').trim();
       const thumbnailUrl =
-        isDeleted || !(m as any).thumbnailR2Key
+        isDeleted || !m.thumbnailR2Key
           ? null
           : publicAssetUrl({
               publicBaseUrl: publicAssetBaseUrl,
-              key: (m as any).thumbnailR2Key,
+              key: m.thumbnailR2Key,
             });
       const durationSeconds =
-        typeof (m as any).durationSeconds === 'number' && Number.isFinite((m as any).durationSeconds)
-          ? Math.max(0, Math.floor((m as any).durationSeconds))
+        typeof m.durationSeconds === 'number' && Number.isFinite(m.durationSeconds)
+          ? Math.max(0, Math.floor(m.durationSeconds))
           : null;
       return {
         id: m.id,
@@ -124,16 +130,16 @@ export function toPostDto(
         url: url || '',
         mp4Url: m.mp4Url ?? null,
         thumbnailUrl: thumbnailUrl || null,
-        width: typeof (m as any).width === 'number' ? ((m as any).width as number) : m.width ?? null,
-        height: typeof (m as any).height === 'number' ? ((m as any).height as number) : m.height ?? null,
+        width: typeof m.width === 'number' ? m.width : m.width ?? null,
+        height: typeof m.height === 'number' ? m.height : m.height ?? null,
         durationSeconds: durationSeconds ?? null,
         deletedAt: deletedAt || null,
       };
     })
     .filter((m) => Boolean(m.url) || Boolean(m.deletedAt));
 
-  const mentions: PostMentionDto[] = ((post as any).mentions ?? [])
-    .map((m: PostMentionWithUser) =>
+  const mentions: PostMentionDto[] = (post.mentions ?? [])
+    .map((m: PostMentionWithUser): PostMentionDto | null =>
       m.user?.id != null && m.user?.username != null
         ? {
             id: m.user.id,
@@ -143,7 +149,7 @@ export function toPostDto(
           }
         : null,
     )
-    .filter(Boolean);
+    .filter((x): x is PostMentionDto => x != null);
 
   return {
     id: post.id,
@@ -151,9 +157,9 @@ export function toPostDto(
     body: post.body,
     visibility: post.visibility,
     boostCount: post.boostCount,
-    bookmarkCount: (post as any).bookmarkCount ?? 0,
-    commentCount: (post as any).commentCount ?? 0,
-    parentId: (post as any).parentId ?? null,
+    bookmarkCount: post.bookmarkCount ?? 0,
+    commentCount: post.commentCount ?? 0,
+    parentId: post.parentId ?? null,
     mentions,
     media,
     ...(typeof opts?.viewerHasBoosted === 'boolean' ? { viewerHasBoosted: opts.viewerHasBoosted } : {}),

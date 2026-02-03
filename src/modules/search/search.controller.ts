@@ -3,6 +3,7 @@ import { OptionalCurrentUserId } from '../users/users.decorator';
 import { z } from 'zod';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
+import type { PostWithAuthorAndMedia } from '../posts/post.dto';
 import { toPostDto } from '../posts/post.dto';
 import { PostsService } from '../posts/posts.service';
 import { SearchService, type SearchUserRow } from './search.service';
@@ -94,7 +95,7 @@ export class SearchController {
       const posts = (res.posts ?? []).map((p) => {
         const base = internalByPostId?.get(p.id);
         const score = scoreByPostId?.get(p.id);
-        return toPostDto(p as any, publicBaseUrl, {
+        return toPostDto(p as PostWithAuthorAndMedia, publicBaseUrl, {
           viewerHasBoosted: boosted.has(p.id),
           viewerHasBookmarked: bookmarksByPostId.has(p.id),
           viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
@@ -148,7 +149,7 @@ export class SearchController {
           bookmarkId: b.bookmarkId,
           createdAt: b.createdAt,
           collectionIds: b.collectionIds ?? [],
-          post: toPostDto(b.post as any, this.appConfig.r2()?.publicBaseUrl ?? null, {
+          post: toPostDto(b.post as PostWithAuthorAndMedia, this.appConfig.r2()?.publicBaseUrl ?? null, {
             viewerHasBoosted: boosted.has(b.post.id),
             viewerHasBookmarked: bookmarksByPostId.has(b.post.id),
             viewerBookmarkCollectionIds: bookmarksByPostId.get(b.post.id)?.collectionIds ?? [],
@@ -182,7 +183,7 @@ export class SearchController {
     const posts = (res.posts ?? []).map((p) => {
       const base = internalByPostId?.get(p.id);
       const score = scoreByPostId?.get(p.id);
-      return toPostDto(p as any, this.appConfig.r2()?.publicBaseUrl ?? null, {
+      return toPostDto(p as PostWithAuthorAndMedia, this.appConfig.r2()?.publicBaseUrl ?? null, {
         viewerHasBoosted: boosted.has(p.id),
         viewerHasBookmarked: bookmarksByPostId.has(p.id),
         viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],

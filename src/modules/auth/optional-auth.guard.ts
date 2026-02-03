@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
+import { getSessionCookie } from '../../common/session-cookie';
 import { AuthService } from './auth.service';
 import type { AuthedRequest } from './auth.guard';
 
@@ -9,8 +10,7 @@ export class OptionalAuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext) {
     const req = context.switchToHttp().getRequest<Request>();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const token = (req as any).cookies?.moh_session as string | undefined;
+    const token = getSessionCookie(req);
     const user = await this.auth.meFromSessionToken(token);
     (req as AuthedRequest).user = user ? { id: user.id } : undefined;
     return true;

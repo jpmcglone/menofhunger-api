@@ -1,11 +1,16 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { AppConfigService } from '../app/app-config.service';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+  constructor(private readonly appConfig: AppConfigService) {
+    super();
+  }
+
   async onModuleInit() {
-    const retries = Number(process.env.PRISMA_CONNECT_RETRIES ?? '20');
-    const delayMs = Number(process.env.PRISMA_CONNECT_RETRY_DELAY_MS ?? '500');
+    const retries = this.appConfig.prismaConnectRetries();
+    const delayMs = this.appConfig.prismaConnectRetryDelayMs();
 
     let lastError: unknown;
     for (let attempt = 1; attempt <= retries; attempt++) {

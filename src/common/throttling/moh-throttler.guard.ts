@@ -8,6 +8,7 @@ import {
 } from '@nestjs/throttler/dist/throttler.decorator';
 import type { ThrottlerModuleOptions } from '@nestjs/throttler/dist/throttler-module-options.interface';
 import type { ThrottlerStorage } from '@nestjs/throttler/dist/throttler-storage.interface';
+import { getSessionCookie } from '../session-cookie';
 import { PrismaService } from '../../modules/prisma/prisma.service';
 import { AppConfigService } from '../../modules/app/app-config.service';
 
@@ -84,10 +85,9 @@ export class MohThrottlerGuard extends ThrottlerGuard {
     return entry.userId;
   }
 
-  protected async getTracker(req: Record<string, any>): Promise<string> {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    const token = (req as any).cookies?.moh_session as string | undefined;
-    if (token && typeof token === 'string' && token.trim()) {
+  protected async getTracker(req: Record<string, unknown>): Promise<string> {
+    const token = getSessionCookie(req as { cookies?: Record<string, string | undefined> });
+    if (token) {
       const userId = await this.userIdFromSessionToken(token.trim());
       if (userId) return `user:${userId}`;
       // If token is invalid/expired, treat as unauthenticated and fall back to IP.

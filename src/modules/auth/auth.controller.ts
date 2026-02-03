@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, Get, Post, Req, Res } from '@nes
 import type { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
+import { getSessionCookie } from '../../common/session-cookie';
 import { AuthService } from './auth.service';
 import { OTP_CODE_LENGTH } from './auth.constants';
 import { normalizePhone } from './auth.utils';
@@ -81,17 +82,14 @@ export class AuthController {
 
   @Get('me')
   async me(@Req() req: Request) {
-    // cookie-parser populates req.cookies
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const token = (req as any).cookies?.moh_session as string | undefined;
+    const token = getSessionCookie(req);
     const user = await this.auth.meFromSessionToken(token);
     return { data: user ?? null };
   }
 
   @Post('logout')
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const token = (req as any).cookies?.moh_session as string | undefined;
+    const token = getSessionCookie(req);
     const result = await this.auth.logout(token, res);
     return { data: result };
   }

@@ -7,6 +7,17 @@ export const envSchema = z.object({
     .optional()
     .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PORT must be a number'),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+
+  // Prisma connection retry (e.g. when Postgres is starting in docker compose).
+  PRISMA_CONNECT_RETRIES: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PRISMA_CONNECT_RETRIES must be a number'),
+  PRISMA_CONNECT_RETRY_DELAY_MS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PRISMA_CONNECT_RETRY_DELAY_MS must be a number'),
+
   // Comma-separated list of allowed web origins for CORS (must be explicit when using cookies).
   // Examples:
   // - http://localhost:3000

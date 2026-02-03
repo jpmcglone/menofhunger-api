@@ -273,7 +273,7 @@ export class UsersController {
       where: { id: userId },
       data: { pinnedPostId: postId },
     });
-    return { pinnedPostId: postId };
+    return { data: { pinnedPostId: postId } };
   }
 
   @UseGuards(AuthGuard)
@@ -283,7 +283,7 @@ export class UsersController {
       where: { id: userId },
       data: { pinnedPostId: null },
     });
-    return { pinnedPostId: null };
+    return { data: { pinnedPostId: null } };
   }
 
   @UseGuards(AuthGuard)

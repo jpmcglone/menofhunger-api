@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable, NotFoundException } from '@nestjs/common';
 import type { Request } from 'express';
+import { getSessionCookie } from '../../common/session-cookie';
 import { AuthService } from '../auth/auth.service';
 
 export type AdminRequest = Request & { user?: { id: string } };
@@ -10,9 +11,7 @@ export class AdminGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext) {
     const req = context.switchToHttp().getRequest<AdminRequest>();
-    // cookie-parser populates req.cookies
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const token = (req as any).cookies?.moh_session as string | undefined;
+    const token = getSessionCookie(req);
     const user = await this.auth.meFromSessionToken(token);
 
     // Hide existence of admin routes from non-admins (and logged-out users).

@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
-import type { PostVisibility, VerifiedStatus } from '@prisma/client';
+import type { PostVisibility, Prisma, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FollowsService } from '../follows/follows.service';
 import { PostsService } from '../posts/posts.service';
@@ -124,8 +124,8 @@ export class SearchService {
         { name: { contains: q, mode: 'insensitive' as const } },
       ],
     };
-    const whereWithCursor = cursorWhere
-      ? ({
+    const whereWithCursor: Prisma.UserWhereInput = cursorWhere
+      ? {
           AND: [
             cursorWhere,
             {
@@ -135,13 +135,13 @@ export class SearchService {
               ],
             },
           ],
-        } as any)
-      : ({
+        }
+      : {
           OR: [
             { usernameIsSet: true, ...matchClause },
             nameOnlyMatch,
           ],
-        } as any);
+        };
 
     const fetchSize = Math.min(limit * 5, 50);
     const raw = await this.prisma.user.findMany({
@@ -250,19 +250,19 @@ export class SearchService {
     const viewer = await this.viewerById(params.viewerUserId ?? null);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
-    const visibilityWhere = viewer?.id
-      ? ({
+    const visibilityWhere: Prisma.PostWhereInput = viewer?.id
+      ? {
           OR: [{ visibility: { in: allowed } }, { userId: viewer.id, visibility: 'onlyMe' }],
-        } as any)
-      : ({ visibility: 'public' } as any);
+        }
+      : { visibility: 'public' };
 
     const matchWhere = this.postSearchMatchWhere(q, words);
     const fetchSize = Math.min(200, limit * 10);
     const offset = cursor ? Math.max(0, parseInt(cursor, 10)) : 0;
 
-    const baseWhere = {
+    const baseWhere: Prisma.PostWhereInput = {
       AND: [{ deletedAt: null }, visibilityWhere, matchWhere],
-    } as any;
+    };
 
     const raw = await this.prisma.post.findMany({
       where: baseWhere,
@@ -365,7 +365,9 @@ export class SearchService {
     });
   }
 
-  private async bookmarkCursorWhere(params: { userId: string; cursor: string | null }) {
+  private async bookmarkCursorWhere(
+    params: { userId: string; cursor: string | null },
+  ): Promise<Prisma.BookmarkWhereInput | null> {
     const cursor = (params.cursor ?? '').trim();
     if (!cursor) return null;
     const row = await this.prisma.bookmark.findUnique({ where: { id: cursor }, select: { id: true, createdAt: true, userId: true } });
@@ -375,7 +377,7 @@ export class SearchService {
         { createdAt: { lt: row.createdAt } },
         { AND: [{ createdAt: row.createdAt }, { id: { lt: row.id } }] },
       ],
-    } as const;
+    };
   }
 
   async searchBookmarks(params: {
@@ -398,17 +400,17 @@ export class SearchService {
 
     const cursorWhere = await this.bookmarkCursorWhere({ userId, cursor });
 
-    const folderWhere = unorganized
-      ? ({ collections: { none: {} } } as any)
+    const folderWhere: Prisma.BookmarkWhereInput = unorganized
+      ? { collections: { none: {} } }
       : collectionId
-        ? ({ collections: { some: { collectionId } } } as any)
+        ? { collections: { some: { collectionId } } }
         : {};
 
-    const where: any = {
+    const where: Prisma.BookmarkWhereInput = {
       AND: [
         { userId },
         folderWhere,
-        cursorWhere ? cursorWhere : {},
+        ...(cursorWhere ? [cursorWhere] : []),
         q
           ? {
               OR: [

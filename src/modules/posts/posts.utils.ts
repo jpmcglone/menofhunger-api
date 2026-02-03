@@ -1,5 +1,5 @@
 import type { Post } from '@prisma/client';
-import type { toPostDto } from './post.dto';
+import type { PostWithAuthorAndMedia, toPostDto } from './post.dto';
 
 type PostWithParentId = { id: string; parentId?: string | null } & Record<string, unknown>;
 
@@ -31,7 +31,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
   function attachParentChain(post: T): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } {
     const internalOverride = internalByPostId?.get(post.id);
     const score = scoreByPostId?.get(post.id);
-    const dto = toPostDto(post as unknown as Parameters<typeof toPostDto>[0], baseUrl, {
+    const dto = toPostDto(post as unknown as PostWithAuthorAndMedia, baseUrl, {
       viewerHasBoosted: boosted.has(post.id),
       viewerHasBookmarked: bookmarksByPostId.has(post.id),
       viewerBookmarkCollectionIds: bookmarksByPostId.get(post.id)?.collectionIds ?? [],

@@ -39,6 +39,20 @@ export class AppConfigService {
     return Number.isFinite(n) ? n : 3001;
   }
 
+  /** Number of connection retries on startup (default 20). */
+  prismaConnectRetries(): number {
+    const raw = this.config.get<string>('PRISMA_CONNECT_RETRIES') ?? '20';
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 20;
+  }
+
+  /** Delay in ms between connection retries (default 500). */
+  prismaConnectRetryDelayMs(): number {
+    const raw = this.config.get<string>('PRISMA_CONNECT_RETRY_DELAY_MS') ?? '500';
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 500;
+  }
+
   allowedOrigins(): string[] {
     const raw = this.config.get<string>('ALLOWED_ORIGINS') ?? '';
     return raw
