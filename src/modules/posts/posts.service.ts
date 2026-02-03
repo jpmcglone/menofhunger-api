@@ -1157,8 +1157,8 @@ export class PostsService {
   }
 
   /**
-   * Thread participants = root post author + all comment authors (one-level threads).
-   * Used to pre-fill mentions when composing a reply.
+   * Thread participants = root post author + all comment authors + everyone mentioned in the thread.
+   * Used to pre-fill mentions and show "Replying to @userA, @userB" when composing a reply.
    */
   async getThreadParticipants(params: { viewerUserId: string | null; postId: string }) {
     const { viewerUserId, postId } = params;
@@ -1167,32 +1167,22 @@ export class PostsService {
       throw new ForbiddenException('This post is private.');
     }
 
-    // Root: walk parentId up (for this phase, comments have parent = top-level, so root = post if parentId null, else parent).
-    let rootId: string;
-    if (post.parentId) {
-      const parent = await this.prisma.post.findUnique({
-        where: { id: post.parentId },
-        select: { id: true, parentId: true },
-      });
-      rootId = parent?.parentId ?? post.parentId;
-    } else {
-      rootId = post.id;
+    // Use rootId if set (post is a reply), otherwise post.id is the root
+    const rootId = (post as { rootId?: string | null }).rootId ?? post.id;
+
+    // Collect all posts in the thread: root post + all replies (using rootId index)
+    const threadPosts = await this.prisma.post.findMany({
+      where: { OR: [{ id: rootId }, { rootId }], ...this.notDeletedWhere() },
+      select: { userId: true, mentions: { select: { userId: true } } },
+    });
+    const participantIds = new Set<string>();
+    for (const p of threadPosts) {
+      participantIds.add(p.userId);
+      for (const m of p.mentions) participantIds.add(m.userId);
     }
 
-    const replyAuthors = await this.prisma.post.findMany({
-      where: { parentId: rootId, ...this.notDeletedWhere() },
-      select: { userId: true },
-    });
-    const rootRow = await this.prisma.post.findUnique({
-      where: { id: rootId },
-      select: { userId: true },
-    });
-    const authorIds = new Set<string>();
-    if (rootRow) authorIds.add(rootRow.userId);
-    for (const r of replyAuthors) authorIds.add(r.userId);
-
     const users = await this.prisma.user.findMany({
-      where: { id: { in: Array.from(authorIds) } },
+      where: { id: { in: Array.from(participantIds) }, usernameIsSet: true },
       select: { id: true, username: true },
     });
     return {
@@ -1292,10 +1282,10 @@ export class PostsService {
 
   /** Thread participant role for reply notifications. */
   private static readonly REPLY_TITLE = {
-    root_author: "Replied to your post",
-    reply_author: "Replied to your comment",
-    mentioned_in_root: "Replied to a post you're mentioned in",
-    mentioned_in_reply: "Replied to a comment you're mentioned in",
+    root_author: "replied to your post",
+    reply_author: "replied to your comment",
+    mentioned_in_root: "replied to a post you're mentioned in",
+    mentioned_in_reply: "replied to a comment you're mentioned in",
   } as const;
 
   /**
@@ -1360,6 +1350,7 @@ export class PostsService {
     let visibility: PostVisibility = requestedVisibility;
     let threadParticipantIds: string[] = [];
     let parentAuthorUserId: string | null = null;
+    let threadRootId: string | null = null; // Root post ID for thread hierarchy
 
     if (parentId) {
       const parent = await this.prisma.post.findFirst({
@@ -1382,14 +1373,21 @@ export class PostsService {
         }
       }
       visibility = parent.visibility as PostVisibility;
-      const rootId = parent.parentId ?? parent.id;
-      const replyAuthors = await this.prisma.post.findMany({
-        where: { parentId: rootId, ...this.notDeletedWhere() },
-        select: { userId: true },
+
+      // Use parent's rootId if it exists (parent is also a reply), otherwise parent.id is the root
+      threadRootId = (parent as { rootId?: string | null }).rootId ?? parent.id;
+
+      // Collect thread participants using rootId for efficient query (works for any thread depth)
+      const threadPosts = await this.prisma.post.findMany({
+        where: { OR: [{ id: threadRootId }, { rootId: threadRootId }], ...this.notDeletedWhere() },
+        select: { userId: true, mentions: { select: { userId: true } } },
       });
-      const authorIds = new Set<string>([parent.user.id]);
-      for (const r of replyAuthors) authorIds.add(r.userId);
-      threadParticipantIds = Array.from(authorIds);
+      const participantIds = new Set<string>();
+      for (const p of threadPosts) {
+        participantIds.add(p.userId);
+        for (const m of p.mentions) participantIds.add(m.userId);
+      }
+      threadParticipantIds = Array.from(participantIds);
     }
 
     const cfg = await this.getSiteConfig();
@@ -1508,11 +1506,19 @@ export class PostsService {
       })
       .filter(Boolean);
 
+    // Parse explicit @mentions from body text only (for notification priority)
     const fromBody = this.parseMentionsFromBody(body);
+    const bodyMentionIds = await this.resolveMentionUsernames(fromBody);
+    const bodyMentionSet = new Set(bodyMentionIds); // Only body mentions determine notification priority
+
+    // Client-provided mentions (thread participants from frontend) - used for PostMention records only
     const clientUsernames = Array.isArray(clientMentions) ? clientMentions.filter((x) => typeof x === 'string' && x.length <= 120) : [];
     const allUsernames = [...new Set([...clientUsernames, ...fromBody])];
     const resolvedFromUsernames = await this.resolveMentionUsernames(allUsernames);
-    const mentionUserIds = [...new Set([...threadParticipantIds, ...resolvedFromUsernames])];
+
+    // All mention IDs for PostMention records: thread participants + explicit mentions
+    const allMentionIds = [...new Set([...threadParticipantIds, ...resolvedFromUsernames])].filter((uid) => uid !== userId);
+    const mentionUserIds = allMentionIds;
 
     const post = await this.prisma.$transaction(async (tx) => {
       const created = await tx.post.create({
@@ -1521,6 +1527,7 @@ export class PostsService {
           visibility,
           userId,
           parentId: parentId ?? undefined,
+          rootId: threadRootId ?? undefined, // Set root post ID for thread hierarchy
           ...(cleanedMedia.length
             ? {
                 media: {
@@ -1549,9 +1556,9 @@ export class PostsService {
       return created;
     });
 
-    // Notifications: parent author + thread participants (with reply titles) and @mentions (one notif per user; mention wins over reply)
+    // Notifications: parent author + thread participants get "comment" notifications.
+    // Only explicit @mentions in body get "mention" notifications (and override "comment" for that user).
     const bodySnippet = body.trim().slice(0, 150);
-    const mentionSet = new Set(resolvedFromUsernames);
 
     if (parentId && parentAuthorUserId !== userId) {
       const threadRoles = await this.getThreadParticipantRoles(parentId);
@@ -1563,14 +1570,15 @@ export class PostsService {
             ? PostsService.REPLY_TITLE.root_author
             : PostsService.REPLY_TITLE.reply_author;
 
-      // Parent author: one notification. If they're also @mentioned, they get only the mention (below).
-      if (parentAuthorUserId && !mentionSet.has(parentAuthorUserId)) {
+      // Parent author: one notification. If they're explicitly @mentioned in body, they get only the mention (below).
+      // Use parentId as subject so preview shows the post that was replied to (including its media).
+      if (parentAuthorUserId && !bodyMentionSet.has(parentAuthorUserId)) {
         this.notifications
           .create({
             recipientUserId: parentAuthorUserId,
             kind: 'comment',
             actorUserId: userId,
-            subjectPostId: post.id,
+            subjectPostId: parentId,
             title: parentTitle,
             body: bodySnippet || undefined,
           })
@@ -1579,16 +1587,16 @@ export class PostsService {
           });
       }
 
-      // Other thread participants (excluding parent author and self): one each, unless they're @mentioned (then they get mention only).
+      // Other thread participants (excluding parent author and self): one each, unless they're explicitly @mentioned in body.
       for (const [uid, role] of threadRoles) {
-        if (uid === userId || uid === parentAuthorUserId || mentionSet.has(uid)) continue;
+        if (uid === userId || uid === parentAuthorUserId || bodyMentionSet.has(uid)) continue;
         const title = PostsService.REPLY_TITLE[role];
         this.notifications
           .create({
             recipientUserId: uid,
             kind: 'comment',
             actorUserId: userId,
-            subjectPostId: post.id,
+            subjectPostId: parentId,
             title,
             body: bodySnippet || undefined,
           })
@@ -1598,8 +1606,8 @@ export class PostsService {
       }
     }
 
-    // @mentions: one notification each (when both mention and thread apply, we send only mention).
-    for (const uid of resolvedFromUsernames) {
+    // Explicit @mentions in body: one notification each. These take priority over comment notifications.
+    for (const uid of bodyMentionIds) {
       if (uid === userId) continue;
       this.notifications
         .create({

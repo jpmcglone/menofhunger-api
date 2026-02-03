@@ -281,6 +281,17 @@ export class NotificationsService {
       where,
       data: { readAt: new Date() },
     });
+
+    // Also mark as delivered (seen) when visiting the post/profile, then emit updated count.
+    const deliveredWhere = { ...where, deliveredAt: null } as const;
+    await this.prisma.notification.updateMany({
+      where: deliveredWhere,
+      data: { deliveredAt: new Date() },
+    });
+    const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
+    this.presenceGateway.emitNotificationsUpdated(recipientUserId, {
+      undeliveredCount,
+    });
   }
 
   async markReadById(
@@ -291,6 +302,16 @@ export class NotificationsService {
       where: { id: notificationId, recipientUserId, readAt: null },
       data: { readAt: new Date() },
     });
+    if (result.count > 0) {
+      await this.prisma.notification.updateMany({
+        where: { id: notificationId, recipientUserId, deliveredAt: null },
+        data: { deliveredAt: new Date() },
+      });
+      const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
+      this.presenceGateway.emitNotificationsUpdated(recipientUserId, {
+        undeliveredCount,
+      });
+    }
     return result.count > 0;
   }
 
@@ -299,6 +320,10 @@ export class NotificationsService {
     await this.prisma.notification.updateMany({
       where: { recipientUserId, readAt: null },
       data: { readAt: new Date() },
+    });
+    const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
+    this.presenceGateway.emitNotificationsUpdated(recipientUserId, {
+      undeliveredCount,
     });
   }
 

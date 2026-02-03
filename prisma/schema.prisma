@@ -147,6 +147,11 @@ model Post {
   parent   Post?   @relation("Post_replies", fields: [parentId], references: [id], onDelete: Cascade)
   replies  Post[] @relation("Post_replies")
 
+  // Root post ID for thread hierarchy (null for root posts, set to root post ID for all replies in a thread)
+  rootId String?
+  root   Post?   @relation("Post_thread", fields: [rootId], references: [id], onDelete: Cascade)
+  threadReplies Post[] @relation("Post_thread")
+
   boosts   Boost[]
   media    PostMedia[]
   bookmarks Bookmark[]
@@ -158,6 +163,8 @@ model Post {
   @@index([createdAt])
   @@index([parentId])
   @@index([parentId, createdAt])
+  @@index([rootId])
+  @@index([rootId, createdAt])
 }
 
 model PostMention {
