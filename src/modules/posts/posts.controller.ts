@@ -34,6 +34,7 @@ const createMediaItemSchema = z.discriminatedUnion('source', [
     width: z.coerce.number().int().min(1).max(20000).optional(),
     height: z.coerce.number().int().min(1).max(20000).optional(),
     durationSeconds: z.coerce.number().int().min(0).max(3600).optional(),
+    alt: z.string().trim().max(500).nullish(),
   }),
   z.object({
     source: z.literal('giphy'),
@@ -42,6 +43,7 @@ const createMediaItemSchema = z.discriminatedUnion('source', [
     mp4Url: z.string().url().optional(),
     width: z.coerce.number().int().min(1).max(20000).optional(),
     height: z.coerce.number().int().min(1).max(20000).optional(),
+    alt: z.string().trim().max(500).nullish(),
   }),
 ]);
 

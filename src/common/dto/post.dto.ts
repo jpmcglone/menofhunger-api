@@ -25,6 +25,8 @@ export type PostMediaDto = {
   height: number | null;
   /** Video duration in seconds. */
   durationSeconds: number | null;
+  /** Optional alt text for accessibility. */
+  alt: string | null;
   // When present, the media was hard-deleted from storage and should render as a placeholder.
   deletedAt: string | null;
 };
@@ -133,6 +135,7 @@ export function toPostDto(
         width: typeof m.width === 'number' ? m.width : m.width ?? null,
         height: typeof m.height === 'number' ? m.height : m.height ?? null,
         durationSeconds: durationSeconds ?? null,
+        alt: (m.alt ?? '').trim() || null,
         deletedAt: deletedAt || null,
       };
     })

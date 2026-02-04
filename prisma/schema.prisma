@@ -288,6 +288,8 @@ model PostMedia {
   height    Int?
   // For video: duration in seconds.
   durationSeconds Int?
+  // Optional alt text for accessibility.
+  alt       String?
   position  Int            @default(0)
 
   // Admin tombstone: media can be hard-deleted from storage, but we keep the row so posts can render a placeholder.

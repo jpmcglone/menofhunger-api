@@ -1331,6 +1331,7 @@ export class PostsService {
       width?: number;
       height?: number;
       durationSeconds?: number;
+      alt?: string;
     }> | null;
   }) {
     const { userId, body, visibility: requestedVisibility, parentId, mentions: clientMentions } = params;
@@ -1449,6 +1450,7 @@ export class PostsService {
           typeof m.durationSeconds === 'number' && Number.isFinite(m.durationSeconds) && m.durationSeconds >= 0
             ? Math.floor(m.durationSeconds)
             : null;
+        const alt = (m.alt ?? '').trim().slice(0, 500) || null;
 
         if (source === 'upload') {
           if (!r2Key) throw new BadRequestException('Invalid uploaded media key.');
@@ -1470,6 +1472,7 @@ export class PostsService {
               width,
               height,
               durationSeconds,
+              alt,
               position: idx,
             };
           }
@@ -1486,6 +1489,7 @@ export class PostsService {
             width,
             height,
             durationSeconds: null,
+            alt,
             position: idx,
           };
         }
@@ -1501,6 +1505,7 @@ export class PostsService {
           width,
           height,
           durationSeconds: null,
+          alt,
           position: idx,
         };
       })
