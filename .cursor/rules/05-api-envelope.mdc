@@ -59,3 +59,7 @@ Do not put cursor or counts at top level; keep them under `pagination`.
 ## Controllers
 
 - Controllers must **explicitly** return `{ data: ... }` (and optionally `pagination`). Do not rely on the interceptor to wrap a raw return; return the envelope from the controller so the contract is clear at the call site.
+
+## When you change an API response
+
+Update the API DTO (e.g. `src/common/dto/*.ts`), then update the corresponding type in **menofhunger-www** `types/api.ts`, then run `npx nuxi typecheck` and `node scripts/validate-api-types.mjs` in the www repo. See `docs/api-contract.md` for the full contract and type locations.

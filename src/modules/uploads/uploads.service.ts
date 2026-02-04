@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { imageSize } from 'image-size';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
-import { toUserDto } from '../users/user.dto';
+import { toUserDto } from '../../common/dto';
 import type { PostMediaKind } from '@prisma/client';
 
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5MB

@@ -14,8 +14,8 @@ import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { normalizePhone } from '../auth/auth.utils';
 import { AppConfigService } from '../app/app-config.service';
+import { toUserDto } from '../../common/dto';
 import { PrismaService } from '../prisma/prisma.service';
-import { toUserDto } from '../users/user.dto';
 import { validateUsername } from '../users/users.utils';
 import { AdminGuard } from './admin.guard';
 

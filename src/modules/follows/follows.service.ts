@@ -4,7 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { toUserListDto } from '../users/user.dto';
+import { toUserListDto } from '../../common/dto';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 
 export type FollowRelationship = {

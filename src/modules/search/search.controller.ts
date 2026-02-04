@@ -3,13 +3,12 @@ import { OptionalCurrentUserId } from '../users/users.decorator';
 import { z } from 'zod';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
-import type { PostWithAuthorAndMedia } from '../posts/post.dto';
-import { toPostDto } from '../posts/post.dto';
+import type { PostWithAuthorAndMedia } from '../../common/dto/post.dto';
+import { toPostDto, toUserListDto } from '../../common/dto';
 import { PostsService } from '../posts/posts.service';
 import { SearchService, type SearchUserRow } from './search.service';
 import { Throttle } from '@nestjs/throttler';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import { toUserListDto } from '../users/user.dto';
 
 const searchSchema = z.object({
   q: z.string().trim().max(200).optional(),
