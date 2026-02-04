@@ -34,6 +34,15 @@ export class PostsService {
   private static popularHalfLifeSeconds = 12 * 60 * 60;
   private static popularLookbackDays = 30;
   private static popularWarmupTake = 200;
+  /**
+   * Score penalty for posts that have deleted ancestors.
+   * We avoid expensive recursive ancestry checks; instead we penalize based on:
+   * - deleted direct parent (for replies to deleted replies)
+   * - deleted thread root (for replies under a deleted root post)
+   *
+   * If both apply, penalty compounds.
+   */
+  private static deletedAncestorPenalty = 0.85;
   // Popular feed candidate selection: bias toward recency, but include top engaged.
   // Keep bounded so we never score/sort an unbounded 30-day set.
   private static popularRecentWindowHours = 72;
@@ -216,10 +225,23 @@ export class PostsService {
               END
             )
             * (CASE WHEN p."parentId" IS NULL THEN ${PostsService.popularTopLevelScoreBoost} ELSE 1.0 END)
+            * POWER(
+              ${PostsService.deletedAncestorPenalty},
+              (
+                (CASE WHEN parent."deletedAt" IS NOT NULL THEN 1 ELSE 0 END)
+                +
+                (CASE
+                  WHEN root."deletedAt" IS NOT NULL AND (parent."id" IS NULL OR root."id" <> parent."id") THEN 1
+                  ELSE 0
+                END)
+              )
+            )
             AS DOUBLE PRECISION
           ) as "score"
         FROM "Post" p
         LEFT JOIN "User" u ON u."id" = p."userId"
+        LEFT JOIN "Post" parent ON parent."id" = p."parentId"
+        LEFT JOIN "Post" root ON root."id" = COALESCE(p."rootId", p."id")
         LEFT JOIN comment_scores cs ON cs."postId" = p."id"
         WHERE p."id" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}`))})
       )
@@ -665,11 +687,24 @@ export class PostsService {
               END
             )
             * (CASE WHEN p."parentId" IS NULL THEN ${PostsService.popularTopLevelScoreBoost} ELSE 1.0 END)
+            * POWER(
+              ${PostsService.deletedAncestorPenalty},
+              (
+                (CASE WHEN parent."deletedAt" IS NOT NULL THEN 1 ELSE 0 END)
+                +
+                (CASE
+                  WHEN root."deletedAt" IS NOT NULL AND (parent."id" IS NULL OR root."id" <> parent."id") THEN 1
+                  ELSE 0
+                END)
+              )
+            )
             AS DOUBLE PRECISION
           ) as "score"
         FROM "Post" p
         JOIN candidates c ON c."id" = p."id"
         LEFT JOIN "User" u ON u."id" = p."userId"
+        LEFT JOIN "Post" parent ON parent."id" = p."parentId"
+        LEFT JOIN "Post" root ON root."id" = COALESCE(p."rootId", p."id")
         LEFT JOIN comment_scores cs ON cs."postId" = p."id"
       )
       SELECT "id", "createdAt", "score"
@@ -1200,9 +1235,8 @@ export class PostsService {
     const viewer = await this.viewerById(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
-    // Guardrail: deleted posts should behave as "not found" everywhere.
     const post = await this.prisma.post.findFirst({
-      where: { id: postId, ...this.notDeletedWhere() },
+      where: { id: postId },
       include: {
         user: true,
         media: { orderBy: { position: 'asc' } },
@@ -1655,6 +1689,7 @@ export class PostsService {
     await this.ensureUserCanBoost(userId);
 
     const post = await this.getById({ viewerUserId: userId, id });
+    if (post.deletedAt) throw new BadRequestException('Deleted posts cannot be boosted.');
     if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be boosted.');
 
     const res = await this.prisma.$transaction(async (tx) => {
@@ -1708,6 +1743,7 @@ export class PostsService {
     await this.ensureUserCanBoost(userId);
 
     const post = await this.getById({ viewerUserId: userId, id });
+    if (post.deletedAt) throw new BadRequestException('Deleted posts cannot be boosted.');
     if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be boosted.');
 
     const res = await this.prisma.$transaction(async (tx) => {

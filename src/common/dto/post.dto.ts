@@ -42,6 +42,7 @@ export type PostDto = {
   id: string;
   createdAt: string;
   body: string;
+  deletedAt: string | null;
   visibility: PostVisibility;
   boostCount: number;
   bookmarkCount: number;
@@ -98,6 +99,10 @@ export function toPostDto(
     typeof opts?.internalOverride?.boostScoreUpdatedAt !== 'undefined'
       ? opts.internalOverride.boostScoreUpdatedAt
       : post.boostScoreUpdatedAt ?? null;
+
+  const postDeletedAt =
+    post.deletedAt instanceof Date ? post.deletedAt.toISOString() : post.deletedAt ? String(post.deletedAt) : null;
+  const isPostDeleted = Boolean(postDeletedAt);
 
   const media: PostMediaDto[] = (post.media ?? [])
     .slice()
@@ -157,14 +162,15 @@ export function toPostDto(
   return {
     id: post.id,
     createdAt: post.createdAt.toISOString(),
-    body: post.body,
+    body: isPostDeleted ? '' : post.body,
+    deletedAt: postDeletedAt,
     visibility: post.visibility,
     boostCount: post.boostCount,
     bookmarkCount: post.bookmarkCount ?? 0,
     commentCount: post.commentCount ?? 0,
     parentId: post.parentId ?? null,
-    mentions,
-    media,
+    mentions: isPostDeleted ? [] : mentions,
+    media: isPostDeleted ? [] : media,
     ...(typeof opts?.viewerHasBoosted === 'boolean' ? { viewerHasBoosted: opts.viewerHasBoosted } : {}),
     ...(typeof opts?.viewerHasBookmarked === 'boolean' ? { viewerHasBookmarked: opts.viewerHasBookmarked } : {}),
     ...(Array.isArray(opts?.viewerBookmarkCollectionIds) ? { viewerBookmarkCollectionIds: opts.viewerBookmarkCollectionIds } : {}),
