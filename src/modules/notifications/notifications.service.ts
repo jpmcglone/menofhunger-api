@@ -89,6 +89,7 @@ export class NotificationsService {
       title: fallbackTitle ?? 'New notification',
       body: (body ?? '').trim().slice(0, 150) || undefined,
       subjectPostId: subjectPostId ?? null,
+      subjectUserId: subjectUserId ?? null,
     }).catch((err) => {
       this.logger.warn(`[push] Failed to send web push: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -160,7 +161,7 @@ export class NotificationsService {
   /** Send Web Push to all of a user's subscriptions; prune expired (410/404). */
   private async sendWebPushToRecipient(
     recipientUserId: string,
-    params: { title: string; body?: string; subjectPostId?: string | null; test?: boolean },
+    params: { title: string; body?: string; subjectPostId?: string | null; subjectUserId?: string | null; test?: boolean },
   ): Promise<void> {
     if (!this.appConfig.vapidConfigured()) return;
     if (!this.vapidConfigured) {
@@ -176,9 +177,20 @@ export class NotificationsService {
       this.appConfig.pushFrontendBaseUrl() ??
       this.appConfig.allowedOrigins()[0]?.trim() ??
       'https://menofhunger.com';
-    const url = params.subjectPostId
-      ? `${baseUrl.replace(/\/$/, '')}/p/${params.subjectPostId}`
-      : `${baseUrl.replace(/\/$/, '')}/notifications`;
+    const safeBase = baseUrl.replace(/\/$/, '');
+    let url = `${safeBase}/notifications`;
+    if (params.subjectPostId) {
+      url = `${safeBase}/p/${params.subjectPostId}`;
+    } else if (params.subjectUserId) {
+      const subjectUser = await this.prisma.user.findUnique({
+        where: { id: params.subjectUserId },
+        select: { username: true },
+      });
+      const username = (subjectUser?.username ?? '').trim();
+      if (username) {
+        url = `${safeBase}/u/${encodeURIComponent(username)}`;
+      }
+    }
 
     const payload = JSON.stringify({
       title: params.title,
