@@ -244,6 +244,12 @@ export class AppConfigService {
     return Boolean(this.vapidPublicKey() && this.vapidPrivateKey());
   }
 
+  /** Base URL for push notification click-through (canonical frontend). If unset, first ALLOWED_ORIGINS entry is used. */
+  pushFrontendBaseUrl(): string | null {
+    const v = this.config.get<string>('PUSH_FRONTEND_BASE_URL')?.trim() ?? '';
+    return v ? v : null;
+  }
+
   // Optional: typed access to full validated env object if needed later.
   envSnapshot(): Partial<Env> {
     return {

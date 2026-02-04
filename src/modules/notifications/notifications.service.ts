@@ -163,8 +163,10 @@ export class NotificationsService {
       } else return;
     }
 
-    const origins = this.appConfig.allowedOrigins();
-    const baseUrl = origins[0]?.trim() || 'https://menofhunger.com';
+    const baseUrl =
+      this.appConfig.pushFrontendBaseUrl() ??
+      this.appConfig.allowedOrigins()[0]?.trim() ??
+      'https://menofhunger.com';
     const url = params.subjectPostId
       ? `${baseUrl.replace(/\/$/, '')}/p/${params.subjectPostId}`
       : `${baseUrl.replace(/\/$/, '')}/notifications`;

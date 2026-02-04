@@ -243,7 +243,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.presence.setUserIdle(userId);
     this.logger.log(`[presence] IDLE userId=${userId}`);
     this.emitIdle(userId);
-    this.scheduleIdleDisconnectTimer(userId);
+    // Do not disconnect on idle; users stay connected.
   }
 
   /** Activity ping (fire-and-forget). Updates lastActivityAt and resets idle-mark timer. Clears idle if set. */
@@ -273,7 +273,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
       this.presence.setUserIdle(userId);
       this.logger.log(`[presence] IDLE (no activity) userId=${userId}`);
       this.emitIdle(userId);
-      this.scheduleIdleDisconnectTimer(userId);
+      // Do not disconnect on idle; users stay connected.
     }, idleAfterMs);
     const existing = this.userTimers.get(userId);
     this.userTimers.set(userId, { ...existing, idleMarkTimer });
