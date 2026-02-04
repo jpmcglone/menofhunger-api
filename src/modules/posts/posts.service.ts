@@ -1331,7 +1331,7 @@ export class PostsService {
       width?: number;
       height?: number;
       durationSeconds?: number;
-      alt?: string;
+      alt?: string | null;
     }> | null;
   }) {
     const { userId, body, visibility: requestedVisibility, parentId, mentions: clientMentions } = params;

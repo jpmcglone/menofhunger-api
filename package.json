@@ -9,6 +9,9 @@
   },
   "scripts": {
     "dev": "nest start --watch",
+    "dev:check": "node scripts/check-port.mjs",
+    "dev:kill": "node scripts/kill-port.mjs",
+    "dev:clean": "npm run dev:kill && npm run dev",
     "start": "node dist/main.js",
     "build": "tsc -p tsconfig.build.json",
     "postinstall": "prisma generate",

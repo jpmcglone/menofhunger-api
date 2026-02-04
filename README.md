@@ -42,6 +42,17 @@ npm run prisma:migrate
 npm run dev
 ```
 
+## Troubleshooting
+
+### Port already in use (3001)
+
+If the API fails to start with `EADDRINUSE` or appears stale:
+
+```bash
+npm run dev:check
+npm run dev:kill
+```
+
 ## Endpoints
 
 - `GET /` → `{ ok: true, service: "menofhunger-api" }`

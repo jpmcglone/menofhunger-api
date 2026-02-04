@@ -211,7 +211,18 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup('docs', app, document);
 
-  await app.listen(port);
+  try {
+    await app.listen(port);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'EADDRINUSE') {
+      startup.error(`Port ${port} is already in use.`);
+      startup.error('Run: npm run dev:kill (or set PORT in .env)');
+    } else {
+      startup.error(`Failed to start server: ${(err as Error)?.message ?? String(err)}`);
+    }
+    process.exit(1);
+  }
 }
 
 void bootstrap();
