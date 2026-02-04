@@ -7,14 +7,17 @@ import { AdminSiteConfigController } from './admin-site-config.controller';
 import { AdminImageReviewController } from './admin-image-review.controller';
 import { AdminImageReviewService } from './admin-image-review.service';
 import { AdminSearchController } from './admin-search.controller';
+import { FeedbackModule } from '../feedback/feedback.module';
+import { AdminFeedbackController } from './admin-feedback.controller';
 
 @Module({
-  imports: [AuthModule, PrismaModule],
+  imports: [AuthModule, PrismaModule, FeedbackModule],
   controllers: [
     AdminUsersController,
     AdminSiteConfigController,
     AdminImageReviewController,
     AdminSearchController,
+    AdminFeedbackController,
   ],
   providers: [AdminGuard, AdminImageReviewService],
 })

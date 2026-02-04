@@ -22,6 +22,7 @@ import { SearchModule } from '../search/search.module';
 import { PresenceModule } from '../presence/presence.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
+import { FeedbackModule } from '../feedback/feedback.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
     PresenceModule,
     NotificationsModule,
     LinkMetadataModule,
+    FeedbackModule,
   ],
   controllers: [AppController],
   providers: [

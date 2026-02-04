@@ -46,6 +46,19 @@ enum NotificationKind {
   generic
 }
 
+enum FeedbackCategory {
+  bug
+  feature
+  account
+  other
+}
+
+enum FeedbackStatus {
+  new
+  triaged
+  resolved
+}
+
 // Start minimal. Add real domain models as you solidify your product.
 model Example {
   id        String   @id @default(cuid())
@@ -111,6 +124,7 @@ model User {
   notificationsAsSubjectUser Notification[] @relation("Notification_subjectUser")
   pushSubscriptions PushSubscription[]
   userSearches     UserSearch[]
+  feedbacks        Feedback[]
 
   @@index([phone])
 }
@@ -400,6 +414,26 @@ model Notification {
   @@index([recipientUserId, createdAt])
   @@index([recipientUserId, deliveredAt])
   @@index([recipientUserId, readAt])
+}
+
+model Feedback {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  category FeedbackCategory
+  status   FeedbackStatus @default(new)
+  email    String?        @db.VarChar(200)
+  subject  String         @db.VarChar(200)
+  details  String         @db.Text
+  adminNote String?       @db.Text
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt, id])
+  @@index([status, createdAt])
+  @@index([category, createdAt])
 }
 
 // Cached OpenGraph/link metadata for post previews (Microlink/Jina).
