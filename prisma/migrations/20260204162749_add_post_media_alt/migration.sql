@@ -1,2 +1,2 @@
 -- AlterTable
-ALTER TABLE "PostMedia" ADD COLUMN     "alt" TEXT;
+ALTER TABLE "PostMedia" ADD COLUMN IF NOT EXISTS "alt" TEXT;

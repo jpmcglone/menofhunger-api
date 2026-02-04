@@ -58,6 +58,15 @@ export class NotificationsService {
       title,
       body,
     } = params;
+    const fallbackTitle =
+      title ??
+      ({
+        follow: 'followed you',
+        boost: 'boosted your post',
+        mention: 'mentioned you',
+        comment: 'replied to you',
+      } as Partial<Record<NotificationKind, string>>)[kind] ??
+      null;
 
     const notification = await this.prisma.notification.create({
       data: {
@@ -66,7 +75,7 @@ export class NotificationsService {
         actorUserId: actorUserId ?? undefined,
         subjectPostId: subjectPostId ?? undefined,
         subjectUserId: subjectUserId ?? undefined,
-        title: title ?? undefined,
+        title: fallbackTitle ?? undefined,
         body: body ?? undefined,
       },
     });
@@ -77,7 +86,7 @@ export class NotificationsService {
     });
 
     this.sendWebPushToRecipient(recipientUserId, {
-      title: title ?? 'New notification',
+      title: fallbackTitle ?? 'New notification',
       body: (body ?? '').trim().slice(0, 150) || undefined,
       subjectPostId: subjectPostId ?? null,
     }).catch((err) => {
@@ -249,6 +258,7 @@ export class NotificationsService {
       kind: 'boost',
       actorUserId,
       subjectPostId,
+      title: 'boosted your post',
       body: bodySnippet ?? undefined,
     });
   }

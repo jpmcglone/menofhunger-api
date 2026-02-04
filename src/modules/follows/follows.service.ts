@@ -112,6 +112,7 @@ export class FollowsService {
             kind: 'follow',
             actorUserId: viewerUserId,
             subjectUserId: viewerUserId,
+            title: 'followed you',
           })
           .catch(() => {});
       }
