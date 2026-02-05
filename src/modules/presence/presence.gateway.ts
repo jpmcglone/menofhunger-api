@@ -40,6 +40,8 @@ type UserTimers = {
 })
 export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(PresenceGateway.name);
+  // Performance: presence events can be very high-frequency. Never spam logs in production.
+  private readonly logPresenceVerbose = (process.env.NODE_ENV ?? 'development') !== 'production';
   private readonly userTimers = new Map<string, UserTimers>();
   private readonly typingThrottleByKey = new Map<string, number>();
 
@@ -73,7 +75,9 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
         : client.handshake.query.client) ?? 'web';
 
     const { isNewlyOnline } = this.presence.register(client.id, user.id, String(clientType));
-    this.logger.log(`[presence] CONNECT socket=${client.id} userId=${user.id} isNewlyOnline=${isNewlyOnline}`);
+    if (this.logPresenceVerbose) {
+      this.logger.debug(`[presence] CONNECT socket=${client.id} userId=${user.id} isNewlyOnline=${isNewlyOnline}`);
+    }
 
     client.emit('presence:init', {});
 
@@ -85,7 +89,11 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   handleDisconnect(client: import('socket.io').Socket): void {
     const result = this.presence.unregister(client.id);
-    this.logger.log(`[presence] DISCONNECT socket=${client.id} userId=${result?.userId ?? '?'} isNowOffline=${result?.isNowOffline ?? false}`);
+    if (this.logPresenceVerbose) {
+      this.logger.debug(
+        `[presence] DISCONNECT socket=${client.id} userId=${result?.userId ?? '?'} isNowOffline=${result?.isNowOffline ?? false}`,
+      );
+    }
     if (result?.isNowOffline) {
       this.cancelUserTimers(result.userId);
       this.emitOffline(result.userId);
@@ -134,7 +142,9 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   private emitToSockets(socketIds: Iterable<string>, event: string, payload: unknown): void {
     const ids = [...socketIds];
-    this.logger.debug(`[presence] EMIT_OUT event=${event} to ${ids.length} sockets`);
+    if (this.logPresenceVerbose) {
+      this.logger.debug(`[presence] EMIT_OUT event=${event} to ${ids.length} sockets`);
+    }
     for (const id of ids) {
       const socket = this.server.sockets.sockets.get(id);
       socket?.emit(event, payload);
@@ -143,7 +153,9 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   private async emitOnline(userId: string): Promise<void> {
     const allTargets = this.getTargetsForUser(userId);
-    this.logger.log(`[presence] emitOnline userId=${userId} totalTargets=${allTargets.size}`);
+    if (this.logPresenceVerbose) {
+      this.logger.debug(`[presence] emitOnline userId=${userId} totalTargets=${allTargets.size}`);
+    }
     if (allTargets.size === 0) return;
 
     const feedListeners = this.presence.getOnlineFeedListeners();
@@ -192,7 +204,9 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     payload: { userIds?: string[] },
   ): Promise<void> {
     const userIds = Array.isArray(payload?.userIds) ? payload.userIds : [];
-    this.logger.log(`[presence] SUBSCRIBE_IN socket=${client.id} userIds=[${userIds.join(', ')}]`);
+    if (this.logPresenceVerbose) {
+      this.logger.debug(`[presence] SUBSCRIBE_IN socket=${client.id} userIds=[${userIds.join(', ')}]`);
+    }
     if (userIds.length === 0) return;
     const { added } = this.presence.subscribe(client.id, userIds);
     if (added.length > 0) {
@@ -208,7 +222,9 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
   @SubscribeMessage('presence:unsubscribe')
   handleUnsubscribe(client: import('socket.io').Socket, payload: { userIds?: string[] }): void {
     const userIds = Array.isArray(payload?.userIds) ? payload.userIds : [];
-    this.logger.log(`[presence] UNSUBSCRIBE_IN socket=${client.id} userIds=[${userIds.join(', ')}]`);
+    if (this.logPresenceVerbose) {
+      this.logger.debug(`[presence] UNSUBSCRIBE_IN socket=${client.id} userIds=[${userIds.join(', ')}]`);
+    }
     if (userIds.length > 0) {
       this.presence.unsubscribe(client.id, userIds);
     }
@@ -217,7 +233,11 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
   @SubscribeMessage('presence:subscribeOnlineFeed')
   async handleSubscribeOnlineFeed(client: import('socket.io').Socket): Promise<void> {
     this.presence.subscribeOnlineFeed(client.id);
-    this.logger.log(`[presence] SUBSCRIBE_ONLINE_FEED_IN socket=${client.id} feedListeners=${this.presence.getOnlineFeedListeners().size}`);
+    if (this.logPresenceVerbose) {
+      this.logger.debug(
+        `[presence] SUBSCRIBE_ONLINE_FEED_IN socket=${client.id} feedListeners=${this.presence.getOnlineFeedListeners().size}`,
+      );
+    }
 
     // Send snapshot of currently online users to avoid race: User B connected before User A subscribed.
     const userIds = this.presence.getOnlineUserIds();
@@ -235,7 +255,9 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
         idle: idleById.get(u.id) ?? false,
       }));
       client.emit('presence:onlineFeedSnapshot', { users: payload, totalOnline: userIds.length });
-      this.logger.log(`[presence] EMIT_OUT presence:onlineFeedSnapshot to socket=${client.id} users=${userIds.length}`);
+      if (this.logPresenceVerbose) {
+        this.logger.debug(`[presence] EMIT_OUT presence:onlineFeedSnapshot to socket=${client.id} users=${userIds.length}`);
+      }
     } catch (err) {
       this.logger.warn(`[presence] Failed to send onlineFeedSnapshot: ${err}`);
     }
@@ -243,7 +265,9 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   @SubscribeMessage('presence:unsubscribeOnlineFeed')
   handleUnsubscribeOnlineFeed(client: import('socket.io').Socket): void {
-    this.logger.log(`[presence] UNSUBSCRIBE_ONLINE_FEED_IN socket=${client.id}`);
+    if (this.logPresenceVerbose) {
+      this.logger.debug(`[presence] UNSUBSCRIBE_ONLINE_FEED_IN socket=${client.id}`);
+    }
     this.presence.unsubscribeOnlineFeed(client.id);
   }
 

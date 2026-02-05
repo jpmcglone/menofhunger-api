@@ -15,6 +15,8 @@ const listSchema = z.object({
   cursor: z.string().optional(),
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
   followingOnly: z.coerce.boolean().optional(),
+  // Optional author filter (comma-separated user IDs). Used by Explore to show trending by recommended users.
+  authorIds: z.string().optional(),
   // "trending" is the UI-friendly name for our half-life boost scoring feed.
   // Keep "popular" for backwards compatibility / internal naming.
   sort: z.enum(['new', 'popular', 'trending']).optional(),
@@ -87,6 +89,12 @@ export class PostsController {
     const viewerUserId = userId ?? null;
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
+    const authorUserIds =
+      (parsed.authorIds ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .slice(0, 50) || [];
 
     const sort = parsed.sort ?? 'new';
     const sortKind = sort === 'trending' ? 'popular' : sort;
@@ -98,6 +106,7 @@ export class PostsController {
             cursor,
             visibility: parsed.visibility ?? 'all',
             followingOnly: parsed.followingOnly ?? false,
+            authorUserIds: authorUserIds.length ? authorUserIds : null,
           })
         : await this.posts.listFeed({
             viewerUserId,
@@ -105,6 +114,7 @@ export class PostsController {
             cursor,
             visibility: parsed.visibility ?? 'all',
             followingOnly: parsed.followingOnly ?? false,
+            authorUserIds: authorUserIds.length ? authorUserIds : null,
           });
 
     const viewer = await this.posts.viewerContext(viewerUserId);

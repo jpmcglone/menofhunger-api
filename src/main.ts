@@ -23,7 +23,12 @@ function isUnsafeMethod(method: string | undefined) {
 async function bootstrap() {
   const logger = new Logger('HTTP');
   const startup = new Logger('Startup');
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const nodeEnv = (process.env.NODE_ENV ?? 'development').trim().toLowerCase();
+  const isProd = nodeEnv === 'production';
+  // Logging can be surprisingly expensive under load; keep production lean.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    logger: isProd ? (['error', 'warn', 'log'] as const) : (['error', 'warn', 'log', 'debug', 'verbose'] as const),
+  });
 
   const appConfig = app.get(AppConfigService);
 

@@ -40,6 +40,129 @@ export class FollowsService {
     private readonly notifications: NotificationsService,
   ) {}
 
+  /**
+   * Recommend users for the viewer to follow.
+   *
+   * Ranking:
+   * - primary: mutual-follow count (friends-of-friends: people the viewer follows who follow the candidate)
+   * - fallback: verified/premium/newest users, excluding already-followed
+   */
+  async recommendUsersToFollow(params: { viewerUserId: string; limit: number }): Promise<{ users: FollowListUser[] }> {
+    const { viewerUserId } = params;
+    const limit = Math.max(1, Math.min(50, Math.floor(params.limit)));
+
+    type RecRow = {
+      id: string;
+      username: string | null;
+      name: string | null;
+      premium: boolean;
+      verifiedStatus: string;
+      avatarKey: string | null;
+      avatarUpdatedAt: Date | null;
+      createdAt: Date;
+    };
+
+    const mutualRows = await this.prisma.$queryRaw<Array<RecRow & { mutualCount: number }>>(Prisma.sql`
+      WITH viewer_following AS (
+        SELECT f1."followingId" AS "userId"
+        FROM "Follow" f1
+        WHERE f1."followerId" = ${viewerUserId}
+      ),
+      mutuals AS (
+        SELECT
+          f2."followingId" AS "userId",
+          COUNT(*)::int AS "mutualCount"
+        FROM viewer_following vf
+        JOIN "Follow" f2 ON f2."followerId" = vf."userId"
+        WHERE
+          f2."followingId" <> ${viewerUserId}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "Follow" f3
+            WHERE f3."followerId" = ${viewerUserId}
+              AND f3."followingId" = f2."followingId"
+          )
+        GROUP BY f2."followingId"
+        ORDER BY "mutualCount" DESC
+        LIMIT ${Math.min(500, limit * 25)}
+      )
+      SELECT
+        u."id",
+        u."username",
+        u."name",
+        u."premium",
+        u."verifiedStatus",
+        u."avatarKey",
+        u."avatarUpdatedAt",
+        u."createdAt",
+        m."mutualCount"
+      FROM mutuals m
+      JOIN "User" u ON u."id" = m."userId"
+      WHERE u."usernameIsSet" = true
+      ORDER BY
+        m."mutualCount" DESC,
+        (u."verifiedStatus" <> 'none') DESC,
+        u."premium" DESC,
+        u."createdAt" DESC
+      LIMIT ${limit}
+    `);
+
+    const selectedIds = new Set(mutualRows.map((r) => r.id));
+    const remaining = limit - mutualRows.length;
+
+    const excludeSql = selectedIds.size
+      ? Prisma.sql`AND u."id" NOT IN (${Prisma.join([...selectedIds].map((id) => Prisma.sql`${id}`))})`
+      : Prisma.sql``;
+
+    const fallbackRows =
+      remaining > 0
+        ? await this.prisma.$queryRaw<Array<RecRow>>(Prisma.sql`
+            SELECT
+              u."id",
+              u."username",
+              u."name",
+              u."premium",
+              u."verifiedStatus",
+              u."avatarKey",
+              u."avatarUpdatedAt",
+              u."createdAt"
+            FROM "User" u
+            WHERE
+              u."usernameIsSet" = true
+              AND u."id" <> ${viewerUserId}
+              ${excludeSql}
+              AND NOT EXISTS (
+                SELECT 1
+                FROM "Follow" f
+                WHERE f."followerId" = ${viewerUserId}
+                  AND f."followingId" = u."id"
+              )
+            ORDER BY
+              (u."verifiedStatus" <> 'none') DESC,
+              u."premium" DESC,
+              u."createdAt" DESC
+            LIMIT ${remaining}
+          `)
+        : [];
+
+    const rows: RecRow[] = [...mutualRows, ...fallbackRows];
+    if (rows.length === 0) return { users: [] };
+
+    const rel = await this.batchRelationshipForUserIds({ viewerUserId, userIds: rows.map((r) => r.id) });
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    const users: FollowListUser[] = rows.map((r) =>
+      toUserListDto(r, publicBaseUrl, {
+        relationship: {
+          viewerFollowsUser: rel.viewerFollows.has(r.id),
+          userFollowsViewer: rel.followsViewer.has(r.id),
+        },
+      }) as FollowListUser,
+    );
+
+    return { users };
+  }
+
   private async viewerById(viewerUserId: string | null) {
     if (!viewerUserId) return null;
     return await this.prisma.user.findUnique({

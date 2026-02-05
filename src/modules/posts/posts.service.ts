@@ -351,8 +351,10 @@ export class PostsService {
     cursor: string | null;
     visibility: 'all' | PostVisibility;
     followingOnly: boolean;
+    authorUserIds?: string[] | null;
   }) {
     const { viewerUserId, limit, cursor, visibility, followingOnly } = params;
+    const authorUserIds = (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean) ?? null;
 
     const viewer = await this.viewerById(viewerUserId);
 
@@ -390,11 +392,16 @@ export class PostsService {
           } as Prisma.PostWhereInput)
         : baseVisibility;
 
+    if (authorUserIds && authorUserIds.length === 0) {
+      return { posts: [], nextCursor: null };
+    }
+
     const where = followingOnly
       ? {
           AND: [
             visibilityWhere,
             this.notDeletedWhere(),
+            ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
             {
               OR: [
                 { userId: viewerUserId as string },
@@ -403,7 +410,13 @@ export class PostsService {
             },
           ],
         }
-      : { AND: [visibilityWhere, this.notDeletedWhere()] };
+      : {
+          AND: [
+            visibilityWhere,
+            this.notDeletedWhere(),
+            ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
+          ],
+        };
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,
@@ -451,8 +464,11 @@ export class PostsService {
     cursor: string | null;
     visibility: 'all' | PostVisibility;
     followingOnly?: boolean;
+    authorUserIds?: string[] | null;
   }) {
     const { viewerUserId, limit, cursor, visibility, followingOnly = false } = params;
+    const requestedAuthorUserIds =
+      (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
 
     const viewer = await this.viewerById(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
@@ -468,8 +484,22 @@ export class PostsService {
       return { posts: [], nextCursor: null };
     }
 
-    const authorUserIds: string[] | null =
+    const followingAuthorIds: string[] | null =
       followingOnly && viewerUserId ? await this.getAuthorIdsForFollowingFilter(viewerUserId) : null;
+
+    const authorUserIds: string[] | null = requestedAuthorUserIds?.length
+      ? followingAuthorIds?.length
+        ? followingAuthorIds.filter((id) => requestedAuthorUserIds.includes(id))
+        : requestedAuthorUserIds
+      : followingAuthorIds;
+
+    if (requestedAuthorUserIds && requestedAuthorUserIds.length === 0) {
+      return { posts: [], nextCursor: null };
+    }
+    if (authorUserIds && authorUserIds.length === 0) {
+      // Intersection produced empty set.
+      return { posts: [], nextCursor: null };
+    }
 
     const visibilityWhere =
       visibility === 'all'

@@ -12,6 +12,10 @@ const listSchema = z.object({
   cursor: z.string().optional(),
 });
 
+const recommendationsSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+});
+
 @Controller('follows')
 export class FollowsController {
   constructor(private readonly follows: FollowsService) {}
@@ -21,6 +25,21 @@ export class FollowsController {
   async myFollowingCount(@CurrentUserId() viewerUserId: string) {
     const followingCount = await this.follows.myFollowingCount({ viewerUserId });
     return { data: followingCount };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 120),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get('recommendations')
+  async recommendations(@CurrentUserId() viewerUserId: string, @Query() query: unknown) {
+    const parsed = recommendationsSchema.parse(query);
+    const limit = parsed.limit ?? 12;
+    const result = await this.follows.recommendUsersToFollow({ viewerUserId, limit });
+    return { data: result.users };
   }
 
   @UseGuards(AuthGuard)

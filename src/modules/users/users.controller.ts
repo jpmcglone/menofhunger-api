@@ -9,6 +9,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { CurrentUserId } from './users.decorator';
 import { validateUsername } from './users.utils';
 import { toUserDto } from './user.dto';
+import { toUserListDto } from '../../common/dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { Throttle } from '@nestjs/throttler';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
@@ -35,6 +36,10 @@ const onboardingSchema = z.object({
   birthdate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Birthdate must be a date (YYYY-MM-DD).').optional(),
   interests: z.array(z.string().trim().min(1).max(40)).min(1).max(30).optional(),
   menOnlyConfirmed: z.boolean().optional(),
+});
+
+const newestUsersSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
 function isAtLeast18(birthdateUtcMidnight: Date): boolean {
@@ -158,6 +163,56 @@ export class UsersController {
       )[0] ?? null;
 
     return { data: { available: !exists, normalized: parsed.usernameLower } };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 120),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get('newest')
+  async newest(@CurrentUserId() viewerUserId: string, @Query() query: unknown) {
+    const parsed = newestUsersSchema.parse(query);
+    const limit = parsed.limit ?? 12;
+
+    const rows = await this.prisma.user.findMany({
+      where: {
+        usernameIsSet: true,
+        id: { not: viewerUserId },
+        // Exclude users the viewer already follows.
+        followers: { none: { followerId: viewerUserId } },
+      },
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        premium: true,
+        verifiedStatus: true,
+        avatarKey: true,
+        avatarUpdatedAt: true,
+        createdAt: true,
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit,
+    });
+
+    const rel = await this.followsService.batchRelationshipForUserIds({
+      viewerUserId,
+      userIds: rows.map((u) => u.id),
+    });
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const users = rows.map((u) =>
+      toUserListDto(u, publicBaseUrl, {
+        relationship: {
+          viewerFollowsUser: rel.viewerFollows.has(u.id),
+          userFollowsViewer: rel.followsViewer.has(u.id),
+        },
+      }),
+    );
+
+    return { data: users };
   }
 
   @UseGuards(AuthGuard)
