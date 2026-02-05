@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { PostsModule } from '../posts/posts.module';
 import { AdminGuard } from './admin.guard';
 import { AdminUsersController } from './admin-users.controller';
 import { AdminSiteConfigController } from './admin-site-config.controller';
@@ -11,7 +12,7 @@ import { FeedbackModule } from '../feedback/feedback.module';
 import { AdminFeedbackController } from './admin-feedback.controller';
 
 @Module({
-  imports: [AuthModule, PrismaModule, FeedbackModule],
+  imports: [AuthModule, PrismaModule, FeedbackModule, PostsModule],
   controllers: [
     AdminUsersController,
     AdminSiteConfigController,

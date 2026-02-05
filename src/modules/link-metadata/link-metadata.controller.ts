@@ -1,5 +1,6 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
+import type { Response } from 'express';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { LinkMetadataService } from './link-metadata.service';
 import { Throttle } from '@nestjs/throttler';
@@ -21,9 +22,11 @@ export class LinkMetadataController {
     },
   })
   @Get()
-  async get(@Query() query: unknown) {
+  async get(@Query() query: unknown, @Res({ passthrough: true }) res: Response) {
     const parsed = getSchema.parse(query);
     const meta = await this.linkMetadata.getMetadata(parsed.url);
+    // Response is already DB-cached; allow long edge/browser caching.
+    res.setHeader('Cache-Control', 'public, max-age=604800');
     return { data: meta };
   }
 }

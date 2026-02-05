@@ -1,6 +1,7 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
@@ -26,6 +27,16 @@ const userListSchema = listSchema.extend({
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
   includeCounts: z.coerce.boolean().optional(),
 });
+
+function setPublicReadCache(res: Response, opts: { viewerUserId: string | null }) {
+  // Avoid leaking personalized fields (boost/bookmark/admin internal) via shared caches.
+  const cacheControl = opts.viewerUserId
+    ? 'private, max-age=15'
+    : 'public, max-age=30, stale-while-revalidate=60';
+  res.setHeader('Cache-Control', cacheControl);
+  // Extra safety for shared caches/proxies that might otherwise key only by URL.
+  res.setHeader('Vary', 'Cookie');
+}
 
 const createMediaItemSchema = z.discriminatedUnion('source', [
   z.object({
@@ -84,7 +95,11 @@ export class PostsController {
     },
   })
   @Get()
-  async list(@OptionalCurrentUserId() userId: string | undefined, @Query() query: unknown) {
+  async list(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Query() query: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const parsed = listSchema.parse(query);
     const viewerUserId = userId ?? null;
     const limit = parsed.limit ?? 30;
@@ -180,6 +195,7 @@ export class PostsController {
       toPostDto,
     });
 
+    setPublicReadCache(res, { viewerUserId });
     return {
       data: filteredPosts.map((p) => attachParentChain(p)),
       pagination: { nextCursor: res.nextCursor },
@@ -188,7 +204,12 @@ export class PostsController {
 
   @UseGuards(OptionalAuthGuard)
   @Get('user/:username')
-  async listForUser(@OptionalCurrentUserId() userId: string | undefined, @Param('username') username: string, @Query() query: unknown) {
+  async listForUser(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('username') username: string,
+    @Query() query: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const parsed = userListSchema.parse(query);
     const viewerUserId = userId ?? null;
     const limit = parsed.limit ?? 30;
@@ -268,6 +289,7 @@ export class PostsController {
       toPostDto,
     });
 
+    setPublicReadCache(res, { viewerUserId });
     return {
       data: filteredPostsUser.map((p) => attachParentChain(p)),
       pagination: { nextCursor: res.nextCursor, counts: res.counts ?? null },
@@ -318,7 +340,12 @@ export class PostsController {
     },
   })
   @Get(':id/comments')
-  async listComments(@OptionalCurrentUserId() userId: string | undefined, @Param('id') id: string, @Query() query: unknown) {
+  async listComments(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('id') id: string,
+    @Query() query: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const viewerUserId = userId ?? null;
     const parsed = z
       .object({
@@ -353,6 +380,7 @@ export class PostsController {
       : null;
     const scoreByPostIdComments =
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(res.comments.map((p) => p.id)) : undefined;
+    setPublicReadCache(res, { viewerUserId });
     return {
       data: res.comments.map((p) =>
         toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
@@ -395,7 +423,11 @@ export class PostsController {
     },
   })
   @Get(':id')
-  async getById(@OptionalCurrentUserId() userId: string | undefined, @Param('id') id: string) {
+  async getById(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const viewerUserId = userId ?? null;
     const res = await this.posts.getById({ viewerUserId, id });
 
@@ -445,6 +477,7 @@ export class PostsController {
       dto = toDto(chain[i], { parent: dto });
     }
 
+    setPublicReadCache(res, { viewerUserId });
     return { data: dto };
   }
 

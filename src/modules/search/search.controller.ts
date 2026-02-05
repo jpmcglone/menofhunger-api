@@ -1,6 +1,7 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
 import { OptionalCurrentUserId } from '../users/users.decorator';
 import { z } from 'zod';
+import type { Response } from 'express';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
 import type { PostWithAuthorAndMedia } from '../../common/dto/post.dto';
@@ -37,7 +38,11 @@ export class SearchController {
     },
   })
   @Get()
-  async searchAll(@OptionalCurrentUserId() userId: string | undefined, @Query() query: unknown) {
+  async searchAll(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Query() query: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const parsed = searchSchema.parse(query);
     const viewerUserId = userId ?? null;
 
@@ -48,6 +53,14 @@ export class SearchController {
     const postCursor = parsed.postCursor ?? null;
     const q = (parsed.q ?? '').trim();
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    // Search results include viewer-specific fields (boost/bookmark relationships) when authenticated.
+    // Allow short caching only for anonymous reads.
+    res.setHeader(
+      'Cache-Control',
+      viewerUserId ? 'private, max-age=60' : 'public, max-age=30, stale-while-revalidate=60',
+    );
+    res.setHeader('Vary', 'Cookie');
 
     if (type === 'all') {
       const userLimit = Math.min(10, limit);

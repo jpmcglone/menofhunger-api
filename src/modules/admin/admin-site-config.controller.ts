@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { PrismaService } from '../prisma/prisma.service';
+import { PostsService } from '../posts/posts.service';
 import { AdminGuard } from './admin.guard';
 
 const updateSchema = z.object({
@@ -11,7 +12,10 @@ const updateSchema = z.object({
 @UseGuards(AdminGuard)
 @Controller('admin/site-config')
 export class AdminSiteConfigController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly posts: PostsService,
+  ) {}
 
   @Get()
   async get() {
@@ -32,6 +36,7 @@ export class AdminSiteConfigController {
         ...(parsed.windowSeconds !== undefined ? { windowSeconds: parsed.windowSeconds } : {}),
       },
     });
+    this.posts.invalidateSiteConfigCache();
     return { data: updated };
   }
 }

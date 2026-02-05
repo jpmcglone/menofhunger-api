@@ -1,6 +1,7 @@
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, Patch, Put, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, Patch, Put, Query, Res, UseGuards } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
+import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { AppConfigService } from '../app/app-config.service';
@@ -58,8 +59,42 @@ function isAtLeast18(birthdateUtcMidnight: Date): boolean {
 
 const JOHN_USERNAME = 'john';
 
+type PublicProfilePayload = {
+  id: string;
+  username: string | null;
+  name: string | null;
+  bio: string | null;
+  premium: boolean;
+  verifiedStatus: string;
+  avatarUrl: string | null;
+  bannerUrl: string | null;
+  pinnedPostId: string | null;
+};
+
 @Controller('users')
 export class UsersController {
+  private publicProfileCache = new Map<string, { value: PublicProfilePayload; expiresAt: number }>();
+
+  private readPublicProfileCache(key: string): PublicProfilePayload | null {
+    const hit = this.publicProfileCache.get(key);
+    if (!hit) return null;
+    if (hit.expiresAt <= Date.now()) {
+      this.publicProfileCache.delete(key);
+      return null;
+    }
+    return hit.value;
+  }
+
+  private writePublicProfileCache(key: string, value: PublicProfilePayload) {
+    this.publicProfileCache.set(key, { value, expiresAt: Date.now() + 5 * 60 * 1000 });
+  }
+
+  private invalidatePublicProfileCacheForUser(user: { id: string; username: string | null }) {
+    this.publicProfileCache.delete(`id:${user.id}`);
+    const u = (user.username ?? '').trim().toLowerCase();
+    if (u) this.publicProfileCache.delete(`username:${u}`);
+  }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
@@ -234,6 +269,7 @@ export class UsersController {
         where: { id: userId },
         data: { username: desired },
       });
+      this.invalidatePublicProfileCacheForUser({ id: updated.id, username: updated.username ?? null });
       return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
     }
 
@@ -256,6 +292,7 @@ export class UsersController {
 
       await this.ensureMutualFollowWithJohn(userId, updated.username ?? parsed.username);
 
+      this.invalidatePublicProfileCacheForUser({ id: updated.id, username: updated.username ?? null });
       return {
         data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
       };
@@ -274,13 +311,22 @@ export class UsersController {
     },
   })
   @Get(':username')
-  async publicProfile(@Param('username') username: string) {
+  async publicProfile(@Param('username') username: string, @Res({ passthrough: true }) res: Response) {
     const raw = (username ?? '').trim();
     if (!raw) throw new NotFoundException('User not found');
 
     const normalized = raw.toLowerCase();
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw);
     const isCuid = /^c[a-z0-9]{24}$/i.test(raw);
+    const isUuidOrCuid = isUuid || isCuid;
+
+    const cacheKey = isUuidOrCuid ? `id:${raw}` : `username:${normalized}`;
+    const cached = this.readPublicProfileCache(cacheKey);
+    if (cached) {
+      // Public profile data is stable-ish and not viewer-specific; allow CDN/browser caching.
+      res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
+      return { data: cached };
+    }
 
     const user =
       (
@@ -302,9 +348,9 @@ export class UsersController {
           SELECT "id", "username", "name", "bio", "premium", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId"
           FROM "User"
           WHERE (
-            (${isUuid || isCuid} = true AND "id" = ${raw})
+            (${isUuidOrCuid} = true AND "id" = ${raw})
             OR
-            (${isUuid || isCuid} = false AND LOWER("username") = ${normalized})
+            (${isUuidOrCuid} = false AND LOWER("username") = ${normalized})
           )
           AND "usernameIsSet" = true
           LIMIT 1
@@ -328,18 +374,27 @@ export class UsersController {
     }
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const payload: PublicProfilePayload = {
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      bio: user.bio,
+      premium: user.premium,
+      verifiedStatus: user.verifiedStatus,
+      avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
+      bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),
+      pinnedPostId,
+    };
+
+    // Cache for subsequent reads (both by username and by id).
+    this.writePublicProfileCache(cacheKey, payload);
+    this.writePublicProfileCache(`id:${user.id}`, payload);
+    if (user.username) this.writePublicProfileCache(`username:${user.username.toLowerCase()}`, payload);
+
+    // Public profile data is stable-ish and not viewer-specific; allow CDN/browser caching.
+    res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
     return {
-      data: {
-        id: user.id,
-        username: user.username,
-        name: user.name,
-        bio: user.bio,
-        premium: user.premium,
-        verifiedStatus: user.verifiedStatus,
-        avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
-        bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),
-        pinnedPostId,
-      },
+      data: payload,
     };
   }
 
@@ -363,6 +418,7 @@ export class UsersController {
         },
       });
 
+      this.invalidatePublicProfileCacheForUser({ id: updated.id, username: updated.username ?? null });
       return {
         data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
       };
@@ -389,20 +445,24 @@ export class UsersController {
     if (post.userId !== userId) throw new NotFoundException('Post not found.');
     if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be pinned.');
 
-    await this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { pinnedPostId: postId },
+      select: { id: true, username: true },
     });
+    this.invalidatePublicProfileCacheForUser({ id: updated.id, username: updated.username ?? null });
     return { data: { pinnedPostId: postId } };
   }
 
   @UseGuards(AuthGuard)
   @Delete('me/pinned-post')
   async unpinPost(@CurrentUserId() userId: string) {
-    await this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { pinnedPostId: null },
+      select: { id: true, username: true },
     });
+    this.invalidatePublicProfileCacheForUser({ id: updated.id, username: updated.username ?? null });
     return { data: { pinnedPostId: null } };
   }
 

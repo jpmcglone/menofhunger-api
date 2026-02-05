@@ -252,9 +252,21 @@ export class PostsService {
   }
 
   private async getSiteConfig() {
+    // Low-churn single row; cache briefly to avoid a DB hit on every create.
+    const now = Date.now();
+    if (this.siteConfigCache && this.siteConfigCache.expiresAt > now) return this.siteConfigCache.value;
+
     const cfg = await this.prisma.siteConfig.findUnique({ where: { id: 1 } });
     // If missing (shouldn't happen after migrations), use safe defaults.
-    return cfg ?? { id: 1, postsPerWindow: 5, windowSeconds: 300 };
+    const value = cfg ?? { id: 1, postsPerWindow: 5, windowSeconds: 300 };
+    this.siteConfigCache = { value, expiresAt: now + 5 * 60 * 1000 };
+    return value;
+  }
+
+  private siteConfigCache: { value: { id: number; postsPerWindow: number; windowSeconds: number }; expiresAt: number } | null = null;
+
+  invalidateSiteConfigCache() {
+    this.siteConfigCache = null;
   }
 
   private async viewerById(viewerUserId: string | null) {
