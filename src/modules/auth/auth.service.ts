@@ -178,6 +178,18 @@ export class AuthService {
     });
 
     if (!session) return null;
+    // Safety: only-me posts should never be pinnable/show on profiles.
+    // If a user already pinned an only-me post (legacy bug), auto-unpin on read.
+    if (session.user.pinnedPostId) {
+      const pinned = await this.prisma.post.findFirst({
+        where: { id: session.user.pinnedPostId, userId: session.user.id, deletedAt: null },
+        select: { visibility: true },
+      });
+      if (!pinned || pinned.visibility === 'onlyMe') {
+        await this.prisma.user.update({ where: { id: session.user.id }, data: { pinnedPostId: null } });
+        session.user.pinnedPostId = null;
+      }
+    }
     return toUserDto(session.user, this.appConfig.r2()?.publicBaseUrl ?? null);
   }
 

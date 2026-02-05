@@ -381,7 +381,13 @@ export class PostsService {
     // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
     const visibilityWhere =
       viewerUserId && visibility === 'all'
-        ? ({ OR: [baseVisibility, { userId: viewerUserId }] } as Prisma.PostWhereInput)
+        ? ({
+            OR: [
+              baseVisibility,
+              // Author sees own posts (e.g. after tier downgrade), but never include only-me outside /only-me.
+              { userId: viewerUserId, visibility: { not: 'onlyMe' } },
+            ],
+          } as Prisma.PostWhereInput)
         : baseVisibility;
 
     const where = followingOnly
@@ -493,7 +499,13 @@ export class PostsService {
     // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
     const popularVisibilityWhere =
       viewerUserId && visibility === 'all'
-        ? ({ OR: [visibilityWhere, { userId: viewerUserId }] } as Prisma.PostWhereInput)
+        ? ({
+            OR: [
+              visibilityWhere,
+              // Author sees own posts (e.g. after tier downgrade), but never include only-me outside /only-me.
+              { userId: viewerUserId, visibility: { not: 'onlyMe' } },
+            ],
+          } as Prisma.PostWhereInput)
         : visibilityWhere;
 
     if (!decoded) {
@@ -536,7 +548,7 @@ export class PostsService {
     // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
     const visibilityFilterSql =
       viewerUserId && visibility === 'all'
-        ? Prisma.sql`AND (p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)}) OR p."userId" = ${viewerUserId})`
+        ? Prisma.sql`AND (p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)}) OR (p."userId" = ${viewerUserId} AND p."visibility" <> 'onlyMe'))`
         : Prisma.sql`AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})`;
 
     const rows = await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date; score: number }>>(Prisma.sql`

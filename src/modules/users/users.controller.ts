@@ -208,6 +208,21 @@ export class UsersController {
       )[0] ?? null;
 
     if (!user) throw new NotFoundException('User not found');
+
+    // Safety: only-me posts should never be pinnable/show on profiles.
+    // If a user already pinned an only-me post (legacy bug), auto-unpin on read.
+    let pinnedPostId: string | null = user.pinnedPostId ?? null;
+    if (pinnedPostId) {
+      const pinned = await this.prisma.post.findFirst({
+        where: { id: pinnedPostId, userId: user.id, deletedAt: null },
+        select: { visibility: true },
+      });
+      if (!pinned || pinned.visibility === 'onlyMe') {
+        await this.prisma.user.update({ where: { id: user.id }, data: { pinnedPostId: null } });
+        pinnedPostId = null;
+      }
+    }
+
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     return {
       data: {
@@ -219,7 +234,7 @@ export class UsersController {
         verifiedStatus: user.verifiedStatus,
         avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
         bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),
-        pinnedPostId: user.pinnedPostId ?? null,
+        pinnedPostId,
       },
     };
   }
@@ -264,10 +279,11 @@ export class UsersController {
 
     const post = await this.prisma.post.findFirst({
       where: { id: postId, deletedAt: null },
-      select: { id: true, userId: true },
+      select: { id: true, userId: true, visibility: true },
     });
     if (!post) throw new NotFoundException('Post not found.');
     if (post.userId !== userId) throw new NotFoundException('Post not found.');
+    if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be pinned.');
 
     await this.prisma.user.update({
       where: { id: userId },
