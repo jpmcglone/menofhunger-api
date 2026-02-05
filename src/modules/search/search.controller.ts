@@ -41,7 +41,7 @@ export class SearchController {
   async searchAll(
     @OptionalCurrentUserId() userId: string | undefined,
     @Query() query: unknown,
-    @Res({ passthrough: true }) res: Response,
+    @Res({ passthrough: true }) httpRes: Response,
   ) {
     const parsed = searchSchema.parse(query);
     const viewerUserId = userId ?? null;
@@ -56,11 +56,11 @@ export class SearchController {
 
     // Search results include viewer-specific fields (boost/bookmark relationships) when authenticated.
     // Allow short caching only for anonymous reads.
-    res.setHeader(
+    httpRes.setHeader(
       'Cache-Control',
       viewerUserId ? 'private, max-age=60' : 'public, max-age=30, stale-while-revalidate=60',
     );
-    res.setHeader('Vary', 'Cookie');
+    httpRes.setHeader('Vary', 'Cookie');
 
     if (type === 'all') {
       const userLimit = Math.min(10, limit);

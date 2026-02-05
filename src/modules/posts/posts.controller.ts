@@ -98,7 +98,7 @@ export class PostsController {
   async list(
     @OptionalCurrentUserId() userId: string | undefined,
     @Query() query: unknown,
-    @Res({ passthrough: true }) res: Response,
+    @Res({ passthrough: true }) httpRes: Response,
   ) {
     const parsed = listSchema.parse(query);
     const viewerUserId = userId ?? null;
@@ -113,7 +113,7 @@ export class PostsController {
 
     const sort = parsed.sort ?? 'new';
     const sortKind = sort === 'trending' ? 'popular' : sort;
-    const res =
+    const result =
       sortKind === 'popular'
         ? await this.posts.listPopularFeed({
             viewerUserId,
@@ -136,9 +136,9 @@ export class PostsController {
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
     // Dedupe: keep only leaf posts (posts that are not an ancestor of any other post). So A→B→C returns only C, not A or B.
     // O(leaves × max chain depth) in-memory; no extra DB queries or indexes needed.
-    const idToPost = new Map(res.posts.map((p) => [p.id, p]));
+    const idToPost = new Map(result.posts.map((p) => [p.id, p]));
     const strictAncestorIds = new Set<string>();
-    for (const p of res.posts) {
+    for (const p of result.posts) {
       let currentId = p.parentId ?? null;
       while (currentId) {
         strictAncestorIds.add(currentId);
@@ -146,7 +146,7 @@ export class PostsController {
         currentId = parentPost?.parentId ?? null;
       }
     }
-    const filteredPosts = res.posts.filter((p) => !strictAncestorIds.has(p.id));
+    const filteredPosts = result.posts.filter((p) => !strictAncestorIds.has(p.id));
 
     // Collect full ancestor chain (walk parentId until null) and fetch all ancestors.
     const parentMap = new Map<string, (Awaited<ReturnType<typeof this.posts.getById>>)>();
@@ -195,10 +195,10 @@ export class PostsController {
       toPostDto,
     });
 
-    setPublicReadCache(res, { viewerUserId });
+    setPublicReadCache(httpRes, { viewerUserId });
     return {
       data: filteredPosts.map((p) => attachParentChain(p)),
-      pagination: { nextCursor: res.nextCursor },
+      pagination: { nextCursor: result.nextCursor },
     };
   }
 
@@ -208,7 +208,7 @@ export class PostsController {
     @OptionalCurrentUserId() userId: string | undefined,
     @Param('username') username: string,
     @Query() query: unknown,
-    @Res({ passthrough: true }) res: Response,
+    @Res({ passthrough: true }) httpRes: Response,
   ) {
     const parsed = userListSchema.parse(query);
     const viewerUserId = userId ?? null;
@@ -217,7 +217,7 @@ export class PostsController {
     const sort = parsed.sort ?? 'new';
     const sortKind = sort === 'trending' ? 'popular' : sort;
 
-    const res = await this.posts.listForUsername({
+    const result = await this.posts.listForUsername({
       viewerUserId,
       username,
       limit,
@@ -230,9 +230,9 @@ export class PostsController {
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
     // Dedupe: keep only leaf posts (same as list()). O(leaves × max chain depth) in-memory.
-    const idToPostUser = new Map(res.posts.map((p) => [p.id, p]));
+    const idToPostUser = new Map(result.posts.map((p) => [p.id, p]));
     const strictAncestorIdsUser = new Set<string>();
-    for (const p of res.posts) {
+    for (const p of result.posts) {
       let currentId = p.parentId ?? null;
       while (currentId) {
         strictAncestorIdsUser.add(currentId);
@@ -240,7 +240,7 @@ export class PostsController {
         currentId = parentPost?.parentId ?? null;
       }
     }
-    const filteredPostsUser = res.posts.filter((p) => !strictAncestorIdsUser.has(p.id));
+    const filteredPostsUser = result.posts.filter((p) => !strictAncestorIdsUser.has(p.id));
 
     // Collect full ancestor chain (walk parentId until null) and fetch all ancestors.
     const parentMap = new Map<string, (Awaited<ReturnType<typeof this.posts.getById>>)>();
@@ -289,10 +289,10 @@ export class PostsController {
       toPostDto,
     });
 
-    setPublicReadCache(res, { viewerUserId });
+    setPublicReadCache(httpRes, { viewerUserId });
     return {
       data: filteredPostsUser.map((p) => attachParentChain(p)),
-      pagination: { nextCursor: res.nextCursor, counts: res.counts ?? null },
+      pagination: { nextCursor: result.nextCursor, counts: result.counts ?? null },
     };
   }
 
@@ -344,7 +344,7 @@ export class PostsController {
     @OptionalCurrentUserId() userId: string | undefined,
     @Param('id') id: string,
     @Query() query: unknown,
-    @Res({ passthrough: true }) res: Response,
+    @Res({ passthrough: true }) httpRes: Response,
   ) {
     const viewerUserId = userId ?? null;
     const parsed = z
@@ -356,7 +356,7 @@ export class PostsController {
       })
       .parse(query);
     const sortKind = parsed.sort === 'trending' ? 'popular' : (parsed.sort ?? 'new');
-    const res = await this.posts.listComments({
+    const result = await this.posts.listComments({
       viewerUserId,
       postId: id,
       limit: parsed.limit ?? 30,
@@ -369,20 +369,20 @@ export class PostsController {
     const boosted = viewerUserId
       ? await this.posts.viewerBoostedPostIds({
           viewerUserId,
-          postIds: res.comments.map((p) => p.id),
+          postIds: result.comments.map((p) => p.id),
         })
       : new Set<string>();
     const bookmarksByPostId = viewerUserId
-      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: res.comments.map((p) => p.id) })
+      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: result.comments.map((p) => p.id) })
       : new Map<string, { collectionIds: string[] }>();
     const internalByPostId = viewerHasAdmin
-      ? await this.posts.ensureBoostScoresFresh(res.comments.map((p) => p.id))
+      ? await this.posts.ensureBoostScoresFresh(result.comments.map((p) => p.id))
       : null;
     const scoreByPostIdComments =
-      viewerHasAdmin ? await this.posts.computeScoresForPostIds(res.comments.map((p) => p.id)) : undefined;
-    setPublicReadCache(res, { viewerUserId });
+      viewerHasAdmin ? await this.posts.computeScoresForPostIds(result.comments.map((p) => p.id)) : undefined;
+    setPublicReadCache(httpRes, { viewerUserId });
     return {
-      data: res.comments.map((p) =>
+      data: result.comments.map((p) =>
         toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: boosted.has(p.id),
           viewerHasBookmarked: bookmarksByPostId.has(p.id),
@@ -397,7 +397,7 @@ export class PostsController {
           })(),
         }),
       ),
-      pagination: { nextCursor: res.nextCursor, counts: res.counts ?? null },
+      pagination: { nextCursor: result.nextCursor, counts: result.counts ?? null },
     };
   }
 
@@ -426,17 +426,17 @@ export class PostsController {
   async getById(
     @OptionalCurrentUserId() userId: string | undefined,
     @Param('id') id: string,
-    @Res({ passthrough: true }) res: Response,
+    @Res({ passthrough: true }) httpRes: Response,
   ) {
     const viewerUserId = userId ?? null;
-    const res = await this.posts.getById({ viewerUserId, id });
+    const post = await this.posts.getById({ viewerUserId, id });
 
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
 
     // Collect ancestor chain (post + all parents) for boost/bookmark and DTO building
     const chain: Awaited<ReturnType<typeof this.posts.getById>>[] = [];
-    let current: Awaited<ReturnType<typeof this.posts.getById>> | null = res;
+    let current: Awaited<ReturnType<typeof this.posts.getById>> | null = post;
     while (current) {
       chain.push(current);
       const parentId: string | null | undefined = (current as { parentId?: string | null }).parentId;
@@ -477,7 +477,7 @@ export class PostsController {
       dto = toDto(chain[i], { parent: dto });
     }
 
-    setPublicReadCache(res, { viewerUserId });
+    setPublicReadCache(httpRes, { viewerUserId });
     return { data: dto };
   }
 
