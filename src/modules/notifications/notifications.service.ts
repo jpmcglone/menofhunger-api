@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import type { NotificationKind } from '@prisma/client';
 import * as webpush from 'web-push';
 import { PrismaService } from '../prisma/prisma.service';
@@ -26,6 +26,7 @@ export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
+    @Inject(forwardRef(() => PresenceGateway))
     private readonly presenceGateway: PresenceGateway,
   ) {}
 

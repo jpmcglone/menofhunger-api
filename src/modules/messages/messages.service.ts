@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
 import type { MessageConversation } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -20,6 +20,7 @@ export class MessagesService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly presenceGateway: PresenceGateway,
+    @Inject(forwardRef(() => NotificationsService))
     private readonly notificationsService: NotificationsService,
   ) {}
 
@@ -152,6 +153,16 @@ export class MessagesService {
         requestUnreadCount: counts.requests,
       });
     });
+  }
+
+  /**
+   * Resolve all participant user IDs for a conversation, asserting the viewer is a participant.
+   * Used by realtime features (e.g. typing indicators) to broadcast to conversation members.
+   */
+  async listConversationParticipantUserIds(params: { userId: string; conversationId: string }): Promise<string[]> {
+    const { userId, conversationId } = params;
+    const conversation = await this.getConversationOrThrow({ userId, conversationId });
+    return conversation.participants.map((p) => p.userId);
   }
 
   async listConversations(params: {

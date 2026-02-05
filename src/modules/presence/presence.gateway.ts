@@ -12,6 +12,7 @@ import { AUTH_COOKIE_NAME } from '../auth/auth.constants';
 import { PresenceService } from './presence.service';
 import { FollowsService } from '../follows/follows.service';
 import type { FollowListUser } from '../follows/follows.service';
+import { MessagesService } from '../messages/messages.service';
 
 function parseSessionTokenFromCookie(cookieHeader: string | undefined): string | undefined {
   if (!cookieHeader?.trim()) return undefined;
@@ -40,6 +41,7 @@ type UserTimers = {
 export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(PresenceGateway.name);
   private readonly userTimers = new Map<string, UserTimers>();
+  private readonly typingThrottleByKey = new Map<string, number>();
 
   @WebSocketServer()
   server!: Server;
@@ -49,6 +51,8 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     private readonly presence: PresenceService,
     @Inject(forwardRef(() => FollowsService))
     private readonly follows: FollowsService,
+    @Inject(forwardRef(() => MessagesService))
+    private readonly messages: MessagesService,
   ) {}
 
   async handleConnection(client: import('socket.io').Socket): Promise<void> {
@@ -275,6 +279,46 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     if (wasIdle) {
       this.logger.log(`[presence] ACTIVE userId=${userId}`);
       this.emitActive(userId);
+    }
+  }
+
+  /**
+   * Realtime typing indicator for messages.
+   * Client emits while typing; we fan-out to conversation participants (excluding sender).
+   */
+  @SubscribeMessage('messages:typing')
+  async handleMessagesTyping(
+    client: import('socket.io').Socket,
+    payload: { conversationId?: string; typing?: boolean },
+  ): Promise<void> {
+    const userId = this.presence.getUserIdForSocket(client.id);
+    if (!userId) return;
+    const conversationId = String(payload?.conversationId ?? '').trim();
+    if (!conversationId) return;
+    const typing = payload?.typing !== false;
+
+    // Throttle DB fanout: at most ~1 per 700ms per (user, conversation).
+    const key = `${userId}:${conversationId}:${typing ? '1' : '0'}`;
+    const now = Date.now();
+    const last = this.typingThrottleByKey.get(key) ?? 0;
+    if (now - last < 700) return;
+    this.typingThrottleByKey.set(key, now);
+
+    let participantIds: string[] = [];
+    try {
+      participantIds = await this.messages.listConversationParticipantUserIds({ userId, conversationId });
+    } catch {
+      // Not a participant or conversation missing; do not leak anything.
+      return;
+    }
+
+    for (const id of participantIds) {
+      if (!id || id === userId) continue;
+      this.presence.emitToUser(this.server, id, 'messages:typing', {
+        conversationId,
+        userId,
+        typing,
+      });
     }
   }
 
