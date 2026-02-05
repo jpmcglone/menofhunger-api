@@ -145,6 +145,7 @@ model User {
   messageConversationsCreated MessageConversation[] @relation("MessageConversation_createdBy")
   blocksInitiated UserBlock[] @relation("UserBlock_blocker")
   blocksReceived  UserBlock[] @relation("UserBlock_blocked")
+  popularScoreSnapshots PostPopularScoreSnapshot[] @relation("PostPopularScoreSnapshot_user")
 
   @@index([phone])
 }
@@ -190,6 +191,8 @@ model Follow {
   @@unique([followerId, followingId])
   @@index([followerId, createdAt])
   @@index([followingId, createdAt])
+  // Speeds up mutual/friends-of-friends queries that walk edges in reverse.
+  @@index([followingId, followerId])
 }
 
 model Post {
@@ -222,6 +225,7 @@ model Post {
   mentions PostMention[]
   pinnedByUser User? @relation("PinnedPost")
   notificationsAsSubject Notification[] @relation("Notification_subjectPost")
+  popularScoreSnapshots PostPopularScoreSnapshot[] @relation("PostPopularScoreSnapshot_post")
 
   @@index([userId, createdAt])
   @@index([createdAt])
@@ -229,6 +233,34 @@ model Post {
   @@index([parentId, createdAt])
   @@index([rootId])
   @@index([rootId, createdAt])
+  // Feed/trending hot paths (parentId IS NULL + deletedAt IS NULL) benefit from composite indexes matching sort+filters.
+  @@index([parentId, deletedAt, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([parentId, deletedAt, boostCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
+  @@index([parentId, deletedAt, bookmarkCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
+  @@index([parentId, deletedAt, commentCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
+}
+
+// Postgres-backed "cache": periodic snapshots of trending scores.
+// We keep a small rolling window (e.g. last ~1 hour) so cursor pagination remains stable across refreshes.
+model PostPopularScoreSnapshot {
+  asOf      DateTime
+  postId    String
+  createdAt DateTime
+  score     Float
+
+  userId     String
+  visibility PostVisibility
+
+  parentId String?
+  rootId   String?
+
+  post Post @relation("PostPopularScoreSnapshot_post", fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation("PostPopularScoreSnapshot_user", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([asOf, postId])
+  @@index([asOf, score(sort: Desc), createdAt(sort: Desc), postId(sort: Desc)])
+  @@index([asOf, userId])
+  @@index([asOf, visibility])
 }
 
 model PostMention {
@@ -436,6 +468,8 @@ model Notification {
   @@index([recipientUserId, createdAt])
   @@index([recipientUserId, deliveredAt])
   @@index([recipientUserId, readAt])
+  // Common list ordering/pagination: ORDER BY createdAt DESC, id DESC.
+  @@index([recipientUserId, createdAt(sort: Desc), id(sort: Desc)])
 }
 
 model MessageConversation {

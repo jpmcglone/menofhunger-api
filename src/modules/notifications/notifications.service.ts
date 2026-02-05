@@ -6,7 +6,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { PresenceGateway } from '../presence/presence.gateway';
-import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectTier } from './notification.dto';
+import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectPostVisibility, SubjectTier } from './notification.dto';
 
 export type CreateNotificationParams = {
   recipientUserId: string;
@@ -384,6 +384,7 @@ export class NotificationsService {
         : [];
     const subjectPreviewByPostId = new Map<string, SubjectPostPreviewDto>();
     const subjectTierByPostId = new Map<string, SubjectTier>();
+    const subjectVisibilityByPostId = new Map<string, SubjectPostVisibility>();
     for (const p of subjectPosts) {
       const bodySnippet = (p.body ?? '').trim().slice(0, 150) || null;
       const media = (p.media ?? [])
@@ -402,6 +403,9 @@ export class NotificationsService {
       subjectPreviewByPostId.set(p.id, { bodySnippet, media });
       const vis = (p as { visibility?: string }).visibility;
       subjectTierByPostId.set(p.id, vis === 'premiumOnly' ? 'premium' : vis === 'verifiedOnly' ? 'verified' : null);
+      if (vis === 'public' || vis === 'verifiedOnly' || vis === 'premiumOnly' || vis === 'onlyMe') {
+        subjectVisibilityByPostId.set(p.id, vis);
+      }
     }
 
     const subjectUserIds = [...new Set(slice.map((n) => n.subjectUserId).filter(Boolean))] as string[];
@@ -420,10 +424,11 @@ export class NotificationsService {
 
     const data: NotificationDto[] = slice.map((n) => {
       const preview = n.subjectPostId ? subjectPreviewByPostId.get(n.subjectPostId) ?? null : null;
+      const subjectPostVisibility = n.subjectPostId ? subjectVisibilityByPostId.get(n.subjectPostId) ?? null : null;
       let subjectTier: SubjectTier = null;
       if (n.subjectPostId) subjectTier = subjectTierByPostId.get(n.subjectPostId) ?? null;
       else if (n.subjectUserId) subjectTier = subjectTierByUserId.get(n.subjectUserId) ?? null;
-      return this.toNotificationDto(n, publicBaseUrl, preview, subjectTier);
+      return this.toNotificationDto(n, publicBaseUrl, preview, subjectPostVisibility, subjectTier);
     });
 
     return {
@@ -542,6 +547,7 @@ export class NotificationsService {
     },
     publicBaseUrl: string | null,
     subjectPostPreview?: SubjectPostPreviewDto | null,
+    subjectPostVisibility: SubjectPostVisibility | null = null,
     subjectTier: SubjectTier = null,
   ): NotificationDto {
     let actor: NotificationActorDto | null = null;
@@ -571,6 +577,7 @@ export class NotificationsService {
       title: n.title,
       body: n.body,
       subjectPostPreview: subjectPostPreview ?? null,
+      subjectPostVisibility,
       subjectTier,
     };
   }

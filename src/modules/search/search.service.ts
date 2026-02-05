@@ -1,9 +1,11 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
-import type { PostVisibility, Prisma, VerifiedStatus } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FollowsService } from '../follows/follows.service';
 import { PostsService } from '../posts/posts.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
+import { RequestCacheService } from '../../common/cache/request-cache.service';
 
 /**
  * Search scoring (higher = better). Used for ranking only; tie-breaks: relationship (users), createdAt (posts).
@@ -70,14 +72,20 @@ export class SearchService {
     private readonly prisma: PrismaService,
     private readonly follows: FollowsService,
     private readonly posts: PostsService,
+    private readonly requestCache: RequestCacheService,
   ) {}
 
   private async viewerById(viewerUserId: string | null): Promise<Viewer> {
     if (!viewerUserId) return null;
-    return await this.prisma.user.findUnique({
+    const key = `search.viewerById:${viewerUserId}`;
+    const cached = this.requestCache.get<Viewer>(key);
+    if (cached !== undefined) return cached;
+    const viewer = await this.prisma.user.findUnique({
       where: { id: viewerUserId },
       select: { id: true, verifiedStatus: true, premium: true },
     });
+    this.requestCache.set(key, viewer);
+    return viewer;
   }
 
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
@@ -101,65 +109,121 @@ export class SearchService {
     const qLower = q.toLowerCase();
     const words = queryToWords(q);
 
-    const cursorWhere = await createdAtIdCursorWhere({
-      cursor,
-      lookup: async (id) => await this.prisma.user.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
-    });
-
-    const orConditions: any[] = [
-      { username: { contains: q, mode: 'insensitive' as const } },
-      { name: { contains: q, mode: 'insensitive' as const } },
-      { bio: { not: null, contains: q, mode: 'insensitive' as const } },
-    ];
-    for (const w of words) {
-      if (w === qLower) continue;
-      orConditions.push({ username: { contains: w, mode: 'insensitive' as const } });
-      orConditions.push({ name: { contains: w, mode: 'insensitive' as const } });
-      orConditions.push({ bio: { not: null, contains: w, mode: 'insensitive' as const } });
-    }
-    const matchClause = { OR: orConditions };
-    const nameOnlyMatch = {
-      AND: [
-        { name: { not: null } },
-        { name: { contains: q, mode: 'insensitive' as const } },
-      ],
-    };
-    const whereWithCursor: Prisma.UserWhereInput = cursorWhere
-      ? {
-          AND: [
-            cursorWhere,
-            {
-              OR: [
-                { usernameIsSet: true, ...matchClause },
-                nameOnlyMatch,
-              ],
-            },
-          ],
-        }
-      : {
-          OR: [
-            { usernameIsSet: true, ...matchClause },
-            nameOnlyMatch,
-          ],
-        };
-
     const fetchSize = Math.min(limit * 5, 50);
-    const raw = await this.prisma.user.findMany({
-      where: whereWithCursor,
-      select: {
-        id: true,
-        createdAt: true,
-        username: true,
-        name: true,
-        bio: true,
-        premium: true,
-        verifiedStatus: true,
-        avatarKey: true,
-        avatarUpdatedAt: true,
-      },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: fetchSize + 1,
-    });
+    type RawUser = {
+      id: string;
+      createdAt: Date;
+      username: string | null;
+      name: string | null;
+      bio: string | null;
+      premium: boolean;
+      verifiedStatus: VerifiedStatus;
+      avatarKey: string | null;
+      avatarUpdatedAt: Date | null;
+    };
+
+    let raw: RawUser[] = [];
+
+    // FTS has better scaling than ILIKE/contains, but it changes semantics (especially for very short queries).
+    // Keep substring matching for short queries; switch to FTS for longer queries.
+    const useFts = q.length >= 3;
+
+    if (useFts) {
+      const cursorRow =
+        cursor
+          ? await this.prisma.user.findUnique({ where: { id: cursor }, select: { id: true, createdAt: true } })
+          : null;
+
+      raw = await this.prisma.$queryRaw<RawUser[]>(Prisma.sql`
+        WITH q AS (SELECT websearch_to_tsquery('english', ${q}) AS tsq)
+        SELECT
+          u."id",
+          u."createdAt",
+          u."username",
+          u."name",
+          u."bio",
+          u."premium",
+          u."verifiedStatus",
+          u."avatarKey",
+          u."avatarUpdatedAt"
+        FROM "User" u, q
+        WHERE
+          (u."usernameIsSet" = true OR u."name" IS NOT NULL)
+          AND to_tsvector(
+            'english',
+            COALESCE(u."username", '') || ' ' || COALESCE(u."name", '') || ' ' || COALESCE(u."bio", '')
+          ) @@ q.tsq
+          ${
+            cursorRow
+              ? Prisma.sql`AND (
+                  u."createdAt" < ${cursorRow.createdAt}
+                  OR (u."createdAt" = ${cursorRow.createdAt} AND u."id" < ${cursorRow.id})
+                )`
+              : Prisma.sql``
+          }
+        ORDER BY u."createdAt" DESC, u."id" DESC
+        LIMIT ${fetchSize + 1}
+      `);
+    } else {
+      const cursorWhere = await createdAtIdCursorWhere({
+        cursor,
+        lookup: async (id) => await this.prisma.user.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+      });
+
+      const orConditions: any[] = [
+        { username: { contains: q, mode: 'insensitive' as const } },
+        { name: { contains: q, mode: 'insensitive' as const } },
+        { bio: { not: null, contains: q, mode: 'insensitive' as const } },
+      ];
+      for (const w of words) {
+        if (w === qLower) continue;
+        orConditions.push({ username: { contains: w, mode: 'insensitive' as const } });
+        orConditions.push({ name: { contains: w, mode: 'insensitive' as const } });
+        orConditions.push({ bio: { not: null, contains: w, mode: 'insensitive' as const } });
+      }
+      const matchClause = { OR: orConditions };
+      const nameOnlyMatch = {
+        AND: [
+          { name: { not: null } },
+          { name: { contains: q, mode: 'insensitive' as const } },
+        ],
+      };
+      const whereWithCursor: Prisma.UserWhereInput = cursorWhere
+        ? {
+            AND: [
+              cursorWhere,
+              {
+                OR: [
+                  { usernameIsSet: true, ...matchClause },
+                  nameOnlyMatch,
+                ],
+              },
+            ],
+          }
+        : {
+            OR: [
+              { usernameIsSet: true, ...matchClause },
+              nameOnlyMatch,
+            ],
+          };
+
+      raw = await this.prisma.user.findMany({
+        where: whereWithCursor,
+        select: {
+          id: true,
+          createdAt: true,
+          username: true,
+          name: true,
+          bio: true,
+          premium: true,
+          verifiedStatus: true,
+          avatarKey: true,
+          avatarUpdatedAt: true,
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: fetchSize + 1,
+      });
+    }
 
     const userIds = raw.map((u) => u.id);
     const rel = await this.follows.batchRelationshipForUserIds({ viewerUserId, userIds });
@@ -256,24 +320,77 @@ export class SearchService {
         }
       : { visibility: 'public' };
 
-    const matchWhere = this.postSearchMatchWhere(q, words);
     const fetchSize = Math.min(200, limit * 10);
     const offset = cursor ? Math.max(0, parseInt(cursor, 10)) : 0;
 
-    const baseWhere: Prisma.PostWhereInput = {
-      AND: [{ deletedAt: null }, visibilityWhere, matchWhere],
-    };
+    const useFts = q.length >= 3;
 
-    const raw = await this.prisma.post.findMany({
-      where: baseWhere,
+    type SearchPostRow = Prisma.PostGetPayload<{
       include: {
-        user: true,
-        media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
-      },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: fetchSize,
-    });
+        user: true;
+        media: true;
+        mentions: { include: { user: { select: { id: true; username: true; verifiedStatus: true; premium: true } } } };
+      };
+    }>;
+    let raw: SearchPostRow[] = [];
+
+    if (useFts) {
+      const allowedSql = allowed.map((v) => Prisma.sql`${v}::"PostVisibility"`);
+      const visibilitySql = viewer?.id
+        ? Prisma.sql`AND (p."visibility" IN (${Prisma.join(allowedSql)}) OR (p."userId" = ${viewer.id} AND p."visibility" = 'onlyMe'))`
+        : Prisma.sql`AND p."visibility" = 'public'`;
+
+      const ids = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        WITH q AS (SELECT websearch_to_tsquery('english', ${q}) AS tsq)
+        SELECT p."id" as "id"
+        FROM "Post" p
+        JOIN "User" u ON u."id" = p."userId"
+        CROSS JOIN q
+        WHERE
+          p."deletedAt" IS NULL
+          ${visibilitySql}
+          AND (
+            to_tsvector('english', p."body") @@ q.tsq
+            OR (
+              u."usernameIsSet" = true
+              AND to_tsvector(
+                'english',
+                COALESCE(u."username", '') || ' ' || COALESCE(u."name", '') || ' ' || COALESCE(u."bio", '')
+              ) @@ q.tsq
+            )
+          )
+        ORDER BY p."createdAt" DESC, p."id" DESC
+        LIMIT ${fetchSize}
+      `);
+
+      const postIds = ids.map((r) => r.id);
+      raw = postIds.length
+        ? await this.prisma.post.findMany({
+            where: { id: { in: postIds } },
+            include: {
+              user: true,
+              media: { orderBy: { position: 'asc' } },
+              mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+            },
+          })
+        : [];
+    } else {
+      const matchWhere = this.postSearchMatchWhere(q, words);
+      const baseWhere: Prisma.PostWhereInput = {
+        AND: [{ deletedAt: null }, visibilityWhere, matchWhere],
+      };
+
+      raw = await this.prisma.post.findMany({
+        where: baseWhere,
+        include: {
+          user: true,
+          media: { orderBy: { position: 'asc' } },
+          mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: fetchSize,
+      });
+    }
 
     const postIds = raw.map((p) => p.id);
     await this.posts.ensureBoostScoresFresh(postIds);

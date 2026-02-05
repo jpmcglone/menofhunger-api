@@ -1,10 +1,12 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
+import type { Response } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { NotificationsService } from './notifications.service';
+import { setReadCache } from '../../common/http-cache';
 
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -70,7 +72,11 @@ export class NotificationsController {
     },
   })
   @Get('unread-count')
-  async getUnreadCount(@CurrentUserId() userId: string) {
+  async getUnreadCount(
+    @CurrentUserId() userId: string,
+    @Res({ passthrough: true }) httpRes: Response,
+  ) {
+    setReadCache(httpRes, { viewerUserId: userId, privateMaxAgeSeconds: 5, varyCookie: false });
     const count = await this.notifications.getUndeliveredCount(userId);
     return { data: { count } };
   }

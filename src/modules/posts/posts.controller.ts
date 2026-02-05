@@ -10,6 +10,7 @@ import { PostsService } from './posts.service';
 import { toPostDto } from './post.dto';
 import { buildAttachParentChain } from './posts.utils';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
+import { setReadCache } from '../../common/http-cache';
 
 const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -27,16 +28,6 @@ const userListSchema = listSchema.extend({
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
   includeCounts: z.coerce.boolean().optional(),
 });
-
-function setPublicReadCache(res: Response, opts: { viewerUserId: string | null }) {
-  // Avoid leaking personalized fields (boost/bookmark/admin internal) via shared caches.
-  const cacheControl = opts.viewerUserId
-    ? 'private, max-age=15'
-    : 'public, max-age=30, stale-while-revalidate=60';
-  res.setHeader('Cache-Control', cacheControl);
-  // Extra safety for shared caches/proxies that might otherwise key only by URL.
-  res.setHeader('Vary', 'Cookie');
-}
 
 const createMediaItemSchema = z.discriminatedUnion('source', [
   z.object({
@@ -195,7 +186,7 @@ export class PostsController {
       toPostDto,
     });
 
-    setPublicReadCache(httpRes, { viewerUserId });
+    setReadCache(httpRes, { viewerUserId });
     return {
       data: filteredPosts.map((p) => attachParentChain(p)),
       pagination: { nextCursor: result.nextCursor },
@@ -289,7 +280,7 @@ export class PostsController {
       toPostDto,
     });
 
-    setPublicReadCache(httpRes, { viewerUserId });
+    setReadCache(httpRes, { viewerUserId });
     return {
       data: filteredPostsUser.map((p) => attachParentChain(p)),
       pagination: { nextCursor: result.nextCursor, counts: result.counts ?? null },
@@ -380,7 +371,7 @@ export class PostsController {
       : null;
     const scoreByPostIdComments =
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(result.comments.map((p) => p.id)) : undefined;
-    setPublicReadCache(httpRes, { viewerUserId });
+    setReadCache(httpRes, { viewerUserId });
     return {
       data: result.comments.map((p) =>
         toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
@@ -477,7 +468,7 @@ export class PostsController {
       dto = toDto(chain[i], { parent: dto });
     }
 
-    setPublicReadCache(httpRes, { viewerUserId });
+    setReadCache(httpRes, { viewerUserId });
     return { data: dto };
   }
 

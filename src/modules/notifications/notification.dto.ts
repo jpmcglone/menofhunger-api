@@ -15,6 +15,8 @@ export type SubjectPostPreviewDto = {
   media: Array<{ url: string; thumbnailUrl: string | null; kind: string }>;
 };
 
+export type SubjectPostVisibility = 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe';
+
 /** Tier of the notification subject (post visibility or user tier) for unseen row highlight. */
 export type SubjectTier = 'premium' | 'verified' | null;
 
@@ -31,6 +33,8 @@ export type NotificationDto = {
   body: string | null;
   /** When set (e.g. boost), for quote + stacked images / video thumbnail in the UI. */
   subjectPostPreview?: SubjectPostPreviewDto | null;
+  /** When subject is a post, its visibility (used for UI tinting). */
+  subjectPostVisibility?: SubjectPostVisibility | null;
   /** Tier of subject (post or user) for unseen row highlight. */
   subjectTier: SubjectTier;
 };

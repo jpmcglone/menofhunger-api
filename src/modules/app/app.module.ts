@@ -8,6 +8,7 @@ import { envSchema, validateEnv } from './env';
 import { AppConfigModule } from './app-config.module';
 import { AppConfigService } from './app-config.service';
 import { MohThrottlerGuard } from '../../common/throttling/moh-throttler.guard';
+import { RequestCacheModule } from '../../common/cache/request-cache.module';
 import { HealthModule } from '../health/health.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
@@ -28,6 +29,7 @@ import { MessagesModule } from '../messages/messages.module';
 @Module({
   imports: [
     ScheduleModule.forRoot(),
+    RequestCacheModule,
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnv(envSchema),

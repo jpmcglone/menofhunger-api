@@ -1,6 +1,8 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
+import { setReadCache } from '../../common/http-cache';
 
 @Controller('health')
 export class HealthController {
@@ -10,7 +12,8 @@ export class HealthController {
   ) {}
 
   @Get()
-  async health() {
+  async health(@Res({ passthrough: true }) httpRes: Response) {
+    setReadCache(httpRes, { viewerUserId: null, publicMaxAgeSeconds: 30, publicStaleWhileRevalidateSeconds: 0, varyCookie: false });
     const now = new Date();
     const nowIso = now.toISOString();
     const serverTime = Math.floor(now.getTime() / 1000);

@@ -14,6 +14,7 @@ import { ApiResponseInterceptor } from './common/interceptors/api-response.inter
 import { ApiExceptionFilter } from './common/filters/api-exception.filter';
 import { AppConfigService } from './modules/app/app-config.service';
 import { PresenceIoAdapter } from './common/adapters/presence-io.adapter';
+import { RequestCacheService } from './common/cache/request-cache.service';
 
 function isUnsafeMethod(method: string | undefined) {
   const m = (method ?? '').toUpperCase();
@@ -31,6 +32,7 @@ async function bootstrap() {
   });
 
   const appConfig = app.get(AppConfigService);
+  const requestCache = app.get(RequestCacheService);
 
   // Fail fast if required env is missing (avoids obscure runtime failures on first DB/auth use).
   const missing: string[] = [];
@@ -117,6 +119,11 @@ async function bootstrap() {
       res.setHeader('Expires', '0');
     }
     next();
+  });
+
+  // Request-scoped memoization (AsyncLocalStorage). Must run before controllers/guards/services.
+  app.use((_req: Request, _res: Response, next: NextFunction) => {
+    requestCache.runWithNewStore(() => next());
   });
 
   // Request id (for tracing + debugging). Returned as `x-request-id`.
