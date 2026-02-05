@@ -23,6 +23,7 @@ import { PresenceModule } from '../presence/presence.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
 import { FeedbackModule } from '../feedback/feedback.module';
+import { MessagesModule } from '../messages/messages.module';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { FeedbackModule } from '../feedback/feedback.module';
     NotificationsModule,
     LinkMetadataModule,
     FeedbackModule,
+    MessagesModule,
   ],
   controllers: [AppController],
   providers: [

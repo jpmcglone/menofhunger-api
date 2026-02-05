@@ -161,7 +161,15 @@ export class NotificationsService {
   /** Send Web Push to all of a user's subscriptions; prune expired (410/404). */
   private async sendWebPushToRecipient(
     recipientUserId: string,
-    params: { title: string; body?: string; subjectPostId?: string | null; subjectUserId?: string | null; test?: boolean },
+    params: {
+      title: string;
+      body?: string;
+      subjectPostId?: string | null;
+      subjectUserId?: string | null;
+      test?: boolean;
+      url?: string | null;
+      tag?: string | null;
+    },
   ): Promise<void> {
     if (!this.appConfig.vapidConfigured()) return;
     if (!this.vapidConfigured) {
@@ -178,10 +186,10 @@ export class NotificationsService {
       this.appConfig.allowedOrigins()[0]?.trim() ??
       'https://menofhunger.com';
     const safeBase = baseUrl.replace(/\/$/, '');
-    let url = `${safeBase}/notifications`;
-    if (params.subjectPostId) {
+    let url = params.url?.trim() || `${safeBase}/notifications`;
+    if (!params.url && params.subjectPostId) {
       url = `${safeBase}/p/${params.subjectPostId}`;
-    } else if (params.subjectUserId) {
+    } else if (!params.url && params.subjectUserId) {
       const subjectUser = await this.prisma.user.findUnique({
         where: { id: params.subjectUserId },
         select: { username: true },
@@ -196,7 +204,7 @@ export class NotificationsService {
       title: params.title,
       body: params.body ?? 'You have a new notification.',
       url,
-      tag: params.test ? 'notification-test' : `notification-${recipientUserId}`,
+      tag: params.tag?.trim() || (params.test ? 'notification-test' : `notification-${recipientUserId}`),
       test: params.test === true,
     });
 
@@ -226,6 +234,29 @@ export class NotificationsService {
           await this.prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {});
         }
       }
+    }
+  }
+
+  async sendMessagePush(params: {
+    recipientUserId: string;
+    senderName: string;
+    body?: string | null;
+    conversationId: string;
+  }): Promise<void> {
+    const sender = (params.senderName ?? '').trim();
+    const title = sender ? `New message from ${sender}` : 'New message';
+    const body = (params.body ?? '').trim().slice(0, 150) || undefined;
+    const url = `/messages?c=${encodeURIComponent(params.conversationId)}`;
+    const tag = `message-${params.conversationId}`;
+    try {
+      await this.sendWebPushToRecipient(params.recipientUserId, {
+        title,
+        body,
+        url,
+        tag,
+      });
+    } catch (err) {
+      this.logger.warn(`[push] Failed to send DM web push: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

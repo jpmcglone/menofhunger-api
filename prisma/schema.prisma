@@ -59,6 +59,21 @@ enum FeedbackStatus {
   resolved
 }
 
+enum MessageConversationType {
+  direct
+  group
+}
+
+enum MessageParticipantStatus {
+  pending
+  accepted
+}
+
+enum MessageParticipantRole {
+  owner
+  member
+}
+
 // Start minimal. Add real domain models as you solidify your product.
 model Example {
   id        String   @id @default(cuid())
@@ -125,6 +140,11 @@ model User {
   pushSubscriptions PushSubscription[]
   userSearches     UserSearch[]
   feedbacks        Feedback[]
+  messageParticipants MessageParticipant[] @relation("MessageParticipant_user")
+  messagesSent        Message[] @relation("Message_sender")
+  messageConversationsCreated MessageConversation[] @relation("MessageConversation_createdBy")
+  blocksInitiated UserBlock[] @relation("UserBlock_blocker")
+  blocksReceived  UserBlock[] @relation("UserBlock_blocked")
 
   @@index([phone])
 }
@@ -416,6 +436,78 @@ model Notification {
   @@index([recipientUserId, createdAt])
   @@index([recipientUserId, deliveredAt])
   @@index([recipientUserId, readAt])
+}
+
+model MessageConversation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  type MessageConversationType
+  title String?
+  createdByUserId String
+  /** Unique key for direct conversations (sorted user ids). */
+  directKey String? @unique
+
+  lastMessageAt DateTime?
+  lastMessageId String? @unique
+
+  createdBy User @relation("MessageConversation_createdBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  participants MessageParticipant[]
+  messages Message[] @relation("MessageConversation_messages")
+  lastMessage Message? @relation("MessageConversation_lastMessage", fields: [lastMessageId], references: [id], onDelete: SetNull)
+
+  @@index([type, updatedAt])
+  @@index([lastMessageAt, id])
+}
+
+model MessageParticipant {
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  conversationId String
+  userId String
+  role MessageParticipantRole @default(member)
+  status MessageParticipantStatus @default(pending)
+  acceptedAt DateTime?
+  lastReadAt DateTime?
+
+  conversation MessageConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user User @relation("MessageParticipant_user", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, userId])
+  @@index([userId, status, updatedAt])
+  @@index([conversationId, updatedAt])
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  body      String   @db.Text
+
+  conversationId String
+  senderId String
+
+  conversation MessageConversation @relation("MessageConversation_messages", fields: [conversationId], references: [id], onDelete: Cascade)
+  sender User @relation("Message_sender", fields: [senderId], references: [id], onDelete: Cascade)
+  lastMessageFor MessageConversation? @relation("MessageConversation_lastMessage")
+
+  @@index([conversationId, createdAt])
+  @@index([senderId, createdAt])
+}
+
+model UserBlock {
+  createdAt DateTime @default(now())
+
+  blockerId String
+  blockedId String
+
+  blocker User @relation("UserBlock_blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("UserBlock_blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@id([blockerId, blockedId])
+  @@index([blockerId, createdAt])
+  @@index([blockedId, createdAt])
 }
 
 model Feedback {

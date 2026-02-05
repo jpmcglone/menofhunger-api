@@ -112,6 +112,22 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.presence.emitToUser(this.server, userId, 'notifications:updated', payload);
   }
 
+  /** Emit messages:updated to a user's sockets (used by MessagesService). */
+  emitMessagesUpdated(
+    userId: string,
+    payload: { primaryUnreadCount: number; requestUnreadCount: number },
+  ): void {
+    this.presence.emitToUser(this.server, userId, 'messages:updated', payload);
+  }
+
+  /** Emit messages:new to a user's sockets (used by MessagesService). */
+  emitMessageCreated(
+    userId: string,
+    payload: { conversationId: string; message: unknown },
+  ): void {
+    this.presence.emitToUser(this.server, userId, 'messages:new', payload);
+  }
+
   private emitToSockets(socketIds: Iterable<string>, event: string, payload: unknown): void {
     const ids = [...socketIds];
     this.logger.debug(`[presence] EMIT_OUT event=${event} to ${ids.length} sockets`);

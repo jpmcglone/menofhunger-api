@@ -17,6 +17,14 @@ This document describes where each public API response type is defined and how t
 | `GET /auth/me` | `{ user }` | `UserDto` | consumed as `data.user` |
 | `GET /search` (type=bookmarks) | `SearchBookmarkItem[]` | search controller maps to post DTO | `SearchBookmarkItem` |
 | `GET /notifications` | list with custom DTO | `notification.dto.ts` | `NotificationDto` etc. |
+| `GET /messages/conversations` | `MessageConversation[]` | `src/modules/messages/message.dto.ts` | `types/api.ts` (`MessageConversation`) |
+| `GET /messages/conversations/:id` | `{ conversation, messages }` | `src/modules/messages/message.dto.ts` | `types/api.ts` (`GetMessageConversationResponse`) |
+| `GET /messages/conversations/:id/messages` | `Message[]` | `src/modules/messages/message.dto.ts` | `types/api.ts` (`GetMessagesResponse`) |
+| `POST /messages/conversations` | `{ conversationId, message }` | `src/modules/messages/message.dto.ts` | `types/api.ts` (`CreateMessageConversationResponse`) |
+| `POST /messages/lookup` | `{ conversationId }` | `src/modules/messages/messages.service.ts` | `types/api.ts` (`LookupMessageConversationResponse`) |
+| `POST /messages/conversations/:id/messages` | `{ message }` | `src/modules/messages/message.dto.ts` | `types/api.ts` (`SendMessageResponse`) |
+| `GET /messages/unread-count` | `{ primary, requests }` | `src/modules/messages/messages.service.ts` | `types/api.ts` (`GetMessagesUnreadCountResponse`) |
+| `GET /messages/blocks` | `MessageBlockListItem[]` | `src/modules/messages/messages.service.ts` | `types/api.ts` (`MessageBlockListItem`) |
 | `GET /follows/:username/followers` | list with `UserListDto` | `src/common/dto/user.dto.ts` (`UserListDto`) | follow list types |
 | Envelope | `{ data, pagination? }` | all controllers | `ApiEnvelope<T>`, `ApiPagination` in `types/api.ts` |
 
