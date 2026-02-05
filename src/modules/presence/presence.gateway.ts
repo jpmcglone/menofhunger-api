@@ -247,6 +247,17 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.presence.unsubscribeOnlineFeed(client.id);
   }
 
+  @SubscribeMessage('messages:screen')
+  handleMessagesScreen(
+    client: import('socket.io').Socket,
+    payload: { active?: boolean },
+  ): void {
+    const userId = this.presence.getUserIdForSocket(client.id);
+    if (!userId) return;
+    const active = payload?.active !== false;
+    this.presence.setChatScreenActive(client.id, active);
+  }
+
   @SubscribeMessage('presence:logout')
   handleLogout(client: import('socket.io').Socket): void {
     const result = this.presence.forceUnregister(client.id);
@@ -314,7 +325,9 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
 
     for (const id of participantIds) {
       if (!id || id === userId) continue;
-      this.presence.emitToUser(this.server, id, 'messages:typing', {
+      const targetSockets = this.presence.getChatScreenSocketIdsForUser(id);
+      if (targetSockets.length === 0) continue;
+      this.emitToSockets(targetSockets, 'messages:typing', {
         conversationId,
         userId,
         typing,

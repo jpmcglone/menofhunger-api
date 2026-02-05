@@ -29,6 +29,8 @@ export class PresenceService {
   private readonly userSubscribers = new Map<string, Set<string>>();
   /** socketIds that receive all online/offline events (online page viewers) */
   private readonly onlineFeedListeners = new Set<string>();
+  /** socketIds that are currently on chat screens */
+  private readonly chatScreenListeners = new Set<string>();
   /** userIds currently marked idle (no activity for X time); still online, shown with clock */
   private readonly idleUserIds = new Set<string>();
 
@@ -100,6 +102,7 @@ export class PresenceService {
   forceUnregister(socketId: string): { userId: string; wasLastConnection: boolean } | null {
     this.socketSubscriptions.delete(socketId);
     this.onlineFeedListeners.delete(socketId);
+    this.chatScreenListeners.delete(socketId);
     this.removeSocketFromUserSubscribers(socketId);
 
     const meta = this.socketMeta.get(socketId);
@@ -126,6 +129,7 @@ export class PresenceService {
   unregister(socketId: string): { userId: string; isNowOffline: boolean } | null {
     this.socketSubscriptions.delete(socketId);
     this.onlineFeedListeners.delete(socketId);
+    this.chatScreenListeners.delete(socketId);
     this.removeSocketFromUserSubscribers(socketId);
 
     const meta = this.socketMeta.get(socketId);
@@ -219,6 +223,15 @@ export class PresenceService {
     this.onlineFeedListeners.delete(socketId);
   }
 
+  setChatScreenActive(socketId: string, active: boolean): void {
+    if (active) this.chatScreenListeners.add(socketId);
+    else this.chatScreenListeners.delete(socketId);
+  }
+
+  isChatScreenListener(socketId: string): boolean {
+    return this.chatScreenListeners.has(socketId);
+  }
+
   getSubscribers(userId: string): Set<string> {
     return this.userSubscribers.get(userId) ?? new Set();
   }
@@ -250,5 +263,11 @@ export class PresenceService {
   getSocketIdsForUser(userId: string): string[] {
     const set = this.userSockets.get(userId);
     return set ? Array.from(set) : [];
+  }
+
+  getChatScreenSocketIdsForUser(userId: string): string[] {
+    const socketIds = this.userSockets.get(userId);
+    if (!socketIds) return [];
+    return Array.from(socketIds).filter((id) => this.chatScreenListeners.has(id));
   }
 }
