@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@n
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
+import { VerifiedGuard } from '../auth/verified.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { MessagesService } from './messages.service';
@@ -36,10 +37,10 @@ const lookupConversationSchema = z.object({
 });
 
 @Controller('messages')
+@UseGuards(AuthGuard, VerifiedGuard)
 export class MessagesController {
   constructor(private readonly messages: MessagesService) {}
 
-  @UseGuards(AuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('publicRead', 240),
@@ -61,7 +62,6 @@ export class MessagesController {
     };
   }
 
-  @UseGuards(AuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('publicRead', 240),
@@ -77,7 +77,6 @@ export class MessagesController {
     };
   }
 
-  @UseGuards(AuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('publicRead', 240),
@@ -99,7 +98,6 @@ export class MessagesController {
     };
   }
 
-  @UseGuards(AuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('interact', 60),
@@ -118,7 +116,6 @@ export class MessagesController {
     return { data: result };
   }
 
-  @UseGuards(AuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('publicRead', 240),
@@ -135,7 +132,6 @@ export class MessagesController {
     return { data: result };
   }
 
-  @UseGuards(AuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('interact', 180),
@@ -149,7 +145,6 @@ export class MessagesController {
     return { data: result };
   }
 
-  @UseGuards(AuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('interact', 180),
@@ -162,7 +157,6 @@ export class MessagesController {
     return { data: {} };
   }
 
-  @UseGuards(AuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('interact', 60),
@@ -175,7 +169,6 @@ export class MessagesController {
     return { data: {} };
   }
 
-  @UseGuards(AuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('publicRead', 240),
@@ -188,7 +181,6 @@ export class MessagesController {
     return { data: { primary: counts.primary, requests: counts.requests } };
   }
 
-  @UseGuards(AuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('publicRead', 120),
@@ -201,7 +193,6 @@ export class MessagesController {
     return { data: blocks };
   }
 
-  @UseGuards(AuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('interact', 60),
@@ -215,7 +206,6 @@ export class MessagesController {
     return { data: {} };
   }
 
-  @UseGuards(AuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('interact', 60),
