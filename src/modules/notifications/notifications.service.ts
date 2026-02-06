@@ -201,11 +201,12 @@ export class NotificationsService {
       }
     }
 
+    const defaultTag = params.test ? `notification-test-${Date.now()}` : `notification-${recipientUserId}`;
     const payload = JSON.stringify({
       title: params.title,
       body: params.body ?? 'You have a new notification.',
       url,
-      tag: params.tag?.trim() || (params.test ? 'notification-test' : `notification-${recipientUserId}`),
+      tag: params.tag?.trim() || defaultTag,
       test: params.test === true,
     });
 
