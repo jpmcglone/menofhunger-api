@@ -171,6 +171,12 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
       await this.emitRadioListeners(prevStationId);
     }
     await this.emitRadioListeners(stationId);
+
+    // Notify other tabs/windows for this user so they stop their radio (one play per user).
+    const otherSocketIds = this.presence.getSocketIdsForUser(userId).filter((id) => id !== client.id);
+    for (const sid of otherSocketIds) {
+      this.server.sockets.sockets.get(sid)?.emit('radio:replaced', {});
+    }
   }
 
   /**
