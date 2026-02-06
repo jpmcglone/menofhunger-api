@@ -26,6 +26,7 @@ import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
 import { FeedbackModule } from '../feedback/feedback.module';
 import { MessagesModule } from '../messages/messages.module';
 import { VerificationModule } from '../verification/verification.module';
+import { ReportsModule } from '../reports/reports.module';
 import { Websters1828Module } from '../websters1828/websters1828.module';
 import { RadioModule } from '../radio/radio.module';
 
@@ -63,6 +64,7 @@ import { RadioModule } from '../radio/radio.module';
     NotificationsModule,
     LinkMetadataModule,
     FeedbackModule,
+    ReportsModule,
     MessagesModule,
     Websters1828Module,
     RadioModule,

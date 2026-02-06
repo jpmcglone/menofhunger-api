@@ -59,6 +59,27 @@ enum FeedbackStatus {
   resolved
 }
 
+enum ReportTargetType {
+  post
+  user
+}
+
+enum ReportReason {
+  spam
+  harassment
+  hate
+  sexual
+  violence
+  illegal
+  other
+}
+
+enum ReportStatus {
+  pending
+  dismissed
+  actionTaken
+}
+
 enum VerificationRequestStatus {
   pending
   approved
@@ -149,6 +170,9 @@ model User {
   pushSubscriptions PushSubscription[]
   userSearches     UserSearch[]
   feedbacks        Feedback[]
+  reportsMade      Report[] @relation("Report_reporter")
+  reportsReceived  Report[] @relation("Report_subjectUser")
+  reportsResolved  Report[] @relation("Report_resolvedBy")
   verificationRequests VerificationRequest[] @relation("VerificationRequest_user")
   verificationRequestsReviewed VerificationRequest[] @relation("VerificationRequest_reviewedBy")
   messageParticipants MessageParticipant[] @relation("MessageParticipant_user")
@@ -237,6 +261,7 @@ model Post {
   pinnedByUser User? @relation("PinnedPost")
   notificationsAsSubject Notification[] @relation("Notification_subjectPost")
   popularScoreSnapshots PostPopularScoreSnapshot[] @relation("PostPopularScoreSnapshot_post")
+  reports Report[] @relation("Report_subjectPost")
 
   @@index([userId, createdAt])
   @@index([createdAt])
@@ -573,6 +598,39 @@ model Feedback {
   @@index([createdAt, id])
   @@index([status, createdAt])
   @@index([category, createdAt])
+}
+
+model Report {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  targetType ReportTargetType
+  reason     ReportReason
+  details    String?      @db.Text
+
+  status     ReportStatus @default(pending)
+  adminNote  String?      @db.Text
+  resolvedAt DateTime?
+
+  reporterUserId String
+  reporter       User   @relation("Report_reporter", fields: [reporterUserId], references: [id], onDelete: Cascade)
+
+  subjectUserId String?
+  subjectUser   User?  @relation("Report_subjectUser", fields: [subjectUserId], references: [id], onDelete: Cascade)
+
+  subjectPostId String?
+  subjectPost   Post?  @relation("Report_subjectPost", fields: [subjectPostId], references: [id], onDelete: Cascade)
+
+  resolvedByAdminId String?
+  resolvedByAdmin   User? @relation("Report_resolvedBy", fields: [resolvedByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt, id])
+  @@index([status, createdAt])
+  @@index([targetType, createdAt])
+  @@index([reporterUserId, createdAt])
+  @@index([subjectUserId, createdAt])
+  @@index([subjectPostId, createdAt])
 }
 
 model VerificationRequest {
