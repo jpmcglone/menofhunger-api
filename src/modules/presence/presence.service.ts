@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Server } from 'socket.io';
 import { AppConfigService } from '../app/app-config.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 export type SocketMeta = { userId: string; client: string };
 
@@ -34,7 +35,10 @@ export class PresenceService {
   /** userIds currently marked idle (no activity for X time); still online, shown with clock */
   private readonly idleUserIds = new Set<string>();
 
-  constructor(private readonly appConfig: AppConfigService) {}
+  constructor(
+    private readonly appConfig: AppConfigService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   /** Minutes of no activity before marking user idle. */
   presenceIdleAfterMinutes(): number {
@@ -114,6 +118,7 @@ export class PresenceService {
     if (set) {
       set.delete(socketId);
       if (set.size === 0) {
+        this.persistLastOnlineAt(meta.userId);
         this.userSockets.delete(meta.userId);
         this.lastConnectAt.delete(meta.userId);
         this.lastActivityAt.delete(meta.userId);
@@ -141,12 +146,27 @@ export class PresenceService {
     if (set) {
       set.delete(socketId);
       if (set.size === 0) {
+        this.persistLastOnlineAt(meta.userId);
         this.userSockets.delete(meta.userId);
         this.lastConnectAt.delete(meta.userId);
         return { userId: meta.userId, isNowOffline: true };
       }
     }
     return { userId: meta.userId, isNowOffline: false };
+  }
+
+  /** Persist last-online as the moment the user disconnected (when their last socket is removed). */
+  private persistLastOnlineAt(userId: string): void {
+    // Fire-and-forget: presence disconnect should never block gateway cleanup.
+    void this.prisma.user
+      .update({
+        where: { id: userId },
+        data: { lastOnlineAt: new Date() },
+        select: { id: true },
+      })
+      .catch((err) => {
+        this.logger.warn(`[presence] Failed to persist lastOnlineAt userId=${userId}: ${err}`);
+      });
   }
 
   private removeSocketFromUserSubscribers(socketId: string): void {

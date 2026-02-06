@@ -122,6 +122,8 @@ model User {
   avatarUpdatedAt DateTime?
   bannerKey String?
   bannerUpdatedAt DateTime?
+  // When the user last went offline (set by presence disconnect).
+  lastOnlineAt DateTime?
   sessions  Session[]
   posts     Post[]
   boosts    Boost[]

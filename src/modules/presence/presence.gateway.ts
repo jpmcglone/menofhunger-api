@@ -13,6 +13,8 @@ import { PresenceService } from './presence.service';
 import { FollowsService } from '../follows/follows.service';
 import type { FollowListUser } from '../follows/follows.service';
 import { MessagesService } from '../messages/messages.service';
+import { RadioService } from '../radio/radio.service';
+import type { RadioListenerDto } from '../../common/dto';
 
 function parseSessionTokenFromCookie(cookieHeader: string | undefined): string | undefined {
   if (!cookieHeader?.trim()) return undefined;
@@ -55,6 +57,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     private readonly follows: FollowsService,
     @Inject(forwardRef(() => MessagesService))
     private readonly messages: MessagesService,
+    private readonly radio: RadioService,
   ) {}
 
   async handleConnection(client: import('socket.io').Socket): Promise<void> {
@@ -75,6 +78,8 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
         : client.handshake.query.client) ?? 'web';
 
     const { isNewlyOnline } = this.presence.register(client.id, user.id, String(clientType));
+    // Store for downstream event handlers (radio, etc).
+    (client.data as { userId?: string }).userId = user.id;
     if (this.logPresenceVerbose) {
       this.logger.debug(`[presence] CONNECT socket=${client.id} userId=${user.id} isNewlyOnline=${isNewlyOnline}`);
     }
@@ -98,6 +103,126 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
       this.cancelUserTimers(result.userId);
       this.emitOffline(result.userId);
     }
+
+    // Radio cleanup (best-effort).
+    const radioLeft = this.radio.onDisconnect(client.id);
+    if (radioLeft?.wasActive) {
+      void this.emitRadioListeners(radioLeft.stationId);
+    }
+  }
+
+  private async emitRadioListeners(stationId: string): Promise<void> {
+    const sid = (stationId ?? '').trim();
+    if (!sid) return;
+    const { userIds, pausedUserIds } = this.radio.getListenersForStation(sid);
+    const room = `radio:${sid}`;
+
+    let listeners: RadioListenerDto[] = [];
+    if (userIds.length > 0) {
+      try {
+        const users = await this.follows.getFollowListUsersByIds({ viewerUserId: null, userIds });
+        const byId = new Map(users.map((u) => [u.id, u]));
+        const pausedSet = new Set(pausedUserIds);
+        listeners = [];
+        for (const id of userIds) {
+          const u = byId.get(id);
+          if (!u) continue;
+          listeners.push({
+            id: u.id,
+            username: u.username,
+            avatarUrl: u.avatarUrl ?? null,
+            paused: pausedSet.has(u.id),
+          });
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to fetch radio listeners for station ${sid}: ${err}`);
+      }
+    }
+
+    // Emit to everyone in the station room (including the joiner).
+    this.server.to(room).emit('radio:listeners', { stationId: sid, listeners });
+  }
+
+  @SubscribeMessage('radio:join')
+  async handleRadioJoin(
+    client: import('socket.io').Socket,
+    payload: { stationId?: string },
+  ): Promise<void> {
+    const stationId = (payload?.stationId ?? '').trim();
+    if (!this.radio.isValidStationId(stationId)) return;
+
+    const userId =
+      (client.data as { userId?: string })?.userId ??
+      this.presence.getUserIdForSocket(client.id) ??
+      null;
+    if (!userId) return;
+
+    // Update in-memory state (deduped per user) and track room subscription for this socket.
+    const { prevStationId, prevRoomStationId } = this.radio.join({ socketId: client.id, userId, stationId });
+
+    // Ensure this socket only receives updates for one station.
+    if (prevRoomStationId && prevRoomStationId !== stationId) {
+      client.leave(`radio:${prevRoomStationId}`);
+    }
+    client.join(`radio:${stationId}`);
+
+    // If the user was previously listening to a different station, update that station's listeners.
+    if (prevStationId && prevStationId !== stationId) {
+      await this.emitRadioListeners(prevStationId);
+    }
+    await this.emitRadioListeners(stationId);
+  }
+
+  /**
+   * Pause: stop counting as a listener, but remain subscribed to the room so the client can
+   * still see live listener updates while paused.
+   */
+  @SubscribeMessage('radio:pause')
+  async handleRadioPause(client: import('socket.io').Socket): Promise<void> {
+    const paused = this.radio.pause(client.id);
+    if (paused?.wasActive && paused.changed) {
+      await this.emitRadioListeners(paused.stationId);
+    }
+  }
+
+  /**
+   * Watch: subscribe to station updates without counting as a listener.
+   */
+  @SubscribeMessage('radio:watch')
+  async handleRadioWatch(
+    client: import('socket.io').Socket,
+    payload: { stationId?: string },
+  ): Promise<void> {
+    const stationId = (payload?.stationId ?? '').trim();
+    if (!this.radio.isValidStationId(stationId)) return;
+
+    const userId =
+      (client.data as { userId?: string })?.userId ??
+      this.presence.getUserIdForSocket(client.id) ??
+      null;
+    if (!userId) return;
+
+    const { prevRoomStationId } = this.radio.watch({ socketId: client.id, stationId });
+    if (prevRoomStationId && prevRoomStationId !== stationId) {
+      client.leave(`radio:${prevRoomStationId}`);
+    }
+    client.join(`radio:${stationId}`);
+
+    // Ensure the watcher is not counted as a listener.
+    const left = this.radio.leave(client.id);
+    if (left?.wasActive) {
+      await this.emitRadioListeners(left.stationId);
+    }
+    await this.emitRadioListeners(stationId);
+  }
+
+  @SubscribeMessage('radio:leave')
+  async handleRadioLeave(client: import('socket.io').Socket): Promise<void> {
+    const roomStationId = this.radio.getRoomStationForSocket(client.id);
+    const left = this.radio.leave(client.id);
+    this.radio.clearRoomForSocket(client.id);
+    if (roomStationId) client.leave(`radio:${roomStationId}`);
+    if (left?.wasActive) await this.emitRadioListeners(left.stationId);
   }
 
   private cancelUserTimers(userId: string): void {

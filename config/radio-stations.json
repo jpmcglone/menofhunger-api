@@ -1,0 +1,51 @@
+[
+  {
+    "id": "groovesalad",
+    "name": "Groove Salad",
+    "streamUrl": "https://ice1.somafm.com/groovesalad-128-mp3",
+    "attributionName": "SomaFM",
+    "attributionUrl": "https://somafm.com/groovesalad/"
+  },
+  {
+    "id": "dronezone",
+    "name": "Drone Zone",
+    "streamUrl": "https://ice1.somafm.com/dronezone-128-mp3",
+    "attributionName": "SomaFM",
+    "attributionUrl": "https://somafm.com/dronezone/"
+  },
+  {
+    "id": "missioncontrol",
+    "name": "Mission Control",
+    "streamUrl": "https://ice1.somafm.com/missioncontrol-128-mp3",
+    "attributionName": "SomaFM",
+    "attributionUrl": "https://somafm.com/missioncontrol/"
+  },
+  {
+    "id": "illstreet",
+    "name": "Illinois Street Lounge",
+    "streamUrl": "https://ice1.somafm.com/illstreet-128-mp3",
+    "attributionName": "SomaFM",
+    "attributionUrl": "https://somafm.com/illstreet/"
+  },
+  {
+    "id": "fluid",
+    "name": "Fluid",
+    "streamUrl": "https://ice1.somafm.com/fluid-128-mp3",
+    "attributionName": "SomaFM",
+    "attributionUrl": "https://somafm.com/fluid/"
+  },
+  {
+    "id": "lush",
+    "name": "Lush",
+    "streamUrl": "https://ice1.somafm.com/lush-128-mp3",
+    "attributionName": "SomaFM",
+    "attributionUrl": "https://somafm.com/lush/"
+  },
+  {
+    "id": "ancientfaith",
+    "name": "Ancient Faith (Music)",
+    "streamUrl": "https://ancientfaith.streamguys1.com/music",
+    "attributionName": "Ancient Faith Radio",
+    "attributionUrl": "https://www.ancientfaith.com/"
+  }
+]

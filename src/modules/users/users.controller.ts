@@ -69,6 +69,7 @@ type PublicProfilePayload = {
   avatarUrl: string | null;
   bannerUrl: string | null;
   pinnedPostId: string | null;
+  lastOnlineAt: string | null;
 };
 
 @Controller('users')
@@ -323,6 +324,23 @@ export class UsersController {
     const cacheKey = isUuidOrCuid ? `id:${raw}` : `username:${normalized}`;
     const cached = this.readPublicProfileCache(cacheKey);
     if (cached) {
+      // lastOnlineAt changes frequently; refresh it even when other fields are cached.
+      try {
+        const fresh = await this.prisma.user.findUnique({
+          where: { id: cached.id },
+          select: { lastOnlineAt: true },
+        });
+        const lastOnlineAt = fresh?.lastOnlineAt ? fresh.lastOnlineAt.toISOString() : null;
+        if (lastOnlineAt !== cached.lastOnlineAt) {
+          const next: PublicProfilePayload = { ...cached, lastOnlineAt };
+          this.writePublicProfileCache(cacheKey, next);
+          // Public profile data is stable-ish and not viewer-specific; allow CDN/browser caching.
+          res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
+          return { data: next };
+        }
+      } catch {
+        // If lastOnlineAt refresh fails, fall back to cached payload.
+      }
       // Public profile data is stable-ish and not viewer-specific; allow CDN/browser caching.
       res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
       return { data: cached };
@@ -343,9 +361,10 @@ export class UsersController {
             bannerKey: string | null;
             bannerUpdatedAt: Date | null;
             pinnedPostId: string | null;
+            lastOnlineAt: Date | null;
           }>
         >`
-          SELECT "id", "username", "name", "bio", "premium", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId"
+          SELECT "id", "username", "name", "bio", "premium", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt"
           FROM "User"
           WHERE (
             (${isUuidOrCuid} = true AND "id" = ${raw})
@@ -384,6 +403,7 @@ export class UsersController {
       avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
       bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),
       pinnedPostId,
+      lastOnlineAt: user.lastOnlineAt ? user.lastOnlineAt.toISOString() : null,
     };
 
     // Cache for subsequent reads (both by username and by id).
