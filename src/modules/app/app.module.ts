@@ -25,6 +25,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
 import { FeedbackModule } from '../feedback/feedback.module';
 import { MessagesModule } from '../messages/messages.module';
+import { VerificationModule } from '../verification/verification.module';
+import { Websters1828Module } from '../websters1828/websters1828.module';
 
 @Module({
   imports: [
@@ -48,6 +50,7 @@ import { MessagesModule } from '../messages/messages.module';
     PrismaModule,
     AuthModule,
     UsersModule,
+    VerificationModule,
     AdminModule,
     UploadsModule,
     PostsModule,
@@ -60,6 +63,7 @@ import { MessagesModule } from '../messages/messages.module';
     LinkMetadataModule,
     FeedbackModule,
     MessagesModule,
+    Websters1828Module,
   ],
   controllers: [AppController],
   providers: [

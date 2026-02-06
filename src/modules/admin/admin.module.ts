@@ -10,15 +10,18 @@ import { AdminImageReviewService } from './admin-image-review.service';
 import { AdminSearchController } from './admin-search.controller';
 import { FeedbackModule } from '../feedback/feedback.module';
 import { AdminFeedbackController } from './admin-feedback.controller';
+import { AdminVerificationController } from './admin-verification.controller';
+import { VerificationModule } from '../verification/verification.module';
 
 @Module({
-  imports: [AuthModule, PrismaModule, FeedbackModule, PostsModule],
+  imports: [AuthModule, PrismaModule, FeedbackModule, PostsModule, VerificationModule],
   controllers: [
     AdminUsersController,
     AdminSiteConfigController,
     AdminImageReviewController,
     AdminSearchController,
     AdminFeedbackController,
+    AdminVerificationController,
   ],
   providers: [AdminGuard, AdminImageReviewService],
 })

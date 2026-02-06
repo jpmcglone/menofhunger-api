@@ -59,6 +59,13 @@ enum FeedbackStatus {
   resolved
 }
 
+enum VerificationRequestStatus {
+  pending
+  approved
+  rejected
+  cancelled
+}
+
 enum MessageConversationType {
   direct
   group
@@ -140,6 +147,8 @@ model User {
   pushSubscriptions PushSubscription[]
   userSearches     UserSearch[]
   feedbacks        Feedback[]
+  verificationRequests VerificationRequest[] @relation("VerificationRequest_user")
+  verificationRequestsReviewed VerificationRequest[] @relation("VerificationRequest_reviewedBy")
   messageParticipants MessageParticipant[] @relation("MessageParticipant_user")
   messagesSent        Message[] @relation("Message_sender")
   messageConversationsCreated MessageConversation[] @relation("MessageConversation_createdBy")
@@ -562,6 +571,34 @@ model Feedback {
   @@index([createdAt, id])
   @@index([status, createdAt])
   @@index([category, createdAt])
+}
+
+model VerificationRequest {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId String
+  user   User   @relation("VerificationRequest_user", fields: [userId], references: [id], onDelete: Cascade)
+
+  status VerificationRequestStatus @default(pending)
+
+  // Provider-agnostic fields (null until a provider is integrated).
+  provider String? @db.VarChar(50)
+  providerRequestId String? @db.VarChar(200)
+  metadata Json?
+
+  // Admin review fields.
+  reviewedAt DateTime?
+  reviewedByAdminId String?
+  reviewedByAdmin User? @relation("VerificationRequest_reviewedBy", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+  adminNote String? @db.Text
+  rejectionReason String? @db.Text
+
+  @@index([createdAt, id])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([provider, providerRequestId])
 }
 
 // Cached OpenGraph/link metadata for post previews (Microlink/Jina).
