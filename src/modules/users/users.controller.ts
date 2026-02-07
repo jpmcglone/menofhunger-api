@@ -4,10 +4,11 @@ import { z } from 'zod';
 import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthGuard } from '../auth/auth.guard';
+import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
 import { FollowsService } from '../follows/follows.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { CurrentUserId } from './users.decorator';
+import { CurrentUserId, OptionalCurrentUserId } from './users.decorator';
 import { validateUsername } from './users.utils';
 import { toUserDto } from './user.dto';
 import { toUserListDto } from '../../common/dto';
@@ -70,6 +71,20 @@ type PublicProfilePayload = {
   bannerUrl: string | null;
   pinnedPostId: string | null;
   lastOnlineAt: string | null;
+};
+
+type UserPreviewPayload = {
+  id: string;
+  username: string | null;
+  name: string | null;
+  bio: string | null;
+  premium: boolean;
+  verifiedStatus: string;
+  avatarUrl: string | null;
+  bannerUrl: string | null;
+  relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean };
+  followerCount: number | null;
+  followingCount: number | null;
 };
 
 @Controller('users')
@@ -303,6 +318,183 @@ export class UsersController {
       }
       throw err;
     }
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 300),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @UseGuards(OptionalAuthGuard)
+  @Get(':username/preview')
+  async userPreview(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('username') username: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const viewerUserId = userId ?? null;
+
+    // Fetch the same profile payload used by GET /users/:username, but do not set cache headers here
+    // (this endpoint is viewer-specific when authenticated).
+    const raw = (username ?? '').trim();
+    if (!raw) throw new NotFoundException('User not found');
+
+    const normalized = raw.toLowerCase();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw);
+    const isCuid = /^c[a-z0-9]{24}$/i.test(raw);
+    const isUuidOrCuid = isUuid || isCuid;
+
+    const cacheKey = isUuidOrCuid ? `id:${raw}` : `username:${normalized}`;
+    const cached = this.readPublicProfileCache(cacheKey);
+
+    let profile: PublicProfilePayload;
+    if (cached) {
+      profile = cached;
+      // Best-effort: refresh lastOnlineAt even when other fields are cached.
+      try {
+        const fresh = await this.prisma.user.findUnique({
+          where: { id: cached.id },
+          select: { lastOnlineAt: true },
+        });
+        const lastOnlineAt = fresh?.lastOnlineAt ? fresh.lastOnlineAt.toISOString() : null;
+        if (lastOnlineAt !== cached.lastOnlineAt) {
+          const next: PublicProfilePayload = { ...cached, lastOnlineAt };
+          this.writePublicProfileCache(cacheKey, next);
+          profile = next;
+        }
+      } catch {
+        // If lastOnlineAt refresh fails, fall back to cached payload.
+      }
+    } else {
+      const user =
+        (
+          await this.prisma.$queryRaw<
+            Array<{
+              id: string;
+              username: string | null;
+              name: string | null;
+              bio: string | null;
+              premium: boolean;
+              verifiedStatus: string;
+              avatarKey: string | null;
+              avatarUpdatedAt: Date | null;
+              bannerKey: string | null;
+              bannerUpdatedAt: Date | null;
+              pinnedPostId: string | null;
+              lastOnlineAt: Date | null;
+            }>
+          >`
+            SELECT "id", "username", "name", "bio", "premium", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt"
+            FROM "User"
+            WHERE (
+              (${isUuidOrCuid} = true AND "id" = ${raw})
+              OR
+              (${isUuidOrCuid} = false AND LOWER("username") = ${normalized})
+            )
+            AND "usernameIsSet" = true
+            LIMIT 1
+          `
+        )[0] ?? null;
+
+      if (!user) throw new NotFoundException('User not found');
+
+      // Safety: only-me posts should never be pinnable/show on profiles.
+      // If a user already pinned an only-me post (legacy bug), auto-unpin on read.
+      let pinnedPostId: string | null = user.pinnedPostId ?? null;
+      if (pinnedPostId) {
+        const pinned = await this.prisma.post.findFirst({
+          where: { id: pinnedPostId, userId: user.id, deletedAt: null },
+          select: { visibility: true },
+        });
+        if (!pinned || pinned.visibility === 'onlyMe') {
+          await this.prisma.user.update({ where: { id: user.id }, data: { pinnedPostId: null } });
+          pinnedPostId = null;
+        }
+      }
+
+      const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+      profile = {
+        id: user.id,
+        username: user.username,
+        name: user.name,
+        bio: user.bio,
+        premium: user.premium,
+        verifiedStatus: user.verifiedStatus,
+        avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
+        bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),
+        pinnedPostId,
+        lastOnlineAt: user.lastOnlineAt ? user.lastOnlineAt.toISOString() : null,
+      };
+
+      // Cache for subsequent reads (both by username and by id).
+      this.writePublicProfileCache(cacheKey, profile);
+      this.writePublicProfileCache(`id:${user.id}`, profile);
+      if (user.username) this.writePublicProfileCache(`username:${user.username.toLowerCase()}`, profile);
+    }
+
+    const rel = await this.followsService.batchRelationshipForUserIds({
+      viewerUserId,
+      userIds: [profile.id],
+    });
+
+    // Follow counts are subject to followVisibility rules, so compute them here.
+    // When the viewer cannot see follow info, return null counts.
+    const targetMeta = await this.prisma.user.findUnique({
+      where: { id: profile.id },
+      select: { id: true, followVisibility: true },
+    });
+    const viewerMeta = viewerUserId
+      ? await this.prisma.user.findUnique({
+          where: { id: viewerUserId },
+          select: { id: true, verifiedStatus: true, premium: true },
+        })
+      : null;
+
+    const canViewFollowCounts = (() => {
+      if (!targetMeta) return false;
+      if (viewerMeta && viewerMeta.id === targetMeta.id) return true;
+      const v = targetMeta.followVisibility;
+      if (v === 'all') return true;
+      if (v === 'none') return false;
+      if (v === 'verified') return Boolean(viewerMeta && viewerMeta.verifiedStatus && viewerMeta.verifiedStatus !== 'none');
+      if (v === 'premium') return Boolean(viewerMeta && viewerMeta.premium);
+      return false;
+    })();
+
+    const [followerCount, followingCount] = canViewFollowCounts
+      ? await Promise.all([
+          this.prisma.follow.count({ where: { followingId: profile.id, follower: { usernameIsSet: true } } }),
+          this.prisma.follow.count({ where: { followerId: profile.id, following: { usernameIsSet: true } } }),
+        ])
+      : [null, null];
+
+    const payload: UserPreviewPayload = {
+      id: profile.id,
+      username: profile.username,
+      name: profile.name,
+      bio: profile.bio,
+      premium: profile.premium,
+      verifiedStatus: profile.verifiedStatus,
+      avatarUrl: profile.avatarUrl,
+      bannerUrl: profile.bannerUrl,
+      relationship: {
+        viewerFollowsUser: rel.viewerFollows.has(profile.id),
+        userFollowsViewer: rel.followsViewer.has(profile.id),
+      },
+      followerCount,
+      followingCount,
+    };
+
+    // Preview includes viewer-specific relationship when authenticated.
+    // Allow longer caching for anonymous reads; authenticated must be private.
+    res.setHeader(
+      'Cache-Control',
+      viewerUserId ? 'private, max-age=60, stale-while-revalidate=120' : 'public, max-age=300, stale-while-revalidate=600',
+    );
+    res.setHeader('Vary', 'Cookie');
+
+    return { data: payload };
   }
 
   @Throttle({

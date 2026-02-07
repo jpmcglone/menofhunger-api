@@ -77,6 +77,20 @@ export type UserDto = {
   pinnedPostId: string | null;
 };
 
+export type UserPreviewDto = {
+  id: string;
+  username: string | null;
+  name: string | null;
+  bio: string | null;
+  premium: boolean;
+  verifiedStatus: string;
+  avatarUrl: string | null;
+  bannerUrl: string | null;
+  relationship: UserListRelationship;
+  followerCount: number | null;
+  followingCount: number | null;
+};
+
 export function toUserDto(user: User, publicAssetBaseUrl: string | null = null): UserDto {
   return {
     id: user.id,
