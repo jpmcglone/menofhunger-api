@@ -25,6 +25,7 @@ const profileSchema = z.object({
   name: z.string().trim().max(50).optional(),
   bio: z.string().trim().max(160).optional(),
   email: z.union([z.string().trim().email(), z.literal('')]).optional(),
+  interests: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
 });
 
 const settingsSchema = z.object({
@@ -506,18 +507,32 @@ export class UsersController {
     const parsed = profileSchema.parse(body);
 
     try {
+      const update: Prisma.UserUpdateInput = {
+        name: parsed.name === undefined ? undefined : (parsed.name || null),
+        bio: parsed.bio === undefined ? undefined : (parsed.bio || null),
+        email:
+          parsed.email === undefined
+            ? undefined
+            : parsed.email.trim()
+              ? parsed.email.trim().toLowerCase()
+              : null,
+      };
+
+      if (parsed.interests !== undefined) {
+        const cleaned = Array.from(
+          new Set(
+            parsed.interests
+              .map((s) => s.trim())
+              .filter(Boolean),
+          ),
+        ).slice(0, 30);
+        if (cleaned.length < 1) throw new BadRequestException('Select at least one interest.');
+        update.interests = cleaned;
+      }
+
       const updated = await this.prisma.user.update({
         where: { id: userId },
-        data: {
-          name: parsed.name === undefined ? undefined : (parsed.name || null),
-          bio: parsed.bio === undefined ? undefined : (parsed.bio || null),
-          email:
-            parsed.email === undefined
-              ? undefined
-              : parsed.email.trim()
-                ? parsed.email.trim().toLowerCase()
-                : null,
-        },
+        data: update,
       });
 
       this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });

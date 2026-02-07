@@ -21,7 +21,7 @@ const listSchema = z.object({
   authorIds: z.string().optional(),
   // "trending" is the UI-friendly name for our half-life boost scoring feed.
   // Keep "popular" for backwards compatibility / internal naming.
-  sort: z.enum(['new', 'popular', 'trending']).optional(),
+  sort: z.enum(['new', 'popular', 'trending', 'featured']).optional(),
 });
 
 const userListSchema = listSchema.extend({
@@ -131,7 +131,16 @@ export class PostsController {
     const sort = parsed.sort ?? 'new';
     const sortKind = sort === 'trending' ? 'popular' : sort;
     const result =
-      sortKind === 'popular'
+      sortKind === 'featured'
+        ? await this.posts.listFeaturedFeed({
+            viewerUserId,
+            limit,
+            cursor,
+            visibility: parsed.visibility ?? 'all',
+            followingOnly: parsed.followingOnly ?? false,
+            authorUserIds: authorUserIds.length ? authorUserIds : null,
+          })
+        : sortKind === 'popular'
         ? await this.posts.listPopularFeed({
             viewerUserId,
             limit,

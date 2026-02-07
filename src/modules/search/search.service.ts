@@ -6,6 +6,7 @@ import { FollowsService } from '../follows/follows.service';
 import { PostsService } from '../posts/posts.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
+import { queryToTopicValues } from '../../common/topics/topic-utils';
 
 /**
  * Search scoring (higher = better). Used for ranking only; tie-breaks: relationship (users), createdAt (posts).
@@ -37,6 +38,7 @@ const USER_SCORE = {
 const POST_SCORE = {
   bodyPhrase: 90,
   bodyAllWords: 75,
+  topicMatch: 70,
   authorExactUsername: 65,
   authorExactName: 60,
   bodyAnyWord: 45,
@@ -316,6 +318,7 @@ export class SearchService {
     const cursor = params.cursor ?? null;
     const words = queryToWords(q);
     const qLower = q.toLowerCase();
+    const topicValues = queryToTopicValues(q);
 
     const viewer = await this.viewerById(params.viewerUserId ?? null);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
@@ -346,6 +349,11 @@ export class SearchService {
         ? Prisma.sql`AND (p."visibility" IN (${Prisma.join(allowedSql)}) OR (p."userId" = ${viewer.id} AND p."visibility" = 'onlyMe'))`
         : Prisma.sql`AND p."visibility" = 'public'`;
 
+      const topicsSql =
+        topicValues.length > 0
+          ? Prisma.sql`OR (p."topics" && ARRAY[${Prisma.join(topicValues.map((t) => Prisma.sql`${t}`))}]::text[])`
+          : Prisma.sql``;
+
       const ids = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         WITH q AS (SELECT websearch_to_tsquery('english', ${q}) AS tsq)
         SELECT p."id" as "id"
@@ -364,6 +372,7 @@ export class SearchService {
                 COALESCE(u."username", '') || ' ' || COALESCE(u."name", '') || ' ' || COALESCE(u."bio", '')
               ) @@ q.tsq
             )
+            ${topicsSql}
           )
         ORDER BY p."createdAt" DESC, p."id" DESC
         LIMIT ${fetchSize}
@@ -382,8 +391,14 @@ export class SearchService {
         : [];
     } else {
       const matchWhere = this.postSearchMatchWhere(q, words);
+      const topicWhere: Prisma.PostWhereInput =
+        topicValues.length > 0 ? ({ topics: { hasSome: topicValues } } as Prisma.PostWhereInput) : {};
       const baseWhere: Prisma.PostWhereInput = {
-        AND: [{ deletedAt: null }, visibilityWhere, matchWhere],
+        AND: [
+          { deletedAt: null },
+          visibilityWhere,
+          topicValues.length > 0 ? ({ OR: [matchWhere, topicWhere] } as Prisma.PostWhereInput) : matchWhere,
+        ],
       };
 
       raw = await this.prisma.post.findMany({
@@ -409,6 +424,12 @@ export class SearchService {
       let score = 0;
       if (body.includes(qLower)) score = Math.max(score, POST_SCORE.bodyPhrase);
       if (words.length > 0 && words.every((w) => body.includes(w))) score = Math.max(score, POST_SCORE.bodyAllWords);
+      if (topicValues.length > 0) {
+        const topics = Array.isArray((p as any).topics) ? ((p as any).topics as string[]) : [];
+        if (topics.some((t) => topicValues.includes(String(t)))) {
+          score = Math.max(score, POST_SCORE.topicMatch);
+        }
+      }
       if (un === qLower) score = Math.max(score, POST_SCORE.authorExactUsername);
       if (nm === qLower) score = Math.max(score, POST_SCORE.authorExactName);
       if (words.some((w) => body.includes(w))) score = Math.max(score, POST_SCORE.bodyAnyWord);

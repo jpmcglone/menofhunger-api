@@ -237,6 +237,8 @@ model Post {
   createdAt  DateTime       @default(now())
   deletedAt  DateTime?
   body       String
+  /** Inferred topics (from allowlist) used for search/discovery. */
+  topics     String[]       @default([])
   visibility PostVisibility @default(public)
   boostCount Int            @default(0)
   bookmarkCount Int         @default(0)
@@ -271,6 +273,7 @@ model Post {
   @@index([parentId, createdAt])
   @@index([rootId])
   @@index([rootId, createdAt])
+  @@index([topics], type: Gin)
   // Feed/trending hot paths (parentId IS NULL + deletedAt IS NULL) benefit from composite indexes matching sort+filters.
   @@index([parentId, deletedAt, createdAt(sort: Desc), id(sort: Desc)])
   @@index([parentId, deletedAt, boostCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])

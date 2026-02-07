@@ -6,6 +6,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
 import { parseMentionsFromBody as parseMentionsFromBodyText } from '../../common/mentions/mention-regex';
+import { inferTopicsFromText } from '../../common/topics/topic-utils';
 
 export type PostCounts = {
   all: number;
@@ -72,6 +73,14 @@ export class PostsService {
   private static pinScorePremium = 0.5;
   private static pinScoreVerified = 0.3;
   private static pinScoreBase = 0.15;
+
+  // "Featured" is an automated, stable subset of trending:
+  // - Top-level posts only
+  // - Shorter lookback window (more “fresh”)
+  // - Light author diversity (avoid 5 posts in a row from same author)
+  private static featuredLookbackDays = 14;
+  private static featuredMaxPerAuthor = 1;
+  private static featuredScanTakeMax = 500;
 
   private encodePopularCursor(cursor: { asOf: string; score: number; createdAt: string; id: string }) {
     return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
@@ -630,6 +639,134 @@ export class PostsService {
     return { posts: ordered, nextCursor, scoreByPostId };
   }
 
+  private async listFeaturedFeedFromSnapshot(params: {
+    viewerUserId: string | null;
+    limit: number;
+    decodedCursor: { asOf: string; score: number; createdAt: string; id: string } | null;
+    visibility: 'all' | PostVisibility;
+    allowed: PostVisibility[];
+    authorUserIds: string[] | null;
+  }): Promise<PopularFeedResult | null> {
+    const { viewerUserId, limit, decodedCursor, visibility, allowed, authorUserIds } = params;
+
+    const asOf = decodedCursor ? new Date(decodedCursor.asOf) : null;
+    const snapshotAsOf =
+      asOf ??
+      (await this.prisma.postPopularScoreSnapshot.findFirst({
+        orderBy: [{ asOf: 'desc' }],
+        select: { asOf: true },
+      }))?.asOf ??
+      null;
+
+    if (!snapshotAsOf) return null;
+
+    const baseVisibilityWhere: Prisma.PostPopularScoreSnapshotWhereInput =
+      visibility === 'all'
+        ? ({ visibility: { in: allowed } } as Prisma.PostPopularScoreSnapshotWhereInput)
+        : visibility === 'public'
+          ? ({ visibility: 'public' } as Prisma.PostPopularScoreSnapshotWhereInput)
+          : ({ visibility } as Prisma.PostPopularScoreSnapshotWhereInput);
+
+    // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
+    // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
+    const visibilityWhere: Prisma.PostPopularScoreSnapshotWhereInput =
+      viewerUserId && visibility === 'all'
+        ? ({
+            OR: [
+              baseVisibilityWhere,
+              { userId: viewerUserId, visibility: { not: 'onlyMe' } },
+            ],
+          } as Prisma.PostPopularScoreSnapshotWhereInput)
+        : baseVisibilityWhere;
+
+    const cursorCreatedAt = decodedCursor ? new Date(decodedCursor.createdAt) : null;
+    const cursorScore = decodedCursor?.score ?? null;
+    const cursorId = decodedCursor?.id ?? null;
+
+    const cursorWhere: Prisma.PostPopularScoreSnapshotWhereInput =
+      decodedCursor && cursorCreatedAt && cursorScore != null && cursorId
+        ? ({
+            OR: [
+              { score: { lt: cursorScore } },
+              {
+                AND: [
+                  { score: cursorScore },
+                  {
+                    OR: [
+                      { createdAt: { lt: cursorCreatedAt } },
+                      { AND: [{ createdAt: cursorCreatedAt }, { postId: { lt: cursorId } }] },
+                    ],
+                  },
+                ],
+              },
+            ],
+          } as Prisma.PostPopularScoreSnapshotWhereInput)
+        : {};
+
+    const lookbackMs = PostsService.featuredLookbackDays * 24 * 60 * 60 * 1000;
+    const minCreatedAt = new Date(snapshotAsOf.getTime() - lookbackMs);
+
+    const scanTake = Math.min(PostsService.featuredScanTakeMax, Math.max(limit * 40, limit + 1));
+
+    const rows = await this.prisma.postPopularScoreSnapshot.findMany({
+      where: {
+        asOf: snapshotAsOf,
+        parentId: null,
+        createdAt: { gte: minCreatedAt },
+        ...(authorUserIds?.length ? ({ userId: { in: authorUserIds } } as Prisma.PostPopularScoreSnapshotWhereInput) : {}),
+        ...visibilityWhere,
+        ...cursorWhere,
+      },
+      orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
+      take: scanTake,
+      select: { postId: true, createdAt: true, score: true, userId: true },
+    });
+
+    // If caller asked for a specific asOf (cursor pagination) but we no longer retain that snapshot, return null and fallback.
+    if (decodedCursor && rows.length === 0) return null;
+
+    const picked: Array<{ postId: string; createdAt: Date; score: number; userId: string }> = [];
+    const perAuthor = new Map<string, number>();
+
+    for (const r of rows) {
+      if (picked.length >= limit + 1) break;
+      const n = perAuthor.get(r.userId) ?? 0;
+      if (n >= PostsService.featuredMaxPerAuthor) continue;
+      perAuthor.set(r.userId, n + 1);
+      picked.push(r);
+    }
+
+    const sliceRows = picked.slice(0, limit);
+    const ids = sliceRows.map((r) => r.postId);
+    const boundaryRow = sliceRows.length > 0 ? sliceRows[sliceRows.length - 1] : null;
+
+    const posts = ids.length
+      ? await this.prisma.post.findMany({
+          where: { id: { in: ids }, ...this.notDeletedWhere() },
+          include: {
+            user: true,
+            media: { orderBy: { position: 'asc' } },
+            mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+          },
+        })
+      : [];
+    const byId = new Map(posts.map((p) => [p.id, p] as const));
+    const ordered = ids.map((id) => byId.get(id)).filter((p): p is (typeof posts)[number] => Boolean(p));
+
+    const nextCursor =
+      picked.length > limit && boundaryRow
+        ? this.encodePopularCursor({
+            asOf: snapshotAsOf.toISOString(),
+            score: boundaryRow.score,
+            createdAt: boundaryRow.createdAt.toISOString(),
+            id: boundaryRow.postId,
+          })
+        : null;
+
+    const scoreByPostId = new Map<string, number>(sliceRows.map((r) => [r.postId, r.score]));
+    return { posts: ordered, nextCursor, scoreByPostId };
+  }
+
   /**
    * Trending feed: same half-life boost + bookmark scoring everywhere.
    * Scope: site-wide (authorUserIds null), or only from authors [viewer + followed] (home "following"), or one user (profile).
@@ -989,6 +1126,77 @@ export class PostsService {
 
     const scoreByPostId = new Map<string, number>(sliceRows.map((r) => [r.id, r.score]));
     return { posts: ordered, nextCursor, scoreByPostId };
+  }
+
+  /**
+   * Featured feed: automated subset of trending (popular), tuned for Explore.
+   * Uses snapshot table when available; falls back to the trending feed otherwise.
+   */
+  async listFeaturedFeed(params: {
+    viewerUserId: string | null;
+    limit: number;
+    cursor: string | null;
+    visibility: 'all' | PostVisibility;
+    followingOnly?: boolean;
+    authorUserIds?: string[] | null;
+  }): Promise<PopularFeedResult> {
+    const { viewerUserId, limit, cursor, visibility, followingOnly = false } = params;
+    const requestedAuthorUserIds =
+      (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
+
+    const viewer = await this.viewerById(viewerUserId);
+    const allowed = this.allowedVisibilitiesForViewer(viewer);
+
+    if (visibility === 'verifiedOnly') {
+      if (!viewer || viewer.verifiedStatus === 'none') throw new ForbiddenException('Verify to view verified-only posts.');
+    }
+    if (visibility === 'premiumOnly') {
+      if (!viewer || !viewer.premium) throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+    }
+
+    if (followingOnly && !viewerUserId) {
+      return { posts: [], nextCursor: null, scoreByPostId: new Map() };
+    }
+
+    const followingAuthorIds: string[] | null =
+      followingOnly && viewerUserId ? await this.getAuthorIdsForFollowingFilter(viewerUserId) : null;
+
+    const authorUserIds: string[] | null = requestedAuthorUserIds?.length
+      ? followingAuthorIds?.length
+        ? followingAuthorIds.filter((id) => requestedAuthorUserIds.includes(id))
+        : requestedAuthorUserIds
+      : followingAuthorIds;
+
+    if (requestedAuthorUserIds && requestedAuthorUserIds.length === 0) {
+      return { posts: [], nextCursor: null, scoreByPostId: new Map() };
+    }
+    if (authorUserIds && authorUserIds.length === 0) {
+      // Intersection produced empty set.
+      return { posts: [], nextCursor: null, scoreByPostId: new Map() };
+    }
+
+    const decoded = this.decodePopularCursor(cursor);
+
+    const snapshotResult = await this.listFeaturedFeedFromSnapshot({
+      viewerUserId,
+      limit,
+      decodedCursor: decoded,
+      visibility,
+      allowed,
+      authorUserIds,
+    });
+    if (snapshotResult) return snapshotResult;
+
+    // Fallback: if snapshots aren't available, return the trending feed.
+    // (Avoid custom cursor semantics when the snapshot table isn't present yet.)
+    return await this.listPopularFeed({
+      viewerUserId,
+      limit,
+      cursor,
+      visibility,
+      followingOnly,
+      authorUserIds,
+    });
   }
 
   async listForUsername(params: {
@@ -1803,9 +2011,11 @@ export class PostsService {
     const mentionUserIds = [...new Set([...threadParticipantIds, ...resolvedFromUsernames])];
 
     const post = await this.prisma.$transaction(async (tx) => {
+      const topics = inferTopicsFromText(body);
       const created = await tx.post.create({
         data: {
           body,
+          topics,
           visibility,
           userId,
           parentId: parentId ?? undefined,

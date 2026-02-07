@@ -46,6 +46,7 @@ export type PostDto = {
   body: string;
   deletedAt: string | null;
   visibility: PostVisibility;
+  topics: string[];
   boostCount: number;
   bookmarkCount: number;
   commentCount: number;
@@ -168,6 +169,7 @@ export function toPostDto(
     body: isPostDeleted ? '' : post.body,
     deletedAt: postDeletedAt,
     visibility: post.visibility,
+    topics: Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [],
     boostCount: post.boostCount,
     bookmarkCount: post.bookmarkCount ?? 0,
     commentCount: post.commentCount ?? 0,
