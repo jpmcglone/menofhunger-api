@@ -38,35 +38,6 @@ const createUploadMediaItemSchema = z.object({
   height: z.coerce.number().int().min(1).max(20000).optional(),
   durationSeconds: z.coerce.number().int().min(0).max(3600).optional(),
   alt: z.string().trim().max(500).nullish(),
-}).superRefine((val, ctx) => {
-  if (val.kind !== 'video') return;
-
-  const width = typeof val.width === 'number' ? val.width : null;
-  const height = typeof val.height === 'number' ? val.height : null;
-  const durationSeconds = typeof val.durationSeconds === 'number' ? val.durationSeconds : null;
-
-  if (width == null || height == null || durationSeconds == null) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Video media must include width, height, and durationSeconds.',
-      path: ['width'],
-    });
-    return;
-  }
-  if (durationSeconds > 5 * 60) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Video must be 5 minutes or shorter.',
-      path: ['durationSeconds'],
-    });
-  }
-  if (width > 2560 || height > 1440) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Video must be 1440p or smaller.',
-      path: ['width'],
-    });
-  }
 });
 
 const createMediaItemSchema = z.discriminatedUnion('source', [
@@ -81,6 +52,8 @@ const createMediaItemSchema = z.discriminatedUnion('source', [
     alt: z.string().trim().max(500).nullish(),
   }),
 ]);
+
+type CreateMediaItem = z.infer<typeof createMediaItemSchema>;
 
 const createSchema = z
   .object({
@@ -99,6 +72,28 @@ const createSchema = z
         message: 'Post must include text or media.',
         path: ['body'],
       });
+    }
+    // Video uploads: require dimensions and duration, enforce 1440p and 5 min
+    for (let i = 0; i < (val.media ?? []).length; i++) {
+      const item = val.media![i];
+      if (item.source !== 'upload' || item.kind !== 'video') continue;
+      const width = typeof item.width === 'number' ? item.width : null;
+      const height = typeof item.height === 'number' ? item.height : null;
+      const durationSeconds = typeof item.durationSeconds === 'number' ? item.durationSeconds : null;
+      if (width == null || height == null || durationSeconds == null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Video media must include width, height, and durationSeconds.',
+          path: ['media', i, 'width'],
+        });
+        continue;
+      }
+      if (durationSeconds > 5 * 60) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Video must be 5 minutes or shorter.', path: ['media', i, 'durationSeconds'] });
+      }
+      if (width > 2560 || height > 1440) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Video must be 1440p or smaller.', path: ['media', i, 'width'] });
+      }
     }
   });
 
@@ -513,13 +508,14 @@ export class PostsController {
   @Post()
   async create(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = createSchema.parse(body);
+    const media = (parsed.media ?? null) as CreateMediaItem[] | null;
     const created = await this.posts.createPost({
       userId,
       body: (parsed.body ?? '').trim(),
       visibility: parsed.visibility ?? 'public',
       parentId: parsed.parent_id ?? null,
       mentions: parsed.mentions ?? null,
-      media: parsed.media ?? null,
+      media,
     });
 
     const viewer = await this.posts.viewerContext(userId);

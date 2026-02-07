@@ -124,9 +124,10 @@ export class SearchService {
 
     let raw: RawUser[] = [];
 
-    // FTS has better scaling than ILIKE/contains, but it changes semantics (especially for very short queries).
-    // Keep substring matching for short queries; switch to FTS for longer queries.
-    const useFts = q.length >= 3;
+    // FTS has better scaling than ILIKE/contains, but it changes semantics (especially for prefixes).
+    // Keep substring/prefix matching for single-token queries (mention/autocomplete UX),
+    // switch to FTS only for multi-word queries.
+    const useFts = q.length >= 3 && words.length >= 2;
 
     if (useFts) {
       const cursorRow =

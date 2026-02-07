@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
+import { parseMentionsFromBody as parseMentionsFromBodyText } from '../../common/mentions/mention-regex';
 
 export type PostCounts = {
   all: number;
@@ -1542,10 +1543,9 @@ export class PostsService {
     return ids;
   }
 
-  /** Parse @username tokens from body (word chars, max 120). */
+  /** Parse @username tokens from body: letter then 0–14 [A-Za-z0-9_] (1–15 chars), not mid-email. */
   private parseMentionsFromBody(body: string): string[] {
-    const matches = body.matchAll(/@([a-zA-Z0-9_]{1,120})/g);
-    return [...new Set([...matches].map((m) => m[1]))];
+    return parseMentionsFromBodyText(body);
   }
 
   /** Thread participant role for reply notifications. */
@@ -1789,9 +1789,8 @@ export class PostsService {
     const allUsernames = [...new Set([...clientUsernames, ...fromBody])];
     const resolvedFromUsernames = await this.resolveMentionUsernames(allUsernames);
 
-    // All mention IDs for PostMention records: thread participants + explicit mentions
-    const allMentionIds = [...new Set([...threadParticipantIds, ...resolvedFromUsernames])].filter((uid) => uid !== userId);
-    const mentionUserIds = allMentionIds;
+    // All mention IDs for PostMention records (include self so @yourname renders as a link)
+    const mentionUserIds = [...new Set([...threadParticipantIds, ...resolvedFromUsernames])];
 
     const post = await this.prisma.$transaction(async (tx) => {
       const created = await tx.post.create({
