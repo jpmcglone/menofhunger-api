@@ -52,6 +52,7 @@ export type SearchUserRow = {
   username: string | null;
   name: string | null;
   premium: boolean;
+  premiumPlus: boolean;
   verifiedStatus: VerifiedStatus;
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
@@ -117,6 +118,7 @@ export class SearchService {
       name: string | null;
       bio: string | null;
       premium: boolean;
+      premiumPlus: boolean;
       verifiedStatus: VerifiedStatus;
       avatarKey: string | null;
       avatarUpdatedAt: Date | null;
@@ -144,6 +146,7 @@ export class SearchService {
           u."name",
           u."bio",
           u."premium",
+          u."premiumPlus",
           u."verifiedStatus",
           u."avatarKey",
           u."avatarUpdatedAt"
@@ -217,6 +220,7 @@ export class SearchService {
           name: true,
           bio: true,
           premium: true,
+          premiumPlus: true,
           verifiedStatus: true,
           avatarKey: true,
           avatarUpdatedAt: true,
@@ -274,6 +278,7 @@ export class SearchService {
       username: u.username,
       name: u.name,
       premium: u.premium,
+      premiumPlus: u.premiumPlus,
       verifiedStatus: u.verifiedStatus,
       avatarKey: u.avatarKey,
       avatarUpdatedAt: u.avatarUpdatedAt,
@@ -330,7 +335,7 @@ export class SearchService {
       include: {
         user: true;
         media: true;
-        mentions: { include: { user: { select: { id: true; username: true; verifiedStatus: true; premium: true } } } };
+        mentions: { include: { user: { select: { id: true; username: true; verifiedStatus: true; premium: true; premiumPlus: true } } } };
       };
     }>;
     let raw: SearchPostRow[] = [];
@@ -371,7 +376,7 @@ export class SearchService {
             include: {
               user: true,
               media: { orderBy: { position: 'asc' } },
-              mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+              mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true } } } },
             },
           })
         : [];
@@ -386,7 +391,7 @@ export class SearchService {
         include: {
           user: true,
           media: { orderBy: { position: 'asc' } },
-          mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+          mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true } } } },
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: fetchSize,

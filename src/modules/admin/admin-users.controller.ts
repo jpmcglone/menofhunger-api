@@ -17,6 +17,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { toUserDto } from '../../common/dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { validateUsername } from '../users/users.utils';
+import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 import { AdminGuard } from './admin.guard';
 
 const searchSchema = z.object({
@@ -35,6 +36,7 @@ const updateUserSchema = z.object({
   name: z.string().trim().max(50).nullable().optional(),
   bio: z.string().trim().max(160).nullable().optional(),
   premium: z.boolean().optional(),
+  premiumPlus: z.boolean().optional(),
   verifiedStatus: z.enum(['none', 'identity', 'manual']).optional(),
 });
 
@@ -44,6 +46,7 @@ export class AdminUsersController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
+    private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
   ) {}
 
   @Get('search')
@@ -111,6 +114,12 @@ export class AdminUsersController {
   async updateUser(@Param('id') id: string, @Body() body: unknown) {
     const parsed = updateUserSchema.parse(body);
 
+    const current = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, username: true, verifiedStatus: true },
+    });
+    if (!current) throw new NotFoundException('User not found.');
+
     const data: Prisma.UserUpdateInput = {};
     const now = new Date();
 
@@ -142,9 +151,32 @@ export class AdminUsersController {
       data.bio = parsed.bio === null ? null : (parsed.bio || null);
     }
 
+    const isSettingPremium = parsed.premium !== undefined || parsed.premiumPlus !== undefined;
+
+    // When setting premium/premiumPlus, enforce verified prerequisite.
+    if (isSettingPremium) {
+      const verifiedNow =
+        parsed.verifiedStatus !== undefined ? parsed.verifiedStatus !== 'none' : current.verifiedStatus !== 'none';
+
+      const wantsPremium = parsed.premium === true || parsed.premiumPlus === true;
+      if (wantsPremium && !verifiedNow) {
+        throw new BadRequestException('User must be verified before enabling Premium or Premium+.');
+      }
+    }
+
     if (parsed.premium !== undefined) {
       data.premium = parsed.premium;
     }
+
+    if (parsed.premiumPlus !== undefined) {
+      data.premiumPlus = parsed.premiumPlus;
+    }
+
+    // Enforce invariants:
+    // - premiumPlus implies premium
+    // - disabling premium disables premiumPlus
+    if (data.premiumPlus === true) data.premium = true;
+    if (data.premium === false) data.premiumPlus = false;
 
     if (parsed.verifiedStatus !== undefined) {
       if (parsed.verifiedStatus === 'none') {
@@ -163,6 +195,14 @@ export class AdminUsersController {
         where: { id },
         data,
       });
+
+      // Invalidate public profile caches (profile + preview) so tier changes reflect immediately.
+      try {
+        this.publicProfileCache.invalidateForUser({ id: current.id, username: current.username ?? null });
+        this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+      } catch {
+        // Best-effort cache invalidation; never fail admin updates.
+      }
 
       return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
     } catch (err: unknown) {

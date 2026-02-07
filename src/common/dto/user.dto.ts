@@ -13,6 +13,7 @@ export type UserListRow = {
   username: string | null;
   name: string | null;
   premium: boolean;
+  premiumPlus: boolean;
   verifiedStatus: string;
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
@@ -25,6 +26,7 @@ export type UserListDto = {
   username: string | null;
   name: string | null;
   premium: boolean;
+  premiumPlus: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
   relationship?: UserListRelationship;
@@ -41,6 +43,7 @@ export function toUserListDto(
     username: row.username,
     name: row.name,
     premium: row.premium,
+    premiumPlus: row.premiumPlus,
     verifiedStatus: row.verifiedStatus,
     avatarUrl: publicAssetUrl({
       publicBaseUrl,
@@ -68,6 +71,7 @@ export type UserDto = {
   menOnlyConfirmed: boolean;
   siteAdmin: boolean;
   premium: boolean;
+  premiumPlus: boolean;
   verifiedStatus: VerifiedStatus;
   verifiedAt: string | null;
   unverifiedAt: string | null;
@@ -83,6 +87,7 @@ export type UserPreviewDto = {
   name: string | null;
   bio: string | null;
   premium: boolean;
+  premiumPlus: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
   bannerUrl: string | null;
@@ -106,6 +111,7 @@ export function toUserDto(user: User, publicAssetBaseUrl: string | null = null):
     menOnlyConfirmed: Boolean(user.menOnlyConfirmed),
     siteAdmin: user.siteAdmin,
     premium: user.premium,
+    premiumPlus: user.premiumPlus,
     verifiedStatus: user.verifiedStatus,
     verifiedAt: user.verifiedAt ? user.verifiedAt.toISOString() : null,
     unverifiedAt: user.unverifiedAt ? user.unverifiedAt.toISOString() : null,

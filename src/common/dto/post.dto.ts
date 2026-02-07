@@ -9,6 +9,7 @@ export type PostAuthorDto = {
   username: string | null;
   name: string | null;
   premium: boolean;
+  premiumPlus: boolean;
   verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
 };
@@ -36,6 +37,7 @@ export type PostMentionDto = {
   username: string;
   verifiedStatus?: VerifiedStatus;
   premium?: boolean;
+  premiumPlus?: boolean;
 };
 
 export type PostDto = {
@@ -66,7 +68,7 @@ export type PostDto = {
 
 /** Mention row with user included (from Prisma include). */
 export type PostMentionWithUser = {
-  user: { id: string; username: string | null; verifiedStatus?: VerifiedStatus; premium?: boolean };
+  user: { id: string; username: string | null; verifiedStatus?: VerifiedStatus; premium?: boolean; premiumPlus?: boolean };
 };
 
 /** Post with relations included for DTO mapping. Post has bookmarkCount, commentCount, parentId from schema. */
@@ -154,6 +156,7 @@ export function toPostDto(
             username: m.user.username,
             verifiedStatus: m.user.verifiedStatus ?? undefined,
             premium: m.user.premium ?? undefined,
+            premiumPlus: m.user.premiumPlus ?? undefined,
           }
         : null,
     )
@@ -190,6 +193,7 @@ export function toPostDto(
       username: post.user.username,
       name: post.user.name,
       premium: post.user.premium,
+      premiumPlus: post.user.premiumPlus,
       verifiedStatus: post.user.verifiedStatus,
       avatarUrl: publicAssetUrl({
         publicBaseUrl: publicAssetBaseUrl,

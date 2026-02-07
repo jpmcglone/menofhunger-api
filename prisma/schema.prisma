@@ -132,6 +132,8 @@ model User {
   siteAdmin Boolean @default(false)
   // Premium flag (paid product access; used for visibility gating).
   premium Boolean @default(false)
+  // Premium+ (superset of premium; special supporters tier).
+  premiumPlus Boolean @default(false)
   // Verified badge (more roles/permissions later).
   verifiedStatus VerifiedStatus @default(none)
   verifiedAt DateTime?

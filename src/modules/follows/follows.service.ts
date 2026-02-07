@@ -56,6 +56,7 @@ export class FollowsService {
       username: string | null;
       name: string | null;
       premium: boolean;
+      premiumPlus: boolean;
       verifiedStatus: string;
       avatarKey: string | null;
       avatarUpdatedAt: Date | null;
@@ -122,6 +123,7 @@ export class FollowsService {
               u."username",
               u."name",
               u."premium",
+              u."premiumPlus",
               u."verifiedStatus",
               u."avatarKey",
               u."avatarUpdatedAt",
@@ -386,6 +388,7 @@ export class FollowsService {
             username: true,
             name: true,
             premium: true,
+            premiumPlus: true,
             verifiedStatus: true,
             avatarKey: true,
             avatarUpdatedAt: true,
@@ -448,6 +451,7 @@ export class FollowsService {
             username: true,
             name: true,
             premium: true,
+            premiumPlus: true,
             verifiedStatus: true,
             avatarKey: true,
             avatarUpdatedAt: true,
@@ -495,6 +499,7 @@ export class FollowsService {
         username: true,
         name: true,
         premium: true,
+        premiumPlus: true,
         verifiedStatus: true,
         avatarKey: true,
         avatarUpdatedAt: true,

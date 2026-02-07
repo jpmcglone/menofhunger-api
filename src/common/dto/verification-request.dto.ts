@@ -21,6 +21,7 @@ export type VerificationRequestAdminUserSummaryDto = {
   name: string | null;
   siteAdmin: boolean;
   premium: boolean;
+  premiumPlus: boolean;
   verifiedStatus: VerifiedStatus;
   verifiedAt: string | null;
   unverifiedAt: string | null;
@@ -56,6 +57,7 @@ function toAdminUserSummaryDto(user: User): VerificationRequestAdminUserSummaryD
     name: user.name ?? null,
     siteAdmin: Boolean(user.siteAdmin),
     premium: Boolean(user.premium),
+    premiumPlus: Boolean(user.premiumPlus),
     verifiedStatus: user.verifiedStatus,
     verifiedAt: user.verifiedAt ? user.verifiedAt.toISOString() : null,
     unverifiedAt: user.unverifiedAt ? user.unverifiedAt.toISOString() : null,

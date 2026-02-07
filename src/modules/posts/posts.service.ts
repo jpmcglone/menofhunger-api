@@ -1608,6 +1608,13 @@ export class PostsService {
       select: { verifiedStatus: true, premium: true },
     });
     if (!user) throw new NotFoundException('User not found.');
+    const viewerIsVerified = Boolean(user.verifiedStatus && user.verifiedStatus !== 'none');
+
+    // Product rule: unverified users cannot create new public feed posts.
+    // (UI already hides this, but enforce on the API too.)
+    if (!viewerIsVerified && !parentId && requestedVisibility === 'public') {
+      throw new ForbiddenException('Verify your account to create public posts.');
+    }
     // Creation is gated by current tier: downgraded users can only create within their tier.
     const allowedForCreation = this.allowedVisibilitiesForViewer(user);
     if (requestedVisibility !== 'onlyMe' && !allowedForCreation.includes(requestedVisibility)) {
@@ -1630,6 +1637,9 @@ export class PostsService {
       parentAuthorUserId = parent.userId;
       if (parent.visibility === 'onlyMe') {
         throw new ForbiddenException('Comments are not allowed on only-me posts.');
+      }
+      if (!viewerIsVerified && parent.visibility === 'public') {
+        throw new ForbiddenException('Verify your account to reply publicly.');
       }
       const viewer = await this.viewerById(userId);
       const allowed = this.allowedVisibilitiesForViewer(viewer);
