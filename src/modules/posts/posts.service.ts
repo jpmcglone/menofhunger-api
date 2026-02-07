@@ -713,6 +713,8 @@ export class PostsService {
         asOf: snapshotAsOf,
         parentId: null,
         createdAt: { gte: minCreatedAt },
+        // Featured on Explore: never show the viewer their own posts.
+        ...(viewerUserId ? ({ userId: { not: viewerUserId } } as Prisma.PostPopularScoreSnapshotWhereInput) : {}),
         ...(authorUserIds?.length ? ({ userId: { in: authorUserIds } } as Prisma.PostPopularScoreSnapshotWhereInput) : {}),
         ...visibilityWhere,
         ...cursorWhere,
@@ -1189,14 +1191,37 @@ export class PostsService {
 
     // Fallback: if snapshots aren't available, return the trending feed.
     // (Avoid custom cursor semantics when the snapshot table isn't present yet.)
-    return await this.listPopularFeed({
+    const base = await this.listPopularFeed({
       viewerUserId,
-      limit,
+      // Fetch extras so we can enforce featured rules (self-filter + top-level + light diversity).
+      // Keep bounded: controller caps to 50 anyway; this is mainly for fresh/dev envs without snapshots.
+      limit: Math.min(50, Math.max(limit * 12, limit)),
       cursor,
       visibility,
       followingOnly,
       authorUserIds,
     });
+
+    const picked: FeedPost[] = [];
+    const perAuthor = new Map<string, number>();
+
+    for (const p of base.posts) {
+      if (picked.length >= limit) break;
+      if (p.parentId) continue; // featured: top-level only
+      if (viewerUserId && p.userId === viewerUserId) continue; // never show viewer their own posts
+      const n = perAuthor.get(p.userId) ?? 0;
+      if (n >= PostsService.featuredMaxPerAuthor) continue;
+      perAuthor.set(p.userId, n + 1);
+      picked.push(p);
+    }
+
+    const pickedIds = new Set(picked.map((p) => p.id));
+    const scoreByPostId = new Map<string, number>();
+    for (const [id, score] of base.scoreByPostId.entries()) {
+      if (pickedIds.has(id)) scoreByPostId.set(id, score);
+    }
+
+    return { posts: picked, nextCursor: base.nextCursor, scoreByPostId };
   }
 
   async listForUsername(params: {

@@ -352,6 +352,10 @@ export class AdminImageReviewService {
         },
       });
 
+        // Prevent future "same file" uploads from reusing this tombstoned key.
+        // (MediaContentHash is a dedupe map: hash -> r2Key.)
+        await tx.mediaContentHash.deleteMany({ where: { r2Key } });
+
       const postMedia = await tx.postMedia.findMany({
         where: { r2Key, source: 'upload' },
         select: { id: true, postId: true },

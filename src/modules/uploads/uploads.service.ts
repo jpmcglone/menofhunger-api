@@ -51,6 +51,14 @@ function extForContentType(contentType: string) {
   return null;
 }
 
+function isNotFoundLikeS3Error(err: unknown): boolean {
+  // AWS SDK v3 errors vary by runtime; check common signals.
+  const anyErr = err as any;
+  const code = String(anyErr?.name ?? anyErr?.Code ?? anyErr?.code ?? '').toLowerCase();
+  const status = Number(anyErr?.$metadata?.httpStatusCode ?? anyErr?.$response?.httpResponse?.statusCode ?? NaN);
+  return code.includes('notfound') || code.includes('nosuchkey') || status === 404;
+}
+
 function isVideoContentType(contentType: string) {
   const ct = (contentType ?? '').trim().toLowerCase();
   return ct === 'video/mp4' || ct === 'video/quicktime' || ct === 'video/webm' || ct === 'video/x-m4v';
@@ -218,12 +226,29 @@ export class UploadsService {
     if (contentHash && purpose === 'post') {
       const existing = await this.prisma.mediaContentHash.findUnique({ where: { contentHash } });
       if (existing) {
-        return {
-          key: existing.r2Key,
-          skipUpload: true,
-          headers: { 'Content-Type': ct },
-          maxBytes: existing.kind === 'video' ? MAX_POST_VIDEO_BYTES : MAX_POST_MEDIA_BYTES,
-        };
+        // Never reuse media that has been admin-deleted (tombstoned), even if the bytes match.
+        // Also, if the backing object is missing in R2, fall back to a fresh upload.
+        const asset = await this.prisma.mediaAsset.findUnique({ where: { r2Key: existing.r2Key } }).catch(() => null);
+        if (asset?.deletedAt || asset?.r2DeletedAt) {
+          // Best-effort cleanup so future uploads won't try to reuse this tombstoned key.
+          this.prisma.mediaContentHash.delete({ where: { contentHash } }).catch(() => undefined);
+        } else {
+          try {
+            // Ensure the object still exists in R2 before instructing the client to skip upload.
+            await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: existing.r2Key }));
+            return {
+              key: existing.r2Key,
+              skipUpload: true,
+              headers: { 'Content-Type': ct },
+              maxBytes: existing.kind === 'video' ? MAX_POST_VIDEO_BYTES : MAX_POST_MEDIA_BYTES,
+            };
+          } catch (err) {
+            // If the object is missing (or we can't verify), upload again.
+            if (isNotFoundLikeS3Error(err)) {
+              this.prisma.mediaContentHash.delete({ where: { contentHash } }).catch(() => undefined);
+            }
+          }
+        }
       }
     }
 
