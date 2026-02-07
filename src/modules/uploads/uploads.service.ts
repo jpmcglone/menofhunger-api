@@ -7,16 +7,30 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { toUserDto } from '../../common/dto';
 import type { PostMediaKind } from '@prisma/client';
+import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_BANNER_BYTES = 8 * 1024 * 1024; // 8MB
 const MAX_POST_MEDIA_BYTES = 12 * 1024 * 1024; // 12MB per attachment
-const MAX_POST_VIDEO_BYTES = 25 * 1024 * 1024; // 25MB per video
+// Phone videos are often large; keep duration cap but allow realistic file sizes.
+const MAX_POST_VIDEO_BYTES = 300 * 1024 * 1024; // 300MB per video
 const MAX_POST_VIDEO_DURATION_SECONDS = 5 * 60; // 5 minutes
 const MAX_POST_VIDEO_WIDTH = 2560; // 1440p (landscape)
 const MAX_POST_VIDEO_HEIGHT = 1440;
 const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-const ALLOWED_POST_MEDIA_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4']);
+const ALLOWED_POST_MEDIA_CONTENT_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'video/mp4',
+  // iOS commonly uploads .mov as video/quicktime
+  'video/quicktime',
+  // Common in browsers / some Android encoders
+  'video/webm',
+  // Some devices label MP4 variants as m4v
+  'video/x-m4v',
+]);
 const ALLOWED_THUMBNAIL_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const BANNER_ASPECT_RATIO = 3; // 3:1
 const BANNER_ASPECT_TOLERANCE = 0.03; // +/- 3%
@@ -31,7 +45,15 @@ function extForContentType(contentType: string) {
   if (contentType === 'image/webp') return 'webp';
   if (contentType === 'image/gif') return 'gif';
   if (contentType === 'video/mp4') return 'mp4';
+  if (contentType === 'video/quicktime') return 'mov';
+  if (contentType === 'video/webm') return 'webm';
+  if (contentType === 'video/x-m4v') return 'm4v';
   return null;
+}
+
+function isVideoContentType(contentType: string) {
+  const ct = (contentType ?? '').trim().toLowerCase();
+  return ct === 'video/mp4' || ct === 'video/quicktime' || ct === 'video/webm' || ct === 'video/x-m4v';
 }
 
 async function streamToBuffer(stream: any, maxBytes: number): Promise<Buffer> {
@@ -64,6 +86,7 @@ export class UploadsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
+    private readonly publicProfileCache: PublicProfileCacheService<any>,
   ) {
     const r2 = this.appConfig.r2();
     if (!r2) {
@@ -179,9 +202,11 @@ export class UploadsService {
       }
     } else {
       if (!ALLOWED_POST_MEDIA_CONTENT_TYPES.has(ct)) {
-        throw new BadRequestException('Unsupported media type. Please upload a JPG, PNG, WebP, GIF, or MP4 video.');
+        throw new BadRequestException(
+          'Unsupported media type. Please upload a JPG, PNG, WebP, GIF, or a video (MP4, MOV, WebM).',
+        );
       }
-      if (ct === 'video/mp4') {
+      if (isVideoContentType(ct)) {
         const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { premium: true } });
         if (!user?.premium) {
           throw new ForbiddenException('Video uploads are for premium members only.');
@@ -207,7 +232,7 @@ export class UploadsService {
 
     const prefix = this.objectKeyPrefix();
     const subdir =
-      purpose === 'thumbnail' ? 'thumbnails' : ct === 'video/mp4' ? 'videos' : 'images';
+      purpose === 'thumbnail' ? 'thumbnails' : isVideoContentType(ct) ? 'videos' : 'images';
     const key = `${prefix}uploads/${userId}/${subdir}/${randomUUID()}.${ext}`;
 
     const uploadUrl = await getSignedUrl(
@@ -221,7 +246,7 @@ export class UploadsService {
       { expiresIn: 300 },
     );
 
-    const maxBytes = ct === 'video/mp4' ? MAX_POST_VIDEO_BYTES : MAX_POST_MEDIA_BYTES;
+    const maxBytes = isVideoContentType(ct) ? MAX_POST_VIDEO_BYTES : MAX_POST_MEDIA_BYTES;
     return {
       key,
       uploadUrl,
@@ -266,6 +291,8 @@ export class UploadsService {
         avatarUpdatedAt: now,
       },
     });
+
+    this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
 
     if (oldKey && oldKey !== cleaned) {
       // Best-effort deletion; don't fail the request if it errors.
@@ -344,6 +371,8 @@ export class UploadsService {
       },
     });
 
+    this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+
     if (oldKey && oldKey !== cleaned) {
       const prefix = this.objectKeyPrefix();
       const canDelete = prefix === '' || oldKey.startsWith(prefix);
@@ -377,6 +406,14 @@ export class UploadsService {
     // Check this first so we accept keys under any user path when reusing by content hash.
     const existingByKey = await this.prisma.mediaContentHash.findFirst({ where: { r2Key: cleaned } });
     if (existingByKey) {
+      // For reused content hashes, return the real content-type from object metadata
+      // (the same key could be video/mp4, video/quicktime, etc).
+      const head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: cleaned }));
+      const contentType = (head.ContentType ?? '').toLowerCase();
+      if (!ALLOWED_POST_MEDIA_CONTENT_TYPES.has(contentType)) {
+        throw new BadRequestException('Uploaded file is not a supported image, GIF, or video.');
+      }
+
       const thumbnailKey =
         typeof body.thumbnailKey === 'string' && body.thumbnailKey.trim().startsWith(thumbnailsPrefix)
           ? body.thumbnailKey.trim()
@@ -396,7 +433,7 @@ export class UploadsService {
 
       return {
         key: cleaned,
-        contentType: existingByKey.kind === 'video' ? 'video/mp4' : 'image/jpeg',
+        contentType,
         kind: existingByKey.kind as 'image' | 'gif' | 'video',
         width: existingByKey.width ?? undefined,
         height: existingByKey.height ?? undefined,

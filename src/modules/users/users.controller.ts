@@ -15,6 +15,7 @@ import { toUserListDto } from '../../common/dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { Throttle } from '@nestjs/throttler';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
+import { PublicProfileCacheService } from './public-profile-cache.service';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -89,34 +90,111 @@ type UserPreviewPayload = {
 
 @Controller('users')
 export class UsersController {
-  private publicProfileCache = new Map<string, { value: PublicProfilePayload; expiresAt: number }>();
-
-  private readPublicProfileCache(key: string): PublicProfilePayload | null {
-    const hit = this.publicProfileCache.get(key);
-    if (!hit) return null;
-    if (hit.expiresAt <= Date.now()) {
-      this.publicProfileCache.delete(key);
-      return null;
-    }
-    return hit.value;
-  }
-
-  private writePublicProfileCache(key: string, value: PublicProfilePayload) {
-    this.publicProfileCache.set(key, { value, expiresAt: Date.now() + 5 * 60 * 1000 });
-  }
-
-  private invalidatePublicProfileCacheForUser(user: { id: string; username: string | null }) {
-    this.publicProfileCache.delete(`id:${user.id}`);
-    const u = (user.username ?? '').trim().toLowerCase();
-    if (u) this.publicProfileCache.delete(`username:${u}`);
-  }
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly followsService: FollowsService,
     private readonly notifications: NotificationsService,
+    private readonly publicProfileCache: PublicProfileCacheService<PublicProfilePayload>,
   ) {}
+
+  private async getPublicProfilePayloadByUsernameOrId(rawUsernameOrId: string): Promise<PublicProfilePayload> {
+    const raw = (rawUsernameOrId ?? '').trim();
+    if (!raw) throw new NotFoundException('User not found');
+
+    const normalized = raw.toLowerCase();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw);
+    const isCuid = /^c[a-z0-9]{24}$/i.test(raw);
+    const isUuidOrCuid = isUuid || isCuid;
+
+    const cacheKey = isUuidOrCuid ? `id:${raw}` : `username:${normalized}`;
+    const cached = this.publicProfileCache.read(cacheKey);
+    if (cached) {
+      // lastOnlineAt changes frequently; refresh it even when other fields are cached.
+      try {
+        const fresh = await this.prisma.user.findUnique({
+          where: { id: cached.id },
+          select: { lastOnlineAt: true },
+        });
+        const lastOnlineAt = fresh?.lastOnlineAt ? fresh.lastOnlineAt.toISOString() : null;
+        if (lastOnlineAt !== cached.lastOnlineAt) {
+          const next: PublicProfilePayload = { ...cached, lastOnlineAt };
+          this.publicProfileCache.write(cacheKey, next, 5 * 60 * 1000);
+          return next;
+        }
+      } catch {
+        // If lastOnlineAt refresh fails, fall back to cached payload.
+      }
+      return cached;
+    }
+
+    const user =
+      (
+        await this.prisma.$queryRaw<
+          Array<{
+            id: string;
+            username: string | null;
+            name: string | null;
+            bio: string | null;
+            premium: boolean;
+            verifiedStatus: string;
+            avatarKey: string | null;
+            avatarUpdatedAt: Date | null;
+            bannerKey: string | null;
+            bannerUpdatedAt: Date | null;
+            pinnedPostId: string | null;
+            lastOnlineAt: Date | null;
+          }>
+        >`
+          SELECT "id", "username", "name", "bio", "premium", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt"
+          FROM "User"
+          WHERE (
+            (${isUuidOrCuid} = true AND "id" = ${raw})
+            OR
+            (${isUuidOrCuid} = false AND LOWER("username") = ${normalized})
+          )
+          AND "usernameIsSet" = true
+          LIMIT 1
+        `
+      )[0] ?? null;
+
+    if (!user) throw new NotFoundException('User not found');
+
+    // Safety: only-me posts should never be pinnable/show on profiles.
+    // If a user already pinned an only-me post (legacy bug), auto-unpin on read.
+    let pinnedPostId: string | null = user.pinnedPostId ?? null;
+    if (pinnedPostId) {
+      const pinned = await this.prisma.post.findFirst({
+        where: { id: pinnedPostId, userId: user.id, deletedAt: null },
+        select: { visibility: true },
+      });
+      if (!pinned || pinned.visibility === 'onlyMe') {
+        await this.prisma.user.update({ where: { id: user.id }, data: { pinnedPostId: null } });
+        pinnedPostId = null;
+      }
+    }
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const payload: PublicProfilePayload = {
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      bio: user.bio,
+      premium: user.premium,
+      verifiedStatus: user.verifiedStatus,
+      avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
+      bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),
+      pinnedPostId,
+      lastOnlineAt: user.lastOnlineAt ? user.lastOnlineAt.toISOString() : null,
+    };
+
+    // Cache for subsequent reads (both by username and by id).
+    this.publicProfileCache.write(cacheKey, payload, 5 * 60 * 1000);
+    this.publicProfileCache.write(`id:${user.id}`, payload, 5 * 60 * 1000);
+    if (user.username) this.publicProfileCache.write(`username:${user.username.toLowerCase()}`, payload, 5 * 60 * 1000);
+
+    return payload;
+  }
 
   /** On production, when a user first sets their username, make them and @john follow each other (unless they are @john). */
   private async ensureMutualFollowWithJohn(userId: string, newUsername: string): Promise<void> {
@@ -285,7 +363,7 @@ export class UsersController {
         where: { id: userId },
         data: { username: desired },
       });
-      this.invalidatePublicProfileCacheForUser({ id: updated.id, username: updated.username ?? null });
+      this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
     }
 
@@ -308,7 +386,7 @@ export class UsersController {
 
       await this.ensureMutualFollowWithJohn(userId, updated.username ?? parsed.username);
 
-      this.invalidatePublicProfileCacheForUser({ id: updated.id, username: updated.username ?? null });
+      this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       return {
         data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
       };
@@ -335,139 +413,30 @@ export class UsersController {
   ) {
     const viewerUserId = userId ?? null;
 
-    // Fetch the same profile payload used by GET /users/:username, but do not set cache headers here
-    // (this endpoint is viewer-specific when authenticated).
-    const raw = (username ?? '').trim();
-    if (!raw) throw new NotFoundException('User not found');
+    const profile = await this.getPublicProfilePayloadByUsernameOrId(username);
 
-    const normalized = raw.toLowerCase();
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw);
-    const isCuid = /^c[a-z0-9]{24}$/i.test(raw);
-    const isUuidOrCuid = isUuid || isCuid;
+    let relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean } = {
+      viewerFollowsUser: false,
+      userFollowsViewer: false,
+    };
+    let followerCount: number | null = null;
+    let followingCount: number | null = null;
 
-    const cacheKey = isUuidOrCuid ? `id:${raw}` : `username:${normalized}`;
-    const cached = this.readPublicProfileCache(cacheKey);
-
-    let profile: PublicProfilePayload;
-    if (cached) {
-      profile = cached;
-      // Best-effort: refresh lastOnlineAt even when other fields are cached.
-      try {
-        const fresh = await this.prisma.user.findUnique({
-          where: { id: cached.id },
-          select: { lastOnlineAt: true },
-        });
-        const lastOnlineAt = fresh?.lastOnlineAt ? fresh.lastOnlineAt.toISOString() : null;
-        if (lastOnlineAt !== cached.lastOnlineAt) {
-          const next: PublicProfilePayload = { ...cached, lastOnlineAt };
-          this.writePublicProfileCache(cacheKey, next);
-          profile = next;
-        }
-      } catch {
-        // If lastOnlineAt refresh fails, fall back to cached payload.
-      }
+    if (profile.username) {
+      const summary = await this.followsService.summary({ viewerUserId, username: profile.username });
+      relationship = { viewerFollowsUser: summary.viewerFollowsUser, userFollowsViewer: summary.userFollowsViewer };
+      followerCount = summary.followerCount;
+      followingCount = summary.followingCount;
     } else {
-      const user =
-        (
-          await this.prisma.$queryRaw<
-            Array<{
-              id: string;
-              username: string | null;
-              name: string | null;
-              bio: string | null;
-              premium: boolean;
-              verifiedStatus: string;
-              avatarKey: string | null;
-              avatarUpdatedAt: Date | null;
-              bannerKey: string | null;
-              bannerUpdatedAt: Date | null;
-              pinnedPostId: string | null;
-              lastOnlineAt: Date | null;
-            }>
-          >`
-            SELECT "id", "username", "name", "bio", "premium", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt"
-            FROM "User"
-            WHERE (
-              (${isUuidOrCuid} = true AND "id" = ${raw})
-              OR
-              (${isUuidOrCuid} = false AND LOWER("username") = ${normalized})
-            )
-            AND "usernameIsSet" = true
-            LIMIT 1
-          `
-        )[0] ?? null;
-
-      if (!user) throw new NotFoundException('User not found');
-
-      // Safety: only-me posts should never be pinnable/show on profiles.
-      // If a user already pinned an only-me post (legacy bug), auto-unpin on read.
-      let pinnedPostId: string | null = user.pinnedPostId ?? null;
-      if (pinnedPostId) {
-        const pinned = await this.prisma.post.findFirst({
-          where: { id: pinnedPostId, userId: user.id, deletedAt: null },
-          select: { visibility: true },
-        });
-        if (!pinned || pinned.visibility === 'onlyMe') {
-          await this.prisma.user.update({ where: { id: user.id }, data: { pinnedPostId: null } });
-          pinnedPostId = null;
-        }
-      }
-
-      const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-      profile = {
-        id: user.id,
-        username: user.username,
-        name: user.name,
-        bio: user.bio,
-        premium: user.premium,
-        verifiedStatus: user.verifiedStatus,
-        avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
-        bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),
-        pinnedPostId,
-        lastOnlineAt: user.lastOnlineAt ? user.lastOnlineAt.toISOString() : null,
+      const rel = await this.followsService.batchRelationshipForUserIds({
+        viewerUserId,
+        userIds: [profile.id],
+      });
+      relationship = {
+        viewerFollowsUser: rel.viewerFollows.has(profile.id),
+        userFollowsViewer: rel.followsViewer.has(profile.id),
       };
-
-      // Cache for subsequent reads (both by username and by id).
-      this.writePublicProfileCache(cacheKey, profile);
-      this.writePublicProfileCache(`id:${user.id}`, profile);
-      if (user.username) this.writePublicProfileCache(`username:${user.username.toLowerCase()}`, profile);
     }
-
-    const rel = await this.followsService.batchRelationshipForUserIds({
-      viewerUserId,
-      userIds: [profile.id],
-    });
-
-    // Follow counts are subject to followVisibility rules, so compute them here.
-    // When the viewer cannot see follow info, return null counts.
-    const targetMeta = await this.prisma.user.findUnique({
-      where: { id: profile.id },
-      select: { id: true, followVisibility: true },
-    });
-    const viewerMeta = viewerUserId
-      ? await this.prisma.user.findUnique({
-          where: { id: viewerUserId },
-          select: { id: true, verifiedStatus: true, premium: true },
-        })
-      : null;
-
-    const canViewFollowCounts = (() => {
-      if (!targetMeta) return false;
-      if (viewerMeta && viewerMeta.id === targetMeta.id) return true;
-      const v = targetMeta.followVisibility;
-      if (v === 'all') return true;
-      if (v === 'none') return false;
-      if (v === 'verified') return Boolean(viewerMeta && viewerMeta.verifiedStatus && viewerMeta.verifiedStatus !== 'none');
-      if (v === 'premium') return Boolean(viewerMeta && viewerMeta.premium);
-      return false;
-    })();
-
-    const [followerCount, followingCount] = canViewFollowCounts
-      ? await Promise.all([
-          this.prisma.follow.count({ where: { followingId: profile.id, follower: { usernameIsSet: true } } }),
-          this.prisma.follow.count({ where: { followerId: profile.id, following: { usernameIsSet: true } } }),
-        ])
-      : [null, null];
 
     const payload: UserPreviewPayload = {
       id: profile.id,
@@ -478,10 +447,7 @@ export class UsersController {
       verifiedStatus: profile.verifiedStatus,
       avatarUrl: profile.avatarUrl,
       bannerUrl: profile.bannerUrl,
-      relationship: {
-        viewerFollowsUser: rel.viewerFollows.has(profile.id),
-        userFollowsViewer: rel.followsViewer.has(profile.id),
-      },
+      relationship,
       followerCount,
       followingCount,
     };
@@ -505,109 +471,11 @@ export class UsersController {
   })
   @Get(':username')
   async publicProfile(@Param('username') username: string, @Res({ passthrough: true }) res: Response) {
-    const raw = (username ?? '').trim();
-    if (!raw) throw new NotFoundException('User not found');
-
-    const normalized = raw.toLowerCase();
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw);
-    const isCuid = /^c[a-z0-9]{24}$/i.test(raw);
-    const isUuidOrCuid = isUuid || isCuid;
-
-    const cacheKey = isUuidOrCuid ? `id:${raw}` : `username:${normalized}`;
-    const cached = this.readPublicProfileCache(cacheKey);
-    if (cached) {
-      // lastOnlineAt changes frequently; refresh it even when other fields are cached.
-      try {
-        const fresh = await this.prisma.user.findUnique({
-          where: { id: cached.id },
-          select: { lastOnlineAt: true },
-        });
-        const lastOnlineAt = fresh?.lastOnlineAt ? fresh.lastOnlineAt.toISOString() : null;
-        if (lastOnlineAt !== cached.lastOnlineAt) {
-          const next: PublicProfilePayload = { ...cached, lastOnlineAt };
-          this.writePublicProfileCache(cacheKey, next);
-          // Public profile data is stable-ish and not viewer-specific; allow CDN/browser caching.
-          res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
-          return { data: next };
-        }
-      } catch {
-        // If lastOnlineAt refresh fails, fall back to cached payload.
-      }
-      // Public profile data is stable-ish and not viewer-specific; allow CDN/browser caching.
-      res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
-      return { data: cached };
-    }
-
-    const user =
-      (
-        await this.prisma.$queryRaw<
-          Array<{
-            id: string;
-            username: string | null;
-            name: string | null;
-            bio: string | null;
-            premium: boolean;
-            verifiedStatus: string;
-            avatarKey: string | null;
-            avatarUpdatedAt: Date | null;
-            bannerKey: string | null;
-            bannerUpdatedAt: Date | null;
-            pinnedPostId: string | null;
-            lastOnlineAt: Date | null;
-          }>
-        >`
-          SELECT "id", "username", "name", "bio", "premium", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt"
-          FROM "User"
-          WHERE (
-            (${isUuidOrCuid} = true AND "id" = ${raw})
-            OR
-            (${isUuidOrCuid} = false AND LOWER("username") = ${normalized})
-          )
-          AND "usernameIsSet" = true
-          LIMIT 1
-        `
-      )[0] ?? null;
-
-    if (!user) throw new NotFoundException('User not found');
-
-    // Safety: only-me posts should never be pinnable/show on profiles.
-    // If a user already pinned an only-me post (legacy bug), auto-unpin on read.
-    let pinnedPostId: string | null = user.pinnedPostId ?? null;
-    if (pinnedPostId) {
-      const pinned = await this.prisma.post.findFirst({
-        where: { id: pinnedPostId, userId: user.id, deletedAt: null },
-        select: { visibility: true },
-      });
-      if (!pinned || pinned.visibility === 'onlyMe') {
-        await this.prisma.user.update({ where: { id: user.id }, data: { pinnedPostId: null } });
-        pinnedPostId = null;
-      }
-    }
-
-    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const payload: PublicProfilePayload = {
-      id: user.id,
-      username: user.username,
-      name: user.name,
-      bio: user.bio,
-      premium: user.premium,
-      verifiedStatus: user.verifiedStatus,
-      avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
-      bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),
-      pinnedPostId,
-      lastOnlineAt: user.lastOnlineAt ? user.lastOnlineAt.toISOString() : null,
-    };
-
-    // Cache for subsequent reads (both by username and by id).
-    this.writePublicProfileCache(cacheKey, payload);
-    this.writePublicProfileCache(`id:${user.id}`, payload);
-    if (user.username) this.writePublicProfileCache(`username:${user.username.toLowerCase()}`, payload);
+    const payload = await this.getPublicProfilePayloadByUsernameOrId(username);
 
     // Public profile data is stable-ish and not viewer-specific; allow CDN/browser caching.
     res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
-    return {
-      data: payload,
-    };
+    return { data: payload };
   }
 
   @UseGuards(AuthGuard)
@@ -630,7 +498,7 @@ export class UsersController {
         },
       });
 
-      this.invalidatePublicProfileCacheForUser({ id: updated.id, username: updated.username ?? null });
+      this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       return {
         data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
       };
@@ -662,7 +530,7 @@ export class UsersController {
       data: { pinnedPostId: postId },
       select: { id: true, username: true },
     });
-    this.invalidatePublicProfileCacheForUser({ id: updated.id, username: updated.username ?? null });
+    this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
     return { data: { pinnedPostId: postId } };
   }
 
@@ -674,7 +542,7 @@ export class UsersController {
       data: { pinnedPostId: null },
       select: { id: true, username: true },
     });
-    this.invalidatePublicProfileCacheForUser({ id: updated.id, username: updated.username ?? null });
+    this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
     return { data: { pinnedPostId: null } };
   }
 
@@ -690,6 +558,7 @@ export class UsersController {
       },
     });
 
+    this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
     return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
   }
 
@@ -782,6 +651,7 @@ export class UsersController {
         await this.ensureMutualFollowWithJohn(userId, updated.username);
       }
 
+      this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
