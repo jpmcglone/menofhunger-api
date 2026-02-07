@@ -29,17 +29,48 @@ const userListSchema = listSchema.extend({
   includeCounts: z.coerce.boolean().optional(),
 });
 
+const createUploadMediaItemSchema = z.object({
+  source: z.literal('upload'),
+  kind: z.enum(['image', 'gif', 'video']),
+  r2Key: z.string().min(1),
+  thumbnailR2Key: z.string().min(1).optional(),
+  width: z.coerce.number().int().min(1).max(20000).optional(),
+  height: z.coerce.number().int().min(1).max(20000).optional(),
+  durationSeconds: z.coerce.number().int().min(0).max(3600).optional(),
+  alt: z.string().trim().max(500).nullish(),
+}).superRefine((val, ctx) => {
+  if (val.kind !== 'video') return;
+
+  const width = typeof val.width === 'number' ? val.width : null;
+  const height = typeof val.height === 'number' ? val.height : null;
+  const durationSeconds = typeof val.durationSeconds === 'number' ? val.durationSeconds : null;
+
+  if (width == null || height == null || durationSeconds == null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Video media must include width, height, and durationSeconds.',
+      path: ['width'],
+    });
+    return;
+  }
+  if (durationSeconds > 5 * 60) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Video must be 5 minutes or shorter.',
+      path: ['durationSeconds'],
+    });
+  }
+  if (width > 2560 || height > 1440) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Video must be 1440p or smaller.',
+      path: ['width'],
+    });
+  }
+});
+
 const createMediaItemSchema = z.discriminatedUnion('source', [
-  z.object({
-    source: z.literal('upload'),
-    kind: z.enum(['image', 'gif', 'video']),
-    r2Key: z.string().min(1),
-    thumbnailR2Key: z.string().min(1).optional(),
-    width: z.coerce.number().int().min(1).max(20000).optional(),
-    height: z.coerce.number().int().min(1).max(20000).optional(),
-    durationSeconds: z.coerce.number().int().min(0).max(3600).optional(),
-    alt: z.string().trim().max(500).nullish(),
-  }),
+  createUploadMediaItemSchema,
   z.object({
     source: z.literal('giphy'),
     kind: z.literal('gif'),

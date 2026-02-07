@@ -12,6 +12,9 @@ const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_BANNER_BYTES = 8 * 1024 * 1024; // 8MB
 const MAX_POST_MEDIA_BYTES = 12 * 1024 * 1024; // 12MB per attachment
 const MAX_POST_VIDEO_BYTES = 25 * 1024 * 1024; // 25MB per video
+const MAX_POST_VIDEO_DURATION_SECONDS = 5 * 60; // 5 minutes
+const MAX_POST_VIDEO_WIDTH = 2560; // 1440p (landscape)
+const MAX_POST_VIDEO_HEIGHT = 1440;
 const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const ALLOWED_POST_MEDIA_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4']);
 const ALLOWED_THUMBNAIL_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -378,6 +381,19 @@ export class UploadsService {
         typeof body.thumbnailKey === 'string' && body.thumbnailKey.trim().startsWith(thumbnailsPrefix)
           ? body.thumbnailKey.trim()
           : undefined;
+
+      if (existingByKey.kind === 'video') {
+        const w = existingByKey.width ?? null;
+        const h = existingByKey.height ?? null;
+        const d = existingByKey.durationSeconds ?? null;
+        if (d != null && d > MAX_POST_VIDEO_DURATION_SECONDS) {
+          throw new BadRequestException('Video must be 5 minutes or shorter.');
+        }
+        if (w != null && h != null && (w > MAX_POST_VIDEO_WIDTH || h > MAX_POST_VIDEO_HEIGHT)) {
+          throw new BadRequestException('Video must be 1440p or smaller.');
+        }
+      }
+
       return {
         key: cleaned,
         contentType: existingByKey.kind === 'video' ? 'video/mp4' : 'image/jpeg',
@@ -423,6 +439,19 @@ export class UploadsService {
         typeof body.durationSeconds === 'number' && Number.isFinite(body.durationSeconds) && body.durationSeconds >= 0
           ? Math.floor(body.durationSeconds)
           : null;
+
+      if (width == null || height == null || durationSeconds == null) {
+        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
+        throw new BadRequestException('Video uploads must include width, height, and durationSeconds.');
+      }
+      if (durationSeconds > MAX_POST_VIDEO_DURATION_SECONDS) {
+        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
+        throw new BadRequestException('Video must be 5 minutes or shorter.');
+      }
+      if (width > MAX_POST_VIDEO_WIDTH || height > MAX_POST_VIDEO_HEIGHT) {
+        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
+        throw new BadRequestException('Video must be 1440p or smaller.');
+      }
     } else {
       try {
         const obj = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: cleaned }));
