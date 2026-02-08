@@ -1,6 +1,7 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY prisma ./prisma/
 RUN npm ci
 
 FROM node:20-alpine AS dev
@@ -17,12 +18,14 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
+# Runner: production deps only (smaller image, no devDependencies copy).
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+COPY package.json package-lock.json ./
+COPY prisma ./prisma/
+RUN npm ci --omit=dev && npx prisma generate
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/node_modules ./node_modules
 EXPOSE 3001
 CMD ["node", "dist/main.js"]
 

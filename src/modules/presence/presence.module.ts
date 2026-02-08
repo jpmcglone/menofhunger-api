@@ -5,12 +5,13 @@ import { MessagesModule } from '../messages/messages.module';
 import { RadioModule } from '../radio/radio.module';
 import { PresenceController } from './presence.controller';
 import { PresenceGateway } from './presence.gateway';
+import { PresenceRealtimeService } from './presence-realtime.service';
 import { PresenceService } from './presence.service';
 
 @Module({
   imports: [AuthModule, forwardRef(() => FollowsModule), forwardRef(() => MessagesModule), RadioModule],
   controllers: [PresenceController],
-  providers: [PresenceGateway, PresenceService],
-  exports: [PresenceService, PresenceGateway],
+  providers: [PresenceGateway, PresenceService, PresenceRealtimeService],
+  exports: [PresenceService, PresenceRealtimeService],
 })
 export class PresenceModule {}

@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundEx
 import type { MessageConversation } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
-import { PresenceGateway } from '../presence/presence.gateway';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { toUserListDto } from '../../common/dto';
@@ -19,7 +19,7 @@ export class MessagesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
-    private readonly presenceGateway: PresenceGateway,
+    private readonly presenceRealtime: PresenceRealtimeService,
     @Inject(forwardRef(() => NotificationsService))
     private readonly notificationsService: NotificationsService,
   ) {}
@@ -149,7 +149,7 @@ export class MessagesService {
 
   private emitUnreadCounts(userId: string): void {
     void this.getUnreadCounts(userId).then((counts) => {
-      this.presenceGateway.emitMessagesUpdated(userId, {
+      this.presenceRealtime.emitMessagesUpdated(userId, {
         primaryUnreadCount: counts.primary,
         requestUnreadCount: counts.requests,
       });
@@ -536,10 +536,10 @@ export class MessagesService {
       'Someone';
 
     this.emitUnreadCounts(userId);
-    this.presenceGateway.emitMessageCreated(userId, { conversationId: result.conversationId, message: dto });
+    this.presenceRealtime.emitMessageCreated(userId, { conversationId: result.conversationId, message: dto });
     for (const recipientId of uniqueRecipients) {
       this.emitUnreadCounts(recipientId);
-      this.presenceGateway.emitMessageCreated(recipientId, { conversationId: result.conversationId, message: dto });
+      this.presenceRealtime.emitMessageCreated(recipientId, { conversationId: result.conversationId, message: dto });
     }
     const acceptedRecipientIds = uniqueRecipients.filter((id) => followerSet.has(id));
     for (const recipientId of acceptedRecipientIds) {
@@ -624,7 +624,7 @@ export class MessagesService {
       result.sender?.username?.trim() ||
       'Someone';
     for (const id of [userId, ...otherIds]) {
-      this.presenceGateway.emitMessageCreated(id, { conversationId, message: dto });
+      this.presenceRealtime.emitMessageCreated(id, { conversationId, message: dto });
       this.emitUnreadCounts(id);
     }
     const pushRecipients = conversation.participants.filter(

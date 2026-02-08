@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import * as cookieParser from 'cookie-parser';
+import cookieParser = require('cookie-parser');
 import compression = require('compression');
 import * as express from 'express';
 import { randomUUID } from 'crypto';

@@ -1,11 +1,11 @@
-import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import type { NotificationKind } from '@prisma/client';
 import * as webpush from 'web-push';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
-import { PresenceGateway } from '../presence/presence.gateway';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectPostVisibility, SubjectTier } from './notification.dto';
 
 export type CreateNotificationParams = {
@@ -26,8 +26,7 @@ export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
-    @Inject(forwardRef(() => PresenceGateway))
-    private readonly presenceGateway: PresenceGateway,
+    private readonly presenceRealtime: PresenceRealtimeService,
   ) {}
 
   /** True if recipient already has a follow notification from actor within the last withinMs. Use to avoid spam when someone unfollows then follows again. */
@@ -82,7 +81,7 @@ export class NotificationsService {
     });
 
     const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
-    this.presenceGateway.emitNotificationsUpdated(recipientUserId, {
+    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
     });
 
@@ -320,7 +319,7 @@ export class NotificationsService {
     await this.prisma.notification.delete({ where: { id: existing.id } });
     if (wasUndelivered) {
       const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
-      this.presenceGateway.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
+      this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
     }
   }
 
@@ -451,7 +450,7 @@ export class NotificationsService {
       data: { deliveredAt: new Date() },
     });
     const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
-    this.presenceGateway.emitNotificationsUpdated(recipientUserId, {
+    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
     });
   }
@@ -482,7 +481,7 @@ export class NotificationsService {
       data: { deliveredAt: new Date() },
     });
     const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
-    this.presenceGateway.emitNotificationsUpdated(recipientUserId, {
+    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
     });
   }
@@ -501,7 +500,7 @@ export class NotificationsService {
         data: { deliveredAt: new Date() },
       });
       const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
-      this.presenceGateway.emitNotificationsUpdated(recipientUserId, {
+      this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
         undeliveredCount,
       });
     }
@@ -520,7 +519,7 @@ export class NotificationsService {
       data: { deliveredAt: now },
     });
     const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
-    this.presenceGateway.emitNotificationsUpdated(recipientUserId, {
+    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
     });
   }

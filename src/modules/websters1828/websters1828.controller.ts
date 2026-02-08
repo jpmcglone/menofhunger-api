@@ -16,8 +16,9 @@ export class Websters1828Controller {
   })
   @Get('wotd')
   async wordOfTheDay(@Res({ passthrough: true }) res: Response) {
-    const data = await this.websters.getWordOfDay({ ttlMs: 30 * 60 * 1000 });
-    res.setHeader('Cache-Control', 'public, max-age=1800');
+    const data = await this.websters.getWordOfDay();
+    const maxAge = this.websters.getCacheControlMaxAgeSeconds(new Date());
+    res.setHeader('Cache-Control', `public, max-age=${maxAge}`);
     return { data };
   }
 }

@@ -6,4 +6,14 @@ coverage
 npm-debug.log
 Dockerfile
 docker-compose.yml
+# Avoid invalidating build layer when only docs/tests change
+test
+docs
+.cursor
+*.md
+README.md
+env.example
+eslint.config.mjs
+.prettierrc
+.prettierignore
 

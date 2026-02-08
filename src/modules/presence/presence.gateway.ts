@@ -4,12 +4,14 @@ import {
   OnGatewayConnection,
   OnGatewayDisconnect,
   SubscribeMessage,
+  OnGatewayInit,
 } from '@nestjs/websockets';
 import { Inject, Logger, forwardRef } from '@nestjs/common';
-import { Server } from 'socket.io';
+import { Server, type Socket } from 'socket.io';
 import { AuthService } from '../auth/auth.service';
 import { AUTH_COOKIE_NAME } from '../auth/auth.constants';
 import { PresenceService } from './presence.service';
+import { PresenceRealtimeService } from './presence-realtime.service';
 import { FollowsService } from '../follows/follows.service';
 import type { FollowListUser } from '../follows/follows.service';
 import { MessagesService } from '../messages/messages.service';
@@ -40,7 +42,7 @@ type UserTimers = {
     credentials: true,
   },
 })
-export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(PresenceGateway.name);
   // Performance: presence events can be very high-frequency. Never spam logs in production.
   private readonly logPresenceVerbose = (process.env.NODE_ENV ?? 'development') !== 'production';
@@ -53,6 +55,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
   constructor(
     private readonly auth: AuthService,
     private readonly presence: PresenceService,
+    private readonly realtime: PresenceRealtimeService,
     @Inject(forwardRef(() => FollowsService))
     private readonly follows: FollowsService,
     @Inject(forwardRef(() => MessagesService))
@@ -60,7 +63,12 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     private readonly radio: RadioService,
   ) {}
 
-  async handleConnection(client: import('socket.io').Socket): Promise<void> {
+  afterInit(server: Server): void {
+    // Provide the Socket.IO server to other modules without them importing the gateway.
+    this.realtime.setServer(server);
+  }
+
+  async handleConnection(client: Socket): Promise<void> {
     const cookieHeader = client.handshake.headers.cookie as string | undefined;
     const token = parseSessionTokenFromCookie(cookieHeader);
     const user = await this.auth.meFromSessionToken(token);
@@ -92,7 +100,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.scheduleIdleMarkTimer(user.id);
   }
 
-  handleDisconnect(client: import('socket.io').Socket): void {
+  handleDisconnect(client: Socket): void {
     const result = this.presence.unregister(client.id);
     if (this.logPresenceVerbose) {
       this.logger.debug(
@@ -145,7 +153,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   @SubscribeMessage('radio:join')
   async handleRadioJoin(
-    client: import('socket.io').Socket,
+    client: Socket,
     payload: { stationId?: string },
   ): Promise<void> {
     const stationId = (payload?.stationId ?? '').trim();
@@ -184,7 +192,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
    * still see live listener updates while paused.
    */
   @SubscribeMessage('radio:pause')
-  async handleRadioPause(client: import('socket.io').Socket): Promise<void> {
+  async handleRadioPause(client: Socket): Promise<void> {
     const paused = this.radio.pause(client.id);
     if (paused?.wasActive && paused.changed) {
       await this.emitRadioListeners(paused.stationId);
@@ -196,7 +204,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
    */
   @SubscribeMessage('radio:watch')
   async handleRadioWatch(
-    client: import('socket.io').Socket,
+    client: Socket,
     payload: { stationId?: string },
   ): Promise<void> {
     const stationId = (payload?.stationId ?? '').trim();
@@ -223,7 +231,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('radio:leave')
-  async handleRadioLeave(client: import('socket.io').Socket): Promise<void> {
+  async handleRadioLeave(client: Socket): Promise<void> {
     const roomStationId = this.radio.getRoomStationForSocket(client.id);
     const left = this.radio.leave(client.id);
     this.radio.clearRoomForSocket(client.id);
@@ -245,30 +253,6 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
       ...this.presence.getSubscribers(userId),
       ...this.presence.getOnlineFeedListeners(),
     ]);
-  }
-
-  /** Emit notifications:updated to a user's sockets (used by NotificationsService). */
-  emitNotificationsUpdated(
-    userId: string,
-    payload: { undeliveredCount: number },
-  ): void {
-    this.presence.emitToUser(this.server, userId, 'notifications:updated', payload);
-  }
-
-  /** Emit messages:updated to a user's sockets (used by MessagesService). */
-  emitMessagesUpdated(
-    userId: string,
-    payload: { primaryUnreadCount: number; requestUnreadCount: number },
-  ): void {
-    this.presence.emitToUser(this.server, userId, 'messages:updated', payload);
-  }
-
-  /** Emit messages:new to a user's sockets (used by MessagesService). */
-  emitMessageCreated(
-    userId: string,
-    payload: { conversationId: string; message: unknown },
-  ): void {
-    this.presence.emitToUser(this.server, userId, 'messages:new', payload);
   }
 
   private emitToSockets(socketIds: Iterable<string>, event: string, payload: unknown): void {
@@ -331,7 +315,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   @SubscribeMessage('presence:subscribe')
   async handleSubscribe(
-    client: import('socket.io').Socket,
+    client: Socket,
     payload: { userIds?: string[] },
   ): Promise<void> {
     const userIds = Array.isArray(payload?.userIds) ? payload.userIds : [];
@@ -351,7 +335,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('presence:unsubscribe')
-  handleUnsubscribe(client: import('socket.io').Socket, payload: { userIds?: string[] }): void {
+  handleUnsubscribe(client: Socket, payload: { userIds?: string[] }): void {
     const userIds = Array.isArray(payload?.userIds) ? payload.userIds : [];
     if (this.logPresenceVerbose) {
       this.logger.debug(`[presence] UNSUBSCRIBE_IN socket=${client.id} userIds=[${userIds.join(', ')}]`);
@@ -362,7 +346,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('presence:subscribeOnlineFeed')
-  async handleSubscribeOnlineFeed(client: import('socket.io').Socket): Promise<void> {
+  async handleSubscribeOnlineFeed(client: Socket): Promise<void> {
     this.presence.subscribeOnlineFeed(client.id);
     if (this.logPresenceVerbose) {
       this.logger.debug(
@@ -395,7 +379,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('presence:unsubscribeOnlineFeed')
-  handleUnsubscribeOnlineFeed(client: import('socket.io').Socket): void {
+  handleUnsubscribeOnlineFeed(client: Socket): void {
     if (this.logPresenceVerbose) {
       this.logger.debug(`[presence] UNSUBSCRIBE_ONLINE_FEED_IN socket=${client.id}`);
     }
@@ -404,7 +388,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   @SubscribeMessage('messages:screen')
   handleMessagesScreen(
-    client: import('socket.io').Socket,
+    client: Socket,
     payload: { active?: boolean },
   ): void {
     const userId = this.presence.getUserIdForSocket(client.id);
@@ -414,7 +398,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('presence:logout')
-  handleLogout(client: import('socket.io').Socket): void {
+  handleLogout(client: Socket): void {
     const result = this.presence.forceUnregister(client.id);
     if (result?.wasLastConnection) {
       this.cancelUserTimers(result.userId);
@@ -423,7 +407,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('presence:idle')
-  handleIdle(client: import('socket.io').Socket): void {
+  handleIdle(client: Socket): void {
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
     this.presence.setUserIdle(userId);
@@ -434,7 +418,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   /** Activity ping (fire-and-forget). Updates lastActivityAt and resets idle-mark timer. Clears idle if set. */
   @SubscribeMessage('presence:active')
-  handleActive(client: import('socket.io').Socket): void {
+  handleActive(client: Socket): void {
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
     this.presence.setLastActivity(userId);
@@ -454,7 +438,7 @@ export class PresenceGateway implements OnGatewayConnection, OnGatewayDisconnect
    */
   @SubscribeMessage('messages:typing')
   async handleMessagesTyping(
-    client: import('socket.io').Socket,
+    client: Socket,
     payload: { conversationId?: string; typing?: boolean },
   ): Promise<void> {
     const userId = this.presence.getUserIdForSocket(client.id);
