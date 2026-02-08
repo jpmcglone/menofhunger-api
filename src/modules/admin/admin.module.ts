@@ -9,6 +9,8 @@ import { AdminSiteConfigController } from './admin-site-config.controller';
 import { AdminImageReviewController } from './admin-image-review.controller';
 import { AdminImageReviewService } from './admin-image-review.service';
 import { AdminSearchController } from './admin-search.controller';
+import { AdminHashtagsController } from './admin-hashtags.controller';
+import { AdminHashtagsService } from './admin-hashtags.service';
 import { FeedbackModule } from '../feedback/feedback.module';
 import { AdminFeedbackController } from './admin-feedback.controller';
 import { AdminVerificationController } from './admin-verification.controller';
@@ -23,11 +25,12 @@ import { AdminReportsController } from './admin-reports.controller';
     AdminSiteConfigController,
     AdminImageReviewController,
     AdminSearchController,
+    AdminHashtagsController,
     AdminFeedbackController,
     AdminReportsController,
     AdminVerificationController,
   ],
-  providers: [AdminGuard, AdminImageReviewService],
+  providers: [AdminGuard, AdminImageReviewService, AdminHashtagsService],
 })
 export class AdminModule {}
 

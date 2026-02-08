@@ -7,6 +7,7 @@ import { PostsService } from '../posts/posts.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
 import { queryToTopicValues } from '../../common/topics/topic-utils';
+import { HASHTAG_IN_TEXT_DISPLAY_RE, parseHashtagsFromText } from '../../common/hashtags/hashtag-regex';
 
 /**
  * Search scoring (higher = better). Used for ranking only; tie-breaks: relationship (users), createdAt (posts).
@@ -36,6 +37,7 @@ const USER_SCORE = {
 } as const;
 
 const POST_SCORE = {
+  hashtagMatch: 110,
   bodyPhrase: 90,
   bodyAllWords: 75,
   topicMatch: 70,
@@ -47,6 +49,16 @@ const POST_SCORE = {
 } as const;
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
+
+const SEARCH_POST_INCLUDE = {
+  user: true,
+  media: { orderBy: { position: 'asc' as const } },
+  mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true } } } },
+} as const;
+
+type SearchPostRow = Prisma.PostGetPayload<{
+  include: typeof SEARCH_POST_INCLUDE;
+}>;
 
 export type SearchUserRow = {
   id: string;
@@ -67,6 +79,27 @@ function queryToWords(q: string): string[] {
   if (!trimmed) return [];
   const words = trimmed.split(/\s+/).filter((w) => w.length > 0);
   return [...new Set(words)];
+}
+
+function splitSearchQuery(q: string): { hashtags: string[]; text: string } {
+  const raw = (q ?? '').toString();
+  const hashtags = parseHashtagsFromText(raw);
+  if (!hashtags.length) return { hashtags: [], text: raw.trim() };
+  const text = raw.replace(new RegExp(HASHTAG_IN_TEXT_DISPLAY_RE.source, 'g'), ' ').replace(/\s+/g, ' ').trim();
+  return { hashtags, text };
+}
+
+function extractQuotedPhrases(q: string): string[] {
+  const raw = (q ?? '').toString();
+  if (!raw.includes('"')) return [];
+  const out: string[] = [];
+  const re = /"([^"]+)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw))) {
+    const phrase = (m[1] ?? '').trim();
+    if (phrase) out.push(phrase);
+  }
+  return [...new Set(out)];
 }
 
 @Injectable()
@@ -104,7 +137,8 @@ export class SearchService {
     cursor: string | null;
     viewerUserId: string | null;
   }): Promise<{ users: SearchUserRow[]; nextCursor: string | null }> {
-    const q = (params.q ?? '').trim();
+    const { text: qText } = splitSearchQuery(params.q ?? '');
+    const q = (qText ?? '').trim();
     if (!q) return { users: [], nextCursor: null };
     const limit = Math.max(1, Math.min(50, params.limit || 30));
     const cursor = params.cursor ?? null;
@@ -293,6 +327,60 @@ export class SearchService {
     return { users, nextCursor };
   }
 
+  async searchHashtags(params: {
+    q: string;
+    limit: number;
+    cursor: string | null;
+  }): Promise<{ hashtags: Array<{ value: string; label: string; usageCount: number }>; nextCursor: string | null }> {
+    const raw = (params.q ?? '').trim();
+    const limit = Math.max(1, Math.min(50, params.limit || 30));
+
+    const q = raw.startsWith('#') ? raw.slice(1) : raw;
+    const qLower = q.toLowerCase();
+
+    // Cursor not used yet (autocomplete doesn't paginate); keep contract for forward-compat.
+    void params.cursor;
+
+    const rows = await this.prisma.hashtag.findMany({
+      where: qLower ? { tag: { startsWith: qLower } } : {},
+      orderBy: [
+        { usageCount: 'desc' },
+        { tag: 'asc' },
+      ],
+      take: limit,
+      select: { tag: true, usageCount: true },
+    });
+
+    const tags = rows.map((r) => r.tag).filter(Boolean);
+    const labelByTag = new Map<string, string>();
+    if (tags.length > 0) {
+      // Variants are the source of truth for display casing.
+      // DISTINCT ON picks the highest-count variant per tag (ties -> variant asc).
+      const variantRows = await this.prisma.$queryRaw<Array<{ tag: string; variant: string }>>(Prisma.sql`
+        SELECT DISTINCT ON (hv."tag")
+          hv."tag" as "tag",
+          hv."variant" as "variant"
+        FROM "HashtagVariant" hv
+        WHERE hv."tag" IN (${Prisma.join(tags.map((t) => Prisma.sql`${t}`))})
+        ORDER BY hv."tag" ASC, hv."count" DESC, hv."variant" ASC
+      `);
+      for (const r of variantRows) {
+        const t = (r?.tag ?? '').trim();
+        const v = (r?.variant ?? '').trim();
+        if (t && v) labelByTag.set(t, v);
+      }
+    }
+
+    return {
+      hashtags: rows.map((r) => ({
+        value: r.tag,
+        label: labelByTag.get(r.tag) ?? r.tag,
+        usageCount: r.usageCount ?? 0,
+      })),
+      nextCursor: null,
+    };
+  }
+
   /** Broad match: body or author username/name (phrase + each word) so "john steve" matches @john, @steve, or body. */
   private postSearchMatchWhere(q: string, words: string[]): object {
     const trimmed = (q ?? '').trim();
@@ -311,14 +399,130 @@ export class SearchService {
     return { OR: orConditions };
   }
 
+  private async fetchHashtagFallbackTextPosts(params: {
+    viewer: Viewer;
+    allowed: PostVisibility[];
+    visibilityWhere: Prisma.PostWhereInput;
+    hashtags: string[];
+    queryFts: string;
+    queryMatch: string;
+    limit: number;
+    cursorPostId: string | null;
+  }): Promise<{ posts: SearchPostRow[]; nextCursor: string | null }> {
+    const limit = Math.max(1, Math.min(50, params.limit || 30));
+    const queryMatch = (params.queryMatch ?? '').trim();
+    const queryFts = (params.queryFts ?? '').trim();
+    if (!queryMatch) return { posts: [], nextCursor: null };
+
+    const hashtags = (params.hashtags ?? []).map((t) => String(t).trim().toLowerCase()).filter(Boolean);
+    const hashtagWhere: Prisma.PostWhereInput =
+      hashtags.length > 0 ? ({ hashtags: { hasSome: hashtags } } as Prisma.PostWhereInput) : {};
+    const cursorPostId = (params.cursorPostId ?? '').trim() || null;
+
+    const useFts = queryMatch.length >= 3;
+    if (useFts) {
+      const viewer = params.viewer;
+      const allowed = params.allowed ?? ['public'];
+      const allowedSql = allowed.map((v) => Prisma.sql`${v}::"PostVisibility"`);
+      const visibilitySql = viewer?.id
+        ? Prisma.sql`AND (p."visibility" IN (${Prisma.join(allowedSql)}) OR (p."userId" = ${viewer.id} AND p."visibility" = 'onlyMe'))`
+        : Prisma.sql`AND p."visibility" = 'public'`;
+
+      const excludeHashtagsSql =
+        hashtags.length > 0
+          ? Prisma.sql`AND NOT (p."hashtags" && ARRAY[${Prisma.join(hashtags.map((t) => Prisma.sql`${t}`))}]::text[])`
+          : Prisma.sql``;
+
+      const cursorRow = cursorPostId
+        ? await this.prisma.post.findUnique({ where: { id: cursorPostId }, select: { id: true, createdAt: true } })
+        : null;
+      const cursorSql = cursorRow
+        ? Prisma.sql`AND (
+            p."createdAt" < ${cursorRow.createdAt}
+            OR (p."createdAt" = ${cursorRow.createdAt} AND p."id" < ${cursorRow.id})
+          )`
+        : Prisma.sql``;
+
+      const ids = await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date }>>(Prisma.sql`
+        WITH q AS (SELECT websearch_to_tsquery('english', ${queryFts}) AS tsq)
+        SELECT p."id" as "id", p."createdAt" as "createdAt"
+        FROM "Post" p
+        JOIN "User" u ON u."id" = p."userId"
+        CROSS JOIN q
+        WHERE
+          p."deletedAt" IS NULL
+          ${visibilitySql}
+          ${excludeHashtagsSql}
+          ${cursorSql}
+          AND (
+            to_tsvector('english', p."body") @@ q.tsq
+            OR (
+              u."usernameIsSet" = true
+              AND to_tsvector(
+                'english',
+                COALESCE(u."username", '') || ' ' || COALESCE(u."name", '') || ' ' || COALESCE(u."bio", '')
+              ) @@ q.tsq
+            )
+          )
+        ORDER BY p."createdAt" DESC, p."id" DESC
+        LIMIT ${limit + 1}
+      `);
+
+      const sliceIds = ids.slice(0, limit).map((r) => r.id);
+      const nextCursor = ids.length > limit ? (sliceIds[sliceIds.length - 1] ?? null) : null;
+      if (sliceIds.length === 0) return { posts: [], nextCursor: null };
+
+      const rows = await this.prisma.post.findMany({
+        where: { id: { in: sliceIds } },
+        include: SEARCH_POST_INCLUDE,
+      });
+      const byId = new Map(rows.map((r) => [r.id, r] as const));
+      const ordered = sliceIds.map((id) => byId.get(id)).filter(Boolean) as SearchPostRow[];
+      return { posts: ordered, nextCursor };
+    }
+
+    const words = queryToWords(queryMatch);
+    const matchWhere = this.postSearchMatchWhere(queryMatch, words) as Prisma.PostWhereInput;
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor: cursorPostId,
+      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+    });
+
+    const rows = await this.prisma.post.findMany({
+      where: {
+        AND: [
+          { deletedAt: null },
+          params.visibilityWhere,
+          ...(hashtags.length > 0 ? [({ NOT: hashtagWhere } as Prisma.PostWhereInput)] : []),
+          ...(cursorWhere ? [cursorWhere] : []),
+          matchWhere,
+        ],
+      },
+      include: SEARCH_POST_INCLUDE,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+    });
+    const slice = rows.slice(0, limit);
+    const nextCursor = rows.length > limit ? slice[slice.length - 1]?.id ?? null : null;
+    return { posts: slice, nextCursor };
+  }
+
   async searchPosts(params: { viewerUserId: string | null; q: string; limit: number; cursor: string | null }) {
-    const q = (params.q ?? '').trim();
-    if (!q) return { posts: [], nextCursor: null };
+    const rawQ = (params.q ?? '').trim();
+    if (!rawQ) return { posts: [], nextCursor: null };
     const limit = Math.max(1, Math.min(50, params.limit || 30));
     const cursor = params.cursor ?? null;
-    const words = queryToWords(q);
-    const qLower = q.toLowerCase();
-    const topicValues = queryToTopicValues(q);
+    const { hashtags, text: qText } = splitSearchQuery(rawQ);
+    const tagsText = hashtags.join(' ').trim();
+    const qFtsExpanded = (qText ? `${qText} ${tagsText}` : tagsText).trim(); // preserve quotes for websearch_to_tsquery
+    const qMatchBase = qText.replace(/"/g, ' ').replace(/\s+/g, ' ').trim();
+    const qMatchExpanded = (qMatchBase ? `${qMatchBase} ${tagsText}` : tagsText).trim();
+    if (!qMatchExpanded && hashtags.length === 0) return { posts: [], nextCursor: null };
+    const phrases = extractQuotedPhrases(qText);
+    const phraseLowers = phrases.map((p) => p.toLowerCase());
+    const words = queryToWords(qMatchExpanded);
+    const qLower = qMatchExpanded.toLowerCase();
+    const topicValues = queryToTopicValues(qMatchExpanded);
 
     const viewer = await this.viewerById(params.viewerUserId ?? null);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
@@ -329,18 +533,125 @@ export class SearchService {
         }
       : { visibility: 'public' };
 
+    const cursorRaw = (cursor ?? '').trim();
+    const cursorIsOffset = cursorRaw ? /^\d+$/.test(cursorRaw) : false;
+    const offset = cursorIsOffset ? Math.max(0, parseInt(cursorRaw, 10)) : 0;
+    const cursorIsTextPhase = cursorRaw.startsWith('t:');
+    const cursorPostId =
+      cursorRaw && !cursorIsOffset
+        ? ((cursorIsTextPhase ? cursorRaw.slice(2) : (cursorRaw.startsWith('p:') ? cursorRaw.slice(2) : cursorRaw)).trim() || null)
+        : null;
+
+    const hashtagWhere: Prisma.PostWhereInput =
+      hashtags.length > 0 ? ({ hashtags: { hasSome: hashtags } } as Prisma.PostWhereInput) : {};
+
+    // Fast path: hashtag-only search should be cheap and index-backed.
+    const isHashtagOnly = hashtags.length > 0 && !qMatchBase;
+    if (isHashtagOnly) {
+      // Support legacy offset cursor (numeric) but prefer createdAt/id cursor for scalability.
+      if (cursorIsOffset) {
+        const rows = await this.prisma.post.findMany({
+          where: {
+            AND: [{ deletedAt: null }, visibilityWhere, hashtagWhere],
+          },
+          include: {
+            user: true,
+            media: { orderBy: { position: 'asc' } },
+            mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true } } } },
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          skip: offset,
+          take: limit + 1,
+        });
+        const slice = rows.slice(0, limit);
+        const next = slice[slice.length - 1]?.id ?? null;
+        const nextCursor = rows.length > limit && next ? `p:${next}` : null;
+        return { posts: slice, nextCursor };
+      }
+
+      // Phase 1: hashtag matches (cursor = `p:<postId>`). Phase 2: text matches (`t:<postId>`) excluding hashtag matches.
+      if (!cursorIsTextPhase) {
+        const cursorWhere = await createdAtIdCursorWhere({
+          cursor: cursorPostId,
+          lookup: async (id) =>
+            await this.prisma.post.findUnique({
+              where: { id },
+              select: { id: true, createdAt: true },
+            }),
+        });
+
+        const rows = await this.prisma.post.findMany({
+          where: {
+            AND: [
+              { deletedAt: null },
+              visibilityWhere,
+              hashtagWhere,
+              ...(cursorWhere ? [cursorWhere] : []),
+            ],
+          },
+          include: SEARCH_POST_INCLUDE,
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: limit + 1,
+        });
+
+        // If we still have more hashtag matches, don't show text matches yet (hashtag posts should dominate).
+        if (rows.length > limit) {
+          const slice = rows.slice(0, limit);
+          const next = slice[slice.length - 1]?.id ?? null;
+          const nextCursor = next ? `p:${next}` : null;
+          return { posts: slice, nextCursor };
+        }
+
+        // Hashtag matches are exhausted (or fewer than a page): fill with text matches for the tag words.
+        const hashtagSlice = rows.slice(0, limit);
+        const remaining = Math.max(0, limit - hashtagSlice.length);
+        if (remaining === 0) {
+          const probe = await this.fetchHashtagFallbackTextPosts({
+            viewer,
+            allowed,
+            visibilityWhere,
+            hashtags,
+            queryFts: tagsText,
+            queryMatch: tagsText,
+            limit: 1,
+            cursorPostId: null,
+          });
+          return { posts: hashtagSlice, nextCursor: probe.posts.length > 0 ? 't:' : null };
+        }
+
+        const textRes = await this.fetchHashtagFallbackTextPosts({
+          viewer,
+          allowed,
+          visibilityWhere,
+          hashtags,
+          queryFts: tagsText,
+          queryMatch: tagsText,
+          limit: remaining,
+          cursorPostId: null,
+        });
+
+        const combined = [...hashtagSlice, ...textRes.posts];
+        const nextCursor = textRes.nextCursor ? `t:${textRes.nextCursor}` : null;
+        return { posts: combined, nextCursor };
+      }
+
+      // Phase 2: text-only fallback.
+      const textRes = await this.fetchHashtagFallbackTextPosts({
+        viewer,
+        allowed,
+        visibilityWhere,
+        hashtags,
+        queryFts: tagsText,
+        queryMatch: tagsText,
+        limit,
+        cursorPostId,
+      });
+      const nextCursor = textRes.nextCursor ? `t:${textRes.nextCursor}` : null;
+      return { posts: textRes.posts, nextCursor };
+    }
+
     const fetchSize = Math.min(200, limit * 10);
-    const offset = cursor ? Math.max(0, parseInt(cursor, 10)) : 0;
-
-    const useFts = q.length >= 3;
-
-    type SearchPostRow = Prisma.PostGetPayload<{
-      include: {
-        user: true;
-        media: true;
-        mentions: { include: { user: { select: { id: true; username: true; verifiedStatus: true; premium: true; premiumPlus: true } } } };
-      };
-    }>;
+    const useFts = qMatchExpanded.length >= 3;
     let raw: SearchPostRow[] = [];
 
     if (useFts) {
@@ -354,8 +665,13 @@ export class SearchService {
           ? Prisma.sql`OR (p."topics" && ARRAY[${Prisma.join(topicValues.map((t) => Prisma.sql`${t}`))}]::text[])`
           : Prisma.sql``;
 
+      const hashtagOrSql =
+        hashtags.length > 0
+          ? Prisma.sql`OR (p."hashtags" && ARRAY[${Prisma.join(hashtags.map((t) => Prisma.sql`${t}`))}]::text[])`
+          : Prisma.sql``;
+
       const ids = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-        WITH q AS (SELECT websearch_to_tsquery('english', ${q}) AS tsq)
+        WITH q AS (SELECT websearch_to_tsquery('english', ${qFtsExpanded}) AS tsq)
         SELECT p."id" as "id"
         FROM "Post" p
         JOIN "User" u ON u."id" = p."userId"
@@ -373,6 +689,7 @@ export class SearchService {
               ) @@ q.tsq
             )
             ${topicsSql}
+            ${hashtagOrSql}
           )
         ORDER BY p."createdAt" DESC, p."id" DESC
         LIMIT ${fetchSize}
@@ -382,32 +699,39 @@ export class SearchService {
       raw = postIds.length
         ? await this.prisma.post.findMany({
             where: { id: { in: postIds } },
-            include: {
-              user: true,
-              media: { orderBy: { position: 'asc' } },
-              mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true } } } },
-            },
+            include: SEARCH_POST_INCLUDE,
           })
         : [];
     } else {
-      const matchWhere = this.postSearchMatchWhere(q, words);
+      const matchWhere = this.postSearchMatchWhere(qMatchExpanded, words);
       const topicWhere: Prisma.PostWhereInput =
         topicValues.length > 0 ? ({ topics: { hasSome: topicValues } } as Prisma.PostWhereInput) : {};
-      const baseWhere: Prisma.PostWhereInput = {
-        AND: [
-          { deletedAt: null },
-          visibilityWhere,
-          topicValues.length > 0 ? ({ OR: [matchWhere, topicWhere] } as Prisma.PostWhereInput) : matchWhere,
-        ],
-      };
+      const baseWhere: Prisma.PostWhereInput =
+        hashtags.length > 0
+          ? {
+              AND: [
+                { deletedAt: null },
+                visibilityWhere,
+                {
+                  OR: [
+                    hashtagWhere,
+                    ...(topicValues.length > 0 ? [topicWhere] : []),
+                    matchWhere,
+                  ],
+                },
+              ],
+            }
+          : {
+              AND: [
+                { deletedAt: null },
+                visibilityWhere,
+                topicValues.length > 0 ? ({ OR: [matchWhere, topicWhere] } as Prisma.PostWhereInput) : matchWhere,
+              ],
+            };
 
       raw = await this.prisma.post.findMany({
         where: baseWhere,
-        include: {
-          user: true,
-          media: { orderBy: { position: 'asc' } },
-          mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true } } } },
-        },
+        include: SEARCH_POST_INCLUDE,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: fetchSize,
       });
@@ -422,7 +746,15 @@ export class SearchService {
       const un = (p.user?.username ?? '').trim().toLowerCase();
       const nm = (p.user?.name ?? '').trim().toLowerCase();
       let score = 0;
-      if (body.includes(qLower)) score = Math.max(score, POST_SCORE.bodyPhrase);
+      if (hashtags.length > 0) {
+        const tags = Array.isArray((p as any).hashtags) ? ((p as any).hashtags as string[]) : [];
+        if (tags.some((t) => hashtags.includes(String(t)))) score = Math.max(score, POST_SCORE.hashtagMatch);
+      }
+      if (phraseLowers.length > 0) {
+        if (phraseLowers.some((ph) => body.includes(ph))) score = Math.max(score, POST_SCORE.bodyPhrase);
+      } else if (qLower && body.includes(qLower)) {
+        score = Math.max(score, POST_SCORE.bodyPhrase);
+      }
       if (words.length > 0 && words.every((w) => body.includes(w))) score = Math.max(score, POST_SCORE.bodyAllWords);
       if (topicValues.length > 0) {
         const topics = Array.isArray((p as any).topics) ? ((p as any).topics as string[]) : [];

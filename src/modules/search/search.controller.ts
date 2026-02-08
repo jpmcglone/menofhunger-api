@@ -13,7 +13,7 @@ import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit
 
 const searchSchema = z.object({
   q: z.string().trim().max(200).optional(),
-  type: z.enum(['posts', 'users', 'bookmarks', 'all']).optional(),
+  type: z.enum(['posts', 'users', 'bookmarks', 'all', 'hashtags']).optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
   userCursor: z.string().optional(),
@@ -61,6 +61,11 @@ export class SearchController {
       viewerUserId ? 'private, max-age=60' : 'public, max-age=30, stale-while-revalidate=60',
     );
     httpRes.setHeader('Vary', 'Cookie');
+
+    if (type === 'hashtags') {
+      const res = await this.search.searchHashtags({ q, limit, cursor });
+      return { data: res.hashtags, pagination: { nextCursor: res.nextCursor } };
+    }
 
     if (type === 'all') {
       const userLimit = Math.min(10, limit);

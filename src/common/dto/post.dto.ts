@@ -47,6 +47,8 @@ export type PostDto = {
   deletedAt: string | null;
   visibility: PostVisibility;
   topics: string[];
+  /** User-created hashtags parsed from body text (lowercase, without '#'). */
+  hashtags: string[];
   boostCount: number;
   bookmarkCount: number;
   commentCount: number;
@@ -170,6 +172,7 @@ export function toPostDto(
     deletedAt: postDeletedAt,
     visibility: post.visibility,
     topics: Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [],
+    hashtags: isPostDeleted ? [] : (Array.isArray((post as any).hashtags) ? ((post as any).hashtags as string[]) : []),
     boostCount: post.boostCount,
     bookmarkCount: post.bookmarkCount ?? 0,
     commentCount: post.commentCount ?? 0,

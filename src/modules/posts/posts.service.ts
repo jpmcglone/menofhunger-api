@@ -6,6 +6,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
 import { parseMentionsFromBody as parseMentionsFromBodyText } from '../../common/mentions/mention-regex';
+import { parseHashtagTokensFromText, type HashtagToken } from '../../common/hashtags/hashtag-regex';
 import { inferTopicsFromText } from '../../common/topics/topic-utils';
 
 export type PostCounts = {
@@ -1735,15 +1736,46 @@ export class PostsService {
 
     const post = await this.prisma.post.findUnique({
       where: { id },
-      select: { id: true, userId: true, deletedAt: true },
+      select: { id: true, userId: true, deletedAt: true, hashtags: true, hashtagCasings: true },
     });
     if (!post) throw new NotFoundException('Post not found.');
     if (post.userId !== userId) throw new ForbiddenException('Not allowed to delete this post.');
     if (post.deletedAt) return { success: true };
 
-    await this.prisma.post.update({
-      where: { id },
-      data: { deletedAt: new Date() },
+    const tags = Array.isArray((post as any).hashtags) ? ((post as any).hashtags as string[]) : [];
+    const variants = Array.isArray((post as any).hashtagCasings) ? ((post as any).hashtagCasings as string[]) : [];
+    await this.prisma.$transaction(async (tx) => {
+      await tx.post.update({
+        where: { id },
+        data: { deletedAt: new Date() },
+      });
+      if (tags.length > 0) {
+        for (let i = 0; i < tags.length; i++) {
+          const t = (tags[i] ?? '').trim().toLowerCase();
+          const variant = (variants[i] ?? '').trim();
+          if (!t) continue;
+          try {
+            await tx.hashtag.update({
+              where: { tag: t },
+              data: { usageCount: { decrement: 1 } },
+            });
+          } catch {
+            // ignore: missing hashtag row (best-effort counters)
+          }
+          if (variant) {
+            try {
+              await tx.hashtagVariant.update({
+                where: { tag_variant: { tag: t, variant } },
+                data: { count: { decrement: 1 } },
+              });
+            } catch {
+              // ignore
+            }
+          }
+        }
+        await tx.hashtagVariant.deleteMany({ where: { tag: { in: tags }, count: { lte: 0 } } });
+        await tx.hashtag.deleteMany({ where: { tag: { in: tags }, usageCount: { lte: 0 } } });
+      }
     });
     return { success: true };
   }
@@ -1779,6 +1811,11 @@ export class PostsService {
   /** Parse @username tokens from body: letter then 0–14 [A-Za-z0-9_] (1–15 chars), not mid-email. */
   private parseMentionsFromBody(body: string): string[] {
     return parseMentionsFromBodyText(body);
+  }
+
+  /** Parse #hashtag tokens from body: letter then [A-Za-z0-9_], stored lowercase without '#'. */
+  private parseHashtagsFromBody(body: string): HashtagToken[] {
+    return parseHashtagTokensFromText(body);
   }
 
   /** Thread participant role for reply notifications. */
@@ -2035,12 +2072,22 @@ export class PostsService {
     // All mention IDs for PostMention records (include self so @yourname renders as a link)
     const mentionUserIds = [...new Set([...threadParticipantIds, ...resolvedFromUsernames])];
 
+    const hashtagTokensRaw = this.parseHashtagsFromBody(body);
+    const hashtagTokens = hashtagTokensRaw
+      .map((t) => ({ tag: (t.tag ?? '').trim().toLowerCase(), variant: (t.variant ?? '').trim() }))
+      .filter((t) => Boolean(t.tag && t.variant));
+    hashtagTokens.sort((a, b) => a.tag.localeCompare(b.tag) || a.variant.localeCompare(b.variant));
+    const hashtags = hashtagTokens.map((t) => t.tag);
+    const hashtagCasings = hashtagTokens.map((t) => t.variant);
+
     const post = await this.prisma.$transaction(async (tx) => {
       const topics = inferTopicsFromText(body);
       const created = await tx.post.create({
         data: {
           body,
           topics,
+          hashtags,
+          hashtagCasings,
           visibility,
           userId,
           parentId: parentId ?? undefined,
@@ -2068,6 +2115,23 @@ export class PostsService {
           data: mentionUserIds.map((uid) => ({ postId: created.id, userId: uid })),
           skipDuplicates: true,
         });
+      }
+
+      if (hashtagTokens.length > 0) {
+        for (const tok of hashtagTokens) {
+          const t = tok.tag;
+          const variant = tok.variant;
+          await tx.hashtag.upsert({
+            where: { tag: t },
+            create: { tag: t, usageCount: 1 },
+            update: { usageCount: { increment: 1 } },
+          });
+          await tx.hashtagVariant.upsert({
+            where: { tag_variant: { tag: t, variant } },
+            create: { tag: t, variant, count: 1 },
+            update: { count: { increment: 1 } },
+          });
+        }
       }
 
       return created;

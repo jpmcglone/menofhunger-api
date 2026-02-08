@@ -239,6 +239,10 @@ model Post {
   body       String
   /** Inferred topics (from allowlist) used for search/discovery. */
   topics     String[]       @default([])
+  /** User-created hashtags (parsed from body) used for search/autocomplete. Stored lowercase. */
+  hashtags   String[]       @default([])
+  /** Hashtag casing variants used in this post (one per entry in `hashtags`, without '#'). */
+  hashtagCasings String[]   @default([])
   visibility PostVisibility @default(public)
   boostCount Int            @default(0)
   bookmarkCount Int         @default(0)
@@ -274,11 +278,61 @@ model Post {
   @@index([rootId])
   @@index([rootId, createdAt])
   @@index([topics], type: Gin)
+  @@index([hashtags], type: Gin)
   // Feed/trending hot paths (parentId IS NULL + deletedAt IS NULL) benefit from composite indexes matching sort+filters.
   @@index([parentId, deletedAt, createdAt(sort: Desc), id(sort: Desc)])
   @@index([parentId, deletedAt, boostCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
   @@index([parentId, deletedAt, bookmarkCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
   @@index([parentId, deletedAt, commentCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
+}
+
+model Hashtag {
+  tag String @id
+
+  usageCount Int @default(0)
+  /** Most common casing for display/autocomplete, e.g. "HashTags". */
+  displayTag String?
+  /** Count for `displayTag` (ties keep existing). */
+  displayTagCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  variants HashtagVariant[]
+
+  @@index([usageCount])
+  @@index([updatedAt])
+}
+
+model HashtagVariant {
+  tag     String
+  variant String
+  count   Int @default(0)
+
+  hashtag Hashtag @relation(fields: [tag], references: [tag], onDelete: Cascade)
+
+  @@id([tag, variant])
+  @@index([tag])
+  @@index([count])
+}
+
+model HashtagBackfillRun {
+  id String @id @default(cuid())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  status String @default("running")
+  /** Post id cursor for createdAt/id pagination. */
+  cursor String?
+  processedPosts Int @default(0)
+  updatedPosts Int @default(0)
+  resetDone Boolean @default(false)
+  startedAt DateTime @default(now())
+  finishedAt DateTime?
+  lastError String? @db.Text
+
+  @@index([status, updatedAt])
 }
 
 // Postgres-backed "cache": periodic snapshots of trending scores.
@@ -302,6 +356,23 @@ model PostPopularScoreSnapshot {
   @@index([asOf, score(sort: Desc), createdAt(sort: Desc), postId(sort: Desc)])
   @@index([asOf, userId])
   @@index([asOf, visibility])
+}
+
+// Postgres-backed "cache": periodic snapshots of trending hashtag scores.
+// We keep a small rolling window (e.g. last ~1 hour) so paging remains stable across refreshes.
+model HashtagTrendingScoreSnapshot {
+  asOf DateTime
+  /** Canonical lowercase tag (no '#'). */
+  tag String
+  visibility PostVisibility
+  /** Time-decayed score (half-life based); used for ranking only. */
+  score Float
+  /** Raw usage count within the lookback window (not time-decayed). */
+  usageCount Int
+
+  @@id([asOf, visibility, tag])
+  @@index([asOf, visibility, score(sort: Desc), usageCount(sort: Desc), tag(sort: Asc)])
+  @@index([asOf, tag])
 }
 
 model PostMention {
