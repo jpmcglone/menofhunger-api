@@ -145,4 +145,3 @@ function nextEasternMidnightUtcMs(now: Date): number {
   // Fallback: ~24h from now (should never happen).
   return now.getTime() + 24 * 60 * 60 * 1000;
 }
-
