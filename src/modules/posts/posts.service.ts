@@ -74,14 +74,26 @@ export class PostsService {
   private static pinScorePremium = 0.5;
   private static pinScoreVerified = 0.3;
   private static pinScoreBase = 0.15;
+  /**
+   * Trending hashtag bonus: small additive bump so "hot topic" posts surface a bit sooner,
+   * but engagement signals (boosts/bookmarks/comments) still dominate.
+   *
+   * Base applies when the post has >=1 hashtag that appears in the latest trending snapshot.
+   * Scaled applies proportional to the post's strongest trending hashtag score (normalized to snapshot max).
+   */
+  private static popularTrendingHashtagBaseBonus = 0.05;
+  private static popularTrendingHashtagMaxScaledBonus = 0.15;
 
   // "Featured" is an automated, stable subset of trending:
   // - Top-level posts only
   // - Shorter lookback window (more “fresh”)
   // - Light author diversity (avoid 5 posts in a row from same author)
-  private static featuredLookbackDays = 14;
+  private static featuredLookbackDays = 10;
   private static featuredMaxPerAuthor = 1;
   private static featuredScanTakeMax = 500;
+  private static featuredRisingWindowHours = 48;
+  private static featuredRisingHalfLifeSeconds = 6 * 60 * 60;
+  private static featuredRisingMixTopRatio = 0.7;
 
   private encodePopularCursor(cursor: { asOf: string; score: number; createdAt: string; id: string }) {
     return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
@@ -728,21 +740,275 @@ export class PostsService {
     // If caller asked for a specific asOf (cursor pagination) but we no longer retain that snapshot, return null and fallback.
     if (decodedCursor && rows.length === 0) return null;
 
-    const picked: Array<{ postId: string; createdAt: Date; score: number; userId: string }> = [];
-    const perAuthor = new Map<string, number>();
+    if (decodedCursor) {
+      const picked: Array<{ postId: string; createdAt: Date; score: number; userId: string }> = [];
+      const perAuthor = new Map<string, number>();
 
+      for (const r of rows) {
+        if (picked.length >= limit + 1) break;
+        const n = perAuthor.get(r.userId) ?? 0;
+        if (n >= PostsService.featuredMaxPerAuthor) continue;
+        perAuthor.set(r.userId, n + 1);
+        picked.push(r);
+      }
+
+      const sliceRows = picked.slice(0, limit);
+      const ids = sliceRows.map((r) => r.postId);
+      const boundaryRow = sliceRows.length > 0 ? sliceRows[sliceRows.length - 1] : null;
+
+      const posts = ids.length
+        ? await this.prisma.post.findMany({
+            where: { id: { in: ids }, ...this.notDeletedWhere() },
+            include: {
+              user: true,
+              media: { orderBy: { position: 'asc' } },
+              mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+            },
+          })
+        : [];
+      const byId = new Map(posts.map((p) => [p.id, p] as const));
+      const ordered = ids.map((id) => byId.get(id)).filter((p): p is (typeof posts)[number] => Boolean(p));
+
+      const nextCursor =
+        picked.length > limit && boundaryRow
+          ? this.encodePopularCursor({
+              asOf: snapshotAsOf.toISOString(),
+              score: boundaryRow.score,
+              createdAt: boundaryRow.createdAt.toISOString(),
+              id: boundaryRow.postId,
+            })
+          : null;
+
+      const scoreByPostId = new Map<string, number>(sliceRows.map((r) => [r.postId, r.score]));
+      return { posts: ordered, nextCursor, scoreByPostId };
+    }
+
+    // First page only: blend two buckets so Explore "Featured" feels fresh.
+    // Cursor pagination continues using the stable snapshot ordering path above.
+    const topTake = Math.max(1, Math.min(limit, Math.round(limit * PostsService.featuredRisingMixTopRatio)));
+    const risingTake = Math.max(0, limit - topTake);
+
+    const perAuthor = new Map<string, number>();
+    const topPicked: Array<{ postId: string; createdAt: Date; score: number; userId: string }> = [];
     for (const r of rows) {
-      if (picked.length >= limit + 1) break;
+      if (topPicked.length >= topTake + 1) break; // keep one extra for cursor
       const n = perAuthor.get(r.userId) ?? 0;
       if (n >= PostsService.featuredMaxPerAuthor) continue;
       perAuthor.set(r.userId, n + 1);
-      picked.push(r);
+      topPicked.push(r);
     }
 
-    const sliceRows = picked.slice(0, limit);
-    const ids = sliceRows.map((r) => r.postId);
-    const boundaryRow = sliceRows.length > 0 ? sliceRows[sliceRows.length - 1] : null;
+    const topSlice = topPicked.slice(0, topTake);
+    const topBoundaryRow = topSlice.length > 0 ? topSlice[topSlice.length - 1] : null;
+    const nextCursor =
+      topPicked.length > topTake && topBoundaryRow
+        ? this.encodePopularCursor({
+            asOf: snapshotAsOf.toISOString(),
+            score: topBoundaryRow.score,
+            createdAt: topBoundaryRow.createdAt.toISOString(),
+            id: topBoundaryRow.postId,
+          })
+        : null;
 
+    const excludePostIds = topSlice.map((r) => r.postId);
+    const excludePostIdsSql =
+      excludePostIds.length > 0
+        ? Prisma.sql`AND p."id" NOT IN (${Prisma.join(excludePostIds.map((id) => Prisma.sql`${id}`))})`
+        : Prisma.sql``;
+
+    const excludeAuthorIds = Array.from(perAuthor.keys());
+    const excludeAuthorIdsSql =
+      excludeAuthorIds.length > 0
+        ? Prisma.sql`AND p."userId" NOT IN (${Prisma.join(excludeAuthorIds.map((id) => Prisma.sql`${id}`))})`
+        : Prisma.sql``;
+
+    const excludeSelfSql = viewerUserId ? Prisma.sql`AND p."userId" <> ${viewerUserId}` : Prisma.sql``;
+    const authorFilterSql =
+      authorUserIds?.length
+        ? Prisma.sql`AND p."userId" IN (${Prisma.join(authorUserIds.map((id) => Prisma.sql`${id}`))})`
+        : Prisma.sql``;
+
+    const risingWindowMs = PostsService.featuredRisingWindowHours * 60 * 60 * 1000;
+    const risingMinCreatedAt = new Date(snapshotAsOf.getTime() - risingWindowMs);
+
+    const risingVisibilitiesForQuery: PostVisibility[] =
+      visibility === 'all' ? allowed : visibility === 'public' ? (['public'] as PostVisibility[]) : ([visibility] as PostVisibility[]);
+    const risingVisibilitiesForQuerySql = risingVisibilitiesForQuery.map((v) => Prisma.sql`${v}::"PostVisibility"`);
+    const risingVisibilityFilterSql = Prisma.sql`AND p."visibility" IN (${Prisma.join(risingVisibilitiesForQuerySql)})`;
+
+    const risingRows =
+      risingTake > 0
+        ? await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date; score: number; userId: string }>>(Prisma.sql`
+            WITH
+            comment_scores AS (
+              SELECT
+                p."parentId" as "postId",
+                CAST(
+                  SUM(
+                    POWER(
+                      0.5,
+                      GREATEST(
+                        0,
+                        EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                      ) / ${PostsService.featuredRisingHalfLifeSeconds}
+                    )
+                  ) AS DOUBLE PRECISION
+                ) as "commentScore"
+              FROM "Post" p
+              WHERE
+                p."parentId" IS NOT NULL
+                AND p."deletedAt" IS NULL
+                AND p."createdAt" >= ${risingMinCreatedAt}
+              GROUP BY p."parentId"
+            ),
+            candidates AS (
+              SELECT p."id"
+              FROM "Post" p
+              WHERE
+                p."deletedAt" IS NULL
+                AND p."parentId" IS NULL
+                AND p."createdAt" >= ${risingMinCreatedAt}
+                ${risingVisibilityFilterSql}
+                ${excludeSelfSql}
+                ${authorFilterSql}
+                ${excludePostIdsSql}
+                ${excludeAuthorIdsSql}
+                AND (p."boostCount" > 0 OR p."bookmarkCount" > 0 OR p."commentCount" > 0)
+              ORDER BY (p."boostCount" + p."bookmarkCount" + p."commentCount") DESC, p."createdAt" DESC, p."id" DESC
+              LIMIT 2000
+            ),
+            latest_hashtag_snapshot AS (
+              SELECT (
+                SELECT s."asOf"
+                FROM "HashtagTrendingScoreSnapshot" s
+                ORDER BY s."asOf" DESC
+                LIMIT 1
+              ) as "asOf"
+            ),
+            hashtag_global AS (
+              SELECT
+                CAST(MAX(h."score") AS DOUBLE PRECISION) as "maxScore"
+              FROM "HashtagTrendingScoreSnapshot" h
+              JOIN latest_hashtag_snapshot lhs ON TRUE
+              WHERE
+                lhs."asOf" IS NOT NULL
+                AND h."asOf" = lhs."asOf"
+                AND h."visibility" IN (${Prisma.join(risingVisibilitiesForQuerySql)})
+            ),
+            post_hashtag_scores AS (
+              SELECT
+                p."id" as "postId",
+                CAST(MAX(h."score") AS DOUBLE PRECISION) as "maxTagScore"
+              FROM "Post" p
+              JOIN candidates c ON c."id" = p."id"
+              CROSS JOIN LATERAL UNNEST(p."hashtags") AS t
+              JOIN latest_hashtag_snapshot lhs ON TRUE
+              LEFT JOIN "HashtagTrendingScoreSnapshot" h ON
+                lhs."asOf" IS NOT NULL
+                AND h."asOf" = lhs."asOf"
+                AND h."visibility" = p."visibility"
+                AND h."tag" = LOWER(TRIM(t))
+              WHERE LOWER(TRIM(t)) <> ''
+              GROUP BY p."id"
+            ),
+            scored AS (
+              SELECT
+                p."id" as "id",
+                p."createdAt" as "createdAt",
+                p."userId" as "userId",
+                CAST(
+                  (
+                    CASE
+                    WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
+                    ELSE p."boostScore" * POWER(
+                      0.5,
+                      GREATEST(
+                        0,
+                        EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                      ) / ${PostsService.featuredRisingHalfLifeSeconds}
+                    )
+                    END
+                  )
+                  +
+                  (
+                    (p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(
+                      0.5,
+                      GREATEST(
+                        0,
+                        EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                      ) / ${PostsService.featuredRisingHalfLifeSeconds}
+                    )
+                  )
+                  +
+                  (
+                    (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight}
+                  )
+                  +
+                  (
+                    CASE
+                      WHEN hs."maxTagScore" IS NULL OR hs."maxTagScore" <= 0 THEN 0
+                      ELSE
+                        ${PostsService.popularTrendingHashtagBaseBonus}
+                        +
+                        COALESCE(
+                          LEAST(
+                            1.0,
+                            hs."maxTagScore" / NULLIF(hg."maxScore", 0)
+                          ),
+                          0
+                        ) * ${PostsService.popularTrendingHashtagMaxScaledBonus}
+                    END
+                  )
+                  +
+                  (
+                    CASE
+                      WHEN u."pinnedPostId" = p."id" THEN
+                        (CASE WHEN u."premium" THEN ${PostsService.pinScorePremium} WHEN u."verifiedStatus" <> 'none' THEN ${PostsService.pinScoreVerified} ELSE ${PostsService.pinScoreBase} END)
+                        * POWER(
+                          0.5,
+                          GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))) / ${PostsService.featuredRisingHalfLifeSeconds}
+                        )
+                      ELSE 0
+                    END
+                  )
+                  * ${PostsService.popularTopLevelScoreBoost}
+                  AS DOUBLE PRECISION
+                ) as "score"
+              FROM "Post" p
+              JOIN candidates c ON c."id" = p."id"
+              LEFT JOIN "User" u ON u."id" = p."userId"
+              LEFT JOIN comment_scores cs ON cs."postId" = p."id"
+              CROSS JOIN hashtag_global hg
+              LEFT JOIN post_hashtag_scores hs ON hs."postId" = p."id"
+            )
+            SELECT "id", "createdAt", "score", "userId"
+            FROM scored
+            WHERE "score" > 0
+            ORDER BY "score" DESC, "createdAt" DESC, "id" DESC
+            LIMIT 200
+          `)
+        : [];
+
+    const risingPicked: Array<{ postId: string; createdAt: Date; score: number; userId: string }> = [];
+    for (const r of risingRows) {
+      if (risingPicked.length >= risingTake) break;
+      const n = perAuthor.get(r.userId) ?? 0;
+      if (n >= PostsService.featuredMaxPerAuthor) continue;
+      perAuthor.set(r.userId, n + 1);
+      risingPicked.push({ postId: r.id, createdAt: r.createdAt, score: r.score, userId: r.userId });
+    }
+
+    // Interleave so Explore doesn't show "2 old + 1 new" clumped.
+    const combined: Array<{ postId: string; createdAt: Date; score: number; userId: string }> = [];
+    const topQueue = [...topSlice];
+    const risingQueue = [...risingPicked];
+    while (combined.length < limit && (topQueue.length > 0 || risingQueue.length > 0)) {
+      if (topQueue.length > 0) combined.push(topQueue.shift()!);
+      if (combined.length >= limit) break;
+      if (risingQueue.length > 0) combined.push(risingQueue.shift()!);
+    }
+
+    const ids = combined.map((r) => r.postId);
     const posts = ids.length
       ? await this.prisma.post.findMany({
           where: { id: { in: ids }, ...this.notDeletedWhere() },
@@ -756,17 +1022,7 @@ export class PostsService {
     const byId = new Map(posts.map((p) => [p.id, p] as const));
     const ordered = ids.map((id) => byId.get(id)).filter((p): p is (typeof posts)[number] => Boolean(p));
 
-    const nextCursor =
-      picked.length > limit && boundaryRow
-        ? this.encodePopularCursor({
-            asOf: snapshotAsOf.toISOString(),
-            score: boundaryRow.score,
-            createdAt: boundaryRow.createdAt.toISOString(),
-            id: boundaryRow.postId,
-          })
-        : null;
-
-    const scoreByPostId = new Map<string, number>(sliceRows.map((r) => [r.postId, r.score]));
+    const scoreByPostId = new Map<string, number>(combined.map((r) => [r.postId, r.score]));
     return { posts: ordered, nextCursor, scoreByPostId };
   }
 
@@ -1010,6 +1266,40 @@ export class PostsService {
         ) u
         GROUP BY u."id"
       ),
+      latest_hashtag_snapshot AS (
+        SELECT (
+          SELECT s."asOf"
+          FROM "HashtagTrendingScoreSnapshot" s
+          ORDER BY s."asOf" DESC
+          LIMIT 1
+        ) as "asOf"
+      ),
+      hashtag_global AS (
+        SELECT
+          CAST(MAX(h."score") AS DOUBLE PRECISION) as "maxScore"
+        FROM "HashtagTrendingScoreSnapshot" h
+        JOIN latest_hashtag_snapshot lhs ON TRUE
+        WHERE
+          lhs."asOf" IS NOT NULL
+          AND h."asOf" = lhs."asOf"
+          AND h."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
+      ),
+      post_hashtag_scores AS (
+        SELECT
+          p."id" as "postId",
+          CAST(MAX(h."score") AS DOUBLE PRECISION) as "maxTagScore"
+        FROM "Post" p
+        JOIN candidates c ON c."id" = p."id"
+        CROSS JOIN LATERAL UNNEST(p."hashtags") AS t
+        JOIN latest_hashtag_snapshot lhs ON TRUE
+        LEFT JOIN "HashtagTrendingScoreSnapshot" h ON
+          lhs."asOf" IS NOT NULL
+          AND h."asOf" = lhs."asOf"
+          AND h."visibility" = p."visibility"
+          AND h."tag" = LOWER(TRIM(t))
+        WHERE LOWER(TRIM(t)) <> ''
+        GROUP BY p."id"
+      ),
       scored AS (
         SELECT
           p."id" as "id",
@@ -1047,6 +1337,22 @@ export class PostsService {
             +
             (
               CASE
+                WHEN hs."maxTagScore" IS NULL OR hs."maxTagScore" <= 0 THEN 0
+                ELSE
+                  ${PostsService.popularTrendingHashtagBaseBonus}
+                  +
+                  COALESCE(
+                    LEAST(
+                      1.0,
+                      hs."maxTagScore" / NULLIF(hg."maxScore", 0)
+                    ),
+                    0
+                  ) * ${PostsService.popularTrendingHashtagMaxScaledBonus}
+              END
+            )
+            +
+            (
+              CASE
                 WHEN u."pinnedPostId" = p."id" THEN
                   (CASE WHEN u."premium" THEN ${PostsService.pinScorePremium} WHEN u."verifiedStatus" <> 'none' THEN ${PostsService.pinScoreVerified} ELSE ${PostsService.pinScoreBase} END)
                   * POWER(
@@ -1076,6 +1382,8 @@ export class PostsService {
         LEFT JOIN "Post" parent ON parent."id" = p."parentId"
         LEFT JOIN "Post" root ON root."id" = COALESCE(p."rootId", p."id")
         LEFT JOIN comment_scores cs ON cs."postId" = p."id"
+        CROSS JOIN hashtag_global hg
+        LEFT JOIN post_hashtag_scores hs ON hs."postId" = p."id"
       )
       SELECT "id", "createdAt", "score"
       FROM scored

@@ -17,9 +17,10 @@ import { AdminVerificationController } from './admin-verification.controller';
 import { VerificationModule } from '../verification/verification.module';
 import { ReportsModule } from '../reports/reports.module';
 import { AdminReportsController } from './admin-reports.controller';
+import { HashtagsModule } from '../hashtags/hashtags.module';
 
 @Module({
-  imports: [AuthModule, PrismaModule, UsersModule, FeedbackModule, ReportsModule, PostsModule, VerificationModule],
+  imports: [AuthModule, PrismaModule, UsersModule, FeedbackModule, ReportsModule, PostsModule, VerificationModule, HashtagsModule],
   controllers: [
     AdminUsersController,
     AdminSiteConfigController,

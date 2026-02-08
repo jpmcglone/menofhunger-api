@@ -8,7 +8,7 @@ import { HashtagsService } from './hashtags.service';
   imports: [AuthModule],
   controllers: [HashtagsController],
   providers: [HashtagsService, HashtagsTrendingScoreCron],
-  exports: [HashtagsService],
+  exports: [HashtagsService, HashtagsTrendingScoreCron],
 })
 export class HashtagsModule {}
 

@@ -43,47 +43,52 @@ export class HashtagsTrendingScoreCron implements OnModuleInit {
     const startedAt = Date.now();
     try {
       const asOf = new Date();
-      const lookbackDays = 14;
-      const minCreatedAt = new Date(asOf.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
       const halfLifeHours = 12;
       const halfLifeSeconds = halfLifeHours * 60 * 60;
 
-      const rows = await this.prisma.$queryRaw<
-        Array<{
-          visibility: 'public' | 'verifiedOnly' | 'premiumOnly';
-          tag: string;
-          score: number;
-          usageCount: number;
-        }>
-      >(Prisma.sql`
-        SELECT
-          p."visibility" as "visibility",
-          LOWER(TRIM(t)) as "tag",
-          CAST(
-            SUM(
-              POWER(
-                0.5,
-                GREATEST(
-                  0,
-                  EXTRACT(EPOCH FROM (${asOf}::timestamptz - p."createdAt"))
-                ) / ${halfLifeSeconds}
-              )
-            ) AS DOUBLE PRECISION
-          ) as "score",
-          CAST(COUNT(*) AS INT) as "usageCount"
-        FROM "Post" p
-        CROSS JOIN LATERAL UNNEST(p."hashtags") AS t
-        WHERE
-          p."deletedAt" IS NULL
-          AND p."createdAt" >= ${minCreatedAt}
-          AND p."parentId" IS NULL
-          AND p."visibility" <> 'onlyMe'
-          AND CARDINALITY(p."hashtags") > 0
-        GROUP BY 1, 2
-        HAVING LOWER(TRIM(t)) <> ''
-        ORDER BY "score" DESC, "usageCount" DESC, "tag" ASC
-        LIMIT 20000
-      `);
+      const queryRows = async (lookbackDays: number) => {
+        const minCreatedAt = new Date(asOf.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
+        return await this.prisma.$queryRaw<
+          Array<{
+            visibility: 'public' | 'verifiedOnly' | 'premiumOnly';
+            tag: string;
+            score: number;
+            usageCount: number;
+          }>
+        >(Prisma.sql`
+          SELECT
+            p."visibility" as "visibility",
+            LOWER(TRIM(t)) as "tag",
+            CAST(
+              SUM(
+                POWER(
+                  0.5,
+                  GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (${asOf}::timestamptz - p."createdAt"))
+                  ) / ${halfLifeSeconds}
+                )
+              ) AS DOUBLE PRECISION
+            ) as "score",
+            CAST(COUNT(*) AS INT) as "usageCount"
+          FROM "Post" p
+          CROSS JOIN LATERAL UNNEST(p."hashtags") AS t
+          WHERE
+            p."deletedAt" IS NULL
+            AND p."createdAt" >= ${minCreatedAt}
+            AND p."parentId" IS NULL
+            AND p."visibility" <> 'onlyMe'
+            AND CARDINALITY(p."hashtags") > 0
+          GROUP BY 1, 2
+          HAVING LOWER(TRIM(t)) <> ''
+          ORDER BY "score" DESC, "usageCount" DESC, "tag" ASC
+          LIMIT 20000
+        `);
+      };
+
+      // Primary: true “trending” (2-week lookback). Fallback: if sparse data yields nothing, widen so UI isn't empty.
+      const rows14 = await queryRows(14);
+      const rows = rows14.length > 0 ? rows14 : await queryRows(365);
 
       const cutoff = new Date(asOf.getTime() - 60 * 60 * 1000);
 

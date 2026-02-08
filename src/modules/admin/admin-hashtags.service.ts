@@ -1,8 +1,9 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { parseHashtagTokensFromText } from '../../common/hashtags/hashtag-regex';
+import { HashtagsTrendingScoreCron } from '../hashtags/hashtags-trending-score.cron';
 
 type BackfillStatusDto = {
   id: string;
@@ -19,7 +20,12 @@ type BackfillStatusDto = {
 
 @Injectable()
 export class AdminHashtagsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(AdminHashtagsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly hashtagTrendingCron: HashtagsTrendingScoreCron,
+  ) {}
 
   async getBackfillStatus(): Promise<{ data: BackfillStatusDto | null }> {
     const run = await this.prisma.hashtagBackfillRun.findFirst({
@@ -59,7 +65,7 @@ export class AdminHashtagsService {
     const batchSize = Math.max(10, Math.min(5_000, Math.floor(params.batchSize || 500)));
 
     // One request = one interactive transaction so advisory_xact_lock is safe (single connection).
-    return await this.prisma.$transaction(async (tx) => {
+    const res = await this.prisma.$transaction(async (tx) => {
       // Ensure only one backfill batch runs at a time.
       const lockKey = 982_341_771;
       const lockedRows = await tx.$queryRaw<Array<{ locked: boolean }>>(
@@ -201,6 +207,17 @@ export class AdminHashtagsService {
         },
       };
     }, { timeout: 120_000 });
+
+    // When a backfill run finishes, refresh hashtag trending snapshots immediately so the UI updates right away.
+    if (res?.data?.done) {
+      try {
+        await this.hashtagTrendingCron.refreshTrendingHashtagSnapshots();
+      } catch (err) {
+        this.logger.warn(`Hashtag trending refresh after backfill failed: ${(err as Error).message}`);
+      }
+    }
+
+    return res;
   }
 }
 

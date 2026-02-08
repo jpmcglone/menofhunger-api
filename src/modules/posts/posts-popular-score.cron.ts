@@ -155,6 +155,40 @@ export class PostsPopularScoreCron {
           ) u
           GROUP BY u."id"
         ),
+        latest_hashtag_snapshot AS (
+          SELECT (
+            SELECT s."asOf"
+            FROM "HashtagTrendingScoreSnapshot" s
+            ORDER BY s."asOf" DESC
+            LIMIT 1
+          ) as "asOf"
+        ),
+        hashtag_global AS (
+          SELECT
+            CAST(MAX(h."score") AS DOUBLE PRECISION) as "maxScore"
+          FROM "HashtagTrendingScoreSnapshot" h
+          JOIN latest_hashtag_snapshot lhs ON TRUE
+          WHERE
+            lhs."asOf" IS NOT NULL
+            AND h."asOf" = lhs."asOf"
+            AND h."visibility" IN ('public'::"PostVisibility", 'verifiedOnly'::"PostVisibility", 'premiumOnly'::"PostVisibility")
+        ),
+        post_hashtag_scores AS (
+          SELECT
+            p."id" as "postId",
+            CAST(MAX(h."score") AS DOUBLE PRECISION) as "maxTagScore"
+          FROM "Post" p
+          JOIN candidates c ON c."id" = p."id"
+          CROSS JOIN LATERAL UNNEST(p."hashtags") AS t
+          JOIN latest_hashtag_snapshot lhs ON TRUE
+          LEFT JOIN "HashtagTrendingScoreSnapshot" h ON
+            lhs."asOf" IS NOT NULL
+            AND h."asOf" = lhs."asOf"
+            AND h."visibility" = p."visibility"
+            AND h."tag" = LOWER(TRIM(t))
+          WHERE LOWER(TRIM(t)) <> ''
+          GROUP BY p."id"
+        ),
         scored AS (
           SELECT
             p."id" as "id",
@@ -193,6 +227,22 @@ export class PostsPopularScoreCron {
               +
               (
                 CASE
+                  WHEN hs."maxTagScore" IS NULL OR hs."maxTagScore" <= 0 THEN 0
+                  ELSE
+                    0.05
+                    +
+                    COALESCE(
+                      LEAST(
+                        1.0,
+                        hs."maxTagScore" / NULLIF(hg."maxScore", 0)
+                      ),
+                      0
+                    ) * 0.15
+                END
+              )
+              +
+              (
+                CASE
                   WHEN u."pinnedPostId" = p."id" THEN
                     (CASE WHEN u."premium" THEN 0.5 WHEN u."verifiedStatus" <> 'none' THEN 0.3 ELSE 0.15 END)
                     * POWER(
@@ -222,6 +272,8 @@ export class PostsPopularScoreCron {
           LEFT JOIN "Post" parent ON parent."id" = p."parentId"
           LEFT JOIN "Post" root ON root."id" = COALESCE(p."rootId", p."id")
           LEFT JOIN comment_scores cs ON cs."postId" = p."id"
+          CROSS JOIN hashtag_global hg
+          LEFT JOIN post_hashtag_scores hs ON hs."postId" = p."id"
         )
         SELECT "id", "createdAt", "score", "userId", "visibility", "parentId", "rootId"
         FROM scored
