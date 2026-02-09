@@ -46,8 +46,9 @@ export class HashtagsTrendingScoreCron implements OnModuleInit {
       const halfLifeHours = 12;
       const halfLifeSeconds = halfLifeHours * 60 * 60;
 
-      const queryRows = async (lookbackDays: number) => {
-        const minCreatedAt = new Date(asOf.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
+      const queryRows = async (params: { lookbackDays: number; topLevelOnly: boolean }) => {
+        const minCreatedAt = new Date(asOf.getTime() - params.lookbackDays * 24 * 60 * 60 * 1000);
+        const topLevelSql = params.topLevelOnly ? Prisma.sql`AND p."parentId" IS NULL` : Prisma.sql``;
         return await this.prisma.$queryRaw<
           Array<{
             visibility: 'public' | 'verifiedOnly' | 'premiumOnly';
@@ -76,7 +77,7 @@ export class HashtagsTrendingScoreCron implements OnModuleInit {
           WHERE
             p."deletedAt" IS NULL
             AND p."createdAt" >= ${minCreatedAt}
-            AND p."parentId" IS NULL
+            ${topLevelSql}
             AND p."visibility" <> 'onlyMe'
             AND CARDINALITY(p."hashtags") > 0
           GROUP BY 1, 2
@@ -86,9 +87,12 @@ export class HashtagsTrendingScoreCron implements OnModuleInit {
         `);
       };
 
-      // Primary: true “trending” (2-week lookback). Fallback: if sparse data yields nothing, widen so UI isn't empty.
-      const rows14 = await queryRows(14);
-      const rows = rows14.length > 0 ? rows14 : await queryRows(365);
+      // Primary: true “trending” (2-week lookback, top-level only).
+      // Fallbacks are intentionally more permissive so the UI doesn't show "No trends yet" forever on sparse datasets.
+      const rows14 = await queryRows({ lookbackDays: 14, topLevelOnly: true });
+      const rows3650Top = rows14.length === 0 ? await queryRows({ lookbackDays: 3650, topLevelOnly: true }) : [];
+      const rows3650All = rows14.length === 0 && rows3650Top.length === 0 ? await queryRows({ lookbackDays: 3650, topLevelOnly: false }) : [];
+      const rows = rows14.length > 0 ? rows14 : rows3650Top.length > 0 ? rows3650Top : rows3650All;
 
       const cutoff = new Date(asOf.getTime() - 60 * 60 * 1000);
 
@@ -112,7 +116,10 @@ export class HashtagsTrendingScoreCron implements OnModuleInit {
       });
 
       const ms = Date.now() - startedAt;
-      this.logger.log(`Refreshed hashtag trending snapshots: ${rows.length} rows asOf=${asOf.toISOString()} (${ms}ms)`);
+      const mode = rows14.length > 0 ? '14d-top' : rows3650Top.length > 0 ? '3650d-top' : '3650d-all';
+      this.logger.log(
+        `Refreshed hashtag trending snapshots: ${rows.length} rows asOf=${asOf.toISOString()} mode=${mode} (${ms}ms)`,
+      );
     } catch (err) {
       this.logger.warn(`Hashtag trending snapshot refresh failed: ${(err as Error).message}`);
     } finally {
