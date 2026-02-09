@@ -22,6 +22,15 @@ const hashtagBackfillSchema = z.object({
   reset: z.coerce.boolean().optional(),
 });
 
+const postsTopicsBackfillSchema = z.object({
+  /** When true, recompute topics even if already set. */
+  wipeExisting: z.coerce.boolean().optional(),
+  /** Batch size (posts per run). */
+  batchSize: z.coerce.number().int().min(10).max(5_000).optional(),
+  /** How far back to scan for posts. */
+  lookbackDays: z.coerce.number().int().min(1).max(10_000).optional(),
+});
+
 @UseGuards(AdminGuard)
 @Controller('admin/jobs')
 export class AdminJobsController {
@@ -78,8 +87,13 @@ export class AdminJobsController {
   }
 
   @Post('posts-topics-backfill')
-  async runPostsTopicsBackfill() {
-    await this.postsTopicsBackfill.backfill();
+  async runPostsTopicsBackfill(@Body() body: unknown) {
+    const parsed = postsTopicsBackfillSchema.parse(body ?? {});
+    await this.postsTopicsBackfill.backfill({
+      wipeExisting: Boolean(parsed.wipeExisting),
+      batchSize: parsed.batchSize ?? undefined,
+      lookbackDays: parsed.lookbackDays ?? undefined,
+    });
     return { data: { ok: true } };
   }
 

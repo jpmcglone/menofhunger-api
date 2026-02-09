@@ -6,8 +6,8 @@ import type { PostWithAuthorAndMedia } from '../../common/dto/post.dto';
 import { toPostDto, type TopicDto } from '../../common/dto';
 import { AppConfigService } from '../app/app-config.service';
 import { PostsService } from '../posts/posts.service';
-import { SearchService } from '../search/search.service';
 import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
+import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
 
@@ -28,11 +28,16 @@ function normalizeKey(s: string): string {
 
 // (token extraction helpers removed; we now aggregate Post.topics directly)
 
+const TOPIC_POST_INCLUDE = {
+  user: true,
+  media: { orderBy: { position: 'asc' as const } },
+  mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true } } } },
+} as const;
+
 @Injectable()
 export class TopicsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly search: SearchService,
     private readonly posts: PostsService,
     private readonly appConfig: AppConfigService,
   ) {}
@@ -154,26 +159,50 @@ export class TopicsService {
     const limit = Math.max(1, Math.min(50, params.limit || 30));
     const cursor = (params.cursor ?? '').trim() || null;
 
-    const res = await this.search.searchPosts({
-      viewerUserId: params.viewerUserId ?? null,
-      q,
-      limit,
+    const viewer = await this.viewerById(params.viewerUserId ?? null);
+    const allowed = this.allowedVisibilitiesForViewer(viewer);
+    const visibilityWhere: Prisma.PostWhereInput = viewer?.id
+      ? {
+          OR: [{ visibility: { in: allowed } }, { userId: viewer.id, visibility: 'onlyMe' }],
+        }
+      : { visibility: 'public' };
+
+    const cursorWhere = await createdAtIdCursorWhere({
       cursor,
+      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
     });
 
-    const postIds = (res.posts ?? []).map((p) => p.id);
+    const rows = await this.prisma.post.findMany({
+      where: {
+        AND: [
+          { deletedAt: null },
+          { parentId: null },
+          visibilityWhere,
+          { topics: { has: q } },
+          ...(cursorWhere ? [cursorWhere as Prisma.PostWhereInput] : []),
+        ],
+      },
+      include: TOPIC_POST_INCLUDE,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+    });
+
+    const slice = rows.slice(0, limit);
+    const nextCursor = rows.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
+
+    const postIds = slice.map((p) => p.id);
     const boosted = params.viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId: params.viewerUserId, postIds }) : new Set<string>();
     const bookmarksByPostId = params.viewerUserId
       ? await this.posts.viewerBookmarksByPostId({ viewerUserId: params.viewerUserId, postIds })
       : new Map<string, { collectionIds: string[] }>();
 
-    const viewer = await this.posts.viewerContext(params.viewerUserId ?? null);
-    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const viewerCtx = await this.posts.viewerContext(params.viewerUserId ?? null);
+    const viewerHasAdmin = Boolean(viewerCtx?.siteAdmin);
     const internalByPostId = viewerHasAdmin && postIds.length > 0 ? await this.posts.ensureBoostScoresFresh(postIds) : null;
     const scoreByPostId = viewerHasAdmin && postIds.length > 0 ? await this.posts.computeScoresForPostIds(postIds) : undefined;
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const posts = (res.posts ?? []).map((p) => {
+    const posts = slice.map((p) => {
       const base = internalByPostId?.get(p.id);
       const score = scoreByPostId?.get(p.id);
       return toPostDto(p as PostWithAuthorAndMedia, publicBaseUrl, {
@@ -188,7 +217,7 @@ export class TopicsService {
       });
     });
 
-    return { posts, nextCursor: res.nextCursor ?? null };
+    return { posts, nextCursor };
   }
 }
 

@@ -15,23 +15,25 @@ export class PostsTopicsBackfillCron {
    * Small bounded batches; safe to run repeatedly.
    */
   @Cron('*/15 * * * *')
-  async backfill() {
+  async backfill(opts?: { wipeExisting?: boolean; batchSize?: number; lookbackDays?: number }) {
     if (this.running) return;
     this.running = true;
     const startedAt = Date.now();
     try {
-      const lookbackDays = 3650;
+      const wipeExisting = Boolean(opts?.wipeExisting);
+      const lookbackDays = Math.max(1, Math.min(10_000, Math.floor(opts?.lookbackDays ?? 3650)));
+      const batchSize = Math.max(10, Math.min(5_000, Math.floor(opts?.batchSize ?? 200)));
       const minCreatedAt = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
 
       const rows = await this.prisma.post.findMany({
         where: {
           deletedAt: null,
           createdAt: { gte: minCreatedAt },
-          topics: { equals: [] },
+          ...(wipeExisting ? {} : { topics: { equals: [] } }),
         },
         select: { id: true, body: true, hashtags: true },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: 200,
+        take: batchSize,
       });
 
       if (rows.length === 0) return;
@@ -46,7 +48,9 @@ export class PostsTopicsBackfillCron {
       );
 
       const ms = Date.now() - startedAt;
-      this.logger.log(`Backfilled topics for ${rows.length} posts (${ms}ms)`);
+      this.logger.log(
+        `${wipeExisting ? 'Rebuilt' : 'Backfilled'} topics for ${rows.length} posts (${ms}ms)`,
+      );
     } catch (err) {
       this.logger.warn(`Topics backfill failed: ${(err as Error).message}`);
     } finally {
