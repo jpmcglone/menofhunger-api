@@ -434,13 +434,24 @@ export class MessagesService {
 
     const uniqueRecipients = [...new Set(recipientUserIds.filter(Boolean))].filter((id) => id !== userId);
     if (uniqueRecipients.length === 0) throw new BadRequestException('At least one recipient is required.');
-    await this.assertNotBlocked(userId, uniqueRecipients);
 
-    const users = await this.prisma.user.findMany({
-      where: { id: { in: uniqueRecipients } },
-      select: { id: true },
+    // Tier rule:
+    // - Verified members can chat in conversations they are already part of.
+    // - Only Premium members can start NEW chats.
+    // This endpoint is used for "send first message", so allow it only when it resolves to an existing conversation,
+    // unless the sender is Premium (who can create a new conversation).
+    const sender = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { premium: true, premiumPlus: true, verifiedStatus: true },
     });
-    if (users.length !== uniqueRecipients.length) throw new NotFoundException('User not found.');
+    if (!sender) throw new NotFoundException('User not found.');
+    const senderIsVerified = Boolean(sender.verifiedStatus && sender.verifiedStatus !== 'none');
+    if (!senderIsVerified) {
+      // Defense-in-depth: MessagesController already uses VerifiedGuard.
+      throw new ForbiddenException('Verify to use chat.');
+    }
+    const senderIsPremium = Boolean(sender.premium || sender.premiumPlus);
+    await this.assertNotBlocked(userId, uniqueRecipients);
 
     const isDirect = uniqueRecipients.length === 1;
     const type: MessageConversation['type'] = isDirect ? 'direct' : 'group';
@@ -454,6 +465,25 @@ export class MessagesService {
       if (existing) {
         const sent = await this.sendMessage({ userId, conversationId: existing.id, body: trimmed });
         return { conversationId: existing.id, message: sent.message };
+      }
+    }
+
+    // From this point on, we are creating a new conversation (no existing direct thread matched).
+    if (!senderIsPremium) {
+      throw new ForbiddenException(
+        'Upgrade to Premium to start new chats. Verified members can reply to chats started with them.',
+      );
+    }
+
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: uniqueRecipients } },
+      select: { id: true, verifiedStatus: true },
+    });
+    if (users.length !== uniqueRecipients.length) throw new NotFoundException('User not found.');
+    // Don't allow starting chats with unverified recipients (they can't access chat anyway).
+    for (const u of users) {
+      if (!u.verifiedStatus || u.verifiedStatus === 'none') {
+        throw new ForbiddenException('You can only start chats with verified members.');
       }
     }
 

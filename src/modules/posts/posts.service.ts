@@ -2536,10 +2536,14 @@ export class PostsService {
   private async ensureUserCanBoost(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, usernameIsSet: true },
+      select: { id: true, usernameIsSet: true, verifiedStatus: true },
     });
     if (!user) throw new NotFoundException('User not found.');
     if (!user.usernameIsSet) throw new ForbiddenException('Set a username to boost posts.');
+    // Tier rule: Unverified users are read-only (no meaningful reactions).
+    if (!user.verifiedStatus || user.verifiedStatus === 'none') {
+      throw new ForbiddenException('Verify your account to boost posts.');
+    }
   }
 
   async boostPost(params: { userId: string; postId: string }) {
