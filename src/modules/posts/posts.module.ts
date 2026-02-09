@@ -10,7 +10,7 @@ import { PostsService } from './posts.service';
   imports: [AuthModule, NotificationsModule],
   controllers: [PostsController],
   providers: [PostsService, PostsPopularScoreCron, PostsTopicsBackfillCron],
-  exports: [PostsService],
+  exports: [PostsService, PostsPopularScoreCron, PostsTopicsBackfillCron],
 })
 export class PostsModule {}
 

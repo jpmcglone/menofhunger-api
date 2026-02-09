@@ -26,18 +26,6 @@ function normalizeKey(s: string): string {
     .trim();
 }
 
-function topicStopwords(): Set<string> {
-  return new Set([
-    // Generic English
-    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'can', 'do', 'for', 'from', 'has', 'have', 'he', 'her', 'his',
-    'i', 'if', 'in', 'into', 'is', 'it', 'its', 'just', 'me', 'my', 'no', 'not', 'of', 'on', 'or', 'our', 'ours',
-    'so', 'that', 'the', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'to', 'too', 'up', 'us', 'was', 'we',
-    'were', 'what', 'when', 'where', 'who', 'why', 'with', 'you', 'your',
-    // Platform-ish noise
-    'men', 'man', 'hunger', 'moh',
-  ]);
-}
-
 // (token extraction helpers removed; we now aggregate Post.topics directly)
 
 @Injectable()

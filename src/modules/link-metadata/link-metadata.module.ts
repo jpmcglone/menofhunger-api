@@ -9,6 +9,6 @@ import { AuthModule } from '../auth/auth.module';
   imports: [PrismaModule, AuthModule],
   controllers: [LinkMetadataController],
   providers: [LinkMetadataService, LinkMetadataCron],
-  exports: [LinkMetadataService],
+  exports: [LinkMetadataService, LinkMetadataCron],
 })
 export class LinkMetadataModule {}

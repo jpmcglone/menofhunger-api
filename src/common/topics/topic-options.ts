@@ -20,13 +20,13 @@ export type TopicOption = {
  */
 export const TOPIC_OPTIONS: TopicOption[] = [
   // Fitness (strength)
-  { value: 'weightlifting', label: 'Weightlifting', group: 'Fitness' },
-  { value: 'powerlifting', label: 'Powerlifting', group: 'Fitness' },
-  { value: 'bodybuilding', label: 'Bodybuilding', group: 'Fitness' },
-  { value: 'crossfit', label: 'CrossFit', group: 'Fitness' },
-  { value: 'calisthenics', label: 'Calisthenics', group: 'Fitness', aliases: ['bodyweight training'] },
+  { value: 'weightlifting', label: 'Weightlifting', group: 'Fitness', aliases: ['oly', 'olympic lifting'] },
+  { value: 'powerlifting', label: 'Powerlifting', group: 'Fitness', aliases: ['squat', 'bench', 'deadlift'] },
+  { value: 'bodybuilding', label: 'Bodybuilding', group: 'Fitness', aliases: ['hypertrophy'] },
+  { value: 'crossfit', label: 'CrossFit', group: 'Fitness', aliases: ['wod'] },
+  { value: 'calisthenics', label: 'Calisthenics', group: 'Fitness', aliases: ['bodyweight training', 'bodyweight'] },
   { value: 'kettlebells', label: 'Kettlebells', group: 'Fitness', aliases: ['kettlebell'] },
-  { value: 'strongman', label: 'Strongman', group: 'Fitness' },
+  { value: 'strongman', label: 'Strongman', group: 'Fitness', aliases: ['atlas stones'] },
   { value: 'yoga', label: 'Yoga', group: 'Wellness' },
   { value: 'mobility', label: 'Mobility', group: 'Wellness', aliases: ['stretching'] },
 
@@ -75,8 +75,8 @@ export const TOPIC_OPTIONS: TopicOption[] = [
   { value: 'off_roading', label: 'Off-roading', group: 'Motors', aliases: ['4x4', 'overlanding'] },
 
   // Food & drink
-  { value: 'cooking', label: 'Cooking', group: 'Food & drink', aliases: ['cook'] },
-  { value: 'bbq', label: 'BBQ', group: 'Food & drink', aliases: ['barbecue'] },
+  { value: 'cooking', label: 'Cooking', group: 'Food & drink', aliases: ['cook', 'recipes', 'meal prep'] },
+  { value: 'bbq', label: 'BBQ', group: 'Food & drink', aliases: ['barbecue', 'grilling', 'smoking'] },
   { value: 'coffee', label: 'Coffee', group: 'Food & drink' },
   { value: 'whiskey', label: 'Whiskey', group: 'Food & drink', aliases: ['bourbon', 'scotch'] },
   { value: 'craft_beer', label: 'Craft beer', group: 'Food & drink', aliases: ['beer'] },
@@ -88,7 +88,7 @@ export const TOPIC_OPTIONS: TopicOption[] = [
   { value: 'ai', label: 'AI', group: 'Tech & games', aliases: ['artificial intelligence', 'machine learning', 'ml'] },
   { value: 'cybersecurity', label: 'Cybersecurity', group: 'Tech & games', aliases: ['infosec', 'security'] },
   { value: 'gaming', label: 'Gaming', group: 'Tech & games', aliases: ['games', 'video games'] },
-  { value: 'board_games', label: 'Board games', group: 'Tech & games', aliases: ['tabletop games'] },
+  { value: 'board_games', label: 'Board games', group: 'Tech & games', aliases: ['tabletop games', 'tabletop'] },
 
   // Learning & culture
   { value: 'books', label: 'Books', group: 'Learning', aliases: ['reading'] },

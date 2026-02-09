@@ -20,7 +20,7 @@ export class PostsTopicsBackfillCron {
     this.running = true;
     const startedAt = Date.now();
     try {
-      const lookbackDays = 60;
+      const lookbackDays = 3650;
       const minCreatedAt = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
 
       const rows = await this.prisma.post.findMany({
@@ -29,7 +29,7 @@ export class PostsTopicsBackfillCron {
           createdAt: { gte: minCreatedAt },
           topics: { equals: [] },
         },
-        select: { id: true, body: true },
+        select: { id: true, body: true, hashtags: true },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: 200,
       });
@@ -40,7 +40,7 @@ export class PostsTopicsBackfillCron {
         rows.map((p) =>
           this.prisma.post.update({
             where: { id: p.id },
-            data: { topics: inferTopicsFromText(p.body ?? '') },
+            data: { topics: inferTopicsFromText(p.body ?? '', p.hashtags ?? []) },
           }),
         ),
       );

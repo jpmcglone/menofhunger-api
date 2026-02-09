@@ -5,7 +5,8 @@ import eslintConfigPrettier from 'eslint-config-prettier'
 /** @type {import('eslint').Linter.FlatConfig[]} */
 export default [
   {
-    ignores: ['dist/**', 'node_modules/**', 'prisma/migrations/**'],
+    // Ignore generated/build output everywhere.
+    ignores: ['**/dist/**', '**/node_modules/**', '**/prisma/migrations/**'],
     linterOptions: {
       // This repo contains a few intentionally disabled rules; don't fail/warn on unused disables.
       reportUnusedDisableDirectives: 'off',
@@ -35,8 +36,16 @@ export default [
       ecmaVersion: 2022,
       sourceType: 'module',
     },
+    plugins: {
+      // Some built JS files may contain eslint-disable directives for TS rules; registering the plugin avoids
+      // "Definition for rule ... was not found" if those files are ever linted.
+      '@typescript-eslint': tsPlugin,
+    },
     rules: {
       ...(eslintConfigPrettier?.rules ?? {}),
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-var-requires': 'off',
+      '@typescript-eslint/no-require-imports': 'off',
     },
   },
 ]

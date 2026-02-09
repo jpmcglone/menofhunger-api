@@ -46,10 +46,12 @@ const GROUP_KEYWORDS: Record<string, string[]> = {
   Life: ['life', 'travel', 'road trips'],
 };
 
-export function inferTopicsFromText(text: string): string[] {
+export function inferTopicsFromText(text: string, hashtags?: string[]): string[] {
   const normalized = normalizeText(text);
-  if (!normalized) return [];
-  const hay = ` ${normalized} `;
+  const tags = Array.isArray(hashtags) ? hashtags.map(normalizeText).filter(Boolean).join(' ') : '';
+  const combined = [normalized, tags].filter(Boolean).join(' ');
+  if (!combined) return [];
+  const hay = ` ${combined} `;
   const out: string[] = [];
   for (const o of OPTION_PHRASES) {
     let matched = false;

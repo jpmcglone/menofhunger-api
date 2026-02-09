@@ -1,5 +1,5 @@
 import type { Post } from '@prisma/client';
-import type { PostWithAuthorAndMedia, toPostDto } from './post.dto';
+import type { PostWithAuthorAndMedia } from './post.dto';
 
 type PostWithParentId = { id: string; parentId?: string | null } & Record<string, unknown>;
 

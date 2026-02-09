@@ -16,12 +16,12 @@ export type PostCounts = {
   premiumOnly: number;
 };
 
-const feedPostIncludeForType = {
+const feedPostInclude = {
   user: true,
-  media: true,
+  media: { orderBy: { position: 'asc' as const } },
   mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
 } as const;
-type FeedPost = Prisma.PostGetPayload<{ include: typeof feedPostIncludeForType }>;
+type FeedPost = Prisma.PostGetPayload<{ include: typeof feedPostInclude }>;
 type FeedResult = { posts: FeedPost[]; nextCursor: string | null };
 type PopularFeedResult = FeedResult & { scoreByPostId: Map<string, number> };
 type ViewerRow = { id: string; verifiedStatus: VerifiedStatus; premium: boolean; siteAdmin: boolean } | null;
@@ -419,11 +419,7 @@ export class PostsService {
           ...(cursorWhere ? [cursorWhere] : []),
         ],
       },
-      include: {
-        user: true,
-        media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
-      },
+      include: feedPostInclude,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -2389,7 +2385,7 @@ export class PostsService {
     const hashtagCasings = hashtagTokens.map((t) => t.variant);
 
     const post = await this.prisma.$transaction(async (tx) => {
-      const topics = inferTopicsFromText(body);
+      const topics = inferTopicsFromText(body, hashtags);
       const created = await tx.post.create({
         data: {
           body,

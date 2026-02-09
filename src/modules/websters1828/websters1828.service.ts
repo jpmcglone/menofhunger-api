@@ -51,7 +51,7 @@ export class Websters1828Service {
       } finally {
         clearTimeout(t);
       }
-    } catch (e) {
+    } catch {
       throw new ServiceUnavailableException('Word of the day is temporarily unavailable.');
     }
 
@@ -93,9 +93,7 @@ function easternDateKey(d: Date): string {
   const month = parts.find((p) => p.type === 'month')?.value ?? '01';
   const day = parts.find((p) => p.type === 'day')?.value ?? '01';
   return `${year}-${month}-${day}`;
-}
-
-function easternYmd(d: Date): { y: number; m: number; d: number } {
+}function easternYmd(d: Date): { y: number; m: number; d: number } {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: ET_ZONE,
     year: 'numeric',

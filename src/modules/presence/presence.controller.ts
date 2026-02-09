@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { OptionalCurrentUserId } from '../users/users.decorator';
 import { Throttle } from '@nestjs/throttler';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
@@ -21,11 +21,15 @@ export class PresenceController {
     },
   })
   @Get('online')
-  async online(@OptionalCurrentUserId() userId: string | undefined) {
+  async online(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Query('includeSelf') includeSelfRaw?: string,
+  ) {
     const viewerUserId = userId ?? null;
-    // Do not include the viewer in "Online now".
+    const includeSelf = includeSelfRaw === '1' || includeSelfRaw === 'true';
+    // Default: do not include the viewer in "Online now" (Explore UX). `/online` can opt-in to include self.
     let userIds = this.presence.getOnlineUserIds();
-    if (viewerUserId) {
+    if (viewerUserId && !includeSelf) {
       userIds = userIds.filter((id) => id !== viewerUserId);
     }
 
