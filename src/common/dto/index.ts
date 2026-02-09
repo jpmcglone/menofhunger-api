@@ -7,4 +7,6 @@ export * from './websters1828.dto';
 export * from './radio.dto';
 export * from './topic.dto';
 export * from './hashtag.dto';
+export * from './notification-feed.dto';
 export * from './realtime.dto';
+export * from './metrics.dto';

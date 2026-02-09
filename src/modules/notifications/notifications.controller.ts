@@ -56,7 +56,7 @@ export class NotificationsController {
       cursor,
     });
     return {
-      data: res.notifications,
+      data: res.items,
       pagination: {
         nextCursor: res.nextCursor,
         undeliveredCount: res.undeliveredCount,

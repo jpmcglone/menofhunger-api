@@ -86,6 +86,9 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         : client.handshake.query.client) ?? 'web';
 
     const { isNewlyOnline } = this.presence.register(client.id, user.id, String(clientType));
+    // Best-effort: mark reading/being in-app as active for metrics (DAU/MAU).
+    this.presence.persistLastSeenAt(user.id);
+    this.presence.persistDailyActivity(user.id);
     // Store for downstream event handlers (radio, etc).
     (client.data as { userId?: string }).userId = user.id;
     if (this.logPresenceVerbose) {
@@ -422,6 +425,9 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
     this.presence.setLastActivity(userId);
+    // Best-effort: update metrics activity (server-throttled).
+    this.presence.persistLastSeenAt(userId);
+    this.presence.persistDailyActivity(userId);
     const wasIdle = this.presence.isUserIdle(userId);
     this.presence.setUserActive(userId);
     this.scheduleIdleMarkTimer(userId);

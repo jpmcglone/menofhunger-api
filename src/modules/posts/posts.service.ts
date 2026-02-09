@@ -3317,6 +3317,8 @@ export class PostsService {
               actorUserId: userId,
               actorPostId: post.id,
               subjectPostId: post.id,
+              // Visiting the actor's profile should clear these.
+              subjectUserId: userId,
               body: bodySnippet || undefined,
             })
             .catch((err) => {

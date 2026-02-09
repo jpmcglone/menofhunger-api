@@ -31,6 +31,7 @@ import { Websters1828Module } from '../websters1828/websters1828.module';
 import { RadioModule } from '../radio/radio.module';
 import { TopicsModule } from '../topics/topics.module';
 import { HashtagsModule } from '../hashtags/hashtags.module';
+import { MetricsModule } from '../metrics/metrics.module';
 
 @Module({
   imports: [
@@ -72,6 +73,7 @@ import { HashtagsModule } from '../hashtags/hashtags.module';
     RadioModule,
     TopicsModule,
     HashtagsModule,
+    MetricsModule,
   ],
   controllers: [AppController],
   providers: [

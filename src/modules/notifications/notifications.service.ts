@@ -7,6 +7,7 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectPostVisibility, SubjectTier } from './notification.dto';
+import type { NotificationFeedItemDto, NotificationGroupDto, NotificationGroupKind } from '../../common/dto/notification-feed.dto';
 
 export type CreateNotificationParams = {
   recipientUserId: string;
@@ -425,6 +426,9 @@ export class NotificationsService {
     cursor: string | null;
   }) {
     const { recipientUserId, limit, cursor } = params;
+    const desiredItemLimit = Math.max(1, Math.min(limit, 50));
+    const maxGroupNotifications = 50;
+    const rawFetchLimit = Math.min(desiredItemLimit * 6, 250);
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,
@@ -456,16 +460,15 @@ export class NotificationsService {
         },
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: limit + 1,
+      take: rawFetchLimit + 1,
     });
 
-    const slice = notifications.slice(0, limit);
-    const nextCursor =
-      notifications.length > limit ? slice[slice.length - 1]?.id ?? null : null;
+    const raw = notifications.slice(0, rawFetchLimit);
+    const hasMoreRaw = notifications.length > rawFetchLimit;
     const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const subjectPostIds = [...new Set(slice.map((n) => n.subjectPostId).filter(Boolean))] as string[];
+    const subjectPostIds = [...new Set(raw.map((n) => n.subjectPostId).filter(Boolean))] as string[];
     const subjectPosts =
       subjectPostIds.length > 0
         ? await this.prisma.post.findMany({
@@ -504,7 +507,7 @@ export class NotificationsService {
       }
     }
 
-    const subjectUserIds = [...new Set(slice.map((n) => n.subjectUserId).filter(Boolean))] as string[];
+    const subjectUserIds = [...new Set(raw.map((n) => n.subjectUserId).filter(Boolean))] as string[];
     const subjectUsers =
       subjectUserIds.length > 0
         ? await this.prisma.user.findMany({
@@ -518,7 +521,7 @@ export class NotificationsService {
       subjectTierByUserId.set(u.id, tier);
     }
 
-    const data: NotificationDto[] = slice.map((n) => {
+    const dtos: NotificationDto[] = raw.map((n) => {
       const preview = n.subjectPostId ? subjectPreviewByPostId.get(n.subjectPostId) ?? null : null;
       const subjectPostVisibility = n.subjectPostId ? subjectVisibilityByPostId.get(n.subjectPostId) ?? null : null;
       let subjectTier: SubjectTier = null;
@@ -527,8 +530,101 @@ export class NotificationsService {
       return this.toNotificationDto(n, publicBaseUrl, preview, subjectPostVisibility, subjectTier);
     });
 
+    function groupKey(n: NotificationDto): string | null {
+      if (n.kind === 'boost' && n.subjectPostId) return `boost:post:${n.subjectPostId}`;
+      if (n.kind === 'comment' && n.subjectPostId) return `comment:post:${n.subjectPostId}`;
+      if (n.kind === 'follow') return 'follow';
+      if (n.kind === 'followed_post' && n.actor?.id) return `followed_post:actor:${n.actor.id}`;
+      return null;
+    }
+
+    function groupKindFromKey(key: string): NotificationGroupKind | null {
+      if (key.startsWith('boost:')) return 'boost';
+      if (key.startsWith('comment:')) return 'comment';
+      if (key === 'follow') return 'follow';
+      if (key.startsWith('followed_post:')) return 'followed_post';
+      return null;
+    }
+
+    function buildGroup(members: NotificationDto[], key: string): NotificationGroupDto {
+      const newest = members[0]!;
+      const kind = groupKindFromKey(key) ?? (newest.kind as NotificationGroupKind);
+      const anyUndelivered = members.some((m) => m.deliveredAt == null);
+      const anyUnread = members.some((m) => m.readAt == null);
+
+      const actors: NotificationActorDto[] = [];
+      const actorIds = new Set<string>();
+      for (const m of members) {
+        const a = m.actor;
+        if (!a?.id) continue;
+        if (actorIds.has(a.id)) continue;
+        actorIds.add(a.id);
+        actors.push(a);
+      }
+
+      const latestBody =
+        kind === 'comment' ? (members.find((m) => (m.body ?? '').trim())?.body ?? null) : null;
+
+      const subjectPostId = (kind === 'boost' || kind === 'comment') ? (newest.subjectPostId ?? null) : null;
+      const subjectUserId =
+        kind === 'follow'
+          ? (newest.actor?.id ?? newest.subjectUserId ?? null)
+          : kind === 'followed_post'
+            ? (newest.actor?.id ?? null)
+            : null;
+
+      return {
+        id: newest.id,
+        kind,
+        createdAt: newest.createdAt,
+        deliveredAt: anyUndelivered ? null : newest.deliveredAt,
+        readAt: anyUnread ? null : newest.readAt,
+        subjectPostId,
+        subjectUserId,
+        actors,
+        actorCount: actors.length,
+        count: members.length,
+        latestBody,
+        latestSubjectPostPreview: newest.subjectPostPreview ?? null,
+        subjectPostVisibility: newest.subjectPostVisibility ?? null,
+        subjectTier: newest.subjectTier ?? null,
+      };
+    }
+
+    const items: NotificationFeedItemDto[] = [];
+    let i = 0;
+    while (i < dtos.length && items.length < desiredItemLimit) {
+      const n = dtos[i]!;
+      const key = groupKey(n);
+      if (!key) {
+        items.push({ type: 'single', notification: n });
+        i += 1;
+        continue;
+      }
+
+      const members: NotificationDto[] = [n];
+      let j = i + 1;
+      while (j < dtos.length && groupKey(dtos[j]!) === key && members.length < maxGroupNotifications) {
+        members.push(dtos[j]!);
+        j += 1;
+      }
+
+      if (members.length === 1) {
+        items.push({ type: 'single', notification: n });
+        i += 1;
+        continue;
+      }
+
+      items.push({ type: 'group', group: buildGroup(members, key) });
+      i = j;
+    }
+
+    const lastConsumedId = i > 0 ? dtos[i - 1]?.id ?? null : null;
+    const hasMore = i < dtos.length || hasMoreRaw;
+    const nextCursor = hasMore ? lastConsumedId : null;
+
     return {
-      notifications: data,
+      items,
       nextCursor,
       undeliveredCount,
     };
@@ -558,12 +654,20 @@ export class NotificationsService {
     const { postId, userId } = params;
     if (!postId && !userId) return;
 
-    const where: { recipientUserId: string; readAt: null; subjectPostId?: string; subjectUserId?: string } = {
+    // Back-compat: followed_post notifications were historically keyed only by actorUserId.
+    // When visiting a user's profile we want to clear "new posts" notifications for that actor,
+    // even if subjectUserId was not set at creation time.
+    const or: Array<Record<string, unknown>> = [];
+    if (postId) or.push({ subjectPostId: postId });
+    if (userId) {
+      or.push({ subjectUserId: userId });
+      or.push({ kind: 'followed_post', actorUserId: userId });
+    }
+    const where = {
       recipientUserId,
       readAt: null,
-    };
-    if (postId) where.subjectPostId = postId;
-    if (userId) where.subjectUserId = userId;
+      ...(or.length ? { OR: or } : {}),
+    } as const;
 
     await this.prisma.notification.updateMany({
       where,

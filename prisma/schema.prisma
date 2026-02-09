@@ -150,6 +150,9 @@ model User {
   bannerUpdatedAt DateTime?
   // When the user last went offline (set by presence disconnect).
   lastOnlineAt DateTime?
+  // When the user last had in-app activity (presence connect/ping). Used for DAU/MAU.
+  lastSeenAt DateTime?
+  dailyActivityDays UserDailyActivity[]
   sessions  Session[]
   posts     Post[]
   boosts    Boost[]
@@ -189,6 +192,23 @@ model User {
   popularScoreSnapshots PostPopularScoreSnapshot[] @relation("PostPopularScoreSnapshot_user")
 
   @@index([phone])
+  @@index([lastSeenAt])
+}
+
+/**
+ * Per-user per-day activity rollup (UTC day).
+ * This exists so we can compute historical DAU averages (a single lastSeenAt cannot).
+ */
+model UserDailyActivity {
+  userId    String
+  /** UTC midnight for the day this activity represents. */
+  day       DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, day])
+  @@index([day])
 }
 
 model UserSearch {

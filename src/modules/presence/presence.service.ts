@@ -6,6 +6,10 @@ import { PrismaService } from '../prisma/prisma.service';
 export type SocketMeta = { userId: string; client: string };
 
 const MAX_SUBSCRIPTIONS_PER_SOCKET = 100;
+// Presence pings can be frequent. Persist lastSeenAt at a safe cadence.
+const LAST_SEEN_PERSIST_THROTTLE_MS = 2 * 60 * 1000;
+// Daily activity should be written at most once per day per user per server.
+const DAILY_ACTIVITY_PERSIST_THROTTLE_MS = 5 * 60 * 1000;
 
 /**
  * In-memory presence: userId -> Set of socketIds, socketId -> { userId, client }.
@@ -34,6 +38,12 @@ export class PresenceService {
   private readonly chatScreenListeners = new Set<string>();
   /** userIds currently marked idle (no activity for X time); still online, shown with clock */
   private readonly idleUserIds = new Set<string>();
+  /** userId -> last time we persisted lastSeenAt (ms). */
+  private readonly lastSeenPersistedAt = new Map<string, number>();
+  /** userId -> last time we persisted daily activity (ms). */
+  private readonly dailyActivityPersistedAt = new Map<string, number>();
+  /** userId -> last UTC day key we wrote (e.g. 20260209). */
+  private readonly dailyActivityDayKeyByUserId = new Map<string, string>();
 
   constructor(
     private readonly appConfig: AppConfigService,
@@ -64,6 +74,66 @@ export class PresenceService {
   /** Update last activity time (call on presence:active or connect). Resets idle timer. */
   setLastActivity(userId: string): void {
     this.lastActivityAt.set(userId, Date.now());
+  }
+
+  /**
+   * Best-effort persist lastSeenAt for DAU/MAU.
+   * Throttled in-memory to avoid hammering DB on frequent activity pings.
+   */
+  persistLastSeenAt(userId: string): void {
+    const uid = (userId ?? '').trim();
+    if (!uid) return;
+    const now = Date.now();
+    const last = this.lastSeenPersistedAt.get(uid) ?? 0;
+    if (now - last < LAST_SEEN_PERSIST_THROTTLE_MS) return;
+    this.lastSeenPersistedAt.set(uid, now);
+
+    // Fire-and-forget: presence activity should never block realtime.
+    void this.prisma.user
+      .update({
+        where: { id: uid },
+        data: { lastSeenAt: new Date() },
+        select: { id: true },
+      })
+      .catch((err) => {
+        this.logger.warn(`[presence] Failed to persist lastSeenAt userId=${uid}: ${err}`);
+      });
+  }
+
+  /**
+   * Best-effort persist (user, day) activity for DAU/MAU averaging.
+   * - Day is stored at UTC midnight
+   * - Throttled in-memory to avoid repeated upserts
+   */
+  persistDailyActivity(userId: string): void {
+    const uid = (userId ?? '').trim();
+    if (!uid) return;
+
+    const now = new Date();
+    const dayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const dayKey = `${dayUtc.getUTCFullYear()}${String(dayUtc.getUTCMonth() + 1).padStart(2, '0')}${String(dayUtc.getUTCDate()).padStart(2, '0')}`;
+
+    // Ensure we only ever upsert once per user per day per server (fast path).
+    const lastDayKey = this.dailyActivityDayKeyByUserId.get(uid) ?? null;
+    if (lastDayKey === dayKey) return;
+
+    // Also rate limit in case the map is thrashed (defensive).
+    const nowMs = Date.now();
+    const lastMs = this.dailyActivityPersistedAt.get(uid) ?? 0;
+    if (nowMs - lastMs < DAILY_ACTIVITY_PERSIST_THROTTLE_MS) return;
+    this.dailyActivityPersistedAt.set(uid, nowMs);
+    this.dailyActivityDayKeyByUserId.set(uid, dayKey);
+
+    void this.prisma.userDailyActivity
+      .upsert({
+        where: { userId_day: { userId: uid, day: dayUtc } },
+        create: { userId: uid, day: dayUtc },
+        update: {},
+        select: { userId: true },
+      })
+      .catch((err) => {
+        this.logger.warn(`[presence] Failed to persist daily activity userId=${uid}: ${err}`);
+      });
   }
 
   getLastActivity(userId: string): number | undefined {
