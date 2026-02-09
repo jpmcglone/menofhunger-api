@@ -2203,14 +2203,17 @@ export class PostsService {
     let threadParticipantIds: string[] = [];
     let parentAuthorUserId: string | null = null;
     let threadRootId: string | null = null; // Root post ID for thread hierarchy
+    let parentTopics: string[] = [];
+    let rootTopics: string[] = [];
 
     if (parentId) {
       const parent = await this.prisma.post.findFirst({
         where: { id: parentId, ...this.notDeletedWhere() },
-        include: { user: { select: { id: true } } },
+        select: { id: true, userId: true, visibility: true, rootId: true, topics: true },
       });
       if (!parent) throw new NotFoundException('Post not found.');
       parentAuthorUserId = parent.userId;
+      parentTopics = Array.isArray(parent.topics) ? (parent.topics as string[]) : [];
       if (parent.visibility === 'onlyMe') {
         throw new ForbiddenException('Comments are not allowed on only-me posts.');
       }
@@ -2231,6 +2234,15 @@ export class PostsService {
 
       // Use parent's rootId if it exists (parent is also a reply), otherwise parent.id is the root
       threadRootId = (parent as { rootId?: string | null }).rootId ?? parent.id;
+      if (threadRootId && threadRootId !== parent.id) {
+        const root = await this.prisma.post.findFirst({
+          where: { id: threadRootId, ...this.notDeletedWhere() },
+          select: { topics: true },
+        });
+        rootTopics = Array.isArray(root?.topics) ? ((root?.topics ?? []) as string[]) : [];
+      } else {
+        rootTopics = parentTopics;
+      }
 
       // Collect thread participants using rootId for efficient query (works for any thread depth)
       const threadPosts = await this.prisma.post.findMany({
@@ -2387,7 +2399,8 @@ export class PostsService {
     const hashtagCasings = hashtagTokens.map((t) => t.variant);
 
     const post = await this.prisma.$transaction(async (tx) => {
-      const topics = inferTopicsFromText(body, hashtags);
+      const relatedTopics = Array.from(new Set([...(parentTopics ?? []), ...(rootTopics ?? [])])).filter(Boolean);
+      const topics = inferTopicsFromText(body, { hashtags, relatedTopics });
       const created = await tx.post.create({
         data: {
           body,

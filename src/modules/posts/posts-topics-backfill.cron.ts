@@ -31,18 +31,41 @@ export class PostsTopicsBackfillCron {
           createdAt: { gte: minCreatedAt },
           ...(wipeExisting ? {} : { topics: { equals: [] } }),
         },
-        select: { id: true, body: true, hashtags: true },
+        select: { id: true, body: true, hashtags: true, parentId: true, rootId: true },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: batchSize,
       });
 
       if (rows.length === 0) return;
 
+      // Reply tie-breaker: prefetch parent/root topics for this batch.
+      const refIds = new Set<string>();
+      for (const r of rows) {
+        if (r.parentId) refIds.add(r.parentId);
+        if (r.rootId) refIds.add(r.rootId);
+      }
+      const refRows = refIds.size
+        ? await this.prisma.post.findMany({
+            where: { id: { in: Array.from(refIds) } },
+            select: { id: true, topics: true },
+          })
+        : [];
+      const topicsById = new Map<string, string[]>(
+        refRows.map((p) => [p.id, (Array.isArray(p.topics) ? (p.topics as string[]) : [])] as const),
+      );
+
       await this.prisma.$transaction(
         rows.map((p) =>
           this.prisma.post.update({
             where: { id: p.id },
-            data: { topics: inferTopicsFromText(p.body ?? '', p.hashtags ?? []) },
+            data: {
+              topics: inferTopicsFromText(p.body ?? '', {
+                hashtags: p.hashtags ?? [],
+                relatedTopics: Array.from(
+                  new Set([...(topicsById.get(p.parentId ?? '') ?? []), ...(topicsById.get(p.rootId ?? '') ?? [])]),
+                ).filter(Boolean),
+              }),
+            },
           }),
         ),
       );
