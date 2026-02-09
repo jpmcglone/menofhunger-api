@@ -19,6 +19,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { validateUsername } from '../users/users.utils';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 import { AdminGuard } from './admin.guard';
+import { UsersRealtimeService } from '../users/users-realtime.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 const searchSchema = z.object({
   q: z.string().optional(),
@@ -47,6 +49,8 @@ export class AdminUsersController {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
+    private readonly usersRealtime: UsersRealtimeService,
+    private readonly presenceRealtime: PresenceRealtimeService,
   ) {}
 
   @Get('search')
@@ -202,6 +206,18 @@ export class AdminUsersController {
         this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       } catch {
         // Best-effort cache invalidation; never fail admin updates.
+      }
+
+      // Realtime: user tier/profile changes should update their own UI and any related users.
+      try {
+        const profile = await this.usersRealtime.getPublicProfileDtoByUserId(updated.id);
+        if (profile) {
+          const related = await this.usersRealtime.listRelatedUserIds(updated.id);
+          const recipients = new Set<string>([updated.id, ...related].filter(Boolean));
+          this.presenceRealtime.emitUsersSelfUpdated(recipients, { user: profile });
+        }
+      } catch {
+        // Best-effort
       }
 
       return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };

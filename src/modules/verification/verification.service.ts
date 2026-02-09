@@ -2,10 +2,16 @@ import { BadRequestException, Injectable, NotFoundException, UnauthorizedExcepti
 import type { Prisma, VerificationRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
+import { UsersRealtimeService } from '../users/users-realtime.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 @Injectable()
 export class VerificationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly usersRealtime: UsersRealtimeService,
+    private readonly presenceRealtime: PresenceRealtimeService,
+  ) {}
 
   async createRequestForUser(params: { userId: string | null; providerHint: string | null }) {
     const userId = (params.userId ?? '').trim();
@@ -147,7 +153,7 @@ export class VerificationService {
 
     const now = new Date();
 
-    return await this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.verificationRequest.findUnique({
         where: { id },
         include: { user: { select: { id: true, verifiedStatus: true } } },
@@ -185,6 +191,25 @@ export class VerificationService {
 
       return updated;
     });
+
+    // Realtime: admin cross-tab sync + user/follower tier updates.
+    try {
+      this.presenceRealtime.emitAdminUpdated(params.adminUserId, {
+        kind: 'verification',
+        action: 'reviewed',
+        id: updated.id,
+      });
+      const profile = await this.usersRealtime.getPublicProfileDtoByUserId(updated.userId);
+      if (profile) {
+        const related = await this.usersRealtime.listRelatedUserIds(updated.userId);
+        const recipients = new Set<string>([updated.userId, ...related].filter(Boolean));
+        this.presenceRealtime.emitUsersSelfUpdated(recipients, { user: profile });
+      }
+    } catch {
+      // Best-effort
+    }
+
+    return updated;
   }
 
   async rejectAdmin(params: { requestId: string; adminUserId: string; rejectionReason: string; adminNote?: string | null }) {
@@ -196,7 +221,7 @@ export class VerificationService {
 
     const now = new Date();
 
-    return await this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.verificationRequest.findUnique({
         where: { id },
       });
@@ -218,6 +243,19 @@ export class VerificationService {
         },
       });
     });
+
+    // Realtime: admin cross-tab sync (self only).
+    try {
+      this.presenceRealtime.emitAdminUpdated(params.adminUserId, {
+        kind: 'verification',
+        action: 'reviewed',
+        id: updated.id,
+      });
+    } catch {
+      // Best-effort
+    }
+
+    return updated;
   }
 }
 

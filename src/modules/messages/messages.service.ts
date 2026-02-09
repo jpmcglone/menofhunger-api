@@ -645,9 +645,16 @@ export class MessagesService {
   async markRead(params: { userId: string; conversationId: string }) {
     const { userId, conversationId } = params;
     await this.getConversationOrThrow({ userId, conversationId });
+    const now = new Date();
     await this.prisma.messageParticipant.update({
       where: { conversationId_userId: { conversationId, userId } },
-      data: { lastReadAt: new Date() },
+      data: { lastReadAt: now },
+    });
+    // Cross-tab/device sync for your own account.
+    this.presenceRealtime.emitMessagesRead(userId, {
+      conversationId,
+      userId,
+      lastReadAt: now.toISOString(),
     });
     this.emitUnreadCounts(userId);
   }

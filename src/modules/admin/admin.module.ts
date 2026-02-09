@@ -21,11 +21,13 @@ import { SearchModule } from '../search/search.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
 import { AdminJobsController } from './admin-jobs.controller';
+import { PresenceModule } from '../presence/presence.module';
 
 @Module({
   imports: [
     AuthModule,
     PrismaModule,
+    PresenceModule,
     UsersModule,
     FeedbackModule,
     ReportsModule,

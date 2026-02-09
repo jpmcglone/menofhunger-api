@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
 import { parseMentionsFromBody as parseMentionsFromBodyText } from '../../common/mentions/mention-regex';
@@ -34,6 +35,7 @@ export class PostsService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly requestCache: RequestCacheService,
+    private readonly presenceRealtime: PresenceRealtimeService,
   ) {}
 
   /**
@@ -2578,6 +2580,16 @@ export class PostsService {
         .catch(() => {});
     }
 
+    // Realtime post interaction update (post author + actor).
+    const recipients = new Set<string>([userId, post.userId].filter(Boolean));
+    this.presenceRealtime.emitPostsInteraction(recipients, {
+      postId: id,
+      actorUserId: userId,
+      kind: 'boost',
+      active: true,
+      boostCount: res.boostCount,
+    });
+
     return { success: true, viewerHasBoosted: true, boostCount: res.boostCount };
   }
 
@@ -2621,6 +2633,16 @@ export class PostsService {
     if (post.userId !== userId) {
       this.notifications.deleteBoostNotification(post.userId, userId, id).catch(() => {});
     }
+
+    // Realtime post interaction update (post author + actor).
+    const recipients = new Set<string>([userId, post.userId].filter(Boolean));
+    this.presenceRealtime.emitPostsInteraction(recipients, {
+      postId: id,
+      actorUserId: userId,
+      kind: 'boost',
+      active: false,
+      boostCount: res.boostCount,
+    });
 
     return { success: true, viewerHasBoosted: false, boostCount: res.boostCount };
   }

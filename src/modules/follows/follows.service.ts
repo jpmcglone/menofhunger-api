@@ -6,6 +6,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { toUserListDto } from '../../common/dto';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 export type FollowRelationship = {
   viewerFollowsUser: boolean;
@@ -38,6 +39,7 @@ export class FollowsService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly notifications: NotificationsService,
+    private readonly presenceRealtime: PresenceRealtimeService,
   ) {}
 
   /**
@@ -243,6 +245,13 @@ export class FollowsService {
       }
     }
 
+    // Cross-tab/device sync for the actor (self only).
+    this.presenceRealtime.emitFollowsChanged(viewerUserId, {
+      actorUserId: viewerUserId,
+      targetUserId: target.id,
+      viewerFollowsUser: true,
+    });
+
     return {
       success: true,
       viewerFollowsUser: true,
@@ -256,6 +265,13 @@ export class FollowsService {
 
     await this.prisma.follow.deleteMany({
       where: { followerId: viewerUserId, followingId: target.id },
+    });
+
+    // Cross-tab/device sync for the actor (self only).
+    this.presenceRealtime.emitFollowsChanged(viewerUserId, {
+      actorUserId: viewerUserId,
+      targetUserId: target.id,
+      viewerFollowsUser: false,
     });
 
     return {

@@ -85,6 +85,20 @@ export class NotificationsService {
       undeliveredCount,
     });
 
+    // Also emit the full notification payload so clients can update in-place without refetch.
+    try {
+      const dto = await this.buildNotificationDtoForRecipient({
+        recipientUserId,
+        notificationId: notification.id,
+      });
+      if (dto) {
+        this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
+      }
+    } catch (err) {
+      // Best-effort: never fail notification creation on realtime emission.
+      this.logger.debug(`[notifications] Failed to emit notifications:new: ${err}`);
+    }
+
     this.sendWebPushToRecipient(recipientUserId, {
       title: fallbackTitle ?? 'New notification',
       body: (body ?? '').trim().slice(0, 150) || undefined,
@@ -295,6 +309,18 @@ export class NotificationsService {
         where: { id: existing.id },
         data: { createdAt: new Date(), body: bodySnippet ?? undefined },
       });
+      // Treat as a new notification row for UI ordering (without changing delivered/read).
+      try {
+        const dto = await this.buildNotificationDtoForRecipient({
+          recipientUserId,
+          notificationId: existing.id,
+        });
+        if (dto) {
+          this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
+        }
+      } catch {
+        // Best-effort
+      }
       return;
     }
     await this.create({
@@ -580,5 +606,86 @@ export class NotificationsService {
       subjectPostVisibility,
       subjectTier,
     };
+  }
+
+  private async buildNotificationDtoForRecipient(params: {
+    recipientUserId: string;
+    notificationId: string;
+  }): Promise<NotificationDto | null> {
+    const { recipientUserId, notificationId } = params;
+    const id = (notificationId ?? '').trim();
+    if (!id) return null;
+
+    const n = await this.prisma.notification.findFirst({
+      where: { id, recipientUserId },
+      include: {
+        actor: {
+          select: {
+            id: true,
+            username: true,
+            name: true,
+            avatarKey: true,
+            avatarUpdatedAt: true,
+            premium: true,
+            verifiedStatus: true,
+          },
+        },
+      },
+    });
+    if (!n) return null;
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    let subjectPostPreview: SubjectPostPreviewDto | null = null;
+    let subjectTier: SubjectTier = null;
+    let subjectPostVisibility: SubjectPostVisibility | null = null;
+
+    if (n.subjectPostId) {
+      const p = await this.prisma.post.findUnique({
+        where: { id: n.subjectPostId },
+        select: {
+          id: true,
+          body: true,
+          visibility: true,
+          media: {
+            where: { deletedAt: null },
+            orderBy: { position: 'asc' },
+            select: { kind: true, r2Key: true, thumbnailR2Key: true, url: true },
+          },
+        },
+      });
+      if (p) {
+        const bodySnippet = (p.body ?? '').trim().slice(0, 150) || null;
+        const media = (p.media ?? [])
+          .map((m) => {
+            const url =
+              (m as { url?: string }).url?.trim() ||
+              (publicAssetUrl({ publicBaseUrl, key: (m as { r2Key?: string }).r2Key ?? null }) ?? '');
+            const thumbnailUrl =
+              (publicAssetUrl({
+                publicBaseUrl,
+                key: (m as { thumbnailR2Key?: string }).thumbnailR2Key ?? null,
+              }) ?? null) || null;
+            return { url: url || '', thumbnailUrl, kind: (m as { kind: string }).kind };
+          })
+          .filter((m) => m.url);
+        subjectPostPreview = { bodySnippet, media };
+        const vis = (p as { visibility?: string }).visibility;
+        subjectTier = vis === 'premiumOnly' ? 'premium' : vis === 'verifiedOnly' ? 'verified' : null;
+        if (vis === 'public' || vis === 'verifiedOnly' || vis === 'premiumOnly' || vis === 'onlyMe') {
+          subjectPostVisibility = vis;
+        }
+      }
+    } else if (n.subjectUserId) {
+      const u = await this.prisma.user.findUnique({
+        where: { id: n.subjectUserId },
+        select: { id: true, premium: true, verifiedStatus: true },
+      });
+      if (u) {
+        subjectTier = u.premium ? 'premium' : u.verifiedStatus !== 'none' ? 'verified' : null;
+      }
+    }
+
+    return this.toNotificationDto(n, publicBaseUrl, subjectPostPreview, subjectPostVisibility, subjectTier);
   }
 }

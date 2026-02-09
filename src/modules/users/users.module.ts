@@ -2,14 +2,16 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { FollowsModule } from '../follows/follows.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { PresenceModule } from '../presence/presence.module';
 import { UsersController } from './users.controller';
 import { PublicProfileCacheService } from './public-profile-cache.service';
+import { UsersRealtimeService } from './users-realtime.service';
 
 @Module({
-  imports: [AuthModule, FollowsModule, NotificationsModule],
+  imports: [AuthModule, FollowsModule, NotificationsModule, PresenceModule],
   controllers: [UsersController],
-  providers: [PublicProfileCacheService],
-  exports: [PublicProfileCacheService],
+  providers: [PublicProfileCacheService, UsersRealtimeService],
+  exports: [PublicProfileCacheService, UsersRealtimeService],
 })
 export class UsersModule {}
 

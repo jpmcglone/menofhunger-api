@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AdminGuard, type AdminRequest } from './admin.guard';
 import { ReportsService } from '../reports/reports.service';
 import { toReportAdminDto } from '../../common/dto';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 const listSchema = z.object({
   q: z.string().trim().max(200).optional(),
@@ -21,7 +22,10 @@ const updateSchema = z.object({
 @UseGuards(AdminGuard)
 @Controller('admin/reports')
 export class AdminReportsController {
-  constructor(private readonly reports: ReportsService) {}
+  constructor(
+    private readonly reports: ReportsService,
+    private readonly presenceRealtime: PresenceRealtimeService,
+  ) {}
 
   @Get()
   async list(@Query() query: unknown) {
@@ -55,6 +59,17 @@ export class AdminReportsController {
       status: parsed.status,
       adminNote: parsed.adminNote,
     });
+
+    // Realtime: cross-tab admin sync (self only).
+    try {
+      this.presenceRealtime.emitAdminUpdated(req.user!.id, {
+        kind: 'reports',
+        action: 'updated',
+        id: updated.id,
+      });
+    } catch {
+      // Best-effort
+    }
 
     return { data: toReportAdminDto(updated) };
   }

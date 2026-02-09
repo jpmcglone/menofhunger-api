@@ -16,6 +16,8 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { Throttle } from '@nestjs/throttler';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { PublicProfileCacheService } from './public-profile-cache.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { UsersRealtimeService } from './users-realtime.service';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -99,7 +101,21 @@ export class UsersController {
     private readonly followsService: FollowsService,
     private readonly notifications: NotificationsService,
     private readonly publicProfileCache: PublicProfileCacheService<PublicProfilePayload>,
+    private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly usersRealtime: UsersRealtimeService,
   ) {}
+
+  private async emitUserSelfUpdated(userId: string): Promise<void> {
+    try {
+      const profile = await this.usersRealtime.getPublicProfileDtoByUserId(userId);
+      if (!profile) return;
+      const related = await this.usersRealtime.listRelatedUserIds(userId);
+      const recipients = new Set<string>([userId, ...related].filter(Boolean));
+      this.presenceRealtime.emitUsersSelfUpdated(recipients, { user: profile });
+    } catch {
+      // Best-effort
+    }
+  }
 
   private async getPublicProfilePayloadByUsernameOrId(rawUsernameOrId: string): Promise<PublicProfilePayload> {
     const raw = (rawUsernameOrId ?? '').trim();
@@ -386,6 +402,7 @@ export class UsersController {
         data: { username: desired },
       });
       this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+      await this.emitUserSelfUpdated(updated.id);
       return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
     }
 
@@ -409,6 +426,7 @@ export class UsersController {
       await this.ensureMutualFollowWithJohn(userId, updated.username ?? parsed.username);
 
       this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+      await this.emitUserSelfUpdated(updated.id);
       return {
         data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
       };
@@ -536,6 +554,7 @@ export class UsersController {
       });
 
       this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+      await this.emitUserSelfUpdated(updated.id);
       return {
         data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
       };
@@ -568,6 +587,7 @@ export class UsersController {
       select: { id: true, username: true },
     });
     this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    await this.emitUserSelfUpdated(updated.id);
     return { data: { pinnedPostId: postId } };
   }
 
@@ -580,6 +600,7 @@ export class UsersController {
       select: { id: true, username: true },
     });
     this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    await this.emitUserSelfUpdated(updated.id);
     return { data: { pinnedPostId: null } };
   }
 
@@ -689,6 +710,7 @@ export class UsersController {
       }
 
       this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+      await this.emitUserSelfUpdated(updated.id);
       return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {

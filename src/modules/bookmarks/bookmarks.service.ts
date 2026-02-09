@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean };
 
@@ -18,7 +19,10 @@ const RESERVED_COLLECTION_SLUGS = new Set<string>(['unorganized']);
 
 @Injectable()
 export class BookmarksService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly presenceRealtime: PresenceRealtimeService,
+  ) {}
 
   private async viewer(userId: string): Promise<Viewer> {
     const u = await this.prisma.user.findUnique({
@@ -36,7 +40,9 @@ export class BookmarksService {
     return allowed;
   }
 
-  private async assertViewerCanBookmarkPost(params: { viewerUserId: string; postId: string }) {
+  private async assertViewerCanBookmarkPost(params: { viewerUserId: string; postId: string }): Promise<{
+    postUserId: string;
+  }> {
     const { viewerUserId, postId } = params;
     const viewer = await this.viewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
@@ -49,9 +55,10 @@ export class BookmarksService {
 
     if (post.visibility === 'onlyMe') {
       if (post.userId !== viewerUserId) throw new ForbiddenException('Post not found.');
-      return;
+      return { postUserId: post.userId };
     }
     if (!allowed.includes(post.visibility)) throw new ForbiddenException('Post not found.');
+    return { postUserId: post.userId };
   }
 
   async listCollections(params: { userId: string }) {
@@ -170,7 +177,7 @@ export class BookmarksService {
     const postId = (params.postId ?? '').trim();
     if (!postId) throw new BadRequestException('Post id is required.');
 
-    await this.assertViewerCanBookmarkPost({ viewerUserId: userId, postId });
+    const { postUserId } = await this.assertViewerCanBookmarkPost({ viewerUserId: userId, postId });
 
     const desired = Array.isArray(params.collectionIds)
       ? Array.from(
@@ -226,6 +233,24 @@ export class BookmarksService {
       return row;
     });
 
+    // Fetch updated bookmark count for realtime payload (keep REST response stable).
+    try {
+      const post = await this.prisma.post.findUnique({
+        where: { id: postId },
+        select: { bookmarkCount: true },
+      });
+      const recipients = new Set<string>([userId, postUserId].filter(Boolean));
+      this.presenceRealtime.emitPostsInteraction(recipients, {
+        postId,
+        actorUserId: userId,
+        kind: 'bookmark',
+        active: true,
+        bookmarkCount: post?.bookmarkCount ?? undefined,
+      });
+    } catch {
+      // Best-effort
+    }
+
     return { success: true, bookmarked: true, bookmarkId: bookmark.id, collectionIds: desired };
   }
 
@@ -233,6 +258,15 @@ export class BookmarksService {
     const userId = (params.userId ?? '').trim();
     const postId = (params.postId ?? '').trim();
     if (!postId) throw new BadRequestException('Post id is required.');
+
+    // Best-effort: removing a bookmark should not require the post to still be visible.
+    const postUserId =
+      (
+        await this.prisma.post.findUnique({
+          where: { id: postId },
+          select: { userId: true },
+        })
+      )?.userId ?? null;
 
     await this.prisma.$transaction(async (tx) => {
       const deleted = await tx.bookmark.deleteMany({ where: { userId, postId } });
@@ -243,6 +277,25 @@ export class BookmarksService {
         });
       }
     });
+
+    // Fetch updated bookmark count for realtime payload (keep REST response stable).
+    try {
+      const post = await this.prisma.post.findUnique({
+        where: { id: postId },
+        select: { bookmarkCount: true },
+      });
+      const recipients = new Set<string>([userId, postUserId].filter(Boolean) as string[]);
+      this.presenceRealtime.emitPostsInteraction(recipients, {
+        postId,
+        actorUserId: userId,
+        kind: 'bookmark',
+        active: false,
+        bookmarkCount: post?.bookmarkCount ?? undefined,
+      });
+    } catch {
+      // Best-effort
+    }
+
     return { success: true, bookmarked: false };
   }
 }
