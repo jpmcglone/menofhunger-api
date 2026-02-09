@@ -7,5 +7,7 @@ export type TopicDto = {
   interestCount: number;
   /** How many times this topic appeared in recent post text. */
   postCount: number;
+  /** When viewer is authenticated, whether they follow this topic. */
+  viewerFollows?: boolean;
 };
 

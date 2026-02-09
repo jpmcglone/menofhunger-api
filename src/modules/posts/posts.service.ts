@@ -295,12 +295,33 @@ export class PostsService {
 
     const cfg = await this.prisma.siteConfig.findUnique({ where: { id: 1 } });
     // If missing (shouldn't happen after migrations), use safe defaults.
-    const value = cfg ?? { id: 1, postsPerWindow: 5, windowSeconds: 300 };
+    const value =
+      cfg ??
+      ({
+        id: 1,
+        postsPerWindow: 5,
+        windowSeconds: 300,
+        verifiedPostsPerWindow: 5,
+        verifiedWindowSeconds: 300,
+        premiumPostsPerWindow: 5,
+        premiumWindowSeconds: 300,
+      } as const);
     this.siteConfigCache = { value, expiresAt: now + 5 * 60 * 1000 };
     return value;
   }
 
-  private siteConfigCache: { value: { id: number; postsPerWindow: number; windowSeconds: number }; expiresAt: number } | null = null;
+  private siteConfigCache: {
+    value: {
+      id: number;
+      postsPerWindow: number;
+      windowSeconds: number;
+      verifiedPostsPerWindow: number;
+      verifiedWindowSeconds: number;
+      premiumPostsPerWindow: number;
+      premiumWindowSeconds: number;
+    };
+    expiresAt: number;
+  } | null = null;
 
   invalidateSiteConfigCache() {
     this.siteConfigCache = null;
@@ -417,7 +438,7 @@ export class PostsService {
     const posts = await this.prisma.post.findMany({
       where: {
         AND: [
-          { userId, visibility: 'onlyMe', parentId: null, ...this.notDeletedWhere() },
+          { userId, visibility: 'onlyMe', parentId: null, isDraft: false, ...this.notDeletedWhere() },
           ...(cursorWhere ? [cursorWhere] : []),
         ],
       },
@@ -2083,7 +2104,732 @@ export class PostsService {
         await tx.hashtag.deleteMany({ where: { tag: { in: tags }, usageCount: { lte: 0 } } });
       }
     });
+
+    // Delete all notifications that reference this post (as subject) or were caused by this post (as actorPost).
+    // Best-effort: deleting a post should not fail due to notification cleanup.
+    await Promise.allSettled([
+      this.notifications.deleteBySubjectPostId(id),
+      this.notifications.deleteByActorPostId(id),
+    ]).catch(() => {});
     return { success: true };
+  }
+
+  async updatePost(params: { userId: string; postId: string; body: string }) {
+    const { userId, postId } = params;
+    const id = (postId ?? '').trim();
+    if (!id) throw new NotFoundException('Post not found.');
+
+    const nextBody = (params.body ?? '').trim();
+    if (!nextBody) throw new BadRequestException('Post must include text.');
+
+    const post = await this.prisma.post.findUnique({
+      where: { id },
+      include: {
+        user: true,
+        media: { orderBy: { position: 'asc' } },
+        mentions: { select: { userId: true } },
+      },
+    });
+    if (!post) throw new NotFoundException('Post not found.');
+    if (post.userId !== userId) throw new ForbiddenException('Not allowed to edit this post.');
+    if (post.deletedAt) throw new ForbiddenException('Cannot edit a deleted post.');
+    if (post.visibility === 'onlyMe') throw new ForbiddenException('Only-me posts are not editable via this endpoint.');
+    if (post.parentId) throw new ForbiddenException('Replies cannot be edited.');
+
+    // Enforce edit window + count: 3 edits in first 30 minutes after creation.
+    const now = Date.now();
+    const createdAtMs = post.createdAt instanceof Date ? post.createdAt.getTime() : new Date(post.createdAt as any).getTime();
+    const windowMs = 30 * 60 * 1000;
+    if (Number.isFinite(createdAtMs) && now > createdAtMs + windowMs) {
+      throw new ForbiddenException('This post can no longer be edited.');
+    }
+    const editCount = typeof (post as any).editCount === 'number' ? ((post as any).editCount as number) : 0;
+    if (editCount >= 3) throw new ForbiddenException('This post has reached the edit limit.');
+
+    // Length rules align with createPost.
+    const maxLen = post.user?.premium ? 500 : 200;
+    if (nextBody.length > maxLen) {
+      throw new BadRequestException(
+        post.user?.premium
+          ? 'Posts are limited to 500 characters.'
+          : 'Posts are limited to 200 characters for non-premium members.',
+      );
+    }
+
+    const hashtagTokensRaw = this.parseHashtagsFromBody(nextBody);
+    const hashtagTokens = hashtagTokensRaw
+      .map((t) => ({ tag: (t.tag ?? '').trim().toLowerCase(), variant: (t.variant ?? '').trim() }))
+      .filter((t) => Boolean(t.tag && t.variant));
+    hashtagTokens.sort((a, b) => a.tag.localeCompare(b.tag) || a.variant.localeCompare(b.variant));
+    const hashtags = hashtagTokens.map((t) => t.tag);
+    const hashtagCasings = hashtagTokens.map((t) => t.variant);
+
+    const fromBodyMentions = this.parseMentionsFromBody(nextBody);
+    const bodyMentionIds = await this.resolveMentionUsernames(fromBodyMentions);
+    const existingMentionIds = Array.isArray((post as any).mentions) ? ((post as any).mentions as Array<{ userId: string }>).map((m) => m.userId) : [];
+    const mentionUserIds = Array.from(new Set([...existingMentionIds, ...bodyMentionIds])).filter(Boolean);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // Snapshot previous state (pre-edit).
+      await tx.postVersion.create({
+        data: {
+          postId: post.id,
+          body: post.body,
+          topics: Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [],
+          hashtags: Array.isArray((post as any).hashtags) ? ((post as any).hashtags as string[]) : [],
+          hashtagCasings: Array.isArray((post as any).hashtagCasings) ? ((post as any).hashtagCasings as string[]) : [],
+          visibility: post.visibility,
+        },
+      });
+
+      // Recompute topics from text and hashtags (no related topics for root post edits).
+      const topics = inferTopicsFromText(nextBody, { hashtags, relatedTopics: [] });
+
+      const next = await tx.post.update({
+        where: { id: post.id },
+        data: {
+          body: nextBody,
+          topics,
+          hashtags,
+          hashtagCasings,
+          editedAt: new Date(),
+          editCount: { increment: 1 },
+        },
+        include: {
+          user: true,
+          media: { orderBy: { position: 'asc' } },
+          mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true } } } },
+        },
+      });
+
+      await tx.postMention.deleteMany({ where: { postId: post.id } });
+      if (mentionUserIds.length > 0) {
+        await tx.postMention.createMany({
+          data: mentionUserIds.map((uid) => ({ postId: post.id, userId: uid })),
+          skipDuplicates: true,
+        });
+      }
+
+      // If hashtags changed, best-effort adjust counters by recomputing counts deltas.
+      // We keep it simple for v1: decrement old and increment new based on tokens.
+      const prevTags = Array.isArray((post as any).hashtags) ? ((post as any).hashtags as string[]) : [];
+      const prevVariants = Array.isArray((post as any).hashtagCasings) ? ((post as any).hashtagCasings as string[]) : [];
+      const prevPairs = prevTags.map((t, i) => ({ tag: (t ?? '').trim().toLowerCase(), variant: (prevVariants[i] ?? '').trim() })).filter((x) => x.tag);
+      const nextPairs = hashtagTokens;
+
+      const prevKeyCount = new Map<string, number>();
+      for (const p of prevPairs) prevKeyCount.set(`${p.tag}\n${p.variant}`, (prevKeyCount.get(`${p.tag}\n${p.variant}`) ?? 0) + 1);
+      const nextKeyCount = new Map<string, number>();
+      for (const p of nextPairs) nextKeyCount.set(`${p.tag}\n${p.variant}`, (nextKeyCount.get(`${p.tag}\n${p.variant}`) ?? 0) + 1);
+
+      const allKeys = new Set<string>([...prevKeyCount.keys(), ...nextKeyCount.keys()]);
+      for (const key of allKeys) {
+        const [tag, variant] = key.split('\n');
+        const prevN = prevKeyCount.get(key) ?? 0;
+        const nextN = nextKeyCount.get(key) ?? 0;
+        const delta = nextN - prevN;
+        if (!tag || delta === 0) continue;
+        if (delta > 0) {
+          await tx.hashtag.upsert({
+            where: { tag },
+            create: { tag, usageCount: delta },
+            update: { usageCount: { increment: delta } },
+          });
+          if (variant) {
+            await tx.hashtagVariant.upsert({
+              where: { tag_variant: { tag, variant } },
+              create: { tag, variant, count: delta },
+              update: { count: { increment: delta } },
+            });
+          }
+        } else if (delta < 0) {
+          try {
+            await tx.hashtag.update({ where: { tag }, data: { usageCount: { decrement: Math.abs(delta) } } });
+          } catch {
+            // ignore
+          }
+          if (variant) {
+            try {
+              await tx.hashtagVariant.update({ where: { tag_variant: { tag, variant } }, data: { count: { decrement: Math.abs(delta) } } });
+            } catch {
+              // ignore
+            }
+          }
+        }
+      }
+      const allTagsTouched = Array.from(new Set([...prevTags, ...hashtags].map((t) => String(t ?? '').trim().toLowerCase()).filter(Boolean)));
+      await tx.hashtagVariant.deleteMany({ where: { tag: { in: allTagsTouched }, count: { lte: 0 } } });
+      await tx.hashtag.deleteMany({ where: { tag: { in: allTagsTouched }, usageCount: { lte: 0 } } });
+
+      return next;
+    });
+    return updated;
+  }
+
+  async listDrafts(params: { userId: string; limit: number; cursor: string | null }) {
+    const limit = Math.max(1, Math.min(50, params.limit || 30));
+    const cursor = (params.cursor ?? '').trim() || null;
+
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor,
+      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+    });
+
+    const rows = await this.prisma.post.findMany({
+      where: {
+        AND: [
+          this.notDeletedWhere(),
+          { userId: params.userId },
+          { visibility: 'onlyMe' },
+          { isDraft: true },
+          { parentId: null },
+          ...(cursorWhere ? [cursorWhere as Prisma.PostWhereInput] : []),
+        ],
+      },
+      include: {
+        user: true,
+        media: { orderBy: { position: 'asc' } },
+        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true } } } },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+    });
+
+    const slice = rows.slice(0, limit);
+    const nextCursor = rows.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
+    return { posts: slice, nextCursor };
+  }
+
+  async createDraft(params: {
+    userId: string;
+    body: string;
+    media: Array<{
+      source: 'upload' | 'giphy';
+      kind: 'image' | 'gif' | 'video';
+      r2Key?: string;
+      thumbnailR2Key?: string;
+      url?: string;
+      mp4Url?: string;
+      width?: number;
+      height?: number;
+      durationSeconds?: number;
+      alt?: string | null;
+    }> | null;
+  }) {
+    const { userId } = params;
+    const body = (params.body ?? '').trim();
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { verifiedStatus: true, premium: true },
+    });
+    if (!user) throw new NotFoundException('User not found.');
+
+    const media = (params.media ?? []).filter(Boolean);
+    if (media.length > 4) throw new BadRequestException('You can attach up to 4 images, GIFs, or videos.');
+
+    // Media drafts are Premium/Premium+ only (align with post media rule).
+    if (media.length > 0 && !user.premium) {
+      throw new ForbiddenException('Upgrade to premium to post media.');
+    }
+
+    const maxLen = user.premium ? 500 : 200;
+    if (body.length > maxLen) {
+      throw new BadRequestException(
+        user.premium
+          ? 'Posts are limited to 500 characters.'
+          : 'Posts are limited to 200 characters for non-premium members.',
+      );
+    }
+
+    // Clean + validate media (same rules as createPost, but without notifications/mentions side-effects).
+    const allowedImagePrefixes = [`uploads/${userId}/images/`, `dev/uploads/${userId}/images/`];
+    const allowedVideoPrefixes = [`uploads/${userId}/videos/`, `dev/uploads/${userId}/videos/`];
+    const allowedThumbnailPrefixes = [`uploads/${userId}/thumbnails/`, `dev/uploads/${userId}/thumbnails/`];
+    const uploadKeys = media
+      .filter((m) => m.source === 'upload' && (m.r2Key ?? '').trim())
+      .map((m) => (m.r2Key ?? '').trim());
+    const reusedKeySet = new Set(
+      uploadKeys.length
+        ? (await this.prisma.mediaContentHash.findMany({ where: { r2Key: { in: uploadKeys } }, select: { r2Key: true } })).map((r) => r.r2Key)
+        : [],
+    );
+    const cleanedMedia = media
+      .map((m, idx) => {
+        const source = m.source;
+        const kind = m.kind;
+        const r2Key = (m.r2Key ?? '').trim();
+        const thumbnailR2Key = (m.thumbnailR2Key ?? '').trim() || null;
+        const url = (m.url ?? '').trim();
+        const mp4Url = (m.mp4Url ?? '').trim();
+        const width = typeof m.width === 'number' && Number.isFinite(m.width) ? Math.max(1, Math.floor(m.width)) : null;
+        const height = typeof m.height === 'number' && Number.isFinite(m.height) ? Math.max(1, Math.floor(m.height)) : null;
+        const durationSeconds =
+          typeof m.durationSeconds === 'number' && Number.isFinite(m.durationSeconds) && m.durationSeconds >= 0
+            ? Math.floor(m.durationSeconds)
+            : null;
+        const alt = (m.alt ?? '').trim().slice(0, 500) || null;
+
+        if (source === 'upload') {
+          if (!r2Key) throw new BadRequestException('Invalid uploaded media key.');
+          const isReusedKey = reusedKeySet.has(r2Key);
+          if (kind === 'video') {
+            if (!isReusedKey && !allowedVideoPrefixes.some((p) => r2Key.startsWith(p))) {
+              throw new BadRequestException('Invalid uploaded video key.');
+            }
+            if (thumbnailR2Key && !allowedThumbnailPrefixes.some((p) => thumbnailR2Key.startsWith(p))) {
+              throw new BadRequestException('Invalid thumbnail key.');
+            }
+            return {
+              source,
+              kind,
+              r2Key,
+              thumbnailR2Key: thumbnailR2Key || undefined,
+              url: null,
+              mp4Url: null,
+              width,
+              height,
+              durationSeconds,
+              alt,
+              position: idx,
+            };
+          }
+          if (!isReusedKey && !allowedImagePrefixes.some((p) => r2Key.startsWith(p))) {
+            throw new BadRequestException('Invalid uploaded media key.');
+          }
+          return {
+            source,
+            kind,
+            r2Key,
+            thumbnailR2Key: undefined,
+            url: null,
+            mp4Url: null,
+            width,
+            height,
+            durationSeconds: null,
+            alt,
+            position: idx,
+          };
+        }
+
+        if (!url) throw new BadRequestException('Invalid Giphy media URL.');
+        return {
+          source,
+          kind,
+          r2Key: null,
+          thumbnailR2Key: undefined,
+          url,
+          mp4Url: mp4Url || null,
+          width,
+          height,
+          durationSeconds: null,
+          alt,
+          position: idx,
+        };
+      })
+      .filter(Boolean);
+
+    const hashtagTokensRaw = body ? this.parseHashtagsFromBody(body) : [];
+    const hashtagTokens = hashtagTokensRaw
+      .map((t) => ({ tag: (t.tag ?? '').trim().toLowerCase(), variant: (t.variant ?? '').trim() }))
+      .filter((t) => Boolean(t.tag && t.variant));
+    hashtagTokens.sort((a, b) => a.tag.localeCompare(b.tag) || a.variant.localeCompare(b.variant));
+    const hashtags = hashtagTokens.map((t) => t.tag);
+    const hashtagCasings = hashtagTokens.map((t) => t.variant);
+    const topics = body ? inferTopicsFromText(body, { hashtags, relatedTopics: [] }) : [];
+
+    const created = await this.prisma.post.create({
+      data: {
+        userId,
+        body,
+        visibility: 'onlyMe',
+        isDraft: true,
+        topics,
+        hashtags,
+        hashtagCasings,
+        ...(cleanedMedia.length
+          ? {
+              media: {
+                create: cleanedMedia,
+              },
+            }
+          : {}),
+      },
+      include: {
+        user: true,
+        media: { orderBy: { position: 'asc' } },
+        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true } } } },
+      },
+    });
+
+    return created;
+  }
+
+  async updateDraft(params: {
+    userId: string;
+    draftId: string;
+    body?: string;
+    media: Array<{
+      source: 'upload' | 'giphy';
+      kind: 'image' | 'gif' | 'video';
+      r2Key?: string;
+      thumbnailR2Key?: string;
+      url?: string;
+      mp4Url?: string;
+      width?: number;
+      height?: number;
+      durationSeconds?: number;
+      alt?: string | null;
+    }> | null;
+  }) {
+    const id = (params.draftId ?? '').trim();
+    if (!id) throw new NotFoundException('Draft not found.');
+
+    const post = await this.prisma.post.findUnique({
+      where: { id },
+      include: {
+        user: true,
+        media: { orderBy: { position: 'asc' } },
+        mentions: { select: { userId: true } },
+      },
+    });
+    if (!post) throw new NotFoundException('Draft not found.');
+    if (post.userId !== params.userId) throw new ForbiddenException('Not allowed.');
+    if (post.deletedAt) throw new ForbiddenException('Draft not found.');
+    if (post.visibility !== 'onlyMe' || !post.isDraft) throw new ForbiddenException('Not a draft.');
+    if (post.parentId) throw new ForbiddenException('Not a draft.');
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: params.userId },
+      select: { premium: true },
+    });
+    if (!user) throw new NotFoundException('User not found.');
+
+    const nextBody = typeof params.body === 'string' ? params.body.trim() : post.body;
+    const maxLen = user.premium ? 500 : 200;
+    if (nextBody.length > maxLen) {
+      throw new BadRequestException(
+        user.premium
+          ? 'Posts are limited to 500 characters.'
+          : 'Posts are limited to 200 characters for non-premium members.',
+      );
+    }
+
+    const media = params.media === null ? null : (params.media ?? null);
+    if (media && media.length > 4) throw new BadRequestException('You can attach up to 4 images, GIFs, or videos.');
+    if ((media?.length ?? 0) > 0 && !user.premium) throw new ForbiddenException('Upgrade to premium to post media.');
+
+    // If media is provided, validate/clean; otherwise leave unchanged.
+    let cleanedMedia:
+      | Array<{
+          source: 'upload' | 'giphy';
+          kind: 'image' | 'gif' | 'video';
+          r2Key?: string | null;
+          thumbnailR2Key?: string;
+          url?: string | null;
+          mp4Url?: string | null;
+          width?: number | null;
+          height?: number | null;
+          durationSeconds?: number | null;
+          alt?: string | null;
+          position: number;
+        }>
+      | null = null;
+
+    if (media) {
+      const allowedImagePrefixes = [`uploads/${params.userId}/images/`, `dev/uploads/${params.userId}/images/`];
+      const allowedVideoPrefixes = [`uploads/${params.userId}/videos/`, `dev/uploads/${params.userId}/videos/`];
+      const allowedThumbnailPrefixes = [`uploads/${params.userId}/thumbnails/`, `dev/uploads/${params.userId}/thumbnails/`];
+      const uploadKeys = media
+        .filter((m) => m.source === 'upload' && (m.r2Key ?? '').trim())
+        .map((m) => (m.r2Key ?? '').trim());
+      const reusedKeySet = new Set(
+        uploadKeys.length
+          ? (await this.prisma.mediaContentHash.findMany({ where: { r2Key: { in: uploadKeys } }, select: { r2Key: true } })).map((r) => r.r2Key)
+          : [],
+      );
+      cleanedMedia = media
+        .map((m, idx) => {
+          const source = m.source;
+          const kind = m.kind;
+          const r2Key = (m.r2Key ?? '').trim();
+          const thumbnailR2Key = (m.thumbnailR2Key ?? '').trim() || null;
+          const url = (m.url ?? '').trim();
+          const mp4Url = (m.mp4Url ?? '').trim();
+          const width = typeof m.width === 'number' && Number.isFinite(m.width) ? Math.max(1, Math.floor(m.width)) : null;
+          const height = typeof m.height === 'number' && Number.isFinite(m.height) ? Math.max(1, Math.floor(m.height)) : null;
+          const durationSeconds =
+            typeof m.durationSeconds === 'number' && Number.isFinite(m.durationSeconds) && m.durationSeconds >= 0
+              ? Math.floor(m.durationSeconds)
+              : null;
+          const alt = (m.alt ?? '').trim().slice(0, 500) || null;
+
+          if (source === 'upload') {
+            if (!r2Key) throw new BadRequestException('Invalid uploaded media key.');
+            const isReusedKey = reusedKeySet.has(r2Key);
+            if (kind === 'video') {
+              if (!isReusedKey && !allowedVideoPrefixes.some((p) => r2Key.startsWith(p))) {
+                throw new BadRequestException('Invalid uploaded video key.');
+              }
+              if (thumbnailR2Key && !allowedThumbnailPrefixes.some((p) => thumbnailR2Key.startsWith(p))) {
+                throw new BadRequestException('Invalid thumbnail key.');
+              }
+              return {
+                source,
+                kind,
+                r2Key,
+                thumbnailR2Key: thumbnailR2Key || undefined,
+                url: null,
+                mp4Url: null,
+                width,
+                height,
+                durationSeconds,
+                alt,
+                position: idx,
+              };
+            }
+            if (!isReusedKey && !allowedImagePrefixes.some((p) => r2Key.startsWith(p))) {
+              throw new BadRequestException('Invalid uploaded media key.');
+            }
+            return {
+              source,
+              kind,
+              r2Key,
+              thumbnailR2Key: undefined,
+              url: null,
+              mp4Url: null,
+              width,
+              height,
+              durationSeconds: null,
+              alt,
+              position: idx,
+            };
+          }
+
+          if (!url) throw new BadRequestException('Invalid Giphy media URL.');
+          return {
+            source,
+            kind,
+            r2Key: null,
+            thumbnailR2Key: undefined,
+            url,
+            mp4Url: mp4Url || null,
+            width,
+            height,
+            durationSeconds: null,
+            alt,
+            position: idx,
+          };
+        })
+        .filter(Boolean);
+    }
+
+    const hashtagTokensRaw = nextBody ? this.parseHashtagsFromBody(nextBody) : [];
+    const hashtagTokens = hashtagTokensRaw
+      .map((t) => ({ tag: (t.tag ?? '').trim().toLowerCase(), variant: (t.variant ?? '').trim() }))
+      .filter((t) => Boolean(t.tag && t.variant));
+    hashtagTokens.sort((a, b) => a.tag.localeCompare(b.tag) || a.variant.localeCompare(b.variant));
+    const hashtags = hashtagTokens.map((t) => t.tag);
+    const hashtagCasings = hashtagTokens.map((t) => t.variant);
+    const topics = nextBody ? inferTopicsFromText(nextBody, { hashtags, relatedTopics: [] }) : [];
+
+    const fromBodyMentions = nextBody ? this.parseMentionsFromBody(nextBody) : [];
+    const bodyMentionIds = await this.resolveMentionUsernames(fromBodyMentions);
+    const existingMentionIds = Array.isArray((post as any).mentions) ? ((post as any).mentions as Array<{ userId: string }>).map((m) => m.userId) : [];
+    const mentionUserIds = Array.from(new Set([...existingMentionIds, ...bodyMentionIds])).filter(Boolean);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const next = await tx.post.update({
+        where: { id: post.id },
+        data: {
+          body: nextBody,
+          topics,
+          hashtags,
+          hashtagCasings,
+        },
+        include: {
+          user: true,
+          media: { orderBy: { position: 'asc' } },
+          mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true } } } },
+        },
+      });
+
+      if (cleanedMedia) {
+        await tx.postMedia.deleteMany({ where: { postId: post.id } });
+        if (cleanedMedia.length > 0) {
+          await tx.postMedia.createMany({
+            data: cleanedMedia.map((m) => ({
+              postId: post.id,
+              source: m.source,
+              kind: m.kind,
+              r2Key: (m as any).r2Key ?? null,
+              thumbnailR2Key: (m as any).thumbnailR2Key ?? null,
+              url: (m as any).url ?? null,
+              mp4Url: (m as any).mp4Url ?? null,
+              width: (m as any).width ?? null,
+              height: (m as any).height ?? null,
+              durationSeconds: (m as any).durationSeconds ?? null,
+              alt: (m as any).alt ?? null,
+              position: m.position,
+            })),
+            skipDuplicates: false,
+          });
+        }
+      }
+
+      await tx.postMention.deleteMany({ where: { postId: post.id } });
+      if (mentionUserIds.length > 0) {
+        await tx.postMention.createMany({
+          data: mentionUserIds.map((uid) => ({ postId: post.id, userId: uid })),
+          skipDuplicates: true,
+        });
+      }
+
+      return next;
+    });
+
+    return updated;
+  }
+
+  async deleteDraft(params: { userId: string; draftId: string }) {
+    const id = (params.draftId ?? '').trim();
+    if (!id) throw new NotFoundException('Draft not found.');
+    const post = await this.prisma.post.findUnique({ where: { id }, select: { id: true, userId: true, deletedAt: true, visibility: true, isDraft: true } });
+    if (!post) throw new NotFoundException('Draft not found.');
+    if (post.userId !== params.userId) throw new ForbiddenException('Not allowed.');
+    if (post.visibility !== 'onlyMe' || !post.isDraft) throw new ForbiddenException('Not a draft.');
+    if (post.deletedAt) return { success: true };
+    await this.prisma.post.update({ where: { id }, data: { deletedAt: new Date() } });
+    return { success: true };
+  }
+
+  async publishFromOnlyMe(params: {
+    userId: string;
+    sourcePostId: string;
+    body: string | null;
+    visibility: PostVisibility;
+    media?: Array<
+      | { source: 'existing'; id: string; alt?: string | null }
+      | {
+          source: 'upload';
+          kind: 'image' | 'gif' | 'video';
+          r2Key?: string;
+          thumbnailR2Key?: string;
+          url?: string;
+          mp4Url?: string;
+          width?: number;
+          height?: number;
+          durationSeconds?: number;
+          alt?: string | null;
+        }
+      | {
+          source: 'giphy';
+          kind: 'gif';
+          url: string;
+          mp4Url?: string;
+          width?: number;
+          height?: number;
+          alt?: string | null;
+        }
+    > | null;
+  }) {
+    const sourceId = (params.sourcePostId ?? '').trim();
+    if (!sourceId) throw new NotFoundException('Post not found.');
+
+    const source = await this.prisma.post.findUnique({
+      where: { id: sourceId },
+      include: { media: { orderBy: { position: 'asc' } } },
+    });
+    if (!source) throw new NotFoundException('Post not found.');
+    if (source.userId !== params.userId) throw new ForbiddenException('Not allowed.');
+    if (source.deletedAt) throw new NotFoundException('Post not found.');
+    if (source.visibility !== 'onlyMe') throw new ForbiddenException('Not allowed.');
+    if (source.parentId) throw new ForbiddenException('Not allowed.');
+
+    const body = (params.body ?? source.body ?? '').trim();
+
+    const sourceMediaSorted = (source.media ?? [])
+      .slice()
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+
+    const requested = (params.media ?? null) as (NonNullable<(typeof params)['media']>) | null;
+
+    const media = requested
+      ? requested.map((m) => {
+          if (m.source === 'existing') {
+            const id = (m.id ?? '').trim();
+            if (!id) throw new BadRequestException('Invalid media item.');
+            const found = sourceMediaSorted.find((sm) => sm.id === id && !sm.deletedAt);
+            if (!found) throw new BadRequestException('Invalid media item.');
+            const alt = (m.alt ?? '').trim() || (found.alt ?? '').trim() || null;
+            return {
+              source: found.source === 'giphy' ? ('giphy' as const) : ('upload' as const),
+              kind: found.kind as 'image' | 'gif' | 'video',
+              r2Key: found.r2Key ?? undefined,
+              thumbnailR2Key: found.thumbnailR2Key ?? undefined,
+              url: found.url ?? undefined,
+              mp4Url: found.mp4Url ?? undefined,
+              width: found.width ?? undefined,
+              height: found.height ?? undefined,
+              durationSeconds: (found as any).durationSeconds ?? undefined,
+              alt,
+            };
+          }
+          if (m.source === 'giphy') {
+            return {
+              source: 'giphy' as const,
+              kind: 'gif' as const,
+              url: m.url,
+              mp4Url: m.mp4Url ?? undefined,
+              width: m.width ?? undefined,
+              height: m.height ?? undefined,
+              alt: (m.alt ?? '').trim() || null,
+            };
+          }
+          // upload
+          return {
+            source: 'upload' as const,
+            kind: m.kind,
+            r2Key: m.r2Key ?? undefined,
+            thumbnailR2Key: m.thumbnailR2Key ?? undefined,
+            width: m.width ?? undefined,
+            height: m.height ?? undefined,
+            durationSeconds: (m as any).durationSeconds ?? undefined,
+            alt: (m.alt ?? '').trim() || null,
+          };
+        })
+      : sourceMediaSorted.map((m) => ({
+          source: m.source === 'giphy' ? ('giphy' as const) : ('upload' as const),
+          kind: m.kind as 'image' | 'gif' | 'video',
+          r2Key: m.r2Key ?? undefined,
+          thumbnailR2Key: m.thumbnailR2Key ?? undefined,
+          url: m.url ?? undefined,
+          mp4Url: m.mp4Url ?? undefined,
+          width: m.width ?? undefined,
+          height: m.height ?? undefined,
+          durationSeconds: (m as any).durationSeconds ?? undefined,
+          alt: (m.alt ?? '').trim() || null,
+        }));
+
+    const created = await this.createPost({
+      userId: params.userId,
+      body,
+      visibility: params.visibility,
+      parentId: null,
+      mentions: null,
+      media: media.length ? media : null,
+    });
+
+    // Fetch with mentions for UI consistency.
+    const full = await this.prisma.post.findUnique({
+      where: { id: created.id },
+      include: {
+        user: true,
+        media: { orderBy: { position: 'asc' } },
+        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true } } } },
+      },
+    });
+    return full ?? created;
   }
 
   /** Resolve usernames to user ids (case-insensitive, usernameIsSet). Invalid usernames ignored. */
@@ -2257,18 +3003,27 @@ export class PostsService {
       threadParticipantIds = Array.from(participantIds);
     }
 
-    const cfg = await this.getSiteConfig();
-    const windowStart = new Date(Date.now() - cfg.windowSeconds * 1000);
-    const recentCount = await this.prisma.post.count({
-      where: { userId, createdAt: { gte: windowStart } },
-    });
-    if (recentCount >= cfg.postsPerWindow) {
-      const minutes = Math.max(1, Math.round(cfg.windowSeconds / 60));
-      const minuteLabel = minutes === 1 ? 'minute' : 'minutes';
-      throw new HttpException(
-        `You are posting too often. You can make up to ${cfg.postsPerWindow} posts every ${minutes} ${minuteLabel}.`,
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+    // Rate limits (tier-specific). Exclude onlyMe so private notes/drafts don't count.
+    // Unverified users can only create onlyMe posts; skip rate limit entirely for them.
+    if (viewerIsVerified) {
+      const cfg = await this.getSiteConfig();
+      const isPremium = Boolean(user.premium);
+
+      const postsPerWindow = isPremium ? cfg.premiumPostsPerWindow : cfg.verifiedPostsPerWindow;
+      const windowSeconds = isPremium ? cfg.premiumWindowSeconds : cfg.verifiedWindowSeconds;
+
+      const windowStart = new Date(Date.now() - windowSeconds * 1000);
+      const recentCount = await this.prisma.post.count({
+        where: { userId, createdAt: { gte: windowStart }, visibility: { not: 'onlyMe' } },
+      });
+      if (recentCount >= postsPerWindow) {
+        const minutes = Math.max(1, Math.round(windowSeconds / 60));
+        const minuteLabel = minutes === 1 ? 'minute' : 'minutes';
+        throw new HttpException(
+          `You are posting too often. You can make up to ${postsPerWindow} posts every ${minutes} ${minuteLabel}.`,
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
     }
 
     const maxLen = user.premium ? 500 : 200;
@@ -2282,6 +3037,11 @@ export class PostsService {
 
     const media = (params.media ?? []).filter(Boolean);
     if (media.length > 4) throw new BadRequestException('You can attach up to 4 images, GIFs, or videos.');
+
+    // Product rule: media posts are Premium/Premium+ only (images, GIFs/Giphy, video).
+    if (media.length > 0 && !user.premium) {
+      throw new ForbiddenException('Upgrade to premium to post media.');
+    }
 
     const hasVideo = media.some((m) => m.kind === 'video');
     if (hasVideo && !user.premium) {
@@ -2478,6 +3238,7 @@ export class PostsService {
             recipientUserId: parentAuthorUserId,
             kind: 'comment',
             actorUserId: userId,
+            actorPostId: post.id,
             subjectPostId: parentId,
             title: parentTitle,
             body: bodySnippet || undefined,
@@ -2496,6 +3257,7 @@ export class PostsService {
             recipientUserId: uid,
             kind: 'comment',
             actorUserId: userId,
+            actorPostId: post.id,
             subjectPostId: parentId,
             title,
             body: bodySnippet || undefined,
@@ -2514,12 +3276,60 @@ export class PostsService {
           recipientUserId: uid,
           kind: 'mention',
           actorUserId: userId,
+          actorPostId: post.id,
           subjectPostId: post.id,
           body: bodySnippet || undefined,
         })
         .catch((err) => {
           this.logger.warn(`[notifications] Failed to create mention notification: ${err instanceof Error ? err.message : String(err)}`);
         });
+    }
+
+    // Follower notifications: when someone you follow publishes a top-level post.
+    // Filter recipients by post visibility so we don't notify followers who can't view it.
+    if (!parentId && visibility !== 'onlyMe') {
+      try {
+        const follows = await this.prisma.follow.findMany({
+          where: { followingId: userId },
+          select: {
+            followerId: true,
+            follower: { select: { verifiedStatus: true, premium: true, premiumPlus: true } },
+          },
+        });
+
+        for (const f of follows) {
+          const recipientUserId = f.followerId;
+          if (!recipientUserId || recipientUserId === userId) continue;
+
+          if (visibility === 'verifiedOnly') {
+            const vs = f.follower?.verifiedStatus ?? 'none';
+            if (!vs || vs === 'none') continue;
+          }
+          if (visibility === 'premiumOnly') {
+            const isPremium = Boolean(f.follower?.premium || f.follower?.premiumPlus);
+            if (!isPremium) continue;
+          }
+
+          this.notifications
+            .create({
+              recipientUserId,
+              kind: 'followed_post',
+              actorUserId: userId,
+              actorPostId: post.id,
+              subjectPostId: post.id,
+              body: bodySnippet || undefined,
+            })
+            .catch((err) => {
+              this.logger.warn(
+                `[notifications] Failed to create followed-post notification: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+        }
+      } catch (err) {
+        this.logger.warn(
+          `[notifications] Failed to query followers for followed-post notifications: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     const withMentions = await this.prisma.post.findUnique({

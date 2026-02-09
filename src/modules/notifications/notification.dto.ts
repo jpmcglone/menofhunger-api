@@ -27,6 +27,8 @@ export type NotificationDto = {
   deliveredAt: string | null;
   readAt: string | null;
   actor: NotificationActorDto | null;
+  /** The post that caused this notification (e.g. a reply or mention post). */
+  actorPostId: string | null;
   subjectPostId: string | null;
   subjectUserId: string | null;
   title: string | null;

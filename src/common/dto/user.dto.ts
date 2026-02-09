@@ -14,6 +14,7 @@ export type UserListRow = {
   name: string | null;
   premium: boolean;
   premiumPlus: boolean;
+  stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
@@ -27,6 +28,7 @@ export type UserListDto = {
   name: string | null;
   premium: boolean;
   premiumPlus: boolean;
+  stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
   relationship?: UserListRelationship;
@@ -44,6 +46,7 @@ export function toUserListDto(
     name: row.name,
     premium: row.premium,
     premiumPlus: row.premiumPlus,
+    stewardBadgeEnabled: Boolean(row.stewardBadgeEnabled),
     verifiedStatus: row.verifiedStatus,
     avatarUrl: publicAssetUrl({
       publicBaseUrl,
@@ -72,6 +75,7 @@ export type UserDto = {
   siteAdmin: boolean;
   premium: boolean;
   premiumPlus: boolean;
+  stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   verifiedAt: string | null;
   unverifiedAt: string | null;
@@ -88,6 +92,7 @@ export type UserPreviewDto = {
   bio: string | null;
   premium: boolean;
   premiumPlus: boolean;
+  stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
   bannerUrl: string | null;
@@ -112,6 +117,7 @@ export function toUserDto(user: User, publicAssetBaseUrl: string | null = null):
     siteAdmin: user.siteAdmin,
     premium: user.premium,
     premiumPlus: user.premiumPlus,
+    stewardBadgeEnabled: Boolean(user.stewardBadgeEnabled),
     verifiedStatus: user.verifiedStatus,
     verifiedAt: user.verifiedAt ? user.verifiedAt.toISOString() : null,
     unverifiedAt: user.unverifiedAt ? user.unverifiedAt.toISOString() : null,

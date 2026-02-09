@@ -10,6 +10,7 @@ export type PostAuthorDto = {
   name: string | null;
   premium: boolean;
   premiumPlus: boolean;
+  stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
 };
@@ -38,14 +39,18 @@ export type PostMentionDto = {
   verifiedStatus?: VerifiedStatus;
   premium?: boolean;
   premiumPlus?: boolean;
+  stewardBadgeEnabled?: boolean;
 };
 
 export type PostDto = {
   id: string;
   createdAt: string;
+  editedAt: string | null;
+  editCount: number;
   body: string;
   deletedAt: string | null;
   visibility: PostVisibility;
+  isDraft: boolean;
   topics: string[];
   /** User-created hashtags parsed from body text (lowercase, without '#'). */
   hashtags: string[];
@@ -71,7 +76,14 @@ export type PostDto = {
 
 /** Mention row with user included (from Prisma include). */
 export type PostMentionWithUser = {
-  user: { id: string; username: string | null; verifiedStatus?: VerifiedStatus; premium?: boolean; premiumPlus?: boolean };
+  user: {
+    id: string;
+    username: string | null;
+    verifiedStatus?: VerifiedStatus;
+    premium?: boolean;
+    premiumPlus?: boolean;
+    stewardBadgeEnabled?: boolean;
+  };
 };
 
 /** Post with relations included for DTO mapping. Post has bookmarkCount, commentCount, parentId from schema. */
@@ -160,6 +172,7 @@ export function toPostDto(
             verifiedStatus: m.user.verifiedStatus ?? undefined,
             premium: m.user.premium ?? undefined,
             premiumPlus: m.user.premiumPlus ?? undefined,
+            stewardBadgeEnabled: m.user.stewardBadgeEnabled ?? undefined,
           }
         : null,
     )
@@ -168,9 +181,12 @@ export function toPostDto(
   return {
     id: post.id,
     createdAt: post.createdAt.toISOString(),
+    editedAt: post.editedAt ? post.editedAt.toISOString() : null,
+    editCount: typeof (post as any).editCount === 'number' ? ((post as any).editCount as number) : 0,
     body: isPostDeleted ? '' : post.body,
     deletedAt: postDeletedAt,
     visibility: post.visibility,
+    isDraft: Boolean((post as any).isDraft),
     topics: Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [],
     hashtags: isPostDeleted ? [] : (Array.isArray((post as any).hashtags) ? ((post as any).hashtags as string[]) : []),
     boostCount: post.boostCount,
@@ -199,6 +215,7 @@ export function toPostDto(
       name: post.user.name,
       premium: post.user.premium,
       premiumPlus: post.user.premiumPlus,
+      stewardBadgeEnabled: Boolean(post.user.stewardBadgeEnabled),
       verifiedStatus: post.user.verifiedStatus,
       avatarUrl: publicAssetUrl({
         publicBaseUrl: publicAssetBaseUrl,

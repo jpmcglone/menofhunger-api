@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -44,12 +44,38 @@ export class TopicsService {
 
   private topicsCache: { expiresAt: number; data: TopicDto[] } | null = null;
 
+  private topicOptionByKey(): Map<string, string> {
+    const optionByKey = new Map<string, string>();
+    for (const opt of TOPIC_OPTIONS) {
+      optionByKey.set(normalizeKey(opt.value), opt.value);
+      optionByKey.set(normalizeKey(opt.label), opt.value);
+      for (const a of opt.aliases ?? []) optionByKey.set(normalizeKey(a), opt.value);
+    }
+    return optionByKey;
+  }
+
+  private resolveAllowlistedTopicOrThrow(topicParam: string): string {
+    const raw = normalizeKey(topicParam);
+    const mapped = this.topicOptionByKey().get(raw) ?? null;
+    if (!mapped) throw new BadRequestException('Unknown topic.');
+    return mapped;
+  }
+
   private async viewerById(viewerUserId: string | null): Promise<Viewer> {
     if (!viewerUserId) return null;
     return await this.prisma.user.findUnique({
       where: { id: viewerUserId },
       select: { id: true, verifiedStatus: true, premium: true },
     });
+  }
+
+  private async followedTopicSet(viewerUserId: string | null): Promise<Set<string>> {
+    if (!viewerUserId) return new Set<string>();
+    const rows = await this.prisma.topicFollow.findMany({
+      where: { userId: viewerUserId },
+      select: { topic: true },
+    });
+    return new Set(rows.map((r) => r.topic));
   }
 
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
@@ -59,24 +85,17 @@ export class TopicsService {
     return allowed;
   }
 
-  async listTopics(params: { viewerUserId: string | null; limit: number }): Promise<TopicDto[]> {
-    const limit = Math.max(1, Math.min(50, params.limit || 30));
-
+  private async combinedTopicsCached(params: { viewerUserId: string | null }): Promise<TopicDto[]> {
     const viewer = await this.viewerById(params.viewerUserId ?? null);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
     const now = Date.now();
     // Topics are global-ish and expensive-ish (post scan). Cache briefly.
     if (this.topicsCache && this.topicsCache.expiresAt > now) {
-      return this.topicsCache.data.slice(0, limit);
+      return this.topicsCache.data;
     }
 
-    const optionByKey = new Map<string, string>();
-    for (const opt of TOPIC_OPTIONS) {
-      optionByKey.set(normalizeKey(opt.value), opt.value);
-      optionByKey.set(normalizeKey(opt.label), opt.value);
-      for (const a of opt.aliases ?? []) optionByKey.set(normalizeKey(a), opt.value);
-    }
+    const optionByKey = this.topicOptionByKey();
 
     // 1) Interests (aggregated): unnest interests arrays and count.
     // Only use users who completed onboarding enough to set a username (reduces noise from abandoned signups).
@@ -140,21 +159,43 @@ export class TopicsService {
 
     // Keep a stable list; cache for 5 minutes.
     this.topicsCache = { expiresAt: now + 5 * 60 * 1000, data: combined };
+    return combined;
+  }
 
-    return combined.slice(0, limit);
+  async listTopics(params: { viewerUserId: string | null; limit: number }): Promise<TopicDto[]> {
+    const limit = Math.max(1, Math.min(50, params.limit || 30));
+    const combined = await this.combinedTopicsCached({ viewerUserId: params.viewerUserId ?? null });
+    const followed = await this.followedTopicSet(params.viewerUserId ?? null);
+    return combined.slice(0, limit).map((t) => (followed.size > 0 ? { ...t, viewerFollows: followed.has(t.topic) } : t));
+  }
+
+  async listFollowedTopics(params: { viewerUserId: string; limit: number }): Promise<TopicDto[]> {
+    const limit = Math.max(1, Math.min(50, params.limit || 30));
+    const followed = await this.followedTopicSet(params.viewerUserId);
+    if (followed.size === 0) return [];
+    const combined = await this.combinedTopicsCached({ viewerUserId: params.viewerUserId });
+    const rows = combined.filter((t) => followed.has(t.topic)).map((t) => ({ ...t, viewerFollows: true }));
+    return rows.slice(0, limit);
+  }
+
+  async followTopic(params: { userId: string; topic: string }) {
+    const topic = this.resolveAllowlistedTopicOrThrow(params.topic);
+    await this.prisma.topicFollow.upsert({
+      where: { userId_topic: { userId: params.userId, topic } },
+      create: { userId: params.userId, topic },
+      update: {},
+    });
+    return { topic };
+  }
+
+  async unfollowTopic(params: { userId: string; topic: string }) {
+    const topic = this.resolveAllowlistedTopicOrThrow(params.topic);
+    await this.prisma.topicFollow.deleteMany({ where: { userId: params.userId, topic } });
+    return { topic };
   }
 
   async listTopicPosts(params: { viewerUserId: string | null; topic: string; limit: number; cursor: string | null }) {
-    const qRaw = normalizeKey(params.topic);
-    const optionByKey = new Map<string, string>();
-    for (const opt of TOPIC_OPTIONS) {
-      optionByKey.set(normalizeKey(opt.value), opt.value);
-      optionByKey.set(normalizeKey(opt.label), opt.value);
-      for (const a of opt.aliases ?? []) optionByKey.set(normalizeKey(a), opt.value);
-    }
-    const mapped = optionByKey.get(qRaw) ?? null;
-    const q = mapped ?? normalizeTopic(params.topic);
-    if (!q) return { posts: [], nextCursor: null };
+    const q = this.resolveAllowlistedTopicOrThrow(params.topic);
 
     const limit = Math.max(1, Math.min(50, params.limit || 30));
     const cursor = (params.cursor ?? '').trim() || null;

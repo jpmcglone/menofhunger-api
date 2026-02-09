@@ -32,6 +32,7 @@ const profileSchema = z.object({
 
 const settingsSchema = z.object({
   followVisibility: z.enum(['all', 'verified', 'premium', 'none']).optional(),
+  stewardBadgeEnabled: z.boolean().optional(),
 });
 
 const onboardingSchema = z.object({
@@ -71,6 +72,7 @@ type PublicProfilePayload = {
   bio: string | null;
   premium: boolean;
   premiumPlus: boolean;
+  stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
   bannerUrl: string | null;
@@ -85,6 +87,7 @@ type UserPreviewPayload = {
   bio: string | null;
   premium: boolean;
   premiumPlus: boolean;
+  stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
   bannerUrl: string | null;
@@ -173,6 +176,7 @@ export class UsersController {
             bio: string | null;
             premium: boolean;
             premiumPlus: boolean;
+            stewardBadgeEnabled: boolean;
             verifiedStatus: string;
             avatarKey: string | null;
             avatarUpdatedAt: Date | null;
@@ -182,7 +186,7 @@ export class UsersController {
             lastOnlineAt: Date | null;
           }>
         >`
-          SELECT "id", "username", "name", "bio", "premium", "premiumPlus", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt"
+          SELECT "id", "username", "name", "bio", "premium", "premiumPlus", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt"
           FROM "User"
           WHERE (
             (${isUuidOrCuid} = true AND "id" = ${raw})
@@ -218,6 +222,7 @@ export class UsersController {
       bio: user.bio,
       premium: user.premium,
       premiumPlus: user.premiumPlus,
+      stewardBadgeEnabled: Boolean(user.stewardBadgeEnabled),
       verifiedStatus: user.verifiedStatus,
       avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
       bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),
@@ -356,6 +361,7 @@ export class UsersController {
         name: true,
         premium: true,
         premiumPlus: true,
+        stewardBadgeEnabled: true,
         verifiedStatus: true,
         avatarKey: true,
         avatarUpdatedAt: true,
@@ -485,6 +491,7 @@ export class UsersController {
       bio: profile.bio,
       premium: profile.premium,
       premiumPlus: profile.premiumPlus,
+      stewardBadgeEnabled: Boolean(profile.stewardBadgeEnabled),
       verifiedStatus: profile.verifiedStatus,
       avatarUrl: profile.avatarUrl,
       bannerUrl: profile.bannerUrl,
@@ -609,10 +616,22 @@ export class UsersController {
   async updateMySettings(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = settingsSchema.parse(body);
 
+    if (parsed.stewardBadgeEnabled !== undefined) {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { premiumPlus: true },
+      });
+      if (!user) throw new NotFoundException('User not found.');
+      if (!user.premiumPlus) {
+        throw new BadRequestException('Premium+ is required to change steward badge settings.');
+      }
+    }
+
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
         followVisibility: parsed.followVisibility,
+        ...(parsed.stewardBadgeEnabled !== undefined ? { stewardBadgeEnabled: parsed.stewardBadgeEnabled } : {}),
       },
     });
 

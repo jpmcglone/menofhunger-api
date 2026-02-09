@@ -4,6 +4,7 @@ import { AdminGuard } from './admin.guard';
 import { AuthCleanupCron } from '../auth/auth-cleanup.cron';
 import { SearchCleanupCron } from '../search/search-cleanup.cron';
 import { NotificationsCleanupCron } from '../notifications/notifications-cleanup.cron';
+import { NotificationsOrphanCleanupCron } from '../notifications/notifications-orphan-cleanup.cron';
 import { HashtagsCleanupCron } from '../hashtags/hashtags-cleanup.cron';
 import { PostsTopicsBackfillCron } from '../posts/posts-topics-backfill.cron';
 import { PostsPopularScoreCron } from '../posts/posts-popular-score.cron';
@@ -38,6 +39,7 @@ export class AdminJobsController {
     private readonly authCleanup: AuthCleanupCron,
     private readonly searchCleanup: SearchCleanupCron,
     private readonly notificationsCleanup: NotificationsCleanupCron,
+    private readonly notificationsOrphanCleanup: NotificationsOrphanCleanupCron,
     private readonly hashtagsCleanup: HashtagsCleanupCron,
     private readonly postsTopicsBackfill: PostsTopicsBackfillCron,
     private readonly postsPopularRefresh: PostsPopularScoreCron,
@@ -77,6 +79,12 @@ export class AdminJobsController {
   @Post('notifications-cleanup')
   async runNotificationsCleanup() {
     await this.notificationsCleanup.cleanupOldReadNotifications();
+    return { data: { ok: true } };
+  }
+
+  @Post('notifications-orphan-cleanup')
+  async runNotificationsOrphanCleanup() {
+    await this.notificationsOrphanCleanup.cleanupDeletedPostNotifications();
     return { data: { ok: true } };
   }
 

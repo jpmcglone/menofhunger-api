@@ -1,58 +1,32 @@
 ---
-description: Core engineering conventions for menofhunger-api (NestJS + Prisma).
+description: menofhunger-api core conventions (Nest + Prisma)
+alwaysApply: true
 ---
 
-## Primary goals
-- Keep changes **small, composable, and testable** (SOLID/DRY).
-- Prefer **clear domain boundaries** over cleverness.
-- Always ship changes with **good migration hygiene** and predictable API payloads.
-
 ## API contract (must follow)
-- **Success**: always return `{ data: T }` (or `{ data: T[], pagination }` for lists). Never return raw `{ ResponseData }` or `[ResponseData]` at top level — always under `data`. For list endpoints, use a sibling `pagination: { nextCursor?, counts?, totalOnline?, ... }`.
-- Do **not** add top-level keys such as `user`, `post`, `posts`, `items`, `nextCursor`; only `data` and optionally `pagination`.
-- **Failure**: must be `meta.errors[]` envelope (handled by the global exception filter).
-- Do not use `ok: true/false` in responses. See **05-api-envelope** for the full envelope contract and documentation style (METHOD URI → ResponseData / [ResponseData]).
+- **Success**: `{ data: T }` (or `{ data: T[], pagination }` for lists)
+- **Errors**: `{ meta: { status, errors: [...] } }` (global exception filter)
+- **Controllers**: return the envelope explicitly (don’t return raw payloads)
 
-## Auth + admin security
-- Auth uses **HTTP-only cookies**; always set `credentials: include` on clients.
-- Admin routes must be **hidden** from non-admins:
-  - For admin-only controllers/guards: return **404** (NotFound) instead of 401/403 where required by product behavior.
-- Do not leak sensitive flags or internal fields via public endpoints.
+## When you change an API response
+- Update `menofhunger-api/src/common/dto/**`
+- Update `menofhunger-www/types/api.ts`
+- Run `npx nuxi typecheck` + `node scripts/validate-api-types.mjs` (www)
 
-## Prisma / DB rules (high priority)
-- Any schema change requires:
-  - update `prisma/schema.prisma`
-  - generate migration SQL via a script (preferred):
-    - `npm run prisma:migrate:create -- <name>` (generates SQL diff from current DB → `schema.prisma`)
-    - then apply with `npm run prisma:migrate:deploy`
-  - **avoid manually editing migration SQL** unless absolutely necessary (migration hygiene matters for prod)
-    - if you must edit: keep changes minimal and make SQL **idempotent** where possible (`IF EXISTS`, etc.)
-  - run `npx prisma generate` after schema/migration changes
-- Prefer DB-enforced constraints:
-  - add indices for query paths (filter/sort keys)
-  - use unique constraints for identity fields (phone, username)
-- If you add a new user-facing query, consider indexing and pagination up front.
+## Auth + admin
+- Cookie auth (HTTP-only cookies)
+- Admin-only surfaces must be hidden from non-admins (**404**, not 401/403)
 
-## DTOs + mapping
-- Controllers should return DTOs, not raw Prisma models.
-- Reuse mapping helpers (e.g. `toUserDto`) and do not duplicate user “shape” mapping across controllers.
-- Keep DTOs stable; only widen payloads intentionally.
+## Validation + config
+- Validate bodies with Zod; use clear user-facing messages
+- Don’t read `process.env` in services/controllers; use `AppConfigService`
 
-## Validation + errors
-- Validate request bodies with Zod; reject invalid inputs with clear messages.
-- Normalize phone numbers via shared helpers (`normalizePhone`).
-- For uniqueness conflicts, catch Prisma codes and throw a specific, user-readable error.
+## Prisma migrations
+- Schema change: edit `prisma/schema.prisma`
+- Create SQL: `npm run prisma:migrate:create -- <name>`
+- Apply: `npm run prisma:migrate:deploy`
+- Generate: `npx prisma generate`
 
-## Code structure
-- Keep feature code in `src/modules/<feature>/` with:
-  - controller (thin)
-  - service (business logic)
-  - guards/decorators/utilities extracted as needed
-- Avoid cross-module imports except through a module boundary (exports/providers).
-
-## Workflow expectations
-- After substantive changes:
-  - `npm run build`
-  - run migrations/generate as needed
-- Do not add dependencies unless truly needed; prefer existing stack.
+## After substantive changes
+- `npm run build`
 

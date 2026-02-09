@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
@@ -96,6 +96,48 @@ const createSchema = z
       }
     }
   });
+
+const updateSchema = z
+  .object({
+    body: z.string().trim().max(500).optional(),
+  })
+  .superRefine((val, ctx) => {
+    const body = (val.body ?? '').trim();
+    if (!body) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Post must include text.',
+        path: ['body'],
+      });
+    }
+  });
+
+const publishFromOnlyMeSchema = z.object({
+  body: z.string().trim().max(500).optional(),
+  visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly']),
+  media: z
+    .array(
+      z.discriminatedUnion('source', [
+        z.object({
+          source: z.literal('existing'),
+          id: z.string().min(1),
+          alt: z.string().trim().max(500).nullish(),
+        }),
+        createUploadMediaItemSchema,
+        z.object({
+          source: z.literal('giphy'),
+          kind: z.literal('gif'),
+          url: z.string().url(),
+          mp4Url: z.string().url().optional(),
+          width: z.coerce.number().int().min(1).max(20000).optional(),
+          height: z.coerce.number().int().min(1).max(20000).optional(),
+          alt: z.string().trim().max(500).nullish(),
+        }),
+      ]),
+    )
+    .max(4)
+    .optional(),
+});
 
 @Controller('posts')
 export class PostsController {
@@ -548,6 +590,55 @@ export class PostsController {
   async delete(@Param('id') id: string, @CurrentUserId() userId: string) {
     const result = await this.posts.deletePost({ userId, postId: id });
     return { data: result };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Patch(':id')
+  async update(@Param('id') id: string, @Body() body: unknown, @CurrentUserId() userId: string) {
+    const parsed = updateSchema.parse(body);
+    const updated = await this.posts.updatePost({ userId, postId: id, body: (parsed.body ?? '').trim() });
+
+    const viewer = await this.posts.viewerContext(userId);
+    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    return {
+      data: toPostDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null, {
+        viewerHasBoosted: false,
+        includeInternal: viewerHasAdmin,
+      }),
+    };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('postCreate', 30),
+      ttl: rateLimitTtl('postCreate', 60),
+    },
+  })
+  @Post(':id/publish-from-only-me')
+  async publishFromOnlyMe(@Param('id') id: string, @Body() body: unknown, @CurrentUserId() userId: string) {
+    const parsed = publishFromOnlyMeSchema.parse(body);
+    const created = await this.posts.publishFromOnlyMe({
+      userId,
+      sourcePostId: id,
+      body: typeof parsed.body === 'string' ? parsed.body.trim() : null,
+      visibility: parsed.visibility,
+      media: (parsed as any).media ?? null,
+    });
+    const viewer = await this.posts.viewerContext(userId);
+    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    return {
+      data: toPostDto(created, this.appConfig.r2()?.publicBaseUrl ?? null, {
+        viewerHasBoosted: false,
+        includeInternal: viewerHasAdmin,
+      }),
+    };
   }
 
   @UseGuards(AuthGuard)

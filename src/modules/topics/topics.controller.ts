@@ -1,9 +1,10 @@
-import { Controller, Get, Param, Query, Res, UseGuards } from '@nestjs/common';
+import { Controller, Delete, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import type { Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
+import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
-import { OptionalCurrentUserId } from '../users/users.decorator';
+import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { setReadCache } from '../../common/http-cache';
 import { TopicsService } from './topics.service';
@@ -16,6 +17,10 @@ const listTopicsSchema = z.object({
 const listTopicPostsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
+});
+
+const listFollowedSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
 @UseGuards(OptionalAuthGuard)
@@ -49,6 +54,47 @@ export class TopicsController {
     const limit = parsed.limit ?? 30;
     const data = await this.topics.listTopics({ viewerUserId, limit });
     setReadCache(httpRes, { viewerUserId });
+    return { data };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Get('followed')
+  async followed(@CurrentUserId() userId: string, @Query() query: unknown) {
+    const parsed = listFollowedSchema.parse(query);
+    const limit = parsed.limit ?? 50;
+    const data = await this.topics.listFollowedTopics({ viewerUserId: userId, limit });
+    return { data };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post(':topic/follow')
+  async follow(@Param('topic') topic: string, @CurrentUserId() userId: string) {
+    const data = await this.topics.followTopic({ userId, topic });
+    return { data };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Delete(':topic/follow')
+  async unfollow(@Param('topic') topic: string, @CurrentUserId() userId: string) {
+    const data = await this.topics.unfollowTopic({ userId, topic });
     return { data };
   }
 

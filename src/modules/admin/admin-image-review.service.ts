@@ -290,7 +290,7 @@ export class AdminImageReviewService {
 
     const users = await this.prisma.user.findMany({
       where: { OR: [{ avatarKey: a.r2Key }, { bannerKey: a.r2Key }] },
-      select: { id: true, username: true, name: true, premium: true, premiumPlus: true, verifiedStatus: true },
+      select: { id: true, username: true, name: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true, verifiedStatus: true },
     });
 
     const publicUrl = this.publicUrlForKey(a.deletedAt ? null : a.r2Key);

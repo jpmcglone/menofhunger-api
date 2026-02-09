@@ -5,7 +5,7 @@ alwaysApply: true
 
 ## Dev servers / watchers
 
-- **Do not run** `npm run dev` (or other long-running dev servers/watchers).
-- Assume the USER already has dev servers running for both `menofhunger-api` and `menofhunger-www` and that they auto-reload on file changes.
-- If a server restart is required (rare), **tell the USER what command to run**, but do not run it yourself.
+- Don’t start long-running dev servers/watchers (e.g. `npm run dev`).
+- Assume the user has them running with auto-reload.
+- If a restart is needed, tell the user the command—don’t run it.
 

@@ -42,6 +42,7 @@ enum NotificationKind {
   comment
   boost
   follow
+  followed_post
   mention
   generic
 }
@@ -134,6 +135,8 @@ model User {
   premium Boolean @default(false)
   // Premium+ (superset of premium; special supporters tier).
   premiumPlus Boolean @default(false)
+  // Premium+ opt-in steward badge shown across the app.
+  stewardBadgeEnabled Boolean @default(true)
   // Verified badge (more roles/permissions later).
   verifiedStatus VerifiedStatus @default(none)
   verifiedAt DateTime?
@@ -161,6 +164,7 @@ model User {
   // `followers`: users who follow this user (incoming edges)
   following Follow[] @relation("Follow_follower")
   followers Follow[] @relation("Follow_following")
+  topicFollows TopicFollow[]
 
   // Admin audit relations
   deletedPostMedia PostMedia[] @relation("PostMedia_deletedByAdmin")
@@ -232,11 +236,29 @@ model Follow {
   @@index([followingId, followerId])
 }
 
+model TopicFollow {
+  createdAt DateTime @default(now())
+
+  userId String
+  /** Canonical topic value (must be in allowlist). */
+  topic  String @db.VarChar(64)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, topic])
+  @@index([userId, createdAt])
+  @@index([topic, createdAt])
+}
+
 model Post {
   id         String         @id @default(cuid())
   createdAt  DateTime       @default(now())
+  editedAt   DateTime?
+  editCount  Int            @default(0)
   deletedAt  DateTime?
   body       String
+  /** Drafts are only-me posts used for autosave / compose. */
+  isDraft    Boolean        @default(false)
   /** Inferred topics (from allowlist) used for search/discovery. */
   topics     String[]       @default([])
   /** User-created hashtags (parsed from body) used for search/autocomplete. Stored lowercase. */
@@ -266,8 +288,10 @@ model Post {
   media    PostMedia[]
   bookmarks Bookmark[]
   mentions PostMention[]
+  versions PostVersion[]
   pinnedByUser User? @relation("PinnedPost")
   notificationsAsSubject Notification[] @relation("Notification_subjectPost")
+  notificationsAsActorPost Notification[] @relation("Notification_actorPost")
   popularScoreSnapshots PostPopularScoreSnapshot[] @relation("PostPopularScoreSnapshot_post")
   reports Report[] @relation("Report_subjectPost")
 
@@ -284,6 +308,22 @@ model Post {
   @@index([parentId, deletedAt, boostCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
   @@index([parentId, deletedAt, bookmarkCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
   @@index([parentId, deletedAt, commentCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
+}
+
+model PostVersion {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  postId String
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  body String
+  topics String[] @default([])
+  hashtags String[] @default([])
+  hashtagCasings String[] @default([])
+  visibility PostVisibility
+
+  @@index([postId, createdAt])
 }
 
 model Hashtag {
@@ -529,6 +569,12 @@ model SiteConfig {
 
   postsPerWindow     Int @default(5)
   windowSeconds      Int @default(300)
+
+  // Tier-specific post rate limits (excludes onlyMe posts).
+  verifiedPostsPerWindow Int @default(5)
+  verifiedWindowSeconds  Int @default(300)
+  premiumPostsPerWindow  Int @default(5)
+  premiumWindowSeconds   Int @default(300)
 }
 
 model PhoneOtp {
@@ -567,6 +613,8 @@ model Notification {
   recipientUserId String
   kind      NotificationKind
   actorUserId    String?
+  /** The post that caused this notification (e.g. a reply or a mention post). */
+  actorPostId    String?
   subjectPostId  String?
   subjectUserId  String?
   title     String?
@@ -574,12 +622,15 @@ model Notification {
 
   recipient User  @relation("Notification_recipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
   actor     User? @relation("Notification_actor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorPost Post? @relation("Notification_actorPost", fields: [actorPostId], references: [id], onDelete: SetNull)
   subjectPost Post? @relation("Notification_subjectPost", fields: [subjectPostId], references: [id], onDelete: SetNull)
   subjectUser User? @relation("Notification_subjectUser", fields: [subjectUserId], references: [id], onDelete: SetNull)
 
   @@index([recipientUserId, createdAt])
   @@index([recipientUserId, deliveredAt])
   @@index([recipientUserId, readAt])
+  @@index([actorPostId])
+  @@index([subjectPostId])
   // Common list ordering/pagination: ORDER BY createdAt DESC, id DESC.
   @@index([recipientUserId, createdAt(sort: Desc), id(sort: Desc)])
 }

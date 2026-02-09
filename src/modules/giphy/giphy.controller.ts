@@ -1,8 +1,10 @@
-import { BadRequestException, Controller, Get, Query, ServiceUnavailableException, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, ForbiddenException, Get, Query, ServiceUnavailableException, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
 import { AppConfigService } from '../app/app-config.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { CurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 
 const searchSchema = z.object({
@@ -55,7 +57,21 @@ function mapGiphyItems(json: GiphySearchResponse) {
 @UseGuards(AuthGuard)
 @Controller('giphy')
 export class GiphyController {
-  constructor(private readonly cfg: AppConfigService) {}
+  constructor(
+    private readonly cfg: AppConfigService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  private async assertPremium(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { premium: true, premiumPlus: true },
+    });
+    if (!user) throw new ForbiddenException('Not allowed.');
+    if (!user.premium && !user.premiumPlus) {
+      throw new ForbiddenException('Upgrade to premium to use GIF search.');
+    }
+  }
 
   @Throttle({
     default: {
@@ -64,7 +80,8 @@ export class GiphyController {
     },
   })
   @Get('search')
-  async search(@Query() query: unknown) {
+  async search(@CurrentUserId() userId: string, @Query() query: unknown) {
+    await this.assertPremium(userId);
     const parsed = searchSchema.parse(query);
     const apiKey = this.cfg.giphyApiKey();
     if (!apiKey) throw new ServiceUnavailableException('Giphy is not configured yet.');
@@ -95,7 +112,8 @@ export class GiphyController {
     },
   })
   @Get('trending')
-  async trending(@Query() query: unknown) {
+  async trending(@CurrentUserId() userId: string, @Query() query: unknown) {
+    await this.assertPremium(userId);
     const parsed = trendingSchema.parse(query);
     const apiKey = this.cfg.giphyApiKey();
     if (!apiKey) throw new ServiceUnavailableException('Giphy is not configured yet.');

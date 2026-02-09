@@ -12,6 +12,7 @@ export type CreateNotificationParams = {
   recipientUserId: string;
   kind: NotificationKind;
   actorUserId?: string | null;
+  actorPostId?: string | null;
   subjectPostId?: string | null;
   subjectUserId?: string | null;
   title?: string | null;
@@ -53,6 +54,7 @@ export class NotificationsService {
       recipientUserId,
       kind,
       actorUserId,
+      actorPostId,
       subjectPostId,
       subjectUserId,
       title,
@@ -63,6 +65,7 @@ export class NotificationsService {
       ({
         follow: 'followed you',
         boost: 'boosted your post',
+        followed_post: 'posted',
         mention: 'mentioned you',
         comment: 'replied to you',
       } as Partial<Record<NotificationKind, string>>)[kind] ??
@@ -73,6 +76,7 @@ export class NotificationsService {
         recipientUserId,
         kind,
         actorUserId: actorUserId ?? undefined,
+        actorPostId: actorPostId ?? undefined,
         subjectPostId: subjectPostId ?? undefined,
         subjectUserId: subjectUserId ?? undefined,
         title: fallbackTitle ?? undefined,
@@ -343,10 +347,76 @@ export class NotificationsService {
     if (!existing) return;
     const wasUndelivered = existing.deliveredAt == null;
     await this.prisma.notification.delete({ where: { id: existing.id } });
+    this.presenceRealtime.emitNotificationsDeleted(recipientUserId, { notificationIds: [existing.id] });
     if (wasUndelivered) {
       const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
       this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
     }
+  }
+
+  private async deleteNotificationRowsAndEmit(
+    rows: Array<{ id: string; recipientUserId: string; deliveredAt: Date | null }>,
+  ): Promise<number> {
+    const ids = rows.map((r) => r.id).filter(Boolean);
+    if (ids.length === 0) return 0;
+
+    await this.prisma.notification.deleteMany({ where: { id: { in: ids } } });
+
+    const idsByRecipient = new Map<string, string[]>();
+    const undeliveredRecipients = new Set<string>();
+    for (const r of rows) {
+      const uid = (r.recipientUserId ?? '').trim();
+      if (!uid) continue;
+      const list = idsByRecipient.get(uid) ?? [];
+      list.push(r.id);
+      idsByRecipient.set(uid, list);
+      if (r.deliveredAt == null) undeliveredRecipients.add(uid);
+    }
+
+    for (const [uid, notifIds] of idsByRecipient) {
+      this.presenceRealtime.emitNotificationsDeleted(uid, { notificationIds: notifIds });
+    }
+
+    for (const uid of undeliveredRecipients) {
+      const undeliveredCount = await this.getUndeliveredCount(uid);
+      this.presenceRealtime.emitNotificationsUpdated(uid, { undeliveredCount });
+    }
+
+    return ids.length;
+  }
+
+  /** Delete all notifications that reference this post as the subject (post is gone). */
+  async deleteBySubjectPostId(subjectPostId: string): Promise<number> {
+    const id = (subjectPostId ?? '').trim();
+    if (!id) return 0;
+    const rows = await this.prisma.notification.findMany({
+      where: { subjectPostId: id },
+      select: { id: true, recipientUserId: true, deliveredAt: true },
+    });
+    return await this.deleteNotificationRowsAndEmit(rows);
+  }
+
+  /** Delete all notifications caused by this post (e.g. replies or mentions) using actorPostId. */
+  async deleteByActorPostId(actorPostId: string): Promise<number> {
+    const id = (actorPostId ?? '').trim();
+    if (!id) return 0;
+    const rows = await this.prisma.notification.findMany({
+      where: { actorPostId: id },
+      select: { id: true, recipientUserId: true, deliveredAt: true },
+    });
+    return await this.deleteNotificationRowsAndEmit(rows);
+  }
+
+  /** Delete follow notifications for a relationship (used on unfollow). */
+  async deleteFollowNotification(recipientUserId: string, actorUserId: string): Promise<number> {
+    const recipient = (recipientUserId ?? '').trim();
+    const actor = (actorUserId ?? '').trim();
+    if (!recipient || !actor) return 0;
+    const rows = await this.prisma.notification.findMany({
+      where: { recipientUserId: recipient, actorUserId: actor, kind: 'follow' },
+      select: { id: true, recipientUserId: true, deliveredAt: true },
+    });
+    return await this.deleteNotificationRowsAndEmit(rows);
   }
 
   async list(params: {
@@ -557,6 +627,7 @@ export class NotificationsService {
       kind: NotificationKind;
       deliveredAt: Date | null;
       readAt: Date | null;
+      actorPostId: string | null;
       subjectPostId: string | null;
       subjectUserId: string | null;
       title: string | null;
@@ -598,6 +669,7 @@ export class NotificationsService {
       deliveredAt: n.deliveredAt ? n.deliveredAt.toISOString() : null,
       readAt: n.readAt ? n.readAt.toISOString() : null,
       actor,
+      actorPostId: n.actorPostId,
       subjectPostId: n.subjectPostId,
       subjectUserId: n.subjectUserId,
       title: n.title,

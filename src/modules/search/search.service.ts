@@ -53,7 +53,13 @@ type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } |
 const SEARCH_POST_INCLUDE = {
   user: true,
   media: { orderBy: { position: 'asc' as const } },
-  mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true } } } },
+  mentions: {
+    include: {
+      user: {
+        select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true },
+      },
+    },
+  },
 } as const;
 
 type SearchPostRow = Prisma.PostGetPayload<{
@@ -67,6 +73,7 @@ export type SearchUserRow = {
   name: string | null;
   premium: boolean;
   premiumPlus: boolean;
+  stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
@@ -155,6 +162,7 @@ export class SearchService {
       bio: string | null;
       premium: boolean;
       premiumPlus: boolean;
+      stewardBadgeEnabled: boolean;
       verifiedStatus: VerifiedStatus;
       avatarKey: string | null;
       avatarUpdatedAt: Date | null;
@@ -257,6 +265,7 @@ export class SearchService {
           bio: true,
           premium: true,
           premiumPlus: true,
+          stewardBadgeEnabled: true,
           verifiedStatus: true,
           avatarKey: true,
           avatarUpdatedAt: true,
@@ -315,6 +324,7 @@ export class SearchService {
       name: u.name,
       premium: u.premium,
       premiumPlus: u.premiumPlus,
+      stewardBadgeEnabled: Boolean(u.stewardBadgeEnabled),
       verifiedStatus: u.verifiedStatus,
       avatarKey: u.avatarKey,
       avatarUpdatedAt: u.avatarUpdatedAt,

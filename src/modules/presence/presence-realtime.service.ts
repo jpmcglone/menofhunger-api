@@ -5,6 +5,7 @@ import type {
   AdminUpdatedPayloadDto,
   FollowsChangedPayloadDto,
   MessagesReadPayloadDto,
+  NotificationsDeletedPayloadDto,
   NotificationsNewPayloadDto,
   PostsInteractionPayloadDto,
   UsersSelfUpdatedPayloadDto,
@@ -42,6 +43,12 @@ export class PresenceRealtimeService {
     const server = this.getServerOrNull();
     if (!server) return;
     this.presence.emitToUser(server, userId, 'notifications:new', payload);
+  }
+
+  emitNotificationsDeleted(userId: string, payload: NotificationsDeletedPayloadDto): void {
+    const server = this.getServerOrNull();
+    if (!server) return;
+    this.presence.emitToUser(server, userId, 'notifications:deleted', payload);
   }
 
   emitMessagesUpdated(userId: string, payload: { primaryUnreadCount: number; requestUnreadCount: number }): void {

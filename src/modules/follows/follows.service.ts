@@ -59,6 +59,7 @@ export class FollowsService {
       name: string | null;
       premium: boolean;
       premiumPlus: boolean;
+      stewardBadgeEnabled: boolean;
       verifiedStatus: string;
       avatarKey: string | null;
       avatarUpdatedAt: Date | null;
@@ -126,6 +127,7 @@ export class FollowsService {
               u."name",
               u."premium",
               u."premiumPlus",
+              u."stewardBadgeEnabled",
               u."verifiedStatus",
               u."avatarKey",
               u."avatarUpdatedAt",
@@ -267,6 +269,9 @@ export class FollowsService {
       where: { followerId: viewerUserId, followingId: target.id },
     });
 
+    // Remove follow notification(s) if present (user unfollowed).
+    this.notifications.deleteFollowNotification(target.id, viewerUserId).catch(() => {});
+
     // Cross-tab/device sync for the actor (self only).
     this.presenceRealtime.emitFollowsChanged(viewerUserId, {
       actorUserId: viewerUserId,
@@ -405,6 +410,7 @@ export class FollowsService {
             name: true,
             premium: true,
             premiumPlus: true,
+            stewardBadgeEnabled: true,
             verifiedStatus: true,
             avatarKey: true,
             avatarUpdatedAt: true,
@@ -468,6 +474,7 @@ export class FollowsService {
             name: true,
             premium: true,
             premiumPlus: true,
+            stewardBadgeEnabled: true,
             verifiedStatus: true,
             avatarKey: true,
             avatarUpdatedAt: true,
@@ -516,6 +523,7 @@ export class FollowsService {
         name: true,
         premium: true,
         premiumPlus: true,
+        stewardBadgeEnabled: true,
         verifiedStatus: true,
         avatarKey: true,
         avatarUpdatedAt: true,

@@ -13,6 +13,10 @@ export type NotificationsNewPayloadDto = {
   notification: NotificationDto;
 };
 
+export type NotificationsDeletedPayloadDto = {
+  notificationIds: string[];
+};
+
 /**
  * Cross-device/tab sync for message read state.
  * (We currently emit to the reader's own sockets only.)
