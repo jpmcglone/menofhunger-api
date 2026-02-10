@@ -6,12 +6,18 @@ import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { FollowsService } from '../follows/follows.service';
 import { PresenceService } from './presence.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import type { RecentlyOnlineUserDto } from '../../common/dto';
+import type { PresenceOnlinePageDto, RecentlyOnlineUserDto } from '../../common/dto';
 import { PrismaService } from '../prisma/prisma.service';
 
 const recentSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
+});
+
+const onlinePageSchema = z.object({
+  includeSelf: z.string().optional(),
+  recentLimit: z.coerce.number().int().min(1).max(50).optional(),
+  recentCursor: z.string().optional(),
 });
 
 function encodeCursor(params: { tMs: number; id: string }): string {
@@ -188,6 +194,151 @@ export class PresenceController {
         nextCursor: next?.lastOnlineAt
           ? encodeCursor({ tMs: next.lastOnlineAt.getTime(), id: next.id })
           : null,
+      },
+    };
+  }
+
+  /**
+   * Combined payload for /online page: online snapshot + total count + first page of "recently online".
+   * Keeps a single server snapshot so counts/lists stay consistent.
+   */
+  @UseGuards(OptionalAuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 60),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Get('online-page')
+  async onlinePage(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Query() query: unknown,
+  ): Promise<{ data: PresenceOnlinePageDto; pagination: { totalOnline: number; recentNextCursor: string | null } }> {
+    const viewerUserId = userId ?? null;
+    const parsed = onlinePageSchema.parse(query);
+
+    // Default: include the viewer in "Online now" counts.
+    // Keep includeSelf for backwards compatibility with /presence/online.
+    const includeSelfRaw = (parsed.includeSelf ?? '').trim();
+    const includeSelf = includeSelfRaw ? includeSelfRaw === '1' || includeSelfRaw === 'true' : true;
+
+    // ——— Online snapshot ———
+    let onlineUserIds = this.presence.getOnlineUserIds();
+    if (viewerUserId && !includeSelf) {
+      onlineUserIds = onlineUserIds.filter((id) => id !== viewerUserId);
+    }
+
+    // Sort by longest online first (earliest connect time first).
+    onlineUserIds = onlineUserIds
+      .slice()
+      .sort((a, b) => {
+        const aAt = this.presence.getLastConnectAt(a);
+        const bAt = this.presence.getLastConnectAt(b);
+        const aKey = typeof aAt === 'number' && Number.isFinite(aAt) ? aAt : Number.POSITIVE_INFINITY;
+        const bKey = typeof bAt === 'number' && Number.isFinite(bAt) ? bAt : Number.POSITIVE_INFINITY;
+        if (aKey !== bKey) return aKey - bKey;
+        return a.localeCompare(b);
+      });
+
+    const onlineUsers = await this.follows.getFollowListUsersByIds({
+      viewerUserId,
+      userIds: onlineUserIds,
+    });
+    const orderMap = new Map(onlineUserIds.map((id, i) => [id, i]));
+    onlineUsers.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
+    const lastConnectAtById = new Map(onlineUserIds.map((id) => [id, this.presence.getLastConnectAt(id) ?? null]));
+    const idleById = new Map(onlineUserIds.map((id) => [id, this.presence.isUserIdle(id)]));
+
+    const onlineData = onlineUsers.map((u) => ({
+      ...(u as any),
+      lastConnectAt: lastConnectAtById.get(u.id) ?? null,
+      idle: idleById.get(u.id) ?? false,
+    }));
+
+    // ——— Recently online (privacy-gated, cursor-paginated) ———
+    let recentData: RecentlyOnlineUserDto[] = [];
+    let recentNextCursor: string | null = null;
+
+    if (viewerUserId) {
+      const viewer = await this.prisma.user.findUnique({
+        where: { id: viewerUserId },
+        select: { verifiedStatus: true, siteAdmin: true },
+      });
+      const viewerVerifiedStatus = (viewer as any)?.verifiedStatus ?? 'none';
+      const viewerCanSeeLastOnline =
+        Boolean((viewer as any)?.siteAdmin) ||
+        (typeof viewerVerifiedStatus === 'string' && viewerVerifiedStatus !== 'none');
+
+      if (viewerCanSeeLastOnline) {
+        const limit = parsed.recentLimit ?? 30;
+        const cursorRaw = (parsed.recentCursor ?? '').trim();
+        const cursor = decodeCursor(cursorRaw);
+        if (cursorRaw && !cursor) throw new BadRequestException('Invalid cursor.');
+
+        // Exclude currently-online users so "Recently online" is truly "recently" (offline users).
+        const onlineIds = onlineUserIds.length ? onlineUserIds : this.presence.getOnlineUserIds();
+
+        const items = await this.prisma.user.findMany({
+          where: {
+            usernameIsSet: true,
+            lastOnlineAt: { not: null },
+            ...(onlineIds.length ? { id: { notIn: onlineIds } } : {}),
+            ...(cursor
+              ? {
+                  ...((
+                    () => {
+                      const cursorDate = new Date(cursor.tMs);
+                      return {
+                        OR: [
+                          { lastOnlineAt: { lt: cursorDate } },
+                          { lastOnlineAt: cursorDate, id: { lt: cursor.id } },
+                        ],
+                      };
+                    }
+                  )()),
+                }
+              : {}),
+          },
+          orderBy: [{ lastOnlineAt: 'desc' }, { id: 'desc' }],
+          take: limit + 1,
+          select: {
+            id: true,
+            lastOnlineAt: true,
+          },
+        });
+
+        const page = items.slice(0, limit);
+        const next = items.length > limit ? items[limit] : null;
+        recentNextCursor = next?.lastOnlineAt ? encodeCursor({ tMs: next.lastOnlineAt.getTime(), id: next.id }) : null;
+
+        const recentUserIds = page.map((r) => r.id);
+        const followListUsers = recentUserIds.length
+          ? await this.follows.getFollowListUsersByIds({ viewerUserId, userIds: recentUserIds })
+          : [];
+
+        // Preserve order: most recently online first.
+        const recentOrderMap = new Map(recentUserIds.map((id, i) => [id, i]));
+        followListUsers.sort((a, b) => (recentOrderMap.get(a.id) ?? 999) - (recentOrderMap.get(b.id) ?? 999));
+
+        const lastOnlineAtById = new Map<string, string | null>(
+          page.map((r) => [r.id, r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null]),
+        );
+
+        recentData = followListUsers.map((u) => ({
+          ...(u as any),
+          lastOnlineAt: lastOnlineAtById.get(u.id) ?? null,
+        }));
+      }
+    }
+
+    return {
+      data: {
+        online: onlineData,
+        recent: recentData,
+      },
+      pagination: {
+        totalOnline: onlineUserIds.length,
+        recentNextCursor,
       },
     };
   }
