@@ -26,8 +26,10 @@ export class PresenceController {
     @Query('includeSelf') includeSelfRaw?: string,
   ) {
     const viewerUserId = userId ?? null;
-    const includeSelf = includeSelfRaw === '1' || includeSelfRaw === 'true';
-    // Default: do not include the viewer in "Online now" (Explore UX). `/online` can opt-in to include self.
+    // Default: include the viewer in "Online now" counts.
+    // Keep the query param for backwards compatibility (includeSelf=0/false will exclude).
+    const includeSelf =
+      includeSelfRaw == null ? true : (includeSelfRaw === '1' || includeSelfRaw === 'true');
     let userIds = this.presence.getOnlineUserIds();
     if (viewerUserId && !includeSelf) {
       userIds = userIds.filter((id) => id !== viewerUserId);
