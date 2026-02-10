@@ -5,6 +5,7 @@ import { FeedbackService } from '../feedback/feedback.service';
 import { toFeedbackAdminDto } from '../../common/dto';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import type { AdminRequest } from './admin.guard';
+import { AppConfigService } from '../app/app-config.service';
 
 const listSchema = z.object({
   q: z.string().trim().max(200).optional(),
@@ -25,6 +26,7 @@ export class AdminFeedbackController {
   constructor(
     private readonly feedback: FeedbackService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly config: AppConfigService,
   ) {}
 
   @Get()
@@ -32,6 +34,7 @@ export class AdminFeedbackController {
     const parsed = listSchema.parse(query);
     const limit = parsed.limit ?? 50;
 
+    const publicAssetBaseUrl = this.config.r2()?.publicBaseUrl ?? null;
     const { rows, nextCursor } = await this.feedback.listAdmin({
       limit,
       cursor: parsed.cursor ?? null,
@@ -41,7 +44,7 @@ export class AdminFeedbackController {
     });
 
     return {
-      data: rows.map((row) => toFeedbackAdminDto(row)),
+      data: rows.map((row) => toFeedbackAdminDto(row, publicAssetBaseUrl)),
       pagination: { nextCursor },
     };
   }
@@ -53,6 +56,7 @@ export class AdminFeedbackController {
       throw new BadRequestException('No changes provided.');
     }
 
+    const publicAssetBaseUrl = this.config.r2()?.publicBaseUrl ?? null;
     const updated = await this.feedback.updateAdmin(id, {
       status: parsed.status,
       adminNote: parsed.adminNote,
@@ -69,6 +73,6 @@ export class AdminFeedbackController {
       // Best-effort
     }
 
-    return { data: toFeedbackAdminDto(updated) };
+    return { data: toFeedbackAdminDto(updated, publicAssetBaseUrl) };
   }
 }

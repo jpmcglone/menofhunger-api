@@ -1,12 +1,14 @@
 import { BadRequestException, Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
+import { ModuleRef } from '@nestjs/core';
 import { z } from 'zod';
 import { getSessionCookie } from '../../common/session-cookie';
 import { AuthService } from './auth.service';
 import { OTP_CODE_LENGTH } from './auth.constants';
 import { normalizePhone } from './auth.utils';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 const startSchema = z.object({
   phone: z.string().min(1),
@@ -27,7 +29,10 @@ const existsSchema = z.object({
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly moduleRef: ModuleRef,
+  ) {}
 
   @Throttle({
     default: {
@@ -90,7 +95,14 @@ export class AuthController {
   @Post('logout')
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const token = getSessionCookie(req);
+    const user = await this.auth.meFromSessionToken(token);
     const result = await this.auth.logout(token, res);
+    // Disconnect all active sockets for this user immediately on logout.
+    if (user?.id) {
+      // Avoid module import cycles by resolving at runtime (PresenceModule is loaded in AppModule).
+      const presenceRealtime = this.moduleRef.get(PresenceRealtimeService, { strict: false });
+      presenceRealtime?.disconnectUserSockets(user.id);
+    }
     return { data: result };
   }
 }

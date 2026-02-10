@@ -33,6 +33,19 @@ export class PresenceRealtimeService {
     return null;
   }
 
+  disconnectUserSockets(userId: string): void {
+    const server = this.getServerOrNull();
+    if (!server) return;
+    const ids = this.presence.getSocketIdsForUser(userId);
+    for (const id of ids) {
+      try {
+        server.sockets.sockets.get(id)?.disconnect(true);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   emitNotificationsUpdated(userId: string, payload: { undeliveredCount: number }): void {
     const server = this.getServerOrNull();
     if (!server) return;

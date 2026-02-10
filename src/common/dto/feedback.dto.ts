@@ -1,4 +1,5 @@
 import type { Feedback, FeedbackCategory, FeedbackStatus } from '@prisma/client';
+import { publicAssetUrl } from '../assets/public-asset-url';
 
 export type FeedbackDto = {
   id: string;
@@ -17,6 +18,7 @@ export type FeedbackAdminDto = FeedbackDto & {
     id: string;
     username: string | null;
     name: string | null;
+    avatarUrl: string | null;
   } | null;
 };
 
@@ -34,11 +36,25 @@ export function toFeedbackDto(feedback: Feedback): FeedbackDto {
 }
 
 export function toFeedbackAdminDto(
-  feedback: Feedback & { user?: { id: string; username: string | null; name: string | null } | null },
+  feedback: Feedback & {
+    user?: { id: string; username: string | null; name: string | null; avatarKey?: string | null; avatarUpdatedAt?: Date | null } | null;
+  },
+  publicAssetBaseUrl: string | null = null,
 ): FeedbackAdminDto {
   return {
     ...toFeedbackDto(feedback),
     adminNote: feedback.adminNote ?? null,
-    user: feedback.user ? { id: feedback.user.id, username: feedback.user.username, name: feedback.user.name } : null,
+    user: feedback.user
+      ? {
+          id: feedback.user.id,
+          username: feedback.user.username,
+          name: feedback.user.name,
+          avatarUrl: publicAssetUrl({
+            publicBaseUrl: publicAssetBaseUrl,
+            key: feedback.user.avatarKey ?? null,
+            updatedAt: feedback.user.avatarUpdatedAt ?? null,
+          }),
+        }
+      : null,
   };
 }

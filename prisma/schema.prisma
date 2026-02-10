@@ -785,12 +785,16 @@ model Feedback {
   details  String         @db.Text
   adminNote String?       @db.Text
 
+  /** IP address of submitter (for rate limiting / abuse prevention). */
+  submitterIp String? @db.VarChar(64)
+
   userId String?
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([createdAt, id])
   @@index([status, createdAt])
   @@index([category, createdAt])
+  @@index([submitterIp, createdAt])
 }
 
 model Report {

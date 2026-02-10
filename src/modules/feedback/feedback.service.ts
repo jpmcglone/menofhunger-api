@@ -1,5 +1,5 @@
 import type { FeedbackCategory, FeedbackStatus, Prisma } from '@prisma/client';
-import { Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 
@@ -13,13 +13,66 @@ export class FeedbackService {
     subject: string;
     details: string;
     userId?: string | null;
+    submitterIp?: string | null;
   }) {
+    const submitterIp = (input.submitterIp ?? '').trim() || null;
+
+    const throwRateLimit = () => {
+      throw new HttpException(
+        { message: 'Too many feedback submissions. Please try again later.', error: 'feedback_rate_limit' },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    };
+
+    // Rate limiting (DB-backed):
+    // - Anonymous: 3 submissions per hour per IP.
+    // - Logged-in but unverified: 5 submissions per hour per user.
+    //
+    // Verified/premium/admin users are not constrained here (global throttling still applies).
+    const windowMs = 60 * 60 * 1000;
+    const since = new Date(Date.now() - windowMs);
+
+    if (!input.userId) {
+      if (submitterIp) {
+        const count = await this.prisma.feedback.count({
+          where: { submitterIp, createdAt: { gt: since } },
+        });
+        if (count >= 3) {
+          throwRateLimit();
+        }
+      } else {
+        // No IP available: apply a conservative global cap.
+        const count = await this.prisma.feedback.count({
+          where: { userId: null, createdAt: { gt: since } },
+        });
+        if (count >= 20) {
+          throwRateLimit();
+        }
+      }
+    } else {
+      const user = await this.prisma.user.findUnique({
+        where: { id: input.userId },
+        select: { verifiedStatus: true, premium: true, premiumPlus: true, siteAdmin: true },
+      });
+      const isUnverified = !user || user.verifiedStatus === 'none';
+      const isExempt = Boolean(user?.siteAdmin || user?.premium || user?.premiumPlus || (user?.verifiedStatus && user.verifiedStatus !== 'none'));
+      if (isUnverified && !isExempt) {
+        const count = await this.prisma.feedback.count({
+          where: { userId: input.userId, createdAt: { gt: since } },
+        });
+        if (count >= 5) {
+          throwRateLimit();
+        }
+      }
+    }
+
     return await this.prisma.feedback.create({
       data: {
         category: input.category,
         email: input.email,
         subject: input.subject,
         details: input.details,
+        submitterIp,
         ...(input.userId ? { user: { connect: { id: input.userId } } } : {}),
       },
     });
@@ -64,7 +117,7 @@ export class FeedbackService {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: params.limit + 1,
       include: {
-        user: { select: { id: true, username: true, name: true } },
+        user: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } },
       },
     });
 
@@ -82,7 +135,7 @@ export class FeedbackService {
         ...(input.adminNote !== undefined ? { adminNote: input.adminNote } : {}),
       },
       include: {
-        user: { select: { id: true, username: true, name: true } },
+        user: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } },
       },
     });
   }

@@ -9,7 +9,6 @@ import {
 import { Inject, Logger, forwardRef } from '@nestjs/common';
 import { Server, type Socket } from 'socket.io';
 import { AuthService } from '../auth/auth.service';
-import { AUTH_COOKIE_NAME } from '../auth/auth.constants';
 import { PresenceService } from './presence.service';
 import { PresenceRealtimeService } from './presence-realtime.service';
 import { FollowsService } from '../follows/follows.service';
@@ -17,18 +16,7 @@ import type { FollowListUser } from '../follows/follows.service';
 import { MessagesService } from '../messages/messages.service';
 import { RadioService } from '../radio/radio.service';
 import type { RadioListenerDto } from '../../common/dto';
-
-function parseSessionTokenFromCookie(cookieHeader: string | undefined): string | undefined {
-  if (!cookieHeader?.trim()) return undefined;
-  const parts = cookieHeader.split(';').map((s) => s.trim());
-  for (const part of parts) {
-    const eq = part.indexOf('=');
-    if (eq === -1) continue;
-    const name = part.slice(0, eq).trim();
-    if (name === AUTH_COOKIE_NAME) return part.slice(eq + 1).trim() || undefined;
-  }
-  return undefined;
-}
+import { parseSessionCookieFromHeader } from '../../common/session-cookie';
 
 type UserTimers = {
   idleMarkTimer?: ReturnType<typeof setTimeout>;
@@ -70,8 +58,15 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
   async handleConnection(client: Socket): Promise<void> {
     const cookieHeader = client.handshake.headers.cookie as string | undefined;
-    const token = parseSessionTokenFromCookie(cookieHeader);
-    const user = await this.auth.meFromSessionToken(token);
+    const token = parseSessionCookieFromHeader(cookieHeader);
+    let user: any = null;
+    try {
+      user = await this.auth.meFromSessionToken(token);
+    } catch (err) {
+      this.logger.warn(`[presence] Connection auth failed socket=${client.id}: ${err}`);
+      client.disconnect(true);
+      return;
+    }
     if (!user) {
       this.logger.debug(`Presence connection rejected: no session for socket ${client.id}`);
       client.disconnect(true);
@@ -401,11 +396,26 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   @SubscribeMessage('presence:logout')
-  handleLogout(client: Socket): void {
+  async handleLogout(client: Socket): Promise<void> {
+    // Revoke the session server-side (best-effort), so socket-only logout can’t leave a valid session behind.
+    try {
+      const cookieHeader = client.handshake.headers.cookie as string | undefined;
+      const token = parseSessionCookieFromHeader(cookieHeader);
+      await this.auth.revokeSessionToken(token);
+    } catch (err) {
+      this.logger.warn(`[presence] Failed to revoke session token on logout: ${err}`);
+    }
+
     const result = this.presence.forceUnregister(client.id);
     if (result?.wasLastConnection) {
       this.cancelUserTimers(result.userId);
       this.emitOffline(result.userId);
+    }
+    // Ensure the client reconnects cleanly after logout.
+    try {
+      client.disconnect(true);
+    } catch {
+      // ignore
     }
   }
 

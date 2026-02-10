@@ -124,10 +124,13 @@ async function bootstrap() {
   // Cookies (auth).
   app.use(cookieParser());
 
-  // Admin endpoints should never be cached (prevents 304 loops in production behind CDNs/proxies).
+  // Sensitive endpoints should never be cached (prevents 304 loops in production behind CDNs/proxies,
+  // and avoids caching auth state).
   app.use((req: Request, res: Response, next: NextFunction) => {
     const path = String(req.originalUrl || req.url || '');
-    if (path.startsWith('/admin/')) {
+    const isAdmin = path.startsWith('/admin/') || path === '/admin';
+    const isAuth = path.startsWith('/auth/') || path === '/auth' || path.startsWith('/auth?');
+    if (isAdmin || isAuth) {
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
@@ -173,6 +176,8 @@ async function bootstrap() {
     // Allow third-party webhooks (no Origin/Referer).
     if (isStripeWebhookPath(req)) return next();
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const requestId = String((req as any)?.requestId ?? '').trim() || null;
     const origin = String(req.headers.origin ?? '').trim();
     const referer = String(req.headers.referer ?? '').trim();
 
@@ -183,6 +188,7 @@ async function bootstrap() {
         return res.status(403).json({
           meta: {
             status: 403,
+            ...(requestId ? { requestId } : {}),
             errors: [{ code: 403, message: 'CSRF blocked', reason: 'csrf_missing_origin' }],
           },
         });
@@ -202,6 +208,7 @@ async function bootstrap() {
       return res.status(403).json({
         meta: {
           status: 403,
+          ...(requestId ? { requestId } : {}),
           errors: [{ code: 403, message: 'CSRF blocked', reason: 'csrf' }],
         },
       });

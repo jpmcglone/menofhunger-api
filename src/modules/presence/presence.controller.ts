@@ -129,18 +129,27 @@ export class PresenceController {
     // Exclude currently-online users so "Recently online" is truly "recently" (offline users).
     const onlineIds = this.presence.getOnlineUserIds();
 
-    const cursorDate = cursor ? new Date(cursor.tMs) : null;
     const items = await this.prisma.user.findMany({
       where: {
         usernameIsSet: true,
         lastOnlineAt: { not: null },
         ...(onlineIds.length ? { id: { notIn: onlineIds } } : {}),
-        ...(cursorDate
+        ...(cursor
           ? {
-              OR: [
-                { lastOnlineAt: { lt: cursorDate } },
-                { lastOnlineAt: cursorDate, id: { lt: cursor.id } },
-              ],
+              // Cursor is a {tMs,id} pair; build deterministic paging that matches ORDER BY lastOnlineAt DESC, id DESC.
+              // Note: compute cursorDate inside this branch so it is always a Date (never null/undefined).
+              // (Prisma filters disallow lt: null.)
+              ...((
+                () => {
+                  const cursorDate = new Date(cursor.tMs);
+                  return {
+                    OR: [
+                      { lastOnlineAt: { lt: cursorDate } },
+                      { lastOnlineAt: cursorDate, id: { lt: cursor.id } },
+                    ],
+                  };
+                }
+              )()),
             }
           : {}),
       },

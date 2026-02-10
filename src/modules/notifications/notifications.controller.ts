@@ -89,7 +89,7 @@ export class NotificationsController {
     @CurrentUserId() userId: string,
     @Res({ passthrough: true }) httpRes: Response,
   ) {
-    setReadCache(httpRes, { viewerUserId: userId, privateMaxAgeSeconds: 5, varyCookie: false });
+    setReadCache(httpRes, { viewerUserId: userId, privateMaxAgeSeconds: 5 });
     const count = await this.notifications.getUndeliveredCount(userId);
     return { data: { count } };
   }

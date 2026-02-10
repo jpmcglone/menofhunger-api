@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, forwardRef } from '@nestjs/common';
 import type { MessageConversation } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -16,6 +16,8 @@ type ConversationCursor = { updatedAt: string; id: string };
 
 @Injectable()
 export class MessagesService {
+  private readonly logger = new Logger(MessagesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
@@ -149,12 +151,16 @@ export class MessagesService {
   }
 
   private emitUnreadCounts(userId: string): void {
-    void this.getUnreadCounts(userId).then((counts) => {
-      this.presenceRealtime.emitMessagesUpdated(userId, {
-        primaryUnreadCount: counts.primary,
-        requestUnreadCount: counts.requests,
+    void this.getUnreadCounts(userId)
+      .then((counts) => {
+        this.presenceRealtime.emitMessagesUpdated(userId, {
+          primaryUnreadCount: counts.primary,
+          requestUnreadCount: counts.requests,
+        });
+      })
+      .catch((err) => {
+        this.logger.warn(`emitUnreadCounts failed for userId=${userId}: ${(err as Error)?.message ?? String(err)}`);
       });
-    });
   }
 
   /**

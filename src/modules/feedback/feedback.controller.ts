@@ -1,4 +1,5 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
 import { z } from 'zod';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { OptionalCurrentUserId } from '../users/users.decorator';
@@ -18,9 +19,12 @@ export class FeedbackController {
   constructor(private readonly feedback: FeedbackService) {}
 
   @Post()
-  async create(@Body() body: unknown, @OptionalCurrentUserId() userId?: string) {
+  async create(@Req() req: Request, @Body() body: unknown, @OptionalCurrentUserId() userId?: string) {
     const parsed = createSchema.parse(body);
     const email = parsed.email?.trim() || null;
+
+    const xff = String(req.headers['x-forwarded-for'] ?? '').split(',')[0]?.trim() || '';
+    const submitterIp = (xff || req.ip || '').trim() || null;
 
     const created = await this.feedback.create({
       category: parsed.category,
@@ -28,6 +32,7 @@ export class FeedbackController {
       subject: parsed.subject,
       details: parsed.details,
       userId,
+      submitterIp,
     });
 
     return { data: toFeedbackDto(created) };

@@ -194,15 +194,22 @@ export class AuthService {
   }
 
   async logout(token: string | undefined, res: Response) {
-    if (token) {
-      const tokenHash = hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
-      await this.prisma.session.deleteMany({
-        where: { tokenHash },
-      });
-    }
+    await this.revokeSessionToken(token);
 
     this.clearAuthCookie(res);
     return { success: true };
+  }
+
+  /**
+   * Revoke (delete) a session token server-side without touching cookies.
+   * Useful for non-HTTP contexts like WebSocket logout.
+   */
+  async revokeSessionToken(token: string | undefined): Promise<void> {
+    if (!token) return;
+    const tokenHash = hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
+    await this.prisma.session.deleteMany({
+      where: { tokenHash },
+    });
   }
 
   private cookieOptions(expires: Date) {
