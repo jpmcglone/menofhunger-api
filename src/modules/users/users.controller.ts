@@ -91,6 +91,7 @@ type UserPreviewPayload = {
   verifiedStatus: string;
   avatarUrl: string | null;
   bannerUrl: string | null;
+  lastOnlineAt: string | null;
   relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean };
   followerCount: number | null;
   followingCount: number | null;
@@ -107,6 +108,20 @@ export class UsersController {
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly usersRealtime: UsersRealtimeService,
   ) {}
+
+  private async viewerCanSeeLastOnline(viewerUserId: string | null): Promise<boolean> {
+    if (!viewerUserId) return false;
+    try {
+      const viewer = await this.prisma.user.findUnique({
+        where: { id: viewerUserId },
+        select: { verifiedStatus: true, siteAdmin: true },
+      });
+      const verifiedStatus = (viewer as any)?.verifiedStatus ?? 'none';
+      return Boolean((viewer as any)?.siteAdmin) || (typeof verifiedStatus === 'string' && verifiedStatus !== 'none');
+    } catch {
+      return false;
+    }
+  }
 
   private async emitUserSelfUpdated(userId: string): Promise<void> {
     try {
@@ -458,6 +473,7 @@ export class UsersController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const viewerUserId = userId ?? null;
+    const canSeeLastOnline = await this.viewerCanSeeLastOnline(viewerUserId);
 
     const profile = await this.getPublicProfilePayloadByUsernameOrId(username);
 
@@ -495,6 +511,7 @@ export class UsersController {
       verifiedStatus: profile.verifiedStatus,
       avatarUrl: profile.avatarUrl,
       bannerUrl: profile.bannerUrl,
+      lastOnlineAt: canSeeLastOnline ? (profile.lastOnlineAt ?? null) : null,
       relationship,
       followerCount,
       followingCount,
@@ -517,13 +534,25 @@ export class UsersController {
       ttl: rateLimitTtl('publicRead', 60),
     },
   })
+  @UseGuards(OptionalAuthGuard)
   @Get(':username')
-  async publicProfile(@Param('username') username: string, @Res({ passthrough: true }) res: Response) {
+  async publicProfile(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('username') username: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const viewerUserId = userId ?? null;
+    const canSeeLastOnline = await this.viewerCanSeeLastOnline(viewerUserId);
     const payload = await this.getPublicProfilePayloadByUsernameOrId(username);
 
-    // Public profile data is stable-ish and not viewer-specific; allow CDN/browser caching.
-    res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
-    return { data: payload };
+    // lastOnlineAt is viewer-sensitive: only verified viewers can see it.
+    // Anonymous reads can still be publicly cached since we always redact lastOnlineAt there.
+    res.setHeader(
+      'Cache-Control',
+      viewerUserId ? 'private, max-age=60, stale-while-revalidate=120' : 'public, max-age=300, stale-while-revalidate=600',
+    );
+    if (viewerUserId) res.setHeader('Vary', 'Cookie');
+    return { data: { ...(payload as any), lastOnlineAt: canSeeLastOnline ? payload.lastOnlineAt : null } };
   }
 
   @UseGuards(AuthGuard)

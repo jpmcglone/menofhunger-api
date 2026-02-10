@@ -68,7 +68,9 @@ export class UsersRealtimeService {
       avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey ?? null, updatedAt: user.avatarUpdatedAt ?? null }),
       bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey ?? null, updatedAt: user.bannerUpdatedAt ?? null }),
       pinnedPostId,
-      lastOnlineAt: user.lastOnlineAt ? user.lastOnlineAt.toISOString() : null,
+      // Privacy: last-online timestamps are only for verified viewers via HTTP endpoints.
+      // Realtime fanout targets can include unverified users, so we redact here.
+      lastOnlineAt: null,
     };
   }
 

@@ -57,7 +57,7 @@ type CreateMediaItem = z.infer<typeof createMediaItemSchema>;
 
 const createSchema = z
   .object({
-    body: z.string().trim().max(500).optional(),
+    body: z.string().trim().max(1000).optional(),
     visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly', 'onlyMe']).optional(),
     parent_id: z.string().cuid().optional(),
     mentions: z.array(z.string().min(1).max(120)).max(20).optional(),
@@ -99,7 +99,7 @@ const createSchema = z
 
 const updateSchema = z
   .object({
-    body: z.string().trim().max(500).optional(),
+    body: z.string().trim().max(1000).optional(),
   })
   .superRefine((val, ctx) => {
     const body = (val.body ?? '').trim();
@@ -113,7 +113,7 @@ const updateSchema = z
   });
 
 const publishFromOnlyMeSchema = z.object({
-  body: z.string().trim().max(500).optional(),
+  body: z.string().trim().max(1000).optional(),
   visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly']),
   media: z
     .array(

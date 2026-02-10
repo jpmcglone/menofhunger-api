@@ -96,6 +96,7 @@ export type UserPreviewDto = {
   verifiedStatus: string;
   avatarUrl: string | null;
   bannerUrl: string | null;
+  lastOnlineAt: string | null;
   relationship: UserListRelationship;
   followerCount: number | null;
   followingCount: number | null;

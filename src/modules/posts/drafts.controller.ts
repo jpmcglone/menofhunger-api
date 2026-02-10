@@ -40,12 +40,12 @@ const listSchema = z.object({
 });
 
 const createSchema = z.object({
-  body: z.string().trim().max(500).optional(),
+  body: z.string().trim().max(1000).optional(),
   media: z.array(draftMediaSchema).max(4).optional(),
 });
 
 const patchSchema = z.object({
-  body: z.string().trim().max(500).optional(),
+  body: z.string().trim().max(1000).optional(),
   media: z.array(draftMediaSchema).max(4).optional(),
 });
 

@@ -2147,11 +2147,11 @@ export class PostsService {
     if (editCount >= 3) throw new ForbiddenException('This post has reached the edit limit.');
 
     // Length rules align with createPost.
-    const maxLen = post.user?.premium ? 500 : 200;
+    const maxLen = post.user?.premium ? 1000 : 200;
     if (nextBody.length > maxLen) {
       throw new BadRequestException(
         post.user?.premium
-          ? 'Posts are limited to 500 characters.'
+          ? 'Posts are limited to 1000 characters.'
           : 'Posts are limited to 200 characters for non-premium members.',
       );
     }
@@ -2333,11 +2333,11 @@ export class PostsService {
       throw new ForbiddenException('Upgrade to premium to post media.');
     }
 
-    const maxLen = user.premium ? 500 : 200;
+    const maxLen = user.premium ? 1000 : 200;
     if (body.length > maxLen) {
       throw new BadRequestException(
         user.premium
-          ? 'Posts are limited to 500 characters.'
+          ? 'Posts are limited to 1000 characters.'
           : 'Posts are limited to 200 characters for non-premium members.',
       );
     }
@@ -2506,11 +2506,11 @@ export class PostsService {
     if (!user) throw new NotFoundException('User not found.');
 
     const nextBody = typeof params.body === 'string' ? params.body.trim() : post.body;
-    const maxLen = user.premium ? 500 : 200;
+    const maxLen = user.premium ? 1000 : 200;
     if (nextBody.length > maxLen) {
       throw new BadRequestException(
         user.premium
-          ? 'Posts are limited to 500 characters.'
+          ? 'Posts are limited to 1000 characters.'
           : 'Posts are limited to 200 characters for non-premium members.',
       );
     }
@@ -3026,11 +3026,11 @@ export class PostsService {
       }
     }
 
-    const maxLen = user.premium ? 500 : 200;
+    const maxLen = user.premium ? 1000 : 200;
     if (body.length > maxLen) {
       throw new BadRequestException(
         user.premium
-          ? 'Posts are limited to 500 characters.'
+          ? 'Posts are limited to 1000 characters.'
           : 'Posts are limited to 200 characters for non-premium members.',
       );
     }

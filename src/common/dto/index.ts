@@ -12,3 +12,4 @@ export * from './realtime.dto';
 export * from './metrics.dto';
 export * from './billing.dto';
 export * from './notification-preferences.dto';
+export * from './presence.dto';
