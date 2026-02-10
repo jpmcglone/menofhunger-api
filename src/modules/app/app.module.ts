@@ -32,6 +32,7 @@ import { RadioModule } from '../radio/radio.module';
 import { TopicsModule } from '../topics/topics.module';
 import { HashtagsModule } from '../hashtags/hashtags.module';
 import { MetricsModule } from '../metrics/metrics.module';
+import { BillingModule } from '../billing/billing.module';
 
 @Module({
   imports: [
@@ -74,6 +75,7 @@ import { MetricsModule } from '../metrics/metrics.module';
     TopicsModule,
     HashtagsModule,
     MetricsModule,
+    BillingModule,
   ],
   controllers: [AppController],
   providers: [

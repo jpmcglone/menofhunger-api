@@ -19,6 +19,22 @@ export type R2Config = {
   publicBaseUrl?: string;
 };
 
+export type StripeConfig = {
+  secretKey: string;
+  webhookSecret: string;
+  pricePremiumMonthly: string;
+  pricePremiumPlusMonthly: string;
+  /** Canonical frontend base URL used for redirect URLs (checkout/portal) and webhook click-through. */
+  frontendBaseUrl: string;
+};
+
+export type EmailConfig = {
+  provider: 'mailgun';
+  apiKey: string;
+  domain: string;
+  fromEmail: string;
+};
+
 @Injectable()
 export class AppConfigService {
   private readonly logger = new Logger(AppConfigService.name);
@@ -250,6 +266,36 @@ export class AppConfigService {
     return v ? v : null;
   }
 
+  /** Canonical frontend base URL. Prefer explicit PUSH_FRONTEND_BASE_URL, else first allowed origin. */
+  frontendBaseUrl(): string | null {
+    const explicit = this.pushFrontendBaseUrl();
+    if (explicit) return explicit;
+    const first = this.allowedOrigins()[0];
+    return first ? first : null;
+  }
+
+  stripe(): StripeConfig | null {
+    const secretKey = this.config.get<string>('STRIPE_SECRET_KEY')?.trim() ?? '';
+    const webhookSecret = this.config.get<string>('STRIPE_WEBHOOK_SECRET')?.trim() ?? '';
+    const pricePremiumMonthly = this.config.get<string>('STRIPE_PRICE_PREMIUM_MONTHLY')?.trim() ?? '';
+    const pricePremiumPlusMonthly = this.config.get<string>('STRIPE_PRICE_PREMIUM_PLUS_MONTHLY')?.trim() ?? '';
+    const frontendBaseUrl = this.frontendBaseUrl()?.trim() ?? '';
+
+    if (!secretKey || !webhookSecret || !pricePremiumMonthly || !pricePremiumPlusMonthly || !frontendBaseUrl) return null;
+    return { secretKey, webhookSecret, pricePremiumMonthly, pricePremiumPlusMonthly, frontendBaseUrl };
+  }
+
+  email(): EmailConfig | null {
+    const mailgunApiKey = this.config.get<string>('MAILGUN_API_KEY')?.trim() ?? '';
+    const mailgunDomain = this.config.get<string>('MAILGUN_DOMAIN')?.trim() ?? '';
+    const mailgunFrom = this.config.get<string>('MAILGUN_FROM_EMAIL')?.trim() ?? '';
+    if (mailgunApiKey && mailgunDomain && mailgunFrom) {
+      return { provider: 'mailgun', apiKey: mailgunApiKey, domain: mailgunDomain, fromEmail: mailgunFrom };
+    }
+
+    return null;
+  }
+
   // Optional: typed access to full validated env object if needed later.
   envSnapshot(): Partial<Env> {
     return {
@@ -296,6 +342,15 @@ export class AppConfigService {
       REQUIRE_CSRF_ORIGIN_IN_PROD: this.config.get<string>(
         'REQUIRE_CSRF_ORIGIN_IN_PROD',
       ) as Env['REQUIRE_CSRF_ORIGIN_IN_PROD'],
+      STRIPE_SECRET_KEY: this.config.get<string>('STRIPE_SECRET_KEY') as Env['STRIPE_SECRET_KEY'],
+      STRIPE_WEBHOOK_SECRET: this.config.get<string>('STRIPE_WEBHOOK_SECRET') as Env['STRIPE_WEBHOOK_SECRET'],
+      STRIPE_PRICE_PREMIUM_MONTHLY: this.config.get<string>('STRIPE_PRICE_PREMIUM_MONTHLY') as Env['STRIPE_PRICE_PREMIUM_MONTHLY'],
+      STRIPE_PRICE_PREMIUM_PLUS_MONTHLY: this.config.get<string>(
+        'STRIPE_PRICE_PREMIUM_PLUS_MONTHLY',
+      ) as Env['STRIPE_PRICE_PREMIUM_PLUS_MONTHLY'],
+      MAILGUN_API_KEY: this.config.get<string>('MAILGUN_API_KEY') as Env['MAILGUN_API_KEY'],
+      MAILGUN_DOMAIN: this.config.get<string>('MAILGUN_DOMAIN') as Env['MAILGUN_DOMAIN'],
+      MAILGUN_FROM_EMAIL: this.config.get<string>('MAILGUN_FROM_EMAIL') as Env['MAILGUN_FROM_EMAIL'],
     };
   }
 }

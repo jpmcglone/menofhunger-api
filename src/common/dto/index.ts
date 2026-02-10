@@ -10,3 +10,5 @@ export * from './hashtag.dto';
 export * from './notification-feed.dto';
 export * from './realtime.dto';
 export * from './metrics.dto';
+export * from './billing.dto';
+export * from './notification-preferences.dto';

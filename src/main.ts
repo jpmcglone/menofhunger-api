@@ -21,6 +21,11 @@ function isUnsafeMethod(method: string | undefined) {
   return m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE';
 }
 
+function isStripeWebhookPath(req: Request): boolean {
+  const path = String(req.originalUrl || req.url || '');
+  return path === '/billing/webhook' || path.startsWith('/billing/webhook?');
+}
+
 async function bootstrap() {
   const logger = new Logger('HTTP');
   const startup = new Logger('Startup');
@@ -104,7 +109,16 @@ async function bootstrap() {
   app.use(compression());
 
   // Body limits (protect memory).
-  app.use(express.json({ limit: appConfig.bodyJsonLimit() }));
+  // Capture raw JSON body for webhook signature verification (Stripe requires exact bytes).
+  app.use(
+    express.json({
+      limit: appConfig.bodyJsonLimit(),
+      verify: (req, _res, buf) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (req as any).rawBody = buf;
+      },
+    }),
+  );
   app.use(express.urlencoded({ extended: true, limit: appConfig.bodyUrlEncodedLimit() }));
 
   // Cookies (auth).
@@ -156,6 +170,8 @@ async function bootstrap() {
   // This blocks cross-site form/fetch attacks when cookies are present.
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (!isUnsafeMethod(req.method)) return next();
+    // Allow third-party webhooks (no Origin/Referer).
+    if (isStripeWebhookPath(req)) return next();
 
     const origin = String(req.headers.origin ?? '').trim();
     const referer = String(req.headers.referer ?? '').trim();

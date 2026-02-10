@@ -58,6 +58,7 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "swagger-ui-express": "^5.0.1",
+    "stripe": "^18.5.0",
     "twilio": "^5.12.1",
     "typescript": "^5.9.3",
     "web-push": "^3.6.7",

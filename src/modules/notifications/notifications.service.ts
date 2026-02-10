@@ -8,6 +8,7 @@ import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cu
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectPostVisibility, SubjectTier } from './notification.dto';
 import type { NotificationFeedItemDto, NotificationGroupDto, NotificationGroupKind } from '../../common/dto/notification-feed.dto';
+import type { NotificationPreferencesDto } from '../../common/dto';
 
 export type CreateNotificationParams = {
   recipientUserId: string;
@@ -104,16 +105,75 @@ export class NotificationsService {
       this.logger.debug(`[notifications] Failed to emit notifications:new: ${err}`);
     }
 
-    this.sendWebPushToRecipient(recipientUserId, {
-      title: fallbackTitle ?? 'New notification',
-      body: (body ?? '').trim().slice(0, 150) || undefined,
-      subjectPostId: subjectPostId ?? null,
-      subjectUserId: subjectUserId ?? null,
-    }).catch((err) => {
-      this.logger.warn(`[push] Failed to send web push: ${err instanceof Error ? err.message : String(err)}`);
-    });
+    // Web push is optional (VAPID + user preference).
+    try {
+      const prefs = await this.getPreferencesInternal(recipientUserId);
+      if (this.shouldSendPushForKind(prefs, kind)) {
+        this.sendWebPushToRecipient(recipientUserId, {
+          title: fallbackTitle ?? 'New notification',
+          body: (body ?? '').trim().slice(0, 150) || undefined,
+          subjectPostId: subjectPostId ?? null,
+          subjectUserId: subjectUserId ?? null,
+        }).catch((err) => {
+          this.logger.warn(`[push] Failed to send web push: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+    } catch (err) {
+      // Best-effort: never fail notification creation on push preference issues.
+      this.logger.debug(`[push] Failed to evaluate push preferences: ${err}`);
+    }
 
     return notification;
+  }
+
+  private async getPreferencesInternal(userId: string) {
+    return await this.prisma.notificationPreferences.upsert({
+      where: { userId },
+      create: { userId },
+      update: {},
+    });
+  }
+
+  private shouldSendPushForKind(
+    prefs: Pick<NotificationPreferencesDto, 'pushComment' | 'pushBoost' | 'pushFollow' | 'pushMention'>,
+    kind: NotificationKind,
+  ): boolean {
+    if (kind === 'comment') return Boolean(prefs.pushComment);
+    if (kind === 'boost') return Boolean(prefs.pushBoost);
+    if (kind === 'follow') return Boolean(prefs.pushFollow);
+    if (kind === 'mention') return Boolean(prefs.pushMention);
+    // Other kinds currently don't produce push notifications.
+    return true;
+  }
+
+  async getPreferences(userId: string): Promise<NotificationPreferencesDto> {
+    const prefs = await this.getPreferencesInternal(userId);
+    return {
+      pushComment: Boolean(prefs.pushComment),
+      pushBoost: Boolean(prefs.pushBoost),
+      pushFollow: Boolean(prefs.pushFollow),
+      pushMention: Boolean(prefs.pushMention),
+      pushMessage: Boolean(prefs.pushMessage),
+      emailDigestWeekly: Boolean(prefs.emailDigestWeekly),
+      emailNewNotifications: Boolean(prefs.emailNewNotifications),
+    };
+  }
+
+  async updatePreferences(userId: string, patch: Partial<NotificationPreferencesDto>): Promise<NotificationPreferencesDto> {
+    const updated = await this.prisma.notificationPreferences.upsert({
+      where: { userId },
+      create: { userId, ...patch },
+      update: patch,
+    });
+    return {
+      pushComment: Boolean(updated.pushComment),
+      pushBoost: Boolean(updated.pushBoost),
+      pushFollow: Boolean(updated.pushFollow),
+      pushMention: Boolean(updated.pushMention),
+      pushMessage: Boolean(updated.pushMessage),
+      emailDigestWeekly: Boolean(updated.emailDigestWeekly),
+      emailNewNotifications: Boolean(updated.emailNewNotifications),
+    };
   }
 
   /** Upsert push subscription for a user (idempotent). */
@@ -263,6 +323,12 @@ export class NotificationsService {
     body?: string | null;
     conversationId: string;
   }): Promise<void> {
+    try {
+      const prefs = await this.getPreferencesInternal(params.recipientUserId);
+      if (!prefs.pushMessage) return;
+    } catch {
+      // Best-effort: if prefs read fails, still attempt push (default behavior).
+    }
     const sender = (params.senderName ?? '').trim();
     const title = sender ? `New message from ${sender}` : 'New message';
     const body = (params.body ?? '').trim().slice(0, 150) || undefined;

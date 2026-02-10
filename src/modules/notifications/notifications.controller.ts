@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import type { Response } from 'express';
@@ -7,6 +7,7 @@ import { CurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { NotificationsService } from './notifications.service';
 import { setReadCache } from '../../common/http-cache';
+import type { NotificationPreferencesDto } from '../../common/dto';
 
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -30,6 +31,18 @@ const pushSubscribeBodySchema = z.object({
 const pushUnsubscribeBodySchema = z.object({
   endpoint: z.string().trim().min(1),
 });
+
+const preferencesPatchSchema = z
+  .object({
+    pushComment: z.boolean().optional(),
+    pushBoost: z.boolean().optional(),
+    pushFollow: z.boolean().optional(),
+    pushMention: z.boolean().optional(),
+    pushMessage: z.boolean().optional(),
+    emailDigestWeekly: z.boolean().optional(),
+    emailNewNotifications: z.boolean().optional(),
+  })
+  .refine((d) => Object.keys(d).length > 0, { message: 'At least one preference is required.' });
 
 @Controller('notifications')
 export class NotificationsController {
@@ -130,6 +143,34 @@ export class NotificationsController {
     const parsed = pushUnsubscribeBodySchema.parse(body);
     await this.notifications.pushUnsubscribe(userId, parsed.endpoint);
     return { data: {} };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Get('preferences')
+  async preferences(@CurrentUserId() userId: string): Promise<{ data: NotificationPreferencesDto }> {
+    return { data: await this.notifications.getPreferences(userId) };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Patch('preferences')
+  async updatePreferences(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ): Promise<{ data: NotificationPreferencesDto }> {
+    const parsed = preferencesPatchSchema.parse(body);
+    return { data: await this.notifications.updatePreferences(userId, parsed) };
   }
 
   @UseGuards(AuthGuard)

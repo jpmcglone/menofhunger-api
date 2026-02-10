@@ -141,6 +141,13 @@ model User {
   verifiedStatus VerifiedStatus @default(none)
   verifiedAt DateTime?
   unverifiedAt DateTime?
+  // Stripe billing identifiers (optional; null when user has never subscribed).
+  stripeCustomerId String? @unique
+  stripeSubscriptionId String? @unique
+  stripeSubscriptionStatus String?
+  stripeSubscriptionPriceId String?
+  stripeCurrentPeriodEnd DateTime?
+  stripeCancelAtPeriodEnd Boolean @default(false)
   // Follow list privacy (controls counts + follower/following lists).
   followVisibility FollowVisibility @default(all)
   // Public media (stored in object storage; API stores keys only).
@@ -177,6 +184,7 @@ model User {
   notificationsAsActor Notification[] @relation("Notification_actor")
   notificationsAsSubjectUser Notification[] @relation("Notification_subjectUser")
   pushSubscriptions PushSubscription[]
+  notificationPreferences NotificationPreferences?
   userSearches     UserSearch[]
   feedbacks        Feedback[]
   reportsMade      Report[] @relation("Report_reporter")
@@ -193,6 +201,17 @@ model User {
 
   @@index([phone])
   @@index([lastSeenAt])
+}
+
+/**
+ * Stripe webhook event dedupe (Stripe may retry; we must be idempotent).
+ * Use the Stripe event id as the primary key.
+ */
+model StripeWebhookEvent {
+  id        String   @id
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }
 
 /**
@@ -653,6 +672,33 @@ model Notification {
   @@index([subjectPostId])
   // Common list ordering/pagination: ORDER BY createdAt DESC, id DESC.
   @@index([recipientUserId, createdAt(sort: Desc), id(sort: Desc)])
+}
+
+model NotificationPreferences {
+  userId    String   @id
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Web push preferences (in-app notifications are always created; this controls browser notifications).
+  pushComment Boolean @default(true)
+  pushBoost Boolean @default(true)
+  pushFollow Boolean @default(true)
+  pushMention Boolean @default(true)
+  pushMessage Boolean @default(true)
+
+  // Email preferences (requires user.email).
+  emailDigestWeekly Boolean @default(true)
+  emailNewNotifications Boolean @default(true)
+
+  // Email send timestamps (rate limiting / dedupe).
+  lastEmailDigestSentAt DateTime?
+  lastEmailNewNotificationsSentAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([updatedAt])
+  @@index([lastEmailNewNotificationsSentAt])
+  @@index([lastEmailDigestSentAt])
 }
 
 model MessageConversation {
