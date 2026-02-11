@@ -136,6 +136,8 @@ model User {
   premium Boolean @default(false)
   // Premium+ (superset of premium; special supporters tier).
   premiumPlus Boolean @default(false)
+  // Organization account (special badge + avatar shape in clients).
+  isOrganization Boolean @default(false)
   // Premium+ opt-in steward badge shown across the app.
   stewardBadgeEnabled Boolean @default(true)
   // Verified badge (more roles/permissions later).

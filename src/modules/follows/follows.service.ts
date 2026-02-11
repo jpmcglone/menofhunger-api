@@ -60,6 +60,7 @@ export class FollowsService {
       name: string | null;
       premium: boolean;
       premiumPlus: boolean;
+      isOrganization: boolean;
       stewardBadgeEnabled: boolean;
       verifiedStatus: string;
       avatarKey: string | null;
@@ -96,6 +97,9 @@ export class FollowsService {
         u."username",
         u."name",
         u."premium",
+        u."premiumPlus",
+        u."isOrganization",
+        u."stewardBadgeEnabled",
         u."verifiedStatus",
         u."avatarKey",
         u."avatarUpdatedAt",
@@ -128,6 +132,7 @@ export class FollowsService {
               u."name",
               u."premium",
               u."premiumPlus",
+              u."isOrganization",
               u."stewardBadgeEnabled",
               u."verifiedStatus",
               u."avatarKey",
@@ -550,6 +555,7 @@ export class FollowsService {
             name: true,
             premium: true,
             premiumPlus: true,
+            isOrganization: true,
             stewardBadgeEnabled: true,
             verifiedStatus: true,
             avatarKey: true,
@@ -614,6 +620,7 @@ export class FollowsService {
             name: true,
             premium: true,
             premiumPlus: true,
+            isOrganization: true,
             stewardBadgeEnabled: true,
             verifiedStatus: true,
             avatarKey: true,
@@ -663,6 +670,7 @@ export class FollowsService {
         name: true,
         premium: true,
         premiumPlus: true,
+        isOrganization: true,
         stewardBadgeEnabled: true,
         verifiedStatus: true,
         avatarKey: true,

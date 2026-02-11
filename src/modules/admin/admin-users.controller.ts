@@ -39,6 +39,7 @@ const updateUserSchema = z.object({
   bio: z.string().trim().max(160).nullable().optional(),
   premium: z.boolean().optional(),
   premiumPlus: z.boolean().optional(),
+  isOrganization: z.boolean().optional(),
   verifiedStatus: z.enum(['none', 'identity', 'manual']).optional(),
 });
 
@@ -120,7 +121,7 @@ export class AdminUsersController {
 
     const current = await this.prisma.user.findUnique({
       where: { id },
-      select: { id: true, username: true, verifiedStatus: true },
+      select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, isOrganization: true },
     });
     if (!current) throw new NotFoundException('User not found.');
 
@@ -181,6 +182,23 @@ export class AdminUsersController {
     // - disabling premium disables premiumPlus
     if (data.premiumPlus === true) data.premium = true;
     if (data.premium === false) data.premiumPlus = false;
+
+    // Compute effective next-state values (current + patch), so admins can update multiple fields atomically.
+    const effectiveVerifiedStatus = parsed.verifiedStatus ?? current.verifiedStatus;
+    let effectivePremium = parsed.premium ?? current.premium;
+    const effectivePremiumPlus = parsed.premiumPlus ?? current.premiumPlus;
+    if (effectivePremiumPlus === true) effectivePremium = true;
+    // Enforce "premium=false disables premiumPlus" invariant for effective state.
+    if (parsed.premium === false && parsed.premiumPlus !== true) effectivePremium = false;
+
+    const effectiveIsOrganization = parsed.isOrganization ?? current.isOrganization;
+    if (effectiveIsOrganization === true && (effectivePremium !== true || effectiveVerifiedStatus === 'none')) {
+      throw new BadRequestException('Organization accounts must be verified and premium.');
+    }
+
+    if (parsed.isOrganization !== undefined) {
+      data.isOrganization = parsed.isOrganization;
+    }
 
     if (parsed.verifiedStatus !== undefined) {
       if (parsed.verifiedStatus === 'none') {

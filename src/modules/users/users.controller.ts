@@ -72,6 +72,7 @@ type PublicProfilePayload = {
   bio: string | null;
   premium: boolean;
   premiumPlus: boolean;
+  isOrganization: boolean;
   stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
@@ -87,6 +88,7 @@ type UserPreviewPayload = {
   bio: string | null;
   premium: boolean;
   premiumPlus: boolean;
+  isOrganization: boolean;
   stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
@@ -153,17 +155,19 @@ export class UsersController {
       try {
         const fresh = await this.prisma.user.findUnique({
           where: { id: cached.id },
-          select: { lastOnlineAt: true, premium: true, premiumPlus: true, verifiedStatus: true },
+          select: { lastOnlineAt: true, premium: true, premiumPlus: true, isOrganization: true, verifiedStatus: true },
         });
         const lastOnlineAt = fresh?.lastOnlineAt ? fresh.lastOnlineAt.toISOString() : null;
         const premium = fresh?.premium ?? cached.premium;
         const premiumPlus = (fresh as any)?.premiumPlus ?? (cached as any).premiumPlus ?? false;
+        const isOrganization = (fresh as any)?.isOrganization ?? (cached as any).isOrganization ?? false;
         const verifiedStatus = (fresh as any)?.verifiedStatus ?? (cached as any).verifiedStatus ?? 'none';
 
         if (
           lastOnlineAt !== (cached as any).lastOnlineAt ||
           premium !== (cached as any).premium ||
           premiumPlus !== (cached as any).premiumPlus ||
+          isOrganization !== (cached as any).isOrganization ||
           verifiedStatus !== (cached as any).verifiedStatus
         ) {
           const next: PublicProfilePayload = {
@@ -171,6 +175,7 @@ export class UsersController {
             lastOnlineAt,
             premium,
             premiumPlus,
+            isOrganization,
             verifiedStatus,
           };
           this.publicProfileCache.write(cacheKey, next, 5 * 60 * 1000);
@@ -192,6 +197,7 @@ export class UsersController {
             bio: string | null;
             premium: boolean;
             premiumPlus: boolean;
+            isOrganization: boolean;
             stewardBadgeEnabled: boolean;
             verifiedStatus: string;
             avatarKey: string | null;
@@ -202,7 +208,7 @@ export class UsersController {
             lastOnlineAt: Date | null;
           }>
         >`
-          SELECT "id", "username", "name", "bio", "premium", "premiumPlus", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt"
+          SELECT "id", "username", "name", "bio", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt"
           FROM "User"
           WHERE (
             (${isUuidOrCuid} = true AND "id" = ${raw})
@@ -238,6 +244,7 @@ export class UsersController {
       bio: user.bio,
       premium: user.premium,
       premiumPlus: user.premiumPlus,
+      isOrganization: Boolean((user as any).isOrganization),
       stewardBadgeEnabled: Boolean(user.stewardBadgeEnabled),
       verifiedStatus: user.verifiedStatus,
       avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
@@ -377,6 +384,7 @@ export class UsersController {
         name: true,
         premium: true,
         premiumPlus: true,
+        isOrganization: true,
         stewardBadgeEnabled: true,
         verifiedStatus: true,
         avatarKey: true,
@@ -510,6 +518,7 @@ export class UsersController {
       bio: profile.bio,
       premium: profile.premium,
       premiumPlus: profile.premiumPlus,
+      isOrganization: Boolean((profile as any).isOrganization),
       stewardBadgeEnabled: Boolean(profile.stewardBadgeEnabled),
       verifiedStatus: profile.verifiedStatus,
       avatarUrl: profile.avatarUrl,

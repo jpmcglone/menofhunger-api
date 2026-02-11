@@ -2198,7 +2198,21 @@ export class PostsService {
         include: {
           user: true,
           media: { orderBy: { position: 'asc' } },
-          mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true } } } },
+          mentions: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  username: true,
+                  verifiedStatus: true,
+                  premium: true,
+                  premiumPlus: true,
+                  isOrganization: true,
+                  stewardBadgeEnabled: true,
+                },
+              },
+            },
+          },
         },
       });
 
@@ -2289,7 +2303,21 @@ export class PostsService {
       include: {
         user: true,
         media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true } } } },
+        mentions: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                username: true,
+                verifiedStatus: true,
+                premium: true,
+                premiumPlus: true,
+                isOrganization: true,
+                stewardBadgeEnabled: true,
+              },
+            },
+          },
+        },
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
@@ -2458,7 +2486,21 @@ export class PostsService {
       include: {
         user: true,
         media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true } } } },
+        mentions: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                username: true,
+                verifiedStatus: true,
+                premium: true,
+                premiumPlus: true,
+                isOrganization: true,
+                stewardBadgeEnabled: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -2650,7 +2692,21 @@ export class PostsService {
         include: {
           user: true,
           media: { orderBy: { position: 'asc' } },
-          mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true } } } },
+          mentions: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  username: true,
+                  verifiedStatus: true,
+                  premium: true,
+                  premiumPlus: true,
+                  isOrganization: true,
+                  stewardBadgeEnabled: true,
+                },
+              },
+            },
+          },
         },
       });
 
@@ -2826,7 +2882,21 @@ export class PostsService {
       include: {
         user: true,
         media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true } } } },
+        mentions: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                username: true,
+                verifiedStatus: true,
+                premium: true,
+                premiumPlus: true,
+                isOrganization: true,
+                stewardBadgeEnabled: true,
+              },
+            },
+          },
+        },
       },
     });
     return full ?? created;

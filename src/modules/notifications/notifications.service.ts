@@ -521,6 +521,7 @@ export class NotificationsService {
             avatarKey: true,
             avatarUpdatedAt: true,
             premium: true,
+            isOrganization: true,
             verifiedStatus: true,
           },
         },
@@ -965,6 +966,7 @@ export class NotificationsService {
         avatarKey: string | null;
         avatarUpdatedAt: Date | null;
         premium: boolean;
+        isOrganization: boolean;
         verifiedStatus: string;
       } | null;
     },
@@ -985,6 +987,7 @@ export class NotificationsService {
           updatedAt: n.actor.avatarUpdatedAt,
         }),
         premium: n.actor.premium,
+        isOrganization: Boolean((n.actor as any).isOrganization),
         verifiedStatus: n.actor.verifiedStatus,
       };
     }
@@ -1027,6 +1030,7 @@ export class NotificationsService {
             avatarKey: true,
             avatarUpdatedAt: true,
             premium: true,
+            isOrganization: true,
             verifiedStatus: true,
           },
         },

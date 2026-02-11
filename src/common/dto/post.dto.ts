@@ -10,6 +10,7 @@ export type PostAuthorDto = {
   name: string | null;
   premium: boolean;
   premiumPlus: boolean;
+  isOrganization: boolean;
   stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
@@ -39,6 +40,7 @@ export type PostMentionDto = {
   verifiedStatus?: VerifiedStatus;
   premium?: boolean;
   premiumPlus?: boolean;
+  isOrganization?: boolean;
   stewardBadgeEnabled?: boolean;
 };
 
@@ -82,6 +84,7 @@ export type PostMentionWithUser = {
     verifiedStatus?: VerifiedStatus;
     premium?: boolean;
     premiumPlus?: boolean;
+    isOrganization?: boolean;
     stewardBadgeEnabled?: boolean;
   };
 };
@@ -172,6 +175,7 @@ export function toPostDto(
             verifiedStatus: m.user.verifiedStatus ?? undefined,
             premium: m.user.premium ?? undefined,
             premiumPlus: m.user.premiumPlus ?? undefined,
+            isOrganization: m.user.isOrganization ?? undefined,
             stewardBadgeEnabled: m.user.stewardBadgeEnabled ?? undefined,
           }
         : null,
@@ -215,6 +219,7 @@ export function toPostDto(
       name: post.user.name,
       premium: post.user.premium,
       premiumPlus: post.user.premiumPlus,
+      isOrganization: Boolean((post.user as any).isOrganization),
       stewardBadgeEnabled: Boolean(post.user.stewardBadgeEnabled),
       verifiedStatus: post.user.verifiedStatus,
       avatarUrl: publicAssetUrl({

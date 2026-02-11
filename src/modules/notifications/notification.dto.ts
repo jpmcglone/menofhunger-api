@@ -6,6 +6,7 @@ export type NotificationActorDto = {
   name: string | null;
   avatarUrl: string | null;
   premium: boolean;
+  isOrganization: boolean;
   verifiedStatus: string;
 };
 

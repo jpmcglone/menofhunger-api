@@ -64,6 +64,8 @@ export type PublicProfileDto = {
   bio: string | null;
   premium: boolean;
   premiumPlus: boolean;
+  isOrganization: boolean;
+  stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
   bannerUrl: string | null;

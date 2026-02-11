@@ -56,7 +56,15 @@ const SEARCH_POST_INCLUDE = {
   mentions: {
     include: {
       user: {
-        select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true },
+        select: {
+          id: true,
+          username: true,
+          verifiedStatus: true,
+          premium: true,
+          premiumPlus: true,
+          isOrganization: true,
+          stewardBadgeEnabled: true,
+        },
       },
     },
   },
@@ -73,6 +81,7 @@ export type SearchUserRow = {
   name: string | null;
   premium: boolean;
   premiumPlus: boolean;
+  isOrganization: boolean;
   stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   avatarKey: string | null;
@@ -265,6 +274,7 @@ export class SearchService {
           bio: true,
           premium: true,
           premiumPlus: true,
+          isOrganization: true,
           stewardBadgeEnabled: true,
           verifiedStatus: true,
           avatarKey: true,
@@ -567,7 +577,21 @@ export class SearchService {
           include: {
             user: true,
             media: { orderBy: { position: 'asc' } },
-            mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true } } } },
+            mentions: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    username: true,
+                    verifiedStatus: true,
+                    premium: true,
+                    premiumPlus: true,
+                    isOrganization: true,
+                    stewardBadgeEnabled: true,
+                  },
+                },
+              },
+            },
           },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           skip: offset,
