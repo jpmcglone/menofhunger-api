@@ -403,15 +403,15 @@ export class FollowsService {
       }
     }
 
-    this.notifications
-      .create({
-        recipientUserId: target.id,
-        kind: 'nudge',
-        actorUserId: viewerUserId,
-        subjectUserId: viewerUserId,
-        title: 'nudged you',
-      })
-      .catch(() => {});
+    // Await creation so subsequent reads (profile/preview) are immediately consistent.
+    // This is still best-effort for UX, but avoids the “Nudged → Nudge again” flicker caused by async writes.
+    await this.notifications.create({
+      recipientUserId: target.id,
+      kind: 'nudge',
+      actorUserId: viewerUserId,
+      subjectUserId: viewerUserId,
+      title: 'nudged you',
+    });
 
     return {
       sent: true,
