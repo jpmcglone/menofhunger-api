@@ -26,6 +26,8 @@ export type NotificationDto = {
   kind: NotificationKind;
   deliveredAt: string | null;
   readAt: string | null;
+  ignoredAt: string | null;
+  nudgedBackAt: string | null;
   actor: NotificationActorDto | null;
   /** The post that caused this notification (e.g. a reply or mention post). */
   actorPostId: string | null;

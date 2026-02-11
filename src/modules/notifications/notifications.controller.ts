@@ -234,4 +234,84 @@ export class NotificationsController {
     const updated = await this.notifications.markReadById(userId, id);
     return { data: { updated } };
   }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post(':id/ignore')
+  async ignoreById(
+    @CurrentUserId() userId: string,
+    @Param('id') id: string,
+  ) {
+    const updated = await this.notifications.ignoreById(userId, id);
+    return { data: { updated } };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('nudges/:actorUserId/mark-read')
+  async markNudgesReadByActor(
+    @CurrentUserId() userId: string,
+    @Param('actorUserId') actorUserId: string,
+  ) {
+    const updatedCount = await this.notifications.markNudgesReadByActor(userId, actorUserId);
+    return { data: { updatedCount } };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('nudges/:actorUserId/nudged-back')
+  async markNudgesNudgedBackByActor(
+    @CurrentUserId() userId: string,
+    @Param('actorUserId') actorUserId: string,
+  ) {
+    const updatedCount = await this.notifications.markNudgesNudgedBackByActor(userId, actorUserId);
+    return { data: { updatedCount } };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post(':id/nudged-back')
+  async markNudgeNudgedBackById(
+    @CurrentUserId() userId: string,
+    @Param('id') id: string,
+  ) {
+    const updated = await this.notifications.markNudgeNudgedBackById(userId, id);
+    return { data: { updated } };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('nudges/:actorUserId/ignore')
+  async ignoreNudgesByActor(
+    @CurrentUserId() userId: string,
+    @Param('actorUserId') actorUserId: string,
+  ) {
+    const updatedCount = await this.notifications.ignoreNudgesByActor(userId, actorUserId);
+    return { data: { updatedCount } };
+  }
 }

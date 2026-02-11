@@ -4,7 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { toUserListDto } from '../../common/dto';
+import { toUserListDto, type NudgeStateDto } from '../../common/dto';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
@@ -17,6 +17,7 @@ export type FollowSummary = FollowRelationship & {
   canView: boolean;
   followerCount: number | null;
   followingCount: number | null;
+  nudge: NudgeStateDto | null;
 };
 
 export type FollowListUser = {
@@ -207,6 +208,64 @@ export class FollowsService {
     return user;
   }
 
+  private async getNudgeState(params: { viewerUserId: string; targetUserId: string }): Promise<NudgeStateDto> {
+    const { viewerUserId, targetUserId } = params;
+    const pendingMs = 24 * 60 * 60 * 1000; // 24h
+    const since = new Date(Date.now() - pendingMs);
+
+    const [lastOutbound, inbound] = await Promise.all([
+      this.prisma.notification.findFirst({
+        where: {
+          kind: 'nudge',
+          actorUserId: viewerUserId,
+          recipientUserId: targetUserId,
+          createdAt: { gte: since },
+        },
+        select: { createdAt: true, readAt: true, ignoredAt: true },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      }),
+      this.prisma.notification.findFirst({
+        where: {
+          kind: 'nudge',
+          actorUserId: targetUserId,
+          recipientUserId: viewerUserId,
+          readAt: null,
+          createdAt: { gte: since },
+        },
+        select: { id: true, createdAt: true },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      }),
+    ]);
+
+    const hasInboundAfterOutbound = lastOutbound
+      ? Boolean(
+          await this.prisma.notification.findFirst({
+            where: {
+              kind: 'nudge',
+              actorUserId: targetUserId,
+              recipientUserId: viewerUserId,
+              createdAt: { gt: lastOutbound.createdAt },
+            },
+            select: { id: true },
+          }),
+        )
+      : false;
+
+    // Outbound is pending (blocks re-nudge) if:
+    // - the viewer nudged within the last 24h, AND
+    // - the target has not nudged back after that, AND
+    // - the target has not acknowledged it via “Got it” (readAt set without ignoredAt).
+    const acknowledgedByGotIt = Boolean(lastOutbound?.readAt && !lastOutbound?.ignoredAt);
+    const outboundPending = Boolean(lastOutbound && !hasInboundAfterOutbound && !acknowledgedByGotIt);
+
+    return {
+      outboundPending,
+      inboundPending: Boolean(inbound),
+      inboundNotificationId: inbound?.id ?? null,
+      outboundExpiresAt: outboundPending ? new Date(lastOutbound!.createdAt.getTime() + pendingMs).toISOString() : null,
+    };
+  }
+
   async follow(params: { viewerUserId: string; username: string }) {
     const { viewerUserId, username } = params;
     const target = await this.userByUsernameOrThrow(username);
@@ -285,6 +344,82 @@ export class FollowsService {
     };
   }
 
+  async nudge(params: { viewerUserId: string; username: string }): Promise<{
+    sent: boolean;
+    blocked: boolean;
+    nextAllowedAt: string | null;
+  }> {
+    const { viewerUserId, username } = params;
+    const target = await this.userByUsernameOrThrow(username);
+    if (target.id === viewerUserId) throw new BadRequestException('You cannot nudge yourself.');
+
+    // Only allow nudges between mutual follows. If not mutual, hide this surface (404).
+    const [a, b] = await Promise.all([
+      this.prisma.follow.findFirst({
+        where: { followerId: viewerUserId, followingId: target.id },
+        select: { id: true },
+      }),
+      this.prisma.follow.findFirst({
+        where: { followerId: target.id, followingId: viewerUserId },
+        select: { id: true },
+      }),
+    ]);
+    const viewerFollowsUser = Boolean(a);
+    const userFollowsViewer = Boolean(b);
+    if (!viewerFollowsUser || !userFollowsViewer) throw new NotFoundException('Not found.');
+
+    const pendingMs = 24 * 60 * 60 * 1000; // 24h
+    const since = new Date(Date.now() - pendingMs);
+
+    const lastOutbound = await this.prisma.notification.findFirst({
+      where: {
+        kind: 'nudge',
+        recipientUserId: target.id,
+        actorUserId: viewerUserId,
+        createdAt: { gte: since },
+      },
+      select: { createdAt: true, readAt: true, ignoredAt: true },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+
+    if (lastOutbound) {
+      const acknowledgedByGotIt = Boolean(lastOutbound.readAt && !lastOutbound.ignoredAt);
+      const inboundAfter = await this.prisma.notification.findFirst({
+        where: {
+          kind: 'nudge',
+          actorUserId: target.id,
+          recipientUserId: viewerUserId,
+          createdAt: { gt: lastOutbound.createdAt },
+        },
+        select: { id: true },
+      });
+      if (!inboundAfter && !acknowledgedByGotIt) {
+        const nextAllowedAt = new Date(lastOutbound.createdAt.getTime() + pendingMs);
+        return {
+          sent: false,
+          blocked: true,
+          nextAllowedAt: nextAllowedAt.toISOString(),
+        };
+      }
+    }
+
+    this.notifications
+      .create({
+        recipientUserId: target.id,
+        kind: 'nudge',
+        actorUserId: viewerUserId,
+        subjectUserId: viewerUserId,
+        title: 'nudged you',
+      })
+      .catch(() => {});
+
+    return {
+      sent: true,
+      blocked: false,
+      nextAllowedAt: new Date(Date.now() + pendingMs).toISOString(),
+    };
+  }
+
   async status(params: { viewerUserId: string | null; username: string }): Promise<FollowRelationship> {
     const { viewerUserId, username } = params;
     const target = await this.userByUsernameOrThrow(username);
@@ -313,6 +448,9 @@ export class FollowsService {
     const viewer = await this.viewerById(viewerUserId);
 
     const relationship = await this.status({ viewerUserId, username });
+    const mutual = Boolean(relationship.viewerFollowsUser && relationship.userFollowsViewer);
+    const nudge =
+      viewerUserId && mutual ? await this.getNudgeState({ viewerUserId, targetUserId: target.id }) : null;
     const canView = this.canViewFollowInfo({
       viewer,
       targetUserId: target.id,
@@ -325,6 +463,7 @@ export class FollowsService {
         canView: false,
         followerCount: null,
         followingCount: null,
+        nudge,
       };
     }
 
@@ -338,6 +477,7 @@ export class FollowsService {
       canView: true,
       followerCount,
       followingCount,
+      nudge,
     };
   }
 

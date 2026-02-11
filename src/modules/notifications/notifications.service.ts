@@ -601,6 +601,7 @@ export class NotificationsService {
       if (n.kind === 'comment' && n.subjectPostId) return `comment:post:${n.subjectPostId}`;
       if (n.kind === 'follow') return 'follow';
       if (n.kind === 'followed_post' && n.actor?.id) return `followed_post:actor:${n.actor.id}`;
+      if (n.kind === 'nudge' && n.actor?.id) return `nudge:actor:${n.actor.id}`;
       return null;
     }
 
@@ -609,6 +610,7 @@ export class NotificationsService {
       if (key.startsWith('comment:')) return 'comment';
       if (key === 'follow') return 'follow';
       if (key.startsWith('followed_post:')) return 'followed_post';
+      if (key.startsWith('nudge:')) return 'nudge';
       return null;
     }
 
@@ -635,6 +637,8 @@ export class NotificationsService {
       const subjectUserId =
         kind === 'follow'
           ? (newest.actor?.id ?? newest.subjectUserId ?? null)
+          : kind === 'nudge'
+            ? (newest.actor?.id ?? newest.subjectUserId ?? null)
           : kind === 'followed_post'
             ? (newest.actor?.id ?? null)
             : null;
@@ -726,7 +730,9 @@ export class NotificationsService {
     const or: Array<Record<string, unknown>> = [];
     if (postId) or.push({ subjectPostId: postId });
     if (userId) {
-      or.push({ subjectUserId: userId });
+      // Important: do NOT implicitly mark nudges as read when visiting a user's profile.
+      // Nudges should only be cleared via explicit actions (ignore / acknowledge / nudge back).
+      or.push({ subjectUserId: userId, kind: { not: 'nudge' } });
       or.push({ kind: 'followed_post', actorUserId: userId });
     }
     const where = {
@@ -773,6 +779,154 @@ export class NotificationsService {
     return result.count > 0;
   }
 
+  /**
+   * Mark a notification as ignored (used for nudges).
+   * Semantics:
+   * - Clears unread highlight (readAt set)
+   * - Clears badge if undelivered (deliveredAt set)
+   * - Persists ignoredAt so the sender can remain rate-limited for a while
+   */
+  async ignoreById(
+    recipientUserId: string,
+    notificationId: string,
+  ): Promise<boolean> {
+    const now = new Date();
+    const result = await this.prisma.notification.updateMany({
+      where: { id: notificationId, recipientUserId, ignoredAt: null },
+      data: { ignoredAt: now, readAt: now },
+    });
+    if (result.count > 0) {
+      await this.prisma.notification.updateMany({
+        where: { id: notificationId, recipientUserId, deliveredAt: null },
+        data: { deliveredAt: now },
+      });
+      const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
+      this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
+        undeliveredCount,
+      });
+    }
+    return result.count > 0;
+  }
+
+  async markNudgesReadByActor(
+    recipientUserId: string,
+    actorUserId: string,
+  ): Promise<number> {
+    const recipient = (recipientUserId ?? '').trim();
+    const actor = (actorUserId ?? '').trim();
+    if (!recipient || !actor) return 0;
+    const now = new Date();
+    const result = await this.prisma.notification.updateMany({
+      where: {
+        recipientUserId: recipient,
+        kind: 'nudge',
+        actorUserId: actor,
+        readAt: null,
+      },
+      data: { readAt: now },
+    });
+    if (result.count > 0) {
+      await this.prisma.notification.updateMany({
+        where: {
+          recipientUserId: recipient,
+          kind: 'nudge',
+          actorUserId: actor,
+          deliveredAt: null,
+        },
+        data: { deliveredAt: now },
+      });
+      const undeliveredCount = await this.getUndeliveredCount(recipient);
+      this.presenceRealtime.emitNotificationsUpdated(recipient, { undeliveredCount });
+    }
+    return result.count;
+  }
+
+  async markNudgesNudgedBackByActor(
+    recipientUserId: string,
+    actorUserId: string,
+  ): Promise<number> {
+    const recipient = (recipientUserId ?? '').trim();
+    const actor = (actorUserId ?? '').trim();
+    if (!recipient || !actor) return 0;
+    const now = new Date();
+    const result = await this.prisma.notification.updateMany({
+      where: {
+        recipientUserId: recipient,
+        kind: 'nudge',
+        actorUserId: actor,
+        nudgedBackAt: null,
+      },
+      data: { nudgedBackAt: now, readAt: now },
+    });
+    if (result.count > 0) {
+      await this.prisma.notification.updateMany({
+        where: {
+          recipientUserId: recipient,
+          kind: 'nudge',
+          actorUserId: actor,
+          deliveredAt: null,
+        },
+        data: { deliveredAt: now },
+      });
+      const undeliveredCount = await this.getUndeliveredCount(recipient);
+      this.presenceRealtime.emitNotificationsUpdated(recipient, { undeliveredCount });
+    }
+    return result.count;
+  }
+
+  async markNudgeNudgedBackById(
+    recipientUserId: string,
+    notificationId: string,
+  ): Promise<boolean> {
+    const now = new Date();
+    const result = await this.prisma.notification.updateMany({
+      where: { id: notificationId, recipientUserId, kind: 'nudge', nudgedBackAt: null },
+      data: { nudgedBackAt: now, readAt: now },
+    });
+    if (result.count > 0) {
+      await this.prisma.notification.updateMany({
+        where: { id: notificationId, recipientUserId, deliveredAt: null },
+        data: { deliveredAt: now },
+      });
+      const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
+      this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
+    }
+    return result.count > 0;
+  }
+
+  async ignoreNudgesByActor(
+    recipientUserId: string,
+    actorUserId: string,
+  ): Promise<number> {
+    const recipient = (recipientUserId ?? '').trim();
+    const actor = (actorUserId ?? '').trim();
+    if (!recipient || !actor) return 0;
+    const now = new Date();
+    const result = await this.prisma.notification.updateMany({
+      where: {
+        recipientUserId: recipient,
+        kind: 'nudge',
+        actorUserId: actor,
+        ignoredAt: null,
+      },
+      data: { ignoredAt: now, readAt: now },
+    });
+    if (result.count > 0) {
+      await this.prisma.notification.updateMany({
+        where: {
+          recipientUserId: recipient,
+          kind: 'nudge',
+          actorUserId: actor,
+          deliveredAt: null,
+        },
+        data: { deliveredAt: now },
+      });
+      const undeliveredCount = await this.getUndeliveredCount(recipient);
+      this.presenceRealtime.emitNotificationsUpdated(recipient, { undeliveredCount });
+    }
+    return result.count;
+  }
+
   /** Mark all of the user's notifications as read and as seen (clears highlight and badge). */
   async markAllRead(recipientUserId: string): Promise<void> {
     const now = new Date();
@@ -797,6 +951,8 @@ export class NotificationsService {
       kind: NotificationKind;
       deliveredAt: Date | null;
       readAt: Date | null;
+      ignoredAt: Date | null;
+      nudgedBackAt: Date | null;
       actorPostId: string | null;
       subjectPostId: string | null;
       subjectUserId: string | null;
@@ -838,6 +994,8 @@ export class NotificationsService {
       kind: n.kind,
       deliveredAt: n.deliveredAt ? n.deliveredAt.toISOString() : null,
       readAt: n.readAt ? n.readAt.toISOString() : null,
+      ignoredAt: n.ignoredAt ? n.ignoredAt.toISOString() : null,
+      nudgedBackAt: n.nudgedBackAt ? n.nudgedBackAt.toISOString() : null,
       actor,
       actorPostId: n.actorPostId,
       subjectPostId: n.subjectPostId,

@@ -1,6 +1,6 @@
 import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectPostVisibility, SubjectTier } from '../../modules/notifications/notification.dto';
 
-export type NotificationGroupKind = 'comment' | 'boost' | 'follow' | 'followed_post';
+export type NotificationGroupKind = 'comment' | 'boost' | 'follow' | 'followed_post' | 'nudge';
 
 /**
  * A conservative grouped notification row built from strictly consecutive notifications.

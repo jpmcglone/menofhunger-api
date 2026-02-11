@@ -11,7 +11,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { CurrentUserId, OptionalCurrentUserId } from './users.decorator';
 import { validateUsername } from './users.utils';
 import { toUserDto } from './user.dto';
-import { toUserListDto } from '../../common/dto';
+import { toUserListDto, type NudgeStateDto } from '../../common/dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { Throttle } from '@nestjs/throttler';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
@@ -93,6 +93,7 @@ type UserPreviewPayload = {
   bannerUrl: string | null;
   lastOnlineAt: string | null;
   relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean };
+  nudge: NudgeStateDto | null;
   followerCount: number | null;
   followingCount: number | null;
 };
@@ -481,12 +482,14 @@ export class UsersController {
       viewerFollowsUser: false,
       userFollowsViewer: false,
     };
+    let nudge: NudgeStateDto | null = null;
     let followerCount: number | null = null;
     let followingCount: number | null = null;
 
     if (profile.username) {
       const summary = await this.followsService.summary({ viewerUserId, username: profile.username });
       relationship = { viewerFollowsUser: summary.viewerFollowsUser, userFollowsViewer: summary.userFollowsViewer };
+      nudge = summary.nudge;
       followerCount = summary.followerCount;
       followingCount = summary.followingCount;
     } else {
@@ -513,6 +516,7 @@ export class UsersController {
       bannerUrl: profile.bannerUrl,
       lastOnlineAt: canSeeLastOnline ? (profile.lastOnlineAt ?? null) : null,
       relationship,
+      nudge,
       followerCount,
       followingCount,
     };

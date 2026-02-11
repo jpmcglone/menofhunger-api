@@ -7,6 +7,25 @@ export type UserListRelationship = {
   userFollowsViewer: boolean;
 };
 
+export type NudgeStateDto = {
+  /**
+   * True when the viewer is currently blocked from nudging this user.
+   *
+   * Blocked when the viewer has nudged this user within the last 24h and neither:
+   * - the other user nudged back, nor
+   * - the other user acknowledged it via “Got it” (readAt set without ignoredAt).
+   *
+   * Note: “Ignore” does NOT clear the block (ignoredAt is persisted to keep the sender rate-limited).
+   */
+  outboundPending: boolean;
+  /** True when this user has an unread inbound nudge to the viewer (within the expiry window). */
+  inboundPending: boolean;
+  /** Latest unread inbound nudge notification ID (for “Got it” / acknowledge, or “Nudge back”). */
+  inboundNotificationId: string | null;
+  /** When the outbound nudge block expires (ISO string), if any. */
+  outboundExpiresAt: string | null;
+};
+
 /** Row shape accepted by toUserListDto (e.g. Prisma select or search result). */
 export type UserListRow = {
   id: string;
@@ -98,6 +117,7 @@ export type UserPreviewDto = {
   bannerUrl: string | null;
   lastOnlineAt: string | null;
   relationship: UserListRelationship;
+  nudge: NudgeStateDto | null;
   followerCount: number | null;
   followingCount: number | null;
 };

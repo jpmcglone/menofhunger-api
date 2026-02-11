@@ -70,6 +70,19 @@ export class FollowsController {
     return { data: result };
   }
 
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post(':username/nudge')
+  async nudge(@Param('username') username: string, @CurrentUserId() viewerUserId: string) {
+    const result = await this.follows.nudge({ viewerUserId, username });
+    return { data: result };
+  }
+
   @UseGuards(OptionalAuthGuard)
   @Get('status/:username')
   async status(

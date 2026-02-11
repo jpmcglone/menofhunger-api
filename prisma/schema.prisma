@@ -44,6 +44,7 @@ enum NotificationKind {
   follow
   followed_post
   mention
+  nudge
   generic
 }
 
@@ -648,6 +649,8 @@ model Notification {
   createdAt DateTime @default(now())
   deliveredAt DateTime?
   readAt    DateTime?
+  ignoredAt DateTime?
+  nudgedBackAt DateTime?
 
   recipientUserId String
   kind      NotificationKind
@@ -668,6 +671,8 @@ model Notification {
   @@index([recipientUserId, createdAt])
   @@index([recipientUserId, deliveredAt])
   @@index([recipientUserId, readAt])
+  @@index([recipientUserId, ignoredAt])
+  @@index([recipientUserId, nudgedBackAt])
   @@index([actorPostId])
   @@index([subjectPostId])
   // Common list ordering/pagination: ORDER BY createdAt DESC, id DESC.
