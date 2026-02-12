@@ -155,20 +155,37 @@ export class UsersController {
       try {
         const fresh = await this.prisma.user.findUnique({
           where: { id: cached.id },
-          select: { lastOnlineAt: true, premium: true, premiumPlus: true, isOrganization: true, verifiedStatus: true },
+          select: { lastOnlineAt: true, premium: true, premiumPlus: true, isOrganization: true, verifiedStatus: true, pinnedPostId: true },
         });
         const lastOnlineAt = fresh?.lastOnlineAt ? fresh.lastOnlineAt.toISOString() : null;
         const premium = fresh?.premium ?? cached.premium;
         const premiumPlus = (fresh as any)?.premiumPlus ?? (cached as any).premiumPlus ?? false;
         const isOrganization = (fresh as any)?.isOrganization ?? (cached as any).isOrganization ?? false;
         const verifiedStatus = (fresh as any)?.verifiedStatus ?? (cached as any).verifiedStatus ?? 'none';
+        let pinnedPostId = fresh?.pinnedPostId ?? (cached as any).pinnedPostId ?? null;
+        if (pinnedPostId) {
+          const pinned = await this.prisma.post.findFirst({
+            where: { id: pinnedPostId, userId: cached.id, deletedAt: null },
+            select: { visibility: true },
+          });
+          if (!pinned || pinned.visibility === 'onlyMe') {
+            try {
+              await this.prisma.user.update({ where: { id: cached.id }, data: { pinnedPostId: null } });
+              this.publicProfileCache.invalidateForUser({ id: cached.id, username: (cached as any).username ?? null });
+            } catch {
+              // Best-effort
+            }
+            pinnedPostId = null;
+          }
+        }
 
         if (
           lastOnlineAt !== (cached as any).lastOnlineAt ||
           premium !== (cached as any).premium ||
           premiumPlus !== (cached as any).premiumPlus ||
           isOrganization !== (cached as any).isOrganization ||
-          verifiedStatus !== (cached as any).verifiedStatus
+          verifiedStatus !== (cached as any).verifiedStatus ||
+          pinnedPostId !== (cached as any).pinnedPostId
         ) {
           const next: PublicProfilePayload = {
             ...(cached as any),
@@ -177,8 +194,11 @@ export class UsersController {
             premiumPlus,
             isOrganization,
             verifiedStatus,
+            pinnedPostId,
           };
           this.publicProfileCache.write(cacheKey, next, 5 * 60 * 1000);
+          this.publicProfileCache.write(`id:${next.id}`, next, 5 * 60 * 1000);
+          if (next.username) this.publicProfileCache.write(`username:${next.username.toLowerCase()}`, next, 5 * 60 * 1000);
           return next;
         }
       } catch {
@@ -678,6 +698,7 @@ export class UsersController {
     });
 
     this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    await this.emitUserSelfUpdated(updated.id);
     return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
   }
 

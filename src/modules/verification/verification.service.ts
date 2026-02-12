@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { UsersRealtimeService } from '../users/users-realtime.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 
 @Injectable()
 export class VerificationService {
@@ -11,6 +12,7 @@ export class VerificationService {
     private readonly prisma: PrismaService,
     private readonly usersRealtime: UsersRealtimeService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
   ) {}
 
   async createRequestForUser(params: { userId: string | null; providerHint: string | null }) {
@@ -190,6 +192,10 @@ export class VerificationService {
       });
 
       return updated;
+    });
+    this.publicProfileCache.invalidateForUser({
+      id: updated.userId,
+      username: updated.user?.username ?? null,
     });
 
     // Realtime: admin cross-tab sync + user/follower tier updates.

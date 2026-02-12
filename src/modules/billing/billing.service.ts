@@ -5,6 +5,7 @@ import { AppConfigService } from '../app/app-config.service';
 import type { BillingCheckoutSessionDto, BillingMeDto, BillingPortalSessionDto, BillingTier } from '../../common/dto';
 import type { VerifiedStatus } from '@prisma/client';
 import { Prisma } from '@prisma/client';
+import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 
 type StripeCtx = { stripe: Stripe; cfg: NonNullable<ReturnType<AppConfigService['stripe']>> };
 
@@ -24,6 +25,7 @@ export class BillingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
+    private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
   ) {}
 
   private getStripe(): StripeCtx {
@@ -183,7 +185,7 @@ export class BillingService {
 
     const user = await this.prisma.user.findFirst({
       where: { stripeCustomerId: params.customerId },
-      select: { id: true, verifiedStatus: true },
+      select: { id: true, username: true, verifiedStatus: true },
     });
     if (!user) return;
 
@@ -216,6 +218,7 @@ export class BillingService {
         premiumPlus: isPlus,
       },
     });
+    this.publicProfileCache.invalidateForUser({ id: user.id, username: user.username ?? null });
   }
 }
 

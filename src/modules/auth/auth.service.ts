@@ -11,6 +11,7 @@ import { hmacSha256Hex, randomSessionToken } from './auth.utils';
 import { OTP_PROVIDER } from './otp/otp-provider.token';
 import type { OtpProvider } from './otp/otp-provider';
 import { toUserDto } from '../users/user.dto';
+import { invalidateSessionTokenUserCache } from '../../common/throttling/session-token-user-cache';
 
 @Injectable()
 export class AuthService {
@@ -207,6 +208,8 @@ export class AuthService {
   async revokeSessionToken(token: string | undefined): Promise<void> {
     if (!token) return;
     const tokenHash = hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
+    // Remove throttler auth cache entry immediately to avoid a short stale-valid window.
+    invalidateSessionTokenUserCache(tokenHash);
     await this.prisma.session.deleteMany({
       where: { tokenHash },
     });

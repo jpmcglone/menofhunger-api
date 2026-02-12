@@ -11,6 +11,10 @@ import type { ThrottlerStorage } from '@nestjs/throttler/dist/throttler-storage.
 import { getSessionCookie } from '../session-cookie';
 import { PrismaService } from '../../modules/prisma/prisma.service';
 import { AppConfigService } from '../../modules/app/app-config.service';
+import {
+  readSessionTokenUserCache,
+  writeSessionTokenUserCache,
+} from './session-token-user-cache';
 
 /**
  * Throttling key strategy:
@@ -22,9 +26,6 @@ import { AppConfigService } from '../../modules/app/app-config.service';
  */
 @Injectable()
 export class MohThrottlerGuard extends ThrottlerGuard {
-  private static readonly tokenHashToUserCache = new Map<string, { userId: string | null; expiresAtMs: number }>();
-  private static readonly cacheMaxEntries = 5000;
-
   constructor(
     @InjectThrottlerOptions() options: ThrottlerModuleOptions,
     @InjectThrottlerStorage() storageService: ThrottlerStorage,
@@ -39,26 +40,13 @@ export class MohThrottlerGuard extends ThrottlerGuard {
     return crypto.createHmac('sha256', secret).update(value).digest('hex');
   }
 
-  private pruneCache(nowMs: number) {
-    // Drop expired entries first.
-    for (const [k, v] of MohThrottlerGuard.tokenHashToUserCache) {
-      if (v.expiresAtMs <= nowMs) MohThrottlerGuard.tokenHashToUserCache.delete(k);
-    }
-    // Then hard-cap size (remove oldest).
-    while (MohThrottlerGuard.tokenHashToUserCache.size > MohThrottlerGuard.cacheMaxEntries) {
-      const firstKey = MohThrottlerGuard.tokenHashToUserCache.keys().next().value as string | undefined;
-      if (!firstKey) break;
-      MohThrottlerGuard.tokenHashToUserCache.delete(firstKey);
-    }
-  }
-
   private async userIdFromSessionToken(token: string): Promise<string | null> {
     const now = new Date();
     const nowMs = now.getTime();
     const tokenHash = this.hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
 
-    const cached = MohThrottlerGuard.tokenHashToUserCache.get(tokenHash);
-    if (cached && cached.expiresAtMs > nowMs) return cached.userId;
+    const cached = readSessionTokenUserCache(tokenHash, nowMs);
+    if (cached !== undefined) return cached;
 
     const session = await this.prisma.session.findFirst({
       where: {
@@ -80,8 +68,7 @@ export class MohThrottlerGuard extends ThrottlerGuard {
     const entry = session
       ? { userId: session.userId, expiresAtMs: Math.min(nowMs + maxPositiveMs, session.expiresAt.getTime()) }
       : { userId: null, expiresAtMs: nowMs + negativeMs };
-    MohThrottlerGuard.tokenHashToUserCache.set(tokenHash, entry);
-    this.pruneCache(nowMs);
+    writeSessionTokenUserCache(tokenHash, entry, nowMs);
     return entry.userId;
   }
 

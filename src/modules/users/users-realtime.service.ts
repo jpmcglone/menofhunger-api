@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import type { PublicProfileDto } from '../../common/dto';
+import { PublicProfileCacheService } from './public-profile-cache.service';
 
 @Injectable()
 export class UsersRealtimeService {
@@ -11,6 +12,7 @@ export class UsersRealtimeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
+    private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
   ) {}
 
   async getPublicProfileDtoByUserId(userId: string): Promise<PublicProfileDto | null> {
@@ -50,6 +52,7 @@ export class UsersRealtimeService {
       if (!pinned || pinned.visibility === 'onlyMe') {
         try {
           await this.prisma.user.update({ where: { id: user.id }, data: { pinnedPostId: null } });
+          this.publicProfileCache.invalidateForUser({ id: user.id, username: user.username ?? null });
         } catch {
           // Best-effort
         }

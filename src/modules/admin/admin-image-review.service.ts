@@ -4,6 +4,7 @@ import { Prisma, type PostMediaKind } from '@prisma/client';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
+import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 
 function parseBool(v: unknown): boolean {
   if (typeof v === 'boolean') return v;
@@ -48,6 +49,7 @@ export class AdminImageReviewService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cfg: AppConfigService,
+    private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
   ) {
     const r2 = this.cfg.r2();
     if (!r2) {
@@ -374,9 +376,10 @@ export class AdminImageReviewService {
 
       const users = await tx.user.findMany({
         where: { OR: [{ avatarKey: r2Key }, { bannerKey: r2Key }] },
-        select: { id: true, avatarKey: true, bannerKey: true },
+        select: { id: true, username: true, avatarKey: true, bannerKey: true },
       });
 
+      const invalidatedUsers: Array<{ id: string; username: string | null }> = [];
       for (const u of users) {
         const data: Prisma.UserUpdateInput = {};
         if (u.avatarKey === r2Key) {
@@ -389,24 +392,30 @@ export class AdminImageReviewService {
         }
         if (Object.keys(data).length) {
           await tx.user.update({ where: { id: u.id }, data });
+          invalidatedUsers.push({ id: u.id, username: u.username ?? null });
         }
       }
 
       return {
         postMediaCount: postMedia.length,
         userCount: users.length,
+        invalidatedUsers,
       };
     });
+    const { invalidatedUsers, ...affectedCounts } = affected;
+    for (const u of invalidatedUsers) {
+      this.publicProfileCache.invalidateForUser(u);
+    }
 
     // Hard delete from R2.
     const { s3, bucket } = this.requireR2();
     try {
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: r2Key }));
       await this.prisma.mediaAsset.update({ where: { id: a.id }, data: { r2DeletedAt: new Date() } });
-      return { success: true, alreadyDeleted: false, r2Deleted: true, ...affected };
+      return { success: true, alreadyDeleted: false, r2Deleted: true, ...affectedCounts };
     } catch (e: unknown) {
       // Tombstone exists; report failure so admin can retry.
-      return { success: true, alreadyDeleted: false, r2Deleted: false, error: String((e as any)?.message ?? e), ...affected };
+      return { success: true, alreadyDeleted: false, r2Deleted: false, error: String((e as any)?.message ?? e), ...affectedCounts };
     }
   }
 
