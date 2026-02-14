@@ -2138,18 +2138,20 @@ export class PostsService {
     if (!post) throw new NotFoundException('Post not found.');
     if (post.userId !== userId) throw new ForbiddenException('Not allowed to edit this post.');
     if (post.deletedAt) throw new ForbiddenException('Cannot edit a deleted post.');
-    if (post.visibility === 'onlyMe') throw new ForbiddenException('Only-me posts are not editable via this endpoint.');
     if (post.parentId) throw new ForbiddenException('Replies cannot be edited.');
 
-    // Enforce edit window + count: 3 edits in first 30 minutes after creation.
-    const now = Date.now();
-    const createdAtMs = post.createdAt instanceof Date ? post.createdAt.getTime() : new Date(post.createdAt as any).getTime();
-    const windowMs = 30 * 60 * 1000;
-    if (Number.isFinite(createdAtMs) && now > createdAtMs + windowMs) {
-      throw new ForbiddenException('This post can no longer be edited.');
+    // Only-me posts behave like notes/drafts: allow edits without age/count limits.
+    if (post.visibility !== 'onlyMe') {
+      // Enforce edit window + count: 3 edits in first 30 minutes after creation.
+      const now = Date.now();
+      const createdAtMs = post.createdAt instanceof Date ? post.createdAt.getTime() : new Date(post.createdAt as any).getTime();
+      const windowMs = 30 * 60 * 1000;
+      if (Number.isFinite(createdAtMs) && now > createdAtMs + windowMs) {
+        throw new ForbiddenException('This post can no longer be edited.');
+      }
+      const editCount = typeof (post as any).editCount === 'number' ? ((post as any).editCount as number) : 0;
+      if (editCount >= 3) throw new ForbiddenException('This post has reached the edit limit.');
     }
-    const editCount = typeof (post as any).editCount === 'number' ? ((post as any).editCount as number) : 0;
-    if (editCount >= 3) throw new ForbiddenException('This post has reached the edit limit.');
 
     // Length rules align with createPost.
     const maxLen = post.user?.premium ? 1000 : 200;
