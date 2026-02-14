@@ -295,6 +295,12 @@ export class UsersController {
     if (usernameLower !== MENOFHUNGER_USERNAME) {
       try {
         await this.followsService.follow({ viewerUserId: userId, username: MENOFHUNGER_USERNAME });
+        // New users: enable “every post” notifications for starter follows.
+        await this.followsService.setPostNotificationsEnabled({
+          viewerUserId: userId,
+          username: MENOFHUNGER_USERNAME,
+          enabled: true,
+        });
       } catch {
         // Best-effort: ignore if account doesn't exist or relation already exists.
       }
@@ -313,6 +319,12 @@ export class UsersController {
 
     try {
       await this.followsService.follow({ viewerUserId: userId, username: JOHN_USERNAME });
+      // New users: enable “every post” notifications for starter follows.
+      await this.followsService.setPostNotificationsEnabled({
+        viewerUserId: userId,
+        username: JOHN_USERNAME,
+        enabled: true,
+      });
     } catch {
       // John may not exist or follow may already exist; ignore.
     }
@@ -475,9 +487,11 @@ export class UsersController {
 
     const profile = await this.getPublicProfilePayloadByUsernameOrId(username);
 
-    let relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean } = {
+    let relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean; viewerPostNotificationsEnabled: boolean } =
+      {
       viewerFollowsUser: false,
       userFollowsViewer: false,
+      viewerPostNotificationsEnabled: false,
     };
     let nudge: NudgeStateDto | null = null;
     let followerCount: number | null = null;
@@ -485,7 +499,11 @@ export class UsersController {
 
     if (profile.username) {
       const summary = await this.followsService.summary({ viewerUserId, username: profile.username });
-      relationship = { viewerFollowsUser: summary.viewerFollowsUser, userFollowsViewer: summary.userFollowsViewer };
+      relationship = {
+        viewerFollowsUser: summary.viewerFollowsUser,
+        userFollowsViewer: summary.userFollowsViewer,
+        viewerPostNotificationsEnabled: summary.viewerPostNotificationsEnabled,
+      };
       nudge = summary.nudge;
       followerCount = summary.followerCount;
       followingCount = summary.followingCount;
@@ -497,6 +515,7 @@ export class UsersController {
       relationship = {
         viewerFollowsUser: rel.viewerFollows.has(profile.id),
         userFollowsViewer: rel.followsViewer.has(profile.id),
+        viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(profile.id),
       };
     }
 

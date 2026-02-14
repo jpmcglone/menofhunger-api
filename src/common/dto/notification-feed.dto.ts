@@ -37,7 +37,25 @@ export type NotificationGroupDto = {
   subjectTier: SubjectTier;
 };
 
+/**
+ * Collapsed “new posts” row for followed-post notifications when bell is NOT enabled.
+ * This is a UI affordance only; underlying notifications still exist for counts and read semantics.
+ */
+export type FollowedPostsRollupDto = {
+  /** The newest underlying notification id (stable-ish render key). */
+  id: string;
+  createdAt: string;
+  deliveredAt: string | null;
+  readAt: string | null;
+  /** Unique actors with new posts (newest->oldest). */
+  actors: NotificationActorDto[];
+  actorCount: number;
+  /** Number of underlying followed-post notifications represented by this rollup. */
+  count: number;
+};
+
 export type NotificationFeedItemDto =
   | { type: 'single'; notification: NotificationDto }
-  | { type: 'group'; group: NotificationGroupDto };
+  | { type: 'group'; group: NotificationGroupDto }
+  | { type: 'followed_posts_rollup'; rollup: FollowedPostsRollupDto };
 

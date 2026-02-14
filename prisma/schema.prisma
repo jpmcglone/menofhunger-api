@@ -268,6 +268,9 @@ model Follow {
   followerId  String
   followingId String
 
+  /** When true, viewer receives “every post” notifications (bell icon enabled). */
+  postNotificationsEnabled Boolean @default(false)
+
   follower  User @relation("Follow_follower", fields: [followerId], references: [id], onDelete: Cascade)
   following User @relation("Follow_following", fields: [followingId], references: [id], onDelete: Cascade)
 

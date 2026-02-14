@@ -7,7 +7,12 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectPostVisibility, SubjectTier } from './notification.dto';
-import type { NotificationFeedItemDto, NotificationGroupDto, NotificationGroupKind } from '../../common/dto/notification-feed.dto';
+import type {
+  FollowedPostsRollupDto,
+  NotificationFeedItemDto,
+  NotificationGroupDto,
+  NotificationGroupKind,
+} from '../../common/dto/notification-feed.dto';
 import type { NotificationPreferencesDto } from '../../common/dto';
 
 export type CreateNotificationParams = {
@@ -597,6 +602,30 @@ export class NotificationsService {
       return this.toNotificationDto(n, publicBaseUrl, preview, subjectPostVisibility, subjectTier);
     });
 
+    // Follow bell settings: which followed_post actors have “every post” enabled.
+    const followedPostActorUserIds = [
+      ...new Set(raw.filter((n) => n.kind === 'followed_post' && n.actorUserId).map((n) => n.actorUserId as string)),
+    ];
+    const bellEnabledActorIds = new Set<string>();
+    if (followedPostActorUserIds.length > 0) {
+      const rows = await this.prisma.follow.findMany({
+        where: {
+          followerId: recipientUserId,
+          followingId: { in: followedPostActorUserIds },
+          postNotificationsEnabled: true,
+        },
+        select: { followingId: true },
+      });
+      for (const r of rows) bellEnabledActorIds.add(r.followingId);
+    }
+
+    function isBellEnabledFollowedPost(n: NotificationDto): boolean {
+      if (n.kind !== 'followed_post') return false;
+      const actorId = n.actor?.id ?? null;
+      if (!actorId) return false;
+      return bellEnabledActorIds.has(actorId);
+    }
+
     function groupKey(n: NotificationDto): string | null {
       if (n.kind === 'boost' && n.subjectPostId) return `boost:post:${n.subjectPostId}`;
       if (n.kind === 'comment' && n.subjectPostId) return `comment:post:${n.subjectPostId}`;
@@ -663,9 +692,41 @@ export class NotificationsService {
     }
 
     const items: NotificationFeedItemDto[] = [];
+    let rollupInsertIndex: number | null = null;
+    let rollupNewest: NotificationDto | null = null;
+    let rollupCount = 0;
+    let rollupAnyUndelivered = false;
+    let rollupAnyUnread = false;
+    const rollupActors: NotificationActorDto[] = [];
+    const rollupActorIds = new Set<string>();
+
+    function ingestRollup(n: NotificationDto) {
+      if (!rollupNewest) rollupNewest = n;
+      rollupCount += 1;
+      if (n.deliveredAt == null) rollupAnyUndelivered = true;
+      if (n.readAt == null) rollupAnyUnread = true;
+      const a = n.actor;
+      if (a?.id && !rollupActorIds.has(a.id)) {
+        rollupActorIds.add(a.id);
+        rollupActors.push(a);
+      }
+    }
+
     let i = 0;
-    while (i < dtos.length && items.length < desiredItemLimit) {
+    while (
+      i < dtos.length &&
+      items.length + (rollupInsertIndex !== null ? 1 : 0) < desiredItemLimit
+    ) {
       const n = dtos[i]!;
+
+      // Collapse followed_post notifications when bell is not enabled.
+      if (n.kind === 'followed_post' && !isBellEnabledFollowedPost(n)) {
+        if (rollupInsertIndex === null) rollupInsertIndex = items.length;
+        ingestRollup(n);
+        i += 1;
+        continue;
+      }
+
       const key = groupKey(n);
       if (!key) {
         items.push({ type: 'single', notification: n });
@@ -688,6 +749,19 @@ export class NotificationsService {
 
       items.push({ type: 'group', group: buildGroup(members, key) });
       i = j;
+    }
+
+    if (rollupInsertIndex !== null && rollupNewest && rollupCount > 0) {
+      const rollup: FollowedPostsRollupDto = {
+        id: rollupNewest.id,
+        createdAt: rollupNewest.createdAt,
+        deliveredAt: rollupAnyUndelivered ? null : rollupNewest.deliveredAt,
+        readAt: rollupAnyUnread ? null : rollupNewest.readAt,
+        actors: rollupActors,
+        actorCount: rollupActors.length,
+        count: rollupCount,
+      };
+      items.splice(rollupInsertIndex, 0, { type: 'followed_posts_rollup', rollup });
     }
 
     const lastConsumedId = i > 0 ? dtos[i - 1]?.id ?? null : null;

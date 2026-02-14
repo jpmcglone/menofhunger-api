@@ -5,6 +5,8 @@ import { publicAssetUrl } from '../assets/public-asset-url';
 export type UserListRelationship = {
   viewerFollowsUser: boolean;
   userFollowsViewer: boolean;
+  /** True when the viewer has enabled “every post” notifications (bell icon) for this follow. */
+  viewerPostNotificationsEnabled: boolean;
 };
 
 export type NudgeStateDto = {

@@ -11,6 +11,8 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 export type FollowRelationship = {
   viewerFollowsUser: boolean;
   userFollowsViewer: boolean;
+  /** True when viewer enabled “every post” notifications for this follow (bell icon). */
+  viewerPostNotificationsEnabled: boolean;
 };
 
 export type FollowSummary = FollowRelationship & {
@@ -42,6 +44,21 @@ export class FollowsService {
     private readonly notifications: NotificationsService,
     private readonly presenceRealtime: PresenceRealtimeService,
   ) {}
+
+  async setPostNotificationsEnabled(params: { viewerUserId: string; username: string; enabled: boolean }) {
+    const { viewerUserId, username, enabled } = params;
+    const target = await this.userByUsernameOrThrow(username);
+    if (target.id === viewerUserId) throw new BadRequestException('You cannot update post notifications for yourself.');
+
+    // Hide this surface unless the viewer is following the target (404).
+    const updated = await this.prisma.follow.updateMany({
+      where: { followerId: viewerUserId, followingId: target.id },
+      data: { postNotificationsEnabled: Boolean(enabled) },
+    });
+    if (updated.count === 0) throw new NotFoundException('Not found.');
+
+    return { enabled: Boolean(enabled) };
+  }
 
   /**
    * Recommend users for the viewer to follow.
@@ -168,6 +185,7 @@ export class FollowsService {
         relationship: {
           viewerFollowsUser: rel.viewerFollows.has(r.id),
           userFollowsViewer: rel.followsViewer.has(r.id),
+          viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(r.id),
         },
       }) as FollowListUser,
     );
@@ -240,13 +258,14 @@ export class FollowsService {
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const rel = viewerUserId
       ? await this.batchRelationshipForUserIds({ viewerUserId, userIds: rows.map((r) => r.id) })
-      : { viewerFollows: new Set<string>(), followsViewer: new Set<string>() };
+      : { viewerFollows: new Set<string>(), followsViewer: new Set<string>(), viewerBellEnabled: new Set<string>() };
 
     const users: FollowListUser[] = rows.map((r) =>
       toUserListDto(r, publicBaseUrl, {
         relationship: {
           viewerFollowsUser: rel.viewerFollows.has(r.id),
           userFollowsViewer: rel.followsViewer.has(r.id),
+          viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(r.id),
         },
       }) as FollowListUser,
     );
@@ -507,12 +526,14 @@ export class FollowsService {
   async status(params: { viewerUserId: string | null; username: string }): Promise<FollowRelationship> {
     const { viewerUserId, username } = params;
     const target = await this.userByUsernameOrThrow(username);
-    if (!viewerUserId) return { viewerFollowsUser: false, userFollowsViewer: false };
+    if (!viewerUserId) {
+      return { viewerFollowsUser: false, userFollowsViewer: false, viewerPostNotificationsEnabled: false };
+    }
 
     const [a, b] = await Promise.all([
       this.prisma.follow.findFirst({
         where: { followerId: viewerUserId, followingId: target.id },
-        select: { id: true },
+        select: { id: true, postNotificationsEnabled: true },
       }),
       this.prisma.follow.findFirst({
         where: { followerId: target.id, followingId: viewerUserId },
@@ -523,6 +544,7 @@ export class FollowsService {
     return {
       viewerFollowsUser: Boolean(a),
       userFollowsViewer: Boolean(b),
+      viewerPostNotificationsEnabled: Boolean(a?.postNotificationsEnabled),
     };
   }
 
@@ -580,13 +602,14 @@ export class FollowsService {
       return {
         viewerFollows: new Set<string>(),
         followsViewer: new Set<string>(),
+        viewerBellEnabled: new Set<string>(),
       };
     }
 
     const [viewerFollowing, usersFollowingViewer] = await Promise.all([
       this.prisma.follow.findMany({
         where: { followerId: viewerUserId, followingId: { in: userIds } },
-        select: { followingId: true },
+        select: { followingId: true, postNotificationsEnabled: true },
       }),
       this.prisma.follow.findMany({
         where: { followingId: viewerUserId, followerId: { in: userIds } },
@@ -597,6 +620,7 @@ export class FollowsService {
     return {
       viewerFollows: new Set(viewerFollowing.map((r) => r.followingId)),
       followsViewer: new Set(usersFollowingViewer.map((r) => r.followerId)),
+      viewerBellEnabled: new Set(viewerFollowing.filter((r) => r.postNotificationsEnabled).map((r) => r.followingId)),
     };
   }
 
@@ -658,6 +682,7 @@ export class FollowsService {
         relationship: {
           viewerFollowsUser: rel.viewerFollows.has(r.follower.id),
           userFollowsViewer: rel.followsViewer.has(r.follower.id),
+          viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(r.follower.id),
         },
       }) as FollowListUser,
     );
@@ -723,6 +748,7 @@ export class FollowsService {
         relationship: {
           viewerFollowsUser: rel.viewerFollows.has(r.following.id),
           userFollowsViewer: rel.followsViewer.has(r.following.id),
+          viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(r.following.id),
         },
       }) as FollowListUser,
     );
@@ -765,6 +791,7 @@ export class FollowsService {
         relationship: {
           viewerFollowsUser: rel.viewerFollows.has(u.id),
           userFollowsViewer: rel.followsViewer.has(u.id),
+          viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(u.id),
         },
       }) as FollowListUser,
     );

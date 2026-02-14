@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
@@ -20,6 +20,10 @@ const recommendationsSchema = z.object({
 
 const topUsersSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
+});
+
+const postNotificationsSchema = z.object({
+  enabled: z.boolean(),
 });
 
 @Controller('follows')
@@ -86,6 +90,28 @@ export class FollowsController {
   @Delete(':username')
   async unfollow(@Param('username') username: string, @CurrentUserId() viewerUserId: string) {
     const result = await this.follows.unfollow({ viewerUserId, username });
+    return { data: result };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Patch(':username/post-notifications')
+  async setPostNotifications(
+    @Param('username') username: string,
+    @CurrentUserId() viewerUserId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = postNotificationsSchema.parse(body);
+    const result = await this.follows.setPostNotificationsEnabled({
+      viewerUserId,
+      username,
+      enabled: parsed.enabled,
+    });
     return { data: result };
   }
 
