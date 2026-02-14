@@ -3,33 +3,88 @@ import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 export type Websters1828WordOfDay = {
   word: string;
   dictionaryUrl: string;
+  /** Parsed definition text (paragraphs separated by blank lines). */
+  definition: string | null;
+  /** Sanitized HTML preserving source emphasis (bold/italic/paragraph breaks). */
+  definitionHtml: string | null;
+  /** Canonical source URL for the definition. */
+  sourceUrl: string;
   fetchedAt: string;
 };
 
 const ET_ZONE = 'America/New_York';
+const WEBSTERS_HEADERS = {
+  // Some pages appear to be sensitive to default Node fetch headers.
+  'user-agent':
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'accept-language': 'en-US,en;q=0.9',
+} as const;
 
 @Injectable()
 export class Websters1828Service {
   // Simple in-memory cache (per API instance).
   private cache:
-    | { value: Websters1828WordOfDay; dayKey: string; expiresAtMs: number }
+    | {
+        value: Omit<Websters1828WordOfDay, 'definition' | 'definitionHtml'> & {
+          /** Undefined means “not fetched yet”. */
+          definition?: string | null;
+          /** Undefined means “not fetched yet”. */
+          definitionHtml?: string | null;
+          /** Parsed from the homepage WOTD block; used as a fallback. */
+          homepageDefinition?: string | null;
+          /** Parsed HTML from homepage WOTD block; used as a fallback. */
+          homepageDefinitionHtml?: string | null;
+        };
+        dayKey: string;
+        expiresAtMs: number;
+      }
     | null = null;
 
   /**
    * Cache rolls over at midnight ET so it aligns with other daily content.
    * Note: This is an in-memory cache (per API instance).
    */
-  async getWordOfDay(): Promise<Websters1828WordOfDay> {
+  async getWordOfDay(options?: { includeDefinition?: boolean }): Promise<Websters1828WordOfDay> {
+    const includeDefinition = options?.includeDefinition === true;
     const now = Date.now();
     const dayKey = easternDateKey(new Date(now));
     const expiresAtMs = nextEasternMidnightUtcMs(new Date(now));
-    if (this.cache && this.cache.dayKey === dayKey && this.cache.expiresAtMs > now) {
-      return this.cache.value;
+
+    if (!this.cache || this.cache.dayKey !== dayKey || this.cache.expiresAtMs <= now) {
+      const next = await this.fetchWordOfDayBase();
+      this.cache = { value: next, dayKey, expiresAtMs };
     }
 
-    const next = await this.fetchWordOfDay();
-    this.cache = { value: next, dayKey, expiresAtMs };
-    return next;
+    if (includeDefinition) {
+      // Populate definition lazily when requested.
+      if (this.cache.value.definition === undefined || this.cache.value.definitionHtml === undefined) {
+        if (this.cache.value.homepageDefinition || this.cache.value.homepageDefinitionHtml) {
+          this.cache.value.definition = this.cache.value.homepageDefinition ?? null;
+          this.cache.value.definitionHtml = this.cache.value.homepageDefinitionHtml ?? null;
+        } else {
+          const fetched = await this.fetchDefinitionBestEffort(this.cache.value.dictionaryUrl).catch(() => null);
+          this.cache.value.definition = fetched?.text ?? null;
+          this.cache.value.definitionHtml = fetched?.html ?? null;
+        }
+      } else if (!this.cache.value.definition && !this.cache.value.definitionHtml) {
+        // Heal parse/network misses on subsequent requests the same day.
+        const fetched = await this.fetchDefinitionBestEffort(this.cache.value.dictionaryUrl).catch(() => null);
+        if (fetched) {
+          this.cache.value.definition = fetched.text;
+          this.cache.value.definitionHtml = fetched.html;
+        }
+      }
+    }
+
+    return {
+      word: this.cache.value.word,
+      dictionaryUrl: this.cache.value.dictionaryUrl,
+      sourceUrl: this.cache.value.sourceUrl,
+      fetchedAt: this.cache.value.fetchedAt,
+      definition: includeDefinition ? (this.cache.value.definition ?? null) : null,
+      definitionHtml: includeDefinition ? (this.cache.value.definitionHtml ?? null) : null,
+    };
   }
 
   /** Cache-Control max-age in seconds (until next midnight ET). */
@@ -38,14 +93,19 @@ export class Websters1828Service {
     return Math.max(0, Math.floor((expiresAtMs - now.getTime()) / 1000));
   }
 
-  private async fetchWordOfDay(): Promise<Websters1828WordOfDay> {
+  private async fetchWordOfDayBase(): Promise<
+    Omit<Websters1828WordOfDay, 'definition' | 'definitionHtml'> & {
+      homepageDefinition: string | null;
+      homepageDefinitionHtml: string | null;
+    }
+  > {
     const url = 'https://webstersdictionary1828.com/';
     let html: string;
     try {
       const controller = new AbortController();
       const t = setTimeout(() => controller.abort(), 10_000);
       try {
-        const res = await fetch(url, { signal: controller.signal });
+        const res = await fetch(url, { signal: controller.signal, headers: WEBSTERS_HEADERS });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         html = await res.text();
       } finally {
@@ -55,11 +115,9 @@ export class Websters1828Service {
       throw new ServiceUnavailableException('Word of the day is temporarily unavailable.');
     }
 
-    // Primary parse: <div id="WordOfTheDay" ...><h3>Lucre</h3>...</div>
-    const blockMatch = html.match(
-      /<div[^>]+id=["']WordOfTheDay["'][^>]*>[\s\S]*?<h3>([^<]+)<\/h3>/i,
-    );
-    let word = (blockMatch?.[1] ?? '').trim();
+    // Primary parse: <div id="WordOfTheDay" ...><h3>Word</h3>...</div>
+    const blockHtml = extractWordOfTheDayBlockHtml(html);
+    let word = extractWordFromWotdBlock(blockHtml);
 
     // Fallback: older/alternate markup.
     if (!word) {
@@ -70,16 +128,171 @@ export class Websters1828Service {
     word = decodeBasicEntities(word);
     if (!word) throw new ServiceUnavailableException('Word of the day is temporarily unavailable.');
 
+    const dictionaryUrl = `https://webstersdictionary1828.com/Dictionary/${encodeURIComponent(word)}`;
+    const homepageDefinition = extractDefinitionFromWotdBlock(blockHtml);
+
     return {
       word,
-      dictionaryUrl: `https://webstersdictionary1828.com/Dictionary/${encodeURIComponent(word)}`,
+      dictionaryUrl,
+      sourceUrl: dictionaryUrl,
+      homepageDefinition: homepageDefinition.text,
+      homepageDefinitionHtml: homepageDefinition.html,
       fetchedAt: new Date().toISOString(),
+    };
+  }
+
+  private async fetchDefinitionBestEffort(dictionaryUrl: string): Promise<{ text: string; html: string } | null> {
+    const url = (dictionaryUrl ?? '').trim();
+    if (!url) return null;
+    let html: string;
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 10_000);
+      try {
+        const res = await fetch(url, { signal: controller.signal, headers: WEBSTERS_HEADERS });
+        if (!res.ok) return null;
+        html = await res.text();
+      } finally {
+        clearTimeout(t);
+      }
+    } catch {
+      return null;
+    }
+
+    const defHtml = extractDefinitionHtml(html);
+    if (!defHtml) return null;
+    const text = htmlToText(defHtml);
+    const cleanText = text.trim();
+    if (!cleanText) return null;
+    const safeHtml = sanitizeDefinitionHtml(defHtml);
+    return {
+      text: cleanText,
+      html: safeHtml || `<p>${escapeHtml(cleanText)}</p>`,
     };
   }
 }
 
 function decodeBasicEntities(s: string): string {
-  return (s ?? '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim();
+  return (s ?? '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .trim();
+}
+
+function extractDefinitionHtml(pageHtml: string): string | null {
+  const html = String(pageHtml ?? '');
+
+  // Common page shape includes:
+  // <h3 class="dictionaryhead">Word</h3> ... <div>...definition...</div> <div class="d-md-none">...
+  const m1 = html.match(
+    /<h3[^>]*class=["']dictionaryhead["'][^>]*>[\s\S]*?<\/h3>[\s\S]*?<div>([\s\S]*?)<\/div>\s*<div[^>]*class=["']d-md-none["']/i,
+  );
+  if (m1?.[1]) return m1[1];
+
+  // Fallback: grab the first <div> after the dictionaryhead, bounded by the next column or footer.
+  const m2 = html.match(
+    /<h3[^>]*class=["']dictionaryhead["'][^>]*>[\s\S]*?<\/h3>[\s\S]*?<div>([\s\S]*?)<\/div>\s*<\/div>\s*<div[^>]*class=["']col-md-3/i,
+  );
+  if (m2?.[1]) return m2[1];
+
+  return null;
+}
+
+function extractWordOfTheDayBlockHtml(homepageHtml: string): string {
+  const html = String(homepageHtml ?? '');
+  const block = html.match(/<div[^>]+id=["']WordOfTheDay["'][^>]*>([\s\S]*?)<\/div>\s*<\/div>/i)?.[1];
+  return block ?? '';
+}
+
+function extractWordFromWotdBlock(blockHtml: string): string {
+  const html = String(blockHtml ?? '');
+  const h3Inner = html.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i)?.[1] ?? '';
+  const cleaned = htmlToText(h3Inner);
+  return cleaned.trim();
+}
+
+function extractDefinitionFromWotdBlock(blockHtml: string): { text: string | null; html: string | null } {
+  const html = String(blockHtml ?? '');
+  if (!html) return { text: null, html: null };
+  const afterHeading = html.replace(/^[\s\S]*?<\/h3>/i, '');
+  if (!afterHeading || afterHeading === html) return { text: null, html: null };
+  const text = htmlToText(afterHeading);
+  const cleanText = text.trim();
+  if (!cleanText) return { text: null, html: null };
+  const safeHtml = sanitizeDefinitionHtml(afterHeading);
+  return {
+    text: cleanText,
+    html: safeHtml || `<p>${escapeHtml(cleanText)}</p>`,
+  };
+}
+
+function htmlToText(fragmentHtml: string): string {
+  let s = String(fragmentHtml ?? '');
+
+  // Remove scripts/styles just in case.
+  s = s.replace(/<script[\s\S]*?<\/script>/gi, '');
+  s = s.replace(/<style[\s\S]*?<\/style>/gi, '');
+
+  // Line breaks / paragraphing.
+  s = s.replace(/<\s*br\s*\/?>/gi, '\n');
+  s = s.replace(/<\/p\s*>/gi, '\n\n');
+  s = s.replace(/<p[^>]*>/gi, '');
+
+  // Strip remaining tags.
+  s = s.replace(/<[^>]+>/g, '');
+
+  // Decode basic entities.
+  s = decodeBasicEntities(s);
+
+  // Normalize whitespace.
+  s = s.replace(/\r\n/g, '\n');
+  s = s.replace(/[ \t]+\n/g, '\n');
+  s = s.replace(/\n{3,}/g, '\n\n');
+  return s.trim();
+}
+
+function sanitizeDefinitionHtml(fragmentHtml: string): string {
+  let s = String(fragmentHtml ?? '');
+  if (!s.trim()) return '';
+
+  // Strip active content and comments.
+  s = s.replace(/<script[\s\S]*?<\/script>/gi, '');
+  s = s.replace(/<style[\s\S]*?<\/style>/gi, '');
+  s = s.replace(/<!--[\s\S]*?-->/g, '');
+
+  // Normalize common block wrappers to paragraphs.
+  s = s.replace(/<\s*(div|section|article|header|footer|ul|ol)\b[^>]*>/gi, '<p>');
+  s = s.replace(/<\s*\/\s*(div|section|article|header|footer|ul|ol)\s*>/gi, '</p>');
+  s = s.replace(/<\s*li\b[^>]*>/gi, '<p>');
+  s = s.replace(/<\s*\/\s*li\s*>/gi, '</p>');
+
+  // Keep only a minimal, safe subset used by the source styling.
+  s = s.replace(/<(?!\/?(?:p|br|strong|b|em|i)\b)[^>]*>/gi, '');
+
+  // Remove all attributes from allowed tags.
+  s = s.replace(/<(p|strong|b|em|i)\b[^>]*>/gi, '<$1>');
+  s = s.replace(/<br\b[^>]*\/?>/gi, '<br />');
+
+  // Tighten spacing.
+  s = s.replace(/\s*\n+\s*/g, ' ');
+  s = s.replace(/<p>\s*<\/p>/gi, '');
+  s = s.replace(/(?:\s*<br \/>\s*){3,}/gi, '<br /><br />');
+  s = s.replace(/(<\/p>)\s*(<p>)/gi, '$1$2');
+
+  return s.trim();
+}
+
+function escapeHtml(s: string): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function easternDateKey(d: Date): string {

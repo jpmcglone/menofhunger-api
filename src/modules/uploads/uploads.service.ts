@@ -12,11 +12,11 @@ import { PublicProfileCacheService } from '../users/public-profile-cache.service
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_BANNER_BYTES = 8 * 1024 * 1024; // 8MB
 const MAX_POST_MEDIA_BYTES = 12 * 1024 * 1024; // 12MB per attachment
-// Phone videos are often large; keep duration cap but allow realistic file sizes.
-const MAX_POST_VIDEO_BYTES = 300 * 1024 * 1024; // 300MB per video
-const MAX_POST_VIDEO_DURATION_SECONDS = 5 * 60; // 5 minutes
-const MAX_POST_VIDEO_WIDTH = 2560; // 1440p (landscape)
-const MAX_POST_VIDEO_HEIGHT = 1440;
+// Video uploads are premium-only; premium+ gets higher caps.
+const MAX_POST_VIDEO_BYTES_PREMIUM = 75 * 1024 * 1024; // 75MB
+const MAX_POST_VIDEO_BYTES_PREMIUM_PLUS = 125 * 1024 * 1024; // 125MB
+const MAX_POST_VIDEO_DURATION_SECONDS_PREMIUM = 5 * 60; // 5 minutes
+const MAX_POST_VIDEO_DURATION_SECONDS_PREMIUM_PLUS = 15 * 60; // 15 minutes
 const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const ALLOWED_POST_MEDIA_CONTENT_TYPES = new Set([
   'image/jpeg',
@@ -126,6 +126,26 @@ export class UploadsService {
     return this.appConfig.isProd() ? '' : 'dev/';
   }
 
+  private async videoLimitsForUserOrThrow(userId: string): Promise<{ maxBytes: number; maxDurationSeconds: number }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { premium: true, premiumPlus: true },
+    });
+    if (user?.premiumPlus) {
+      return {
+        maxBytes: MAX_POST_VIDEO_BYTES_PREMIUM_PLUS,
+        maxDurationSeconds: MAX_POST_VIDEO_DURATION_SECONDS_PREMIUM_PLUS,
+      };
+    }
+    if (user?.premium) {
+      return {
+        maxBytes: MAX_POST_VIDEO_BYTES_PREMIUM,
+        maxDurationSeconds: MAX_POST_VIDEO_DURATION_SECONDS_PREMIUM,
+      };
+    }
+    throw new ForbiddenException('Video uploads are for premium members only.');
+  }
+
   async initAvatarUpload(userId: string, contentType: string) {
     const { s3, bucket } = this.requireR2();
 
@@ -215,10 +235,7 @@ export class UploadsService {
         );
       }
       if (isVideoContentType(ct)) {
-        const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { premium: true } });
-        if (!user?.premium) {
-          throw new ForbiddenException('Video uploads are for premium members only.');
-        }
+        await this.videoLimitsForUserOrThrow(userId);
       }
     }
 
@@ -240,7 +257,7 @@ export class UploadsService {
               key: existing.r2Key,
               skipUpload: true,
               headers: { 'Content-Type': ct },
-              maxBytes: existing.kind === 'video' ? MAX_POST_VIDEO_BYTES : MAX_POST_MEDIA_BYTES,
+              maxBytes: existing.kind === 'video' ? (await this.videoLimitsForUserOrThrow(userId)).maxBytes : MAX_POST_MEDIA_BYTES,
             };
           } catch (err) {
             // If the object is missing (or we can't verify), upload again.
@@ -271,7 +288,9 @@ export class UploadsService {
       { expiresIn: 300 },
     );
 
-    const maxBytes = isVideoContentType(ct) ? MAX_POST_VIDEO_BYTES : MAX_POST_MEDIA_BYTES;
+    const maxBytes = isVideoContentType(ct)
+      ? (await this.videoLimitsForUserOrThrow(userId)).maxBytes
+      : MAX_POST_MEDIA_BYTES;
     return {
       key,
       uploadUrl,
@@ -435,6 +454,7 @@ export class UploadsService {
       // (the same key could be video/mp4, video/quicktime, etc).
       const head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: cleaned }));
       const contentType = (head.ContentType ?? '').toLowerCase();
+      const size = head.ContentLength ?? 0;
       if (!ALLOWED_POST_MEDIA_CONTENT_TYPES.has(contentType)) {
         throw new BadRequestException('Uploaded file is not a supported image, GIF, or video.');
       }
@@ -445,15 +465,20 @@ export class UploadsService {
           : undefined;
 
       if (existingByKey.kind === 'video') {
+        const limits = await this.videoLimitsForUserOrThrow(userId);
         const w = existingByKey.width ?? null;
         const h = existingByKey.height ?? null;
         const d = existingByKey.durationSeconds ?? null;
-        if (d != null && d > MAX_POST_VIDEO_DURATION_SECONDS) {
-          throw new BadRequestException('Video must be 5 minutes or shorter.');
+        if (size > limits.maxBytes) {
+          throw new BadRequestException('Uploaded file is too large.');
         }
-        if (w != null && h != null && (w > MAX_POST_VIDEO_WIDTH || h > MAX_POST_VIDEO_HEIGHT)) {
-          throw new BadRequestException('Video must be 1440p or smaller.');
+        if (d != null && d > limits.maxDurationSeconds) {
+          const mins = Math.round(limits.maxDurationSeconds / 60);
+          throw new BadRequestException(`Video must be ${mins} minutes or shorter.`);
         }
+        // No resolution caps (MB + duration only).
+        void w;
+        void h;
       }
 
       return {
@@ -482,7 +507,8 @@ export class UploadsService {
       throw new BadRequestException('Uploaded file is not a supported image, GIF, or video.');
     }
 
-    const maxBytes = isVideo ? MAX_POST_VIDEO_BYTES : MAX_POST_MEDIA_BYTES;
+    const videoLimits = isVideo ? await this.videoLimitsForUserOrThrow(userId) : null;
+    const maxBytes = isVideo ? videoLimits!.maxBytes : MAX_POST_MEDIA_BYTES;
     if (size > maxBytes) {
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
       throw new BadRequestException('Uploaded file is too large.');
@@ -506,13 +532,10 @@ export class UploadsService {
         await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
         throw new BadRequestException('Video uploads must include width, height, and durationSeconds.');
       }
-      if (durationSeconds > MAX_POST_VIDEO_DURATION_SECONDS) {
+      if (durationSeconds > (videoLimits?.maxDurationSeconds ?? MAX_POST_VIDEO_DURATION_SECONDS_PREMIUM)) {
         await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
-        throw new BadRequestException('Video must be 5 minutes or shorter.');
-      }
-      if (width > MAX_POST_VIDEO_WIDTH || height > MAX_POST_VIDEO_HEIGHT) {
-        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
-        throw new BadRequestException('Video must be 1440p or smaller.');
+        const mins = Math.round((videoLimits?.maxDurationSeconds ?? MAX_POST_VIDEO_DURATION_SECONDS_PREMIUM) / 60);
+        throw new BadRequestException(`Video must be ${mins} minutes or shorter.`);
       }
     } else {
       try {

@@ -547,10 +547,9 @@ export class SearchService {
     const viewer = await this.viewerById(params.viewerUserId ?? null);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
+    // Never include onlyMe posts in search results (even for the viewer).
     const visibilityWhere: Prisma.PostWhereInput = viewer?.id
-      ? {
-          OR: [{ visibility: { in: allowed } }, { userId: viewer.id, visibility: 'onlyMe' }],
-        }
+      ? { visibility: { in: allowed } }
       : { visibility: 'public' };
 
     const cursorRaw = (cursor ?? '').trim();

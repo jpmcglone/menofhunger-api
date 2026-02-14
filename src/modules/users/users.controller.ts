@@ -7,7 +7,6 @@ import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
 import { FollowsService } from '../follows/follows.service';
-import { NotificationsService } from '../notifications/notifications.service';
 import { CurrentUserId, OptionalCurrentUserId } from './users.decorator';
 import { validateUsername } from './users.utils';
 import { toUserDto } from './user.dto';
@@ -64,6 +63,7 @@ function isAtLeast18(birthdateUtcMidnight: Date): boolean {
 }
 
 const JOHN_USERNAME = 'john';
+const MENOFHUNGER_USERNAME = 'menofhunger';
 
 type PublicProfilePayload = {
   id: string;
@@ -106,7 +106,6 @@ export class UsersController {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly followsService: FollowsService,
-    private readonly notifications: NotificationsService,
     private readonly publicProfileCache: PublicProfileCacheService<PublicProfilePayload>,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly usersRealtime: UsersRealtimeService,
@@ -281,10 +280,27 @@ export class UsersController {
     return payload;
   }
 
-  /** On production, when a user first sets their username, make them and @john follow each other (unless they are @john). */
-  private async ensureMutualFollowWithJohn(userId: string, newUsername: string): Promise<void> {
-    if (!this.appConfig.isProd()) return;
-    if ((newUsername ?? '').trim().toLowerCase() === JOHN_USERNAME) return;
+  /**
+   * On first username set, bootstrap starter follows:
+   * 1) New user follows @menofhunger (one-way) when that account exists.
+   * 2) New user and @john follow each other when @john exists.
+   *
+   * Uses FollowsService so follow notifications go through the normal flow.
+   */
+  private async ensureStarterFollowsOnFirstUsernameSet(userId: string, newUsername: string): Promise<void> {
+    const usernameLower = (newUsername ?? '').trim().toLowerCase();
+    if (!usernameLower) return;
+
+    // First: one-way follow to @menofhunger (if account exists).
+    if (usernameLower !== MENOFHUNGER_USERNAME) {
+      try {
+        await this.followsService.follow({ viewerUserId: userId, username: MENOFHUNGER_USERNAME });
+      } catch {
+        // Best-effort: ignore if account doesn't exist or relation already exists.
+      }
+    }
+
+    if (usernameLower === JOHN_USERNAME) return;
 
     const john = await this.prisma.user.findFirst({
       where: {
@@ -305,53 +321,6 @@ export class UsersController {
       await this.followsService.follow({ viewerUserId: john.id, username: newUsername.trim() });
     } catch {
       // Idempotent or visibility; ignore.
-    }
-
-    // Ensure follow notifications exist both ways, even if the follows already existed (retries / partial failures).
-    // Avoid spam using the same 24h window as FollowsService.
-    const withinMs = 24 * 60 * 60 * 1000;
-    try {
-      // user -> john notification (recipient: john, actor: user)
-      const rel = await this.prisma.follow.findFirst({
-        where: { followerId: userId, followingId: john.id },
-        select: { id: true },
-      });
-      if (rel) {
-        const already = await this.notifications.hasRecentFollowNotification(john.id, userId, withinMs);
-        if (!already) {
-          await this.notifications.create({
-            recipientUserId: john.id,
-            kind: 'follow',
-            actorUserId: userId,
-            subjectUserId: userId,
-            title: 'followed you',
-          });
-        }
-      }
-    } catch {
-      // Best-effort: never block username setting/onboarding on notification failures.
-    }
-
-    try {
-      // john -> user notification (recipient: user, actor: john)
-      const rel = await this.prisma.follow.findFirst({
-        where: { followerId: john.id, followingId: userId },
-        select: { id: true },
-      });
-      if (rel) {
-        const already = await this.notifications.hasRecentFollowNotification(userId, john.id, withinMs);
-        if (!already) {
-          await this.notifications.create({
-            recipientUserId: userId,
-            kind: 'follow',
-            actorUserId: john.id,
-            subjectUserId: john.id,
-            title: 'followed you',
-          });
-        }
-      }
-    } catch {
-      // Best-effort: never block username setting/onboarding on notification failures.
     }
   }
 
@@ -473,7 +442,7 @@ export class UsersController {
         },
       });
 
-      await this.ensureMutualFollowWithJohn(userId, updated.username ?? parsed.username);
+      await this.ensureStarterFollowsOnFirstUsernameSet(userId, updated.username ?? parsed.username);
 
       this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
@@ -788,7 +757,7 @@ export class UsersController {
       });
 
       if (parsed.username !== undefined && updated.username) {
-        await this.ensureMutualFollowWithJohn(userId, updated.username);
+        await this.ensureStarterFollowsOnFirstUsernameSet(userId, updated.username);
       }
 
       this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });

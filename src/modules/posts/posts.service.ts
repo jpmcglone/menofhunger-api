@@ -2076,6 +2076,11 @@ export class PostsService {
         where: { id },
         data: { deletedAt: new Date() },
       });
+
+      // Posts are soft-deleted, so FK cascades won't run. Ensure bookmarks don't retain deleted posts.
+      // (BookmarkCollectionItem cascades off Bookmark, so folder links are cleaned up too.)
+      await tx.bookmark.deleteMany({ where: { postId: id } });
+
       if (tags.length > 0) {
         for (let i = 0; i < tags.length; i++) {
           const t = (tags[i] ?? '').trim().toLowerCase();
@@ -3339,6 +3344,7 @@ export class PostsService {
     }
 
     // Explicit @mentions in body: one notification each. These take priority over comment notifications.
+    const mentionTitle = parentId ? 'mentioned you in a reply' : 'mentioned you in a post';
     for (const uid of bodyMentionIds) {
       if (uid === userId) continue;
       this.notifications
@@ -3348,6 +3354,7 @@ export class PostsService {
           actorUserId: userId,
           actorPostId: post.id,
           subjectPostId: post.id,
+          title: mentionTitle,
           body: bodySnippet || undefined,
         })
         .catch((err) => {
@@ -3370,6 +3377,8 @@ export class PostsService {
         for (const f of follows) {
           const recipientUserId = f.followerId;
           if (!recipientUserId || recipientUserId === userId) continue;
+          // If the follower is explicitly @mentioned, keep only the mention notification.
+          if (bodyMentionSet.has(recipientUserId)) continue;
 
           if (visibility === 'verifiedOnly') {
             const vs = f.follower?.verifiedStatus ?? 'none';

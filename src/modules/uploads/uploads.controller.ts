@@ -53,20 +53,8 @@ const commitPostMediaSchema = z.object({
     return;
   }
 
-  if (durationSeconds > 5 * 60) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Video must be 5 minutes or shorter.',
-      path: ['durationSeconds'],
-    });
-  }
-  if (width > 2560 || height > 1440) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Video must be 1440p or smaller.',
-      path: ['width'],
-    });
-  }
+  // Tier-specific limits are enforced server-side in UploadsService (premium/premium+).
+  // No resolution caps.
 });
 
 @UseGuards(AuthGuard)

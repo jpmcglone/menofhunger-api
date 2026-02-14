@@ -1,4 +1,4 @@
-import { Controller, Get, Res } from '@nestjs/common';
+import { Controller, Get, Query, Res } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
@@ -15,8 +15,14 @@ export class Websters1828Controller {
     },
   })
   @Get('wotd')
-  async wordOfTheDay(@Res({ passthrough: true }) res: Response) {
-    const data = await this.websters.getWordOfDay();
+  async wordOfTheDay(
+    @Res({ passthrough: true }) res: Response,
+    @Query('includeDefinition') includeDefinition?: string,
+  ) {
+    const wantDefinition =
+      String(includeDefinition ?? '').toLowerCase() === '1' ||
+      String(includeDefinition ?? '').toLowerCase() === 'true';
+    const data = await this.websters.getWordOfDay({ includeDefinition: wantDefinition });
     const maxAge = this.websters.getCacheControlMaxAgeSeconds(new Date());
     res.setHeader('Cache-Control', `public, max-age=${maxAge}`);
     return { data };

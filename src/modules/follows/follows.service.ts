@@ -175,6 +175,85 @@ export class FollowsService {
     return { users };
   }
 
+  /**
+   * Public-friendly “top users” list (used when logged out).
+   * Ranking: verified/premium/newest.
+   * When viewer is present, exclude self and already-followed users.
+   */
+  async listTopUsers(params: { viewerUserId: string | null; limit: number }): Promise<{ users: FollowListUser[] }> {
+    const viewerUserId = params.viewerUserId ?? null;
+    const limit = Math.max(1, Math.min(50, Math.floor(params.limit)));
+
+    type Row = {
+      id: string;
+      username: string | null;
+      name: string | null;
+      premium: boolean;
+      premiumPlus: boolean;
+      isOrganization: boolean;
+      stewardBadgeEnabled: boolean;
+      verifiedStatus: string;
+      avatarKey: string | null;
+      avatarUpdatedAt: Date | null;
+      createdAt: Date;
+    };
+
+    const whereViewerExclusions = viewerUserId
+      ? Prisma.sql`
+          AND u."id" <> ${viewerUserId}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "Follow" f
+            WHERE f."followerId" = ${viewerUserId}
+              AND f."followingId" = u."id"
+          )
+        `
+      : Prisma.sql``;
+
+    const rows = await this.prisma.$queryRaw<Array<Row>>(Prisma.sql`
+      SELECT
+        u."id",
+        u."username",
+        u."name",
+        u."premium",
+        u."premiumPlus",
+        u."isOrganization",
+        u."stewardBadgeEnabled",
+        u."verifiedStatus",
+        u."avatarKey",
+        u."avatarUpdatedAt",
+        u."createdAt"
+      FROM "User" u
+      WHERE
+        u."usernameIsSet" = true
+        ${whereViewerExclusions}
+      ORDER BY
+        (u."verifiedStatus" <> 'none') DESC,
+        u."premiumPlus" DESC,
+        u."premium" DESC,
+        u."createdAt" DESC
+      LIMIT ${limit}
+    `);
+
+    if (rows.length === 0) return { users: [] };
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const rel = viewerUserId
+      ? await this.batchRelationshipForUserIds({ viewerUserId, userIds: rows.map((r) => r.id) })
+      : { viewerFollows: new Set<string>(), followsViewer: new Set<string>() };
+
+    const users: FollowListUser[] = rows.map((r) =>
+      toUserListDto(r, publicBaseUrl, {
+        relationship: {
+          viewerFollowsUser: rel.viewerFollows.has(r.id),
+          userFollowsViewer: rel.followsViewer.has(r.id),
+        },
+      }) as FollowListUser,
+    );
+
+    return { users };
+  }
+
   private async viewerById(viewerUserId: string | null) {
     if (!viewerUserId) return null;
     return await this.prisma.user.findUnique({
