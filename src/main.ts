@@ -225,6 +225,11 @@ async function bootstrap() {
 
   const port = appConfig.port();
 
+  if (!appConfig.runHttp()) {
+    startup.log('RUN_HTTP=false: HTTP server disabled (running background jobs only).');
+    return;
+  }
+
   app.enableCors({
     credentials: true,
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {

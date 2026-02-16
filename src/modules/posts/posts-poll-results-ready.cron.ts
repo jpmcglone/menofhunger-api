@@ -3,6 +3,9 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { JobsService } from '../jobs/jobs.service';
+import { JOBS } from '../jobs/jobs.constants';
+import { AppConfigService } from '../app/app-config.service';
 
 @Injectable()
 export class PostsPollResultsReadyCron {
@@ -13,6 +16,8 @@ export class PostsPollResultsReadyCron {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly jobs: JobsService,
+    private readonly appConfig: AppConfigService,
   ) {}
 
   /**
@@ -25,6 +30,18 @@ export class PostsPollResultsReadyCron {
    */
   @Cron('*/1 * * * *')
   async notifyEndedPolls() {
+    if (!this.appConfig.runSchedulers()) return;
+    try {
+      await this.jobs.enqueueCron(JOBS.postsPollResultsReadySweep, {}, 'cron:postsPollResultsReadySweep', {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 30_000 },
+      });
+    } catch {
+      // likely duplicate jobId while previous run is active; treat as no-op
+    }
+  }
+
+  async runPollResultsReadySweep() {
     if (this.running) return;
     this.running = true;
     const startedAt = Date.now();

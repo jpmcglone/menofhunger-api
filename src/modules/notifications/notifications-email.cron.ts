@@ -3,6 +3,8 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { AppConfigService } from '../app/app-config.service';
+import { JobsService } from '../jobs/jobs.service';
+import { JOBS } from '../jobs/jobs.constants';
 
 function safeBaseUrl(raw: string | null): string {
   const base = (raw ?? '').trim() || 'https://menofhunger.com';
@@ -17,11 +19,27 @@ export class NotificationsEmailCron {
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
     private readonly appConfig: AppConfigService,
+    private readonly jobs: JobsService,
   ) {}
 
   /** Every 15 minutes: if you have undelivered notifications, send a lightweight nudge email (if enabled). */
   @Cron('*/15 * * * *')
   async sendNewNotificationsNudges(): Promise<void> {
+    if (!this.appConfig.runSchedulers()) return;
+    const emailCfg = this.appConfig.email();
+    if (!emailCfg) return;
+
+    try {
+      await this.jobs.enqueueCron(JOBS.notificationsEmailNudges, {}, 'cron:notificationsEmailNudges', {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 60_000 },
+      });
+    } catch {
+      // likely duplicate jobId while previous run is active; treat as no-op
+    }
+  }
+
+  async runSendNewNotificationsNudges(): Promise<void> {
     const emailCfg = this.appConfig.email();
     if (!emailCfg) return;
 
@@ -95,6 +113,22 @@ export class NotificationsEmailCron {
   /** Weekly digest (Mondays 15:00 UTC ~ 10am ET). */
   @Cron('0 15 * * 1')
   async sendWeeklyDigest(): Promise<void> {
+    if (!this.appConfig.runSchedulers()) return;
+    const emailCfg = this.appConfig.email();
+    if (!emailCfg) return;
+
+    try {
+      // Weekly schedule already gates frequency; stable jobId prevents overlap on deploys.
+      await this.jobs.enqueueCron(JOBS.notificationsWeeklyDigest, {}, 'cron:notificationsWeeklyDigest', {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5 * 60_000 },
+      });
+    } catch {
+      // likely duplicate jobId while previous run is active; treat as no-op
+    }
+  }
+
+  async runSendWeeklyDigest(): Promise<void> {
     const emailCfg = this.appConfig.email();
     if (!emailCfg) return;
 

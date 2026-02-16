@@ -3,6 +3,9 @@ import { Cron } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PostsService } from './posts.service';
+import { JobsService } from '../jobs/jobs.service';
+import { JOBS } from '../jobs/jobs.constants';
+import { AppConfigService } from '../app/app-config.service';
 
 @Injectable()
 export class PostsPopularScoreCron {
@@ -12,6 +15,8 @@ export class PostsPopularScoreCron {
   constructor(
     private readonly prisma: PrismaService,
     private readonly posts: PostsService,
+    private readonly jobs: JobsService,
+    private readonly appConfig: AppConfigService,
   ) {}
 
   /**
@@ -20,6 +25,18 @@ export class PostsPopularScoreCron {
    */
   @Cron('*/10 * * * *')
   async refreshPopularSnapshots() {
+    if (!this.appConfig.runSchedulers()) return;
+    try {
+      await this.jobs.enqueueCron(JOBS.postsPopularScoreRefresh, {}, 'cron:postsPopularScoreRefresh', {
+        attempts: 2,
+        backoff: { type: 'exponential', delay: 60_000 },
+      });
+    } catch {
+      // likely duplicate jobId while previous run is active; treat as no-op
+    }
+  }
+
+  async runRefreshPopularSnapshots() {
     if (this.running) return;
     this.running = true;
     const startedAt = Date.now();

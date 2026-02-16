@@ -27,6 +27,31 @@ const OPTION_PHRASES = buildOptionPhrases();
 
 const ALLOWED_TOPIC_VALUES = new Set(TOPIC_OPTIONS.map((o) => o.value));
 
+export function canonicalizeTopicValue(raw: string): string | null {
+  const key = normalizeText(raw);
+  if (!key) return null;
+  const padded = ` ${key} `;
+  // Use the same phrase matching rules as inference; return the first (stable-order) match.
+  for (const o of OPTION_PHRASES) {
+    for (const p of o.phrases) {
+      if (!p) continue;
+      if (p.includes(' ')) {
+        if (padded.includes(` ${p} `)) return o.value;
+      } else {
+        if (wordMatch(padded, p)) return o.value;
+      }
+    }
+  }
+  return null;
+}
+
+export function topicCategory(value: string): string | null {
+  const v = (value ?? '').trim();
+  if (!v) return null;
+  const opt = TOPIC_OPTIONS.find((o) => o.value === v);
+  return opt?.group ?? null;
+}
+
 // Very strong signal: link domain → topic(s)
 // Keep this small + high precision; it's easy to extend safely.
 const DOMAIN_TOPIC_MAP: Record<string, string[]> = {
@@ -46,12 +71,12 @@ const DOMAIN_TOPIC_MAP: Record<string, string[]> = {
   'gitlab.com': ['programming'],
   'stackoverflow.com': ['programming'],
   // Endurance / training
-  'strava.com': ['running', 'cycling', 'triathlon'],
-  'garmin.com': ['running', 'cycling', 'triathlon'],
-  'trainingpeaks.com': ['running', 'cycling', 'triathlon'],
-  // Tabletop-ish
-  'chess.com': ['board_games'],
-  'lichess.org': ['board_games'],
+  'strava.com': ['endurance_training'],
+  'garmin.com': ['endurance_training'],
+  'trainingpeaks.com': ['endurance_training'],
+  // Games (broad)
+  'chess.com': ['gaming'],
+  'lichess.org': ['gaming'],
 };
 
 function baseDomainFromHost(host: string): string {
@@ -127,23 +152,13 @@ function matchTopicsInHay(hayPadded: string): string[] {
 
 // Lightweight group keywords so group-name searches (e.g. "fitness") work even if no post text matches.
 const GROUP_KEYWORDS: Record<string, string[]> = {
-  Fitness: ['fitness', 'gym', 'strength', 'lifting'],
-  Endurance: ['endurance', 'cardio', 'running', 'cycling'],
-  Sports: ['sports'],
-  'Combat sports': ['combat', 'fight', 'fighting', 'martial', 'grappling', 'striking'],
-  Outdoors: ['outdoors', 'outdoor', 'nature', 'hiking', 'camping'],
-  Motors: ['motors', 'cars', 'motorcycles', 'automotive', 'vehicles'],
-  'Food & drink': ['food', 'drink', 'cooking', 'bbq', 'grilling'],
-  'Tech & games': ['tech', 'technology', 'software', 'coding', 'programming', 'gaming'],
-  Learning: ['learning', 'reading', 'books', 'study'],
-  Business: ['business', 'money', 'finance', 'investing', 'career'],
-  Arts: ['arts', 'music', 'movies', 'photography'],
-  Family: ['family', 'fatherhood', 'parenting'],
-  Religion: ['religion', 'faith', 'spiritual'],
-  Politics: ['politics', 'news', 'government', 'policy', 'elections'],
-  Community: ['community', 'volunteering', 'mentorship'],
-  Wellness: ['wellness', 'health', 'nutrition', 'mental health', 'meditation', 'yoga'],
-  Life: ['life', 'travel', 'road trips'],
+  Religion: ['religion', 'faith', 'spiritual', 'spirituality', 'god', 'church', 'bible', 'prayer', 'theology'],
+  Politics: ['politics', 'news', 'current events', 'government', 'policy', 'elections', 'law', 'taxes', 'geopolitics'],
+  Business: ['business', 'money', 'finance', 'investing', 'career', 'leadership', 'management', 'marketing', 'sales', 'crypto', 'productivity'],
+  Technology: ['tech', 'technology', 'software', 'coding', 'programming', 'ai', 'security', 'cloud', 'devops', 'data'],
+  Health: ['health', 'fitness', 'gym', 'strength', 'cardio', 'nutrition', 'sleep', 'recovery', 'mental health', 'mobility', 'longevity'],
+  Relationships: ['relationships', 'dating', 'marriage', 'family', 'fatherhood', 'friendship', 'community', 'mentorship', 'communication', 'boundaries'],
+  Philosophy: ['philosophy', 'meaning', 'purpose', 'ethics', 'stoicism', 'discipline', 'habits', 'psychology', 'learning'],
 };
 
 export function inferTopicsFromText(

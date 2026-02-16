@@ -220,8 +220,8 @@ export class AdminUsersController {
 
       // Invalidate public profile caches (profile + preview) so tier changes reflect immediately.
       try {
-        this.publicProfileCache.invalidateForUser({ id: current.id, username: current.username ?? null });
-        this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+        await this.publicProfileCache.invalidateForUser({ id: current.id, username: current.username ?? null });
+        await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       } catch {
         // Best-effort cache invalidation; never fail admin updates.
       }

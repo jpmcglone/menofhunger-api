@@ -23,6 +23,10 @@ const listFollowedSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
+const listCategoriesSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+});
+
 @UseGuards(OptionalAuthGuard)
 @Controller('topics')
 export class TopicsController {
@@ -38,7 +42,7 @@ export class TopicsController {
   async options(@OptionalCurrentUserId() userId: string | undefined, @Res({ passthrough: true }) httpRes: Response) {
     const viewerUserId = userId ?? null;
     setReadCache(httpRes, { viewerUserId });
-    return { data: TOPIC_OPTIONS.map((t) => ({ value: t.value, label: t.label, group: t.group })) };
+    return { data: TOPIC_OPTIONS.map((t) => ({ value: t.value, label: t.label, group: t.group, aliases: t.aliases ?? [] })) };
   }
 
   @Throttle({
@@ -55,6 +59,62 @@ export class TopicsController {
     const data = await this.topics.listTopics({ viewerUserId, limit });
     setReadCache(httpRes, { viewerUserId });
     return { data };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 240),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get('categories')
+  async categories(@OptionalCurrentUserId() userId: string | undefined, @Query() query: unknown, @Res({ passthrough: true }) httpRes: Response) {
+    const parsed = listCategoriesSchema.parse(query);
+    const viewerUserId = userId ?? null;
+    const limit = parsed.limit ?? 30;
+    const data = await this.topics.listCategories({ viewerUserId, limit });
+    setReadCache(httpRes, { viewerUserId });
+    return { data };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 240),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get('categories/:category/topics')
+  async categoryTopics(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('category') category: string,
+    @Res({ passthrough: true }) httpRes: Response,
+  ) {
+    const viewerUserId = userId ?? null;
+    const data = await this.topics.listCategoryTopics({ viewerUserId, category });
+    setReadCache(httpRes, { viewerUserId });
+    return { data };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 240),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get('categories/:category/posts')
+  async categoryPosts(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('category') category: string,
+    @Query() query: unknown,
+    @Res({ passthrough: true }) httpRes: Response,
+  ) {
+    const parsed = listTopicPostsSchema.parse(query);
+    const viewerUserId = userId ?? null;
+    const limit = parsed.limit ?? 30;
+    const cursor = parsed.cursor ?? null;
+    const res = await this.topics.listCategoryPosts({ viewerUserId, category, limit, cursor });
+    setReadCache(httpRes, { viewerUserId });
+    return { data: res.posts, pagination: { nextCursor: res.nextCursor } };
   }
 
   @UseGuards(AuthGuard)

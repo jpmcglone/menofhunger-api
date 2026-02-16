@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { PostWithAuthorAndMedia } from '../../common/dto/post.dto';
-import { toPostDto, type TopicDto } from '../../common/dto';
+import { toPostDto, type TopicCategoryDto, type TopicDto } from '../../common/dto';
 import { AppConfigService } from '../app/app-config.service';
 import { PostsService } from '../posts/posts.service';
 import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
@@ -44,6 +44,23 @@ export class TopicsService {
 
   private topicsCache: { expiresAt: number; data: TopicDto[] } | null = null;
 
+  private categoryLabelByKey(): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const opt of TOPIC_OPTIONS) {
+      const key = normalizeKey(opt.group);
+      if (!key) continue;
+      if (!map.has(key)) map.set(key, opt.group);
+    }
+    return map;
+  }
+
+  private categoryKeyForTopicValue(value: string): { key: string; label: string } {
+    const opt = TOPIC_OPTIONS.find((o) => o.value === value);
+    const label = opt?.group ?? 'Other';
+    const key = normalizeKey(label) || 'other';
+    return { key, label };
+  }
+
   private topicOptionByKey(): Map<string, string> {
     const optionByKey = new Map<string, string>();
     for (const opt of TOPIC_OPTIONS) {
@@ -75,6 +92,7 @@ export class TopicsService {
       where: { userId: viewerUserId },
       select: { topic: true },
     });
+    // No backwards compatibility: follows must already be canonical allowlist values.
     return new Set(rows.map((r) => r.topic));
   }
 
@@ -153,7 +171,15 @@ export class TopicsService {
       const posts = postCount.get(k) ?? 0;
       // Mildly bias toward interests (strong explicit signal).
       const score = interests * 2 + posts * 1;
-      combined.push({ topic: k, score, interestCount: interests, postCount: posts });
+      const cat = this.categoryKeyForTopicValue(k);
+      combined.push({
+        topic: k,
+        category: cat.key,
+        categoryLabel: cat.label,
+        score,
+        interestCount: interests,
+        postCount: posts,
+      });
     }
     combined.sort((a, b) => b.score - a.score || b.interestCount - a.interestCount || b.postCount - a.postCount || a.topic.localeCompare(b.topic));
 
@@ -167,6 +193,128 @@ export class TopicsService {
     const combined = await this.combinedTopicsCached({ viewerUserId: params.viewerUserId ?? null });
     const followed = await this.followedTopicSet(params.viewerUserId ?? null);
     return combined.slice(0, limit).map((t) => (followed.size > 0 ? { ...t, viewerFollows: followed.has(t.topic) } : t));
+  }
+
+  async listCategories(params: { viewerUserId: string | null; limit: number }): Promise<TopicCategoryDto[]> {
+    const limit = Math.max(1, Math.min(50, params.limit || 30));
+    const combined = await this.combinedTopicsCached({ viewerUserId: params.viewerUserId ?? null });
+    const labelByKey = this.categoryLabelByKey();
+
+    const agg = new Map<string, TopicCategoryDto>();
+    for (const t of combined) {
+      const key = t.category;
+      const label = labelByKey.get(key) ?? t.categoryLabel ?? key;
+      const existing = agg.get(key);
+      if (!existing) {
+        agg.set(key, {
+          category: key,
+          label,
+          score: t.score ?? 0,
+          interestCount: t.interestCount ?? 0,
+          postCount: t.postCount ?? 0,
+        });
+      } else {
+        existing.score += t.score ?? 0;
+        existing.interestCount += t.interestCount ?? 0;
+        existing.postCount += t.postCount ?? 0;
+      }
+    }
+
+    const rows = Array.from(agg.values());
+    rows.sort((a, b) => b.score - a.score || b.postCount - a.postCount || b.interestCount - a.interestCount || a.label.localeCompare(b.label));
+    return rows.slice(0, limit);
+  }
+
+  private resolveCategoryKeyOrThrow(categoryParam: string): { key: string; label: string } {
+    const key = normalizeKey(categoryParam);
+    const labelByKey = this.categoryLabelByKey();
+    const label = labelByKey.get(key) ?? null;
+    if (!key || !label) throw new BadRequestException('Unknown category.');
+    return { key, label };
+  }
+
+  async listCategoryTopics(params: { viewerUserId: string | null; category: string }): Promise<TopicDto[]> {
+    const resolved = this.resolveCategoryKeyOrThrow(params.category);
+    const combined = await this.combinedTopicsCached({ viewerUserId: params.viewerUserId ?? null });
+    const followed = await this.followedTopicSet(params.viewerUserId ?? null);
+    const rows = combined
+      .filter((t) => t.category === resolved.key)
+      .map((t) => (followed.size > 0 ? { ...t, viewerFollows: followed.has(t.topic) } : t));
+    // Keep stable order from TOPIC_OPTIONS (combinedTopicsCached already preserves topic-order before ranking? It sorts for global.)
+    // For category topic lists, prefer postCount then interestCount for relevance.
+    rows.sort((a, b) => (b.postCount ?? 0) - (a.postCount ?? 0) || (b.interestCount ?? 0) - (a.interestCount ?? 0) || a.topic.localeCompare(b.topic));
+    return rows;
+  }
+
+  async listCategoryPosts(params: { viewerUserId: string | null; category: string; limit: number; cursor: string | null }) {
+    const resolved = this.resolveCategoryKeyOrThrow(params.category);
+
+    const limit = Math.max(1, Math.min(50, params.limit || 30));
+    const cursor = (params.cursor ?? '').trim() || null;
+
+    const combined = await this.combinedTopicsCached({ viewerUserId: params.viewerUserId ?? null });
+    const topicValues = combined.filter((t) => t.category === resolved.key).map((t) => t.topic);
+    if (topicValues.length === 0) return { posts: [], nextCursor: null };
+
+    const viewer = await this.viewerById(params.viewerUserId ?? null);
+    const allowed = this.allowedVisibilitiesForViewer(viewer);
+    const visibilityWhere: Prisma.PostWhereInput = viewer?.id
+      ? {
+          OR: [{ visibility: { in: allowed } }, { userId: viewer.id, visibility: 'onlyMe' }],
+        }
+      : { visibility: 'public' };
+
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor,
+      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+    });
+
+    const rows = await this.prisma.post.findMany({
+      where: {
+        AND: [
+          { deletedAt: null },
+          { parentId: null },
+          visibilityWhere,
+          { topics: { hasSome: topicValues } },
+          ...(cursorWhere ? [cursorWhere as Prisma.PostWhereInput] : []),
+        ],
+      },
+      include: TOPIC_POST_INCLUDE,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+    });
+
+    const slice = rows.slice(0, limit);
+    const nextCursor = rows.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
+
+    const postIds = slice.map((p) => p.id);
+    const boosted = params.viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId: params.viewerUserId, postIds }) : new Set<string>();
+    const bookmarksByPostId = params.viewerUserId
+      ? await this.posts.viewerBookmarksByPostId({ viewerUserId: params.viewerUserId, postIds })
+      : new Map<string, { collectionIds: string[] }>();
+
+    const viewerCtx = await this.posts.viewerContext(params.viewerUserId ?? null);
+    const viewerHasAdmin = Boolean(viewerCtx?.siteAdmin);
+    const internalByPostId = viewerHasAdmin && postIds.length > 0 ? await this.posts.ensureBoostScoresFresh(postIds) : null;
+    const scoreByPostId = viewerHasAdmin && postIds.length > 0 ? await this.posts.computeScoresForPostIds(postIds) : undefined;
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const posts = slice.map((p) => {
+      const base = internalByPostId?.get(p.id);
+      const score = scoreByPostId?.get(p.id);
+      return toPostDto(p as PostWithAuthorAndMedia, publicBaseUrl, {
+        viewerHasBoosted: boosted.has(p.id),
+        viewerHasBookmarked: bookmarksByPostId.has(p.id),
+        viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
+        includeInternal: viewerHasAdmin,
+        internalOverride:
+          base || (typeof score === 'number' ? { score } : undefined)
+            ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
+            : undefined,
+      });
+    });
+
+    return { posts, nextCursor };
   }
 
   async listFollowedTopics(params: { viewerUserId: string; limit: number }): Promise<TopicDto[]> {

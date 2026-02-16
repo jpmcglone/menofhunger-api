@@ -8,6 +8,26 @@ export const envSchema = z.object({
     .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PORT must be a number'),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
 
+  // Redis (BullMQ). Default is dev-friendly; require explicit value in production.
+  REDIS_URL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('redis://localhost:6379'),
+  ),
+
+  // Process roles (enable/disable parts of the app for API vs worker deployments).
+  RUN_HTTP: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('true'),
+  ),
+  RUN_SCHEDULERS: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('true'),
+  ),
+  RUN_JOB_CONSUMERS: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('true'),
+  ),
+
   // Prisma connection retry (e.g. when Postgres is starting in docker compose).
   PRISMA_CONNECT_RETRIES: z
     .string()
@@ -268,6 +288,14 @@ export const envSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['SESSION_HMAC_SECRET'],
       message: 'SESSION_HMAC_SECRET is required in production (min 16 chars)',
+    });
+  }
+
+  if (!env.REDIS_URL || !String(env.REDIS_URL).trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['REDIS_URL'],
+      message: 'REDIS_URL is required in production',
     });
   }
 });

@@ -1,13 +1,20 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { JobsService } from '../jobs/jobs.service';
+import { JOBS } from '../jobs/jobs.constants';
+import { AppConfigService } from '../app/app-config.service';
 
 @Injectable()
 export class NotificationsOrphanCleanupCron {
   private readonly logger = new Logger(NotificationsOrphanCleanupCron.name);
   private running = false;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jobs: JobsService,
+    private readonly appConfig: AppConfigService,
+  ) {}
 
   /**
    * Best-effort cleanup for notifications that reference soft-deleted posts.
@@ -19,6 +26,18 @@ export class NotificationsOrphanCleanupCron {
    */
   @Cron('15 4 * * *')
   async cleanupDeletedPostNotifications() {
+    if (!this.appConfig.runSchedulers()) return;
+    try {
+      await this.jobs.enqueueCron(JOBS.notificationsOrphanCleanup, {}, 'cron:notificationsOrphanCleanup', {
+        attempts: 2,
+        backoff: { type: 'exponential', delay: 5 * 60_000 },
+      });
+    } catch {
+      // likely duplicate jobId while previous run is active; treat as no-op
+    }
+  }
+
+  async runCleanupDeletedPostNotifications() {
     if (this.running) return;
     this.running = true;
     const startedAt = Date.now();

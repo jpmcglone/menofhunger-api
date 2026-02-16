@@ -218,7 +218,7 @@ export class BillingService {
         premiumPlus: isPlus,
       },
     });
-    this.publicProfileCache.invalidateForUser({ id: user.id, username: user.username ?? null });
+    await this.publicProfileCache.invalidateForUser({ id: user.id, username: user.username ?? null });
   }
 }
 

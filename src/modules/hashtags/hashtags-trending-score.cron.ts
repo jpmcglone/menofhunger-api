@@ -2,18 +2,26 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { JobsService } from '../jobs/jobs.service';
+import { JOBS } from '../jobs/jobs.constants';
+import { AppConfigService } from '../app/app-config.service';
 
 @Injectable()
 export class HashtagsTrendingScoreCron implements OnModuleInit {
   private readonly logger = new Logger(HashtagsTrendingScoreCron.name);
   private running = false;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jobs: JobsService,
+    private readonly appConfig: AppConfigService,
+  ) {}
 
   onModuleInit() {
     // Kick an initial refresh shortly after boot so new envs don't show empty trends for ~10 minutes.
     const t = setTimeout(async () => {
       try {
+        if (!this.appConfig.runSchedulers()) return;
         const latest = await this.prisma.hashtagTrendingScoreSnapshot.findFirst({
           orderBy: [{ asOf: 'desc' }],
           select: { asOf: true },
@@ -38,6 +46,18 @@ export class HashtagsTrendingScoreCron implements OnModuleInit {
    */
   @Cron('*/10 * * * *')
   async refreshTrendingHashtagSnapshots() {
+    if (!this.appConfig.runSchedulers()) return;
+    try {
+      await this.jobs.enqueueCron(JOBS.hashtagsTrendingScoreRefresh, {}, 'cron:hashtagsTrendingScoreRefresh', {
+        attempts: 2,
+        backoff: { type: 'exponential', delay: 60_000 },
+      });
+    } catch {
+      // likely duplicate jobId while previous run is active; treat as no-op
+    }
+  }
+
+  async runRefreshTrendingHashtagSnapshots() {
     if (this.running) return;
     this.running = true;
     const startedAt = Date.now();

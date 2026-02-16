@@ -193,7 +193,7 @@ export class VerificationService {
 
       return updated;
     });
-    this.publicProfileCache.invalidateForUser({
+    await this.publicProfileCache.invalidateForUser({
       id: updated.userId,
       username: updated.user?.username ?? null,
     });

@@ -75,6 +75,7 @@ Before deploying, ensure these are set (API also validates at startup):
 
 - `NODE_ENV=production`
 - `DATABASE_URL` — Postgres connection string
+- `REDIS_URL` — Redis connection string (BullMQ background jobs)
 - `SESSION_HMAC_SECRET` — must be set and not the dev default
 - `OTP_HMAC_SECRET` — must be set and not the dev default
 - `TRUST_PROXY=true` when behind Render/Cloudflare
@@ -82,3 +83,20 @@ Before deploying, ensure these are set (API also validates at startup):
 - Optionally: `COOKIE_DOMAIN`, `REQUIRE_CSRF_ORIGIN_IN_PROD=true`
 
 To check required env without starting the server: `node scripts/check-env.mjs` (load `.env` first or set vars in the shell).
+
+## Background jobs / workers
+
+This API uses a Redis-backed queue (BullMQ) for background work. In the simplest setup, the API process both enqueues and consumes jobs.
+
+### Role flags
+
+You can split responsibilities between an API service and one or more worker services using these env vars:
+
+- `RUN_HTTP` — when false, the process will not bind an HTTP port
+- `RUN_SCHEDULERS` — when false, cron schedulers will not enqueue jobs
+- `RUN_JOB_CONSUMERS` — when false, BullMQ processors will not consume jobs
+
+Recommended Render split:
+
+- **API service**: `RUN_HTTP=true`, `RUN_SCHEDULERS=true`, `RUN_JOB_CONSUMERS=false`
+- **Worker service**: `RUN_HTTP=false`, `RUN_SCHEDULERS=false` (or true on exactly one instance), `RUN_JOB_CONSUMERS=true`

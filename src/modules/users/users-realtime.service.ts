@@ -52,7 +52,7 @@ export class UsersRealtimeService {
       if (!pinned || pinned.visibility === 'onlyMe') {
         try {
           await this.prisma.user.update({ where: { id: user.id }, data: { pinnedPostId: null } });
-          this.publicProfileCache.invalidateForUser({ id: user.id, username: user.username ?? null });
+          await this.publicProfileCache.invalidateForUser({ id: user.id, username: user.username ?? null });
         } catch {
           // Best-effort
         }

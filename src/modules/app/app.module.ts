@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { BullModule } from '@nestjs/bullmq';
 import { AppController } from './app.controller';
 import { envSchema, validateEnv } from './env';
 import { AppConfigModule } from './app-config.module';
@@ -33,6 +34,13 @@ import { TopicsModule } from '../topics/topics.module';
 import { HashtagsModule } from '../hashtags/hashtags.module';
 import { MetricsModule } from '../metrics/metrics.module';
 import { BillingModule } from '../billing/billing.module';
+import { JobsModule } from '../jobs/jobs.module';
+import { JobsConsumersModule } from '../jobs/jobs-consumers.module';
+import { RedisModule } from '../redis/redis.module';
+
+// Module wiring is static; use env flags as a pragmatic switch for which processes host consumers.
+const RUN_JOB_CONSUMERS_RAW = (process.env.RUN_JOB_CONSUMERS ?? 'true').trim().toLowerCase();
+const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'yes', 'on'].includes(RUN_JOB_CONSUMERS_RAW);
 
 @Module({
   imports: [
@@ -43,6 +51,14 @@ import { BillingModule } from '../billing/billing.module';
       validate: validateEnv(envSchema),
     }),
     AppConfigModule,
+    BullModule.forRootAsync({
+      inject: [AppConfigService],
+      useFactory: (cfg: AppConfigService) => ({
+        connection: { url: cfg.redisUrl() },
+      }),
+    }),
+    JobsModule,
+    RedisModule,
     ThrottlerModule.forRootAsync({
       inject: [AppConfigService],
       useFactory: (cfg: AppConfigService) => [
@@ -76,6 +92,7 @@ import { BillingModule } from '../billing/billing.module';
     HashtagsModule,
     MetricsModule,
     BillingModule,
+    ...(RUN_JOB_CONSUMERS ? [JobsConsumersModule] : []),
   ],
   controllers: [AppController],
   providers: [

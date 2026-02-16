@@ -461,7 +461,7 @@ export class UploadsService {
       },
     });
 
-    this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
 
     if (oldKey && oldKey !== cleaned) {
       // Best-effort deletion; don't fail the request if it errors.
@@ -543,7 +543,7 @@ export class UploadsService {
       },
     });
 
-    this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
 
     if (oldKey && oldKey !== cleaned) {
       const prefix = this.objectKeyPrefix();

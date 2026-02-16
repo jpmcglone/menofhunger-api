@@ -2,13 +2,20 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { inferTopicsFromText } from '../../common/topics/topic-utils';
+import { JobsService } from '../jobs/jobs.service';
+import { JOBS } from '../jobs/jobs.constants';
+import { AppConfigService } from '../app/app-config.service';
 
 @Injectable()
 export class PostsTopicsBackfillCron {
   private readonly logger = new Logger(PostsTopicsBackfillCron.name);
   private running = false;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jobs: JobsService,
+    private readonly appConfig: AppConfigService,
+  ) {}
 
   /**
    * Best-effort backfill for older posts created before we stored topics.
@@ -16,6 +23,19 @@ export class PostsTopicsBackfillCron {
    */
   @Cron('*/15 * * * *')
   async backfill(opts?: { wipeExisting?: boolean; batchSize?: number; lookbackDays?: number }) {
+    if (!this.appConfig.runSchedulers()) return;
+    // Cron tick should enqueue only; opts are respected for admin-triggered runs via enqueue.
+    try {
+      await this.jobs.enqueueCron(JOBS.postsTopicsBackfill, {}, 'cron:postsTopicsBackfill', {
+        attempts: 2,
+        backoff: { type: 'exponential', delay: 60_000 },
+      });
+    } catch {
+      // likely duplicate jobId while previous run is active; treat as no-op
+    }
+  }
+
+  async runBackfill(opts?: { wipeExisting?: boolean; batchSize?: number; lookbackDays?: number }) {
     if (this.running) return;
     this.running = true;
     const startedAt = Date.now();

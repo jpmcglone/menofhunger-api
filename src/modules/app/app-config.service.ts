@@ -41,12 +41,38 @@ export class AppConfigService {
 
   constructor(private readonly config: ConfigService) {}
 
+  private readBool(key: string, fallback: boolean): boolean {
+    const raw = this.config.get<string>(key);
+    if (raw == null) return fallback;
+    const v = String(raw).trim().toLowerCase();
+    if (!v) return fallback;
+    if (['1', 'true', 'yes', 'on'].includes(v)) return true;
+    if (['0', 'false', 'no', 'off'].includes(v)) return false;
+    return fallback;
+  }
+
   nodeEnv(): NodeEnv {
     return (this.config.get<string>('NODE_ENV') ?? 'development') as NodeEnv;
   }
 
   isProd(): boolean {
     return this.nodeEnv() === 'production';
+  }
+
+  redisUrl(): string {
+    return (this.config.get<string>('REDIS_URL') ?? 'redis://localhost:6379').trim() || 'redis://localhost:6379';
+  }
+
+  runHttp(): boolean {
+    return this.readBool('RUN_HTTP', true);
+  }
+
+  runSchedulers(): boolean {
+    return this.readBool('RUN_SCHEDULERS', true);
+  }
+
+  runJobConsumers(): boolean {
+    return this.readBool('RUN_JOB_CONSUMERS', true);
   }
 
   port(): number {

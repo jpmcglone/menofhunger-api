@@ -17,6 +17,7 @@ import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit
 import { PublicProfileCacheService } from './public-profile-cache.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { UsersRealtimeService } from './users-realtime.service';
+import { canonicalizeTopicValue } from '../../common/topics/topic-utils';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -137,7 +138,9 @@ export class UsersController {
     }
   }
 
-  private async getPublicProfilePayloadByUsernameOrId(rawUsernameOrId: string): Promise<PublicProfilePayload> {
+  private async getPublicProfilePayloadByUsernameOrId(
+    rawUsernameOrId: string,
+  ): Promise<{ payload: PublicProfilePayload; cache: 'hit' | 'miss' }> {
     const raw = (rawUsernameOrId ?? '').trim();
     if (!raw) throw new NotFoundException('User not found');
 
@@ -147,7 +150,7 @@ export class UsersController {
     const isUuidOrCuid = isUuid || isCuid;
 
     const cacheKey = isUuidOrCuid ? `id:${raw}` : `username:${normalized}`;
-    const cached = this.publicProfileCache.read(cacheKey);
+    const cached = await this.publicProfileCache.read(cacheKey);
     if (cached) {
       // Refresh the most volatile fields even when other fields are cached.
       // (Premium/verified status can change via admin actions; lastOnlineAt changes frequently.)
@@ -170,7 +173,7 @@ export class UsersController {
           if (!pinned || pinned.visibility === 'onlyMe') {
             try {
               await this.prisma.user.update({ where: { id: cached.id }, data: { pinnedPostId: null } });
-              this.publicProfileCache.invalidateForUser({ id: cached.id, username: (cached as any).username ?? null });
+              await this.publicProfileCache.invalidateForUser({ id: cached.id, username: (cached as any).username ?? null });
             } catch {
               // Best-effort
             }
@@ -195,15 +198,15 @@ export class UsersController {
             verifiedStatus,
             pinnedPostId,
           };
-          this.publicProfileCache.write(cacheKey, next, 5 * 60 * 1000);
-          this.publicProfileCache.write(`id:${next.id}`, next, 5 * 60 * 1000);
-          if (next.username) this.publicProfileCache.write(`username:${next.username.toLowerCase()}`, next, 5 * 60 * 1000);
-          return next;
+          void this.publicProfileCache.write(cacheKey, next, 5 * 60 * 1000);
+          void this.publicProfileCache.write(`id:${next.id}`, next, 5 * 60 * 1000);
+          if (next.username) void this.publicProfileCache.write(`username:${next.username.toLowerCase()}`, next, 5 * 60 * 1000);
+          return { payload: next, cache: 'hit' };
         }
       } catch {
         // If lastOnlineAt refresh fails, fall back to cached payload.
       }
-      return cached;
+      return { payload: cached, cache: 'hit' };
     }
 
     const user =
@@ -273,11 +276,11 @@ export class UsersController {
     };
 
     // Cache for subsequent reads (both by username and by id).
-    this.publicProfileCache.write(cacheKey, payload, 5 * 60 * 1000);
-    this.publicProfileCache.write(`id:${user.id}`, payload, 5 * 60 * 1000);
-    if (user.username) this.publicProfileCache.write(`username:${user.username.toLowerCase()}`, payload, 5 * 60 * 1000);
+    void this.publicProfileCache.write(cacheKey, payload, 5 * 60 * 1000);
+    void this.publicProfileCache.write(`id:${user.id}`, payload, 5 * 60 * 1000);
+    if (user.username) void this.publicProfileCache.write(`username:${user.username.toLowerCase()}`, payload, 5 * 60 * 1000);
 
-    return payload;
+    return { payload, cache: 'miss' };
   }
 
   /**
@@ -433,7 +436,7 @@ export class UsersController {
         where: { id: userId },
         data: { username: desired },
       });
-      this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+      await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
       return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
     }
@@ -457,7 +460,7 @@ export class UsersController {
 
       await this.ensureStarterFollowsOnFirstUsernameSet(userId, updated.username ?? parsed.username);
 
-      this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+      await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
       return {
         data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
@@ -486,7 +489,11 @@ export class UsersController {
     const viewerUserId = userId ?? null;
     const canSeeLastOnline = await this.viewerCanSeeLastOnline(viewerUserId);
 
-    const profile = await this.getPublicProfilePayloadByUsernameOrId(username);
+    const profileResult = await this.getPublicProfilePayloadByUsernameOrId(username);
+    const profile = profileResult.payload;
+    if (!this.appConfig.isProd()) {
+      res.setHeader('x-moh-cache', `publicProfile=${profileResult.cache}`);
+    }
 
     let relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean; viewerPostNotificationsEnabled: boolean } =
       {
@@ -565,7 +572,11 @@ export class UsersController {
   ) {
     const viewerUserId = userId ?? null;
     const canSeeLastOnline = await this.viewerCanSeeLastOnline(viewerUserId);
-    const payload = await this.getPublicProfilePayloadByUsernameOrId(username);
+    const profileResult = await this.getPublicProfilePayloadByUsernameOrId(username);
+    const payload = profileResult.payload;
+    if (!this.appConfig.isProd()) {
+      res.setHeader('x-moh-cache', `publicProfile=${profileResult.cache}`);
+    }
 
     // lastOnlineAt is viewer-sensitive: only verified viewers can see it.
     // Anonymous reads can still be publicly cached since we always redact lastOnlineAt there.
@@ -603,7 +614,11 @@ export class UsersController {
           ),
         ).slice(0, 30);
         if (cleaned.length < 1) throw new BadRequestException('Select at least one interest.');
-        update.interests = cleaned;
+        const mapped = cleaned.map((s) => canonicalizeTopicValue(s)).filter(Boolean) as string[];
+        if (mapped.length !== cleaned.length) {
+          throw new BadRequestException('Interests must be selected from the curated list.');
+        }
+        update.interests = mapped;
       }
 
       const updated = await this.prisma.user.update({
@@ -611,7 +626,7 @@ export class UsersController {
         data: update,
       });
 
-      this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+      await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
       return {
         data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
@@ -644,7 +659,7 @@ export class UsersController {
       data: { pinnedPostId: postId },
       select: { id: true, username: true },
     });
-    this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
     await this.emitUserSelfUpdated(updated.id);
     return { data: { pinnedPostId: postId } };
   }
@@ -657,7 +672,7 @@ export class UsersController {
       data: { pinnedPostId: null },
       select: { id: true, username: true },
     });
-    this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
     await this.emitUserSelfUpdated(updated.id);
     return { data: { pinnedPostId: null } };
   }
@@ -686,7 +701,7 @@ export class UsersController {
       },
     });
 
-    this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
     await this.emitUserSelfUpdated(updated.id);
     return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
   }
@@ -749,7 +764,11 @@ export class UsersController {
         ),
       ).slice(0, 30);
       if (cleaned.length < 1) throw new BadRequestException('Select at least one interest.');
-      data.interests = cleaned;
+      const mapped = cleaned.map((s) => canonicalizeTopicValue(s)).filter(Boolean) as string[];
+      if (mapped.length !== cleaned.length) {
+        throw new BadRequestException('Interests must be selected from the curated list.');
+      }
+      data.interests = mapped;
     }
 
     // Allow setting username here only if not already set.
@@ -780,7 +799,7 @@ export class UsersController {
         await this.ensureStarterFollowsOnFirstUsernameSet(userId, updated.username);
       }
 
-      this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+      await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
       return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
     } catch (err: unknown) {

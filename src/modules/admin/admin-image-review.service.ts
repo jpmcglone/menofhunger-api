@@ -404,7 +404,7 @@ export class AdminImageReviewService {
     });
     const { invalidatedUsers, ...affectedCounts } = affected;
     for (const u of invalidatedUsers) {
-      this.publicProfileCache.invalidateForUser(u);
+      await this.publicProfileCache.invalidateForUser(u);
     }
 
     // Hard delete from R2.
