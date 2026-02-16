@@ -13,8 +13,10 @@ const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_BANNER_BYTES = 8 * 1024 * 1024; // 8MB
 const MAX_POST_MEDIA_BYTES = 12 * 1024 * 1024; // 12MB per attachment
 // Video uploads are premium-only; premium+ gets higher caps.
-const MAX_POST_VIDEO_BYTES_PREMIUM = 75 * 1024 * 1024; // 75MB
-const MAX_POST_VIDEO_BYTES_PREMIUM_PLUS = 125 * 1024 * 1024; // 125MB
+// NOTE: We don't transcode yet, but mobile devices increasingly produce large 4K files.
+// Use a practical cap that avoids "upload forever then fail" while still allowing modern devices.
+const MAX_POST_VIDEO_BYTES_PREMIUM = 250 * 1024 * 1024; // 250MB
+const MAX_POST_VIDEO_BYTES_PREMIUM_PLUS = 500 * 1024 * 1024; // 500MB
 const MAX_POST_VIDEO_DURATION_SECONDS_PREMIUM = 5 * 60; // 5 minutes
 const MAX_POST_VIDEO_DURATION_SECONDS_PREMIUM_PLUS = 15 * 60; // 15 minutes
 const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -167,7 +169,8 @@ export class UploadsService {
         ContentType: ct,
         CacheControl: 'public, max-age=31536000, immutable',
       }),
-      { expiresIn: 300 },
+      // Give large mobile uploads a bigger window to start (hashing/metadata extraction can be slow).
+      { expiresIn: isVideoContentType(ct) ? 900 : 300 },
     );
 
     return {
