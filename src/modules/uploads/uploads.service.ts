@@ -3,6 +3,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { BadRequestException, ForbiddenException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { imageSize } from 'image-size';
+import sharp from 'sharp';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { toUserDto } from '../../common/dto';
@@ -146,6 +147,115 @@ export class UploadsService {
       };
     }
     throw new ForbiddenException('Video uploads are for premium members only.');
+  }
+
+  /**
+   * Some phone photos are stored "sideways" with EXIF orientation metadata.
+   * Browsers often display them correctly, but link unfurlers (iMessage/OG crawlers) may not.
+   * Normalize JPEGs by applying orientation to pixels and stripping EXIF.
+   */
+  private async normalizeJpegOrientationIfNeeded(params: {
+    s3: S3Client;
+    bucket: string;
+    key: string;
+    maxBytes: number;
+    cacheControl: string;
+  }): Promise<{ width: number | null; height: number | null; bytes: number; didNormalize: boolean }> {
+    const { s3, bucket, key, maxBytes, cacheControl } = params;
+
+    const obj = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    const body = (obj as any).Body;
+    if (!body) throw new BadRequestException('Unable to read uploaded image.');
+    const buf = await streamToBuffer(body, maxBytes);
+
+    // Check if EXIF orientation requires normalization.
+    let meta: sharp.Metadata;
+    try {
+      meta = await sharp(buf, { failOn: 'none' }).metadata();
+    } catch {
+      // If sharp can't read metadata, fall back to using the original bytes.
+      const dims = imageSize(buf);
+      const w = (dims as any).width ?? null;
+      const h = (dims as any).height ?? null;
+      return {
+        width: typeof w === 'number' ? Math.max(1, Math.floor(w)) : null,
+        height: typeof h === 'number' ? Math.max(1, Math.floor(h)) : null,
+        bytes: buf.length,
+        didNormalize: false,
+      };
+    }
+
+    const orientation = typeof meta.orientation === 'number' ? meta.orientation : null;
+    if (!orientation || orientation === 1) {
+      const w = typeof meta.width === 'number' ? meta.width : null;
+      const h = typeof meta.height === 'number' ? meta.height : null;
+      return {
+        width: w && w > 0 ? w : null,
+        height: h && h > 0 ? h : null,
+        bytes: buf.length,
+        didNormalize: false,
+      };
+    }
+
+    // Apply orientation to pixels and strip metadata by re-encoding.
+    const rotated = await sharp(buf, { failOn: 'none' })
+      .rotate()
+      .jpeg({ quality: 92 })
+      .toBuffer({ resolveWithObject: true });
+
+    const out = rotated.data;
+    const w = rotated.info?.width ?? null;
+    const h = rotated.info?.height ?? null;
+    if (out.length > maxBytes) {
+      throw new BadRequestException('Uploaded file is too large.');
+    }
+
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: out,
+        ContentType: 'image/jpeg',
+        CacheControl: cacheControl,
+      }),
+    );
+
+    return {
+      width: typeof w === 'number' && w > 0 ? w : null,
+      height: typeof h === 'number' && h > 0 ? h : null,
+      bytes: out.length,
+      didNormalize: true,
+    };
+  }
+
+  private async getImageInfoAndNormalizeJpegIfNeeded(params: {
+    s3: S3Client;
+    bucket: string;
+    key: string;
+    contentType: string;
+    maxBytes: number;
+    cacheControl: string;
+  }): Promise<{ width: number | null; height: number | null; bytes: number; didNormalize: boolean }> {
+    const { s3, bucket, key, contentType, maxBytes, cacheControl } = params;
+    const ct = (contentType ?? '').trim().toLowerCase();
+
+    if (ct === 'image/jpeg') {
+      return await this.normalizeJpegOrientationIfNeeded({ s3, bucket, key, maxBytes, cacheControl });
+    }
+
+    const obj = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    const body = (obj as any).Body;
+    if (!body) throw new BadRequestException('Unable to read uploaded image.');
+    const buf = await streamToBuffer(body, maxBytes);
+    const dims = imageSize(buf);
+    const w = (dims as any).width ?? null;
+    const h = (dims as any).height ?? null;
+    return {
+      width: typeof w === 'number' ? Math.max(1, Math.floor(w)) : null,
+      height: typeof h === 'number' ? Math.max(1, Math.floor(h)) : null,
+      bytes: buf.length,
+      didNormalize: false,
+    };
   }
 
   async initAvatarUpload(userId: string, contentType: string) {
@@ -326,6 +436,18 @@ export class UploadsService {
       throw new BadRequestException('Avatar is too large.');
     }
 
+    // Normalize JPEG orientation so avatars render correctly in all contexts (including metadata previews).
+    if (contentType === 'image/jpeg') {
+      await this.getImageInfoAndNormalizeJpegIfNeeded({
+        s3,
+        bucket,
+        key: cleaned,
+        contentType,
+        maxBytes: MAX_AVATAR_BYTES,
+        cacheControl: 'public, max-age=31536000, immutable',
+      }).catch(() => undefined);
+    }
+
     const now = new Date();
 
     const existing = await this.prisma.user.findUnique({ where: { id: userId } });
@@ -384,13 +506,16 @@ export class UploadsService {
 
     // Validate dimensions server-side (not just client cropping).
     try {
-      const obj = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: cleaned }));
-      const body = (obj as any).Body;
-      if (!body) throw new BadRequestException('Unable to read uploaded banner.');
-      const buf = await streamToBuffer(body, MAX_BANNER_BYTES);
-      const dims = imageSize(buf);
-      const w = (dims as any).width ?? 0;
-      const h = (dims as any).height ?? 0;
+      const info = await this.getImageInfoAndNormalizeJpegIfNeeded({
+        s3,
+        bucket,
+        key: cleaned,
+        contentType,
+        maxBytes: MAX_BANNER_BYTES,
+        cacheControl: 'public, max-age=31536000, immutable',
+      });
+      const w = info.width ?? 0;
+      const h = info.height ?? 0;
       if (!w || !h) throw new BadRequestException('Unable to read banner dimensions.');
       if (w < MIN_BANNER_WIDTH || h < MIN_BANNER_HEIGHT) {
         throw new BadRequestException(`Banner is too small. Minimum is ${MIN_BANNER_WIDTH}×${MIN_BANNER_HEIGHT}.`);
@@ -484,12 +609,40 @@ export class UploadsService {
         void h;
       }
 
+      // Normalize EXIF orientation for JPEGs so link unfurlers (iMessage) render correctly.
+      let width = existingByKey.width ?? null;
+      let height = existingByKey.height ?? null;
+      let bytes = typeof existingByKey.bytes === 'number' ? existingByKey.bytes : size;
+      if (existingByKey.kind === 'image') {
+        const normalized = await this.getImageInfoAndNormalizeJpegIfNeeded({
+          s3,
+          bucket,
+          key: cleaned,
+          contentType,
+          maxBytes: MAX_POST_MEDIA_BYTES,
+          cacheControl: 'public, max-age=31536000, immutable',
+        });
+        width = normalized.width ?? width;
+        height = normalized.height ?? height;
+        bytes = normalized.bytes ?? bytes;
+        if (normalized.didNormalize) {
+          await this.prisma.mediaContentHash.update({
+            where: { contentHash: existingByKey.contentHash },
+            data: {
+              width: width ?? undefined,
+              height: height ?? undefined,
+              bytes,
+            },
+          }).catch(() => undefined);
+        }
+      }
+
       return {
         key: cleaned,
         contentType,
         kind: existingByKey.kind as 'image' | 'gif' | 'video',
-        width: existingByKey.width ?? undefined,
-        height: existingByKey.height ?? undefined,
+        width: width ?? undefined,
+        height: height ?? undefined,
         durationSeconds: existingByKey.durationSeconds ?? undefined,
         thumbnailKey: thumbnailKey ?? undefined,
       };
@@ -520,6 +673,7 @@ export class UploadsService {
     let width: number | null = null;
     let height: number | null = null;
     let durationSeconds: number | null = null;
+    let finalBytes = size;
 
     if (isVideo) {
       width =
@@ -542,18 +696,17 @@ export class UploadsService {
       }
     } else {
       try {
-        const obj = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: cleaned }));
-        const streamBody = (obj as any).Body;
-        if (streamBody) {
-          const buf = await streamToBuffer(streamBody, MAX_POST_MEDIA_BYTES);
-          const dims = imageSize(buf);
-          const w = (dims as any).width ?? 0;
-          const h = (dims as any).height ?? 0;
-          if (w && h) {
-            width = Math.max(1, Math.floor(w));
-            height = Math.max(1, Math.floor(h));
-          }
-        }
+        const normalized = await this.getImageInfoAndNormalizeJpegIfNeeded({
+            s3,
+            bucket,
+            key: cleaned,
+          contentType,
+            maxBytes: MAX_POST_MEDIA_BYTES,
+            cacheControl: 'public, max-age=31536000, immutable',
+          });
+        width = normalized.width;
+        height = normalized.height;
+        finalBytes = normalized.bytes;
       } catch {
         // ignore; dims optional
       }
@@ -572,7 +725,7 @@ export class UploadsService {
           width: width ?? undefined,
           height: height ?? undefined,
           durationSeconds: durationSeconds ?? undefined,
-          bytes: size,
+          bytes: finalBytes,
         },
         update: {},
       });
