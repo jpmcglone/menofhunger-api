@@ -40,7 +40,7 @@ export class PostsService {
     private readonly requestCache: RequestCacheService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly polls: PollsService,
-    private readonly viewerContext: ViewerContextService,
+    private readonly viewerContextService: ViewerContextService,
   ) {}
 
   /**
@@ -333,7 +333,7 @@ export class PostsService {
   }
 
   async viewerContext(viewerUserId: string | null) {
-    return await this.viewerContext.getViewer(viewerUserId);
+    return await this.viewerContextService.getViewer(viewerUserId);
   }
 
   async viewerBoostedPostIds(params: { viewerUserId: string; postIds: string[] }) {
@@ -443,7 +443,7 @@ export class PostsService {
   }
 
   private allowedVisibilitiesForViewer(viewer: Pick<ViewerContext, 'verifiedStatus' | 'premium' | 'premiumPlus'> | null) {
-    return this.viewerContext.allowedPostVisibilities(viewer);
+    return this.viewerContextService.allowedPostVisibilities(viewer);
   }
 
   async listOnlyMe(params: { userId: string; limit: number; cursor: string | null }) {
@@ -482,7 +482,7 @@ export class PostsService {
     const { viewerUserId, limit, cursor, visibility, followingOnly } = params;
     const authorUserIds = (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean) ?? null;
 
-    const viewer = await this.viewerContext.getViewer(viewerUserId);
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
 
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
@@ -1064,7 +1064,7 @@ export class PostsService {
     const requestedAuthorUserIds =
       (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
 
-    const viewer = await this.viewerContext.getViewer(viewerUserId);
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
     if (visibility === 'verifiedOnly') {
@@ -1473,7 +1473,7 @@ export class PostsService {
     const requestedAuthorUserIds =
       (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
 
-    const viewer = await this.viewerContext.getViewer(viewerUserId);
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
     if (visibility === 'verifiedOnly') {
@@ -1570,7 +1570,7 @@ export class PostsService {
     });
     if (!user) throw new NotFoundException('User not found.');
 
-    const viewer = await this.viewerContext.getViewer(viewerUserId);
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
 
     const isSelf = Boolean(viewer && viewer.id === user.id);
 
@@ -1843,7 +1843,7 @@ export class PostsService {
       throw new ForbiddenException('This post is private.');
     }
 
-    const viewer = await this.viewerContext.getViewer(viewerUserId);
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
     const baseVisibilityWhere: Prisma.PostWhereInput =
       visibility === 'all'
@@ -2018,7 +2018,7 @@ export class PostsService {
     const cached = this.requestCache.get<FeedPost>(cacheKey);
     if (cached) return cached;
 
-    const viewer = await this.viewerContext.getViewer(viewerUserId);
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
     const post = await this.prisma.post.findFirst({
@@ -3058,7 +3058,7 @@ export class PostsService {
       if (!viewerIsVerified && parent.visibility === 'public') {
         throw new ForbiddenException('Verify your account to reply publicly.');
       }
-      const viewer = await this.viewerContext.getViewer(userId);
+      const viewer = await this.viewerContextService.getViewer(userId);
       const allowed = this.allowedVisibilitiesForViewer(viewer);
       const isSelf = parent.userId === userId;
       if (!isSelf) {
