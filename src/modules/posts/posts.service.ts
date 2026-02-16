@@ -4,6 +4,8 @@ import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { PollsService } from './polls.service';
+import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
 import { parseMentionsFromBody as parseMentionsFromBodyText } from '../../common/mentions/mention-regex';
@@ -37,6 +39,8 @@ export class PostsService {
     private readonly notifications: NotificationsService,
     private readonly requestCache: RequestCacheService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly polls: PollsService,
+    private readonly viewerContext: ViewerContextService,
   ) {}
 
   /**
@@ -328,21 +332,8 @@ export class PostsService {
     this.siteConfigCache = null;
   }
 
-  private async viewerById(viewerUserId: string | null) {
-    if (!viewerUserId) return null;
-    const key = `posts.viewerById:${viewerUserId}`;
-    const cached = this.requestCache.get<ViewerRow>(key);
-    if (cached !== undefined) return cached;
-    const viewer = await this.prisma.user.findUnique({
-      where: { id: viewerUserId },
-      select: { id: true, verifiedStatus: true, premium: true, siteAdmin: true },
-    });
-    this.requestCache.set(key, viewer);
-    return viewer;
-  }
-
   async viewerContext(viewerUserId: string | null) {
-    return await this.viewerById(viewerUserId);
+    return await this.viewerContext.getViewer(viewerUserId);
   }
 
   async viewerBoostedPostIds(params: { viewerUserId: string; postIds: string[] }) {
@@ -451,13 +442,8 @@ export class PostsService {
     return out;
   }
 
-  private allowedVisibilitiesForViewer(
-    viewer: { verifiedStatus: VerifiedStatus; premium: boolean; siteAdmin?: boolean } | null,
-  ) {
-    const allowed: PostVisibility[] = ['public'];
-    if (viewer?.verifiedStatus && viewer.verifiedStatus !== 'none') allowed.push('verifiedOnly');
-    if (viewer?.premium) allowed.push('premiumOnly');
-    return allowed;
+  private allowedVisibilitiesForViewer(viewer: Pick<ViewerContext, 'verifiedStatus' | 'premium' | 'premiumPlus'> | null) {
+    return this.viewerContext.allowedPostVisibilities(viewer);
   }
 
   async listOnlyMe(params: { userId: string; limit: number; cursor: string | null }) {
@@ -496,7 +482,7 @@ export class PostsService {
     const { viewerUserId, limit, cursor, visibility, followingOnly } = params;
     const authorUserIds = (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean) ?? null;
 
-    const viewer = await this.viewerById(viewerUserId);
+    const viewer = await this.viewerContext.getViewer(viewerUserId);
 
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
@@ -1078,7 +1064,7 @@ export class PostsService {
     const requestedAuthorUserIds =
       (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
 
-    const viewer = await this.viewerById(viewerUserId);
+    const viewer = await this.viewerContext.getViewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
     if (visibility === 'verifiedOnly') {
@@ -1487,7 +1473,7 @@ export class PostsService {
     const requestedAuthorUserIds =
       (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
 
-    const viewer = await this.viewerById(viewerUserId);
+    const viewer = await this.viewerContext.getViewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
     if (visibility === 'verifiedOnly') {
@@ -1584,7 +1570,7 @@ export class PostsService {
     });
     if (!user) throw new NotFoundException('User not found.');
 
-    const viewer = await this.viewerById(viewerUserId);
+    const viewer = await this.viewerContext.getViewer(viewerUserId);
 
     const isSelf = Boolean(viewer && viewer.id === user.id);
 
@@ -1857,7 +1843,7 @@ export class PostsService {
       throw new ForbiddenException('This post is private.');
     }
 
-    const viewer = await this.viewerById(viewerUserId);
+    const viewer = await this.viewerContext.getViewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
     const baseVisibilityWhere: Prisma.PostWhereInput =
       visibility === 'all'
@@ -2032,7 +2018,7 @@ export class PostsService {
     const cached = this.requestCache.get<FeedPost>(cacheKey);
     if (cached) return cached;
 
-    const viewer = await this.viewerById(viewerUserId);
+    const viewer = await this.viewerContext.getViewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
     const post = await this.prisma.post.findFirst({
@@ -3072,7 +3058,7 @@ export class PostsService {
       if (!viewerIsVerified && parent.visibility === 'public') {
         throw new ForbiddenException('Verify your account to reply publicly.');
       }
-      const viewer = await this.viewerById(userId);
+      const viewer = await this.viewerContext.getViewer(userId);
       const allowed = this.allowedVisibilitiesForViewer(viewer);
       const isSelf = parent.userId === userId;
       if (!isSelf) {
@@ -3528,54 +3514,7 @@ export class PostsService {
   }
 
   async voteOnPoll(params: { userId: string; postId: string; optionId: string }) {
-    const { userId, postId, optionId } = params;
-    const id = (postId ?? '').trim();
-    const optId = (optionId ?? '').trim();
-    if (!id) throw new NotFoundException('Post not found.');
-    if (!optId) throw new BadRequestException('Invalid poll option.');
-
-    const post = await this.getById({ viewerUserId: userId, id });
-    if (post.deletedAt) throw new BadRequestException('Deleted posts cannot be voted on.');
-    if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be voted on.');
-    if (post.userId === userId) throw new ForbiddenException('You cannot vote on your own poll.');
-
-    const poll = await this.prisma.postPoll.findUnique({
-      where: { postId: id },
-      include: { options: { orderBy: { position: 'asc' } } },
-    });
-    if (!poll) throw new NotFoundException('Poll not found.');
-
-    const now = new Date();
-    if (poll.endsAt <= now) throw new BadRequestException('This poll has ended.');
-
-    const opt = poll.options.find((o) => o.id === optId);
-    if (!opt) throw new BadRequestException('Invalid poll option.');
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      try {
-        await tx.postPollVote.create({
-          data: {
-            pollId: poll.id,
-            optionId: optId,
-            userId,
-          },
-        });
-      } catch (err: any) {
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-          throw new ForbiddenException('You have already voted on this poll.');
-        }
-        throw err;
-      }
-
-      await tx.postPollOption.update({ where: { id: optId }, data: { voteCount: { increment: 1 } } });
-      return await tx.postPoll.update({
-        where: { id: poll.id },
-        data: { totalVoteCount: { increment: 1 } },
-        include: { options: { orderBy: { position: 'asc' } } },
-      });
-    });
-
-    return { poll: updated, viewerVotedOptionId: optId };
+    return await this.polls.voteOnPoll(params);
   }
 
   private async ensureUserCanBoost(userId: string) {

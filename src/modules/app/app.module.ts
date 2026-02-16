@@ -37,6 +37,9 @@ import { BillingModule } from '../billing/billing.module';
 import { JobsModule } from '../jobs/jobs.module';
 import { JobsConsumersModule } from '../jobs/jobs-consumers.module';
 import { RedisModule } from '../redis/redis.module';
+import { RealtimeModule } from '../realtime/realtime.module';
+import { ViewerContextModule } from '../viewer/viewer-context.module';
+import { DomainEventsModule } from '../events/domain-events.module';
 
 // Module wiring is static; use env flags as a pragmatic switch for which processes host consumers.
 const RUN_JOB_CONSUMERS_RAW = (process.env.RUN_JOB_CONSUMERS ?? 'true').trim().toLowerCase();
@@ -51,6 +54,9 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
       validate: validateEnv(envSchema),
     }),
     AppConfigModule,
+    ViewerContextModule,
+    DomainEventsModule,
+    RealtimeModule,
     BullModule.forRootAsync({
       inject: [AppConfigService],
       useFactory: (cfg: AppConfigService) => ({

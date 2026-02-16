@@ -163,6 +163,9 @@ model User {
   lastOnlineAt DateTime?
   // When the user last had in-app activity (presence connect/ping). Used for DAU/MAU.
   lastSeenAt DateTime?
+  // Denormalized badge count for notifications where deliveredAt is still null.
+  // Maintained atomically in NotificationsService.
+  undeliveredNotificationCount Int @default(0)
   dailyActivityDays UserDailyActivity[]
   sessions  Session[]
   posts     Post[]

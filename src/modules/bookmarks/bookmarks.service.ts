@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { ViewerContextService } from '../viewer/viewer-context.service';
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean };
 
@@ -22,22 +23,17 @@ export class BookmarksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly viewerContext: ViewerContextService,
   ) {}
 
   private async viewer(userId: string): Promise<Viewer> {
-    const u = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { id: true, verifiedStatus: true, premium: true },
-    });
+    const u = (await this.viewerContext.getViewer(userId)) as any;
     if (!u) throw new NotFoundException('User not found.');
-    return u;
+    return u as Viewer;
   }
 
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
-    const allowed: PostVisibility[] = ['public'];
-    if (viewer.verifiedStatus !== 'none') allowed.push('verifiedOnly');
-    if (viewer.premium) allowed.push('premiumOnly');
-    return allowed;
+    return this.viewerContext.allowedPostVisibilities(viewer as any);
   }
 
   private async assertViewerCanBookmarkPost(params: { viewerUserId: string; postId: string }): Promise<{

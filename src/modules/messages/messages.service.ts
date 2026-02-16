@@ -1,9 +1,9 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, forwardRef } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { MessageConversation } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { NotificationsService } from '../notifications/notifications.service';
+import { DomainEventsService } from '../events/domain-events.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { toUserListDto } from '../../common/dto';
 import { toMessageDto, toMessageParticipantDto, type MessageConversationDto, type MessageDto } from './message.dto';
@@ -22,8 +22,7 @@ export class MessagesService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly presenceRealtime: PresenceRealtimeService,
-    @Inject(forwardRef(() => NotificationsService))
-    private readonly notificationsService: NotificationsService,
+    private readonly events: DomainEventsService,
   ) {}
 
   private encodeConversationCursor(cursor: ConversationCursor): string {
@@ -587,7 +586,7 @@ export class MessagesService {
     }
     const acceptedRecipientIds = uniqueRecipients.filter((id) => followerSet.has(id));
     for (const recipientId of acceptedRecipientIds) {
-      void this.notificationsService.sendMessagePush({
+      this.events.emitMessagePushRequested({
         recipientUserId: recipientId,
         senderName,
         body: trimmed,
@@ -677,7 +676,7 @@ export class MessagesService {
       (p) => p.userId !== userId && p.status !== 'pending',
     );
     for (const recipient of pushRecipients) {
-      void this.notificationsService.sendMessagePush({
+      this.events.emitMessagePushRequested({
         recipientUserId: recipient.userId,
         senderName,
         body: trimmed,

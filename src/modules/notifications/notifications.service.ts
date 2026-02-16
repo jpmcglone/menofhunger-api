@@ -37,6 +37,14 @@ export class NotificationsService {
     private readonly presenceRealtime: PresenceRealtimeService,
   ) {}
 
+  private async getUndeliveredCountInternal(recipientUserId: string): Promise<number> {
+    const row = await this.prisma.user.findUnique({
+      where: { id: recipientUserId },
+      select: { undeliveredNotificationCount: true },
+    });
+    return row?.undeliveredNotificationCount ?? 0;
+  }
+
   /** True if recipient already has a follow notification from actor within the last withinMs. Use to avoid spam when someone unfollows then follows again. */
   async hasRecentFollowNotification(
     recipientUserId: string,
@@ -79,20 +87,27 @@ export class NotificationsService {
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
-    const notification = await this.prisma.notification.create({
-      data: {
-        recipientUserId,
-        kind,
-        actorUserId: actorUserId ?? undefined,
-        actorPostId: actorPostId ?? undefined,
-        subjectPostId: subjectPostId ?? undefined,
-        subjectUserId: subjectUserId ?? undefined,
-        title: fallbackTitle ?? undefined,
-        body: body ?? undefined,
-      },
+    const { notification, undeliveredCount } = await this.prisma.$transaction(async (tx) => {
+      const notification = await tx.notification.create({
+        data: {
+          recipientUserId,
+          kind,
+          actorUserId: actorUserId ?? undefined,
+          actorPostId: actorPostId ?? undefined,
+          subjectPostId: subjectPostId ?? undefined,
+          subjectUserId: subjectUserId ?? undefined,
+          title: fallbackTitle ?? undefined,
+          body: body ?? undefined,
+        },
+      });
+      const user = await tx.user.update({
+        where: { id: recipientUserId },
+        data: { undeliveredNotificationCount: { increment: 1 } },
+        select: { undeliveredNotificationCount: true },
+      });
+      return { notification, undeliveredCount: user.undeliveredNotificationCount };
     });
 
-    const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
     });
@@ -419,12 +434,24 @@ export class NotificationsService {
     const existing = await this.findExistingBoostNotification(recipientUserId, actorUserId, subjectPostId);
     if (!existing) return;
     const wasUndelivered = existing.deliveredAt == null;
-    await this.prisma.notification.delete({ where: { id: existing.id } });
+    const undeliveredCount = await this.prisma.$transaction(async (tx) => {
+      await tx.notification.delete({ where: { id: existing.id } });
+      if (!wasUndelivered) {
+        const row = await tx.user.findUnique({
+          where: { id: recipientUserId },
+          select: { undeliveredNotificationCount: true },
+        });
+        return row?.undeliveredNotificationCount ?? 0;
+      }
+      const user = await tx.user.update({
+        where: { id: recipientUserId },
+        data: { undeliveredNotificationCount: { decrement: 1 } },
+        select: { undeliveredNotificationCount: true },
+      });
+      return user.undeliveredNotificationCount;
+    });
     this.presenceRealtime.emitNotificationsDeleted(recipientUserId, { notificationIds: [existing.id] });
-    if (wasUndelivered) {
-      const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
-      this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
-    }
+    if (wasUndelivered) this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
   }
 
   private async deleteNotificationRowsAndEmit(
@@ -433,25 +460,44 @@ export class NotificationsService {
     const ids = rows.map((r) => r.id).filter(Boolean);
     if (ids.length === 0) return 0;
 
-    await this.prisma.notification.deleteMany({ where: { id: { in: ids } } });
+    const undeliveredDeletedByRecipient = new Map<string, number>();
+    for (const r of rows) {
+      const uid = (r.recipientUserId ?? '').trim();
+      if (!uid) continue;
+      if (r.deliveredAt != null) continue;
+      undeliveredDeletedByRecipient.set(uid, (undeliveredDeletedByRecipient.get(uid) ?? 0) + 1);
+    }
+
+    const updatedCountByRecipient = await this.prisma.$transaction(async (tx) => {
+      await tx.notification.deleteMany({ where: { id: { in: ids } } });
+
+      const updates = new Map<string, number>();
+      for (const [uid, delta] of undeliveredDeletedByRecipient) {
+        if (delta <= 0) continue;
+        const user = await tx.user.update({
+          where: { id: uid },
+          data: { undeliveredNotificationCount: { decrement: delta } },
+          select: { undeliveredNotificationCount: true },
+        });
+        updates.set(uid, user.undeliveredNotificationCount);
+      }
+      return updates;
+    });
 
     const idsByRecipient = new Map<string, string[]>();
-    const undeliveredRecipients = new Set<string>();
     for (const r of rows) {
       const uid = (r.recipientUserId ?? '').trim();
       if (!uid) continue;
       const list = idsByRecipient.get(uid) ?? [];
       list.push(r.id);
       idsByRecipient.set(uid, list);
-      if (r.deliveredAt == null) undeliveredRecipients.add(uid);
     }
 
     for (const [uid, notifIds] of idsByRecipient) {
       this.presenceRealtime.emitNotificationsDeleted(uid, { notificationIds: notifIds });
     }
 
-    for (const uid of undeliveredRecipients) {
-      const undeliveredCount = await this.getUndeliveredCount(uid);
+    for (const [uid, undeliveredCount] of updatedCountByRecipient) {
       this.presenceRealtime.emitNotificationsUpdated(uid, { undeliveredCount });
     }
 
@@ -778,17 +824,30 @@ export class NotificationsService {
   }
 
   async getUndeliveredCount(recipientUserId: string): Promise<number> {
-    return this.prisma.notification.count({
-      where: { recipientUserId, deliveredAt: null },
-    });
+    return await this.getUndeliveredCountInternal(recipientUserId);
   }
 
   async markDelivered(recipientUserId: string): Promise<void> {
-    await this.prisma.notification.updateMany({
-      where: { recipientUserId, deliveredAt: null },
-      data: { deliveredAt: new Date() },
+    const undeliveredCount = await this.prisma.$transaction(async (tx) => {
+      const res = await tx.notification.updateMany({
+        where: { recipientUserId, deliveredAt: null },
+        data: { deliveredAt: new Date() },
+      });
+      if (res.count > 0) {
+        return (
+          await tx.user.update({
+            where: { id: recipientUserId },
+            data: { undeliveredNotificationCount: { decrement: res.count } },
+            select: { undeliveredNotificationCount: true },
+          })
+        ).undeliveredNotificationCount;
+      }
+      const row = await tx.user.findUnique({
+        where: { id: recipientUserId },
+        select: { undeliveredNotificationCount: true },
+      });
+      return row?.undeliveredNotificationCount ?? 0;
     });
-    const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
     });
@@ -818,18 +877,34 @@ export class NotificationsService {
       ...(or.length ? { OR: or } : {}),
     } as const;
 
-    await this.prisma.notification.updateMany({
-      where,
-      data: { readAt: new Date() },
-    });
+    const undeliveredCount = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      await tx.notification.updateMany({
+        where,
+        data: { readAt: now },
+      });
 
-    // Also mark as delivered (seen) when visiting the post/profile, then emit updated count.
-    const deliveredWhere = { ...where, deliveredAt: null } as const;
-    await this.prisma.notification.updateMany({
-      where: deliveredWhere,
-      data: { deliveredAt: new Date() },
+      // Also mark as delivered (seen) when visiting the post/profile, then emit updated count.
+      const deliveredWhere = { ...where, deliveredAt: null } as const;
+      const deliveredRes = await tx.notification.updateMany({
+        where: deliveredWhere,
+        data: { deliveredAt: now },
+      });
+      if (deliveredRes.count > 0) {
+        return (
+          await tx.user.update({
+            where: { id: recipientUserId },
+            data: { undeliveredNotificationCount: { decrement: deliveredRes.count } },
+            select: { undeliveredNotificationCount: true },
+          })
+        ).undeliveredNotificationCount;
+      }
+      const row = await tx.user.findUnique({
+        where: { id: recipientUserId },
+        select: { undeliveredNotificationCount: true },
+      });
+      return row?.undeliveredNotificationCount ?? 0;
     });
-    const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
     });
@@ -839,21 +914,37 @@ export class NotificationsService {
     recipientUserId: string,
     notificationId: string,
   ): Promise<boolean> {
-    const result = await this.prisma.notification.updateMany({
-      where: { id: notificationId, recipientUserId, readAt: null },
-      data: { readAt: new Date() },
-    });
-    if (result.count > 0) {
-      await this.prisma.notification.updateMany({
-        where: { id: notificationId, recipientUserId, deliveredAt: null },
-        data: { deliveredAt: new Date() },
+    const res = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const readRes = await tx.notification.updateMany({
+        where: { id: notificationId, recipientUserId, readAt: null },
+        data: { readAt: now },
       });
-      const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
+      if (readRes.count === 0) return { changed: false as const, undeliveredCount: null as number | null };
+      const deliveredRes = await tx.notification.updateMany({
+        where: { id: notificationId, recipientUserId, deliveredAt: null },
+        data: { deliveredAt: now },
+      });
+      if (deliveredRes.count > 0) {
+        const user = await tx.user.update({
+          where: { id: recipientUserId },
+          data: { undeliveredNotificationCount: { decrement: deliveredRes.count } },
+          select: { undeliveredNotificationCount: true },
+        });
+        return { changed: true as const, undeliveredCount: user.undeliveredNotificationCount };
+      }
+      const row = await tx.user.findUnique({
+        where: { id: recipientUserId },
+        select: { undeliveredNotificationCount: true },
+      });
+      return { changed: true as const, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
+    });
+    if (res.changed) {
       this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
-        undeliveredCount,
+        undeliveredCount: res.undeliveredCount ?? 0,
       });
     }
-    return result.count > 0;
+    return res.changed;
   }
 
   /**
@@ -867,22 +958,37 @@ export class NotificationsService {
     recipientUserId: string,
     notificationId: string,
   ): Promise<boolean> {
-    const now = new Date();
-    const result = await this.prisma.notification.updateMany({
-      where: { id: notificationId, recipientUserId, ignoredAt: null },
-      data: { ignoredAt: now, readAt: now },
-    });
-    if (result.count > 0) {
-      await this.prisma.notification.updateMany({
+    const res = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const ignoredRes = await tx.notification.updateMany({
+        where: { id: notificationId, recipientUserId, ignoredAt: null },
+        data: { ignoredAt: now, readAt: now },
+      });
+      if (ignoredRes.count === 0) return { changed: false as const, undeliveredCount: null as number | null };
+      const deliveredRes = await tx.notification.updateMany({
         where: { id: notificationId, recipientUserId, deliveredAt: null },
         data: { deliveredAt: now },
       });
-      const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
+      if (deliveredRes.count > 0) {
+        const user = await tx.user.update({
+          where: { id: recipientUserId },
+          data: { undeliveredNotificationCount: { decrement: deliveredRes.count } },
+          select: { undeliveredNotificationCount: true },
+        });
+        return { changed: true as const, undeliveredCount: user.undeliveredNotificationCount };
+      }
+      const row = await tx.user.findUnique({
+        where: { id: recipientUserId },
+        select: { undeliveredNotificationCount: true },
+      });
+      return { changed: true as const, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
+    });
+    if (res.changed) {
       this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
-        undeliveredCount,
+        undeliveredCount: res.undeliveredCount ?? 0,
       });
     }
-    return result.count > 0;
+    return res.changed;
   }
 
   async markNudgesReadByActor(
@@ -892,18 +998,19 @@ export class NotificationsService {
     const recipient = (recipientUserId ?? '').trim();
     const actor = (actorUserId ?? '').trim();
     if (!recipient || !actor) return 0;
-    const now = new Date();
-    const result = await this.prisma.notification.updateMany({
-      where: {
-        recipientUserId: recipient,
-        kind: 'nudge',
-        actorUserId: actor,
-        readAt: null,
-      },
-      data: { readAt: now },
-    });
-    if (result.count > 0) {
-      await this.prisma.notification.updateMany({
+    const res = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const readRes = await tx.notification.updateMany({
+        where: {
+          recipientUserId: recipient,
+          kind: 'nudge',
+          actorUserId: actor,
+          readAt: null,
+        },
+        data: { readAt: now },
+      });
+      if (readRes.count === 0) return { changedCount: 0, undeliveredCount: null as number | null };
+      const deliveredRes = await tx.notification.updateMany({
         where: {
           recipientUserId: recipient,
           kind: 'nudge',
@@ -912,10 +1019,22 @@ export class NotificationsService {
         },
         data: { deliveredAt: now },
       });
-      const undeliveredCount = await this.getUndeliveredCount(recipient);
-      this.presenceRealtime.emitNotificationsUpdated(recipient, { undeliveredCount });
-    }
-    return result.count;
+      if (deliveredRes.count > 0) {
+        const user = await tx.user.update({
+          where: { id: recipient },
+          data: { undeliveredNotificationCount: { decrement: deliveredRes.count } },
+          select: { undeliveredNotificationCount: true },
+        });
+        return { changedCount: readRes.count, undeliveredCount: user.undeliveredNotificationCount };
+      }
+      const row = await tx.user.findUnique({
+        where: { id: recipient },
+        select: { undeliveredNotificationCount: true },
+      });
+      return { changedCount: readRes.count, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
+    });
+    if (res.changedCount > 0) this.presenceRealtime.emitNotificationsUpdated(recipient, { undeliveredCount: res.undeliveredCount ?? 0 });
+    return res.changedCount;
   }
 
   async markNudgesNudgedBackByActor(
@@ -925,18 +1044,19 @@ export class NotificationsService {
     const recipient = (recipientUserId ?? '').trim();
     const actor = (actorUserId ?? '').trim();
     if (!recipient || !actor) return 0;
-    const now = new Date();
-    const result = await this.prisma.notification.updateMany({
-      where: {
-        recipientUserId: recipient,
-        kind: 'nudge',
-        actorUserId: actor,
-        nudgedBackAt: null,
-      },
-      data: { nudgedBackAt: now, readAt: now },
-    });
-    if (result.count > 0) {
-      await this.prisma.notification.updateMany({
+    const res = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const nudgedRes = await tx.notification.updateMany({
+        where: {
+          recipientUserId: recipient,
+          kind: 'nudge',
+          actorUserId: actor,
+          nudgedBackAt: null,
+        },
+        data: { nudgedBackAt: now, readAt: now },
+      });
+      if (nudgedRes.count === 0) return { changedCount: 0, undeliveredCount: null as number | null };
+      const deliveredRes = await tx.notification.updateMany({
         where: {
           recipientUserId: recipient,
           kind: 'nudge',
@@ -945,30 +1065,55 @@ export class NotificationsService {
         },
         data: { deliveredAt: now },
       });
-      const undeliveredCount = await this.getUndeliveredCount(recipient);
-      this.presenceRealtime.emitNotificationsUpdated(recipient, { undeliveredCount });
-    }
-    return result.count;
+      if (deliveredRes.count > 0) {
+        const user = await tx.user.update({
+          where: { id: recipient },
+          data: { undeliveredNotificationCount: { decrement: deliveredRes.count } },
+          select: { undeliveredNotificationCount: true },
+        });
+        return { changedCount: nudgedRes.count, undeliveredCount: user.undeliveredNotificationCount };
+      }
+      const row = await tx.user.findUnique({
+        where: { id: recipient },
+        select: { undeliveredNotificationCount: true },
+      });
+      return { changedCount: nudgedRes.count, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
+    });
+    if (res.changedCount > 0) this.presenceRealtime.emitNotificationsUpdated(recipient, { undeliveredCount: res.undeliveredCount ?? 0 });
+    return res.changedCount;
   }
 
   async markNudgeNudgedBackById(
     recipientUserId: string,
     notificationId: string,
   ): Promise<boolean> {
-    const now = new Date();
-    const result = await this.prisma.notification.updateMany({
-      where: { id: notificationId, recipientUserId, kind: 'nudge', nudgedBackAt: null },
-      data: { nudgedBackAt: now, readAt: now },
-    });
-    if (result.count > 0) {
-      await this.prisma.notification.updateMany({
+    const res = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const nudgedRes = await tx.notification.updateMany({
+        where: { id: notificationId, recipientUserId, kind: 'nudge', nudgedBackAt: null },
+        data: { nudgedBackAt: now, readAt: now },
+      });
+      if (nudgedRes.count === 0) return { changed: false as const, undeliveredCount: null as number | null };
+      const deliveredRes = await tx.notification.updateMany({
         where: { id: notificationId, recipientUserId, deliveredAt: null },
         data: { deliveredAt: now },
       });
-      const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
-      this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
-    }
-    return result.count > 0;
+      if (deliveredRes.count > 0) {
+        const user = await tx.user.update({
+          where: { id: recipientUserId },
+          data: { undeliveredNotificationCount: { decrement: deliveredRes.count } },
+          select: { undeliveredNotificationCount: true },
+        });
+        return { changed: true as const, undeliveredCount: user.undeliveredNotificationCount };
+      }
+      const row = await tx.user.findUnique({
+        where: { id: recipientUserId },
+        select: { undeliveredNotificationCount: true },
+      });
+      return { changed: true as const, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
+    });
+    if (res.changed) this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount: res.undeliveredCount ?? 0 });
+    return res.changed;
   }
 
   async ignoreNudgesByActor(
@@ -978,18 +1123,19 @@ export class NotificationsService {
     const recipient = (recipientUserId ?? '').trim();
     const actor = (actorUserId ?? '').trim();
     if (!recipient || !actor) return 0;
-    const now = new Date();
-    const result = await this.prisma.notification.updateMany({
-      where: {
-        recipientUserId: recipient,
-        kind: 'nudge',
-        actorUserId: actor,
-        ignoredAt: null,
-      },
-      data: { ignoredAt: now, readAt: now },
-    });
-    if (result.count > 0) {
-      await this.prisma.notification.updateMany({
+    const res = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const ignoredRes = await tx.notification.updateMany({
+        where: {
+          recipientUserId: recipient,
+          kind: 'nudge',
+          actorUserId: actor,
+          ignoredAt: null,
+        },
+        data: { ignoredAt: now, readAt: now },
+      });
+      if (ignoredRes.count === 0) return { changedCount: 0, undeliveredCount: null as number | null };
+      const deliveredRes = await tx.notification.updateMany({
         where: {
           recipientUserId: recipient,
           kind: 'nudge',
@@ -998,24 +1144,51 @@ export class NotificationsService {
         },
         data: { deliveredAt: now },
       });
-      const undeliveredCount = await this.getUndeliveredCount(recipient);
-      this.presenceRealtime.emitNotificationsUpdated(recipient, { undeliveredCount });
-    }
-    return result.count;
+      if (deliveredRes.count > 0) {
+        const user = await tx.user.update({
+          where: { id: recipient },
+          data: { undeliveredNotificationCount: { decrement: deliveredRes.count } },
+          select: { undeliveredNotificationCount: true },
+        });
+        return { changedCount: ignoredRes.count, undeliveredCount: user.undeliveredNotificationCount };
+      }
+      const row = await tx.user.findUnique({
+        where: { id: recipient },
+        select: { undeliveredNotificationCount: true },
+      });
+      return { changedCount: ignoredRes.count, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
+    });
+    if (res.changedCount > 0) this.presenceRealtime.emitNotificationsUpdated(recipient, { undeliveredCount: res.undeliveredCount ?? 0 });
+    return res.changedCount;
   }
 
   /** Mark all of the user's notifications as read and as seen (clears highlight and badge). */
   async markAllRead(recipientUserId: string): Promise<void> {
-    const now = new Date();
-    await this.prisma.notification.updateMany({
-      where: { recipientUserId, readAt: null },
-      data: { readAt: now },
+    const undeliveredCount = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      await tx.notification.updateMany({
+        where: { recipientUserId, readAt: null },
+        data: { readAt: now },
+      });
+      const deliveredRes = await tx.notification.updateMany({
+        where: { recipientUserId, deliveredAt: null },
+        data: { deliveredAt: now },
+      });
+      if (deliveredRes.count > 0) {
+        return (
+          await tx.user.update({
+            where: { id: recipientUserId },
+            data: { undeliveredNotificationCount: { decrement: deliveredRes.count } },
+            select: { undeliveredNotificationCount: true },
+          })
+        ).undeliveredNotificationCount;
+      }
+      const row = await tx.user.findUnique({
+        where: { id: recipientUserId },
+        select: { undeliveredNotificationCount: true },
+      });
+      return row?.undeliveredNotificationCount ?? 0;
     });
-    await this.prisma.notification.updateMany({
-      where: { recipientUserId, deliveredAt: null },
-      data: { deliveredAt: now },
-    });
-    const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
     });

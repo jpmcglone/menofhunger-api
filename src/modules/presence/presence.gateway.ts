@@ -6,7 +6,7 @@ import {
   SubscribeMessage,
   OnGatewayInit,
 } from '@nestjs/websockets';
-import { Inject, Logger, forwardRef } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { Server, type Socket } from 'socket.io';
 import { AuthService } from '../auth/auth.service';
 import { PresenceService } from './presence.service';
@@ -44,9 +44,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     private readonly auth: AuthService,
     private readonly presence: PresenceService,
     private readonly realtime: PresenceRealtimeService,
-    @Inject(forwardRef(() => FollowsService))
     private readonly follows: FollowsService,
-    @Inject(forwardRef(() => MessagesService))
     private readonly messages: MessagesService,
     private readonly radio: RadioService,
   ) {}

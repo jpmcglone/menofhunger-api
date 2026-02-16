@@ -6,6 +6,7 @@ import type { PostWithAuthorAndMedia } from '../../common/dto/post.dto';
 import { toPostDto, type TopicCategoryDto, type TopicDto } from '../../common/dto';
 import { AppConfigService } from '../app/app-config.service';
 import { PostsService } from '../posts/posts.service';
+import { ViewerContextService } from '../viewer/viewer-context.service';
 import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 
@@ -40,9 +41,15 @@ export class TopicsService {
     private readonly prisma: PrismaService,
     private readonly posts: PostsService,
     private readonly appConfig: AppConfigService,
+    private readonly viewerContext: ViewerContextService,
   ) {}
 
-  private topicsCache: { expiresAt: number; data: TopicDto[] } | null = null;
+  private topicsCache = new Map<string, { expiresAt: number; data: TopicDto[] }>();
+
+  private cacheKeyForAllowedVisibilities(allowed: PostVisibility[]): string {
+    // Only a few combinations exist; key by allowed visibilities so viewer tiers don't cross-contaminate.
+    return [...allowed].sort().join(',');
+  }
 
   private categoryLabelByKey(): Map<string, string> {
     const map = new Map<string, string>();
@@ -78,14 +85,6 @@ export class TopicsService {
     return mapped;
   }
 
-  private async viewerById(viewerUserId: string | null): Promise<Viewer> {
-    if (!viewerUserId) return null;
-    return await this.prisma.user.findUnique({
-      where: { id: viewerUserId },
-      select: { id: true, verifiedStatus: true, premium: true },
-    });
-  }
-
   private async followedTopicSet(viewerUserId: string | null): Promise<Set<string>> {
     if (!viewerUserId) return new Set<string>();
     const rows = await this.prisma.topicFollow.findMany({
@@ -97,21 +96,18 @@ export class TopicsService {
   }
 
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
-    const allowed: PostVisibility[] = ['public'];
-    if (viewer?.verifiedStatus && viewer.verifiedStatus !== 'none') allowed.push('verifiedOnly');
-    if (viewer?.premium) allowed.push('premiumOnly');
-    return allowed;
+    return this.viewerContext.allowedPostVisibilities(viewer as any);
   }
 
   private async combinedTopicsCached(params: { viewerUserId: string | null }): Promise<TopicDto[]> {
-    const viewer = await this.viewerById(params.viewerUserId ?? null);
+    const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
     const now = Date.now();
     // Topics are global-ish and expensive-ish (post scan). Cache briefly.
-    if (this.topicsCache && this.topicsCache.expiresAt > now) {
-      return this.topicsCache.data;
-    }
+    const cacheKey = this.cacheKeyForAllowedVisibilities(allowed);
+    const cached = this.topicsCache.get(cacheKey) ?? null;
+    if (cached && cached.expiresAt > now) return cached.data;
 
     const optionByKey = this.topicOptionByKey();
 
@@ -184,7 +180,7 @@ export class TopicsService {
     combined.sort((a, b) => b.score - a.score || b.interestCount - a.interestCount || b.postCount - a.postCount || a.topic.localeCompare(b.topic));
 
     // Keep a stable list; cache for 5 minutes.
-    this.topicsCache = { expiresAt: now + 5 * 60 * 1000, data: combined };
+    this.topicsCache.set(cacheKey, { expiresAt: now + 5 * 60 * 1000, data: combined });
     return combined;
   }
 
@@ -256,7 +252,7 @@ export class TopicsService {
     const topicValues = combined.filter((t) => t.category === resolved.key).map((t) => t.topic);
     if (topicValues.length === 0) return { posts: [], nextCursor: null };
 
-    const viewer = await this.viewerById(params.viewerUserId ?? null);
+    const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
     const allowed = this.allowedVisibilitiesForViewer(viewer);
     const visibilityWhere: Prisma.PostWhereInput = viewer?.id
       ? {
@@ -348,7 +344,7 @@ export class TopicsService {
     const limit = Math.max(1, Math.min(50, params.limit || 30));
     const cursor = (params.cursor ?? '').trim() || null;
 
-    const viewer = await this.viewerById(params.viewerUserId ?? null);
+    const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
     const allowed = this.allowedVisibilitiesForViewer(viewer);
     const visibilityWhere: Prisma.PostWhereInput = viewer?.id
       ? {

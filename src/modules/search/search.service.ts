@@ -6,6 +6,7 @@ import { FollowsService } from '../follows/follows.service';
 import { PostsService } from '../posts/posts.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
+import { ViewerContextService } from '../viewer/viewer-context.service';
 import { queryToTopicValues } from '../../common/topics/topic-utils';
 import { HASHTAG_IN_TEXT_DISPLAY_RE, parseHashtagsFromText } from '../../common/hashtags/hashtag-regex';
 
@@ -125,26 +126,11 @@ export class SearchService {
     private readonly follows: FollowsService,
     private readonly posts: PostsService,
     private readonly requestCache: RequestCacheService,
+    private readonly viewerContext: ViewerContextService,
   ) {}
 
-  private async viewerById(viewerUserId: string | null): Promise<Viewer> {
-    if (!viewerUserId) return null;
-    const key = `search.viewerById:${viewerUserId}`;
-    const cached = this.requestCache.get<Viewer>(key);
-    if (cached !== undefined) return cached;
-    const viewer = await this.prisma.user.findUnique({
-      where: { id: viewerUserId },
-      select: { id: true, verifiedStatus: true, premium: true },
-    });
-    this.requestCache.set(key, viewer);
-    return viewer;
-  }
-
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
-    const allowed: PostVisibility[] = ['public'];
-    if (viewer?.verifiedStatus && viewer.verifiedStatus !== 'none') allowed.push('verifiedOnly');
-    if (viewer?.premium) allowed.push('premiumOnly');
-    return allowed;
+    return this.viewerContext.allowedPostVisibilities(viewer as any);
   }
 
   async searchUsers(params: {
@@ -546,7 +532,7 @@ export class SearchService {
     const qLower = qMatchExpanded.toLowerCase();
     const topicValues = queryToTopicValues(qMatchExpanded);
 
-    const viewer = await this.viewerById(params.viewerUserId ?? null);
+    const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
     // Never include onlyMe posts in search results (even for the viewer).

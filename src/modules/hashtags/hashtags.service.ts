@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ViewerContextService } from '../viewer/viewer-context.service';
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
 
@@ -34,21 +35,13 @@ function makeTrendingCursor(params: { asOf: Date; score: number; usageCount: num
 
 @Injectable()
 export class HashtagsService {
-  constructor(private readonly prisma: PrismaService) {}
-
-  private async viewerById(viewerUserId: string | null): Promise<Viewer> {
-    if (!viewerUserId) return null;
-    return await this.prisma.user.findUnique({
-      where: { id: viewerUserId },
-      select: { id: true, verifiedStatus: true, premium: true },
-    });
-  }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly viewerContext: ViewerContextService,
+  ) {}
 
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
-    const allowed: PostVisibility[] = ['public'];
-    if (viewer?.verifiedStatus && viewer.verifiedStatus !== 'none') allowed.push('verifiedOnly');
-    if (viewer?.premium) allowed.push('premiumOnly');
-    return allowed;
+    return this.viewerContext.allowedPostVisibilities(viewer as any);
   }
 
   async trendingHashtags(params: {
@@ -57,7 +50,7 @@ export class HashtagsService {
     cursor: string | null;
   }): Promise<{ hashtags: Array<{ value: string; label: string; usageCount: number }>; nextCursor: string | null }> {
     const limit = Math.max(1, Math.min(50, params.limit || 20));
-    const viewer = await this.viewerById(params.viewerUserId ?? null);
+    const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
     const cursor = parseTrendingCursor(params.cursor ?? null);

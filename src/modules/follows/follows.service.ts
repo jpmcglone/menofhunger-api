@@ -7,6 +7,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { toUserListDto, type NudgeStateDto } from '../../common/dto';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
 
 export type FollowRelationship = {
   viewerFollowsUser: boolean;
@@ -43,6 +44,7 @@ export class FollowsService {
     private readonly appConfig: AppConfigService,
     private readonly notifications: NotificationsService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly viewerContext: ViewerContextService,
   ) {}
 
   async setPostNotificationsEnabled(params: { viewerUserId: string; username: string; enabled: boolean }) {
@@ -273,16 +275,8 @@ export class FollowsService {
     return { users };
   }
 
-  private async viewerById(viewerUserId: string | null) {
-    if (!viewerUserId) return null;
-    return await this.prisma.user.findUnique({
-      where: { id: viewerUserId },
-      select: { id: true, verifiedStatus: true, premium: true },
-    });
-  }
-
   private canViewFollowInfo(params: {
-    viewer: { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
+    viewer: Pick<ViewerContext, 'id' | 'verifiedStatus' | 'premium' | 'premiumPlus'> | null;
     targetUserId: string;
     followVisibility: FollowVisibility;
   }) {
@@ -291,8 +285,8 @@ export class FollowsService {
     if (isSelf) return true;
     if (followVisibility === 'all') return true;
     if (followVisibility === 'none') return false;
-    if (followVisibility === 'verified') return Boolean(viewer && isVerified(viewer.verifiedStatus));
-    if (followVisibility === 'premium') return Boolean(viewer && viewer.premium);
+    if (followVisibility === 'verified') return this.viewerContext.isVerified(viewer ?? null);
+    if (followVisibility === 'premium') return this.viewerContext.isPremium(viewer ?? null);
     return false;
   }
 
@@ -551,7 +545,7 @@ export class FollowsService {
   async summary(params: { viewerUserId: string | null; username: string }): Promise<FollowSummary> {
     const { viewerUserId, username } = params;
     const target = await this.userByUsernameOrThrow(username);
-    const viewer = await this.viewerById(viewerUserId);
+    const viewer = await this.viewerContext.getViewer(viewerUserId);
 
     const relationship = await this.status({ viewerUserId, username });
     const mutual = Boolean(relationship.viewerFollowsUser && relationship.userFollowsViewer);
@@ -632,7 +626,7 @@ export class FollowsService {
   }) {
     const { viewerUserId, username, limit, cursor } = params;
     const target = await this.userByUsernameOrThrow(username);
-    const viewer = await this.viewerById(viewerUserId);
+    const viewer = await this.viewerContext.getViewer(viewerUserId);
 
     const canView = this.canViewFollowInfo({
       viewer,
@@ -698,7 +692,7 @@ export class FollowsService {
   }) {
     const { viewerUserId, username, limit, cursor } = params;
     const target = await this.userByUsernameOrThrow(username);
-    const viewer = await this.viewerById(viewerUserId);
+    const viewer = await this.viewerContext.getViewer(viewerUserId);
 
     const canView = this.canViewFollowInfo({
       viewer,
