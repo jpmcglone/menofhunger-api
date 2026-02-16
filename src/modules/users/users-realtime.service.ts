@@ -5,6 +5,34 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import type { PublicProfileDto } from '../../common/dto';
 import { PublicProfileCacheService } from './public-profile-cache.service';
 
+function formatBirthdayMonthDay(birthdate: Date): string {
+  // Use UTC to avoid timezone surprises.
+  const month = birthdate.getUTCMonth(); // 0-11
+  const day = birthdate.getUTCDate(); // 1-31
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const mm = months[month] ?? 'Jan';
+  return `${mm} ${day}`;
+}
+
+function formatBirthdayFull(birthdate: Date): string {
+  const month = birthdate.getUTCMonth(); // 0-11
+  const day = birthdate.getUTCDate(); // 1-31
+  const year = birthdate.getUTCFullYear();
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const mm = months[month] ?? 'Jan';
+  return `${mm} ${day}, ${year}`;
+}
+
+function formatBirthdayDisplay(
+  birthdate: Date | null,
+  visibility: 'none' | 'monthDay' | 'full' | null | undefined,
+): string | null {
+  if (!birthdate) return null;
+  if (visibility === 'none') return null;
+  if (visibility === 'full') return formatBirthdayFull(birthdate);
+  return formatBirthdayMonthDay(birthdate);
+}
+
 @Injectable()
 export class UsersRealtimeService {
   private readonly logger = new Logger(UsersRealtimeService.name);
@@ -23,10 +51,19 @@ export class UsersRealtimeService {
       where: { id },
       select: {
         id: true,
+        createdAt: true,
         username: true,
         usernameIsSet: true,
         name: true,
         bio: true,
+        website: true,
+        locationDisplay: true,
+        locationCity: true,
+        locationCounty: true,
+        locationState: true,
+        locationCountry: true,
+        birthdate: true,
+        birthdayVisibility: true,
         premium: true,
         premiumPlus: true,
         isOrganization: true,
@@ -64,9 +101,18 @@ export class UsersRealtimeService {
 
     return {
       id: user.id,
+      createdAt: user.createdAt.toISOString(),
       username: user.usernameIsSet ? user.username : null,
       name: user.name,
       bio: user.bio,
+      website: user.website ?? null,
+      locationDisplay: user.locationDisplay ?? null,
+      locationCity: user.locationCity ?? null,
+      locationCounty: user.locationCounty ?? null,
+      locationState: user.locationState ?? null,
+      locationCountry: user.locationCountry ?? null,
+      birthdayDisplay: formatBirthdayDisplay(user.birthdate, (user as any).birthdayVisibility ?? 'monthDay'),
+      birthdayMonthDay: user.birthdate ? formatBirthdayMonthDay(user.birthdate) : null,
       premium: user.premium,
       premiumPlus: user.premiumPlus,
       isOrganization: Boolean(user.isOrganization),

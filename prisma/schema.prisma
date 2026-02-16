@@ -27,6 +27,12 @@ enum FollowVisibility {
   none
 }
 
+enum BirthdayVisibility {
+  none
+  monthDay
+  full
+}
+
 enum PostMediaKind {
   image
   gif
@@ -123,6 +129,19 @@ model User {
   // Public profile fields.
   name String?
   bio  String?
+  website String?
+  /** Raw user-entered location query (zip/city/state text). */
+  locationInput String?
+  /** Normalized display string (e.g. "Roanoke, VA"). */
+  locationDisplay String?
+  locationZip     String?
+  locationCity    String?
+  /** US county name (if resolved). */
+  locationCounty  String?
+  /** US state code/name (e.g. "VA"). */
+  locationState   String?
+  /** Country code/name; US only for now. */
+  locationCountry String?
   // Required onboarding fields (gates app access).
   // Stored as DateTime (UTC midnight) to keep Prisma portable.
   birthdate DateTime?
@@ -154,6 +173,8 @@ model User {
   stripeCancelAtPeriodEnd Boolean @default(false)
   // Follow list privacy (controls counts + follower/following lists).
   followVisibility FollowVisibility @default(all)
+  // Birthday privacy/display preference for public profile.
+  birthdayVisibility BirthdayVisibility @default(monthDay)
   // Public media (stored in object storage; API stores keys only).
   avatarKey String?
   avatarUpdatedAt DateTime?

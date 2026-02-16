@@ -124,6 +124,16 @@ export const envSchema = z.object({
     z.string().optional(),
   ),
 
+  // Mapbox (location normalization / geocoding). Optional; required only if location is enabled.
+  MAPBOX_ACCESS_TOKEN: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  MAPBOX_GEOCODE_TIMEOUT_MS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MAPBOX_GEOCODE_TIMEOUT_MS must be a number'),
+
   // Global API rate limiting (generous defaults if unset).
   RATE_LIMIT_TTL_SECONDS: z
     .string()

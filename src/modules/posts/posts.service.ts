@@ -2362,7 +2362,7 @@ export class PostsService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { verifiedStatus: true, premium: true },
+      select: { verifiedStatus: true, premium: true, premiumPlus: true },
     });
     if (!user) throw new NotFoundException('User not found.');
 
@@ -3019,7 +3019,7 @@ export class PostsService {
     const { userId, body, visibility: requestedVisibility, parentId, mentions: clientMentions } = params;
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { verifiedStatus: true, premium: true },
+      select: { verifiedStatus: true, premium: true, premiumPlus: true },
     });
     if (!user) throw new NotFoundException('User not found.');
     const viewerIsVerified = Boolean(user.verifiedStatus && user.verifiedStatus !== 'none');

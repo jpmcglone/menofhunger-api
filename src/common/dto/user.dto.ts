@@ -1,4 +1,4 @@
-import type { FollowVisibility, User, VerifiedStatus } from '@prisma/client';
+import type { BirthdayVisibility, FollowVisibility, User, VerifiedStatus } from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
 
 /** Relationship fields for list-user DTOs (follows, search). */
@@ -93,6 +93,14 @@ export type UserDto = {
   usernameIsSet: boolean;
   name: string | null;
   bio: string | null;
+  website: string | null;
+  locationInput: string | null;
+  locationDisplay: string | null;
+  locationZip: string | null;
+  locationCity: string | null;
+  locationCounty: string | null;
+  locationState: string | null;
+  locationCountry: string | null;
   birthdate: string | null;
   interests: string[];
   menOnlyConfirmed: boolean;
@@ -105,6 +113,7 @@ export type UserDto = {
   verifiedAt: string | null;
   unverifiedAt: string | null;
   followVisibility: FollowVisibility;
+  birthdayVisibility: BirthdayVisibility;
   avatarUrl: string | null;
   bannerUrl: string | null;
   pinnedPostId: string | null;
@@ -139,6 +148,14 @@ export function toUserDto(user: User, publicAssetBaseUrl: string | null = null):
     usernameIsSet: user.usernameIsSet,
     name: user.name,
     bio: user.bio,
+    website: (user as any).website ?? null,
+    locationInput: (user as any).locationInput ?? null,
+    locationDisplay: (user as any).locationDisplay ?? null,
+    locationZip: (user as any).locationZip ?? null,
+    locationCity: (user as any).locationCity ?? null,
+    locationCounty: (user as any).locationCounty ?? null,
+    locationState: (user as any).locationState ?? null,
+    locationCountry: (user as any).locationCountry ?? null,
     birthdate: user.birthdate ? user.birthdate.toISOString() : null,
     interests: user.interests ?? [],
     menOnlyConfirmed: Boolean(user.menOnlyConfirmed),
@@ -151,6 +168,7 @@ export function toUserDto(user: User, publicAssetBaseUrl: string | null = null):
     verifiedAt: user.verifiedAt ? user.verifiedAt.toISOString() : null,
     unverifiedAt: user.unverifiedAt ? user.unverifiedAt.toISOString() : null,
     followVisibility: user.followVisibility,
+    birthdayVisibility: (user as any).birthdayVisibility ?? 'monthDay',
     avatarUrl: publicAssetUrl({
       publicBaseUrl: publicAssetBaseUrl,
       key: user.avatarKey ?? null,

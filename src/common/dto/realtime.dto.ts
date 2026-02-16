@@ -59,9 +59,20 @@ export type AdminUpdatedPayloadDto = {
 /** Public profile payload (same shape as GET /users/:username). */
 export type PublicProfileDto = {
   id: string;
+  createdAt: string;
   username: string | null;
   name: string | null;
   bio: string | null;
+  website: string | null;
+  locationDisplay: string | null;
+  locationCity: string | null;
+  locationCounty: string | null;
+  locationState: string | null;
+  locationCountry: string | null;
+  /** Birthday display string honoring the user's visibility setting. */
+  birthdayDisplay: string | null;
+  /** Month/day only (no year), e.g. "Jan 4". Null when unset. */
+  birthdayMonthDay: string | null;
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;

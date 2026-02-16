@@ -35,6 +35,11 @@ export type EmailConfig = {
   fromEmail: string;
 };
 
+export type MapboxConfig = {
+  accessToken: string;
+  geocodeTimeoutMs: number;
+};
+
 @Injectable()
 export class AppConfigService {
   private readonly logger = new Logger(AppConfigService.name);
@@ -168,6 +173,15 @@ export class AppConfigService {
   giphyApiKey(): string | null {
     const v = this.config.get<string>('GIPHY_API_KEY')?.trim() ?? '';
     return v ? v : null;
+  }
+
+  mapbox(): MapboxConfig | null {
+    const accessToken = this.config.get<string>('MAPBOX_ACCESS_TOKEN')?.trim() ?? '';
+    if (!accessToken) return null;
+    const rawTimeout = this.config.get<string>('MAPBOX_GEOCODE_TIMEOUT_MS')?.trim() ?? '';
+    const n = Number(rawTimeout);
+    const geocodeTimeoutMs = Number.isFinite(n) && n > 0 ? Math.floor(n) : 4000;
+    return { accessToken, geocodeTimeoutMs };
   }
 
   rateLimitTtlSeconds(): number {
@@ -340,6 +354,8 @@ export class AppConfigService {
       R2_BUCKET: this.config.get<string>('R2_BUCKET') as Env['R2_BUCKET'],
       R2_PUBLIC_BASE_URL: this.config.get<string>('R2_PUBLIC_BASE_URL') as Env['R2_PUBLIC_BASE_URL'],
       GIPHY_API_KEY: this.config.get<string>('GIPHY_API_KEY') as Env['GIPHY_API_KEY'],
+      MAPBOX_ACCESS_TOKEN: this.config.get<string>('MAPBOX_ACCESS_TOKEN') as Env['MAPBOX_ACCESS_TOKEN'],
+      MAPBOX_GEOCODE_TIMEOUT_MS: this.config.get<string>('MAPBOX_GEOCODE_TIMEOUT_MS') as Env['MAPBOX_GEOCODE_TIMEOUT_MS'],
       RATE_LIMIT_TTL_SECONDS: this.config.get<string>('RATE_LIMIT_TTL_SECONDS') as Env['RATE_LIMIT_TTL_SECONDS'],
       RATE_LIMIT_LIMIT: this.config.get<string>('RATE_LIMIT_LIMIT') as Env['RATE_LIMIT_LIMIT'],
       RATE_LIMIT_AUTH_START_TTL_SECONDS: this.config.get<string>(

@@ -54,7 +54,7 @@ export class JobsStatusService implements OnModuleDestroy {
   }
 
   async waitForCompletion(jobId: string, timeoutMs: number): Promise<{ ok: true; result: unknown } | { ok: false; reason: string }> {
-    const j: Job | null = await this.queue.getJob(jobId);
+    const j = await this.queue.getJob(jobId);
     if (!j) return { ok: false, reason: 'not_found' };
     try {
       const result = await j.waitUntilFinished(this.queueEvents, timeoutMs);

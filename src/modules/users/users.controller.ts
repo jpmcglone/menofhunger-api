@@ -18,20 +18,69 @@ import { PublicProfileCacheService } from './public-profile-cache.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { UsersRealtimeService } from './users-realtime.service';
 import { canonicalizeTopicValue } from '../../common/topics/topic-utils';
+import { UsersLocationService } from './users-location.service';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
 });
+
+function formatBirthdayMonthDay(birthdate: Date): string {
+  // Use UTC to avoid timezone surprises.
+  const month = birthdate.getUTCMonth(); // 0-11
+  const day = birthdate.getUTCDate(); // 1-31
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const mm = months[month] ?? 'Jan';
+  return `${mm} ${day}`;
+}
+
+function formatBirthdayFull(birthdate: Date): string {
+  // Use UTC to avoid timezone surprises.
+  const month = birthdate.getUTCMonth(); // 0-11
+  const day = birthdate.getUTCDate(); // 1-31
+  const year = birthdate.getUTCFullYear();
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const mm = months[month] ?? 'Jan';
+  return `${mm} ${day}, ${year}`;
+}
+
+function formatBirthdayDisplay(
+  birthdate: Date | null,
+  visibility: 'none' | 'monthDay' | 'full' | null | undefined,
+): string | null {
+  if (!birthdate) return null;
+  if (visibility === 'none') return null;
+  if (visibility === 'full') return formatBirthdayFull(birthdate);
+  return formatBirthdayMonthDay(birthdate);
+}
+
+function normalizeWebsite(raw: string): string {
+  const s = (raw ?? '').trim();
+  if (!s) throw new BadRequestException('Website is required.');
+  const withScheme = /^https?:\/\//i.test(s) ? s : `https://${s}`;
+  let u: URL;
+  try {
+    u = new URL(withScheme);
+  } catch {
+    throw new BadRequestException('Website must be a valid URL.');
+  }
+  if (!/^https?:$/.test(u.protocol)) throw new BadRequestException('Website must be a valid URL.');
+  // Remove default ports and normalize.
+  u.hash = '';
+  return u.toString();
+}
 
 const profileSchema = z.object({
   name: z.string().trim().max(50).optional(),
   bio: z.string().trim().max(160).optional(),
   email: z.union([z.string().trim().email(), z.literal('')]).optional(),
   interests: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
+  website: z.union([z.string().trim().max(200), z.literal('')]).optional(),
+  locationQuery: z.union([z.string().trim().max(120), z.literal('')]).optional(),
 });
 
 const settingsSchema = z.object({
   followVisibility: z.enum(['all', 'verified', 'premium', 'none']).optional(),
+  birthdayVisibility: z.enum(['none', 'monthDay', 'full']).optional(),
   stewardBadgeEnabled: z.boolean().optional(),
 });
 
@@ -68,9 +117,18 @@ const MENOFHUNGER_USERNAME = 'menofhunger';
 
 type PublicProfilePayload = {
   id: string;
+  createdAt: string;
   username: string | null;
   name: string | null;
   bio: string | null;
+  website: string | null;
+  locationDisplay: string | null;
+  locationCity: string | null;
+  locationCounty: string | null;
+  locationState: string | null;
+  locationCountry: string | null;
+  birthdayDisplay: string | null;
+  birthdayMonthDay: string | null;
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
@@ -110,6 +168,7 @@ export class UsersController {
     private readonly publicProfileCache: PublicProfileCacheService<PublicProfilePayload>,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly usersRealtime: UsersRealtimeService,
+    private readonly usersLocation: UsersLocationService,
   ) {}
 
   private async viewerCanSeeLastOnline(viewerUserId: string | null): Promise<boolean> {
@@ -214,9 +273,18 @@ export class UsersController {
         await this.prisma.$queryRaw<
           Array<{
             id: string;
+            createdAt: Date;
             username: string | null;
             name: string | null;
             bio: string | null;
+            website: string | null;
+            locationDisplay: string | null;
+            locationCity: string | null;
+            locationCounty: string | null;
+            locationState: string | null;
+            locationCountry: string | null;
+            birthdate: Date | null;
+            birthdayVisibility: 'none' | 'monthDay' | 'full';
             premium: boolean;
             premiumPlus: boolean;
             isOrganization: boolean;
@@ -230,7 +298,7 @@ export class UsersController {
             lastOnlineAt: Date | null;
           }>
         >`
-          SELECT "id", "username", "name", "bio", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt"
+          SELECT "id", "createdAt", "username", "name", "bio", "website", "locationDisplay", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt"
           FROM "User"
           WHERE (
             (${isUuidOrCuid} = true AND "id" = ${raw})
@@ -261,9 +329,18 @@ export class UsersController {
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const payload: PublicProfilePayload = {
       id: user.id,
+      createdAt: user.createdAt.toISOString(),
       username: user.username,
       name: user.name,
       bio: user.bio,
+      website: user.website ?? null,
+      locationDisplay: user.locationDisplay ?? null,
+      locationCity: user.locationCity ?? null,
+      locationCounty: user.locationCounty ?? null,
+      locationState: user.locationState ?? null,
+      locationCountry: user.locationCountry ?? null,
+      birthdayDisplay: formatBirthdayDisplay(user.birthdate, (user as any).birthdayVisibility ?? 'monthDay'),
+      birthdayMonthDay: user.birthdate ? formatBirthdayMonthDay(user.birthdate) : null,
       premium: user.premium,
       premiumPlus: user.premiumPlus,
       isOrganization: Boolean((user as any).isOrganization),
@@ -605,6 +682,33 @@ export class UsersController {
               : null,
       };
 
+      if (parsed.website !== undefined) {
+        const raw = (parsed.website ?? '').trim();
+        update.website = raw ? normalizeWebsite(raw) : null;
+      }
+
+      if (parsed.locationQuery !== undefined) {
+        const q = (parsed.locationQuery ?? '').trim();
+        if (!q) {
+          update.locationInput = null;
+          update.locationDisplay = null;
+          update.locationZip = null;
+          update.locationCity = null;
+          update.locationCounty = null;
+          update.locationState = null;
+          update.locationCountry = null;
+        } else {
+          const loc = await this.usersLocation.normalizeUsLocation(q);
+          update.locationInput = loc.input;
+          update.locationDisplay = loc.display;
+          update.locationZip = loc.zip;
+          update.locationCity = loc.city;
+          update.locationCounty = loc.county;
+          update.locationState = loc.state;
+          update.locationCountry = loc.country;
+        }
+      }
+
       if (parsed.interests !== undefined) {
         const cleaned = Array.from(
           new Set(
@@ -697,6 +801,7 @@ export class UsersController {
       where: { id: userId },
       data: {
         followVisibility: parsed.followVisibility,
+        birthdayVisibility: parsed.birthdayVisibility,
         ...(parsed.stewardBadgeEnabled !== undefined ? { stewardBadgeEnabled: parsed.stewardBadgeEnabled } : {}),
       },
     });
