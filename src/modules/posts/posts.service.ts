@@ -20,6 +20,7 @@ export type PostCounts = {
 const feedPostInclude = {
   user: true,
   media: { orderBy: { position: 'asc' as const } },
+  poll: { include: { options: { orderBy: { position: 'asc' as const } } } },
   mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
 } as const;
 type FeedPost = Prisma.PostGetPayload<{ include: typeof feedPostInclude }>;
@@ -418,6 +419,38 @@ export class PostsService {
     return out;
   }
 
+  async viewerVotedPollOptionIdByPostId(params: { viewerUserId: string; postIds: string[] }) {
+    const { viewerUserId, postIds } = params;
+    if (!viewerUserId) return new Map<string, string>();
+    const ids = (postIds ?? []).filter(Boolean);
+    if (ids.length === 0) return new Map<string, string>();
+
+    const cacheKey = `posts.viewerPollVotes:${viewerUserId}`;
+    const cached =
+      this.requestCache.get<Map<string, string | null>>(cacheKey) ??
+      new Map<string, string | null>();
+    if (this.requestCache.get<Map<string, string | null>>(cacheKey) == null) {
+      this.requestCache.set(cacheKey, cached);
+    }
+
+    const missing = ids.filter((id) => !cached.has(id));
+    if (missing.length > 0) {
+      const rows = await this.prisma.postPollVote.findMany({
+        where: { userId: viewerUserId, poll: { postId: { in: missing } } },
+        select: { optionId: true, poll: { select: { postId: true } } },
+      });
+      for (const id of missing) cached.set(id, null);
+      for (const r of rows) cached.set(r.poll.postId, r.optionId);
+    }
+
+    const out = new Map<string, string>();
+    for (const id of ids) {
+      const v = cached.get(id);
+      if (v) out.set(id, v);
+    }
+    return out;
+  }
+
   private allowedVisibilitiesForViewer(
     viewer: { verifiedStatus: VerifiedStatus; premium: boolean; siteAdmin?: boolean } | null,
   ) {
@@ -533,11 +566,7 @@ export class PostsService {
 
     const posts = await this.prisma.post.findMany({
       where: whereWithCursor,
-      include: {
-        user: true,
-        media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
-      },
+      include: feedPostInclude,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -647,11 +676,7 @@ export class PostsService {
     const posts = ids.length
       ? await this.prisma.post.findMany({
           where: { id: { in: ids }, ...this.notDeletedWhere() },
-          include: {
-            user: true,
-            media: { orderBy: { position: 'asc' } },
-            mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
-          },
+          include: feedPostInclude,
         })
       : [];
     const byId = new Map(posts.map((p) => [p.id, p] as const));
@@ -778,11 +803,7 @@ export class PostsService {
       const posts = ids.length
         ? await this.prisma.post.findMany({
             where: { id: { in: ids }, ...this.notDeletedWhere() },
-            include: {
-              user: true,
-              media: { orderBy: { position: 'asc' } },
-              mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
-            },
+            include: feedPostInclude,
           })
         : [];
       const byId = new Map(posts.map((p) => [p.id, p] as const));
@@ -1031,11 +1052,7 @@ export class PostsService {
     const posts = ids.length
       ? await this.prisma.post.findMany({
           where: { id: { in: ids }, ...this.notDeletedWhere() },
-          include: {
-            user: true,
-            media: { orderBy: { position: 'asc' } },
-            mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
-          },
+          include: feedPostInclude,
         })
       : [];
     const byId = new Map(posts.map((p) => [p.id, p] as const));
@@ -1433,12 +1450,8 @@ export class PostsService {
 
     const posts = ids.length
       ? await this.prisma.post.findMany({
-          where: { id: { in: ids } },
-          include: {
-            user: true,
-            media: { orderBy: { position: 'asc' } },
-            mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
-          },
+          where: { id: { in: ids }, ...this.notDeletedWhere() },
+          include: feedPostInclude,
         })
       : [];
     const byId = new Map(posts.map((p) => [p.id, p] as const));
@@ -1767,11 +1780,7 @@ export class PostsService {
       const posts = ids.length
         ? await this.prisma.post.findMany({
             where: { id: { in: ids } },
-            include: {
-              user: true,
-              media: { orderBy: { position: 'asc' } },
-              mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
-            },
+            include: feedPostInclude,
           })
         : [];
       const byId = new Map(posts.map((p) => [p.id, p] as const));
@@ -1798,11 +1807,7 @@ export class PostsService {
 
     const posts = await this.prisma.post.findMany({
       where: { AND: [baseWhere, ...(cursorWhere ? [cursorWhere] : [])] },
-      include: {
-        user: true,
-        media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
-      },
+      include: feedPostInclude,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -2035,6 +2040,7 @@ export class PostsService {
       include: {
         user: true,
         media: { orderBy: { position: 'asc' } },
+        poll: { include: { options: { orderBy: { position: 'asc' } } } },
         mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
       },
     });
@@ -2072,9 +2078,17 @@ export class PostsService {
     const tags = Array.isArray((post as any).hashtags) ? ((post as any).hashtags as string[]) : [];
     const variants = Array.isArray((post as any).hashtagCasings) ? ((post as any).hashtagCasings as string[]) : [];
     await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
       await tx.post.update({
         where: { id },
-        data: { deletedAt: new Date() },
+        data: { deletedAt: now },
+      });
+
+      // Poll cleanup: once a post is deleted, we should never send "poll results ready" notifications.
+      // This also prevents notifications if the post is later restored by an admin.
+      await tx.postPoll.updateMany({
+        where: { postId: id, resultsNotifiedAt: null },
+        data: { resultsNotifiedAt: now },
       });
 
       // Posts are soft-deleted, so FK cascades won't run. Ensure bookmarks don't retain deleted posts.
@@ -2133,12 +2147,18 @@ export class PostsService {
         user: true,
         media: { orderBy: { position: 'asc' } },
         mentions: { select: { userId: true } },
+        poll: { select: { id: true, totalVoteCount: true } },
       },
     });
     if (!post) throw new NotFoundException('Post not found.');
     if (post.userId !== userId) throw new ForbiddenException('Not allowed to edit this post.');
     if (post.deletedAt) throw new ForbiddenException('Cannot edit a deleted post.');
     if (post.parentId) throw new ForbiddenException('Replies cannot be edited.');
+
+    // Product rule: posts with polls cannot be edited once voting begins.
+    if ((post as any).poll && ((post as any).poll.totalVoteCount ?? 0) > 0) {
+      throw new ForbiddenException('This post can no longer be edited.');
+    }
 
     // Only-me posts behave like notes/drafts: allow edits without age/count limits.
     if (post.visibility !== 'onlyMe') {
@@ -2881,6 +2901,7 @@ export class PostsService {
       parentId: null,
       mentions: null,
       media: media.length ? media : null,
+      poll: null,
     });
 
     // Fetch with mentions for UI consistency.
@@ -2889,6 +2910,7 @@ export class PostsService {
       include: {
         user: true,
         media: { orderBy: { position: 'asc' } },
+        poll: { include: { options: { orderBy: { position: 'asc' } } } },
         mentions: {
           include: {
             user: {
@@ -3000,6 +3022,13 @@ export class PostsService {
       durationSeconds?: number;
       alt?: string | null;
     }> | null;
+    poll: {
+      endsAt: Date;
+      options: Array<{
+        text: string;
+        image: { r2Key: string; width: number | null; height: number | null; alt: string | null } | null;
+      }>;
+    } | null;
   }) {
     const { userId, body, visibility: requestedVisibility, parentId, mentions: clientMentions } = params;
     const user = await this.prisma.user.findUnique({
@@ -3115,6 +3144,27 @@ export class PostsService {
     const media = (params.media ?? []).filter(Boolean);
     if (media.length > 4) throw new BadRequestException('You can attach up to 4 images, GIFs, or videos.');
 
+    const poll = params.poll;
+    if (poll && parentId) {
+      throw new ForbiddenException('Polls are not allowed on replies.');
+    }
+    if (poll && media.length > 0) {
+      throw new BadRequestException('You cannot attach media to a poll post.');
+    }
+    // Product rule: polls are Premium/Premium+ only.
+    if (poll && !user.premium) {
+      throw new ForbiddenException('Upgrade to premium to create polls.');
+    }
+    if (poll) {
+      const endsAtMs = poll.endsAt instanceof Date ? poll.endsAt.getTime() : new Date(poll.endsAt as any).getTime();
+      const now = Date.now();
+      const maxMs = 7 * 24 * 60 * 60 * 1000;
+      if (!Number.isFinite(endsAtMs) || endsAtMs <= now) throw new BadRequestException('Invalid poll duration.');
+      if (endsAtMs > now + maxMs) throw new BadRequestException('Poll duration must be 7 days or shorter.');
+      const opts = Array.isArray(poll.options) ? poll.options : [];
+      if (opts.length < 2 || opts.length > 5) throw new BadRequestException('Poll must include 2 to 5 options.');
+    }
+
     // Product rule: media posts are Premium/Premium+ only (images, GIFs/Giphy, video).
     if (media.length > 0 && !user.premium) {
       throw new ForbiddenException('Upgrade to premium to post media.');
@@ -3130,9 +3180,15 @@ export class PostsService {
     const allowedThumbnailPrefixes = [`uploads/${userId}/thumbnails/`, `dev/uploads/${userId}/thumbnails/`];
 
     // Keys that exist in MediaContentHash (reused uploads from any user) are allowed.
-    const uploadKeys = media
-      .filter((m) => m.source === 'upload' && (m.r2Key ?? '').trim())
-      .map((m) => (m.r2Key ?? '').trim());
+    const pollImageKeys = (poll?.options ?? [])
+      .map((o) => (o?.image?.r2Key ?? '').trim())
+      .filter(Boolean);
+    const uploadKeys = [
+      ...media
+        .filter((m) => m.source === 'upload' && (m.r2Key ?? '').trim())
+        .map((m) => (m.r2Key ?? '').trim()),
+      ...pollImageKeys,
+    ];
     const reusedKeySet = new Set(
       uploadKeys.length
         ? (await this.prisma.mediaContentHash.findMany({ where: { r2Key: { in: uploadKeys } }, select: { r2Key: true } })).map((r) => r.r2Key)
@@ -3214,6 +3270,27 @@ export class PostsService {
       })
       .filter(Boolean);
 
+    const cleanedPollOptions = poll
+      ? (poll.options ?? []).map((o, idx) => {
+          const text = (o?.text ?? '').trim().slice(0, 30);
+          const img = o?.image ?? null;
+          if (!text && !img) throw new BadRequestException('Poll option must include text or an image.');
+          if (!img) {
+            return { text, position: idx, imageR2Key: null as string | null, imageWidth: null as number | null, imageHeight: null as number | null, imageAlt: null as string | null };
+          }
+          const r2Key = (img.r2Key ?? '').trim();
+          if (!r2Key) throw new BadRequestException('Invalid poll option image key.');
+          const isReusedKey = reusedKeySet.has(r2Key);
+          if (!isReusedKey && !allowedImagePrefixes.some((p) => r2Key.startsWith(p))) {
+            throw new BadRequestException('Invalid poll option image key.');
+          }
+          const width = typeof img.width === 'number' && Number.isFinite(img.width) ? Math.max(1, Math.floor(img.width)) : null;
+          const height = typeof img.height === 'number' && Number.isFinite(img.height) ? Math.max(1, Math.floor(img.height)) : null;
+          const alt = (img.alt ?? '').trim().slice(0, 500) || null;
+          return { text, position: idx, imageR2Key: r2Key, imageWidth: width, imageHeight: height, imageAlt: alt };
+        })
+      : null;
+
     // Parse explicit @mentions from body text only (for notification priority)
     const fromBody = this.parseMentionsFromBody(body);
     const bodyMentionIds = await this.resolveMentionUsernames(fromBody);
@@ -3255,8 +3332,31 @@ export class PostsService {
                 },
               }
             : {}),
+          ...(poll
+            ? {
+                poll: {
+                  create: {
+                    endsAt: poll.endsAt,
+                    ...(cleanedPollOptions?.length
+                      ? {
+                          options: {
+                            create: cleanedPollOptions.map((o) => ({
+                              text: o.text,
+                              position: o.position,
+                              imageR2Key: o.imageR2Key ?? undefined,
+                              imageWidth: o.imageWidth ?? undefined,
+                              imageHeight: o.imageHeight ?? undefined,
+                              imageAlt: o.imageAlt ?? undefined,
+                            })),
+                          },
+                        }
+                      : {}),
+                  },
+                },
+              }
+            : {}),
         },
-        include: { user: true, media: { orderBy: { position: 'asc' } } },
+        include: { user: true, media: { orderBy: { position: 'asc' } }, poll: { include: { options: { orderBy: { position: 'asc' } } } } },
       });
 
       if (parentId) {
@@ -3421,9 +3521,61 @@ export class PostsService {
         user: true,
         media: { orderBy: { position: 'asc' } },
         mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+        poll: { include: { options: { orderBy: { position: 'asc' } } } },
       },
     });
     return withMentions!;
+  }
+
+  async voteOnPoll(params: { userId: string; postId: string; optionId: string }) {
+    const { userId, postId, optionId } = params;
+    const id = (postId ?? '').trim();
+    const optId = (optionId ?? '').trim();
+    if (!id) throw new NotFoundException('Post not found.');
+    if (!optId) throw new BadRequestException('Invalid poll option.');
+
+    const post = await this.getById({ viewerUserId: userId, id });
+    if (post.deletedAt) throw new BadRequestException('Deleted posts cannot be voted on.');
+    if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be voted on.');
+    if (post.userId === userId) throw new ForbiddenException('You cannot vote on your own poll.');
+
+    const poll = await this.prisma.postPoll.findUnique({
+      where: { postId: id },
+      include: { options: { orderBy: { position: 'asc' } } },
+    });
+    if (!poll) throw new NotFoundException('Poll not found.');
+
+    const now = new Date();
+    if (poll.endsAt <= now) throw new BadRequestException('This poll has ended.');
+
+    const opt = poll.options.find((o) => o.id === optId);
+    if (!opt) throw new BadRequestException('Invalid poll option.');
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      try {
+        await tx.postPollVote.create({
+          data: {
+            pollId: poll.id,
+            optionId: optId,
+            userId,
+          },
+        });
+      } catch (err: any) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          throw new ForbiddenException('You have already voted on this poll.');
+        }
+        throw err;
+      }
+
+      await tx.postPollOption.update({ where: { id: optId }, data: { voteCount: { increment: 1 } } });
+      return await tx.postPoll.update({
+        where: { id: poll.id },
+        data: { totalVoteCount: { increment: 1 } },
+        include: { options: { orderBy: { position: 'asc' } } },
+      });
+    });
+
+    return { poll: updated, viewerVotedOptionId: optId };
   }
 
   private async ensureUserCanBoost(userId: string) {

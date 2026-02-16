@@ -7,7 +7,7 @@ import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { PostsService } from './posts.service';
-import { toPostDto } from './post.dto';
+import { toPostDto, toPostPollDto } from './post.dto';
 import { buildAttachParentChain } from './posts.utils';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { setReadCache } from '../../common/http-cache';
@@ -40,6 +40,15 @@ const createUploadMediaItemSchema = z.object({
   alt: z.string().trim().max(500).nullish(),
 });
 
+const createPollOptionImageSchema = z.object({
+  source: z.literal('upload'),
+  kind: z.literal('image'),
+  r2Key: z.string().min(1),
+  width: z.coerce.number().int().min(1).max(20000).optional(),
+  height: z.coerce.number().int().min(1).max(20000).optional(),
+  alt: z.string().trim().max(500).nullish(),
+});
+
 const createMediaItemSchema = z.discriminatedUnion('source', [
   createUploadMediaItemSchema,
   z.object({
@@ -55,6 +64,53 @@ const createMediaItemSchema = z.discriminatedUnion('source', [
 
 type CreateMediaItem = z.infer<typeof createMediaItemSchema>;
 
+const createPollSchema = z.object({
+  options: z
+    .array(
+      z.object({
+        text: z.string().trim().max(30).optional(),
+        image: createPollOptionImageSchema.nullish(),
+      }),
+    )
+    .min(2)
+    .max(5),
+  duration: z.object({
+    days: z.coerce.number().int().min(0).max(7),
+    hours: z.coerce.number().int().min(0).max(23),
+    minutes: z.coerce.number().int().min(0).max(59),
+  }),
+}).superRefine((val, ctx) => {
+  const opts = val.options ?? [];
+  for (let i = 0; i < opts.length; i++) {
+    const o = opts[i]!;
+    const text = (o.text ?? '').trim();
+    const hasText = Boolean(text);
+    const hasImage = Boolean(o.image?.r2Key);
+    if (!hasText && !hasImage) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Poll option must include text or an image.',
+        path: ['options', i, 'text'],
+      });
+    }
+  }
+
+  // Product rule: if any option includes an image, all options must include an image.
+  const anyHasImage = opts.some((o) => Boolean(o?.image?.r2Key));
+  if (anyHasImage) {
+    for (let i = 0; i < opts.length; i++) {
+      const o = opts[i]!;
+      if (!o?.image?.r2Key) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'If any poll option has an image, all poll options must have images.',
+          path: ['options', i, 'image'],
+        });
+      }
+    }
+  }
+});
+
 const createSchema = z
   .object({
     body: z.string().trim().max(1000).optional(),
@@ -62,16 +118,60 @@ const createSchema = z
     parent_id: z.string().cuid().optional(),
     mentions: z.array(z.string().min(1).max(120)).max(20).optional(),
     media: z.array(createMediaItemSchema).max(4).optional(),
+    poll: createPollSchema.optional(),
   })
   .superRefine((val, ctx) => {
     const body = (val.body ?? '').trim();
     const mediaCount = val.media?.length ?? 0;
-    if (!body && mediaCount === 0) {
+    const hasPoll = Boolean(val.poll);
+    if (!body && mediaCount === 0 && !hasPoll) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Post must include text or media.',
+        message: 'Post must include text, media, or a poll.',
         path: ['body'],
       });
+    }
+    if (hasPoll && mediaCount > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'You cannot attach media to a poll post.',
+        path: ['media'],
+      });
+    }
+    if (hasPoll && val.parent_id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Polls are not allowed on replies.',
+        path: ['poll'],
+      });
+    }
+    if (hasPoll) {
+      const d = val.poll?.duration;
+      const days = typeof d?.days === 'number' ? d.days : 0;
+      const hours = typeof d?.hours === 'number' ? d.hours : 0;
+      const minutes = typeof d?.minutes === 'number' ? d.minutes : 0;
+      const totalSeconds = days * 24 * 60 * 60 + hours * 60 * 60 + minutes * 60;
+      if (totalSeconds <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Poll duration must be at least 1 minute.',
+          path: ['poll', 'duration'],
+        });
+      }
+      if (totalSeconds > 7 * 24 * 60 * 60) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Poll duration must be 7 days or shorter.',
+          path: ['poll', 'duration'],
+        });
+      }
+      if (days === 7 && (hours > 0 || minutes > 0)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'When days is 7, hours and minutes must be 0.',
+          path: ['poll', 'duration'],
+        });
+      }
     }
     // Video uploads: require dimensions and duration, enforce 1440p and 5 min
     for (let i = 0; i < (val.media ?? []).length; i++) {
@@ -247,6 +347,9 @@ export class PostsController {
     const bookmarksByPostId = viewerUserId
       ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
       : new Map<string, { collectionIds: string[] }>();
+    const votedPollOptionIdByPostId = viewerUserId
+      ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
+      : new Map<string, string>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)) : null;
     const scoreByPostId =
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
@@ -257,6 +360,7 @@ export class PostsController {
       baseUrl,
       boosted,
       bookmarksByPostId,
+      votedPollOptionIdByPostId,
       viewerHasAdmin,
       internalByPostId,
       scoreByPostId,
@@ -341,6 +445,9 @@ export class PostsController {
     const bookmarksByPostId = viewerUserId
       ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
       : new Map<string, { collectionIds: string[] }>();
+    const votedPollOptionIdByPostId = viewerUserId
+      ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
+      : new Map<string, string>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPostsUser.map((p) => p.id)) : null;
     const scoreByPostIdUser =
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
@@ -351,6 +458,7 @@ export class PostsController {
       baseUrl,
       boosted,
       bookmarksByPostId,
+      votedPollOptionIdByPostId,
       viewerHasAdmin,
       internalByPostId,
       scoreByPostId: scoreByPostIdUser,
@@ -443,6 +551,9 @@ export class PostsController {
     const bookmarksByPostId = viewerUserId
       ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: result.comments.map((p) => p.id) })
       : new Map<string, { collectionIds: string[] }>();
+    const votedPollOptionIdByPostId = viewerUserId
+      ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: result.comments.map((p) => p.id) })
+      : new Map<string, string>();
     const internalByPostId = viewerHasAdmin
       ? await this.posts.ensureBoostScoresFresh(result.comments.map((p) => p.id))
       : null;
@@ -455,6 +566,7 @@ export class PostsController {
           viewerHasBoosted: boosted.has(p.id),
           viewerHasBookmarked: bookmarksByPostId.has(p.id),
           viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
+          viewerVotedPollOptionId: votedPollOptionIdByPostId.get(p.id) ?? null,
           includeInternal: viewerHasAdmin,
           internalOverride: (() => {
             const base = internalByPostId?.get(p.id);
@@ -518,6 +630,9 @@ export class PostsController {
     const bookmarksByPostId = viewerUserId
       ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
       : new Map<string, { collectionIds: string[] }>();
+    const votedPollOptionIdByPostId = viewerUserId
+      ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds })
+      : new Map<string, string>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(postIds) : null;
     const scoreByPostIdGet =
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(postIds) : undefined;
@@ -530,6 +645,7 @@ export class PostsController {
         viewerHasBoosted: boosted.has(p.id),
         viewerHasBookmarked: bookmarksByPostId.has(p.id),
         viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
+        viewerVotedPollOptionId: votedPollOptionIdByPostId.get(p.id) ?? null,
         includeInternal: viewerHasAdmin,
         internalOverride:
           base || (typeof score === 'number' ? { score } : undefined)
@@ -560,6 +676,27 @@ export class PostsController {
   async create(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = createSchema.parse(body);
     const media = (parsed.media ?? null) as CreateMediaItem[] | null;
+    const poll =
+      parsed.poll
+        ? (() => {
+            const d = parsed.poll!.duration;
+            const totalSeconds = d.days * 24 * 60 * 60 + d.hours * 60 * 60 + d.minutes * 60;
+            return {
+              endsAt: new Date(Date.now() + totalSeconds * 1000),
+              options: parsed.poll!.options.map((o) => ({
+                text: (o.text ?? '').trim(),
+                image: o.image
+                  ? {
+                      r2Key: o.image.r2Key,
+                      width: typeof o.image.width === 'number' ? o.image.width : null,
+                      height: typeof o.image.height === 'number' ? o.image.height : null,
+                      alt: (o.image.alt ?? '').trim() || null,
+                    }
+                  : null,
+              })),
+            };
+          })()
+        : null;
     const created = await this.posts.createPost({
       userId,
       body: (parsed.body ?? '').trim(),
@@ -567,6 +704,7 @@ export class PostsController {
       parentId: parsed.parent_id ?? null,
       mentions: parsed.mentions ?? null,
       media,
+      poll,
     });
 
     const viewer = await this.posts.viewerContext(userId);
@@ -665,6 +803,30 @@ export class PostsController {
   async unboost(@Param('id') id: string, @CurrentUserId() userId: string) {
     const result = await this.posts.unboostPost({ userId, postId: id });
     return { data: result };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post(':id/poll/vote')
+  async voteOnPoll(@Param('id') id: string, @Body() body: unknown, @CurrentUserId() userId: string) {
+    const parsed = z
+      .object({
+        optionId: z.string().cuid(),
+      })
+      .parse(body);
+    const result = await this.posts.voteOnPoll({ userId, postId: id, optionId: parsed.optionId });
+    return {
+      data: {
+        poll: toPostPollDto(result.poll as any, this.appConfig.r2()?.publicBaseUrl ?? null, {
+          viewerVotedOptionId: result.viewerVotedOptionId,
+        }),
+      },
+    };
   }
 }
 

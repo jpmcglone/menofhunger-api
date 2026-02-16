@@ -1,4 +1,14 @@
-import type { Post, PostMedia, PostMediaKind, PostMediaSource, PostVisibility, User, VerifiedStatus } from '@prisma/client';
+import type {
+  Post,
+  PostMedia,
+  PostMediaKind,
+  PostMediaSource,
+  PostPoll,
+  PostPollOption,
+  PostVisibility,
+  User,
+  VerifiedStatus,
+} from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
 
 /** PostMedia from Prisma already has thumbnailR2Key, durationSeconds, width, height, deletedAt. */
@@ -44,6 +54,27 @@ export type PostMentionDto = {
   stewardBadgeEnabled?: boolean;
 };
 
+export type PostPollOptionDto = {
+  id: string;
+  text: string;
+  imageUrl: string | null;
+  width: number | null;
+  height: number | null;
+  alt: string | null;
+  voteCount: number;
+  percent: number;
+};
+
+export type PostPollDto = {
+  id: string;
+  endsAt: string;
+  ended: boolean;
+  totalVoteCount: number;
+  viewerHasVoted: boolean;
+  viewerVotedOptionId: string | null;
+  options: PostPollOptionDto[];
+};
+
 export type PostDto = {
   id: string;
   createdAt: string;
@@ -64,6 +95,7 @@ export type PostDto = {
   parent?: PostDto;
   mentions: PostMentionDto[];
   media: PostMediaDto[];
+  poll?: PostPollDto | null;
   viewerHasBoosted?: boolean;
   viewerHasBookmarked?: boolean;
   viewerBookmarkCollectionIds?: string[];
@@ -94,7 +126,61 @@ export type PostWithAuthorAndMedia = Post & {
   user: User;
   media: PostMediaWithOptional[];
   mentions?: PostMentionWithUser[];
+  poll?: (PostPoll & { options: PostPollOption[] }) | null;
 };
+
+export function toPostPollDto(
+  poll: (PostPoll & { options: PostPollOption[] }) | null | undefined,
+  publicAssetBaseUrl: string | null = null,
+  opts?: { viewerVotedOptionId?: string | null },
+): PostPollDto | null {
+  if (!poll) return null;
+  const endsAtIso = poll.endsAt instanceof Date ? poll.endsAt.toISOString() : new Date(poll.endsAt as any).toISOString();
+  const ended = new Date(endsAtIso).getTime() <= Date.now();
+  const totalVoteCount =
+    typeof (poll as any).totalVoteCount === 'number' && Number.isFinite((poll as any).totalVoteCount)
+      ? Math.max(0, Math.floor((poll as any).totalVoteCount))
+      : 0;
+  const viewerVotedOptionId = (opts?.viewerVotedOptionId ?? null) || null;
+  const viewerHasVoted = Boolean(viewerVotedOptionId);
+
+  const options = (poll.options ?? [])
+    .slice()
+    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    .map((o): PostPollOptionDto => {
+      const voteCount =
+        typeof (o as any).voteCount === 'number' && Number.isFinite((o as any).voteCount)
+          ? Math.max(0, Math.floor((o as any).voteCount))
+          : 0;
+      const percent =
+        totalVoteCount > 0
+          ? Math.round((voteCount / totalVoteCount) * 100)
+          : 0;
+      const imageUrl = o.imageR2Key
+        ? publicAssetUrl({ publicBaseUrl: publicAssetBaseUrl, key: o.imageR2Key })
+        : null;
+      return {
+        id: o.id,
+        text: (o.text ?? '').trim(),
+        imageUrl: imageUrl || null,
+        width: typeof (o as any).imageWidth === 'number' ? ((o as any).imageWidth as number) : (o as any).imageWidth ?? null,
+        height: typeof (o as any).imageHeight === 'number' ? ((o as any).imageHeight as number) : (o as any).imageHeight ?? null,
+        alt: (o.imageAlt ?? '').trim() || null,
+        voteCount,
+        percent,
+      };
+    });
+
+  return {
+    id: poll.id,
+    endsAt: endsAtIso,
+    ended,
+    totalVoteCount,
+    viewerHasVoted,
+    viewerVotedOptionId,
+    options,
+  };
+}
 
 export function toPostDto(
   post: PostWithAuthorAndMedia,
@@ -103,6 +189,7 @@ export function toPostDto(
     viewerHasBoosted?: boolean;
     viewerHasBookmarked?: boolean;
     viewerBookmarkCollectionIds?: string[];
+    viewerVotedPollOptionId?: string | null;
     includeInternal?: boolean;
     internalOverride?: {
       boostScore?: number | null;
@@ -182,6 +269,10 @@ export function toPostDto(
     )
     .filter((x): x is PostMentionDto => x != null);
 
+  const pollDto = toPostPollDto(post.poll ?? null, publicAssetBaseUrl, {
+    viewerVotedOptionId: opts?.viewerVotedPollOptionId ?? null,
+  });
+
   return {
     id: post.id,
     createdAt: post.createdAt.toISOString(),
@@ -199,6 +290,7 @@ export function toPostDto(
     parentId: post.parentId ?? null,
     mentions: isPostDeleted ? [] : mentions,
     media: isPostDeleted ? [] : media,
+    ...(typeof (post as any).poll !== 'undefined' ? { poll: isPostDeleted ? null : pollDto } : {}),
     ...(typeof opts?.viewerHasBoosted === 'boolean' ? { viewerHasBoosted: opts.viewerHasBoosted } : {}),
     ...(typeof opts?.viewerHasBookmarked === 'boolean' ? { viewerHasBookmarked: opts.viewerHasBookmarked } : {}),
     ...(Array.isArray(opts?.viewerBookmarkCollectionIds) ? { viewerBookmarkCollectionIds: opts.viewerBookmarkCollectionIds } : {}),

@@ -78,7 +78,16 @@ export class SearchController {
         userCursor,
         postCursor,
       });
-      const users = res.users.map((u) => toUserListDto(u, publicBaseUrl, { relationship: u.relationship, createdAt: u.createdAt }));
+      const users = res.users.map((u) =>
+        toUserListDto(u, publicBaseUrl, {
+          relationship: {
+            viewerFollowsUser: u.relationship.viewerFollowsUser,
+            userFollowsViewer: u.relationship.userFollowsViewer,
+            viewerPostNotificationsEnabled: (u.relationship as any).viewerPostNotificationsEnabled ?? false,
+          },
+          createdAt: u.createdAt,
+        }),
+      );
       const postIds = (res.posts ?? []).map((p) => p.id);
       const boosted = viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds }) : new Set<string>();
       const bookmarksByPostId = viewerUserId
@@ -117,7 +126,16 @@ export class SearchController {
 
     if (type === 'users') {
       const result = await this.search.searchUsers({ q, limit, cursor, viewerUserId });
-      const users = result.users.map((u) => toUserListDto(u, publicBaseUrl, { relationship: u.relationship, createdAt: u.createdAt }));
+      const users = result.users.map((u) =>
+        toUserListDto(u, publicBaseUrl, {
+          relationship: {
+            viewerFollowsUser: u.relationship.viewerFollowsUser,
+            userFollowsViewer: u.relationship.userFollowsViewer,
+            viewerPostNotificationsEnabled: (u.relationship as any).viewerPostNotificationsEnabled ?? false,
+          },
+          createdAt: u.createdAt,
+        }),
+      );
       return { data: users, pagination: { nextCursor: result.nextCursor } };
     }
     if (type === 'bookmarks') {

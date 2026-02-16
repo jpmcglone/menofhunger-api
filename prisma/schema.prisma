@@ -45,6 +45,7 @@ enum NotificationKind {
   followed_post
   mention
   nudge
+  poll_results_ready
   generic
 }
 
@@ -166,6 +167,7 @@ model User {
   sessions  Session[]
   posts     Post[]
   boosts    Boost[]
+  pollVotes PostPollVote[]
   bookmarks Bookmark[]
   bookmarkCollections BookmarkCollection[]
   // Pinned post on profile (one per user; must be own post).
@@ -331,6 +333,7 @@ model Post {
 
   boosts   Boost[]
   media    PostMedia[]
+  poll     PostPoll?
   bookmarks Bookmark[]
   mentions PostMention[]
   versions PostVersion[]
@@ -353,6 +356,67 @@ model Post {
   @@index([parentId, deletedAt, boostCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
   @@index([parentId, deletedAt, bookmarkCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
   @@index([parentId, deletedAt, commentCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
+}
+
+model PostPoll {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  /** Poll end timestamp (UTC). */
+  endsAt    DateTime
+  totalVoteCount Int @default(0)
+  /** When set, "poll results ready" notifications have been created. */
+  resultsNotifiedAt DateTime?
+
+  postId String @unique
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  options PostPollOption[]
+  votes   PostPollVote[]
+
+  @@index([endsAt])
+  @@index([resultsNotifiedAt])
+  @@index([createdAt])
+}
+
+model PostPollOption {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  pollId String
+  poll   PostPoll @relation(fields: [pollId], references: [id], onDelete: Cascade)
+
+  text     String @db.VarChar(30)
+  position Int    @default(0)
+
+  /** Optional image (stored in R2; URL computed server-side from base URL). */
+  imageR2Key String?
+  imageWidth Int?
+  imageHeight Int?
+  imageAlt   String? @db.VarChar(500)
+
+  voteCount Int @default(0)
+  votes     PostPollVote[]
+
+  @@unique([pollId, position])
+  @@index([pollId, position])
+}
+
+model PostPollVote {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  pollId   String
+  optionId String
+  userId   String
+
+  poll   PostPoll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  option PostPollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, userId])
+  @@index([pollId, createdAt])
+  @@index([optionId, createdAt])
+  @@index([userId, createdAt])
 }
 
 model PostVersion {

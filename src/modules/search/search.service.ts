@@ -334,6 +334,7 @@ export class SearchService {
       name: u.name,
       premium: u.premium,
       premiumPlus: u.premiumPlus,
+      isOrganization: Boolean((u as any).isOrganization),
       stewardBadgeEnabled: Boolean(u.stewardBadgeEnabled),
       verifiedStatus: u.verifiedStatus,
       avatarKey: u.avatarKey,

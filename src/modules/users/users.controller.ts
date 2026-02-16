@@ -406,6 +406,7 @@ export class UsersController {
         relationship: {
           viewerFollowsUser: rel.viewerFollows.has(u.id),
           userFollowsViewer: rel.followsViewer.has(u.id),
+          viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(u.id),
         },
       }),
     );

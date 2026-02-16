@@ -75,6 +75,7 @@ export class NotificationsService {
         followed_post: 'posted',
         mention: 'mentioned you',
         comment: 'replied to you',
+        poll_results_ready: 'Poll results are ready',
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
@@ -752,11 +753,12 @@ export class NotificationsService {
     }
 
     if (rollupInsertIndex !== null && rollupNewest && rollupCount > 0) {
+      const newest = rollupNewest as NotificationDto;
       const rollup: FollowedPostsRollupDto = {
-        id: rollupNewest.id,
-        createdAt: rollupNewest.createdAt,
-        deliveredAt: rollupAnyUndelivered ? null : rollupNewest.deliveredAt,
-        readAt: rollupAnyUnread ? null : rollupNewest.readAt,
+        id: newest.id,
+        createdAt: newest.createdAt,
+        deliveredAt: rollupAnyUndelivered ? null : newest.deliveredAt,
+        readAt: rollupAnyUnread ? null : newest.readAt,
         actors: rollupActors,
         actorCount: rollupActors.length,
         count: rollupCount,
