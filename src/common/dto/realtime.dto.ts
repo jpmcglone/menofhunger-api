@@ -1,5 +1,6 @@
 import type { MessageDto } from '../../modules/messages/message.dto';
 import type { NotificationDto } from '../../modules/notifications/notification.dto';
+import type { UserDto } from './user.dto';
 
 /**
  * Websocket (Socket.IO) payload DTOs.
@@ -90,6 +91,16 @@ export type PublicProfileDto = {
  */
 export type UsersSelfUpdatedPayloadDto = {
   user: PublicProfileDto;
+};
+
+/**
+ * Self-only auth/settings updates (emitted to the user's own sockets only).
+ * Canonical payload matches `/auth/me` user shape.
+ */
+export type UsersMeUpdatedPayloadDto = {
+  user: UserDto;
+  /** Optional hint for debugging/UI refresh decisions. */
+  reason?: string;
 };
 
 /**

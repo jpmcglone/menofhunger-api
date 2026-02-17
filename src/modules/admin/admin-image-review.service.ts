@@ -286,7 +286,16 @@ export class AdminImageReviewService {
 
     const postMedia = await this.prisma.postMedia.findMany({
       where: { r2Key: a.r2Key },
-      include: { post: { include: { user: true } } },
+      include: {
+        post: {
+          select: {
+            id: true,
+            createdAt: true,
+            visibility: true,
+            user: { select: { id: true, username: true } },
+          },
+        },
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
 

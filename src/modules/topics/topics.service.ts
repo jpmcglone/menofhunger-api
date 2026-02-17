@@ -9,6 +9,7 @@ import { PostsService } from '../posts/posts.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
+import { POST_BASE_INCLUDE } from '../../common/prisma-includes/post.include';
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
 
@@ -29,11 +30,7 @@ function normalizeKey(s: string): string {
 
 // (token extraction helpers removed; we now aggregate Post.topics directly)
 
-const TOPIC_POST_INCLUDE = {
-  user: true,
-  media: { orderBy: { position: 'asc' as const } },
-  mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true } } } },
-} as const;
+const TOPIC_POST_INCLUDE = POST_BASE_INCLUDE;
 
 @Injectable()
 export class TopicsService {

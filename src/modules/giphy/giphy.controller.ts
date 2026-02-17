@@ -6,6 +6,9 @@ import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
+import { RedisKeys } from '../redis/redis-keys';
+import { CacheService } from '../redis/cache.service';
+import { CacheTtl } from '../redis/cache-ttl';
 
 const searchSchema = z.object({
   q: z.string().trim().min(1).max(120),
@@ -60,6 +63,7 @@ export class GiphyController {
   constructor(
     private readonly cfg: AppConfigService,
     private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
   ) {}
 
   private async assertPremium(userId: string) {
@@ -83,6 +87,12 @@ export class GiphyController {
   async search(@CurrentUserId() userId: string, @Query() query: unknown) {
     await this.assertPremium(userId);
     const parsed = searchSchema.parse(query);
+    const cacheKey = RedisKeys.giphySearch(parsed.q, parsed.limit ?? 24);
+    return await this.cache.getOrSetJson<{ data: ReturnType<typeof mapGiphyItems> }>({
+      enabled: true,
+      key: cacheKey,
+      ttlSeconds: CacheTtl.giphySeconds,
+      compute: async () => {
     const apiKey = this.cfg.giphyApiKey();
     if (!apiKey) throw new ServiceUnavailableException('Giphy is not configured yet.');
 
@@ -102,7 +112,9 @@ export class GiphyController {
       throw new BadRequestException('Failed to search Giphy.');
     }
 
-    return { data: mapGiphyItems(json) };
+        return { data: mapGiphyItems(json) };
+      },
+    });
   }
 
   @Throttle({
@@ -115,6 +127,12 @@ export class GiphyController {
   async trending(@CurrentUserId() userId: string, @Query() query: unknown) {
     await this.assertPremium(userId);
     const parsed = trendingSchema.parse(query);
+    const cacheKey = RedisKeys.giphyTrending(parsed.limit ?? 24);
+    return await this.cache.getOrSetJson<{ data: ReturnType<typeof mapGiphyItems> }>({
+      enabled: true,
+      key: cacheKey,
+      ttlSeconds: CacheTtl.giphySeconds,
+      compute: async () => {
     const apiKey = this.cfg.giphyApiKey();
     if (!apiKey) throw new ServiceUnavailableException('Giphy is not configured yet.');
 
@@ -133,7 +151,9 @@ export class GiphyController {
       throw new BadRequestException('Failed to load trending GIFs.');
     }
 
-    return { data: mapGiphyItems(json) };
+        return { data: mapGiphyItems(json) };
+      },
+    });
   }
 }
 

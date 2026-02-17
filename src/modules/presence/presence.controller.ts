@@ -4,7 +4,7 @@ import { OptionalCurrentUserId } from '../users/users.decorator';
 import { Throttle } from '@nestjs/throttler';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { FollowsService } from '../follows/follows.service';
-import { PresenceService } from './presence.service';
+import { PresenceRedisStateService } from './presence-redis-state.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import type { PresenceOnlinePageDto, RecentlyOnlineUserDto } from '../../common/dto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -42,7 +42,7 @@ function decodeCursor(raw: string): { tMs: number; id: string } | null {
 @Controller('presence')
 export class PresenceController {
   constructor(
-    private readonly presence: PresenceService,
+    private readonly presenceRedis: PresenceRedisStateService,
     private readonly follows: FollowsService,
     private readonly prisma: PrismaService,
   ) {}
@@ -64,17 +64,18 @@ export class PresenceController {
     // Keep the query param for backwards compatibility (includeSelf=0/false will exclude).
     const includeSelf =
       includeSelfRaw == null ? true : (includeSelfRaw === '1' || includeSelfRaw === 'true');
-    let userIds = this.presence.getOnlineUserIds();
+    let userIds = await this.presenceRedis.onlineUserIds();
     if (viewerUserId && !includeSelf) {
       userIds = userIds.filter((id) => id !== viewerUserId);
     }
 
     // Sort by longest online first (earliest connect time first).
+    const lastConnectAtById = await this.presenceRedis.lastConnectAtMsByUserId(userIds);
     userIds = userIds
       .slice()
       .sort((a, b) => {
-        const aAt = this.presence.getLastConnectAt(a);
-        const bAt = this.presence.getLastConnectAt(b);
+        const aAt = lastConnectAtById.get(a) ?? null;
+        const bAt = lastConnectAtById.get(b) ?? null;
         const aKey = typeof aAt === 'number' && Number.isFinite(aAt) ? aAt : Number.POSITIVE_INFINITY;
         const bKey = typeof bAt === 'number' && Number.isFinite(bAt) ? bAt : Number.POSITIVE_INFINITY;
         if (aKey !== bKey) return aKey - bKey;
@@ -86,8 +87,7 @@ export class PresenceController {
     });
     const orderMap = new Map(userIds.map((id, i) => [id, i]));
     users.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
-    const lastConnectAtById = new Map(userIds.map((id) => [id, this.presence.getLastConnectAt(id) ?? null]));
-    const idleById = new Map(userIds.map((id) => [id, this.presence.isUserIdle(id)]));
+    const idleById = await this.presenceRedis.idleByUserIds(userIds);
     const data = users.map((u) => ({
       ...u,
       lastConnectAt: lastConnectAtById.get(u.id),
@@ -133,7 +133,7 @@ export class PresenceController {
     if (cursorRaw && !cursor) throw new BadRequestException('Invalid cursor.');
 
     // Exclude currently-online users so "Recently online" is truly "recently" (offline users).
-    const onlineIds = this.presence.getOnlineUserIds();
+    const onlineIds = await this.presenceRedis.onlineUserIds();
 
     const items = await this.prisma.user.findMany({
       where: {
@@ -223,17 +223,18 @@ export class PresenceController {
     const includeSelf = includeSelfRaw ? includeSelfRaw === '1' || includeSelfRaw === 'true' : true;
 
     // ——— Online snapshot ———
-    let onlineUserIds = this.presence.getOnlineUserIds();
+    let onlineUserIds = await this.presenceRedis.onlineUserIds();
     if (viewerUserId && !includeSelf) {
       onlineUserIds = onlineUserIds.filter((id) => id !== viewerUserId);
     }
 
     // Sort by longest online first (earliest connect time first).
+    const lastConnectAtById = await this.presenceRedis.lastConnectAtMsByUserId(onlineUserIds);
     onlineUserIds = onlineUserIds
       .slice()
       .sort((a, b) => {
-        const aAt = this.presence.getLastConnectAt(a);
-        const bAt = this.presence.getLastConnectAt(b);
+        const aAt = lastConnectAtById.get(a) ?? null;
+        const bAt = lastConnectAtById.get(b) ?? null;
         const aKey = typeof aAt === 'number' && Number.isFinite(aAt) ? aAt : Number.POSITIVE_INFINITY;
         const bKey = typeof bAt === 'number' && Number.isFinite(bAt) ? bAt : Number.POSITIVE_INFINITY;
         if (aKey !== bKey) return aKey - bKey;
@@ -246,8 +247,7 @@ export class PresenceController {
     });
     const orderMap = new Map(onlineUserIds.map((id, i) => [id, i]));
     onlineUsers.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
-    const lastConnectAtById = new Map(onlineUserIds.map((id) => [id, this.presence.getLastConnectAt(id) ?? null]));
-    const idleById = new Map(onlineUserIds.map((id) => [id, this.presence.isUserIdle(id)]));
+    const idleById = await this.presenceRedis.idleByUserIds(onlineUserIds);
 
     const onlineData = onlineUsers.map((u) => ({
       ...(u as any),
@@ -276,7 +276,7 @@ export class PresenceController {
         if (cursorRaw && !cursor) throw new BadRequestException('Invalid cursor.');
 
         // Exclude currently-online users so "Recently online" is truly "recently" (offline users).
-        const onlineIds = onlineUserIds.length ? onlineUserIds : this.presence.getOnlineUserIds();
+        const onlineIds = onlineUserIds.length ? onlineUserIds : await this.presenceRedis.onlineUserIds();
 
         const items = await this.prisma.user.findMany({
           where: {

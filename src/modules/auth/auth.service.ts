@@ -11,7 +11,8 @@ import { hmacSha256Hex, randomSessionToken } from './auth.utils';
 import { OTP_PROVIDER } from './otp/otp-provider.token';
 import type { OtpProvider } from './otp/otp-provider';
 import { toUserDto } from '../users/user.dto';
-import { invalidateSessionTokenUserCache } from '../../common/throttling/session-token-user-cache';
+import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { USER_DTO_SELECT } from '../../common/prisma-selects/user.select';
 
 @Injectable()
 export class AuthService {
@@ -20,6 +21,7 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
+    private readonly cacheInvalidation: CacheInvalidationService,
     @Inject(OTP_PROVIDER) private readonly otpProvider: OtpProvider,
   ) {}
 
@@ -175,7 +177,7 @@ export class AuthService {
         revokedAt: null,
         expiresAt: { gt: now },
       },
-      include: { user: true },
+      include: { user: { select: USER_DTO_SELECT } },
     });
 
     if (!session) return null;
@@ -208,8 +210,8 @@ export class AuthService {
   async revokeSessionToken(token: string | undefined): Promise<void> {
     if (!token) return;
     const tokenHash = hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
-    // Remove throttler auth cache entry immediately to avoid a short stale-valid window.
-    invalidateSessionTokenUserCache(tokenHash);
+    // Remove Redis-backed session->user cache immediately to avoid a short stale-valid window.
+    await this.cacheInvalidation.deleteSessionUser(tokenHash);
     await this.prisma.session.deleteMany({
       where: { tokenHash },
     });

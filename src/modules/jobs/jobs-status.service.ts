@@ -1,6 +1,6 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import type { Job, Queue } from 'bullmq';
+import type { Queue } from 'bullmq';
 import { QueueEvents } from 'bullmq';
 import { MOH_BACKGROUND_QUEUE } from './jobs.constants';
 import { AppConfigService } from '../app/app-config.service';

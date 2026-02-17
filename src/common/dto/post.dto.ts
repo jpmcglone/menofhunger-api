@@ -6,7 +6,6 @@ import type {
   PostPoll,
   PostPollOption,
   PostVisibility,
-  User,
   VerifiedStatus,
 } from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
@@ -121,9 +120,23 @@ export type PostMentionWithUser = {
   };
 };
 
+/** Minimal author row required by toPostDto (avoid `include: { user: true }`). */
+export type PostAuthorRow = {
+  id: string;
+  username: string | null;
+  name: string | null;
+  premium: boolean;
+  premiumPlus: boolean;
+  isOrganization: boolean;
+  stewardBadgeEnabled: boolean;
+  verifiedStatus: VerifiedStatus;
+  avatarKey: string | null;
+  avatarUpdatedAt: Date | null;
+};
+
 /** Post with relations included for DTO mapping. Post has bookmarkCount, commentCount, parentId from schema. */
 export type PostWithAuthorAndMedia = Post & {
-  user: User;
+  user: PostAuthorRow;
   media: PostMediaWithOptional[];
   mentions?: PostMentionWithUser[];
   poll?: (PostPoll & { options: PostPollOption[] }) | null;

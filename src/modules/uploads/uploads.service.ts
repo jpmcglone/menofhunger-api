@@ -9,6 +9,8 @@ import { AppConfigService } from '../app/app-config.service';
 import { toUserDto } from '../../common/dto';
 import type { PostMediaKind } from '@prisma/client';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
+import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
+import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
 
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_BANNER_BYTES = 8 * 1024 * 1024; // 8MB
@@ -98,6 +100,8 @@ export class UploadsService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly publicProfileCache: PublicProfileCacheService<any>,
+    private readonly usersMeRealtime: UsersMeRealtimeService,
+    private readonly usersPublicRealtime: UsersPublicRealtimeService,
   ) {
     const r2 = this.appConfig.r2();
     if (!r2) {
@@ -462,6 +466,8 @@ export class UploadsService {
     });
 
     await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    void this.usersPublicRealtime.emitPublicProfileUpdated(updated.id);
+    this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'avatar_changed');
 
     if (oldKey && oldKey !== cleaned) {
       // Best-effort deletion; don't fail the request if it errors.
@@ -544,6 +550,8 @@ export class UploadsService {
     });
 
     await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    void this.usersPublicRealtime.emitPublicProfileUpdated(updated.id);
+    this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'banner_changed');
 
     if (oldKey && oldKey !== cleaned) {
       const prefix = this.objectKeyPrefix();

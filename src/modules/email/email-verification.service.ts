@@ -4,6 +4,8 @@ import { EmailService } from './email.service';
 import { AppConfigService } from '../app/app-config.service';
 import { EmailActionTokensService } from './email-action-tokens.service';
 import { escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from './templates/moh-email';
+import { toUserDto } from '../../common/dto';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 const VERIFY_EXPIRES_HOURS = 48;
 // Protect deliverability + cost: prevent hammering resend.
@@ -24,6 +26,7 @@ export class EmailVerificationService {
     private readonly appConfig: AppConfigService,
     private readonly tokens: EmailActionTokensService,
     private readonly email: EmailService,
+    private readonly presenceRealtime: PresenceRealtimeService,
   ) {}
 
   async requestVerification(params: { userId: string; email: string; name?: string | null }): Promise<{ sent: boolean }> {
@@ -48,9 +51,13 @@ export class EmailVerificationService {
 
     // Mark requestedAt (best-effort; don't block email).
     try {
-      await this.prisma.user.update({
+      const updated = await this.prisma.user.update({
         where: { id: user.id },
         data: { emailVerificationRequestedAt: new Date() },
+      });
+      this.presenceRealtime.emitUsersMeUpdated(updated.id, {
+        user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
+        reason: 'email_verification_requested',
       });
     } catch {
       // ignore
@@ -160,9 +167,14 @@ export class EmailVerificationService {
       return { ok: false, reason: 'email_changed' };
     }
 
-    await this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: user.id },
       data: { emailVerifiedAt: new Date() },
+    });
+    // Realtime: reflect verified status immediately across tabs/devices.
+    this.presenceRealtime.emitUsersMeUpdated(updated.id, {
+      user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
+      reason: 'email_verified',
     });
     return { ok: true };
   }

@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import type { FollowVisibility, VerifiedStatus } from '@prisma/client';
+import type { FollowVisibility } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -32,10 +32,6 @@ export type FollowListUser = {
   avatarUrl: string | null;
   relationship: FollowRelationship;
 };
-
-function isVerified(status: VerifiedStatus | string | null | undefined) {
-  return Boolean(status && status !== 'none');
-}
 
 @Injectable()
 export class FollowsService {

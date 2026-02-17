@@ -2,17 +2,20 @@ import { BadRequestException, Injectable, NotFoundException, UnauthorizedExcepti
 import type { Prisma, VerificationRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
-import { UsersRealtimeService } from '../users/users-realtime.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
+import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
+import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
+import { VERIFICATION_ADMIN_USER_SELECT } from '../../common/prisma-selects/user.select';
 
 @Injectable()
 export class VerificationService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly usersRealtime: UsersRealtimeService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
+    private readonly usersMeRealtime: UsersMeRealtimeService,
+    private readonly usersPublicRealtime: UsersPublicRealtimeService,
   ) {}
 
   async createRequestForUser(params: { userId: string | null; providerHint: string | null }) {
@@ -138,7 +141,7 @@ export class VerificationService {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: params.limit + 1,
       include: {
-        user: true,
+        user: { select: VERIFICATION_ADMIN_USER_SELECT },
         reviewedByAdmin: { select: { id: true, username: true, name: true } },
       },
     });
@@ -177,7 +180,7 @@ export class VerificationService {
           rejectionReason: null,
         },
         include: {
-          user: true,
+          user: { select: VERIFICATION_ADMIN_USER_SELECT },
           reviewedByAdmin: { select: { id: true, username: true, name: true } },
         },
       });
@@ -205,12 +208,8 @@ export class VerificationService {
         action: 'reviewed',
         id: updated.id,
       });
-      const profile = await this.usersRealtime.getPublicProfileDtoByUserId(updated.userId);
-      if (profile) {
-        const related = await this.usersRealtime.listRelatedUserIds(updated.userId);
-        const recipients = new Set<string>([updated.userId, ...related].filter(Boolean));
-        this.presenceRealtime.emitUsersSelfUpdated(recipients, { user: profile });
-      }
+      await this.usersPublicRealtime.emitPublicProfileUpdated(updated.userId);
+      void this.usersMeRealtime.emitMeUpdated(updated.userId, 'verification_status_changed');
     } catch {
       // Best-effort
     }
@@ -244,7 +243,7 @@ export class VerificationService {
           rejectionReason: reason,
         },
         include: {
-          user: true,
+          user: { select: VERIFICATION_ADMIN_USER_SELECT },
           reviewedByAdmin: { select: { id: true, username: true, name: true } },
         },
       });

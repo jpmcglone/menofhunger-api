@@ -8,12 +8,26 @@ import { UsersController } from './users.controller';
 import { PublicProfileCacheService } from './public-profile-cache.service';
 import { UsersRealtimeService } from './users-realtime.service';
 import { UsersLocationService } from './users-location.service';
+import { UsersMeRealtimeService } from './users-me-realtime.service';
+import { UsersPublicRealtimeService } from './users-public-realtime.service';
 
 @Module({
   imports: [AuthModule, FollowsModule, NotificationsModule, RealtimeModule, EmailModule],
   controllers: [UsersController],
-  providers: [PublicProfileCacheService, UsersRealtimeService, UsersLocationService],
-  exports: [PublicProfileCacheService, UsersRealtimeService, UsersLocationService],
+  providers: [
+    PublicProfileCacheService,
+    UsersRealtimeService,
+    UsersLocationService,
+    UsersMeRealtimeService,
+    UsersPublicRealtimeService,
+  ],
+  exports: [
+    PublicProfileCacheService,
+    UsersRealtimeService,
+    UsersLocationService,
+    UsersMeRealtimeService,
+    UsersPublicRealtimeService,
+  ],
 })
 export class UsersModule {}
 

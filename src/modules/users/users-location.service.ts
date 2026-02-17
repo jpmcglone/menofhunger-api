@@ -1,5 +1,8 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { AppConfigService } from '../app/app-config.service';
+import { RedisKeys } from '../redis/redis-keys';
+import { CacheService } from '../redis/cache.service';
+import { CacheTtl } from '../redis/cache-ttl';
 
 export type NormalizedUsLocation = {
   input: string;
@@ -49,7 +52,10 @@ function ensure5DigitZip(zip: string | null): string | null {
 
 @Injectable()
 export class UsersLocationService {
-  constructor(private readonly appConfig: AppConfigService) {}
+  constructor(
+    private readonly appConfig: AppConfigService,
+    private readonly cache: CacheService,
+  ) {}
 
   /**
    * Normalize a US-only location. Input can be ZIP or free-text (city/state).
@@ -60,6 +66,10 @@ export class UsersLocationService {
   async normalizeUsLocation(rawQuery: string): Promise<NormalizedUsLocation> {
     const query = (rawQuery ?? '').trim();
     if (!query) throw new BadRequestException('Location is required.');
+
+    const cacheKey = RedisKeys.geoUs(query);
+    const cached = await this.cache.getJson<NormalizedUsLocation>(cacheKey);
+    if (cached?.display && cached.country === 'US') return cached;
 
     const mapbox = this.appConfig.mapbox();
     if (!mapbox) throw new BadRequestException('Location lookup is not configured.');
@@ -116,7 +126,7 @@ export class UsersLocationService {
             ? feature.place_name.trim()
             : city ?? query;
 
-      return {
+      const result: NormalizedUsLocation = {
         input: query,
         display,
         zip,
@@ -125,6 +135,9 @@ export class UsersLocationService {
         state,
         country: 'US',
       };
+      // Cache successful normalizations to reduce Mapbox traffic.
+      void this.cache.setJson(cacheKey, result, { ttlSeconds: CacheTtl.geoUsSeconds }).catch(() => undefined);
+      return result;
     } catch (err: unknown) {
       if (err instanceof BadRequestException) throw err;
       // Timeout / network errors should look like a validation failure to the client.

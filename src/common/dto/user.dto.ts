@@ -1,4 +1,4 @@
-import type { BirthdayVisibility, FollowVisibility, User, VerifiedStatus } from '@prisma/client';
+import type { BirthdayVisibility, FollowVisibility, VerifiedStatus } from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
 
 /** Relationship fields for list-user DTOs (follows, search). */
@@ -140,41 +140,80 @@ export type UserPreviewDto = {
   followingCount: number | null;
 };
 
-export function toUserDto(user: User, publicAssetBaseUrl: string | null = null): UserDto {
+export type UserDtoRow = {
+  id: string;
+  createdAt: Date;
+  phone: string;
+  email: string | null;
+  emailVerifiedAt: Date | null;
+  emailVerificationRequestedAt: Date | null;
+  username: string | null;
+  usernameIsSet: boolean;
+  name: string | null;
+  bio: string | null;
+  website: string | null;
+  locationInput: string | null;
+  locationDisplay: string | null;
+  locationZip: string | null;
+  locationCity: string | null;
+  locationCounty: string | null;
+  locationState: string | null;
+  locationCountry: string | null;
+  birthdate: Date | null;
+  interests: string[];
+  menOnlyConfirmed: boolean;
+  siteAdmin: boolean;
+  premium: boolean;
+  premiumPlus: boolean;
+  isOrganization: boolean;
+  stewardBadgeEnabled: boolean;
+  verifiedStatus: VerifiedStatus;
+  verifiedAt: Date | null;
+  unverifiedAt: Date | null;
+  followVisibility: FollowVisibility;
+  birthdayVisibility: BirthdayVisibility;
+  avatarKey: string | null;
+  avatarUpdatedAt: Date | null;
+  bannerKey: string | null;
+  bannerUpdatedAt: Date | null;
+  pinnedPostId: string | null;
+};
+
+export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = null): UserDto {
   return {
     id: user.id,
     createdAt: user.createdAt.toISOString(),
     phone: user.phone,
     email: user.email ?? null,
-    emailVerifiedAt: (user as any).emailVerifiedAt ? (user as any).emailVerifiedAt.toISOString() : null,
-    emailVerificationRequestedAt: (user as any).emailVerificationRequestedAt
-      ? (user as any).emailVerificationRequestedAt.toISOString()
+    emailVerifiedAt: user.emailVerifiedAt ? user.emailVerifiedAt.toISOString() : null,
+    emailVerificationRequestedAt: user.emailVerificationRequestedAt
+      ? user.emailVerificationRequestedAt.toISOString()
       : null,
     username: user.username,
     usernameIsSet: user.usernameIsSet,
     name: user.name,
     bio: user.bio,
-    website: (user as any).website ?? null,
-    locationInput: (user as any).locationInput ?? null,
-    locationDisplay: (user as any).locationDisplay ?? null,
-    locationZip: (user as any).locationZip ?? null,
-    locationCity: (user as any).locationCity ?? null,
-    locationCounty: (user as any).locationCounty ?? null,
-    locationState: (user as any).locationState ?? null,
-    locationCountry: (user as any).locationCountry ?? null,
+    website: user.website ?? null,
+    locationInput: user.locationInput ?? null,
+    locationDisplay: user.locationDisplay ?? null,
+    locationZip: user.locationZip ?? null,
+    locationCity: user.locationCity ?? null,
+    locationCounty: user.locationCounty ?? null,
+    locationState: user.locationState ?? null,
+    locationCountry: user.locationCountry ?? null,
     birthdate: user.birthdate ? user.birthdate.toISOString() : null,
     interests: user.interests ?? [],
     menOnlyConfirmed: Boolean(user.menOnlyConfirmed),
     siteAdmin: user.siteAdmin,
     premium: user.premium,
     premiumPlus: user.premiumPlus,
-    isOrganization: Boolean((user as any).isOrganization),
+    isOrganization: Boolean(user.isOrganization),
     stewardBadgeEnabled: Boolean(user.stewardBadgeEnabled),
     verifiedStatus: user.verifiedStatus,
     verifiedAt: user.verifiedAt ? user.verifiedAt.toISOString() : null,
     unverifiedAt: user.unverifiedAt ? user.unverifiedAt.toISOString() : null,
     followVisibility: user.followVisibility,
-    birthdayVisibility: (user as any).birthdayVisibility ?? 'monthDay',
+    birthdayVisibility: user.birthdayVisibility ?? 'monthDay',
     avatarUrl: publicAssetUrl({
       publicBaseUrl: publicAssetBaseUrl,
       key: user.avatarKey ?? null,

@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import type { MessageConversation } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -120,6 +121,48 @@ export class MessagesService {
     });
   }
 
+  private async getUnreadCountByConversationId(params: {
+    userId: string;
+    perConversation: Array<{ conversationId: string; lastReadAt: Date | null }>;
+  }): Promise<Map<string, number>> {
+    const userId = (params.userId ?? '').trim();
+    const perConversation = params.perConversation ?? [];
+    if (!userId || perConversation.length === 0) return new Map<string, number>();
+
+    const tuples = perConversation
+      .map((p) => ({
+        conversationId: String(p?.conversationId ?? '').trim(),
+        lastReadAt: p?.lastReadAt ?? null,
+      }))
+      .filter((p) => p.conversationId.length > 0);
+    if (tuples.length === 0) return new Map<string, number>();
+
+    const values = tuples.map((t) => Prisma.sql`(${t.conversationId}, ${t.lastReadAt})`);
+
+    const rows = await this.prisma.$queryRaw<Array<{ conversationId: string; count: number }>>(Prisma.sql`
+      WITH p("conversationId", "lastReadAt") AS (
+        VALUES ${Prisma.join(values)}
+      )
+      SELECT
+        p."conversationId" as "conversationId",
+        CAST(COUNT(m."id") AS INT) as "count"
+      FROM p
+      LEFT JOIN "Message" m
+        ON m."conversationId" = p."conversationId"
+        AND m."senderId" <> ${userId}
+        AND (p."lastReadAt" IS NULL OR m."createdAt" > p."lastReadAt")
+      GROUP BY p."conversationId"
+    `);
+
+    const out = new Map<string, number>();
+    for (const r of rows) {
+      const id = String(r?.conversationId ?? '').trim();
+      if (!id) continue;
+      out.set(id, Math.max(0, Math.floor(r?.count ?? 0)));
+    }
+    return out;
+  }
+
   private async getUnreadCounts(userId: string): Promise<{ primary: number; requests: number }> {
     const blockedUserIds = await this.getBlockedUserIds(userId);
     const participants = await this.prisma.messageParticipant.findMany({
@@ -131,21 +174,16 @@ export class MessagesService {
       },
       select: { conversationId: true, status: true, lastReadAt: true },
     });
-    const counts = await Promise.all(
-      participants.map(async (p) => ({
-        status: p.status,
-        count: await this.getUnreadCount({
-          userId,
-          conversationId: p.conversationId,
-          lastReadAt: p.lastReadAt,
-        }),
-      })),
-    );
+    const countByConversationId = await this.getUnreadCountByConversationId({
+      userId,
+      perConversation: participants.map((p) => ({ conversationId: p.conversationId, lastReadAt: p.lastReadAt })),
+    });
     let primary = 0;
     let requests = 0;
-    for (const row of counts) {
-      if (row.status === 'accepted') primary += row.count;
-      else requests += row.count;
+    for (const p of participants) {
+      const count = countByConversationId.get(p.conversationId) ?? 0;
+      if (p.status === 'accepted') primary += count;
+      else requests += count;
     }
     return { primary, requests };
   }
@@ -244,46 +282,46 @@ export class MessagesService {
         : null;
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const items: MessageConversationDto[] = await Promise.all(
-      slice.map(async (conversation) => {
-        const viewerParticipant = conversation.participants.find((p) => p.userId === userId);
-        if (!viewerParticipant) throw new NotFoundException('Conversation not found.');
-        const unreadCount = await this.getUnreadCount({
-          userId,
-          conversationId: conversation.id,
-          lastReadAt: viewerParticipant.lastReadAt,
-        });
+    const perConversation = slice.map((conversation) => {
+      const viewerParticipant = conversation.participants.find((p) => p.userId === userId);
+      return { conversationId: conversation.id, lastReadAt: viewerParticipant?.lastReadAt ?? null };
+    });
+    const unreadCountByConversationId = await this.getUnreadCountByConversationId({ userId, perConversation });
 
-        return {
-          id: conversation.id,
-          type: conversation.type,
-          title: conversation.title ?? null,
-          createdAt: conversation.createdAt.toISOString(),
-          updatedAt: conversation.updatedAt.toISOString(),
-          lastMessageAt: conversation.lastMessageAt ? conversation.lastMessageAt.toISOString() : null,
-          lastMessage: conversation.lastMessage
-            ? {
-                id: conversation.lastMessage.id,
-                body: conversation.lastMessage.body,
-                createdAt: conversation.lastMessage.createdAt.toISOString(),
-                senderId: conversation.lastMessage.senderId,
-              }
-            : null,
-          participants: conversation.participants.map((p) =>
-            toMessageParticipantDto({
-              user: p.user,
-              status: p.status,
-              role: p.role,
-              acceptedAt: p.acceptedAt,
-              lastReadAt: p.lastReadAt,
-              publicBaseUrl,
-            }),
-          ),
-          viewerStatus: viewerParticipant.status,
-          unreadCount,
-        };
-      }),
-    );
+    const items: MessageConversationDto[] = slice.map((conversation) => {
+      const viewerParticipant = conversation.participants.find((p) => p.userId === userId);
+      if (!viewerParticipant) throw new NotFoundException('Conversation not found.');
+      const unreadCount = unreadCountByConversationId.get(conversation.id) ?? 0;
+
+      return {
+        id: conversation.id,
+        type: conversation.type,
+        title: conversation.title ?? null,
+        createdAt: conversation.createdAt.toISOString(),
+        updatedAt: conversation.updatedAt.toISOString(),
+        lastMessageAt: conversation.lastMessageAt ? conversation.lastMessageAt.toISOString() : null,
+        lastMessage: conversation.lastMessage
+          ? {
+              id: conversation.lastMessage.id,
+              body: conversation.lastMessage.body,
+              createdAt: conversation.lastMessage.createdAt.toISOString(),
+              senderId: conversation.lastMessage.senderId,
+            }
+          : null,
+        participants: conversation.participants.map((p) =>
+          toMessageParticipantDto({
+            user: p.user,
+            status: p.status,
+            role: p.role,
+            acceptedAt: p.acceptedAt,
+            lastReadAt: p.lastReadAt,
+            publicBaseUrl,
+          }),
+        ),
+        viewerStatus: viewerParticipant.status,
+        unreadCount,
+      };
+    });
 
     return { conversations: items, nextCursor };
   }

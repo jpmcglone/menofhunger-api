@@ -20,8 +20,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { validateUsername } from '../users/users.utils';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 import { AdminGuard } from './admin.guard';
-import { UsersRealtimeService } from '../users/users-realtime.service';
-import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
+import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
 
 const searchSchema = z.object({
   q: z.string().optional(),
@@ -51,8 +51,8 @@ export class AdminUsersController {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
-    private readonly usersRealtime: UsersRealtimeService,
-    private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly usersMeRealtime: UsersMeRealtimeService,
+    private readonly usersPublicRealtime: UsersPublicRealtimeService,
   ) {}
 
   @Get('search')
@@ -230,12 +230,9 @@ export class AdminUsersController {
 
       // Realtime: user tier/profile changes should update their own UI and any related users.
       try {
-        const profile = await this.usersRealtime.getPublicProfileDtoByUserId(updated.id);
-        if (profile) {
-          const related = await this.usersRealtime.listRelatedUserIds(updated.id);
-          const recipients = new Set<string>([updated.id, ...related].filter(Boolean));
-          this.presenceRealtime.emitUsersSelfUpdated(recipients, { user: profile });
-        }
+        await this.usersPublicRealtime.emitPublicProfileUpdated(updated.id);
+        // Also update the user across their own devices (auth/settings state).
+        this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'admin_user_updated');
       } catch {
         // Best-effort
       }
@@ -279,6 +276,7 @@ export class AdminUsersController {
       return u;
     });
 
+    this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'email_unverified');
     return { data: toUserDto(updated, publicBaseUrl) };
   }
 }

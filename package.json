@@ -18,7 +18,7 @@
     "postinstall": "prisma generate",
     "seed:prod": "node scripts/seed-prod.js",
     "seed:dev": "node scripts/seed-dev.js",
-    "lint": "eslint .",
+    "lint": "eslint src --ext .ts",
     "format": "prettier --write .",
     "test": "jest --passWithNoTests",
     "test:watch": "jest --watch --passWithNoTests",

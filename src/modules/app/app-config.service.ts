@@ -103,6 +103,17 @@ export class AppConfigService {
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : 500;
   }
 
+  /** Enable Prisma slow query logging (default: on in dev/test, off in prod). */
+  prismaLogSlowQueries(): boolean {
+    const fallback = this.nodeEnv() !== 'production';
+    return this.readBool('PRISMA_LOG_SLOW_QUERIES', fallback);
+  }
+
+  /** Slow query threshold in ms (default 200). */
+  prismaSlowQueryMs(): number {
+    return this.readPositiveInt('PRISMA_SLOW_QUERY_MS', 200);
+  }
+
   allowedOrigins(): string[] {
     const raw = this.config.get<string>('ALLOWED_ORIGINS') ?? '';
     return raw

@@ -22,7 +22,7 @@ export class PostsTopicsBackfillCron {
    * Small bounded batches; safe to run repeatedly.
    */
   @Cron('*/15 * * * *')
-  async backfill(opts?: { wipeExisting?: boolean; batchSize?: number; lookbackDays?: number }) {
+  async backfill() {
     if (!this.appConfig.runSchedulers()) return;
     // Cron tick should enqueue only; opts are respected for admin-triggered runs via enqueue.
     try {

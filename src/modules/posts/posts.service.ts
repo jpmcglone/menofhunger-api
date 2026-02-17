@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import type { PostVisibility, VerifiedStatus } from '@prisma/client';
+import type { PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
@@ -11,6 +11,9 @@ import { RequestCacheService } from '../../common/cache/request-cache.service';
 import { parseMentionsFromBody as parseMentionsFromBodyText } from '../../common/mentions/mention-regex';
 import { parseHashtagTokensFromText, type HashtagToken } from '../../common/hashtags/hashtag-regex';
 import { inferTopicsFromText } from '../../common/topics/topic-utils';
+import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
+import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 
 export type PostCounts = {
   all: number;
@@ -19,16 +22,10 @@ export type PostCounts = {
   premiumOnly: number;
 };
 
-const feedPostInclude = {
-  user: true,
-  media: { orderBy: { position: 'asc' as const } },
-  poll: { include: { options: { orderBy: { position: 'asc' as const } } } },
-  mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
-} as const;
+const feedPostInclude = POST_WITH_POLL_INCLUDE;
 type FeedPost = Prisma.PostGetPayload<{ include: typeof feedPostInclude }>;
 type FeedResult = { posts: FeedPost[]; nextCursor: string | null };
 type PopularFeedResult = FeedResult & { scoreByPostId: Map<string, number> };
-type ViewerRow = { id: string; verifiedStatus: VerifiedStatus; premium: boolean; siteAdmin: boolean } | null;
 
 @Injectable()
 export class PostsService {
@@ -41,6 +38,7 @@ export class PostsService {
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly polls: PollsService,
     private readonly viewerContextService: ViewerContextService,
+    private readonly cacheInvalidation: CacheInvalidationService,
   ) {}
 
   /**
@@ -1894,9 +1892,9 @@ export class PostsService {
       const comments = await this.prisma.post.findMany({
         where: cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere,
         include: {
-          user: true,
+          user: { select: USER_LIST_SELECT },
           media: { orderBy: { position: 'asc' } },
-          mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+          mentions: { include: { user: { select: MENTION_USER_SELECT } } },
         },
         orderBy: [
           { boostScore: 'desc' },
@@ -1936,9 +1934,9 @@ export class PostsService {
     const comments = await this.prisma.post.findMany({
       where: cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere,
       include: {
-        user: true,
+        user: { select: USER_LIST_SELECT },
         media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
       },
       orderBy: isDesc ? [{ createdAt: 'desc' }, { id: 'desc' }] : [{ createdAt: 'asc' }, { id: 'asc' }],
       take: limit + 1,
@@ -2024,10 +2022,10 @@ export class PostsService {
     const post = await this.prisma.post.findFirst({
       where: { id: postId },
       include: {
-        user: true,
+        user: { select: USER_LIST_SELECT },
         media: { orderBy: { position: 'asc' } },
         poll: { include: { options: { orderBy: { position: 'asc' } } } },
-        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
       },
     });
     if (!post) throw new NotFoundException('Post not found.');
@@ -2055,12 +2053,13 @@ export class PostsService {
 
     const post = await this.prisma.post.findUnique({
       where: { id },
-      select: { id: true, userId: true, deletedAt: true, hashtags: true, hashtagCasings: true },
+      select: { id: true, userId: true, deletedAt: true, hashtags: true, hashtagCasings: true, topics: true },
     });
     if (!post) throw new NotFoundException('Post not found.');
     if (post.userId !== userId) throw new ForbiddenException('Not allowed to delete this post.');
     if (post.deletedAt) return { success: true };
 
+    const postTopics = Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [];
     const tags = Array.isArray((post as any).hashtags) ? ((post as any).hashtags as string[]) : [];
     const variants = Array.isArray((post as any).hashtagCasings) ? ((post as any).hashtagCasings as string[]) : [];
     await this.prisma.$transaction(async (tx) => {
@@ -2116,6 +2115,7 @@ export class PostsService {
       this.notifications.deleteBySubjectPostId(id),
       this.notifications.deleteByActorPostId(id),
     ]).catch(() => {});
+    await this.cacheInvalidation.bumpForPostWrite({ topics: postTopics });
     return { success: true };
   }
 
@@ -2130,7 +2130,7 @@ export class PostsService {
     const post = await this.prisma.post.findUnique({
       where: { id },
       include: {
-        user: true,
+        user: { select: USER_LIST_SELECT },
         media: { orderBy: { position: 'asc' } },
         mentions: { select: { userId: true } },
         poll: { select: { id: true, totalVoteCount: true } },
@@ -2182,6 +2182,7 @@ export class PostsService {
     const existingMentionIds = Array.isArray((post as any).mentions) ? ((post as any).mentions as Array<{ userId: string }>).map((m) => m.userId) : [];
     const mentionUserIds = Array.from(new Set([...existingMentionIds, ...bodyMentionIds])).filter(Boolean);
 
+    const prevTopics = Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [];
     const updated = await this.prisma.$transaction(async (tx) => {
       // Snapshot previous state (pre-edit).
       await tx.postVersion.create({
@@ -2209,20 +2210,12 @@ export class PostsService {
           editCount: { increment: 1 },
         },
         include: {
-          user: true,
+          user: { select: USER_LIST_SELECT },
           media: { orderBy: { position: 'asc' } },
           mentions: {
             include: {
               user: {
-                select: {
-                  id: true,
-                  username: true,
-                  verifiedStatus: true,
-                  premium: true,
-                  premiumPlus: true,
-                  isOrganization: true,
-                  stewardBadgeEnabled: true,
-                },
+                select: MENTION_USER_SELECT,
               },
             },
           },
@@ -2290,6 +2283,8 @@ export class PostsService {
 
       return next;
     });
+    const nextTopics = Array.isArray((updated as any).topics) ? ((updated as any).topics as string[]) : [];
+    await this.cacheInvalidation.bumpForPostWrite({ topics: [...prevTopics, ...nextTopics] });
     return updated;
   }
 
@@ -2314,20 +2309,12 @@ export class PostsService {
         ],
       },
       include: {
-        user: true,
+        user: { select: USER_LIST_SELECT },
         media: { orderBy: { position: 'asc' } },
         mentions: {
           include: {
             user: {
-              select: {
-                id: true,
-                username: true,
-                verifiedStatus: true,
-                premium: true,
-                premiumPlus: true,
-                isOrganization: true,
-                stewardBadgeEnabled: true,
-              },
+              select: MENTION_USER_SELECT,
             },
           },
         },
@@ -2497,20 +2484,12 @@ export class PostsService {
           : {}),
       },
       include: {
-        user: true,
+        user: { select: USER_LIST_SELECT },
         media: { orderBy: { position: 'asc' } },
         mentions: {
           include: {
             user: {
-              select: {
-                id: true,
-                username: true,
-                verifiedStatus: true,
-                premium: true,
-                premiumPlus: true,
-                isOrganization: true,
-                stewardBadgeEnabled: true,
-              },
+              select: MENTION_USER_SELECT,
             },
           },
         },
@@ -2543,7 +2522,7 @@ export class PostsService {
     const post = await this.prisma.post.findUnique({
       where: { id },
       include: {
-        user: true,
+        user: { select: USER_LIST_SELECT },
         media: { orderBy: { position: 'asc' } },
         mentions: { select: { userId: true } },
       },
@@ -2703,20 +2682,12 @@ export class PostsService {
           hashtagCasings,
         },
         include: {
-          user: true,
+          user: { select: USER_LIST_SELECT },
           media: { orderBy: { position: 'asc' } },
           mentions: {
             include: {
               user: {
-                select: {
-                  id: true,
-                  username: true,
-                  verifiedStatus: true,
-                  premium: true,
-                  premiumPlus: true,
-                  isOrganization: true,
-                  stewardBadgeEnabled: true,
-                },
+                select: MENTION_USER_SELECT,
               },
             },
           },
@@ -2894,27 +2865,24 @@ export class PostsService {
     const full = await this.prisma.post.findUnique({
       where: { id: created.id },
       include: {
-        user: true,
+        user: { select: USER_LIST_SELECT },
         media: { orderBy: { position: 'asc' } },
         poll: { include: { options: { orderBy: { position: 'asc' } } } },
         mentions: {
           include: {
             user: {
-              select: {
-                id: true,
-                username: true,
-                verifiedStatus: true,
-                premium: true,
-                premiumPlus: true,
-                isOrganization: true,
-                stewardBadgeEnabled: true,
-              },
+              select: MENTION_USER_SELECT,
             },
           },
         },
       },
     });
-    return full ?? created;
+    const out = full ?? created;
+    if ((out as any)?.visibility && (out as any).visibility !== 'onlyMe') {
+      const topics = Array.isArray((out as any).topics) ? ((out as any).topics as string[]) : [];
+      await this.cacheInvalidation.bumpForPostWrite({ topics });
+    }
+    return out;
   }
 
   /** Resolve usernames to user ids (case-insensitive, usernameIsSet). Invalid usernames ignored. */
@@ -3342,7 +3310,7 @@ export class PostsService {
               }
             : {}),
         },
-        include: { user: true, media: { orderBy: { position: 'asc' } }, poll: { include: { options: { orderBy: { position: 'asc' } } } } },
+        include: { user: { select: USER_LIST_SELECT }, media: { orderBy: { position: 'asc' } }, poll: { include: { options: { orderBy: { position: 'asc' } } } } },
       });
 
       if (parentId) {
@@ -3378,6 +3346,12 @@ export class PostsService {
 
       return created;
     });
+
+    // Versioned read caches: bump after successful create so public reads shift namespaces immediately.
+    if ((post as any)?.visibility && (post as any).visibility !== 'onlyMe') {
+      const topics = Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [];
+      await this.cacheInvalidation.bumpForPostWrite({ topics });
+    }
 
     // Notifications: parent author + thread participants get "comment" notifications.
     // Only explicit @mentions in body get "mention" notifications (and override "comment" for that user).
@@ -3504,9 +3478,9 @@ export class PostsService {
     const withMentions = await this.prisma.post.findUnique({
       where: { id: post.id },
       include: {
-        user: true,
+        user: { select: USER_LIST_SELECT },
         media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
         poll: { include: { options: { orderBy: { position: 'asc' } } } },
       },
     });
@@ -3591,6 +3565,9 @@ export class PostsService {
       boostCount: res.boostCount,
     });
 
+    // Popular/trending/featured feeds are boost-sensitive. Bump so anon caches shift instantly.
+    await this.cacheInvalidation.bumpFeedGlobal();
+
     return { success: true, viewerHasBoosted: true, boostCount: res.boostCount };
   }
 
@@ -3644,6 +3621,9 @@ export class PostsService {
       active: false,
       boostCount: res.boostCount,
     });
+
+    // Popular/trending/featured feeds are boost-sensitive. Bump so anon caches shift instantly.
+    await this.cacheInvalidation.bumpFeedGlobal();
 
     return { success: true, viewerHasBoosted: false, boostCount: res.boostCount };
   }

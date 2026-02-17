@@ -15,8 +15,8 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { Throttle } from '@nestjs/throttler';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { PublicProfileCacheService } from './public-profile-cache.service';
-import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { UsersRealtimeService } from './users-realtime.service';
+import { UsersMeRealtimeService } from './users-me-realtime.service';
+import { UsersPublicRealtimeService } from './users-public-realtime.service';
 import { canonicalizeTopicValue } from '../../common/topics/topic-utils';
 import { UsersLocationService } from './users-location.service';
 import { EmailVerificationService } from '../email/email-verification.service';
@@ -167,8 +167,8 @@ export class UsersController {
     private readonly appConfig: AppConfigService,
     private readonly followsService: FollowsService,
     private readonly publicProfileCache: PublicProfileCacheService<PublicProfilePayload>,
-    private readonly presenceRealtime: PresenceRealtimeService,
-    private readonly usersRealtime: UsersRealtimeService,
+    private readonly usersMeRealtime: UsersMeRealtimeService,
+    private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly usersLocation: UsersLocationService,
     private readonly emailVerification: EmailVerificationService,
   ) {}
@@ -188,15 +188,7 @@ export class UsersController {
   }
 
   private async emitUserSelfUpdated(userId: string): Promise<void> {
-    try {
-      const profile = await this.usersRealtime.getPublicProfileDtoByUserId(userId);
-      if (!profile) return;
-      const related = await this.usersRealtime.listRelatedUserIds(userId);
-      const recipients = new Set<string>([userId, ...related].filter(Boolean));
-      this.presenceRealtime.emitUsersSelfUpdated(recipients, { user: profile });
-    } catch {
-      // Best-effort
-    }
+    await this.usersPublicRealtime.emitPublicProfileUpdated(userId);
   }
 
   private async getPublicProfilePayloadByUsernameOrId(
@@ -748,6 +740,7 @@ export class UsersController {
 
       await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
+      this.usersMeRealtime.emitMeUpdatedFromUser(updated, emailChanged ? 'email_changed' : 'profile_changed');
 
       if (emailChanged && nextEmail) {
         const greetingName = (updated.name ?? updated.username ?? '').trim() || null;
@@ -789,6 +782,7 @@ export class UsersController {
     });
     await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
     await this.emitUserSelfUpdated(updated.id);
+    void this.usersMeRealtime.emitMeUpdated(updated.id, 'pinned_post_changed');
     return { data: { pinnedPostId: postId } };
   }
 
@@ -802,6 +796,7 @@ export class UsersController {
     });
     await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
     await this.emitUserSelfUpdated(updated.id);
+    void this.usersMeRealtime.emitMeUpdated(updated.id, 'pinned_post_changed');
     return { data: { pinnedPostId: null } };
   }
 
@@ -832,6 +827,7 @@ export class UsersController {
 
     await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
     await this.emitUserSelfUpdated(updated.id);
+    this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'settings_changed');
     return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
   }
 
@@ -939,6 +935,7 @@ export class UsersController {
 
       await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
+      this.usersMeRealtime.emitMeUpdatedFromUser(updated, emailChanged ? 'email_changed' : 'onboarding_changed');
 
       if (emailChanged && nextEmail) {
         const greetingName = (updated.name ?? updated.username ?? '').trim() || null;

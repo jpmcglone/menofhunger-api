@@ -1,10 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Server } from 'socket.io';
 import { PresenceService } from './presence.service';
+import { PresenceRedisStateService } from './presence-redis-state.service';
 import type {
   AdminUpdatedPayloadDto,
   FollowsChangedPayloadDto,
   MessagesReadPayloadDto,
+  UsersMeUpdatedPayloadDto,
   NotificationsDeletedPayloadDto,
   NotificationsNewPayloadDto,
   PostsInteractionPayloadDto,
@@ -16,7 +18,10 @@ export class PresenceRealtimeService {
   private readonly logger = new Logger(PresenceRealtimeService.name);
   private server: Server | null = null;
 
-  constructor(private readonly presence: PresenceService) {}
+  constructor(
+    private readonly presence: PresenceService,
+    private readonly presenceRedis: PresenceRedisStateService,
+  ) {}
 
   /**
    * Called by PresenceGateway once Socket.IO is initialized.
@@ -33,6 +38,26 @@ export class PresenceRealtimeService {
     return null;
   }
 
+  private emitToUser(userId: string, event: string, payload: unknown): void {
+    const server = this.getServerOrNull();
+    if (!server) return;
+    const uid = (userId ?? '').trim();
+    const ev = (event ?? '').trim();
+    if (!uid || !ev) return;
+
+    // Local delivery (fast path).
+    this.presence.emitToUser(server, uid, ev, payload);
+    // Cross-instance delivery (best-effort).
+    void this.presenceRedis.publishEmitToUser({ userId: uid, event: ev, payload }).catch(() => undefined);
+  }
+
+  private emitToUsers(userIds: Iterable<string>, event: string, payload: unknown): void {
+    for (const userId of userIds) {
+      if (!userId) continue;
+      this.emitToUser(userId, event, payload);
+    }
+  }
+
   disconnectUserSockets(userId: string): void {
     const server = this.getServerOrNull();
     if (!server) return;
@@ -47,69 +72,48 @@ export class PresenceRealtimeService {
   }
 
   emitNotificationsUpdated(userId: string, payload: { undeliveredCount: number }): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
-    this.presence.emitToUser(server, userId, 'notifications:updated', payload);
+    this.emitToUser(userId, 'notifications:updated', payload);
   }
 
   emitNotificationNew(userId: string, payload: NotificationsNewPayloadDto): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
-    this.presence.emitToUser(server, userId, 'notifications:new', payload);
+    this.emitToUser(userId, 'notifications:new', payload);
   }
 
   emitNotificationsDeleted(userId: string, payload: NotificationsDeletedPayloadDto): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
-    this.presence.emitToUser(server, userId, 'notifications:deleted', payload);
+    this.emitToUser(userId, 'notifications:deleted', payload);
   }
 
   emitMessagesUpdated(userId: string, payload: { primaryUnreadCount: number; requestUnreadCount: number }): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
-    this.presence.emitToUser(server, userId, 'messages:updated', payload);
+    this.emitToUser(userId, 'messages:updated', payload);
   }
 
   emitMessagesRead(userId: string, payload: MessagesReadPayloadDto): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
-    this.presence.emitToUser(server, userId, 'messages:read', payload);
+    this.emitToUser(userId, 'messages:read', payload);
   }
 
   emitMessageCreated(userId: string, payload: { conversationId: string; message: unknown }): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
-    this.presence.emitToUser(server, userId, 'messages:new', payload);
+    this.emitToUser(userId, 'messages:new', payload);
   }
 
   emitFollowsChanged(userId: string, payload: FollowsChangedPayloadDto): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
-    this.presence.emitToUser(server, userId, 'follows:changed', payload);
+    this.emitToUser(userId, 'follows:changed', payload);
   }
 
   emitPostsInteraction(userIds: Iterable<string>, payload: PostsInteractionPayloadDto): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
-    for (const userId of userIds) {
-      if (!userId) continue;
-      this.presence.emitToUser(server, userId, 'posts:interaction', payload);
-    }
+    this.emitToUsers(userIds, 'posts:interaction', payload);
   }
 
   emitAdminUpdated(userId: string, payload: AdminUpdatedPayloadDto): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
-    this.presence.emitToUser(server, userId, 'admin:updated', payload);
+    this.emitToUser(userId, 'admin:updated', payload);
   }
 
   emitUsersSelfUpdated(userIds: Iterable<string>, payload: UsersSelfUpdatedPayloadDto): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
-    for (const userId of userIds) {
-      if (!userId) continue;
-      this.presence.emitToUser(server, userId, 'users:selfUpdated', payload);
-    }
+    this.emitToUsers(userIds, 'users:selfUpdated', payload);
+  }
+
+  /** Self-only auth/settings updates (never broadcast beyond the user's sockets). */
+  emitUsersMeUpdated(userId: string, payload: UsersMeUpdatedPayloadDto): void {
+    this.emitToUser(userId, 'users:meUpdated', payload);
   }
 }
 

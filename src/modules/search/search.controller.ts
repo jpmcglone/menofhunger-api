@@ -10,6 +10,10 @@ import { PostsService } from '../posts/posts.service';
 import { SearchService } from './search.service';
 import { Throttle } from '@nestjs/throttler';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
+import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
+import { CacheService } from '../redis/cache.service';
+import { CacheTtl } from '../redis/cache-ttl';
 
 const searchSchema = z.object({
   q: z.string().trim().max(200).optional(),
@@ -29,6 +33,8 @@ export class SearchController {
     private readonly search: SearchService,
     private readonly posts: PostsService,
     private readonly appConfig: AppConfigService,
+    private readonly cache: CacheService,
+    private readonly cacheInvalidation: CacheInvalidationService,
   ) {}
 
   @Throttle({
@@ -182,37 +188,57 @@ export class SearchController {
       return { data: bookmarks, pagination: { nextCursor: res.nextCursor ?? null } };
     }
     // posts
-    const res = await this.search.searchPosts({ viewerUserId, q, limit, cursor });
-    const postIds = (res.posts ?? []).map((p) => p.id);
-    const boosted = viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds }) : new Set<string>();
-    const bookmarksByPostId = viewerUserId
-      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
-      : new Map<string, { collectionIds: string[] }>();
-
-    const viewer = await this.posts.viewerContext(viewerUserId);
-    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-    const internalByPostId = viewerHasAdmin && postIds.length > 0
-      ? await this.posts.ensureBoostScoresFresh(postIds)
+    const anonCache = viewerUserId == null;
+    const searchVer = anonCache ? await this.cacheInvalidation.searchGlobalVersion() : null;
+    const paramsHash = anonCache
+      ? stableJsonHash({
+          endpoint: 'search:posts',
+          q,
+          limit,
+          cursor,
+        })
       : null;
-    const scoreByPostId = viewerHasAdmin && postIds.length > 0
-      ? await this.posts.computeScoresForPostIds(postIds)
-      : undefined;
+    const cacheKey = anonCache && searchVer ? RedisKeys.anonSearch(paramsHash!, searchVer) : null;
 
-    const posts = (res.posts ?? []).map((p) => {
-      const base = internalByPostId?.get(p.id);
-      const score = scoreByPostId?.get(p.id);
-      return toPostDto(p as PostWithAuthorAndMedia, this.appConfig.r2()?.publicBaseUrl ?? null, {
-        viewerHasBoosted: boosted.has(p.id),
-        viewerHasBookmarked: bookmarksByPostId.has(p.id),
-        viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
-        includeInternal: viewerHasAdmin,
-        internalOverride:
-          base || (typeof score === 'number' ? { score } : undefined)
-            ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
-            : undefined,
-      });
+    const out = await this.cache.getOrSetJson<{ data: any; pagination: any }>({
+      enabled: anonCache && Boolean(cacheKey),
+      key: cacheKey ?? '',
+      ttlSeconds: CacheTtl.anonSearchPostsSeconds,
+      compute: async () => {
+        const res = await this.search.searchPosts({ viewerUserId, q, limit, cursor });
+        const postIds = (res.posts ?? []).map((p) => p.id);
+        const boosted = viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds }) : new Set<string>();
+        const bookmarksByPostId = viewerUserId
+          ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
+          : new Map<string, { collectionIds: string[] }>();
+
+        const viewer = await this.posts.viewerContext(viewerUserId);
+        const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+        const internalByPostId = viewerHasAdmin && postIds.length > 0
+          ? await this.posts.ensureBoostScoresFresh(postIds)
+          : null;
+        const scoreByPostId = viewerHasAdmin && postIds.length > 0
+          ? await this.posts.computeScoresForPostIds(postIds)
+          : undefined;
+
+        const posts = (res.posts ?? []).map((p) => {
+          const base = internalByPostId?.get(p.id);
+          const score = scoreByPostId?.get(p.id);
+          return toPostDto(p as PostWithAuthorAndMedia, this.appConfig.r2()?.publicBaseUrl ?? null, {
+            viewerHasBoosted: boosted.has(p.id),
+            viewerHasBookmarked: bookmarksByPostId.has(p.id),
+            viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
+            includeInternal: viewerHasAdmin,
+            internalOverride:
+              base || (typeof score === 'number' ? { score } : undefined)
+                ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
+                : undefined,
+          });
+        });
+        return { data: posts, pagination: { nextCursor: res.nextCursor ?? null } };
+      },
     });
-    return { data: posts, pagination: { nextCursor: res.nextCursor ?? null } };
+    return out;
   }
 }
 

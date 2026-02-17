@@ -11,6 +11,10 @@ import { toPostDto, toPostPollDto } from './post.dto';
 import { buildAttachParentChain } from './posts.utils';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { setReadCache } from '../../common/http-cache';
+import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
+import { CacheService } from '../redis/cache.service';
+import { CacheTtl } from '../redis/cache-ttl';
 
 const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -244,6 +248,8 @@ export class PostsController {
   constructor(
     private readonly posts: PostsService,
     private readonly appConfig: AppConfigService,
+    private readonly cache: CacheService,
+    private readonly cacheInvalidation: CacheInvalidationService,
   ) {}
 
   @UseGuards(OptionalAuthGuard)
@@ -272,106 +278,131 @@ export class PostsController {
 
     const sort = parsed.sort ?? 'new';
     const sortKind = sort === 'trending' ? 'popular' : sort;
-    const result =
-      sortKind === 'featured'
-        ? await this.posts.listFeaturedFeed({
-            viewerUserId,
-            limit,
-            cursor,
-            visibility: parsed.visibility ?? 'all',
-            followingOnly: parsed.followingOnly ?? false,
-            authorUserIds: authorUserIds.length ? authorUserIds : null,
-          })
-        : sortKind === 'popular'
-        ? await this.posts.listPopularFeed({
-            viewerUserId,
-            limit,
-            cursor,
-            visibility: parsed.visibility ?? 'all',
-            followingOnly: parsed.followingOnly ?? false,
-            authorUserIds: authorUserIds.length ? authorUserIds : null,
-          })
-        : await this.posts.listFeed({
-            viewerUserId,
-            limit,
-            cursor,
-            visibility: parsed.visibility ?? 'all',
-            followingOnly: parsed.followingOnly ?? false,
-            authorUserIds: authorUserIds.length ? authorUserIds : null,
-          });
 
-    const viewer = await this.posts.viewerContext(viewerUserId);
-    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-    // Dedupe: keep only leaf posts (posts that are not an ancestor of any other post). So A→B→C returns only C, not A or B.
-    // O(leaves × max chain depth) in-memory; no extra DB queries or indexes needed.
-    const idToPost = new Map(result.posts.map((p) => [p.id, p]));
-    const strictAncestorIds = new Set<string>();
-    for (const p of result.posts) {
-      let currentId = p.parentId ?? null;
-      while (currentId) {
-        strictAncestorIds.add(currentId);
-        const parentPost = idToPost.get(currentId);
-        currentId = parentPost?.parentId ?? null;
-      }
-    }
-    const filteredPosts = result.posts.filter((p) => !strictAncestorIds.has(p.id));
-
-    // Collect full ancestor chain (walk parentId until null) and fetch all ancestors.
-    const parentMap = new Map<string, (Awaited<ReturnType<typeof this.posts.getById>>)>();
-    let toFetch = new Set<string>(filteredPosts.map((p) => p.parentId).filter(Boolean) as string[]);
-    while (toFetch.size > 0) {
-      const batch = [...toFetch].filter((id) => !parentMap.has(id));
-      if (batch.length === 0) break;
-      const results = await Promise.allSettled(
-        batch.map((id) => this.posts.getById({ viewerUserId, id })),
-      );
-      const nextIds = new Set<string>();
-      for (let i = 0; i < batch.length; i++) {
-        const r = results[i];
-        if (r?.status === 'fulfilled' && r.value) {
-          const parent = r.value;
-          parentMap.set(batch[i], parent);
-          if (parent.parentId) nextIds.add(parent.parentId);
-        }
-      }
-      toFetch = nextIds;
-    }
-
-    const allPostIds = [...filteredPosts.map((p) => p.id), ...parentMap.keys()];
-    const boosted = viewerUserId
-      ? await this.posts.viewerBoostedPostIds({
-          viewerUserId,
-          postIds: allPostIds,
+    const anonCache = viewerUserId == null;
+    const feedVer = anonCache ? await this.cacheInvalidation.feedGlobalVersion() : null;
+    const paramsHash = anonCache
+      ? stableJsonHash({
+          endpoint: 'posts:list',
+          sort: sortKind,
+          limit,
+          cursor,
+          visibility: parsed.visibility ?? 'all',
+          followingOnly: parsed.followingOnly ?? false,
+          authorUserIds,
         })
-      : new Set<string>();
-    const bookmarksByPostId = viewerUserId
-      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
-      : new Map<string, { collectionIds: string[] }>();
-    const votedPollOptionIdByPostId = viewerUserId
-      ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
-      : new Map<string, string>();
-    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)) : null;
-    const scoreByPostId =
-      viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
+      : null;
+    const cacheKey = anonCache && feedVer ? RedisKeys.anonPostsList(paramsHash!, feedVer) : null;
 
-    const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const attachParentChain = buildAttachParentChain({
-      parentMap,
-      baseUrl,
-      boosted,
-      bookmarksByPostId,
-      votedPollOptionIdByPostId,
-      viewerHasAdmin,
-      internalByPostId,
-      scoreByPostId,
-      toPostDto,
+    const out = await this.cache.getOrSetJson<{ data: any; pagination: any }>({
+      enabled: anonCache && Boolean(cacheKey),
+      key: cacheKey ?? '',
+      ttlSeconds: CacheTtl.anonFeedSeconds,
+      compute: async () => {
+        const result =
+          sortKind === 'featured'
+            ? await this.posts.listFeaturedFeed({
+                viewerUserId,
+                limit,
+                cursor,
+                visibility: parsed.visibility ?? 'all',
+                followingOnly: parsed.followingOnly ?? false,
+                authorUserIds: authorUserIds.length ? authorUserIds : null,
+              })
+            : sortKind === 'popular'
+              ? await this.posts.listPopularFeed({
+                  viewerUserId,
+                  limit,
+                  cursor,
+                  visibility: parsed.visibility ?? 'all',
+                  followingOnly: parsed.followingOnly ?? false,
+                  authorUserIds: authorUserIds.length ? authorUserIds : null,
+                })
+              : await this.posts.listFeed({
+                  viewerUserId,
+                  limit,
+                  cursor,
+                  visibility: parsed.visibility ?? 'all',
+                  followingOnly: parsed.followingOnly ?? false,
+                  authorUserIds: authorUserIds.length ? authorUserIds : null,
+                });
+
+        const viewer = await this.posts.viewerContext(viewerUserId);
+        const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+        // Dedupe: keep only leaf posts (posts that are not an ancestor of any other post). So A→B→C returns only C, not A or B.
+        // O(leaves × max chain depth) in-memory; no extra DB queries or indexes needed.
+        const idToPost = new Map(result.posts.map((p) => [p.id, p]));
+        const strictAncestorIds = new Set<string>();
+        for (const p of result.posts) {
+          let currentId = p.parentId ?? null;
+          while (currentId) {
+            strictAncestorIds.add(currentId);
+            const parentPost = idToPost.get(currentId);
+            currentId = parentPost?.parentId ?? null;
+          }
+        }
+        const filteredPosts = result.posts.filter((p) => !strictAncestorIds.has(p.id));
+
+        // Collect full ancestor chain (walk parentId until null) and fetch all ancestors.
+        const parentMap = new Map<string, (Awaited<ReturnType<typeof this.posts.getById>>)>();
+        let toFetch = new Set<string>(filteredPosts.map((p) => p.parentId).filter(Boolean) as string[]);
+        while (toFetch.size > 0) {
+          const batch = [...toFetch].filter((id) => !parentMap.has(id));
+          if (batch.length === 0) break;
+          const results = await Promise.allSettled(
+            batch.map((id) => this.posts.getById({ viewerUserId, id })),
+          );
+          const nextIds = new Set<string>();
+          for (let i = 0; i < batch.length; i++) {
+            const r = results[i];
+            if (r?.status === 'fulfilled' && r.value) {
+              const parent = r.value;
+              parentMap.set(batch[i], parent);
+              if (parent.parentId) nextIds.add(parent.parentId);
+            }
+          }
+          toFetch = nextIds;
+        }
+
+        const allPostIds = [...filteredPosts.map((p) => p.id), ...parentMap.keys()];
+        const boosted = viewerUserId
+          ? await this.posts.viewerBoostedPostIds({
+              viewerUserId,
+              postIds: allPostIds,
+            })
+          : new Set<string>();
+        const bookmarksByPostId = viewerUserId
+          ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
+          : new Map<string, { collectionIds: string[] }>();
+        const votedPollOptionIdByPostId = viewerUserId
+          ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
+          : new Map<string, string>();
+        const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)) : null;
+        const scoreByPostId =
+          viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
+
+        const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+        const attachParentChain = buildAttachParentChain({
+          parentMap,
+          baseUrl,
+          boosted,
+          bookmarksByPostId,
+          votedPollOptionIdByPostId,
+          viewerHasAdmin,
+          internalByPostId,
+          scoreByPostId,
+          toPostDto,
+        });
+
+        return {
+          data: filteredPosts.map((p) => attachParentChain(p)),
+          pagination: { nextCursor: result.nextCursor },
+        };
+      },
     });
 
     setReadCache(httpRes, { viewerUserId });
-    return {
-      data: filteredPosts.map((p) => attachParentChain(p)),
-      pagination: { nextCursor: result.nextCursor },
-    };
+    return out;
   }
 
   @UseGuards(OptionalAuthGuard)
@@ -389,87 +420,110 @@ export class PostsController {
     const sort = parsed.sort ?? 'new';
     const sortKind = sort === 'trending' ? 'popular' : sort;
 
-    const result = await this.posts.listForUsername({
-      viewerUserId,
-      username,
-      limit,
-      cursor,
-      visibility: parsed.visibility ?? 'all',
-      includeCounts: parsed.includeCounts ?? true,
-      sort: sortKind === 'popular' ? 'popular' : 'new',
-    });
-
-    const viewer = await this.posts.viewerContext(viewerUserId);
-    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-    // Dedupe: keep only leaf posts (same as list()). O(leaves × max chain depth) in-memory.
-    const idToPostUser = new Map(result.posts.map((p) => [p.id, p]));
-    const strictAncestorIdsUser = new Set<string>();
-    for (const p of result.posts) {
-      let currentId = p.parentId ?? null;
-      while (currentId) {
-        strictAncestorIdsUser.add(currentId);
-        const parentPost = idToPostUser.get(currentId);
-        currentId = parentPost?.parentId ?? null;
-      }
-    }
-    const filteredPostsUser = result.posts.filter((p) => !strictAncestorIdsUser.has(p.id));
-
-    // Collect full ancestor chain (walk parentId until null) and fetch all ancestors.
-    const parentMap = new Map<string, (Awaited<ReturnType<typeof this.posts.getById>>)>();
-    let toFetch = new Set<string>(filteredPostsUser.map((p) => p.parentId).filter(Boolean) as string[]);
-    while (toFetch.size > 0) {
-      const batch = [...toFetch].filter((id) => !parentMap.has(id));
-      if (batch.length === 0) break;
-      const results = await Promise.allSettled(
-        batch.map((id) => this.posts.getById({ viewerUserId, id })),
-      );
-      const nextIds = new Set<string>();
-      for (let i = 0; i < batch.length; i++) {
-        const r = results[i];
-        if (r?.status === 'fulfilled' && r.value) {
-          const parent = r.value;
-          parentMap.set(batch[i], parent);
-          if (parent.parentId) nextIds.add(parent.parentId);
-        }
-      }
-      toFetch = nextIds;
-    }
-
-    const allPostIds = [...filteredPostsUser.map((p) => p.id), ...parentMap.keys()];
-    const boosted = viewerUserId
-      ? await this.posts.viewerBoostedPostIds({
-          viewerUserId,
-          postIds: allPostIds,
+    const anonCache = viewerUserId == null;
+    const feedVer = anonCache ? await this.cacheInvalidation.feedGlobalVersion() : null;
+    const paramsHash = anonCache
+      ? stableJsonHash({
+          endpoint: 'posts:user',
+          sort: sortKind,
+          limit,
+          cursor,
+          visibility: parsed.visibility ?? 'all',
+          includeCounts: parsed.includeCounts ?? true,
         })
-      : new Set<string>();
-    const bookmarksByPostId = viewerUserId
-      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
-      : new Map<string, { collectionIds: string[] }>();
-    const votedPollOptionIdByPostId = viewerUserId
-      ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
-      : new Map<string, string>();
-    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPostsUser.map((p) => p.id)) : null;
-    const scoreByPostIdUser =
-      viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
+      : null;
+    const cacheKey = anonCache && feedVer ? RedisKeys.anonPostsUser(username, paramsHash!, feedVer) : null;
 
-    const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const attachParentChain = buildAttachParentChain({
-      parentMap,
-      baseUrl,
-      boosted,
-      bookmarksByPostId,
-      votedPollOptionIdByPostId,
-      viewerHasAdmin,
-      internalByPostId,
-      scoreByPostId: scoreByPostIdUser,
-      toPostDto,
+    const out = await this.cache.getOrSetJson<{ data: any; pagination: any }>({
+      enabled: anonCache && Boolean(cacheKey),
+      key: cacheKey ?? '',
+      ttlSeconds: CacheTtl.anonFeedSeconds,
+      compute: async () => {
+        const result = await this.posts.listForUsername({
+          viewerUserId,
+          username,
+          limit,
+          cursor,
+          visibility: parsed.visibility ?? 'all',
+          includeCounts: parsed.includeCounts ?? true,
+          sort: sortKind === 'popular' ? 'popular' : 'new',
+        });
+
+        const viewer = await this.posts.viewerContext(viewerUserId);
+        const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+        // Dedupe: keep only leaf posts (same as list()). O(leaves × max chain depth) in-memory.
+        const idToPostUser = new Map(result.posts.map((p) => [p.id, p]));
+        const strictAncestorIdsUser = new Set<string>();
+        for (const p of result.posts) {
+          let currentId = p.parentId ?? null;
+          while (currentId) {
+            strictAncestorIdsUser.add(currentId);
+            const parentPost = idToPostUser.get(currentId);
+            currentId = parentPost?.parentId ?? null;
+          }
+        }
+        const filteredPostsUser = result.posts.filter((p) => !strictAncestorIdsUser.has(p.id));
+
+        // Collect full ancestor chain (walk parentId until null) and fetch all ancestors.
+        const parentMap = new Map<string, (Awaited<ReturnType<typeof this.posts.getById>>)>();
+        let toFetch = new Set<string>(filteredPostsUser.map((p) => p.parentId).filter(Boolean) as string[]);
+        while (toFetch.size > 0) {
+          const batch = [...toFetch].filter((id) => !parentMap.has(id));
+          if (batch.length === 0) break;
+          const results = await Promise.allSettled(
+            batch.map((id) => this.posts.getById({ viewerUserId, id })),
+          );
+          const nextIds = new Set<string>();
+          for (let i = 0; i < batch.length; i++) {
+            const r = results[i];
+            if (r?.status === 'fulfilled' && r.value) {
+              const parent = r.value;
+              parentMap.set(batch[i], parent);
+              if (parent.parentId) nextIds.add(parent.parentId);
+            }
+          }
+          toFetch = nextIds;
+        }
+
+        const allPostIds = [...filteredPostsUser.map((p) => p.id), ...parentMap.keys()];
+        const boosted = viewerUserId
+          ? await this.posts.viewerBoostedPostIds({
+              viewerUserId,
+              postIds: allPostIds,
+            })
+          : new Set<string>();
+        const bookmarksByPostId = viewerUserId
+          ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
+          : new Map<string, { collectionIds: string[] }>();
+        const votedPollOptionIdByPostId = viewerUserId
+          ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
+          : new Map<string, string>();
+        const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPostsUser.map((p) => p.id)) : null;
+        const scoreByPostIdUser =
+          viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
+
+        const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+        const attachParentChain = buildAttachParentChain({
+          parentMap,
+          baseUrl,
+          boosted,
+          bookmarksByPostId,
+          votedPollOptionIdByPostId,
+          viewerHasAdmin,
+          internalByPostId,
+          scoreByPostId: scoreByPostIdUser,
+          toPostDto,
+        });
+
+        return {
+          data: filteredPostsUser.map((p) => attachParentChain(p)),
+          pagination: { nextCursor: result.nextCursor, counts: result.counts ?? null },
+        };
+      },
     });
 
     setReadCache(httpRes, { viewerUserId });
-    return {
-      data: filteredPostsUser.map((p) => attachParentChain(p)),
-      pagination: { nextCursor: result.nextCursor, counts: result.counts ?? null },
-    };
+    return out;
   }
 
   @UseGuards(AuthGuard)

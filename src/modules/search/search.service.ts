@@ -9,6 +9,7 @@ import { RequestCacheService } from '../../common/cache/request-cache.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { queryToTopicValues } from '../../common/topics/topic-utils';
 import { HASHTAG_IN_TEXT_DISPLAY_RE, parseHashtagsFromText } from '../../common/hashtags/hashtag-regex';
+import { POST_BASE_INCLUDE } from '../../common/prisma-includes/post.include';
 
 /**
  * Search scoring (higher = better). Used for ranking only; tie-breaks: relationship (users), createdAt (posts).
@@ -51,25 +52,7 @@ const POST_SCORE = {
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
 
-const SEARCH_POST_INCLUDE = {
-  user: true,
-  media: { orderBy: { position: 'asc' as const } },
-  mentions: {
-    include: {
-      user: {
-        select: {
-          id: true,
-          username: true,
-          verifiedStatus: true,
-          premium: true,
-          premiumPlus: true,
-          isOrganization: true,
-          stewardBadgeEnabled: true,
-        },
-      },
-    },
-  },
-} as const;
+const SEARCH_POST_INCLUDE = POST_BASE_INCLUDE;
 
 type SearchPostRow = Prisma.PostGetPayload<{
   include: typeof SEARCH_POST_INCLUDE;
@@ -562,20 +545,12 @@ export class SearchService {
             AND: [{ deletedAt: null }, visibilityWhere, hashtagWhere],
           },
           include: {
-            user: true,
+            user: POST_BASE_INCLUDE.user,
             media: { orderBy: { position: 'asc' } },
             mentions: {
               include: {
                 user: {
-                  select: {
-                    id: true,
-                    username: true,
-                    verifiedStatus: true,
-                    premium: true,
-                    premiumPlus: true,
-                    isOrganization: true,
-                    stewardBadgeEnabled: true,
-                  },
+                  select: POST_BASE_INCLUDE.mentions.include.user.select,
                 },
               },
             },
@@ -931,9 +906,9 @@ export class SearchService {
         collections: { select: { collectionId: true } },
         post: {
           include: {
-            user: true,
+            user: POST_BASE_INCLUDE.user,
             media: { orderBy: { position: 'asc' } },
-            mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true } } } },
+            mentions: POST_BASE_INCLUDE.mentions,
           },
         },
       },

@@ -46,7 +46,24 @@ export function toVerificationRequestPublicDto(req: VerificationRequest): Verifi
   };
 }
 
-function toAdminUserSummaryDto(user: User): VerificationRequestAdminUserSummaryDto {
+type VerificationAdminUserRow = Pick<
+  User,
+  | 'id'
+  | 'createdAt'
+  | 'phone'
+  | 'email'
+  | 'username'
+  | 'usernameIsSet'
+  | 'name'
+  | 'siteAdmin'
+  | 'premium'
+  | 'premiumPlus'
+  | 'verifiedStatus'
+  | 'verifiedAt'
+  | 'unverifiedAt'
+>;
+
+function toAdminUserSummaryDto(user: VerificationAdminUserRow): VerificationRequestAdminUserSummaryDto {
   return {
     id: user.id,
     createdAt: user.createdAt.toISOString(),
@@ -66,7 +83,7 @@ function toAdminUserSummaryDto(user: User): VerificationRequestAdminUserSummaryD
 
 export function toVerificationRequestAdminDto(
   req: VerificationRequest & {
-    user: User;
+    user: VerificationAdminUserRow;
     reviewedByAdmin?: Pick<User, 'id' | 'username' | 'name'> | null;
   },
 ): VerificationRequestAdminDto {

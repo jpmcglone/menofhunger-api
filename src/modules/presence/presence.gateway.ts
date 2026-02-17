@@ -11,6 +11,8 @@ import { Server, type Socket } from 'socket.io';
 import { AuthService } from '../auth/auth.service';
 import { PresenceService } from './presence.service';
 import { PresenceRealtimeService } from './presence-realtime.service';
+import { PresenceRedisStateService } from './presence-redis-state.service';
+import { AppConfigService } from '../app/app-config.service';
 import { FollowsService } from '../follows/follows.service';
 import type { FollowListUser } from '../follows/follows.service';
 import { MessagesService } from '../messages/messages.service';
@@ -33,7 +35,7 @@ type UserTimers = {
 export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(PresenceGateway.name);
   // Performance: presence events can be very high-frequency. Never spam logs in production.
-  private readonly logPresenceVerbose = (process.env.NODE_ENV ?? 'development') !== 'production';
+  private readonly logPresenceVerbose: boolean;
   private readonly userTimers = new Map<string, UserTimers>();
   private readonly typingThrottleByKey = new Map<string, number>();
 
@@ -41,17 +43,37 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   server!: Server;
 
   constructor(
+    private readonly appConfig: AppConfigService,
     private readonly auth: AuthService,
     private readonly presence: PresenceService,
+    private readonly presenceRedis: PresenceRedisStateService,
     private readonly realtime: PresenceRealtimeService,
     private readonly follows: FollowsService,
     private readonly messages: MessagesService,
     private readonly radio: RadioService,
-  ) {}
+  ) {
+    this.logPresenceVerbose = !this.appConfig.isProd();
+  }
 
   afterInit(server: Server): void {
     // Provide the Socket.IO server to other modules without them importing the gateway.
     this.realtime.setServer(server);
+
+    // Cross-instance fanout: emit events from other instances to this instance's subscribers.
+    const myInstanceId = this.presenceRedis.getInstanceId();
+    this.presenceRedis.onEvent((evt) => {
+      if (!evt?.userId) return;
+      if ((evt as any).instanceId === myInstanceId) return;
+      if (evt.type === 'online') this.emitOnline(evt.userId);
+      else if (evt.type === 'offline') this.emitOffline(evt.userId);
+      else if (evt.type === 'idle') this.emitIdle(evt.userId);
+      else if (evt.type === 'active') this.emitActive(evt.userId);
+      else if (evt.type === 'emitToUser') {
+        const e = String((evt as any).event ?? '').trim();
+        if (!e) return;
+        this.presence.emitToUser(this.server, evt.userId, e, (evt as any).payload);
+      }
+    });
   }
 
   async handleConnection(client: Socket): Promise<void> {
@@ -78,12 +100,20 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         ? client.handshake.query.client[0]
         : client.handshake.query.client) ?? 'web';
 
-    const { isNewlyOnline } = this.presence.register(client.id, user.id, String(clientType));
+    // Local (per-instance) socket tracking for targeted emits.
+    this.presence.register(client.id, user.id, String(clientType));
+    // Global (cross-instance) presence state in Redis.
+    const { isNewlyOnline } = await this.presenceRedis.registerSocket({
+      socketId: client.id,
+      userId: user.id,
+      client: String(clientType),
+    });
     // Best-effort: mark reading/being in-app as active for metrics (DAU/MAU).
     this.presence.persistLastSeenAt(user.id);
     this.presence.persistDailyActivity(user.id);
     // Store for downstream event handlers (radio, etc).
-    (client.data as { userId?: string }).userId = user.id;
+    (client.data as { userId?: string; presenceClient?: string }).userId = user.id;
+    (client.data as { userId?: string; presenceClient?: string }).presenceClient = String(clientType);
     if (this.logPresenceVerbose) {
       this.logger.debug(`[presence] CONNECT socket=${client.id} userId=${user.id} isNewlyOnline=${isNewlyOnline}`);
     }
@@ -103,9 +133,16 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         `[presence] DISCONNECT socket=${client.id} userId=${result?.userId ?? '?'} isNowOffline=${result?.isNowOffline ?? false}`,
       );
     }
-    if (result?.isNowOffline) {
-      this.cancelUserTimers(result.userId);
-      this.emitOffline(result.userId);
+    if (result?.userId) {
+      void this.presenceRedis
+        .unregisterSocket({ socketId: client.id, userId: result.userId })
+        .then((r) => {
+          if (r.isNowOffline) {
+            this.cancelUserTimers(result.userId);
+            this.emitOffline(result.userId);
+          }
+        })
+        .catch(() => undefined);
     }
 
     // Radio cleanup (best-effort).
@@ -321,9 +358,11 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     if (userIds.length === 0) return;
     const { added } = this.presence.subscribe(client.id, userIds);
     if (added.length > 0) {
+      const idleById = await this.presenceRedis.idleByUserIds(added);
+      const onlineById = await this.presenceRedis.onlineByUserIds(added);
       const users = added.map((uid) => {
-        const online = this.presence.isUserOnline(uid);
-        const idle = online ? this.presence.isUserIdle(uid) : false;
+        const online = onlineById.get(uid) ?? false;
+        const idle = online ? (idleById.get(uid) ?? false) : false;
         return { userId: uid, online, idle };
       });
       client.emit('presence:subscribed', { users });
@@ -351,18 +390,18 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     }
 
     // Send snapshot of currently online users to avoid race: User B connected before User A subscribed.
-    const userIds = this.presence.getOnlineUserIds();
+    const userIds = await this.presenceRedis.onlineUserIds();
     if (userIds.length === 0) return;
     try {
       const users = await this.follows.getFollowListUsersByIds({
         viewerUserId: null,
         userIds,
       });
-      const lastConnectAtById = new Map(userIds.map((id) => [id, this.presence.getLastConnectAt(id) ?? 0]));
-      const idleById = new Map(userIds.map((id) => [id, this.presence.isUserIdle(id)]));
+      const lastConnectAtById = await this.presenceRedis.lastConnectAtMsByUserId(userIds);
+      const idleById = await this.presenceRedis.idleByUserIds(userIds);
       const payload = users.map((u) => ({
         ...u,
-        lastConnectAt: lastConnectAtById.get(u.id),
+        lastConnectAt: lastConnectAtById.get(u.id) ?? null,
         idle: idleById.get(u.id) ?? false,
       }));
       client.emit('presence:onlineFeedSnapshot', { users: payload, totalOnline: userIds.length });
@@ -405,9 +444,16 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     }
 
     const result = this.presence.forceUnregister(client.id);
-    if (result?.wasLastConnection) {
-      this.cancelUserTimers(result.userId);
-      this.emitOffline(result.userId);
+    if (result?.userId) {
+      const userId = result.userId;
+      const wasLastLocal = result.wasLastConnection;
+      const r = await this.presenceRedis
+        .unregisterSocket({ socketId: client.id, userId })
+        .catch(() => ({ isNowOffline: wasLastLocal }));
+      if (r.isNowOffline) {
+        this.cancelUserTimers(userId);
+        this.emitOffline(userId);
+      }
     }
     // Ensure the client reconnects cleanly after logout.
     try {
@@ -422,6 +468,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
     this.presence.setUserIdle(userId);
+    void this.presenceRedis.setIdle(userId).catch(() => undefined);
     this.logger.log(`[presence] IDLE userId=${userId}`);
     this.emitIdle(userId);
     // Do not disconnect on idle; users stay connected.
@@ -433,11 +480,14 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
     this.presence.setLastActivity(userId);
+    const presenceClient = (client.data as { presenceClient?: string } | undefined)?.presenceClient ?? 'web';
+    void this.presenceRedis.touchSocket({ socketId: client.id, userId, client: presenceClient }).catch(() => undefined);
     // Best-effort: update metrics activity (server-throttled).
     this.presence.persistLastSeenAt(userId);
     this.presence.persistDailyActivity(userId);
     const wasIdle = this.presence.isUserIdle(userId);
     this.presence.setUserActive(userId);
+    void this.presenceRedis.setActive(userId).catch(() => undefined);
     this.scheduleIdleMarkTimer(userId);
     this.cancelIdleDisconnectTimer(userId);
     if (wasIdle) {

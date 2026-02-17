@@ -1,5 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisKeys } from '../redis/redis-keys';
+import { CacheService } from '../redis/cache.service';
+import { CacheTtl } from '../redis/cache-ttl';
 
 export type LinkMetadataDto = {
   url: string;
@@ -45,11 +48,20 @@ function normalizeUrl(raw: string): string | null {
 export class LinkMetadataService {
   private readonly logger = new Logger(LinkMetadataService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
+  ) {}
 
   async getMetadata(url: string): Promise<LinkMetadataDto | null> {
     const normalized = normalizeUrl(url);
     if (!normalized) return null;
+
+    const cacheKey = RedisKeys.linkMeta(normalized);
+    const cached = await this.cache.getJson<{ meta: LinkMetadataDto | null }>(cacheKey);
+    if (cached && Object.prototype.hasOwnProperty.call(cached, 'meta')) {
+      return cached.meta ?? null;
+    }
 
     const existing = await this.prisma.linkMetadata.findUnique({
       where: { url: normalized },
@@ -57,11 +69,38 @@ export class LinkMetadataService {
 
     const staleThreshold = new Date(Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000);
     if (existing && existing.updatedAt >= staleThreshold) {
-      return this.toDto(existing);
+      const dto = this.toDto(existing);
+      // Keep a short front-cache even when DB is fresh to reduce load.
+      void this.cache.setJson(cacheKey, { meta: dto }, { ttlSeconds: CacheTtl.linkMetaFrontSeconds }).catch(() => undefined);
+      return dto;
     }
 
-    const fresh = await this.fetchAndUpsert(normalized);
-    return fresh ? this.toDto(fresh) : null;
+    // Stampede protection: one fetch per URL at a time.
+    const lockKey = RedisKeys.linkMetaLock(normalized);
+    const wrapped = await this.cache.getOrSetJsonWithLock<{ meta: LinkMetadataDto | null }>({
+      enabled: true,
+      key: cacheKey,
+      ttlSeconds: CacheTtl.linkMetaFrontSeconds,
+      lockKey,
+      lockTtlMs: 4_000,
+      lockWaitMs: 250,
+      computeAndSet: async () => {
+        const fresh = await this.fetchAndUpsert(normalized);
+        const dto = fresh ? this.toDto(fresh) : null;
+        // Cache nulls briefly to avoid repeated external fetches for bad URLs.
+        await this.cache.setJson(
+          cacheKey,
+          { meta: dto },
+          { ttlSeconds: dto ? CacheTtl.linkMetaFrontSeconds : CacheTtl.linkMetaNullSeconds },
+        );
+        return { meta: dto };
+      },
+      fallback: async () => {
+        // If lock contention, fall back to stale DB value (if present).
+        return { meta: existing ? this.toDto(existing) : null };
+      },
+    });
+    return wrapped?.meta ?? null;
   }
 
   private toDto(row: { url: string; title: string | null; description: string | null; imageUrl: string | null; siteName: string | null }): LinkMetadataDto {

@@ -9,6 +9,10 @@ import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit
 import { setReadCache } from '../../common/http-cache';
 import { TopicsService } from './topics.service';
 import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
+import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
+import { CacheService } from '../redis/cache.service';
+import { CacheTtl } from '../redis/cache-ttl';
 
 const listTopicsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -30,7 +34,11 @@ const listCategoriesSchema = z.object({
 @UseGuards(OptionalAuthGuard)
 @Controller('topics')
 export class TopicsController {
-  constructor(private readonly topics: TopicsService) {}
+  constructor(
+    private readonly topics: TopicsService,
+    private readonly cache: CacheService,
+    private readonly cacheInvalidation: CacheInvalidationService,
+  ) {}
 
   @Throttle({
     default: {
@@ -56,9 +64,18 @@ export class TopicsController {
     const parsed = listTopicsSchema.parse(query);
     const viewerUserId = userId ?? null;
     const limit = parsed.limit ?? 30;
-    const data = await this.topics.listTopics({ viewerUserId, limit });
+    const anonCache = viewerUserId == null;
+    const feedVer = anonCache ? await this.cacheInvalidation.feedGlobalVersion() : null;
+    const paramsHash = anonCache ? stableJsonHash({ endpoint: 'topics:list', limit }) : null;
+    const cacheKey = anonCache && feedVer ? RedisKeys.anonTopics(paramsHash!, feedVer) : null;
+    const out = await this.cache.getOrSetJson<{ data: any }>({
+      enabled: anonCache && Boolean(cacheKey),
+      key: cacheKey ?? '',
+      ttlSeconds: CacheTtl.anonTopicsListSeconds,
+      compute: async () => ({ data: await this.topics.listTopics({ viewerUserId, limit }) }),
+    });
     setReadCache(httpRes, { viewerUserId });
-    return { data };
+    return out;
   }
 
   @Throttle({
@@ -72,9 +89,18 @@ export class TopicsController {
     const parsed = listCategoriesSchema.parse(query);
     const viewerUserId = userId ?? null;
     const limit = parsed.limit ?? 30;
-    const data = await this.topics.listCategories({ viewerUserId, limit });
+    const anonCache = viewerUserId == null;
+    const feedVer = anonCache ? await this.cacheInvalidation.feedGlobalVersion() : null;
+    const paramsHash = anonCache ? stableJsonHash({ endpoint: 'topics:categories', limit }) : null;
+    const cacheKey = anonCache && feedVer ? RedisKeys.anonTopics(paramsHash!, feedVer) : null;
+    const out = await this.cache.getOrSetJson<{ data: any }>({
+      enabled: anonCache && Boolean(cacheKey),
+      key: cacheKey ?? '',
+      ttlSeconds: CacheTtl.anonTopicsListSeconds,
+      compute: async () => ({ data: await this.topics.listCategories({ viewerUserId, limit }) }),
+    });
     setReadCache(httpRes, { viewerUserId });
-    return { data };
+    return out;
   }
 
   @Throttle({
@@ -90,9 +116,18 @@ export class TopicsController {
     @Res({ passthrough: true }) httpRes: Response,
   ) {
     const viewerUserId = userId ?? null;
-    const data = await this.topics.listCategoryTopics({ viewerUserId, category });
+    const anonCache = viewerUserId == null;
+    const feedVer = anonCache ? await this.cacheInvalidation.feedGlobalVersion() : null;
+    const paramsHash = anonCache ? stableJsonHash({ endpoint: 'topics:category:topics', category }) : null;
+    const cacheKey = anonCache && feedVer ? RedisKeys.anonTopics(paramsHash!, feedVer) : null;
+    const out = await this.cache.getOrSetJson<{ data: any }>({
+      enabled: anonCache && Boolean(cacheKey),
+      key: cacheKey ?? '',
+      ttlSeconds: CacheTtl.anonTopicsListSeconds,
+      compute: async () => ({ data: await this.topics.listCategoryTopics({ viewerUserId, category }) }),
+    });
     setReadCache(httpRes, { viewerUserId });
-    return { data };
+    return out;
   }
 
   @Throttle({
@@ -112,9 +147,21 @@ export class TopicsController {
     const viewerUserId = userId ?? null;
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
-    const res = await this.topics.listCategoryPosts({ viewerUserId, category, limit, cursor });
+    const anonCache = viewerUserId == null;
+    const feedVer = anonCache ? await this.cacheInvalidation.feedGlobalVersion() : null;
+    const paramsHash = anonCache ? stableJsonHash({ endpoint: 'topics:category:posts', category, limit, cursor }) : null;
+    const cacheKey = anonCache && feedVer ? RedisKeys.anonCategoryPosts(category, paramsHash!, feedVer) : null;
+    const out = await this.cache.getOrSetJson<{ data: any; pagination: any }>({
+      enabled: anonCache && Boolean(cacheKey),
+      key: cacheKey ?? '',
+      ttlSeconds: CacheTtl.anonFeedSeconds,
+      compute: async () => {
+        const res = await this.topics.listCategoryPosts({ viewerUserId, category, limit, cursor });
+        return { data: res.posts, pagination: { nextCursor: res.nextCursor } };
+      },
+    });
     setReadCache(httpRes, { viewerUserId });
-    return { data: res.posts, pagination: { nextCursor: res.nextCursor } };
+    return out;
   }
 
   @UseGuards(AuthGuard)
@@ -175,9 +222,21 @@ export class TopicsController {
     const viewerUserId = userId ?? null;
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
-    const res = await this.topics.listTopicPosts({ viewerUserId, topic, limit, cursor });
+    const anonCache = viewerUserId == null;
+    const topicVer = anonCache ? await this.cacheInvalidation.topicVersion(topic) : null;
+    const paramsHash = anonCache ? stableJsonHash({ endpoint: 'topics:posts', topic, limit, cursor }) : null;
+    const cacheKey = anonCache && topicVer ? RedisKeys.anonTopicPosts(topic, paramsHash!, topicVer) : null;
+    const out = await this.cache.getOrSetJson<{ data: any; pagination: any }>({
+      enabled: anonCache && Boolean(cacheKey),
+      key: cacheKey ?? '',
+      ttlSeconds: CacheTtl.anonTopicPostsSeconds,
+      compute: async () => {
+        const res = await this.topics.listTopicPosts({ viewerUserId, topic, limit, cursor });
+        return { data: res.posts, pagination: { nextCursor: res.nextCursor } };
+      },
+    });
     setReadCache(httpRes, { viewerUserId });
-    return { data: res.posts, pagination: { nextCursor: res.nextCursor } };
+    return out;
   }
 }
 

@@ -14,6 +14,10 @@ export default [
   },
   {
     files: ['**/*.ts'],
+    ignores: ['**/dist/**', '**/node_modules/**', '**/prisma/migrations/**'],
+    linterOptions: {
+      reportUnusedDisableDirectives: 'off',
+    },
     languageOptions: {
       parser: tsParser,
       ecmaVersion: 2022,
@@ -32,6 +36,10 @@ export default [
   },
   {
     files: ['**/*.js', '**/*.cjs', '**/*.mjs'],
+    ignores: ['**/dist/**', '**/node_modules/**', '**/prisma/migrations/**'],
+    linterOptions: {
+      reportUnusedDisableDirectives: 'off',
+    },
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',

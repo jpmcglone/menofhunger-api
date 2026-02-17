@@ -11,10 +11,8 @@ import type { ThrottlerStorage } from '@nestjs/throttler/dist/throttler-storage.
 import { getSessionCookie } from '../session-cookie';
 import { PrismaService } from '../../modules/prisma/prisma.service';
 import { AppConfigService } from '../../modules/app/app-config.service';
-import {
-  readSessionTokenUserCache,
-  writeSessionTokenUserCache,
-} from './session-token-user-cache';
+import { RedisService } from '../../modules/redis/redis.service';
+import { RedisKeys } from '../../modules/redis/redis-keys';
 
 /**
  * Throttling key strategy:
@@ -32,6 +30,7 @@ export class MohThrottlerGuard extends ThrottlerGuard {
     reflector: Reflector,
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
+    private readonly redis: RedisService,
   ) {
     super(options, storageService, reflector);
   }
@@ -45,8 +44,15 @@ export class MohThrottlerGuard extends ThrottlerGuard {
     const nowMs = now.getTime();
     const tokenHash = this.hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
 
-    const cached = readSessionTokenUserCache(tokenHash, nowMs);
-    if (cached !== undefined) return cached;
+    const cacheKey = RedisKeys.sessionUser(tokenHash);
+    try {
+      const cached = await this.redis.getString(cacheKey);
+      if (cached !== null) {
+        return cached === '-' ? null : cached;
+      }
+    } catch {
+      // If Redis is down, fall back to DB.
+    }
 
     const session = await this.prisma.session.findFirst({
       where: {
@@ -65,11 +71,13 @@ export class MohThrottlerGuard extends ThrottlerGuard {
     // - Negative: 5s.
     const maxPositiveMs = 30_000;
     const negativeMs = 5_000;
-    const entry = session
-      ? { userId: session.userId, expiresAtMs: Math.min(nowMs + maxPositiveMs, session.expiresAt.getTime()) }
-      : { userId: null, expiresAtMs: nowMs + negativeMs };
-    writeSessionTokenUserCache(tokenHash, entry, nowMs);
-    return entry.userId;
+    const ttlMs = session
+      ? Math.max(1, Math.min(maxPositiveMs, session.expiresAt.getTime() - nowMs))
+      : negativeMs;
+    const value = session ? session.userId : '-';
+    // Best-effort. If Redis is down, throttling still works (just with more DB reads).
+    void this.redis.setString(cacheKey, value, { ttlMs }).catch(() => undefined);
+    return session ? session.userId : null;
   }
 
   protected async getTracker(req: Record<string, unknown>): Promise<string> {

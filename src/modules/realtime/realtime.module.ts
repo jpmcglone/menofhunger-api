@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PresenceService } from '../presence/presence.service';
+import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
 
 /**
  * Standalone realtime primitives (presence state + Socket.IO emission).
@@ -10,8 +11,8 @@ import { PresenceService } from '../presence/presence.service';
  * This breaks circular dependencies between PresenceModule and domain modules.
  */
 @Module({
-  providers: [PresenceService, PresenceRealtimeService],
-  exports: [PresenceService, PresenceRealtimeService],
+  providers: [PresenceService, PresenceRealtimeService, PresenceRedisStateService],
+  exports: [PresenceService, PresenceRealtimeService, PresenceRedisStateService],
 })
 export class RealtimeModule {}
 

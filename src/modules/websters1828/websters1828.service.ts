@@ -1,4 +1,6 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { RedisKeys } from '../redis/redis-keys';
+import { CacheService } from '../redis/cache.service';
 
 export type Websters1828WordOfDay = {
   word: string;
@@ -23,8 +25,10 @@ const WEBSTERS_HEADERS = {
 
 @Injectable()
 export class Websters1828Service {
+  constructor(private readonly cache: CacheService) {}
+
   // Simple in-memory cache (per API instance).
-  private cache:
+  private memCache:
     | {
         value: Omit<Websters1828WordOfDay, 'definition' | 'definitionHtml'> & {
           /** Undefined means “not fetched yet”. */
@@ -51,42 +55,52 @@ export class Websters1828Service {
     const now = Date.now();
     const dayKey = easternDateKey(new Date(now));
     const expiresAtMs = nextEasternMidnightUtcMs(new Date(now));
+    const ttlSeconds = Math.max(1, Math.floor((expiresAtMs - now) / 1000));
 
-    if (forceRefresh) this.cache = null;
-    if (!this.cache || this.cache.dayKey !== dayKey || this.cache.expiresAtMs <= now) {
+    if (!forceRefresh) {
+      const cached = await this.cache.getJson<Websters1828WordOfDay>(RedisKeys.webstersWotd(dayKey, includeDefinition));
+      if (cached?.word && cached.dictionaryUrl) return cached;
+    }
+
+    if (forceRefresh) this.memCache = null;
+    if (!this.memCache || this.memCache.dayKey !== dayKey || this.memCache.expiresAtMs <= now) {
       const next = await this.fetchWordOfDayBase();
-      this.cache = { value: next, dayKey, expiresAtMs };
+      this.memCache = { value: next, dayKey, expiresAtMs };
     }
 
     if (includeDefinition) {
       // Populate definition lazily when requested.
-      if (this.cache.value.definition === undefined || this.cache.value.definitionHtml === undefined) {
-        if (this.cache.value.homepageDefinition || this.cache.value.homepageDefinitionHtml) {
-          this.cache.value.definition = this.cache.value.homepageDefinition ?? null;
-          this.cache.value.definitionHtml = this.cache.value.homepageDefinitionHtml ?? null;
+      if (this.memCache.value.definition === undefined || this.memCache.value.definitionHtml === undefined) {
+        if (this.memCache.value.homepageDefinition || this.memCache.value.homepageDefinitionHtml) {
+          this.memCache.value.definition = this.memCache.value.homepageDefinition ?? null;
+          this.memCache.value.definitionHtml = this.memCache.value.homepageDefinitionHtml ?? null;
         } else {
-          const fetched = await this.fetchDefinitionBestEffort(this.cache.value.dictionaryUrl).catch(() => null);
-          this.cache.value.definition = fetched?.text ?? null;
-          this.cache.value.definitionHtml = fetched?.html ?? null;
+          const fetched = await this.fetchDefinitionBestEffort(this.memCache.value.dictionaryUrl).catch(() => null);
+          this.memCache.value.definition = fetched?.text ?? null;
+          this.memCache.value.definitionHtml = fetched?.html ?? null;
         }
-      } else if (!this.cache.value.definition && !this.cache.value.definitionHtml) {
+      } else if (!this.memCache.value.definition && !this.memCache.value.definitionHtml) {
         // Heal parse/network misses on subsequent requests the same day.
-        const fetched = await this.fetchDefinitionBestEffort(this.cache.value.dictionaryUrl).catch(() => null);
+        const fetched = await this.fetchDefinitionBestEffort(this.memCache.value.dictionaryUrl).catch(() => null);
         if (fetched) {
-          this.cache.value.definition = fetched.text;
-          this.cache.value.definitionHtml = fetched.html;
+          this.memCache.value.definition = fetched.text;
+          this.memCache.value.definitionHtml = fetched.html;
         }
       }
     }
 
-    return {
-      word: this.cache.value.word,
-      dictionaryUrl: this.cache.value.dictionaryUrl,
-      sourceUrl: this.cache.value.sourceUrl,
-      fetchedAt: this.cache.value.fetchedAt,
-      definition: includeDefinition ? (this.cache.value.definition ?? null) : null,
-      definitionHtml: includeDefinition ? (this.cache.value.definitionHtml ?? null) : null,
+    const result: Websters1828WordOfDay = {
+      word: this.memCache.value.word,
+      dictionaryUrl: this.memCache.value.dictionaryUrl,
+      sourceUrl: this.memCache.value.sourceUrl,
+      fetchedAt: this.memCache.value.fetchedAt,
+      definition: includeDefinition ? (this.memCache.value.definition ?? null) : null,
+      definitionHtml: includeDefinition ? (this.memCache.value.definitionHtml ?? null) : null,
     };
+    void this.cache
+      .setJson(RedisKeys.webstersWotd(dayKey, includeDefinition), result, { ttlSeconds })
+      .catch(() => undefined);
+    return result;
   }
 
   /** Cache-Control max-age in seconds (until next midnight ET). */
