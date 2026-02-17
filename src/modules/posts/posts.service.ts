@@ -2062,8 +2062,8 @@ export class PostsService {
     const postTopics = Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [];
     const tags = Array.isArray((post as any).hashtags) ? ((post as any).hashtags as string[]) : [];
     const variants = Array.isArray((post as any).hashtagCasings) ? ((post as any).hashtagCasings as string[]) : [];
+    const now = new Date();
     await this.prisma.$transaction(async (tx) => {
-      const now = new Date();
       await tx.post.update({
         where: { id },
         data: { deletedAt: now },
@@ -2116,6 +2116,17 @@ export class PostsService {
       this.notifications.deleteByActorPostId(id),
     ]).catch(() => {});
     await this.cacheInvalidation.bumpForPostWrite({ topics: postTopics });
+    // Realtime: mark post deleted for live subscribers (best-effort).
+    try {
+      this.presenceRealtime.emitPostsLiveUpdated(id, {
+        postId: id,
+        version: now.toISOString(),
+        reason: 'post_deleted',
+        patch: { deletedAt: now.toISOString() },
+      });
+    } catch {
+      // Best-effort
+    }
     return { success: true };
   }
 
@@ -2285,6 +2296,24 @@ export class PostsService {
     });
     const nextTopics = Array.isArray((updated as any).topics) ? ((updated as any).topics as string[]) : [];
     await this.cacheInvalidation.bumpForPostWrite({ topics: [...prevTopics, ...nextTopics] });
+
+    // Realtime: update body/edited markers for live subscribers (best-effort).
+    try {
+      const editedAtIso = (updated as any)?.editedAt instanceof Date ? (updated as any).editedAt.toISOString() : new Date().toISOString();
+      const editCount = typeof (updated as any)?.editCount === 'number' ? (updated as any).editCount : undefined;
+      this.presenceRealtime.emitPostsLiveUpdated(id, {
+        postId: id,
+        version: editedAtIso,
+        reason: 'post_edited',
+        patch: {
+          body: String((updated as any)?.body ?? ''),
+          editedAt: editedAtIso,
+          ...(typeof editCount === 'number' ? { editCount } : {}),
+        },
+      });
+    } catch {
+      // Best-effort
+    }
     return updated;
   }
 
@@ -3266,6 +3295,7 @@ export class PostsService {
     const hashtags = hashtagTokens.map((t) => t.tag);
     const hashtagCasings = hashtagTokens.map((t) => t.variant);
 
+    let parentCommentCount: number | null = null;
     const post = await this.prisma.$transaction(async (tx) => {
       const relatedTopics = Array.from(new Set([...(parentTopics ?? []), ...(rootTopics ?? [])])).filter(Boolean);
       const topics = inferTopicsFromText(body, { hashtags, relatedTopics });
@@ -3314,10 +3344,12 @@ export class PostsService {
       });
 
       if (parentId) {
-        await tx.post.update({
+        const parentAfter = await tx.post.update({
           where: { id: parentId },
           data: { commentCount: { increment: 1 } },
+          select: { commentCount: true },
         });
+        parentCommentCount = typeof parentAfter.commentCount === 'number' ? parentAfter.commentCount : null;
       }
 
       if (mentionUserIds.length > 0) {
@@ -3351,6 +3383,22 @@ export class PostsService {
     if ((post as any)?.visibility && (post as any).visibility !== 'onlyMe') {
       const topics = Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [];
       await this.cacheInvalidation.bumpForPostWrite({ topics });
+    }
+
+    // Realtime: bump parent commentCount for live subscribers (best-effort).
+    if (parentId) {
+      try {
+        if (typeof parentCommentCount === 'number') {
+          this.presenceRealtime.emitPostsLiveUpdated(parentId, {
+            postId: parentId,
+            version: new Date().toISOString(),
+            reason: 'comment_created',
+            patch: { commentCount: parentCommentCount },
+          });
+        }
+      } catch {
+        // Best-effort
+      }
     }
 
     // Notifications: parent author + thread participants get "comment" notifications.

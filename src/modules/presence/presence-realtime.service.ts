@@ -2,10 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { Server } from 'socket.io';
 import { PresenceService } from './presence.service';
 import { PresenceRedisStateService } from './presence-redis-state.service';
+import { WsEventNames } from '../../common/dto';
 import type {
   AdminUpdatedPayloadDto,
   FollowsChangedPayloadDto,
   MessagesReadPayloadDto,
+  PostsLiveUpdatedPayloadDto,
   UsersMeUpdatedPayloadDto,
   NotificationsDeletedPayloadDto,
   NotificationsNewPayloadDto,
@@ -58,6 +60,16 @@ export class PresenceRealtimeService {
     }
   }
 
+  private emitToRoom(room: string, event: string, payload: unknown): void {
+    const server = this.getServerOrNull();
+    if (!server) return;
+    const r = (room ?? '').trim();
+    const ev = (event ?? '').trim();
+    if (!r || !ev) return;
+    server.to(r).emit(ev, payload);
+    void this.presenceRedis.publishEmitToRoom({ room: r, event: ev, payload }).catch(() => undefined);
+  }
+
   disconnectUserSockets(userId: string): void {
     const server = this.getServerOrNull();
     if (!server) return;
@@ -108,12 +120,19 @@ export class PresenceRealtimeService {
   }
 
   emitUsersSelfUpdated(userIds: Iterable<string>, payload: UsersSelfUpdatedPayloadDto): void {
-    this.emitToUsers(userIds, 'users:selfUpdated', payload);
+    this.emitToUsers(userIds, WsEventNames.usersSelfUpdated, payload);
   }
 
   /** Self-only auth/settings updates (never broadcast beyond the user's sockets). */
   emitUsersMeUpdated(userId: string, payload: UsersMeUpdatedPayloadDto): void {
-    this.emitToUser(userId, 'users:meUpdated', payload);
+    this.emitToUser(userId, WsEventNames.usersMeUpdated, payload);
+  }
+
+  /** Scoped post live updates (delivered only to sockets subscribed to this post). */
+  emitPostsLiveUpdated(postId: string, payload: PostsLiveUpdatedPayloadDto): void {
+    const pid = (postId ?? '').trim();
+    if (!pid) return;
+    this.emitToRoom(`post:${pid}`, WsEventNames.postsLiveUpdated, payload);
   }
 }
 

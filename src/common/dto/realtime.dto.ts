@@ -112,3 +112,46 @@ export type MessagesNewPayloadDto = {
   message: MessageDto;
 };
 
+/**
+ * Canonical websocket event ownership (to avoid double-dipping).
+ *
+ * - `users:meUpdated`: self-only account/auth/settings/gating snapshots (private `UserDto`)
+ * - `users:selfUpdated`: public-profile projection fanout (public `PublicProfileDto`)
+ * - `posts:*`: post/thread projections and scoped subscriptions (never used for user/account state)
+ * - `messages:*`: chat projections only
+ */
+export const WsEventNames = {
+  usersMeUpdated: 'users:meUpdated',
+  usersSelfUpdated: 'users:selfUpdated',
+  postsSubscribe: 'posts:subscribe',
+  postsUnsubscribe: 'posts:unsubscribe',
+  postsSubscribed: 'posts:subscribed',
+  postsLiveUpdated: 'posts:liveUpdated',
+} as const;
+
+export type PostsSubscribePayloadDto = {
+  postIds: string[];
+};
+
+export type PostsSubscribedPayloadDto = {
+  postIds: string[];
+};
+
+/**
+ * Minimal post patch for live updates.
+ * NOTE: Keep this intentionally small; clients should treat unknown fields as best-effort.
+ */
+export type PostsLiveUpdatedPayloadDto = {
+  postId: string;
+  /** Monotonic-ish version (ISO timestamp string). Used for client-side stale checks. */
+  version: string;
+  reason: string;
+  patch: Partial<{
+    body: string;
+    editedAt: string | null;
+    editCount: number;
+    deletedAt: string | null;
+    commentCount: number;
+  }>;
+};
+

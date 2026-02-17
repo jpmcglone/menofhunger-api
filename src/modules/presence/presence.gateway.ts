@@ -18,12 +18,19 @@ import type { FollowListUser } from '../follows/follows.service';
 import { MessagesService } from '../messages/messages.service';
 import { RadioService } from '../radio/radio.service';
 import type { RadioListenerDto } from '../../common/dto';
+import { WsEventNames, type PostsSubscribePayloadDto } from '../../common/dto';
 import { parseSessionCookieFromHeader } from '../../common/session-cookie';
+import { PrismaService } from '../prisma/prisma.service';
 
 type UserTimers = {
   idleMarkTimer?: ReturnType<typeof setTimeout>;
   idleDisconnectTimer?: ReturnType<typeof setTimeout>;
 };
+
+const MAX_POST_SUBSCRIPTIONS_PER_SOCKET = 60;
+function postRoom(postId: string): string {
+  return `post:${postId}`;
+}
 
 @WebSocketGateway({
   path: '/socket.io',
@@ -51,6 +58,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     private readonly follows: FollowsService,
     private readonly messages: MessagesService,
     private readonly radio: RadioService,
+    private readonly prisma: PrismaService,
   ) {
     this.logPresenceVerbose = !this.appConfig.isProd();
   }
@@ -72,6 +80,11 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         const e = String((evt as any).event ?? '').trim();
         if (!e) return;
         this.presence.emitToUser(this.server, evt.userId, e, (evt as any).payload);
+      } else if (evt.type === 'emitToRoom') {
+        const room = String((evt as any).room ?? '').trim();
+        const e = String((evt as any).event ?? '').trim();
+        if (!room || !e) return;
+        this.server.to(room).emit(e, (evt as any).payload);
       }
     });
   }
@@ -114,6 +127,13 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     // Store for downstream event handlers (radio, etc).
     (client.data as { userId?: string; presenceClient?: string }).userId = user.id;
     (client.data as { userId?: string; presenceClient?: string }).presenceClient = String(clientType);
+    (client.data as any).viewer = {
+      verified: Boolean(user?.verifiedStatus && user.verifiedStatus !== 'none'),
+      premium: Boolean(user?.premium),
+      premiumPlus: Boolean((user as any)?.premiumPlus),
+      siteAdmin: Boolean((user as any)?.siteAdmin),
+    };
+    (client.data as any).postSubs = new Set<string>();
     if (this.logPresenceVerbose) {
       this.logger.debug(`[presence] CONNECT socket=${client.id} userId=${user.id} isNewlyOnline=${isNewlyOnline}`);
     }
@@ -378,6 +398,66 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     if (userIds.length > 0) {
       this.presence.unsubscribe(client.id, userIds);
     }
+  }
+
+  @SubscribeMessage('posts:subscribe')
+  async handlePostsSubscribe(client: Socket, payload: Partial<PostsSubscribePayloadDto>): Promise<void> {
+    const raw = Array.isArray((payload as any)?.postIds) ? ((payload as any).postIds as unknown[]) : [];
+    const requested = raw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 200);
+    if (requested.length === 0) return;
+
+    const subs: Set<string> = (client.data as any).postSubs ?? new Set<string>();
+    (client.data as any).postSubs = subs;
+    const remainingCap = Math.max(0, MAX_POST_SUBSCRIPTIONS_PER_SOCKET - subs.size);
+    if (remainingCap <= 0) return;
+
+    // Dedupe and enforce cap incrementally.
+    const toConsider = Array.from(new Set(requested)).filter((id) => !subs.has(id)).slice(0, remainingCap);
+    if (toConsider.length === 0) return;
+
+    const viewerId = (client.data as { userId?: string })?.userId ?? null;
+    const viewer = (client.data as any)?.viewer ?? {};
+    const viewerIsVerified = Boolean(viewer?.siteAdmin) || Boolean(viewer?.verified);
+    const viewerIsPremium = Boolean(viewer?.siteAdmin) || Boolean(viewer?.premium) || Boolean(viewer?.premiumPlus);
+
+    // Fetch minimal visibility fields for gating.
+    const rows = await this.prisma.post.findMany({
+      where: { id: { in: toConsider }, deletedAt: null },
+      select: { id: true, userId: true, visibility: true },
+    });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const accepted: string[] = [];
+
+    for (const postId of toConsider) {
+      const row = byId.get(postId);
+      if (!row) continue;
+      const vis = String((row as any).visibility ?? '');
+      const isSelf = Boolean(viewerId && row.userId === viewerId);
+      if (vis === 'onlyMe' && !isSelf) continue;
+      if (vis === 'verifiedOnly' && !viewerIsVerified && !isSelf) continue;
+      if (vis === 'premiumOnly' && !viewerIsPremium && !isSelf) continue;
+
+      subs.add(postId);
+      accepted.push(postId);
+      client.join(postRoom(postId));
+    }
+
+    if (accepted.length > 0) {
+      client.emit(WsEventNames.postsSubscribed, { postIds: accepted });
+    }
+  }
+
+  @SubscribeMessage('posts:unsubscribe')
+  handlePostsUnsubscribe(client: Socket, payload: Partial<PostsSubscribePayloadDto>): void {
+    const raw = Array.isArray((payload as any)?.postIds) ? ((payload as any).postIds as unknown[]) : [];
+    const ids = raw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 200);
+    if (ids.length === 0) return;
+    const subs: Set<string> = (client.data as any).postSubs ?? new Set<string>();
+    for (const postId of ids) {
+      subs.delete(postId);
+      client.leave(postRoom(postId));
+    }
+    (client.data as any).postSubs = subs;
   }
 
   @SubscribeMessage('presence:subscribeOnlineFeed')

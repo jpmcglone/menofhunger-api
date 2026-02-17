@@ -11,7 +11,8 @@ type PresenceEvent =
   | { type: 'offline'; userId: string; instanceId: string }
   | { type: 'idle'; userId: string; instanceId: string }
   | { type: 'active'; userId: string; instanceId: string }
-  | { type: 'emitToUser'; userId: string; instanceId: string; event: string; payload: unknown };
+  | { type: 'emitToUser'; userId: string; instanceId: string; event: string; payload: unknown }
+  | { type: 'emitToRoom'; userId: string; instanceId: string; room: string; event: string; payload: unknown };
 
 @Injectable()
 export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy {
@@ -200,6 +201,18 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
     const event = String(params.event ?? '').trim();
     if (!userId || !event) return;
     await this.publish({ type: 'emitToUser', userId, instanceId: this.instanceId, event, payload: params.payload });
+  }
+
+  /**
+   * Cross-instance room emit (best-effort).
+   * Used for scoped subscriptions (e.g. per-post live updates).
+   */
+  async publishEmitToRoom(params: { room: string; event: string; payload: unknown }): Promise<void> {
+    const room = String(params.room ?? '').trim();
+    const event = String(params.event ?? '').trim();
+    if (!room || !event) return;
+    // `userId` remains required by the pubsub envelope; use '-' for room emits.
+    await this.publish({ type: 'emitToRoom', userId: '-', instanceId: this.instanceId, room, event, payload: params.payload });
   }
 
   async isIdle(userId: string): Promise<boolean> {
