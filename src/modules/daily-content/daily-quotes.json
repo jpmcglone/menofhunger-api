@@ -1,0 +1,100 @@
+[
+  {
+    "id": "scripture-matthew-5-6",
+    "kind": "scripture",
+    "tradition": "NKJV",
+    "author": "Matthew",
+    "reference": "Matthew 5:6",
+    "text": "Blessed are those who hunger and thirst for righteousness,\nFor they shall be filled.",
+    "isParaphrase": false
+  },
+  {
+    "id": "scripture-luke-6-21",
+    "kind": "scripture",
+    "tradition": "NKJV",
+    "author": "Luke",
+    "reference": "Luke 6:21",
+    "text": "Blessed are you who hunger now,\nFor you shall be filled.",
+    "isParaphrase": false
+  },
+  {
+    "id": "scripture-luke-1-53",
+    "kind": "scripture",
+    "tradition": "NKJV",
+    "author": "Luke",
+    "reference": "Luke 1:53",
+    "text": "He has filled the hungry with good things,\nAnd the rich He has sent away empty.",
+    "isParaphrase": false
+  },
+  {
+    "id": "scripture-psalm-107-9",
+    "kind": "scripture",
+    "tradition": "NKJV",
+    "author": "Psalms",
+    "reference": "Psalm 107:9",
+    "text": "For He satisfies the longing soul,\nAnd fills the hungry soul with goodness.",
+    "isParaphrase": false
+  },
+  {
+    "id": "scripture-proverbs-16-26",
+    "kind": "scripture",
+    "tradition": "NKJV",
+    "author": "Proverbs",
+    "reference": "Proverbs 16:26",
+    "text": "The person who labors, labors for himself,\nFor his hungry mouth drives him on.",
+    "isParaphrase": false
+  },
+  {
+    "id": "scripture-proverbs-27-7",
+    "kind": "scripture",
+    "tradition": "NKJV",
+    "author": "Proverbs",
+    "reference": "Proverbs 27:7",
+    "text": "A satisfied soul loathes the honeycomb,\nBut to a hungry soul every bitter thing is sweet.",
+    "isParaphrase": false
+  },
+  {
+    "id": "quote-steve-jobs-stay-hungry-stay-foolish",
+    "kind": "quote",
+    "author": "Steve Jobs",
+    "reference": "Stanford Commencement Address (2005)",
+    "text": "Stay Hungry. Stay Foolish.",
+    "isParaphrase": false,
+    "sourceUrl": "https://www.networkworld.com/article/744538/data-center-apple-s-steve-jobs-stanford-commencement-speech-transcript.html"
+  },
+  {
+    "id": "quote-cervantes-hunger-best-sauce",
+    "kind": "quote",
+    "author": "Miguel de Cervantes",
+    "reference": "Don Quixote, Part II, Chapter V (1615)",
+    "text": "Hunger is the best sauce in the world.",
+    "isParaphrase": false,
+    "sourceUrl": "https://www.laphamsquarterly.org/food/miscellany/cervantes-discovers-best-sauce-world"
+  },
+  {
+    "id": "paraphrase-augustine-restless-hungry",
+    "kind": "paraphrase",
+    "author": "St. Augustine",
+    "reference": null,
+    "text": "The soul remains restless—and hungry—until it rests in God.",
+    "isParaphrase": true
+  },
+  {
+    "id": "paraphrase-aw-tozer-god-fills-deep-desire",
+    "kind": "paraphrase",
+    "author": "A.W. Tozer",
+    "reference": null,
+    "text": "God fills those who desire Him deeply; shallow desire leads to shallow faith.",
+    "isParaphrase": true
+  },
+  {
+    "id": "paraphrase-viktor-frankl-hunger-meaning",
+    "kind": "paraphrase",
+    "author": "Viktor Frankl",
+    "reference": null,
+    "text": "Man’s deepest hunger is not pleasure, but meaning.",
+    "isParaphrase": true,
+    "note": "Philosophical (not explicitly Christian)."
+  }
+]
+

@@ -6,6 +6,7 @@ import {
   Get,
   NotFoundException,
   Param,
+  Post,
   Patch,
   Query,
   UseGuards,
@@ -67,6 +68,7 @@ export class AdminUsersController {
           OR: [
             { username: { contains: cleaned, mode: 'insensitive' } },
             { name: { contains: cleaned, mode: 'insensitive' } },
+            { email: { contains: cleaned, mode: 'insensitive' } },
             { phone: { contains: cleaned } },
           ],
         }
@@ -249,6 +251,35 @@ export class AdminUsersController {
       }
       throw err;
     }
+  }
+
+  @Post(':id/email/unverify')
+  async unverifyEmail(@Param('id') id: string) {
+    const now = new Date();
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    const existing = await this.prisma.user.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('User not found.');
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.user.update({
+        where: { id },
+        data: {
+          emailVerifiedAt: null,
+          emailVerificationRequestedAt: null,
+        },
+      });
+
+      // Invalidate any outstanding verification links (best-effort).
+      await tx.emailActionToken.updateMany({
+        where: { userId: id, purpose: 'verifyEmail', consumedAt: null },
+        data: { consumedAt: now },
+      });
+
+      return u;
+    });
+
+    return { data: toUserDto(updated, publicBaseUrl) };
   }
 }
 

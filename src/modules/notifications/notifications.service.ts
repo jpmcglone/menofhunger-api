@@ -6,6 +6,8 @@ import { AppConfigService } from '../app/app-config.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { JobsService } from '../jobs/jobs.service';
+import { JOBS } from '../jobs/jobs.constants';
 import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectPostVisibility, SubjectTier } from './notification.dto';
 import type {
   FollowedPostsRollupDto,
@@ -35,6 +37,7 @@ export class NotificationsService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly jobs: JobsService,
   ) {}
 
   private async getUndeliveredCountInternal(recipientUserId: string): Promise<number> {
@@ -144,6 +147,24 @@ export class NotificationsService {
       this.logger.debug(`[push] Failed to evaluate push preferences: ${err}`);
     }
 
+    // Optional: enqueue instant email for high-signal events (mentions + replies).
+    if (kind === 'mention' || kind === 'comment') {
+      try {
+        await this.jobs.enqueueCron(
+          JOBS.notificationsInstantHighSignalEmail,
+          { userId: recipientUserId },
+          `notifications:instantHighSignalEmail:${recipientUserId}`,
+          {
+            delay: 2 * 60_000,
+            attempts: 2,
+            backoff: { type: 'exponential', delay: 60_000 },
+          },
+        );
+      } catch {
+        // likely duplicate jobId; treat as no-op (batching).
+      }
+    }
+
     return notification;
   }
 
@@ -175,16 +196,39 @@ export class NotificationsService {
       pushFollow: Boolean(prefs.pushFollow),
       pushMention: Boolean(prefs.pushMention),
       pushMessage: Boolean(prefs.pushMessage),
-      emailDigestWeekly: Boolean(prefs.emailDigestWeekly),
+      emailDigestDaily: Boolean(prefs.emailDigestDaily),
       emailNewNotifications: Boolean(prefs.emailNewNotifications),
+      emailInstantHighSignal: Boolean((prefs as any).emailInstantHighSignal),
     };
   }
 
   async updatePreferences(userId: string, patch: Partial<NotificationPreferencesDto>): Promise<NotificationPreferencesDto> {
+    // Email prefs are only meaningful for verified emails. Keep the stored settings,
+    // but prevent toggling them until the user verifies their email.
+    const wantsEmailPatch =
+      patch.emailDigestDaily !== undefined ||
+      patch.emailNewNotifications !== undefined ||
+      (patch as any).emailInstantHighSignal !== undefined;
+
+    let effectivePatch = patch;
+    if (wantsEmailPatch) {
+      const u = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { email: true, emailVerifiedAt: true },
+      });
+      const canUseEmail = Boolean((u?.email ?? '').trim()) && Boolean(u?.emailVerifiedAt);
+      if (!canUseEmail) {
+        effectivePatch = { ...patch };
+        delete (effectivePatch as any).emailDigestDaily;
+        delete (effectivePatch as any).emailNewNotifications;
+        delete (effectivePatch as any).emailInstantHighSignal;
+      }
+    }
+
     const updated = await this.prisma.notificationPreferences.upsert({
       where: { userId },
-      create: { userId, ...patch },
-      update: patch,
+      create: { userId, ...(effectivePatch as any) },
+      update: effectivePatch as any,
     });
     return {
       pushComment: Boolean(updated.pushComment),
@@ -192,8 +236,9 @@ export class NotificationsService {
       pushFollow: Boolean(updated.pushFollow),
       pushMention: Boolean(updated.pushMention),
       pushMessage: Boolean(updated.pushMessage),
-      emailDigestWeekly: Boolean(updated.emailDigestWeekly),
+      emailDigestDaily: Boolean(updated.emailDigestDaily),
       emailNewNotifications: Boolean(updated.emailNewNotifications),
+      emailInstantHighSignal: Boolean((updated as any).emailInstantHighSignal),
     };
   }
 
@@ -353,7 +398,7 @@ export class NotificationsService {
     const sender = (params.senderName ?? '').trim();
     const title = sender ? `New message from ${sender}` : 'New message';
     const body = (params.body ?? '').trim().slice(0, 150) || undefined;
-    const url = `/messages?c=${encodeURIComponent(params.conversationId)}`;
+    const url = `/chat?c=${encodeURIComponent(params.conversationId)}`;
     const tag = `message-${params.conversationId}`;
     try {
       await this.sendWebPushToRecipient(params.recipientUserId, {

@@ -45,12 +45,14 @@ export class Websters1828Service {
    * Cache rolls over at midnight ET so it aligns with other daily content.
    * Note: This is an in-memory cache (per API instance).
    */
-  async getWordOfDay(options?: { includeDefinition?: boolean }): Promise<Websters1828WordOfDay> {
+  async getWordOfDay(options?: { includeDefinition?: boolean; forceRefresh?: boolean }): Promise<Websters1828WordOfDay> {
     const includeDefinition = options?.includeDefinition === true;
+    const forceRefresh = options?.forceRefresh === true;
     const now = Date.now();
     const dayKey = easternDateKey(new Date(now));
     const expiresAtMs = nextEasternMidnightUtcMs(new Date(now));
 
+    if (forceRefresh) this.cache = null;
     if (!this.cache || this.cache.dayKey !== dayKey || this.cache.expiresAtMs <= now) {
       const next = await this.fetchWordOfDayBase();
       this.cache = { value: next, dayKey, expiresAtMs };

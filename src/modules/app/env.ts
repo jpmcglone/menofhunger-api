@@ -270,15 +270,20 @@ export const envSchema = z.object({
   ),
 
   // Email (optional): configure Mailgun for digests/re-engagement.
-  MAILGUN_API_KEY: z.preprocess(
+  // Email (optional): Resend (digests + verification + nudges).
+  RESEND_API_KEY: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
   ),
-  MAILGUN_DOMAIN: z.preprocess(
+  RESEND_FROM_EMAIL: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
   ),
-  MAILGUN_FROM_EMAIL: z.preprocess(
+  RESEND_FROM_NOTIFICATIONS_EMAIL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  RESEND_FROM_SUPPORT_EMAIL: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
   ),

@@ -13,6 +13,7 @@ import { NotificationsEmailCron } from '../notifications/notifications-email.cro
 import { AuthCleanupCron } from '../auth/auth-cleanup.cron';
 import { SearchCleanupCron } from '../search/search-cleanup.cron';
 import { LinkMetadataCron } from '../link-metadata/link-metadata.cron';
+import { DailyContentCron } from '../daily-content/daily-content.cron';
 
 @Processor(MOH_BACKGROUND_QUEUE)
 export class JobsProcessor extends WorkerHost {
@@ -27,6 +28,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly notificationsCleanup: NotificationsCleanupCron,
     private readonly notificationsOrphanCleanup: NotificationsOrphanCleanupCron,
     private readonly notificationsEmail: NotificationsEmailCron,
+    private readonly dailyContent: DailyContentCron,
     private readonly authCleanup: AuthCleanupCron,
     private readonly searchCleanup: SearchCleanupCron,
     private readonly linkMetadata: LinkMetadataCron,
@@ -63,8 +65,14 @@ export class JobsProcessor extends WorkerHost {
         case JOBS.notificationsEmailNudges:
           await this.notificationsEmail.runSendNewNotificationsNudges();
           return { ok: true };
-        case JOBS.notificationsWeeklyDigest:
-          await this.notificationsEmail.runSendWeeklyDigest();
+        case JOBS.notificationsDailyDigest:
+          await this.notificationsEmail.runSendDailyDigest();
+          return { ok: true };
+        case JOBS.notificationsInstantHighSignalEmail:
+          await this.notificationsEmail.runSendInstantHighSignalEmail(job.data ?? undefined);
+          return { ok: true };
+        case JOBS.dailyContentRefresh:
+          await this.dailyContent.runRefreshDailyContent();
           return { ok: true };
         case JOBS.authCleanup:
           await this.authCleanup.runCleanupExpiredAuthRecords();

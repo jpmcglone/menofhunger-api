@@ -89,6 +89,8 @@ export type UserDto = {
   createdAt: string;
   phone: string;
   email: string | null;
+  emailVerifiedAt: string | null;
+  emailVerificationRequestedAt: string | null;
   username: string | null;
   usernameIsSet: boolean;
   name: string | null;
@@ -144,6 +146,10 @@ export function toUserDto(user: User, publicAssetBaseUrl: string | null = null):
     createdAt: user.createdAt.toISOString(),
     phone: user.phone,
     email: user.email ?? null,
+    emailVerifiedAt: (user as any).emailVerifiedAt ? (user as any).emailVerifiedAt.toISOString() : null,
+    emailVerificationRequestedAt: (user as any).emailVerificationRequestedAt
+      ? (user as any).emailVerificationRequestedAt.toISOString()
+      : null,
     username: user.username,
     usernameIsSet: user.usernameIsSet,
     name: user.name,

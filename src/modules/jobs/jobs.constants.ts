@@ -14,7 +14,11 @@ export const JOBS = {
   notificationsCleanup: 'notifications.cleanup',
   notificationsOrphanCleanup: 'notifications.orphanCleanup',
   notificationsEmailNudges: 'notifications.emailNudges',
-  notificationsWeeklyDigest: 'notifications.weeklyDigest',
+  notificationsDailyDigest: 'notifications.dailyDigest',
+  notificationsInstantHighSignalEmail: 'notifications.instantHighSignalEmail',
+
+  // Daily content (quote/definition snapshots)
+  dailyContentRefresh: 'dailyContent.refresh',
 
   // Auth / search
   authCleanup: 'auth.cleanup',

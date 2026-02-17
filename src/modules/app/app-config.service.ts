@@ -29,10 +29,13 @@ export type StripeConfig = {
 };
 
 export type EmailConfig = {
-  provider: 'mailgun';
+  provider: 'resend';
   apiKey: string;
-  domain: string;
-  fromEmail: string;
+  fromEmail: {
+    default: string;
+    notifications: string;
+    support: string;
+  };
 };
 
 export type MapboxConfig = {
@@ -326,13 +329,27 @@ export class AppConfigService {
   }
 
   email(): EmailConfig | null {
-    const mailgunApiKey = this.config.get<string>('MAILGUN_API_KEY')?.trim() ?? '';
-    const mailgunDomain = this.config.get<string>('MAILGUN_DOMAIN')?.trim() ?? '';
-    const mailgunFrom = this.config.get<string>('MAILGUN_FROM_EMAIL')?.trim() ?? '';
-    if (mailgunApiKey && mailgunDomain && mailgunFrom) {
-      return { provider: 'mailgun', apiKey: mailgunApiKey, domain: mailgunDomain, fromEmail: mailgunFrom };
-    }
+    const resendApiKey = this.config.get<string>('RESEND_API_KEY')?.trim() ?? '';
+    const resendFromDefault = this.config.get<string>('RESEND_FROM_EMAIL')?.trim() ?? '';
+    const resendFromNotifications = this.config.get<string>('RESEND_FROM_NOTIFICATIONS_EMAIL')?.trim() ?? '';
+    const resendFromSupport = this.config.get<string>('RESEND_FROM_SUPPORT_EMAIL')?.trim() ?? '';
 
+    const fallback = resendFromDefault;
+    const notifications = resendFromNotifications || fallback;
+    const support = resendFromSupport || fallback;
+    const effectiveDefault = fallback || notifications || support;
+
+    if (resendApiKey && effectiveDefault) {
+      return {
+        provider: 'resend',
+        apiKey: resendApiKey,
+        fromEmail: {
+          default: effectiveDefault,
+          notifications: notifications || effectiveDefault,
+          support: support || effectiveDefault,
+        },
+      };
+    }
     return null;
   }
 
@@ -390,9 +407,12 @@ export class AppConfigService {
       STRIPE_PRICE_PREMIUM_PLUS_MONTHLY: this.config.get<string>(
         'STRIPE_PRICE_PREMIUM_PLUS_MONTHLY',
       ) as Env['STRIPE_PRICE_PREMIUM_PLUS_MONTHLY'],
-      MAILGUN_API_KEY: this.config.get<string>('MAILGUN_API_KEY') as Env['MAILGUN_API_KEY'],
-      MAILGUN_DOMAIN: this.config.get<string>('MAILGUN_DOMAIN') as Env['MAILGUN_DOMAIN'],
-      MAILGUN_FROM_EMAIL: this.config.get<string>('MAILGUN_FROM_EMAIL') as Env['MAILGUN_FROM_EMAIL'],
+      RESEND_API_KEY: this.config.get<string>('RESEND_API_KEY') as Env['RESEND_API_KEY'],
+      RESEND_FROM_EMAIL: this.config.get<string>('RESEND_FROM_EMAIL') as Env['RESEND_FROM_EMAIL'],
+      RESEND_FROM_NOTIFICATIONS_EMAIL: this.config.get<string>(
+        'RESEND_FROM_NOTIFICATIONS_EMAIL',
+      ) as Env['RESEND_FROM_NOTIFICATIONS_EMAIL'],
+      RESEND_FROM_SUPPORT_EMAIL: this.config.get<string>('RESEND_FROM_SUPPORT_EMAIL') as Env['RESEND_FROM_SUPPORT_EMAIL'],
     };
   }
 }

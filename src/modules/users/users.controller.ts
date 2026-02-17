@@ -19,6 +19,7 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { UsersRealtimeService } from './users-realtime.service';
 import { canonicalizeTopicValue } from '../../common/topics/topic-utils';
 import { UsersLocationService } from './users-location.service';
+import { EmailVerificationService } from '../email/email-verification.service';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -169,6 +170,7 @@ export class UsersController {
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly usersRealtime: UsersRealtimeService,
     private readonly usersLocation: UsersLocationService,
+    private readonly emailVerification: EmailVerificationService,
   ) {}
 
   private async viewerCanSeeLastOnline(viewerUserId: string | null): Promise<boolean> {
@@ -671,16 +673,30 @@ export class UsersController {
     const parsed = profileSchema.parse(body);
 
     try {
+      const existing = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { email: true, username: true, name: true },
+      });
+      if (!existing) throw new NotFoundException('User not found.');
+
+      const now = new Date();
+      let nextEmail: string | null | undefined = undefined;
+      let emailChanged = false;
+
       const update: Prisma.UserUpdateInput = {
         name: parsed.name === undefined ? undefined : (parsed.name || null),
         bio: parsed.bio === undefined ? undefined : (parsed.bio || null),
-        email:
-          parsed.email === undefined
-            ? undefined
-            : parsed.email.trim()
-              ? parsed.email.trim().toLowerCase()
-              : null,
       };
+      if (parsed.email !== undefined) {
+        const cleaned = parsed.email.trim() ? parsed.email.trim().toLowerCase() : null;
+        nextEmail = cleaned;
+        emailChanged = (existing.email ?? null) !== cleaned;
+        (update as any).email = cleaned;
+        if (emailChanged) {
+          (update as any).emailVerifiedAt = null;
+          (update as any).emailVerificationRequestedAt = cleaned ? now : null;
+        }
+      }
 
       if (parsed.website !== undefined) {
         const raw = (parsed.website ?? '').trim();
@@ -732,6 +748,14 @@ export class UsersController {
 
       await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
+
+      if (emailChanged && nextEmail) {
+        const greetingName = (updated.name ?? updated.username ?? '').trim() || null;
+        // Best-effort: don't block profile updates on email send.
+        void this.emailVerification
+          .requestVerification({ userId: updated.id, email: nextEmail, name: greetingName })
+          .catch(() => undefined);
+      }
       return {
         data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
       };
@@ -820,6 +844,9 @@ export class UsersController {
     if (!user) throw new NotFoundException('User not found.');
 
     const data: Prisma.UserUpdateInput = {};
+    const now = new Date();
+    let emailChanged = false;
+    let nextEmail: string | null = user.email ?? null;
 
     // Required onboarding acknowledgement: once true, it stays true.
     if (!user.menOnlyConfirmed && parsed.menOnlyConfirmed !== true) {
@@ -838,7 +865,13 @@ export class UsersController {
 
     if (parsed.email !== undefined) {
       const cleaned = parsed.email.trim() ? parsed.email.trim().toLowerCase() : null;
-      data.email = cleaned;
+      emailChanged = (user.email ?? null) !== cleaned;
+      nextEmail = cleaned;
+      (data as any).email = cleaned;
+      if (emailChanged) {
+        (data as any).emailVerifiedAt = null;
+        (data as any).emailVerificationRequestedAt = cleaned ? now : null;
+      }
     }
 
     if (parsed.birthdate !== undefined) {
@@ -906,6 +939,13 @@ export class UsersController {
 
       await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
+
+      if (emailChanged && nextEmail) {
+        const greetingName = (updated.name ?? updated.username ?? '').trim() || null;
+        void this.emailVerification
+          .requestVerification({ userId: updated.id, email: nextEmail, name: greetingName })
+          .catch(() => undefined);
+      }
       return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {

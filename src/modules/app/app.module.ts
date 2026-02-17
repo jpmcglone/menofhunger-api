@@ -29,6 +29,7 @@ import { MessagesModule } from '../messages/messages.module';
 import { VerificationModule } from '../verification/verification.module';
 import { ReportsModule } from '../reports/reports.module';
 import { Websters1828Module } from '../websters1828/websters1828.module';
+import { EmailModule } from '../email/email.module';
 import { RadioModule } from '../radio/radio.module';
 import { TopicsModule } from '../topics/topics.module';
 import { HashtagsModule } from '../hashtags/hashtags.module';
@@ -40,6 +41,7 @@ import { RedisModule } from '../redis/redis.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { ViewerContextModule } from '../viewer/viewer-context.module';
 import { DomainEventsModule } from '../events/domain-events.module';
+import { DailyContentModule } from '../daily-content/daily-content.module';
 
 // Module wiring is static; use env flags as a pragmatic switch for which processes host consumers.
 const RUN_JOB_CONSUMERS_RAW = (process.env.RUN_JOB_CONSUMERS ?? 'true').trim().toLowerCase();
@@ -93,11 +95,13 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     ReportsModule,
     MessagesModule,
     Websters1828Module,
+    EmailModule,
     RadioModule,
     TopicsModule,
     HashtagsModule,
     MetricsModule,
     BillingModule,
+    DailyContentModule,
     ...(RUN_JOB_CONSUMERS ? [JobsConsumersModule] : []),
   ],
   controllers: [AppController],

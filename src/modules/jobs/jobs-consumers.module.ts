@@ -7,6 +7,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { AuthModule } from '../auth/auth.module';
 import { SearchModule } from '../search/search.module';
 import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
+import { DailyContentModule } from '../daily-content/daily-content.module';
 
 /**
  * Worker-only module: all BullMQ processors live here so we can disable job consumption
@@ -15,7 +16,16 @@ import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
  * For now, we only wire the module; processors are added in the next step.
  */
 @Module({
-  imports: [JobsModule, PostsModule, HashtagsModule, NotificationsModule, AuthModule, SearchModule, LinkMetadataModule],
+  imports: [
+    JobsModule,
+    PostsModule,
+    HashtagsModule,
+    NotificationsModule,
+    AuthModule,
+    SearchModule,
+    LinkMetadataModule,
+    DailyContentModule,
+  ],
   providers: [JobsProcessor],
 })
 export class JobsConsumersModule {}

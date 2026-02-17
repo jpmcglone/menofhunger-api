@@ -4,7 +4,9 @@ export type NotificationPreferencesDto = {
   pushFollow: boolean;
   pushMention: boolean;
   pushMessage: boolean;
-  emailDigestWeekly: boolean;
+  emailDigestDaily: boolean;
   emailNewNotifications: boolean;
+  /** Optional: near-immediate emails for high-signal events (messages + mentions/replies). */
+  emailInstantHighSignal: boolean;
 };
 

@@ -111,6 +111,11 @@ enum MessageParticipantRole {
   member
 }
 
+enum EmailActionTokenPurpose {
+  verifyEmail
+  unsubscribeDailyDigest
+}
+
 // Start minimal. Add real domain models as you solidify your product.
 model Example {
   id        String   @id @default(cuid())
@@ -123,6 +128,10 @@ model User {
   createdAt DateTime  @default(now())
   phone     String    @unique
   email     String?   @unique
+  /** When the current email was verified by the user (null means unverified). */
+  emailVerifiedAt DateTime?
+  /** When we last requested verification for the current email (used for resend throttling). */
+  emailVerificationRequestedAt DateTime?
   // Username stored as entered (case preserved). Uniqueness is enforced case-insensitively
   // via a functional unique index on LOWER(username) in a migration.
   username String?
@@ -221,6 +230,7 @@ model User {
   reportsResolved  Report[] @relation("Report_resolvedBy")
   verificationRequests VerificationRequest[] @relation("VerificationRequest_user")
   verificationRequestsReviewed VerificationRequest[] @relation("VerificationRequest_reviewedBy")
+  emailActionTokens EmailActionToken[]
   messageParticipants MessageParticipant[] @relation("MessageParticipant_user")
   messagesSent        Message[] @relation("Message_sender")
   messageConversationsCreated MessageConversation[] @relation("MessageConversation_createdBy")
@@ -230,6 +240,41 @@ model User {
 
   @@index([phone])
   @@index([lastSeenAt])
+}
+
+model EmailActionToken {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  purpose   EmailActionTokenPurpose
+  tokenHash String   @unique
+  /** Optional snapshot of email the action was created for (helps invalidate on email change). */
+  email     String?
+  expiresAt DateTime
+  consumedAt DateTime?
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose, createdAt])
+  @@index([expiresAt])
+  @@index([consumedAt])
+}
+
+model DailyContentSnapshot {
+  /** Eastern Time day key (YYYY-MM-DD). */
+  dayKey String @id
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  quote Json?
+  quoteRefreshedAt DateTime?
+
+  websters1828 Json?
+  websters1828RefreshedAt DateTime?
+  websters1828RecheckedAt DateTime?
+
+  @@index([updatedAt])
 }
 
 /**
@@ -785,18 +830,22 @@ model NotificationPreferences {
   pushMessage Boolean @default(true)
 
   // Email preferences (requires user.email).
-  emailDigestWeekly Boolean @default(true)
+  emailDigestDaily Boolean @default(true)
   emailNewNotifications Boolean @default(true)
+  /** Optional: send near-immediate emails for high-signal events (messages + mentions/replies). */
+  emailInstantHighSignal Boolean @default(true)
 
   // Email send timestamps (rate limiting / dedupe).
-  lastEmailDigestSentAt DateTime?
+  lastEmailDigestDailySentAt DateTime?
   lastEmailNewNotificationsSentAt DateTime?
+  lastEmailInstantHighSignalSentAt DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([updatedAt])
   @@index([lastEmailNewNotificationsSentAt])
-  @@index([lastEmailDigestSentAt])
+  @@index([lastEmailDigestDailySentAt])
+  @@index([lastEmailInstantHighSignalSentAt])
 }
 
 model MessageConversation {
