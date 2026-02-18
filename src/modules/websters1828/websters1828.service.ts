@@ -58,8 +58,48 @@ export class Websters1828Service {
     const ttlSeconds = Math.max(1, Math.floor((expiresAtMs - now) / 1000));
 
     if (!forceRefresh) {
-      const cached = await this.cache.getJson<Websters1828WordOfDay>(RedisKeys.webstersWotd(dayKey, includeDefinition));
-      if (cached?.word && cached.dictionaryUrl) return cached;
+      // IMPORTANT:
+      // Keep `includeDefinition=0` and `includeDefinition=1` consistent by treating the "nodef" cache as authoritative base.
+      // This prevents the UI from ever mixing a cached word from one variant with a definition from the other.
+      const cachedNoDef = await this.cache.getJson<Websters1828WordOfDay>(RedisKeys.webstersWotd(dayKey, false));
+      if (!includeDefinition) {
+        if (cachedNoDef?.word && cachedNoDef.dictionaryUrl) return cachedNoDef;
+      } else {
+        const cachedDef = await this.cache.getJson<Websters1828WordOfDay>(RedisKeys.webstersWotd(dayKey, true));
+        if (cachedDef?.word && cachedDef.dictionaryUrl) {
+          // Heal/overwrite the nodef cache in the background so both stay aligned.
+          const healedNoDef: Websters1828WordOfDay = {
+            word: cachedDef.word,
+            dictionaryUrl: cachedDef.dictionaryUrl,
+            sourceUrl: cachedDef.sourceUrl,
+            fetchedAt: cachedDef.fetchedAt,
+            definition: null,
+            definitionHtml: null,
+          };
+          void this.cache.setJson(RedisKeys.webstersWotd(dayKey, false), healedNoDef, { ttlSeconds }).catch(() => undefined);
+          return cachedDef;
+        }
+        // If we have a base word cached but no definition yet, fetch definition for THAT word (no homepage re-parse).
+        if (cachedNoDef?.word && cachedNoDef.dictionaryUrl) {
+          const fetched = await this.fetchDefinitionBestEffort(cachedNoDef.dictionaryUrl).catch(() => null);
+          const defResult: Websters1828WordOfDay = {
+            word: cachedNoDef.word,
+            dictionaryUrl: cachedNoDef.dictionaryUrl,
+            sourceUrl: cachedNoDef.sourceUrl,
+            fetchedAt: cachedNoDef.fetchedAt,
+            definition: fetched?.text ?? null,
+            definitionHtml: fetched?.html ?? null,
+          };
+          // Cache both variants so they cannot drift.
+          void this.cache
+            .setJson(RedisKeys.webstersWotd(dayKey, true), defResult, { ttlSeconds })
+            .catch(() => undefined);
+          void this.cache
+            .setJson(RedisKeys.webstersWotd(dayKey, false), { ...defResult, definition: null, definitionHtml: null }, { ttlSeconds })
+            .catch(() => undefined);
+          return defResult;
+        }
+      }
     }
 
     if (forceRefresh) this.memCache = null;
@@ -97,16 +137,33 @@ export class Websters1828Service {
       definition: includeDefinition ? (this.memCache.value.definition ?? null) : null,
       definitionHtml: includeDefinition ? (this.memCache.value.definitionHtml ?? null) : null,
     };
-    void this.cache
-      .setJson(RedisKeys.webstersWotd(dayKey, includeDefinition), result, { ttlSeconds })
-      .catch(() => undefined);
-    return result;
+
+    // Always write the "nodef" cache so it stays aligned with the definition-bearing variant.
+    const noDefResult: Websters1828WordOfDay = {
+      word: result.word,
+      dictionaryUrl: result.dictionaryUrl,
+      sourceUrl: result.sourceUrl,
+      fetchedAt: result.fetchedAt,
+      definition: null,
+      definitionHtml: null,
+    };
+    void this.cache.setJson(RedisKeys.webstersWotd(dayKey, false), noDefResult, { ttlSeconds }).catch(() => undefined);
+    if (includeDefinition) {
+      void this.cache.setJson(RedisKeys.webstersWotd(dayKey, true), result, { ttlSeconds }).catch(() => undefined);
+      return result;
+    }
+    return noDefResult;
   }
 
   /** Cache-Control max-age in seconds (until next midnight ET). */
   getCacheControlMaxAgeSeconds(now: Date = new Date()): number {
     const expiresAtMs = nextEasternMidnightUtcMs(now);
-    return Math.max(0, Math.floor((expiresAtMs - now.getTime()) / 1000));
+    const secondsUntilMidnight = Math.max(0, Math.floor((expiresAtMs - now.getTime()) / 1000));
+    // Webster's WOTD page can be flaky around midnight; we recheck daily content at 8am ET.
+    // Keep caches short in the early morning so the word can "heal" without users being stuck until midnight.
+    const et = easternYmdHms(now);
+    if (et.hh < 9) return Math.min(300, secondsUntilMidnight);
+    return secondsUntilMidnight;
   }
 
   private async fetchWordOfDayBase(): Promise<
