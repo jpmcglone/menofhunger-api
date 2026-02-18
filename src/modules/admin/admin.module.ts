@@ -22,6 +22,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
 import { AdminJobsController } from './admin-jobs.controller';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { DailyContentModule } from '../daily-content/daily-content.module';
+import { AdminDailyContentController } from './admin-daily-content.controller';
 
 @Module({
   imports: [
@@ -37,6 +39,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
     SearchModule,
     NotificationsModule,
     LinkMetadataModule,
+    DailyContentModule,
   ],
   controllers: [
     AdminUsersController,
@@ -47,6 +50,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
     AdminReportsController,
     AdminVerificationController,
     AdminJobsController,
+    AdminDailyContentController,
   ],
   providers: [AdminGuard, AdminImageReviewService, AdminHashtagsService],
 })

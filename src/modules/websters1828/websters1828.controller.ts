@@ -24,7 +24,8 @@ export class Websters1828Controller {
       String(includeDefinition ?? '').toLowerCase() === 'true';
     const data = await this.websters.getWordOfDay({ includeDefinition: wantDefinition });
     const maxAge = this.websters.getCacheControlMaxAgeSeconds(new Date());
-    res.setHeader('Cache-Control', `public, max-age=${maxAge}`);
+    // IMPORTANT: keep this out of shared/CDN caches so querystring variants can't get mixed.
+    res.setHeader('Cache-Control', `private, max-age=${maxAge}`);
     return { data };
   }
 }

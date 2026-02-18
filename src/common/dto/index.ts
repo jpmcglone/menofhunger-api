@@ -4,6 +4,7 @@ export * from './feedback.dto';
 export * from './report.dto';
 export * from './verification-request.dto';
 export * from './websters1828.dto';
+export * from './daily-content.dto';
 export * from './radio.dto';
 export * from './topic.dto';
 export * from './hashtag.dto';
