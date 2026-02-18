@@ -19,19 +19,14 @@ export class EmailService {
   ) {}
 
   async sendText(params: SendEmailParams): Promise<{ sent: boolean; reason?: string }> {
-    const normalized = this.normalizeForDev({
+    // NOTE: `sendEmail()` applies dev-only normalization.
+    // Avoid normalizing twice (which can duplicate banners/prefixes).
+    const res = await this.sendEmail({
       to: params.to,
       subject: params.subject,
       text: params.text,
       html: params.html,
       from: params.from,
-    });
-    const res = await this.sendEmail({
-      to: normalized.to,
-      subject: normalized.subject,
-      text: normalized.text,
-      html: normalized.html,
-      from: normalized.from,
     });
     return res.sent ? { sent: true } : { sent: false, reason: res.reason };
   }
@@ -61,8 +56,15 @@ export class EmailService {
       return { ...req, subject: prefixedSubject, text: prefixedText };
     }
 
+    // Make dev banner injection idempotent (avoid duplicates if normalize is applied twice).
+    const alreadyHasDevBanner =
+      /data-moh-dev-banner=(?:"|')1(?:"|')/i.test(html) || /Dev\s*-\s*Men\s+of\s+Hunger<\/div>/i.test(html);
+    if (alreadyHasDevBanner) {
+      return { ...req, subject: prefixedSubject, text: prefixedText, html };
+    }
+
     const bannerHtml =
-      '<div style="width:100%;max-width:600px;margin:12px auto 0 auto;padding:8px 12px;border:1px solid #f59e0b;border-radius:10px;background:#fffbeb;color:#92400e;font-size:12px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;text-align:center;">Dev - Men of Hunger</div>';
+      '<div data-moh-dev-banner="1" style="width:100%;max-width:600px;margin:12px auto 0 auto;padding:8px 12px;border:1px solid #f59e0b;border-radius:10px;background:#fffbeb;color:#92400e;font-size:12px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;text-align:center;">Dev - Men of Hunger</div>';
     const htmlWithBanner = html.replace(/(<body\b[^>]*>)/i, `$1${bannerHtml}`);
 
     return { ...req, subject: prefixedSubject, text: prefixedText, html: htmlWithBanner };

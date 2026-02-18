@@ -24,6 +24,8 @@ import { AdminJobsController } from './admin-jobs.controller';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { DailyContentModule } from '../daily-content/daily-content.module';
 import { AdminDailyContentController } from './admin-daily-content.controller';
+import { AdminEmailSamplesController } from './admin-email-samples.controller';
+import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [
@@ -40,6 +42,7 @@ import { AdminDailyContentController } from './admin-daily-content.controller';
     NotificationsModule,
     LinkMetadataModule,
     DailyContentModule,
+    EmailModule,
   ],
   controllers: [
     AdminUsersController,
@@ -51,6 +54,7 @@ import { AdminDailyContentController } from './admin-daily-content.controller';
     AdminVerificationController,
     AdminJobsController,
     AdminDailyContentController,
+    AdminEmailSamplesController,
   ],
   providers: [AdminGuard, AdminImageReviewService, AdminHashtagsService],
 })
