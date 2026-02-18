@@ -81,6 +81,9 @@ export type PostDto = {
   editCount: number;
   body: string;
   deletedAt: string | null;
+  kind: 'regular' | 'checkin';
+  checkinDayKey: string | null;
+  checkinPrompt: string | null;
   visibility: PostVisibility;
   isDraft: boolean;
   topics: string[];
@@ -293,6 +296,9 @@ export function toPostDto(
     editCount: typeof (post as any).editCount === 'number' ? ((post as any).editCount as number) : 0,
     body: isPostDeleted ? '' : post.body,
     deletedAt: postDeletedAt,
+    kind: ((post as any).kind ?? 'regular') as any,
+    checkinDayKey: (post as any).checkinDayKey ? String((post as any).checkinDayKey) : null,
+    checkinPrompt: (post as any).checkinPrompt ? String((post as any).checkinPrompt) : null,
     visibility: post.visibility,
     isDraft: Boolean((post as any).isDraft),
     topics: Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [],

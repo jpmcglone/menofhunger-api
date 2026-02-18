@@ -71,6 +71,9 @@ export class JobsProcessor extends WorkerHost {
         case JOBS.notificationsInstantHighSignalEmail:
           await this.notificationsEmail.runSendInstantHighSignalEmail(job.data ?? undefined);
           return { ok: true };
+        case JOBS.notificationsStreakReminderEmail:
+          await this.notificationsEmail.runSendStreakReminderEmail();
+          return { ok: true };
         case JOBS.dailyContentRefresh:
           await this.dailyContent.runRefreshDailyContent();
           return { ok: true };

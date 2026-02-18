@@ -21,6 +21,7 @@ const listSchema = z.object({
   cursor: z.string().optional(),
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
   followingOnly: z.coerce.boolean().optional(),
+  kind: z.enum(['regular', 'checkin']).optional(),
   // Optional author filter (comma-separated user IDs). Used by Explore to show trending by recommended users.
   authorIds: z.string().optional(),
   // "trending" is the UI-friendly name for our half-life boost scoring feed.
@@ -289,6 +290,7 @@ export class PostsController {
           cursor,
           visibility: parsed.visibility ?? 'all',
           followingOnly: parsed.followingOnly ?? false,
+          kind: parsed.kind ?? null,
           authorUserIds,
         })
       : null;
@@ -307,6 +309,7 @@ export class PostsController {
                 cursor,
                 visibility: parsed.visibility ?? 'all',
                 followingOnly: parsed.followingOnly ?? false,
+                kind: parsed.kind ?? null,
                 authorUserIds: authorUserIds.length ? authorUserIds : null,
               })
             : sortKind === 'popular'
@@ -316,6 +319,7 @@ export class PostsController {
                   cursor,
                   visibility: parsed.visibility ?? 'all',
                   followingOnly: parsed.followingOnly ?? false,
+                  kind: parsed.kind ?? null,
                   authorUserIds: authorUserIds.length ? authorUserIds : null,
                 })
               : await this.posts.listFeed({
@@ -324,6 +328,7 @@ export class PostsController {
                   cursor,
                   visibility: parsed.visibility ?? 'all',
                   followingOnly: parsed.followingOnly ?? false,
+                  kind: parsed.kind ?? null,
                   authorUserIds: authorUserIds.length ? authorUserIds : null,
                 });
 

@@ -6,6 +6,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PollsService } from './polls.service';
 import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
+import { AppConfigService } from '../app/app-config.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
 import { parseMentionsFromBody as parseMentionsFromBodyText } from '../../common/mentions/mention-regex';
@@ -14,6 +15,9 @@ import { inferTopicsFromText } from '../../common/topics/topic-utils';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
+import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
+import { computeCheckinRewards } from '../checkins/checkin-rewards';
+import { toUserDto } from '../../common/dto/user.dto';
 
 export type PostCounts = {
   all: number;
@@ -39,6 +43,7 @@ export class PostsService {
     private readonly polls: PollsService,
     private readonly viewerContextService: ViewerContextService,
     private readonly cacheInvalidation: CacheInvalidationService,
+    private readonly appConfig: AppConfigService,
   ) {}
 
   /**
@@ -201,26 +206,34 @@ export class PostsService {
 
     const rows = await this.prisma.$queryRaw<Array<{ id: string; score: number }>>(Prisma.sql`
       WITH
-      comment_scores AS (
+      commenter_latest AS (
         SELECT
           p."parentId" as "postId",
+          p."userId" as "userId",
+          MAX(p."createdAt") as "latestAt"
+        FROM "Post" p
+        WHERE
+          p."parentId" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}`))})
+          AND p."deletedAt" IS NULL
+          AND p."createdAt" >= ${snapshotMinCreatedAt}
+        GROUP BY p."parentId", p."userId"
+      ),
+      comment_scores AS (
+        SELECT
+          cl."postId" as "postId",
           CAST(
             SUM(
               POWER(
                 0.5,
                 GREATEST(
                   0,
-                  EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                  EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - cl."latestAt"))
                 ) / ${PostsService.popularHalfLifeSeconds}
               )
             ) AS DOUBLE PRECISION
           ) as "commentScore"
-        FROM "Post" p
-        WHERE
-          p."parentId" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}`))})
-          AND p."deletedAt" IS NULL
-          AND p."createdAt" >= ${snapshotMinCreatedAt}
-        GROUP BY p."parentId"
+        FROM commenter_latest cl
+        GROUP BY cl."postId"
       ),
       scored AS (
         SELECT
@@ -255,6 +268,25 @@ export class PostsService {
             +
             (
               CASE
+                WHEN p."kind" = 'checkin' THEN
+                  0.08
+                  * LEAST(
+                    1.0,
+                    GREATEST(
+                      0.0,
+                      (CHAR_LENGTH(COALESCE(TRIM(p."body"), '')) - 60)::DOUBLE PRECISION / 240.0
+                    )
+                  )
+                  * POWER(
+                    0.5,
+                    GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))) / ${PostsService.popularHalfLifeSeconds}
+                  )
+                ELSE 0
+              END
+            )
+            +
+            (
+              CASE
                 WHEN u."pinnedPostId" = p."id" THEN
                   (CASE WHEN u."premium" THEN ${PostsService.pinScorePremium} WHEN u."verifiedStatus" <> 'none' THEN ${PostsService.pinScoreVerified} ELSE ${PostsService.pinScoreBase} END)
                   * POWER(
@@ -265,6 +297,13 @@ export class PostsService {
               END
             )
             * (CASE WHEN p."parentId" IS NULL THEN ${PostsService.popularTopLevelScoreBoost} ELSE 1.0 END)
+            * (CASE WHEN p."kind" = 'checkin' THEN 0.85 ELSE 1.0 END)
+            * (
+              CASE
+                WHEN u."verifiedStatus" = 'none' AND u."createdAt" >= (${snapshotAsOf}::timestamptz - INTERVAL '7 days') THEN 0.85
+                ELSE 1.0
+              END
+            )
             * POWER(
               ${PostsService.deletedAncestorPenalty},
               (
@@ -475,10 +514,12 @@ export class PostsService {
     cursor: string | null;
     visibility: 'all' | PostVisibility;
     followingOnly: boolean;
+    kind?: 'regular' | 'checkin' | null;
     authorUserIds?: string[] | null;
   }): Promise<FeedResult> {
     const { viewerUserId, limit, cursor, visibility, followingOnly } = params;
     const authorUserIds = (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean) ?? null;
+    const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
 
@@ -525,6 +566,7 @@ export class PostsService {
           AND: [
             visibilityWhere,
             this.notDeletedWhere(),
+            ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
             {
               OR: [
@@ -538,6 +580,7 @@ export class PostsService {
           AND: [
             visibilityWhere,
             this.notDeletedWhere(),
+            ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
           ],
         };
@@ -581,8 +624,9 @@ export class PostsService {
     visibility: 'all' | PostVisibility;
     allowed: PostVisibility[];
     authorUserIds: string[] | null;
+    kind: 'regular' | 'checkin' | null;
   }): Promise<PopularFeedResult | null> {
-    const { viewerUserId, limit, decodedCursor, visibility, allowed, authorUserIds } = params;
+    const { viewerUserId, limit, decodedCursor, visibility, allowed, authorUserIds, kind } = params;
 
     const asOf = decodedCursor ? new Date(decodedCursor.asOf) : null;
     const snapshotAsOf =
@@ -641,6 +685,7 @@ export class PostsService {
     const rows = await this.prisma.postPopularScoreSnapshot.findMany({
       where: {
         asOf: snapshotAsOf,
+        ...(kind ? ({ post: { is: { kind } } } as Prisma.PostPopularScoreSnapshotWhereInput) : {}),
         ...(authorUserIds?.length ? ({ userId: { in: authorUserIds } } as Prisma.PostPopularScoreSnapshotWhereInput) : {}),
         ...visibilityWhere,
         ...cursorWhere,
@@ -1056,11 +1101,13 @@ export class PostsService {
     cursor: string | null;
     visibility: 'all' | PostVisibility;
     followingOnly?: boolean;
+    kind?: 'regular' | 'checkin' | null;
     authorUserIds?: string[] | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, cursor, visibility, followingOnly = false } = params;
     const requestedAuthorUserIds =
       (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
+    const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
@@ -1107,16 +1154,20 @@ export class PostsService {
     const decoded = this.decodePopularCursor(cursor);
 
     // Fast path: if we have a precomputed snapshot table, use it.
-    // Fallback to request-time scoring when snapshots are missing (fresh env, retention window, etc).
-    const snapshotResult = await this.listPopularFeedFromSnapshot({
-      viewerUserId,
-      limit,
-      decodedCursor: decoded,
-      visibility,
-      allowed,
-      authorUserIds,
-    });
-    if (snapshotResult) return snapshotResult;
+    // NOTE: Snapshots can exclude "score 0" posts; for kind-filtered views (e.g. check-ins),
+    // prefer request-time scoring so the recency bucket can still surface fresh posts.
+    if (!kind) {
+      const snapshotResult = await this.listPopularFeedFromSnapshot({
+        viewerUserId,
+        limit,
+        decodedCursor: decoded,
+        visibility,
+        allowed,
+        authorUserIds,
+        kind,
+      });
+      if (snapshotResult) return snapshotResult;
+    }
 
     // Stable pagination: keep a consistent "as-of" timestamp across pages.
     // First page: we warm up scores for likely-top posts, then snapshot `asOf`.
@@ -1128,6 +1179,7 @@ export class PostsService {
     const warmupAuthorFilter = authorUserIds?.length
       ? ({ userId: { in: authorUserIds } } as Prisma.PostWhereInput)
       : undefined;
+    const warmupKindFilter = kind ? ({ kind } as Prisma.PostWhereInput) : undefined;
 
     // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
     // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
@@ -1150,6 +1202,7 @@ export class PostsService {
             popularVisibilityWhere,
             { parentId: null },
             ...(warmupAuthorFilter ? [warmupAuthorFilter] : []),
+            ...(warmupKindFilter ? [warmupKindFilter] : []),
             this.notDeletedWhere(),
             { createdAt: { gte: minCreatedAt } },
             { boostCount: { gt: 0 } },
@@ -1177,6 +1230,8 @@ export class PostsService {
       authorUserIds?.length
         ? Prisma.sql`AND p."userId" IN (${Prisma.join(authorUserIds.map((id) => Prisma.sql`${id}`))})`
         : Prisma.sql``;
+    // NOTE: Postgres enum compare requires matching enum type. Cast to text to safely compare against our string param.
+    const kindFilterSql = kind ? Prisma.sql`AND (p."kind"::text = ${kind})` : Prisma.sql``;
 
     // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
     // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
@@ -1222,6 +1277,7 @@ export class PostsService {
               AND p."createdAt" >= ${recentCutoff}
               ${visibilityFilterSql}
               ${authorFilterSql}
+              ${kindFilterSql}
             ORDER BY p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesRecentTake}
           )
@@ -1237,6 +1293,7 @@ export class PostsService {
               AND p."boostCount" > 0
               ${visibilityFilterSql}
               ${authorFilterSql}
+              ${kindFilterSql}
             ORDER BY p."boostCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesBoostedTake}
           )
@@ -1251,6 +1308,7 @@ export class PostsService {
               AND p."bookmarkCount" > 0
               ${visibilityFilterSql}
               ${authorFilterSql}
+              ${kindFilterSql}
             ORDER BY p."bookmarkCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesBookmarkedTake}
           )
@@ -1265,6 +1323,7 @@ export class PostsService {
               AND p."commentCount" > 0
               ${visibilityFilterSql}
               ${authorFilterSql}
+              ${kindFilterSql}
             ORDER BY p."commentCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesCommentedTake}
           )
@@ -1280,6 +1339,7 @@ export class PostsService {
               AND (p."boostCount" > 0 OR p."bookmarkCount" > 0)
               ${visibilityFilterSql}
               ${authorFilterSql}
+              ${kindFilterSql}
             ORDER BY (p."boostCount" + p."bookmarkCount") DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesRepliesTake}
           )
@@ -1465,11 +1525,13 @@ export class PostsService {
     cursor: string | null;
     visibility: 'all' | PostVisibility;
     followingOnly?: boolean;
+    kind?: 'regular' | 'checkin' | null;
     authorUserIds?: string[] | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, cursor, visibility, followingOnly = false } = params;
     const requestedAuthorUserIds =
       (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
+    const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
@@ -1500,6 +1562,19 @@ export class PostsService {
     if (authorUserIds && authorUserIds.length === 0) {
       // Intersection produced empty set.
       return { posts: [], nextCursor: null, scoreByPostId: new Map() };
+    }
+
+    // Featured snapshots don't encode post kind; for kind-filtered feeds, fall back to trending.
+    if (kind) {
+      return await this.listPopularFeed({
+        viewerUserId,
+        limit,
+        cursor,
+        visibility,
+        followingOnly,
+        kind,
+        authorUserIds,
+      });
     }
 
     const decoded = this.decodePopularCursor(cursor);
@@ -3012,11 +3087,38 @@ export class PostsService {
         image: { r2Key: string; width: number | null; height: number | null; alt: string | null } | null;
       }>;
     } | null;
+    kind?: 'regular' | 'checkin';
+    checkinDayKey?: string | null;
+    checkinPrompt?: string | null;
   }) {
     const { userId, body, visibility: requestedVisibility, parentId, mentions: clientMentions } = params;
+    const kind = (params.kind ?? 'regular') as 'regular' | 'checkin';
+    const now = new Date();
+    const checkinDayKeyRaw = (params.checkinDayKey ?? null)?.trim() || null;
+    const checkinPromptRaw = (params.checkinPrompt ?? null)?.trim() || null;
+
+    if (kind === 'checkin') {
+      if (parentId) throw new BadRequestException('Check-ins must be top-level posts.');
+      if (requestedVisibility !== 'verifiedOnly' && requestedVisibility !== 'premiumOnly') {
+        throw new BadRequestException('Check-ins must be verified-only or premium-only.');
+      }
+      const todayKey = easternDayKey(now);
+      if (!checkinDayKeyRaw || checkinDayKeyRaw !== todayKey) {
+        throw new BadRequestException('Invalid check-in day.');
+      }
+      if (!checkinPromptRaw) throw new BadRequestException('Check-in prompt is required.');
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { verifiedStatus: true, premium: true, premiumPlus: true },
+      select: {
+        verifiedStatus: true,
+        premium: true,
+        premiumPlus: true,
+        coins: true,
+        checkinStreakDays: true,
+        lastCheckinDayKey: true,
+      },
     });
     if (!user) throw new NotFoundException('User not found.');
     const viewerIsVerified = Boolean(user.verifiedStatus && user.verifiedStatus !== 'none');
@@ -3296,88 +3398,138 @@ export class PostsService {
     const hashtagCasings = hashtagTokens.map((t) => t.variant);
 
     let parentCommentCount: number | null = null;
-    const post = await this.prisma.$transaction(async (tx) => {
-      const relatedTopics = Array.from(new Set([...(parentTopics ?? []), ...(rootTopics ?? [])])).filter(Boolean);
-      const topics = inferTopicsFromText(body, { hashtags, relatedTopics });
-      const created = await tx.post.create({
-        data: {
-          body,
-          topics,
-          hashtags,
-          hashtagCasings,
-          visibility,
-          userId,
-          parentId: parentId ?? undefined,
-          rootId: threadRootId ?? undefined, // Set root post ID for thread hierarchy
-          ...(cleanedMedia.length
-            ? {
-                media: {
-                  create: cleanedMedia,
-                },
-              }
-            : {}),
-          ...(poll
-            ? {
-                poll: {
-                  create: {
-                    endsAt: poll.endsAt,
-                    ...(cleanedPollOptions?.length
-                      ? {
-                          options: {
-                            create: cleanedPollOptions.map((o) => ({
-                              text: o.text,
-                              position: o.position,
-                              imageR2Key: o.imageR2Key ?? undefined,
-                              imageWidth: o.imageWidth ?? undefined,
-                              imageHeight: o.imageHeight ?? undefined,
-                              imageAlt: o.imageAlt ?? undefined,
-                            })),
-                          },
-                        }
-                      : {}),
+    let didAwardStreak = false;
+    const post = await this.prisma
+      .$transaction(async (tx) => {
+        const relatedTopics = Array.from(new Set([...(parentTopics ?? []), ...(rootTopics ?? [])])).filter(Boolean);
+        const topics = inferTopicsFromText(body, { hashtags, relatedTopics });
+        const created = await tx.post.create({
+          data: {
+            body,
+            topics,
+            hashtags,
+            hashtagCasings,
+            visibility,
+            userId,
+            kind,
+            ...(kind === 'checkin'
+              ? { checkinDayKey: checkinDayKeyRaw ?? undefined, checkinPrompt: checkinPromptRaw ?? undefined }
+              : {}),
+            parentId: parentId ?? undefined,
+            rootId: threadRootId ?? undefined, // Set root post ID for thread hierarchy
+            ...(cleanedMedia.length
+              ? {
+                  media: {
+                    create: cleanedMedia,
                   },
-                },
-              }
-            : {}),
-        },
-        include: { user: { select: USER_LIST_SELECT }, media: { orderBy: { position: 'asc' } }, poll: { include: { options: { orderBy: { position: 'asc' } } } } },
-      });
-
-      if (parentId) {
-        const parentAfter = await tx.post.update({
-          where: { id: parentId },
-          data: { commentCount: { increment: 1 } },
-          select: { commentCount: true },
+                }
+              : {}),
+            ...(poll
+              ? {
+                  poll: {
+                    create: {
+                      endsAt: poll.endsAt,
+                      ...(cleanedPollOptions?.length
+                        ? {
+                            options: {
+                              create: cleanedPollOptions.map((o) => ({
+                                text: o.text,
+                                position: o.position,
+                                imageR2Key: o.imageR2Key ?? undefined,
+                                imageWidth: o.imageWidth ?? undefined,
+                                imageHeight: o.imageHeight ?? undefined,
+                                imageAlt: o.imageAlt ?? undefined,
+                              })),
+                            },
+                          }
+                        : {}),
+                    },
+                  },
+                }
+              : {}),
+          },
+          include: {
+            user: { select: USER_LIST_SELECT },
+            media: { orderBy: { position: 'asc' } },
+            poll: { include: { options: { orderBy: { position: 'asc' } } } },
+          },
         });
-        parentCommentCount = typeof parentAfter.commentCount === 'number' ? parentAfter.commentCount : null;
-      }
-
-      if (mentionUserIds.length > 0) {
-        await tx.postMention.createMany({
-          data: mentionUserIds.map((uid) => ({ postId: created.id, userId: uid })),
-          skipDuplicates: true,
-        });
-      }
-
-      if (hashtagTokens.length > 0) {
-        for (const tok of hashtagTokens) {
-          const t = tok.tag;
-          const variant = tok.variant;
-          await tx.hashtag.upsert({
-            where: { tag: t },
-            create: { tag: t, usageCount: 1 },
-            update: { usageCount: { increment: 1 } },
+        if (parentId) {
+          const parentAfter = await tx.post.update({
+            where: { id: parentId },
+            data: { commentCount: { increment: 1 } },
+            select: { commentCount: true },
           });
-          await tx.hashtagVariant.upsert({
-            where: { tag_variant: { tag: t, variant } },
-            create: { tag: t, variant, count: 1 },
-            update: { count: { increment: 1 } },
+          parentCommentCount = typeof parentAfter.commentCount === 'number' ? parentAfter.commentCount : null;
+        }
+
+        if (mentionUserIds.length > 0) {
+          await tx.postMention.createMany({
+            data: mentionUserIds.map((uid) => ({ postId: created.id, userId: uid })),
+            skipDuplicates: true,
           });
         }
-      }
 
-      return created;
-    });
+        if (hashtagTokens.length > 0) {
+          for (const tok of hashtagTokens) {
+            const t = tok.tag;
+            const variant = tok.variant;
+            await tx.hashtag.upsert({
+              where: { tag: t },
+              create: { tag: t, usageCount: 1 },
+              update: { usageCount: { increment: 1 } },
+            });
+            await tx.hashtagVariant.upsert({
+              where: { tag_variant: { tag: t, variant } },
+              create: { tag: t, variant, count: 1 },
+              update: { count: { increment: 1 } },
+            });
+          }
+        }
+
+        // Rewards: daily streak + coins (transactional with post creation).
+        // Product rule: any non-onlyMe post counts (including replies and check-ins). Award once per ET day.
+        if (visibility !== 'onlyMe') {
+          const todayKey = easternDayKey(now);
+          const yesterdayKey = yesterdayEasternDayKey(now);
+          const u = await tx.user.findUnique({
+            where: { id: userId },
+            select: { coins: true, checkinStreakDays: true, lastCheckinDayKey: true, longestStreakDays: true },
+          });
+          if (!u) throw new NotFoundException('User not found.');
+          // If already awarded today, do nothing (multiple posts per day are allowed).
+          if ((u.lastCheckinDayKey ?? null) !== todayKey) {
+            const out = computeCheckinRewards({
+              todayKey,
+              yesterdayKey,
+              lastCheckinDayKey: u.lastCheckinDayKey ?? null,
+              currentStreakDays: u.checkinStreakDays ?? 0,
+            });
+            const nextLongest = Math.max(u.longestStreakDays ?? 0, out.nextStreakDays);
+            await tx.user.update({
+              where: { id: userId },
+              data: {
+                lastCheckinDayKey: todayKey,
+                checkinStreakDays: out.nextStreakDays,
+                longestStreakDays: nextLongest,
+                coins: { increment: out.coinsAdd },
+              },
+            });
+            didAwardStreak = true;
+          }
+        }
+
+        return created;
+      })
+      .catch((e: unknown) => {
+        if (kind === 'checkin') {
+          // One-per-day uniqueness.
+          if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+            throw new BadRequestException('Already checked in today.');
+          }
+        }
+        throw e;
+      });
 
     // Versioned read caches: bump after successful create so public reads shift namespaces immediately.
     if ((post as any)?.visibility && (post as any).visibility !== 'onlyMe') {
@@ -3532,6 +3684,21 @@ export class PostsService {
         poll: { include: { options: { orderBy: { position: 'asc' } } } },
       },
     });
+
+    // Realtime: if we awarded streak/coins today, sync self snapshot across tabs/devices (best-effort).
+    if (didAwardStreak) {
+      try {
+        const u = await this.prisma.user.findUnique({ where: { id: userId } });
+        if (u) {
+          this.presenceRealtime.emitUsersMeUpdated(userId, {
+            user: toUserDto(u as any, this.appConfig.r2()?.publicBaseUrl ?? null),
+            reason: 'streak_awarded',
+          });
+        }
+      } catch {
+        // Best-effort
+      }
+    }
     return withMentions!;
   }
 

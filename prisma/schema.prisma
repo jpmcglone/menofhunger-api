@@ -20,6 +20,11 @@ enum PostVisibility {
   onlyMe
 }
 
+enum PostKind {
+  regular
+  checkin
+}
+
 enum FollowVisibility {
   all
   verified
@@ -196,6 +201,15 @@ model User {
   // Denormalized badge count for notifications where deliveredAt is still null.
   // Maintained atomically in NotificationsService.
   undeliveredNotificationCount Int @default(0)
+
+  // Private rewards / retention loops (self-only surfaces).
+  coins Int @default(0)
+  /** Current consecutive-day check-in streak (ET day key boundaries). */
+  checkinStreakDays Int @default(0)
+  /** Last ET day key the user checked in (YYYY-MM-DD). */
+  lastCheckinDayKey String?
+  /** Longest streak achieved (private). */
+  longestStreakDays Int @default(0)
   dailyActivityDays UserDailyActivity[]
   sessions  Session[]
   posts     Post[]
@@ -381,6 +395,11 @@ model Post {
   hashtags   String[]       @default([])
   /** Hashtag casing variants used in this post (one per entry in `hashtags`, without '#'). */
   hashtagCasings String[]   @default([])
+  kind       PostKind       @default(regular)
+  /** ET day key (YYYY-MM-DD) for check-ins (null for non-check-ins). */
+  checkinDayKey String?
+  /** Prompt text used for this check-in day (stored to keep history stable). */
+  checkinPrompt String?
   visibility PostVisibility @default(public)
   boostCount Int            @default(0)
   bookmarkCount Int         @default(0)
@@ -414,6 +433,8 @@ model Post {
 
   @@index([userId, createdAt])
   @@index([createdAt])
+  @@index([kind, createdAt])
+  @@unique([userId, kind, checkinDayKey])
   @@index([parentId])
   @@index([parentId, createdAt])
   @@index([rootId])
@@ -834,11 +855,14 @@ model NotificationPreferences {
   emailNewNotifications Boolean @default(true)
   /** Optional: send near-immediate emails for high-signal events (messages + mentions/replies). */
   emailInstantHighSignal Boolean @default(true)
+  /** Send a reminder email if you're at risk of losing your streak today. */
+  emailStreakReminder Boolean @default(true)
 
   // Email send timestamps (rate limiting / dedupe).
   lastEmailDigestDailySentAt DateTime?
   lastEmailNewNotificationsSentAt DateTime?
   lastEmailInstantHighSignalSentAt DateTime?
+  lastEmailStreakReminderSentAt DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -846,6 +870,7 @@ model NotificationPreferences {
   @@index([lastEmailNewNotificationsSentAt])
   @@index([lastEmailDigestDailySentAt])
   @@index([lastEmailInstantHighSignalSentAt])
+  @@index([lastEmailStreakReminderSentAt])
 }
 
 model MessageConversation {

@@ -498,11 +498,12 @@ export class SearchService {
     return { posts: slice, nextCursor };
   }
 
-  async searchPosts(params: { viewerUserId: string | null; q: string; limit: number; cursor: string | null }) {
+  async searchPosts(params: { viewerUserId: string | null; q: string; limit: number; cursor: string | null; kind?: 'regular' | 'checkin' | null }) {
     const rawQ = (params.q ?? '').trim();
     if (!rawQ) return { posts: [], nextCursor: null };
     const limit = Math.max(1, Math.min(50, params.limit || 30));
     const cursor = params.cursor ?? null;
+    const kind = params.kind ?? null;
     const { hashtags, text: qText } = splitSearchQuery(rawQ);
     const tagsText = hashtags.join(' ').trim();
     const qFtsExpanded = (qText ? `${qText} ${tagsText}` : tagsText).trim(); // preserve quotes for websearch_to_tsquery
@@ -522,6 +523,7 @@ export class SearchService {
     const visibilityWhere: Prisma.PostWhereInput = viewer?.id
       ? { visibility: { in: allowed } }
       : { visibility: 'public' };
+    const kindWhere: Prisma.PostWhereInput = kind ? ({ kind } as Prisma.PostWhereInput) : {};
 
     const cursorRaw = (cursor ?? '').trim();
     const cursorIsOffset = cursorRaw ? /^\d+$/.test(cursorRaw) : false;
@@ -542,7 +544,7 @@ export class SearchService {
       if (cursorIsOffset) {
         const rows = await this.prisma.post.findMany({
           where: {
-            AND: [{ deletedAt: null }, visibilityWhere, hashtagWhere],
+            AND: [{ deletedAt: null }, visibilityWhere, kindWhere, hashtagWhere],
           },
           include: {
             user: POST_BASE_INCLUDE.user,
@@ -581,6 +583,7 @@ export class SearchService {
             AND: [
               { deletedAt: null },
               visibilityWhere,
+              kindWhere,
               hashtagWhere,
               ...(cursorWhere ? [cursorWhere] : []),
             ],
@@ -708,6 +711,7 @@ export class SearchService {
               AND: [
                 { deletedAt: null },
                 visibilityWhere,
+                kindWhere,
                 {
                   OR: [
                     hashtagWhere,
@@ -721,6 +725,7 @@ export class SearchService {
               AND: [
                 { deletedAt: null },
                 visibilityWhere,
+                kindWhere,
                 topicValues.length > 0 ? ({ OR: [matchWhere, topicWhere] } as Prisma.PostWhereInput) : matchWhere,
               ],
             };
@@ -789,6 +794,7 @@ export class SearchService {
     postLimit: number;
     userCursor: string | null;
     postCursor: string | null;
+    kind: 'regular' | 'checkin' | null;
   }): Promise<{
     users: SearchUserRow[];
     posts: Awaited<ReturnType<SearchService['searchPosts']>>['posts'];
@@ -817,6 +823,7 @@ export class SearchService {
         q,
         limit: params.postLimit,
         cursor: params.postCursor,
+        kind: params.kind ?? null,
       }),
     ]);
 

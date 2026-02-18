@@ -119,6 +119,11 @@ export type UserDto = {
   avatarUrl: string | null;
   bannerUrl: string | null;
   pinnedPostId: string | null;
+  // Private rewards (self-only surfaces).
+  coins: number;
+  checkinStreakDays: number;
+  lastCheckinDayKey: string | null;
+  longestStreakDays: number;
 };
 
 export type UserPreviewDto = {
@@ -177,6 +182,10 @@ export type UserDtoRow = {
   bannerKey: string | null;
   bannerUpdatedAt: Date | null;
   pinnedPostId: string | null;
+  coins: number;
+  checkinStreakDays: number;
+  lastCheckinDayKey: string | null;
+  longestStreakDays: number;
 };
 
 export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = null): UserDto {
@@ -225,5 +234,14 @@ export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = 
       updatedAt: user.bannerUpdatedAt ?? null,
     }),
     pinnedPostId: user.pinnedPostId ?? null,
+    coins: typeof (user as any).coins === 'number' ? ((user as any).coins as number) : 0,
+    checkinStreakDays: typeof (user as any).checkinStreakDays === 'number' ? ((user as any).checkinStreakDays as number) : 0,
+    lastCheckinDayKey: (user as any).lastCheckinDayKey ? String((user as any).lastCheckinDayKey) : null,
+    // Invariant: longest streak can never be lower than current streak.
+    // This also gracefully handles legacy users where `longestStreakDays` was introduced after streak tracking began.
+    longestStreakDays: Math.max(
+      typeof (user as any).longestStreakDays === 'number' ? ((user as any).longestStreakDays as number) : 0,
+      typeof (user as any).checkinStreakDays === 'number' ? ((user as any).checkinStreakDays as number) : 0,
+    ),
   };
 }

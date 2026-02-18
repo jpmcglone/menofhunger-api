@@ -79,26 +79,34 @@ export class PostsPopularScoreCron {
         }>
       >(Prisma.sql`
         WITH
-        comment_scores AS (
+        commenter_latest AS (
           SELECT
             p."parentId" as "postId",
+            p."userId" as "userId",
+            MAX(p."createdAt") as "latestAt"
+          FROM "Post" p
+          WHERE
+            p."parentId" IS NOT NULL
+            AND p."deletedAt" IS NULL
+            AND p."createdAt" >= ${minCreatedAt}
+          GROUP BY p."parentId", p."userId"
+        ),
+        comment_scores AS (
+          SELECT
+            cl."postId" as "postId",
             CAST(
               SUM(
                 POWER(
                   0.5,
                   GREATEST(
                     0,
-                    EXTRACT(EPOCH FROM (${asOf}::timestamptz - p."createdAt"))
+                    EXTRACT(EPOCH FROM (${asOf}::timestamptz - cl."latestAt"))
                   ) / (12 * 60 * 60)
                 )
               ) AS DOUBLE PRECISION
             ) as "commentScore"
-          FROM "Post" p
-          WHERE
-            p."parentId" IS NOT NULL
-            AND p."deletedAt" IS NULL
-            AND p."createdAt" >= ${minCreatedAt}
-          GROUP BY p."parentId"
+          FROM commenter_latest cl
+          GROUP BY cl."postId"
         ),
         candidates AS (
           SELECT u."id" as "id"
@@ -206,7 +214,7 @@ export class PostsPopularScoreCron {
           WHERE LOWER(TRIM(t)) <> ''
           GROUP BY p."id"
         ),
-        scored AS (
+        scored_base AS (
           SELECT
             p."id" as "id",
             p."createdAt" as "createdAt",
@@ -260,6 +268,25 @@ export class PostsPopularScoreCron {
               +
               (
                 CASE
+                  WHEN p."kind" = 'checkin' THEN
+                    0.08
+                    * LEAST(
+                      1.0,
+                      GREATEST(
+                        0.0,
+                        (CHAR_LENGTH(COALESCE(TRIM(p."body"), '')) - 60)::DOUBLE PRECISION / 240.0
+                      )
+                    )
+                    * POWER(
+                      0.5,
+                      GREATEST(0, EXTRACT(EPOCH FROM (${asOf}::timestamptz - p."createdAt"))) / (12 * 60 * 60)
+                    )
+                  ELSE 0
+                END
+              )
+              +
+              (
+                CASE
                   WHEN u."pinnedPostId" = p."id" THEN
                     (CASE WHEN u."premium" THEN 0.5 WHEN u."verifiedStatus" <> 'none' THEN 0.3 ELSE 0.15 END)
                     * POWER(
@@ -270,6 +297,13 @@ export class PostsPopularScoreCron {
                 END
               )
               * (CASE WHEN p."parentId" IS NULL THEN 1.15 ELSE 1.0 END)
+              * (CASE WHEN p."kind" = 'checkin' THEN 0.85 ELSE 1.0 END)
+              * (
+                CASE
+                  WHEN u."verifiedStatus" = 'none' AND u."createdAt" >= (${asOf}::timestamptz - INTERVAL '7 days') THEN 0.85
+                  ELSE 1.0
+                END
+              )
               * POWER(
                 0.85,
                 (
@@ -291,6 +325,22 @@ export class PostsPopularScoreCron {
           LEFT JOIN comment_scores cs ON cs."postId" = p."id"
           CROSS JOIN hashtag_global hg
           LEFT JOIN post_hashtag_scores hs ON hs."postId" = p."id"
+        ),
+        scored AS (
+          SELECT
+            sb.*,
+            CAST(
+              sb."score"
+              * POWER(
+                0.90,
+                GREATEST(
+                  0,
+                  (ROW_NUMBER() OVER (PARTITION BY sb."userId" ORDER BY sb."score" DESC, sb."createdAt" DESC, sb."id" DESC) - 1)
+                )
+              )
+              AS DOUBLE PRECISION
+            ) as "score"
+          FROM scored_base sb
         )
         SELECT "id", "createdAt", "score", "userId", "visibility", "parentId", "rootId"
         FROM scored

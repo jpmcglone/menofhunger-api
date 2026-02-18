@@ -18,6 +18,8 @@ import { CacheTtl } from '../redis/cache-ttl';
 const searchSchema = z.object({
   q: z.string().trim().max(200).optional(),
   type: z.enum(['posts', 'users', 'bookmarks', 'all', 'hashtags']).optional(),
+  // Posts-only: filter by kind (e.g. allow "check-ins only" in search UI)
+  kind: z.enum(['regular', 'checkin']).optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
   userCursor: z.string().optional(),
@@ -57,6 +59,7 @@ export class SearchController {
     const cursor = parsed.cursor ?? null;
     const userCursor = parsed.userCursor ?? null;
     const postCursor = parsed.postCursor ?? null;
+    const kind = parsed.kind ?? null;
     const q = (parsed.q ?? '').trim();
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
@@ -83,6 +86,7 @@ export class SearchController {
         postLimit,
         userCursor,
         postCursor,
+        kind,
       });
       const users = res.users.map((u) =>
         toUserListDto(u, publicBaseUrl, {
@@ -205,7 +209,7 @@ export class SearchController {
       key: cacheKey ?? '',
       ttlSeconds: CacheTtl.anonSearchPostsSeconds,
       compute: async () => {
-        const res = await this.search.searchPosts({ viewerUserId, q, limit, cursor });
+        const res = await this.search.searchPosts({ viewerUserId, q, limit, cursor, kind });
         const postIds = (res.posts ?? []).map((p) => p.id);
         const boosted = viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds }) : new Set<string>();
         const bookmarksByPostId = viewerUserId

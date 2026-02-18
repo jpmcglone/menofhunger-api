@@ -70,6 +70,10 @@ export const USER_DTO_SELECT = {
   bannerKey: true,
   bannerUpdatedAt: true,
   pinnedPostId: true,
+  coins: true,
+  checkinStreakDays: true,
+  lastCheckinDayKey: true,
+  longestStreakDays: true,
 } as const;
 
 /** Select shape used for verification admin DTO user summary. */

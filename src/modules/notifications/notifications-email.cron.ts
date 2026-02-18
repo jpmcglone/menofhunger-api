@@ -8,6 +8,9 @@ import { JOBS } from '../jobs/jobs.constants';
 import { DailyContentService } from '../daily-content/daily-content.service';
 import { MessagesService } from '../messages/messages.service';
 import { escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
+import { CHECKIN_PROMPTS } from '../checkins/checkin-prompts';
+import { dayIndexEastern, easternDayKey as easternDayKey2 } from '../../common/time/eastern-day-key';
+import { computeCheckinRewards } from '../checkins/checkin-rewards';
 
 function safeBaseUrl(raw: string | null): string {
   const base = (raw ?? '').trim() || 'https://menofhunger.com';
@@ -42,7 +45,10 @@ function easternYmdHm(d: Date): { y: number; m: number; d: number; hh: number; m
   const y = Number(parts.find((p) => p.type === 'year')?.value ?? 0);
   const m = Number(parts.find((p) => p.type === 'month')?.value ?? 1);
   const dd = Number(parts.find((p) => p.type === 'day')?.value ?? 1);
-  const hh = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
+  // Some Intl implementations can emit "24" for midnight with 24-hour formatting.
+  // Normalize so minute-of-day checks always treat midnight as 00:xx.
+  const hhRaw = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
+  const hh = Number.isFinite(hhRaw) ? ((hhRaw % 24) + 24) % 24 : 0;
   const mm = Number(parts.find((p) => p.type === 'minute')?.value ?? 0);
   return { y, m, d: dd, hh, mm };
 }
@@ -76,6 +82,17 @@ function truncate(s: string, max: number): string {
   const t = String(s ?? '').trim();
   if (t.length <= max) return t;
   return t.slice(0, Math.max(0, max - 1)).trimEnd() + '…';
+}
+
+function pickDailyCheckinPrompt(now: Date): { dayKey: string; prompt: string } {
+  const list = CHECKIN_PROMPTS.filter(Boolean);
+  const fallback = "How are you doing today?";
+  const dayKey = easternDayKey2(now);
+  if (list.length === 0) return { dayKey, prompt: fallback };
+
+  const dayIndex = dayIndexEastern(now) + 1;
+  const i = ((dayIndex % list.length) + list.length) % list.length;
+  return { dayKey, prompt: list[i] ?? fallback };
 }
 
 @Injectable()
@@ -260,8 +277,8 @@ export class NotificationsEmailCron {
       const now = new Date();
       const et = easternYmdHm(now);
       const minuteOfDay = et.hh * 60 + et.mm;
-      // Only enqueue after 8:00am ET so a run before 8am can't consume the stable jobId.
-      if (minuteOfDay < 8 * 60) return;
+      // Only enqueue in the 8:00-8:59am ET window.
+      if (minuteOfDay < 8 * 60 || minuteOfDay >= 9 * 60) return;
       const dayKey = easternDayKey(now);
       await this.jobs.enqueueCron(JOBS.notificationsDailyDigest, {}, `cron:notificationsDailyDigest:${dayKey}`, {
         attempts: 3,
@@ -272,6 +289,176 @@ export class NotificationsEmailCron {
     }
   }
 
+  /** Streak reminder (send once per day; target ~4pm ET, DST-safe). */
+  @Cron('*/5 * * * *')
+  async sendStreakReminderEmail(): Promise<void> {
+    if (!this.appConfig.runSchedulers()) return;
+    const emailCfg = this.appConfig.email();
+    if (!emailCfg) return;
+
+    try {
+      const now = new Date();
+      const et = easternYmdHm(now);
+      const minuteOfDay = et.hh * 60 + et.mm;
+      // Only enqueue in the 4:00-4:59pm ET window.
+      if (minuteOfDay < 16 * 60 || minuteOfDay >= 17 * 60) return;
+      const dayKey = easternDayKey(now);
+      await this.jobs.enqueueCron(JOBS.notificationsStreakReminderEmail, {}, `cron:notificationsStreakReminderEmail:${dayKey}`, {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5 * 60_000 },
+      });
+    } catch {
+      // likely duplicate jobId while previous run is active; treat as no-op
+    }
+  }
+
+  async runSendStreakReminderEmail(): Promise<void> {
+    const emailCfg = this.appConfig.email();
+    if (!emailCfg) return;
+
+    const now = new Date();
+    const et = easternYmdHm(now);
+    const minuteOfDay = et.hh * 60 + et.mm;
+    if (minuteOfDay < 16 * 60 || minuteOfDay >= 17 * 60) return;
+
+    const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
+    const homeUrl = `${baseUrl}/home`;
+    const settingsUrl = `${baseUrl}/settings/notifications`;
+
+    const todayEt = easternYmd(now);
+    const windowStartUtcMs = easternUtcMsForLocal({ ...todayEt, hh: 16, mm: 0 });
+    const sendStartUtc = new Date(windowStartUtcMs);
+
+    const todayKey = easternDayKey(now);
+    const yesterdayKey = easternDayKey(new Date(now.getTime() - 36 * 60 * 60 * 1000));
+
+    type RecipientRow = {
+      id: string;
+      email: string | null;
+      username: string | null;
+      name: string | null;
+      checkinStreakDays: number;
+      lastCheckinDayKey: string | null;
+      notificationPreferences: { emailStreakReminder: boolean; lastEmailStreakReminderSentAt: Date | null } | null;
+    };
+
+    let cursorId: string | null = null;
+    const pageSize = 400;
+    for (;;) {
+      const recipients: RecipientRow[] = await this.prisma.user.findMany({
+        where: {
+          email: { not: null },
+          emailVerifiedAt: { not: null },
+          checkinStreakDays: { gt: 0 },
+          lastCheckinDayKey: yesterdayKey, // at risk: last activity was yesterday (ET)
+          ...(cursorId ? { id: { gt: cursorId } } : {}),
+          OR: [
+            { notificationPreferences: { is: null } },
+            { notificationPreferences: { is: { emailStreakReminder: true } } },
+          ],
+        },
+        orderBy: [{ id: 'asc' }],
+        take: pageSize,
+        select: {
+          id: true,
+          email: true,
+          username: true,
+          name: true,
+          checkinStreakDays: true,
+          lastCheckinDayKey: true,
+          notificationPreferences: { select: { emailStreakReminder: true, lastEmailStreakReminderSentAt: true } },
+        },
+      });
+      if (recipients.length === 0) break;
+      cursorId = recipients[recipients.length - 1]?.id ?? null;
+
+      for (const u of recipients) {
+        const to = (u.email ?? '').trim();
+        if (!to) continue;
+        if (u.notificationPreferences && !u.notificationPreferences.emailStreakReminder) continue;
+
+        const lastSent = u.notificationPreferences?.lastEmailStreakReminderSentAt ?? null;
+        if (lastSent && lastSent.getTime() >= sendStartUtc.getTime()) continue;
+
+        // Defensive: if they already posted today, don't send.
+        if ((u.lastCheckinDayKey ?? null) === todayKey) continue;
+
+        const currentStreak = Math.max(0, Math.floor(u.checkinStreakDays ?? 0));
+        if (currentStreak <= 0) continue;
+
+        // What they'll earn today if they post/reply at least once.
+        const reward = computeCheckinRewards({
+          todayKey,
+          yesterdayKey,
+          lastCheckinDayKey: yesterdayKey,
+          currentStreakDays: currentStreak,
+        });
+
+        const greetingName = (u.name ?? u.username ?? '').trim();
+        const greeting = greetingName ? `Hey ${greetingName},` : `Hey,`;
+
+        const subject = `Don’t lose your streak (${currentStreak} day${currentStreak === 1 ? '' : 's'})`;
+
+        const text = [
+          greeting,
+          '',
+          `You’re on a ${currentStreak}-day streak.`,
+          `Post or reply today to keep it.`,
+          '',
+          `Today’s multiplier: ${reward.multiplier}x (${reward.coinsAdd} coin${reward.coinsAdd === 1 ? '' : 's'} for one post/reply)`,
+          `If you skip today, your streak resets to 0.`,
+          '',
+          `Open: ${homeUrl}`,
+          '',
+          `Manage email notification settings: ${settingsUrl}`,
+        ].join('\n');
+
+        const html = renderMohEmail({
+          title: `Keep your streak`,
+          preheader: `Post or reply today to keep your ${currentStreak}-day streak.`,
+          contentHtml: [
+            `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">Keep your streak</div>`,
+            `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(greeting)}</div>`,
+            renderCard(
+              [
+                `<div style="margin-bottom:10px;">${renderPill('Streak reminder', 'warning')}</div>`,
+                `<div style="font-size:14px;line-height:1.8;color:#111827;">You’re on a <strong>${currentStreak}</strong>-day streak.</div>`,
+                `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:#111827;">Post or reply <strong>today</strong> to keep it.</div>`,
+                `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">Today’s multiplier: <strong style="color:#111827;">${reward.multiplier}x</strong> (${reward.coinsAdd} coin${reward.coinsAdd === 1 ? '' : 's'}).</div>`,
+                `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">If you skip today, your streak resets to 0.</div>`,
+                `<div style="margin-top:12px;">${renderButton({ href: homeUrl, label: 'Post now' })}</div>`,
+              ].join(''),
+            ),
+            `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(
+              settingsUrl,
+            )}" style="color:#111827;text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
+          ].join(''),
+          footerHtml: `Manage notifications in <a href="${escapeHtml(
+            settingsUrl,
+          )}" style="color:#9ca3af;text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
+        });
+
+        const sent = await this.email.sendText({
+          to,
+          subject,
+          text,
+          html,
+          from: this.appConfig.email()?.fromEmail.notifications ?? undefined,
+        });
+
+        if (sent.sent) {
+          await this.prisma.notificationPreferences.upsert({
+            where: { userId: u.id },
+            create: { userId: u.id, lastEmailStreakReminderSentAt: now },
+            update: { lastEmailStreakReminderSentAt: now },
+          });
+        } else {
+          this.logger.debug(`[streak-reminder] not sent to userId=${u.id} reason=${sent.reason ?? 'unknown'}`);
+        }
+      }
+    }
+  }
+
   async runSendDailyDigest(): Promise<void> {
     const emailCfg = this.appConfig.email();
     if (!emailCfg) return;
@@ -279,7 +466,7 @@ export class NotificationsEmailCron {
     const now = new Date();
     const et = easternYmdHm(now);
     const minuteOfDay = et.hh * 60 + et.mm;
-    if (minuteOfDay < 8 * 60) return;
+    if (minuteOfDay < 8 * 60 || minuteOfDay >= 9 * 60) return;
 
     const todayEt = easternYmd(now);
     const yesterdayEt = easternYmd(new Date(now.getTime() - 36 * 60 * 60 * 1000));
@@ -291,6 +478,7 @@ export class NotificationsEmailCron {
     const notificationsUrl = `${baseUrl}/notifications`;
     const messagesUrl = `${baseUrl}/chat`;
     const settingsUrl = `${baseUrl}/settings/notifications`;
+    const checkinsUrl = `${baseUrl}/home`;
 
     // Ensure daily content exists (quote + definition).
     await this.dailyContent.refreshForTodayIfNeeded(now);
@@ -302,13 +490,41 @@ export class NotificationsEmailCron {
 
     const quote = (snap?.quote ?? null) as any;
     const wotd = (snap?.websters1828 ?? null) as any;
+    const checkinPrompt = pickDailyCheckinPrompt(now).prompt;
 
     // Featured post: highest trending score among posts created in window.
+    // NOTE: Digest recipients may not have access to all visibilities (verified/premium). Precompute by tier and pick per-user.
     const latestAsOf = await this.prisma.postPopularScoreSnapshot.findFirst({
       orderBy: [{ asOf: 'desc' }],
       select: { asOf: true },
     });
-    const featuredRow =
+    const featuredRowPublic =
+      latestAsOf?.asOf
+        ? await this.prisma.postPopularScoreSnapshot.findFirst({
+            where: {
+              asOf: latestAsOf.asOf,
+              createdAt: { gte: new Date(windowStartUtcMs), lt: new Date(windowEndUtcMs) },
+              parentId: null,
+              visibility: { in: ['public'] },
+            },
+            orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
+            select: { postId: true },
+          })
+        : null;
+    const featuredRowVerified =
+      latestAsOf?.asOf
+        ? await this.prisma.postPopularScoreSnapshot.findFirst({
+            where: {
+              asOf: latestAsOf.asOf,
+              createdAt: { gte: new Date(windowStartUtcMs), lt: new Date(windowEndUtcMs) },
+              parentId: null,
+              visibility: { in: ['public', 'verifiedOnly'] },
+            },
+            orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
+            select: { postId: true },
+          })
+        : null;
+    const featuredRowPremium =
       latestAsOf?.asOf
         ? await this.prisma.postPopularScoreSnapshot.findFirst({
             where: {
@@ -318,23 +534,47 @@ export class NotificationsEmailCron {
               visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] },
             },
             orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
-            select: { postId: true, score: true },
+            select: { postId: true },
           })
         : null;
-    const featuredPost = featuredRow?.postId
+
+    const featuredPostPublic = featuredRowPublic?.postId
       ? await this.prisma.post.findFirst({
-          where: { id: featuredRow.postId, deletedAt: null },
+          where: { id: featuredRowPublic.postId, deletedAt: null },
           select: { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } },
         })
       : null;
-    const featuredUrl = featuredPost ? `${baseUrl}/p/${encodeURIComponent(featuredPost.id)}` : null;
+    const featuredPostVerified = featuredRowVerified?.postId
+      ? await this.prisma.post.findFirst({
+          where: { id: featuredRowVerified.postId, deletedAt: null },
+          select: { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } },
+        })
+      : null;
+    const featuredPostPremium = featuredRowPremium?.postId
+      ? await this.prisma.post.findFirst({
+          where: { id: featuredRowPremium.postId, deletedAt: null },
+          select: { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } },
+        })
+      : null;
+
+    function pickFeaturedPostForUser(u: { verifiedStatus?: string | null; premium?: boolean | null; premiumPlus?: boolean | null }) {
+      const isPremium = Boolean(u.premium || u.premiumPlus);
+      const isVerified = (u.verifiedStatus ?? 'none') !== 'none';
+      if (isPremium) return featuredPostPremium ?? featuredPostVerified ?? featuredPostPublic;
+      if (isVerified) return featuredPostVerified ?? featuredPostPublic;
+      return featuredPostPublic;
+    }
 
     type DigestRecipientRow = {
       id: string;
       email: string | null;
       username: string | null;
       name: string | null;
+      verifiedStatus: 'none' | 'identity' | 'manual';
+      premium: boolean;
+      premiumPlus: boolean;
       undeliveredNotificationCount: number;
+      checkinStreakDays: number;
       notificationPreferences: { emailDigestDaily: boolean; lastEmailDigestDailySentAt: Date | null } | null;
     };
 
@@ -358,7 +598,11 @@ export class NotificationsEmailCron {
           email: true,
           username: true,
           name: true,
+          verifiedStatus: true,
+          premium: true,
+          premiumPlus: true,
           undeliveredNotificationCount: true,
+          checkinStreakDays: true,
           notificationPreferences: { select: { emailDigestDaily: true, lastEmailDigestDailySentAt: true } },
         },
       });
@@ -403,6 +647,9 @@ export class NotificationsEmailCron {
         const definition = wotd?.definition ? String(wotd.definition).trim() : '';
         const dictionaryUrl = wotd?.dictionaryUrl ? String(wotd.dictionaryUrl).trim() : '';
 
+        const featuredPost = pickFeaturedPostForUser(u);
+        const featuredUrl = featuredPost ? `${baseUrl}/p/${encodeURIComponent(featuredPost.id)}` : null;
+
         const text = [
           greeting,
           '',
@@ -411,19 +658,24 @@ export class NotificationsEmailCron {
             : `Notifications: ${notificationsUrl}`,
           unreadChats > 0 ? `You have ${unreadChats} unread message${unreadChats === 1 ? '' : 's'} — ${messagesUrl}` : `Messages: ${messagesUrl}`,
           '',
-          'Quote of the day',
-          quoteText ? `“${quoteText}”` : '(unavailable)',
-          quoteAttr ? `— ${quoteAttr}` : '',
+          'Featured post (last 24 hours, since 8am ET yesterday)',
+          featuredPost
+            ? `by @${(featuredPost.user.username ?? 'unknown').trim()}\n${truncate(featuredPost.body ?? '', 240)}\nOpen: ${featuredUrl ?? ''}`.trim()
+            : '(unavailable)',
           '',
           'Definition of the day',
           word ? word : '(unavailable)',
           definition ? definition : '',
           dictionaryUrl ? `Source: ${dictionaryUrl}` : '',
           '',
-          'Featured post (last 24 hours, since 8am ET yesterday)',
-          featuredPost
-            ? `by @${(featuredPost.user.username ?? 'unknown').trim()}\n${truncate(featuredPost.body ?? '', 240)}\nOpen: ${featuredUrl ?? ''}`.trim()
-            : '(unavailable)',
+          'Quote of the day',
+          quoteText ? `“${quoteText}”` : '(unavailable)',
+          quoteAttr ? `— ${quoteAttr}` : '',
+          '',
+          'Daily check-in',
+          checkinPrompt ? `“${checkinPrompt}”` : '(unavailable)',
+          `Your streak: ${Math.max(0, Math.floor(u.checkinStreakDays ?? 0))} day${Math.max(0, Math.floor(u.checkinStreakDays ?? 0)) === 1 ? '' : 's'}`,
+          `Check in: ${checkinsUrl}`,
           '',
           `Manage notification settings: ${settingsUrl}`,
         ]
@@ -439,6 +691,16 @@ export class NotificationsEmailCron {
               ].join(''),
             )
           : renderCard(`<div>${renderPill('Quote of the day', 'info')}</div><div style="margin-top:10px;color:#6b7280;">(unavailable)</div>`);
+
+        const streakDays = Math.max(0, Math.floor(u.checkinStreakDays ?? 0));
+        const checkinBlock = renderCard(
+          [
+            `<div style="margin-bottom:10px;">${renderPill('Daily check-in', 'warning')}</div>`,
+            `<div style="font-size:14px;line-height:1.8;color:#111827;">${escapeHtml(checkinPrompt || '(unavailable)')}</div>`,
+            `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">Your streak: <strong style="color:#111827;">${streakDays}</strong> day${streakDays === 1 ? '' : 's'}</div>`,
+            `<div style="margin-top:12px;">${renderButton({ href: checkinsUrl, label: 'Check in' })}</div>`,
+          ].join(''),
+        );
 
         const definitionBlock = word && definition
           ? renderCard(
@@ -495,9 +757,10 @@ export class NotificationsEmailCron {
               variant: 'secondary',
             })}</div>`,
             `<div style="height:12px;"></div>`,
-            quoteBlock,
-            definitionBlock,
             featuredHtml,
+            definitionBlock,
+            quoteBlock,
+            checkinBlock,
             `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(
               settingsUrl,
             )}" style="color:#111827;text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
