@@ -650,6 +650,14 @@ export class NotificationsEmailCron {
         const featuredPost = pickFeaturedPostForUser(u);
         const featuredUrl = featuredPost ? `${baseUrl}/p/${encodeURIComponent(featuredPost.id)}` : null;
 
+        const featuredTextLines = featuredPost
+          ? [
+              'Featured post (last 24 hours, since 8am ET yesterday)',
+              `by @${(featuredPost.user.username ?? 'unknown').trim()}\n${truncate(featuredPost.body ?? '', 240)}\nOpen: ${featuredUrl ?? ''}`.trim(),
+              '',
+            ]
+          : [];
+
         const text = [
           greeting,
           '',
@@ -658,11 +666,7 @@ export class NotificationsEmailCron {
             : `Notifications: ${notificationsUrl}`,
           unreadChats > 0 ? `You have ${unreadChats} unread message${unreadChats === 1 ? '' : 's'} — ${messagesUrl}` : `Messages: ${messagesUrl}`,
           '',
-          'Featured post (last 24 hours, since 8am ET yesterday)',
-          featuredPost
-            ? `by @${(featuredPost.user.username ?? 'unknown').trim()}\n${truncate(featuredPost.body ?? '', 240)}\nOpen: ${featuredUrl ?? ''}`.trim()
-            : '(unavailable)',
-          '',
+          ...featuredTextLines,
           'Definition of the day',
           word ? word : '(unavailable)',
           definition ? definition : '',
@@ -731,7 +735,7 @@ export class NotificationsEmailCron {
                 featuredUrl ? `<div style="margin-top:12px;">${renderButton({ href: featuredUrl, label: 'Open post' })}</div>` : ``,
               ].join(''),
             )
-          : renderCard(`<div>${renderPill('Featured post', 'success')}</div><div style="margin-top:10px;color:#6b7280;">(unavailable)</div>`);
+          : '';
 
         const unreadLine =
           unreadNotifs > 0 && unreadChats > 0
@@ -757,7 +761,7 @@ export class NotificationsEmailCron {
               variant: 'secondary',
             })}</div>`,
             `<div style="height:12px;"></div>`,
-            featuredHtml,
+            ...(featuredPost ? [featuredHtml] : []),
             definitionBlock,
             quoteBlock,
             checkinBlock,
@@ -851,7 +855,8 @@ export class NotificationsEmailCron {
           body: true,
           createdAt: true,
           subjectPostId: true,
-          actor: { select: { username: true, name: true } },
+          actor: { select: { username: true, name: true, premium: true, premiumPlus: true, isOrganization: true, verifiedStatus: true } },
+          subjectPost: { select: { visibility: true } },
         },
       }),
       this.messages
@@ -880,15 +885,20 @@ export class NotificationsEmailCron {
     const hasUnreadChats = unreadChats > 0;
     if (!hasHighSignalNotifs && !hasUnreadChats) return;
 
+    const mentionCount = hasHighSignalNotifs ? notifs.filter((n) => n.kind === 'mention').length : 0;
+    const replyCount = hasHighSignalNotifs ? notifs.filter((n) => n.kind === 'comment').length : 0;
+    const notifsNoun =
+      mentionCount > 0 && replyCount > 0 ? 'mentions and replies' : mentionCount > 0 ? 'mentions' : replyCount > 0 ? 'replies' : 'activity';
+
     const greetingName = (prefs.user.name ?? prefs.user.username ?? '').trim();
     const greeting = greetingName ? `Hey ${greetingName},` : `Hey,`;
 
     const subject =
       hasUnreadChats && hasHighSignalNotifs
-        ? `New messages and mentions on Men of Hunger`
+        ? `New messages and ${notifsNoun} on Men of Hunger`
         : hasUnreadChats
           ? `You have new messages on Men of Hunger`
-          : `You were mentioned on Men of Hunger`;
+          : `You have new ${notifsNoun} on Men of Hunger`;
 
     const chatPreviewRows = hasUnreadChats
       ? ((unreadConversations ?? [])
@@ -919,11 +929,44 @@ export class NotificationsEmailCron {
       return `- ${label} from @${actor}: ${msg}`.trim();
     });
 
+    type ActorTier = 'premium' | 'verified' | 'organization' | null;
+    function actorTierFor(n: typeof notifs[number]): ActorTier {
+      const a = n.actor as null | {
+        premium?: boolean | null;
+        premiumPlus?: boolean | null;
+        isOrganization?: boolean | null;
+        verifiedStatus?: string | null;
+      };
+      if (!a) return null;
+      if (a.isOrganization) return 'organization';
+      if (Boolean(a.premium || a.premiumPlus)) return 'premium';
+      if ((a.verifiedStatus ?? 'none') !== 'none') return 'verified';
+      return null;
+    }
+    function actorTierLabel(tier: ActorTier): string {
+      if (tier === 'organization') return 'Organization';
+      if (tier === 'premium') return 'Premium';
+      if (tier === 'verified') return 'Verified';
+      return '';
+    }
+    type PostVisibility = 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe';
+    function postVisibilityFor(n: typeof notifs[number]): PostVisibility | null {
+      const vis = (n as any)?.subjectPost?.visibility;
+      if (vis === 'public' || vis === 'verifiedOnly' || vis === 'premiumOnly' || vis === 'onlyMe') return vis;
+      return null;
+    }
+    function postVisibilityLabel(vis: PostVisibility | null): string {
+      if (vis === 'verifiedOnly') return 'Verified post';
+      if (vis === 'premiumOnly') return 'Premium post';
+      if (vis === 'onlyMe') return 'Only me';
+      return '';
+    }
+
     const text = [
       greeting,
       '',
       hasUnreadChats ? `You have ${unreadChats} unread message${unreadChats === 1 ? '' : 's'} — ${chatUrl}` : '',
-      hasHighSignalNotifs ? `Recent mentions/replies — ${notificationsUrl}` : '',
+      hasHighSignalNotifs ? `Recent ${notifsNoun} — ${notificationsUrl}` : '',
       ...(hasHighSignalNotifs ? [''].concat(notifLines).concat(['']) : []),
       `Open chat: ${chatUrl}`,
       `Open notifications: ${notificationsUrl}`,
@@ -969,11 +1012,18 @@ ${chatPreviewRows
               const label = n.kind === 'comment' ? 'Reply' : 'Mention';
               const msg = truncate((n.body ?? n.title ?? '').trim(), 140);
               const href = n.subjectPostId ? `${baseUrl}/p/${encodeURIComponent(n.subjectPostId)}` : notificationsUrl;
+              const tier = actorTierFor(n as any);
+              const tierPill = tier ? ` <span style="display:inline-block;width:6px;"></span>${renderPill(actorTierLabel(tier), { actorTier: tier })}` : '';
+              const vis = postVisibilityFor(n as any);
+              const visPill =
+                vis && vis !== 'public'
+                  ? ` <span style="display:inline-block;width:6px;"></span>${renderPill(postVisibilityLabel(vis), { postVisibility: vis })}`
+                  : '';
               return `<li style="margin:0 0 10px 0;"><a href="${escapeHtml(
                 href,
               )}" style="color:#111827;text-decoration:none;"><strong>${escapeHtml(label)}</strong> from <strong>@${escapeHtml(
                 actor,
-              )}</strong> — ${escapeHtml(msg)}</a></li>`;
+              )}</strong>${tierPill}${visPill} — ${escapeHtml(msg)}</a></li>`;
             }),
             `</ul>`,
             `<div style="margin-top:12px;">${renderButton({ href: notificationsUrl, label: 'Open notifications', variant: 'secondary' })}</div>`,
@@ -983,10 +1033,10 @@ ${chatPreviewRows
 
     const previewText =
       hasUnreadChats && hasHighSignalNotifs
-        ? `New messages and mentions waiting for you.`
+        ? `New messages and ${notifsNoun} waiting for you.`
         : hasUnreadChats
           ? `You have new messages waiting for you.`
-          : `You have new mentions/replies.`;
+          : `You have new ${notifsNoun}.`;
 
     const html = renderMohEmail({
       title: 'New activity',

@@ -7,15 +7,38 @@ export function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-export function renderPill(label: string, tone: 'neutral' | 'info' | 'warning' | 'success' = 'neutral'): string {
+type PillTone = 'neutral' | 'info' | 'warning' | 'success';
+type PillActorTier = 'premium' | 'verified' | 'organization' | 'onlyMe';
+type PillPostVisibility = 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe';
+
+export function renderPill(
+  label: string,
+  toneOrOptions: PillTone | { tone?: PillTone; actorTier?: PillActorTier | null; postVisibility?: PillPostVisibility | null } = 'neutral',
+): string {
+  const opts = typeof toneOrOptions === 'string' ? { tone: toneOrOptions } : toneOrOptions;
+  const tone: PillTone = (opts.tone ?? 'neutral') as PillTone;
+
+  // App-aligned semantic accents (approximate, email-safe).
+  const semantic =
+    (opts.actorTier ?? null) === 'premium' || (opts.postVisibility ?? null) === 'premiumOnly'
+      ? { bg: '#FFF7ED', border: '#FDBA74', text: '#C77D1A' }
+      : (opts.actorTier ?? null) === 'verified' || (opts.postVisibility ?? null) === 'verifiedOnly'
+        ? { bg: '#EFF6FF', border: '#BFDBFE', text: '#2B7BB9' }
+        : (opts.actorTier ?? null) === 'organization'
+          ? { bg: '#F3F4F6', border: '#D1D5DB', text: '#8A93A3' }
+          : (opts.actorTier ?? null) === 'onlyMe' || (opts.postVisibility ?? null) === 'onlyMe'
+            ? { bg: '#F5F3FF', border: '#C4B5FD', text: '#6B4FD3' }
+            : null;
+
   const colors =
-    tone === 'success'
+    semantic ??
+    (tone === 'success'
       ? { bg: '#ECFDF5', border: '#A7F3D0', text: '#065F46' }
       : tone === 'warning'
         ? { bg: '#FFFBEB', border: '#FDE68A', text: '#92400E' }
         : tone === 'info'
           ? { bg: '#EFF6FF', border: '#BFDBFE', text: '#1D4ED8' }
-          : { bg: '#F3F4F6', border: '#E5E7EB', text: '#111827' };
+          : { bg: '#F3F4F6', border: '#E5E7EB', text: '#111827' });
 
   return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${colors.bg};border:1px solid ${colors.border};font-size:12px;color:${colors.text};white-space:nowrap;">${escapeHtml(
     label,
