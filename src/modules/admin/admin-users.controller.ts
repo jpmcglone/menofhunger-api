@@ -4,6 +4,7 @@ import {
   ConflictException,
   Controller,
   Get,
+  Req,
   NotFoundException,
   Param,
   Post,
@@ -12,6 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { ModuleRef } from '@nestjs/core';
 import { z } from 'zod';
 import { normalizePhone } from '../auth/auth.utils';
 import { AppConfigService } from '../app/app-config.service';
@@ -19,9 +21,11 @@ import { toUserDto } from '../../common/dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { validateUsername } from '../users/users.utils';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
-import { AdminGuard } from './admin.guard';
+import { AdminGuard, type AdminRequest } from './admin.guard';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
+import { AuthService } from '../auth/auth.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 const searchSchema = z.object({
   q: z.string().optional(),
@@ -29,8 +33,18 @@ const searchSchema = z.object({
   cursor: z.string().optional(),
 });
 
+const bannedListSchema = z.object({
+  q: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  cursor: z.string().optional(),
+});
+
 const adminUsernameSchema = z.object({
   username: z.string().optional(),
+});
+
+const banSchema = z.object({
+  reason: z.string().trim().max(500).optional(),
 });
 
 const updateUserSchema = z.object({
@@ -53,7 +67,48 @@ export class AdminUsersController {
     private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
+    private readonly auth: AuthService,
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  @Get('banned')
+  async listBanned(@Query() query: unknown) {
+    const { q, limit, cursor } = bannedListSchema.parse(query);
+    const take = limit ?? 25;
+
+    const raw = (q ?? '').trim();
+    const cleaned = raw.startsWith('@') ? raw.slice(1) : raw;
+
+    const where: Prisma.UserWhereInput = {
+      bannedAt: { not: null },
+      ...(cleaned
+        ? {
+            OR: [
+              { username: { contains: cleaned, mode: 'insensitive' } },
+              { name: { contains: cleaned, mode: 'insensitive' } },
+              { email: { contains: cleaned, mode: 'insensitive' } },
+              { phone: { contains: cleaned } },
+            ],
+          }
+        : {}),
+    };
+
+    const users = await this.prisma.user.findMany({
+      where,
+      orderBy: { id: 'desc' },
+      take: take + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+
+    const slice = users.slice(0, take);
+    const nextCursor = users.length > take ? slice[slice.length - 1]?.id ?? null : null;
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    return {
+      data: slice.map((u) => toUserDto(u, publicBaseUrl)),
+      pagination: { nextCursor },
+    };
+  }
 
   @Get('search')
   async search(@Query() query: unknown) {
@@ -108,6 +163,86 @@ export class AdminUsersController {
       )[0] ?? null;
 
     return { data: { available: !exists, normalized: parsed.usernameLower } };
+  }
+
+  @Post(':id/ban')
+  async ban(@Req() req: AdminRequest, @Param('id') id: string, @Body() body: unknown) {
+    const { reason } = banSchema.parse(body);
+    const adminId = String(req.user?.id ?? '').trim();
+    if (!adminId) throw new NotFoundException();
+
+    const current = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, siteAdmin: true, username: true },
+    });
+    if (!current) throw new NotFoundException('User not found.');
+    if (current.siteAdmin) throw new BadRequestException('Site admins cannot be banned.');
+
+    const now = new Date();
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: {
+        bannedAt: now,
+        bannedReason: (reason ?? '').trim() || null,
+        bannedByAdminId: adminId,
+      },
+    });
+
+    // Revoke all active sessions immediately.
+    await this.auth.revokeAllSessionsForUser(updated.id);
+
+    // Best-effort: notify active clients first, then disconnect sockets.
+    try {
+      this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'account_banned');
+    } catch {
+      // Best-effort
+    }
+    try {
+      const presenceRealtime = this.moduleRef.get(PresenceRealtimeService, { strict: false });
+      presenceRealtime?.disconnectUserSockets(updated.id);
+    } catch {
+      // Best-effort
+    }
+
+    // Invalidate public profile cache (in case they were visible in search, etc).
+    try {
+      await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    } catch {
+      // Best-effort
+    }
+
+    return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+  }
+
+  @Post(':id/unban')
+  async unban(@Param('id') id: string) {
+    const existing = await this.prisma.user.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('User not found.');
+
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: {
+        bannedAt: null,
+        bannedReason: null,
+        bannedByAdminId: null,
+      },
+    });
+
+    try {
+      await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    } catch {
+      // Best-effort
+    }
+
+    // Realtime: refresh their own auth snapshot across devices if they are logged in again later.
+    try {
+      this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'admin_user_updated');
+      await this.usersPublicRealtime.emitPublicProfileUpdated(updated.id);
+    } catch {
+      // Best-effort
+    }
+
+    return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
   }
 
   @Get(':id')

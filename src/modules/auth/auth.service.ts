@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -13,6 +13,7 @@ import type { OtpProvider } from './otp/otp-provider';
 import { toUserDto } from '../users/user.dto';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { USER_DTO_SELECT } from '../../common/prisma-selects/user.select';
+import { dayIndexEastern, easternDayKey, easternDayKeyFromDayIndex } from '../../common/time/eastern-day-key';
 
 @Injectable()
 export class AuthService {
@@ -50,6 +51,11 @@ export class AuthService {
     const isProd = this.appConfig.isProd();
     const disableTwilioInDev = !isProd && this.appConfig.disableTwilioInDev();
     const hasTwilioVerify = Boolean(this.appConfig.twilioVerify());
+    const existing = await this.prisma.user.findUnique({
+      where: { phone },
+      select: { bannedAt: true },
+    });
+    const isBanned = Boolean(existing?.bannedAt);
 
     this.logger.log(
       `startPhoneAuth phone=${this.maskPhone(phone)} env=${this.appConfig.nodeEnv()} twilio=${
@@ -61,7 +67,8 @@ export class AuthService {
       throw new ServiceUnavailableException('SMS login is not configured yet. Please try again later.');
     }
 
-    if (!disableTwilioInDev && hasTwilioVerify) {
+    // Abuse-prevention: banned accounts should never trigger an OTP send.
+    if (!disableTwilioInDev && hasTwilioVerify && !isBanned) {
       try {
         await this.otpProvider.start(phone);
       } catch (err) {
@@ -69,7 +76,11 @@ export class AuthService {
         throw new ServiceUnavailableException('SMS login is not configured yet. Please try again later.');
       }
     } else {
-      this.logger.warn(`Skipping SMS send for phone=${this.maskPhone(phone)}`);
+      this.logger.warn(
+        `Skipping SMS send for phone=${this.maskPhone(phone)}${
+          isBanned ? ' reason=banned' : ''
+        }`,
+      );
     }
 
     // Store a row to enforce resend cooldown and represent "an active code exists".
@@ -105,6 +116,17 @@ export class AuthService {
     const hasTwilioVerify = Boolean(this.appConfig.twilioVerify());
 
     const isDevBypass = !isProd && code === '000000';
+
+    // Account state: reveal bans only after code submit (not during /start).
+    // Also: do this *before* OTP checks so banned accounts don't require a started OTP.
+    const existing = await this.prisma.user.findUnique({ where: { phone } });
+    const isNewUser = !existing;
+    if (existing?.bannedAt) {
+      throw new UnauthorizedException({
+        message: 'This account was banned. Contact an admin if you think it’s a mistake.',
+        error: 'account_banned',
+      });
+    }
 
     // In dev, allow bypass even if /auth/phone/start was never called.
     // (Still safe: production does not allow this path.)
@@ -143,9 +165,6 @@ export class AuthService {
       });
     }
 
-    const existing = await this.prisma.user.findUnique({ where: { phone } });
-    const isNewUser = !existing;
-
     const user = existing
       ? existing
       : await this.prisma.user.create({
@@ -181,6 +200,16 @@ export class AuthService {
     });
 
     if (!session) return null;
+
+    // Account state: banned users are logged out immediately and cannot use the app.
+    if (session.user.bannedAt) {
+      await this.revokeSessionToken(token);
+      throw new UnauthorizedException({
+        message: 'This account was banned. Contact an admin if you think it’s a mistake.',
+        error: 'account_banned',
+      });
+    }
+
     // Safety: only-me posts should never be pinnable/show on profiles.
     // If a user already pinned an only-me post (legacy bug), auto-unpin on read.
     if (session.user.pinnedPostId) {
@@ -193,7 +222,71 @@ export class AuthService {
         session.user.pinnedPostId = null;
       }
     }
+
+    // Self-heal: streak day key bugs can leave `checkinStreakDays` undercounted even though today's award happened.
+    // We only ever adjust upward, and never touch coins here.
+    try {
+      const todayKey = easternDayKey(now);
+      const currentStreak = Math.max(0, Math.floor((session.user as any).checkinStreakDays ?? 0));
+      const lastKey = String((session.user as any).lastCheckinDayKey ?? '').trim() || null;
+      // Only run on a suspicious "awarded today but streak=1" state.
+      if (lastKey === todayKey && currentStreak === 1) {
+        const since = new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000);
+        const rows = await this.prisma.post.findMany({
+          where: {
+            userId: session.user.id,
+            deletedAt: null,
+            visibility: { not: 'onlyMe' },
+            createdAt: { gte: since },
+          },
+          select: { createdAt: true },
+          orderBy: { createdAt: 'desc' },
+          take: 400,
+        });
+        const daySet = new Set<string>();
+        for (const r of rows) {
+          if (r?.createdAt) daySet.add(easternDayKey(r.createdAt));
+        }
+        const todayIndex = dayIndexEastern(now);
+        let streak = 0;
+        for (let i = 0; i < 120; i += 1) {
+          const key = easternDayKeyFromDayIndex(todayIndex - i);
+          if (!daySet.has(key)) break;
+          streak += 1;
+        }
+        if (streak > currentStreak) {
+          const nextLongest = Math.max(
+            Math.max(0, Math.floor((session.user as any).longestStreakDays ?? 0)),
+            streak,
+          );
+          await this.prisma.user.update({
+            where: { id: session.user.id },
+            data: { checkinStreakDays: streak, longestStreakDays: nextLongest },
+          });
+          (session.user as any).checkinStreakDays = streak;
+          (session.user as any).longestStreakDays = nextLongest;
+        }
+      }
+    } catch {
+      // Best-effort only; never block auth/me.
+    }
     return toUserDto(session.user, this.appConfig.r2()?.publicBaseUrl ?? null);
+  }
+
+  async revokeAllSessionsForUser(userId: string): Promise<void> {
+    const id = String(userId ?? '').trim();
+    if (!id) return;
+    const sessions = await this.prisma.session.findMany({
+      where: { userId: id },
+      select: { tokenHash: true },
+    });
+    // Drop cached session->user lookups immediately (best-effort).
+    for (const s of sessions) {
+      const th = String(s.tokenHash ?? '').trim();
+      if (!th) continue;
+      await this.cacheInvalidation.deleteSessionUser(th);
+    }
+    await this.prisma.session.deleteMany({ where: { userId: id } });
   }
 
   async logout(token: string | undefined, res: Response) {

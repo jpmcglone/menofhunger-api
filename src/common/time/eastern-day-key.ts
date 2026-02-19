@@ -27,8 +27,10 @@ export function dayIndexEastern(d: Date): number {
 }
 
 export function easternDayKeyFromDayIndex(dayIndex: number): string {
-  const utcMidnight = new Date(dayIndex * 86400000);
-  return easternDayKey(utcMidnight);
+  // Use UTC noon so the corresponding Eastern Time date is stable.
+  // (UTC midnight can fall on the previous ET calendar day.)
+  const utcNoon = new Date(dayIndex * 86400000 + 12 * 60 * 60 * 1000);
+  return easternDayKey(utcNoon);
 }
 
 export function yesterdayEasternDayKey(now: Date = new Date()): string {

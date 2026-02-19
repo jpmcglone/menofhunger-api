@@ -50,6 +50,12 @@ export class PollsService {
     if (!id) throw new NotFoundException('Post not found.');
     if (!optId) throw new BadRequestException('Invalid poll option.');
 
+    // Tier rule: poll voting is part of "participation" and requires verification.
+    const viewer = await this.viewerContext.getViewer(userId ?? null);
+    if (!viewer?.verifiedStatus || viewer.verifiedStatus === 'none') {
+      throw new ForbiddenException('Verify your account to vote on polls.');
+    }
+
     const post = await this.getPostForVoting({ viewerUserId: userId, postId: id });
     if (post.deletedAt) throw new BadRequestException('Deleted posts cannot be voted on.');
     if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be voted on.');

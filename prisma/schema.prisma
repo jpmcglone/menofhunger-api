@@ -166,6 +166,10 @@ model User {
   usernameIsSet Boolean @default(false)
   // Minimal admin flag (will be replaced by real roles later).
   siteAdmin Boolean @default(false)
+  // Account state: banned users cannot log in (sessions revoked) and should see a clear message.
+  bannedAt DateTime?
+  bannedReason String?
+  bannedByAdminId String?
   // Premium flag (paid product access; used for visibility gating).
   premium Boolean @default(false)
   // Premium+ (superset of premium; special supporters tier).

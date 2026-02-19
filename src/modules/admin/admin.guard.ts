@@ -12,7 +12,12 @@ export class AdminGuard implements CanActivate {
   async canActivate(context: ExecutionContext) {
     const req = context.switchToHttp().getRequest<AdminRequest>();
     const token = getSessionCookie(req);
-    const user = await this.auth.meFromSessionToken(token);
+    let user: Awaited<ReturnType<AuthService['meFromSessionToken']>> | null = null;
+    try {
+      user = await this.auth.meFromSessionToken(token);
+    } catch {
+      user = null;
+    }
 
     // Hide existence of admin routes from non-admins (and logged-out users).
     if (!user || !user.siteAdmin) throw new NotFoundException();

@@ -107,6 +107,9 @@ export type UserDto = {
   interests: string[];
   menOnlyConfirmed: boolean;
   siteAdmin: boolean;
+  bannedAt: string | null;
+  bannedReason: string | null;
+  bannedByAdminId: string | null;
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
@@ -168,6 +171,9 @@ export type UserDtoRow = {
   interests: string[];
   menOnlyConfirmed: boolean;
   siteAdmin: boolean;
+  bannedAt: Date | null;
+  bannedReason: string | null;
+  bannedByAdminId: string | null;
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
@@ -214,6 +220,9 @@ export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = 
     interests: user.interests ?? [],
     menOnlyConfirmed: Boolean(user.menOnlyConfirmed),
     siteAdmin: user.siteAdmin,
+    bannedAt: user.bannedAt ? user.bannedAt.toISOString() : null,
+    bannedReason: user.bannedReason ?? null,
+    bannedByAdminId: user.bannedByAdminId ?? null,
     premium: user.premium,
     premiumPlus: user.premiumPlus,
     isOrganization: Boolean(user.isOrganization),
