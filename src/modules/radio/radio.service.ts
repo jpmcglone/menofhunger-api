@@ -15,11 +15,13 @@ export class RadioService {
   /** socketId -> { userId, stationId } (last join from that socket) */
   private readonly stationBySocket = new Map<string, { userId: string; stationId: string }>();
   /** userId -> { stationId, socketId } (current deduped station for this user) */
-  private readonly currentByUser = new Map<string, { stationId: string; socketId: string; paused: boolean }>();
+  private readonly currentByUser = new Map<string, { stationId: string; socketId: string; paused: boolean; muted: boolean }>();
   /** stationId -> Set<userId> (deduped current listeners) */
   private readonly usersByStation = new Map<string, Set<string>>();
   /** stationId -> Set<userId> (subset of usersByStation: paused listeners) */
   private readonly pausedByStation = new Map<string, Set<string>>();
+  /** stationId -> Set<userId> (subset of usersByStation: muted listeners) */
+  private readonly mutedByStation = new Map<string, Set<string>>();
 
   isValidStationId(stationId: string): boolean {
     return RADIO_STATION_IDS.has((stationId ?? '').trim());
@@ -47,7 +49,7 @@ export class RadioService {
     this.stationBySocket.set(socketId, { userId, stationId });
 
     // Deduped user -> station mapping (last join wins).
-    this.currentByUser.set(userId, { stationId, socketId, paused: false });
+    this.currentByUser.set(userId, { stationId, socketId, paused: false, muted: false });
 
     // Remove from previous station set (if station changed).
     if (prev?.stationId && prev.stationId !== stationId) {
@@ -60,6 +62,11 @@ export class RadioService {
       if (pausedSet) {
         pausedSet.delete(userId);
         if (pausedSet.size === 0) this.pausedByStation.delete(prev.stationId);
+      }
+      const mutedSet = this.mutedByStation.get(prev.stationId);
+      if (mutedSet) {
+        mutedSet.delete(userId);
+        if (mutedSet.size === 0) this.mutedByStation.delete(prev.stationId);
       }
     }
 
@@ -76,6 +83,12 @@ export class RadioService {
     if (pausedSet) {
       pausedSet.delete(userId);
       if (pausedSet.size === 0) this.pausedByStation.delete(stationId);
+    }
+    // Ensure they are not marked muted on this station.
+    const mutedSet = this.mutedByStation.get(stationId);
+    if (mutedSet) {
+      mutedSet.delete(userId);
+      if (mutedSet.size === 0) this.mutedByStation.delete(stationId);
     }
 
     return { prevStationId: prev?.stationId ?? null, prevRoomStationId };
@@ -100,7 +113,12 @@ export class RadioService {
 
     const alreadyPaused = Boolean(current?.paused);
     if (!alreadyPaused) {
-      this.currentByUser.set(meta.userId, { stationId: meta.stationId, socketId, paused: true });
+      this.currentByUser.set(meta.userId, {
+        stationId: meta.stationId,
+        socketId,
+        paused: true,
+        muted: Boolean(current?.muted),
+      });
       let set = this.pausedByStation.get(meta.stationId);
       if (!set) {
         set = new Set<string>();
@@ -110,6 +128,54 @@ export class RadioService {
     }
 
     return { userId: meta.userId, stationId: meta.stationId, wasActive: true, changed: !alreadyPaused };
+  }
+
+  /**
+   * Mark a currently-selected user as muted/unmuted.
+   * Only applies if this socket is the current deduped socket for the user.
+   */
+  setMuted(
+    socketIdRaw: string,
+    mutedRaw: boolean,
+  ): { userId: string; stationId: string; wasActive: boolean; changed: boolean } | null {
+    const socketId = (socketIdRaw ?? '').trim();
+    if (!socketId) return null;
+    const meta = this.stationBySocket.get(socketId);
+    if (!meta) return null;
+
+    const current = this.currentByUser.get(meta.userId) ?? null;
+    const wasActive = Boolean(current?.socketId === socketId);
+    if (!wasActive) {
+      return { userId: meta.userId, stationId: meta.stationId, wasActive: false, changed: false };
+    }
+
+    const nextMuted = Boolean(mutedRaw);
+    const alreadyMuted = Boolean(current?.muted);
+    const changed = alreadyMuted !== nextMuted;
+    if (!changed) {
+      return { userId: meta.userId, stationId: meta.stationId, wasActive: true, changed: false };
+    }
+
+    this.currentByUser.set(meta.userId, {
+      stationId: meta.stationId,
+      socketId,
+      paused: Boolean(current?.paused),
+      muted: nextMuted,
+    });
+
+    let set = this.mutedByStation.get(meta.stationId);
+    if (nextMuted) {
+      if (!set) {
+        set = new Set<string>();
+        this.mutedByStation.set(meta.stationId, set);
+      }
+      set.add(meta.userId);
+    } else if (set) {
+      set.delete(meta.userId);
+      if (set.size === 0) this.mutedByStation.delete(meta.stationId);
+    }
+
+    return { userId: meta.userId, stationId: meta.stationId, wasActive: true, changed: true };
   }
 
   /**
@@ -169,6 +235,11 @@ export class RadioService {
       pausedSet.delete(meta.userId);
       if (pausedSet.size === 0) this.pausedByStation.delete(meta.stationId);
     }
+    const mutedSet = this.mutedByStation.get(meta.stationId);
+    if (mutedSet) {
+      mutedSet.delete(meta.userId);
+      if (mutedSet.size === 0) this.mutedByStation.delete(meta.stationId);
+    }
 
     return { userId: meta.userId, stationId: meta.stationId, wasActive: true };
   }
@@ -179,19 +250,33 @@ export class RadioService {
     return this.leave(socketId);
   }
 
-  getListenersForStation(stationIdRaw: string): { userIds: string[]; pausedUserIds: string[] } {
+  getListenersForStation(stationIdRaw: string): { userIds: string[]; pausedUserIds: string[]; mutedUserIds: string[] } {
     const stationId = (stationIdRaw ?? '').trim();
-    if (!stationId) return { userIds: [], pausedUserIds: [] };
+    if (!stationId) return { userIds: [], pausedUserIds: [], mutedUserIds: [] };
     const set = this.usersByStation.get(stationId);
-    if (!set) return { userIds: [], pausedUserIds: [] };
+    if (!set) return { userIds: [], pausedUserIds: [], mutedUserIds: [] };
     const pausedSet = this.pausedByStation.get(stationId) ?? new Set<string>();
+    const mutedSet = this.mutedByStation.get(stationId) ?? new Set<string>();
     const userIds = Array.from(set);
     const pausedUserIds = userIds.filter((id) => pausedSet.has(id));
-    return { userIds, pausedUserIds };
+    const mutedUserIds = userIds.filter((id) => mutedSet.has(id));
+    return { userIds, pausedUserIds, mutedUserIds };
   }
 
   getListenerUserIdsForStation(stationIdRaw: string): string[] {
     return this.getListenersForStation(stationIdRaw).userIds;
+  }
+
+  /**
+   * Counts of users currently in each station lobby (includes paused).
+   * Always includes all configured station IDs, even if the count is 0.
+   */
+  getLobbyCountsByStationId(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const stationId of RADIO_STATION_IDS) {
+      out[stationId] = this.usersByStation.get(stationId)?.size ?? 0;
+    }
+    return out;
   }
 }
 

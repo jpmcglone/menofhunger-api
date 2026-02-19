@@ -17,7 +17,7 @@ import { FollowsService } from '../follows/follows.service';
 import type { FollowListUser } from '../follows/follows.service';
 import { MessagesService } from '../messages/messages.service';
 import { RadioService } from '../radio/radio.service';
-import type { RadioListenerDto } from '../../common/dto';
+import type { RadioListenerDto, RadioLobbyCountsDto } from '../../common/dto';
 import { WsEventNames, type PostsSubscribePayloadDto } from '../../common/dto';
 import { parseSessionCookieFromHeader } from '../../common/session-cookie';
 import { PrismaService } from '../prisma/prisma.service';
@@ -169,13 +169,14 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const radioLeft = this.radio.onDisconnect(client.id);
     if (radioLeft?.wasActive) {
       void this.emitRadioListeners(radioLeft.stationId);
+      this.emitRadioLobbyCounts();
     }
   }
 
   private async emitRadioListeners(stationId: string): Promise<void> {
     const sid = (stationId ?? '').trim();
     if (!sid) return;
-    const { userIds, pausedUserIds } = this.radio.getListenersForStation(sid);
+    const { userIds, pausedUserIds, mutedUserIds } = this.radio.getListenersForStation(sid);
     const room = `radio:${sid}`;
 
     let listeners: RadioListenerDto[] = [];
@@ -184,6 +185,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         const users = await this.follows.getFollowListUsersByIds({ viewerUserId: null, userIds });
         const byId = new Map(users.map((u) => [u.id, u]));
         const pausedSet = new Set(pausedUserIds);
+        const mutedSet = new Set(mutedUserIds);
         listeners = [];
         for (const id of userIds) {
           const u = byId.get(id);
@@ -193,6 +195,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
             username: u.username,
             avatarUrl: u.avatarUrl ?? null,
             paused: pausedSet.has(u.id),
+            muted: mutedSet.has(u.id),
           });
         }
       } catch (err) {
@@ -202,6 +205,13 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
     // Emit to everyone in the station room (including the joiner).
     this.server.to(room).emit('radio:listeners', { stationId: sid, listeners });
+  }
+
+  private emitRadioLobbyCounts(): void {
+    const payload: RadioLobbyCountsDto = {
+      countsByStationId: this.radio.getLobbyCountsByStationId(),
+    };
+    this.server.to('radio:lobbies').emit('radio:lobbyCounts', payload);
   }
 
   @SubscribeMessage('radio:join')
@@ -232,6 +242,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       await this.emitRadioListeners(prevStationId);
     }
     await this.emitRadioListeners(stationId);
+    this.emitRadioLobbyCounts();
 
     // Notify other tabs/windows for this user so they stop their radio (one play per user).
     const otherSocketIds = this.presence.getSocketIdsForUser(userId).filter((id) => id !== client.id);
@@ -249,6 +260,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const paused = this.radio.pause(client.id);
     if (paused?.wasActive && paused.changed) {
       await this.emitRadioListeners(paused.stationId);
+      this.emitRadioLobbyCounts();
     }
   }
 
@@ -281,6 +293,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       await this.emitRadioListeners(left.stationId);
     }
     await this.emitRadioListeners(stationId);
+    this.emitRadioLobbyCounts();
   }
 
   @SubscribeMessage('radio:leave')
@@ -289,7 +302,35 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const left = this.radio.leave(client.id);
     this.radio.clearRoomForSocket(client.id);
     if (roomStationId) client.leave(`radio:${roomStationId}`);
-    if (left?.wasActive) await this.emitRadioListeners(left.stationId);
+    if (left?.wasActive) {
+      await this.emitRadioListeners(left.stationId);
+      this.emitRadioLobbyCounts();
+    }
+  }
+
+  @SubscribeMessage('radio:mute')
+  async handleRadioMute(client: Socket, payload: { muted?: boolean }): Promise<void> {
+    const muted = payload?.muted;
+    if (typeof muted !== 'boolean') return;
+    const res = this.radio.setMuted(client.id, muted);
+    if (res?.wasActive && res.changed) {
+      await this.emitRadioListeners(res.stationId);
+      this.emitRadioLobbyCounts();
+    }
+  }
+
+  @SubscribeMessage('radio:lobbies:subscribe')
+  handleRadioLobbiesSubscribe(client: Socket): void {
+    client.join('radio:lobbies');
+    const payload: RadioLobbyCountsDto = {
+      countsByStationId: this.radio.getLobbyCountsByStationId(),
+    };
+    client.emit('radio:lobbyCounts', payload);
+  }
+
+  @SubscribeMessage('radio:lobbies:unsubscribe')
+  handleRadioLobbiesUnsubscribe(client: Socket): void {
+    client.leave('radio:lobbies');
   }
 
   private cancelUserTimers(userId: string): void {
