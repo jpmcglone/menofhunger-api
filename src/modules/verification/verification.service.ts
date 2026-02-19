@@ -164,12 +164,27 @@ export class VerificationService {
         include: { user: { select: { id: true, verifiedStatus: true } } },
       });
       if (!existing) throw new NotFoundException('Verification request not found.');
-      if (existing.status !== 'pending') throw new BadRequestException('This verification request is not pending.');
-      if ((existing.user.verifiedStatus ?? 'none') !== 'none') {
-        throw new BadRequestException('User is already verified.');
+
+      const alreadyVerified = (existing.user.verifiedStatus ?? 'none') !== 'none';
+
+      if (existing.status !== 'pending') {
+        if (!alreadyVerified) throw new BadRequestException('This verification request is not pending.');
+        // Idempotent: user already verified; ensure manual and return current request.
+        await tx.user.update({
+          where: { id: existing.user.id },
+          data: { verifiedStatus: 'manual', verifiedAt: now, unverifiedAt: null },
+        });
+        return await tx.verificationRequest.findUniqueOrThrow({
+          where: { id },
+          include: {
+            user: { select: VERIFICATION_ADMIN_USER_SELECT },
+            reviewedByAdmin: { select: { id: true, username: true, name: true } },
+          },
+        });
       }
 
-      const updated = await tx.verificationRequest.update({
+      // Request is pending. If user already verified, accept idempotently (mark approved, set manual).
+      const updatedReq = await tx.verificationRequest.update({
         where: { id },
         data: {
           status: 'approved',
@@ -186,7 +201,7 @@ export class VerificationService {
       });
 
       await tx.user.update({
-        where: { id: updated.userId },
+        where: { id: updatedReq.userId },
         data: {
           verifiedStatus: 'manual',
           verifiedAt: now,
@@ -194,7 +209,7 @@ export class VerificationService {
         },
       });
 
-      return updated;
+      return updatedReq;
     });
     await this.publicProfileCache.invalidateForUser({
       id: updated.userId,

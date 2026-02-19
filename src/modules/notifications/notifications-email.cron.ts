@@ -658,6 +658,21 @@ export class NotificationsEmailCron {
             ]
           : [];
 
+        const postStreakDays = Math.max(0, Math.floor(u.checkinStreakDays ?? 0));
+        const postStreakTextLines =
+          postStreakDays > 0
+            ? [
+                'Post streak',
+                `Your post streak: ${postStreakDays} day${postStreakDays === 1 ? '' : 's'}`,
+                '',
+              ]
+            : [
+                'Post streak',
+                `No post streak yet — post today to start one.`,
+                `Post: ${checkinsUrl}`,
+                '',
+              ];
+
         const text = [
           greeting,
           '',
@@ -666,6 +681,7 @@ export class NotificationsEmailCron {
             : `Notifications: ${notificationsUrl}`,
           unreadChats > 0 ? `You have ${unreadChats} unread message${unreadChats === 1 ? '' : 's'} — ${messagesUrl}` : `Messages: ${messagesUrl}`,
           '',
+          ...postStreakTextLines,
           ...featuredTextLines,
           'Definition of the day',
           word ? word : '(unavailable)',
@@ -678,7 +694,6 @@ export class NotificationsEmailCron {
           '',
           'Daily check-in',
           checkinPrompt ? `“${checkinPrompt}”` : '(unavailable)',
-          `Your streak: ${Math.max(0, Math.floor(u.checkinStreakDays ?? 0))} day${Math.max(0, Math.floor(u.checkinStreakDays ?? 0)) === 1 ? '' : 's'}`,
           `Check in: ${checkinsUrl}`,
           '',
           `Manage notification settings: ${settingsUrl}`,
@@ -696,12 +711,25 @@ export class NotificationsEmailCron {
             )
           : renderCard(`<div>${renderPill('Quote of the day', 'info')}</div><div style="margin-top:10px;color:#6b7280;">(unavailable)</div>`);
 
-        const streakDays = Math.max(0, Math.floor(u.checkinStreakDays ?? 0));
+        const streakDays = postStreakDays;
+        const postStreakBlock = renderCard(
+          streakDays > 0
+            ? [
+                `<div style="margin-bottom:10px;">${renderPill('Post streak', 'warning')}</div>`,
+                `<div style="font-size:14px;line-height:1.8;color:#111827;">You’re on a <strong style="color:#111827;">${streakDays}</strong>-day post streak.</div>`,
+                `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">Post or reply today to keep it going.</div>`,
+              ].join('')
+            : [
+                `<div style="margin-bottom:10px;">${renderPill('Post streak', 'warning')}</div>`,
+                `<div style="font-size:14px;line-height:1.8;color:#111827;">No post streak yet.</div>`,
+                `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">Post today to start your streak.</div>`,
+                `<div style="margin-top:12px;">${renderButton({ href: checkinsUrl, label: 'Post' })}</div>`,
+              ].join(''),
+        );
         const checkinBlock = renderCard(
           [
             `<div style="margin-bottom:10px;">${renderPill('Daily check-in', 'warning')}</div>`,
             `<div style="font-size:14px;line-height:1.8;color:#111827;">${escapeHtml(checkinPrompt || '(unavailable)')}</div>`,
-            `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">Your streak: <strong style="color:#111827;">${streakDays}</strong> day${streakDays === 1 ? '' : 's'}</div>`,
             `<div style="margin-top:12px;">${renderButton({ href: checkinsUrl, label: 'Check in' })}</div>`,
           ].join(''),
         );
@@ -761,6 +789,7 @@ export class NotificationsEmailCron {
               variant: 'secondary',
             })}</div>`,
             `<div style="height:12px;"></div>`,
+            postStreakBlock,
             ...(featuredPost ? [featuredHtml] : []),
             definitionBlock,
             quoteBlock,

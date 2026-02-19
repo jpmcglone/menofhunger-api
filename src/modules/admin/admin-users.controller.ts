@@ -95,7 +95,7 @@ export class AdminUsersController {
 
     const users = await this.prisma.user.findMany({
       where,
-      orderBy: { id: 'desc' },
+      orderBy: [{ bannedAt: 'desc' }, { id: 'desc' }],
       take: take + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });

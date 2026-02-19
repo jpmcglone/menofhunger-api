@@ -23,6 +23,8 @@ export type PostAuthorDto = {
   stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
+  /** When true, author is banned; id/username/name/avatar are redacted. */
+  authorBanned?: boolean;
 };
 
 export type PostMediaDto = {
@@ -108,6 +110,8 @@ export type PostDto = {
     score?: number | null;
   };
   author: PostAuthorDto;
+  /** When true, post body/media/mentions/poll are redacted and author is placeholder. */
+  authorBanned?: boolean;
 };
 
 /** Mention row with user included (from Prisma include). */
@@ -135,6 +139,7 @@ export type PostAuthorRow = {
   verifiedStatus: VerifiedStatus;
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
+  bannedAt: Date | null;
 };
 
 /** Post with relations included for DTO mapping. Post has bookmarkCount, commentCount, parentId from schema. */
@@ -288,6 +293,46 @@ export function toPostDto(
   const pollDto = toPostPollDto(post.poll ?? null, publicAssetBaseUrl, {
     viewerVotedOptionId: opts?.viewerVotedPollOptionId ?? null,
   });
+
+  const authorBanned = Boolean((post.user as { bannedAt?: Date | null }).bannedAt);
+
+  if (authorBanned) {
+    return {
+      id: post.id,
+      createdAt: post.createdAt.toISOString(),
+      editedAt: post.editedAt ? post.editedAt.toISOString() : null,
+      editCount: 0,
+      body: '[Content from banned user]',
+      deletedAt: postDeletedAt,
+      kind: ((post as any).kind ?? 'regular') as any,
+      checkinDayKey: (post as any).checkinDayKey ? String((post as any).checkinDayKey) : null,
+      checkinPrompt: (post as any).checkinPrompt ? String((post as any).checkinPrompt) : null,
+      visibility: post.visibility,
+      isDraft: Boolean((post as any).isDraft),
+      topics: [],
+      hashtags: [],
+      boostCount: post.boostCount,
+      bookmarkCount: post.bookmarkCount ?? 0,
+      commentCount: post.commentCount ?? 0,
+      parentId: post.parentId ?? null,
+      mentions: [],
+      media: [],
+      poll: null,
+      author: {
+        id: '[banned]',
+        username: null,
+        name: 'User is banned',
+        premium: false,
+        premiumPlus: false,
+        isOrganization: false,
+        stewardBadgeEnabled: false,
+        verifiedStatus: 'none',
+        avatarUrl: null,
+        authorBanned: true,
+      },
+      authorBanned: true,
+    };
+  }
 
   return {
     id: post.id,

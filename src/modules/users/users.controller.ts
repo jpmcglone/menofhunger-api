@@ -290,9 +290,10 @@ export class UsersController {
             bannerUpdatedAt: Date | null;
             pinnedPostId: string | null;
             lastOnlineAt: Date | null;
+            bannedAt: Date | null;
           }>
         >`
-          SELECT "id", "createdAt", "username", "name", "bio", "website", "locationDisplay", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt"
+          SELECT "id", "createdAt", "username", "name", "bio", "website", "locationDisplay", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt", "bannedAt"
           FROM "User"
           WHERE (
             (${isUuidOrCuid} = true AND "id" = ${raw})
@@ -305,6 +306,10 @@ export class UsersController {
       )[0] ?? null;
 
     if (!user) throw new NotFoundException('User not found');
+
+    if (user.bannedAt) {
+      return { payload: { banned: true }, cache: 'miss' };
+    }
 
     // Safety: only-me posts should never be pinnable/show on profiles.
     // If a user already pinned an only-me post (legacy bug), auto-unpin on read.
@@ -449,6 +454,7 @@ export class UsersController {
     const rows = await this.prisma.user.findMany({
       where: {
         usernameIsSet: true,
+        bannedAt: null,
         id: { not: viewerUserId },
         // Exclude users the viewer already follows.
         followers: { none: { followerId: viewerUserId } },
@@ -649,6 +655,11 @@ export class UsersController {
       res.setHeader('x-moh-cache', `publicProfile=${profileResult.cache}`);
     }
 
+    if ((payload as { banned?: boolean }).banned === true) {
+      res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
+      return { data: { banned: true } };
+    }
+
     // lastOnlineAt is viewer-sensitive: only verified viewers can see it.
     // Anonymous reads can still be publicly cached since we always redact lastOnlineAt there.
     res.setHeader(
@@ -656,7 +667,7 @@ export class UsersController {
       viewerUserId ? 'private, max-age=60, stale-while-revalidate=120' : 'public, max-age=300, stale-while-revalidate=600',
     );
     if (viewerUserId) res.setHeader('Vary', 'Cookie');
-    return { data: { ...(payload as any), lastOnlineAt: canSeeLastOnline ? payload.lastOnlineAt : null } };
+    return { data: { ...(payload as any), lastOnlineAt: canSeeLastOnline ? (payload as any).lastOnlineAt : null } };
   }
 
   @UseGuards(AuthGuard)

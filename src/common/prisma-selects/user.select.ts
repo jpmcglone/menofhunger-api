@@ -16,6 +16,7 @@ export const USER_LIST_SELECT = {
   verifiedStatus: true,
   avatarKey: true,
   avatarUpdatedAt: true,
+  bannedAt: true,
 } as const;
 
 /**

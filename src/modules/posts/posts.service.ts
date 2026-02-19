@@ -54,6 +54,14 @@ export class PostsService {
     return { deletedAt: null };
   }
 
+  /**
+   * Exclude posts by banned users from feeds and listings.
+   * Banned users' posts may still appear in single-post/thread context but are redacted in toPostDto.
+   */
+  private userNotBannedWhere(): Prisma.PostWhereInput {
+    return { user: { bannedAt: null } };
+  }
+
   private static boostScoreTtlMs = 10 * 60 * 1000;
   /** 12h half-life so trending favors recent engagement. */
   private static popularHalfLifeSeconds = 12 * 60 * 60;
@@ -566,6 +574,7 @@ export class PostsService {
           AND: [
             visibilityWhere,
             this.notDeletedWhere(),
+            this.userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
             {
@@ -580,6 +589,7 @@ export class PostsService {
           AND: [
             visibilityWhere,
             this.notDeletedWhere(),
+            this.userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
           ],
@@ -685,6 +695,7 @@ export class PostsService {
     const rows = await this.prisma.postPopularScoreSnapshot.findMany({
       where: {
         asOf: snapshotAsOf,
+        user: { bannedAt: null },
         ...(kind ? ({ post: { is: { kind } } } as Prisma.PostPopularScoreSnapshotWhereInput) : {}),
         ...(authorUserIds?.length ? ({ userId: { in: authorUserIds } } as Prisma.PostPopularScoreSnapshotWhereInput) : {}),
         ...visibilityWhere,
@@ -797,6 +808,7 @@ export class PostsService {
     const rows = await this.prisma.postPopularScoreSnapshot.findMany({
       where: {
         asOf: snapshotAsOf,
+        user: { bannedAt: null },
         parentId: null,
         createdAt: { gte: minCreatedAt },
         // Featured on Explore: never show the viewer their own posts.
@@ -1204,6 +1216,7 @@ export class PostsService {
             ...(warmupAuthorFilter ? [warmupAuthorFilter] : []),
             ...(warmupKindFilter ? [warmupKindFilter] : []),
             this.notDeletedWhere(),
+            this.userNotBannedWhere(),
             { createdAt: { gte: minCreatedAt } },
             { boostCount: { gt: 0 } },
             { OR: [{ boostScoreUpdatedAt: null }, { boostScoreUpdatedAt: { lt: staleBefore } }] },
@@ -1239,6 +1252,8 @@ export class PostsService {
       viewerUserId && visibility === 'all'
         ? Prisma.sql`AND (p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)}) OR (p."userId" = ${viewerUserId} AND p."visibility" <> 'onlyMe'))`
         : Prisma.sql`AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})`;
+
+    const bannedAuthorSql = Prisma.sql`AND (SELECT u."bannedAt" FROM "User" u WHERE u."id" = p."userId") IS NULL`;
 
     const rows = await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date; score: number }>>(Prisma.sql`
       WITH
@@ -1278,6 +1293,7 @@ export class PostsService {
               ${visibilityFilterSql}
               ${authorFilterSql}
               ${kindFilterSql}
+              ${bannedAuthorSql}
             ORDER BY p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesRecentTake}
           )
@@ -1294,6 +1310,7 @@ export class PostsService {
               ${visibilityFilterSql}
               ${authorFilterSql}
               ${kindFilterSql}
+              ${bannedAuthorSql}
             ORDER BY p."boostCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesBoostedTake}
           )
@@ -1309,6 +1326,7 @@ export class PostsService {
               ${visibilityFilterSql}
               ${authorFilterSql}
               ${kindFilterSql}
+              ${bannedAuthorSql}
             ORDER BY p."bookmarkCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesBookmarkedTake}
           )
@@ -1324,6 +1342,7 @@ export class PostsService {
               ${visibilityFilterSql}
               ${authorFilterSql}
               ${kindFilterSql}
+              ${bannedAuthorSql}
             ORDER BY p."commentCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesCommentedTake}
           )
@@ -1340,6 +1359,7 @@ export class PostsService {
               ${visibilityFilterSql}
               ${authorFilterSql}
               ${kindFilterSql}
+              ${bannedAuthorSql}
             ORDER BY (p."boostCount" + p."bookmarkCount") DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesRepliesTake}
           )
@@ -1807,6 +1827,7 @@ export class PostsService {
             AND p."parentId" IS NULL
             AND p."createdAt" >= ${snapshotMinCreatedAt}
             AND p."userId" = ${user.id}
+            AND (u."bannedAt" IS NULL)
             AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})
         )
         SELECT "id", "createdAt", "score"
@@ -2072,7 +2093,7 @@ export class PostsService {
     }
 
     const users = await this.prisma.user.findMany({
-      where: { id: { in: Array.from(participantIds) }, usernameIsSet: true },
+      where: { id: { in: Array.from(participantIds) }, usernameIsSet: true, bannedAt: null },
       select: { id: true, username: true },
     });
     return {

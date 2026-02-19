@@ -293,6 +293,7 @@ export class FollowsService {
     const user = await this.prisma.user.findFirst({
       where: {
         usernameIsSet: true,
+        bannedAt: null,
         username: { equals: normalized, mode: 'insensitive' },
       },
       select: { id: true, username: true, followVisibility: true },
@@ -638,7 +639,10 @@ export class FollowsService {
 
     const rows = await this.prisma.follow.findMany({
       where: {
-        AND: [{ followingId: target.id, follower: { usernameIsSet: true } }, ...(cursorWhere ? [cursorWhere] : [])],
+        AND: [
+          { followingId: target.id, follower: { usernameIsSet: true, bannedAt: null } },
+          ...(cursorWhere ? [cursorWhere] : []),
+        ],
       },
       include: {
         follower: {
@@ -704,7 +708,10 @@ export class FollowsService {
 
     const rows = await this.prisma.follow.findMany({
       where: {
-        AND: [{ followerId: target.id, following: { usernameIsSet: true } }, ...(cursorWhere ? [cursorWhere] : [])],
+        AND: [
+          { followerId: target.id, following: { usernameIsSet: true, bannedAt: null } },
+          ...(cursorWhere ? [cursorWhere] : []),
+        ],
       },
       include: {
         following: {
