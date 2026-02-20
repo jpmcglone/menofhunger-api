@@ -31,6 +31,7 @@ import { ReportsModule } from '../reports/reports.module';
 import { Websters1828Module } from '../websters1828/websters1828.module';
 import { EmailModule } from '../email/email.module';
 import { RadioModule } from '../radio/radio.module';
+import { SpacesModule } from '../spaces/spaces.module';
 import { TopicsModule } from '../topics/topics.module';
 import { HashtagsModule } from '../hashtags/hashtags.module';
 import { MetricsModule } from '../metrics/metrics.module';
@@ -98,6 +99,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     Websters1828Module,
     EmailModule,
     RadioModule,
+    SpacesModule,
     TopicsModule,
     HashtagsModule,
     MetricsModule,

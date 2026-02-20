@@ -296,5 +296,15 @@ export const DAILY_QUOTES: DailyQuote[] = [
     isParaphrase: true,
     note: 'Original paraphrase for product voice.',
   },
+  {
+    id: 'quote-boethius-thinking-makes-it-so',
+    kind: 'quote',
+    author: 'Boethius',
+    reference: 'The Consolation of Philosophy, Book II, Prose IV',
+    text: 'So true is it that nothing is wretched, but thinking makes it so, and conversely every lot is happy if borne with equanimity.',
+    isParaphrase: false,
+    note: 'Often paraphrased as “Nothing is miserable unless you think it so …”.',
+    sourceUrl: 'https://monadnock.net/boethius/consolation2-p4.html',
+  },
 ];
 

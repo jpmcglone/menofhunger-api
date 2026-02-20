@@ -571,6 +571,10 @@ export class UsersController {
     if (!this.appConfig.isProd()) {
       res.setHeader('x-moh-cache', `publicProfile=${profileResult.cache}`);
     }
+    if ((profile as { banned?: boolean }).banned === true) {
+      res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
+      return { data: { banned: true } };
+    }
 
     let relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean; viewerPostNotificationsEnabled: boolean } =
       {

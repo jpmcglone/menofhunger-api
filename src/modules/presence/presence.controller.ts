@@ -65,12 +65,21 @@ export class PresenceController {
     const includeSelf =
       includeSelfRaw == null ? true : (includeSelfRaw === '1' || includeSelfRaw === 'true');
     let userIds = await this.presenceRedis.onlineUserIds();
-    if (viewerUserId && !includeSelf) {
-      userIds = userIds.filter((id) => id !== viewerUserId);
+    if (viewerUserId) {
+      if (!includeSelf) {
+        userIds = userIds.filter((id) => id !== viewerUserId);
+      } else if (!userIds.includes(viewerUserId)) {
+        // Race hardening: if the viewer just loaded the app, their websocket may not have
+        // registered in Redis yet. Treat the request itself as proof of current activity.
+        userIds = [viewerUserId, ...userIds];
+      }
     }
 
     // Sort by longest online first (earliest connect time first).
     const lastConnectAtById = await this.presenceRedis.lastConnectAtMsByUserId(userIds);
+    if (viewerUserId && includeSelf && !lastConnectAtById.has(viewerUserId)) {
+      lastConnectAtById.set(viewerUserId, Date.now());
+    }
     userIds = userIds
       .slice()
       .sort((a, b) => {
@@ -224,12 +233,21 @@ export class PresenceController {
 
     // ——— Online snapshot ———
     let onlineUserIds = await this.presenceRedis.onlineUserIds();
-    if (viewerUserId && !includeSelf) {
-      onlineUserIds = onlineUserIds.filter((id) => id !== viewerUserId);
+    if (viewerUserId) {
+      if (!includeSelf) {
+        onlineUserIds = onlineUserIds.filter((id) => id !== viewerUserId);
+      } else if (!onlineUserIds.includes(viewerUserId)) {
+        // Race hardening: keep /online consistent with right-rail count even if the
+        // viewer's websocket hasn't yet registered as online in Redis.
+        onlineUserIds = [viewerUserId, ...onlineUserIds];
+      }
     }
 
     // Sort by longest online first (earliest connect time first).
     const lastConnectAtById = await this.presenceRedis.lastConnectAtMsByUserId(onlineUserIds);
+    if (viewerUserId && includeSelf && !lastConnectAtById.has(viewerUserId)) {
+      lastConnectAtById.set(viewerUserId, Date.now());
+    }
     onlineUserIds = onlineUserIds
       .slice()
       .sort((a, b) => {

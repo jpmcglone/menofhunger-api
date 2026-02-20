@@ -16,8 +16,19 @@ import { AppConfigService } from '../app/app-config.service';
 import { FollowsService } from '../follows/follows.service';
 import type { FollowListUser } from '../follows/follows.service';
 import { MessagesService } from '../messages/messages.service';
+import { RadioChatService } from '../radio/radio-chat.service';
 import { RadioService } from '../radio/radio.service';
-import type { RadioListenerDto, RadioLobbyCountsDto } from '../../common/dto';
+import { SpacesChatService } from '../spaces/spaces-chat.service';
+import { SpacesPresenceService } from '../spaces/spaces-presence.service';
+import { SpacesService } from '../spaces/spaces.service';
+import type {
+  RadioChatSenderDto,
+  RadioListenerDto,
+  RadioLobbyCountsDto,
+  SpaceChatSenderDto,
+  SpaceListenerDto,
+  SpaceLobbyCountsDto,
+} from '../../common/dto';
 import { WsEventNames, type PostsSubscribePayloadDto } from '../../common/dto';
 import { parseSessionCookieFromHeader } from '../../common/session-cookie';
 import { PrismaService } from '../prisma/prisma.service';
@@ -30,6 +41,15 @@ type UserTimers = {
 const MAX_POST_SUBSCRIPTIONS_PER_SOCKET = 60;
 function postRoom(postId: string): string {
   return `post:${postId}`;
+}
+function radioChatRoom(stationId: string): string {
+  return `radioChat:${stationId}`;
+}
+function spaceRoom(spaceId: string): string {
+  return `space:${spaceId}`;
+}
+function spacesChatRoom(spaceId: string): string {
+  return `spacesChat:${spaceId}`;
 }
 
 @WebSocketGateway({
@@ -58,6 +78,10 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     private readonly follows: FollowsService,
     private readonly messages: MessagesService,
     private readonly radio: RadioService,
+    private readonly radioChat: RadioChatService,
+    private readonly spaces: SpacesService,
+    private readonly spacesPresence: SpacesPresenceService,
+    private readonly spacesChat: SpacesChatService,
     private readonly prisma: PrismaService,
   ) {
     this.logPresenceVerbose = !this.appConfig.isProd();
@@ -131,8 +155,22 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       verified: Boolean(user?.verifiedStatus && user.verifiedStatus !== 'none'),
       premium: Boolean(user?.premium),
       premiumPlus: Boolean((user as any)?.premiumPlus),
+      isOrganization: Boolean((user as any)?.isOrganization),
+      verifiedStatus: (user?.verifiedStatus ?? 'none') as 'none' | 'identity' | 'manual',
+      stewardBadgeEnabled: Boolean((user as any)?.stewardBadgeEnabled ?? true),
       siteAdmin: Boolean((user as any)?.siteAdmin),
     };
+    (client.data as any).radioChatUser = {
+      id: String(user?.id ?? '').trim(),
+      username: (user?.username ?? null) as string | null,
+      premium: Boolean(user?.premium),
+      premiumPlus: Boolean((user as any)?.premiumPlus),
+      isOrganization: Boolean((user as any)?.isOrganization),
+      verifiedStatus: (user?.verifiedStatus ?? 'none') as 'none' | 'identity' | 'manual',
+      stewardBadgeEnabled: Boolean((user as any)?.stewardBadgeEnabled ?? true),
+    } satisfies RadioChatSenderDto;
+    // Spaces chat sender is the same shape; keep both keys for a smooth transition.
+    (client.data as any).spaceChatUser = (client.data as any).radioChatUser satisfies SpaceChatSenderDto;
     (client.data as any).postSubs = new Set<string>();
     if (this.logPresenceVerbose) {
       this.logger.debug(`[presence] CONNECT socket=${client.id} userId=${user.id} isNewlyOnline=${isNewlyOnline}`);
@@ -170,6 +208,13 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     if (radioLeft?.wasActive) {
       void this.emitRadioListeners(radioLeft.stationId);
       this.emitRadioLobbyCounts();
+    }
+
+    // Spaces cleanup (best-effort).
+    const spaceLeft = this.spacesPresence.onDisconnect(client.id);
+    if (spaceLeft?.wasActive) {
+      void this.emitSpaceMembers(spaceLeft.spaceId);
+      this.emitSpacesLobbyCounts();
     }
   }
 
@@ -214,6 +259,279 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     this.server.to('radio:lobbies').emit('radio:lobbyCounts', payload);
   }
 
+  private async emitSpaceMembers(spaceId: string): Promise<void> {
+    const sid = (spaceId ?? '').trim();
+    if (!sid) return;
+    const { userIds, pausedUserIds, mutedUserIds } = this.spacesPresence.getMembersForSpace(sid);
+    const room = spaceRoom(sid);
+
+    let listeners: SpaceListenerDto[] = [];
+    if (userIds.length > 0) {
+      try {
+        const users = await this.follows.getFollowListUsersByIds({ viewerUserId: null, userIds });
+        const byId = new Map(users.map((u) => [u.id, u]));
+        const pausedSet = new Set(pausedUserIds);
+        const mutedSet = new Set(mutedUserIds);
+        listeners = [];
+        for (const id of userIds) {
+          const u = byId.get(id);
+          if (!u) continue;
+          listeners.push({
+            id: u.id,
+            username: u.username,
+            avatarUrl: u.avatarUrl ?? null,
+            paused: pausedSet.has(u.id),
+            muted: mutedSet.has(u.id),
+          });
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to fetch space members for space ${sid}: ${err}`);
+      }
+    }
+
+    this.server.to(room).emit('spaces:members', { spaceId: sid, members: listeners });
+  }
+
+  private emitSpacesLobbyCounts(): void {
+    const payload: SpaceLobbyCountsDto = {
+      countsBySpaceId: this.spacesPresence.getLobbyCountsBySpaceId(),
+    };
+    this.server.to('spaces:lobbies').emit('spaces:lobbyCounts', payload);
+  }
+
+  @SubscribeMessage('spaces:join')
+  async handleSpacesJoin(client: Socket, payload: { spaceId?: string }): Promise<void> {
+    const spaceId = String(payload?.spaceId ?? '').trim();
+    if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
+
+    const userId =
+      (client.data as { userId?: string })?.userId ??
+      this.presence.getUserIdForSocket(client.id) ??
+      null;
+    if (!userId) return;
+
+    const { prevSpaceId, prevRoomSpaceId } = this.spacesPresence.join({ socketId: client.id, userId, spaceId });
+    if (prevRoomSpaceId && prevRoomSpaceId !== spaceId) {
+      client.leave(spaceRoom(prevRoomSpaceId));
+    }
+    client.join(spaceRoom(spaceId));
+
+    // Keep legacy radio presence in sync while we transition (space may have no station).
+    const stationId = this.spaces.getStationIdBySpaceId(spaceId);
+    if (stationId && this.radio.isValidStationId(stationId)) {
+      const { prevStationId, prevRoomStationId } = this.radio.join({ socketId: client.id, userId, stationId });
+      if (prevRoomStationId && prevRoomStationId !== stationId) client.leave(`radio:${prevRoomStationId}`);
+      client.join(`radio:${stationId}`);
+      if (prevStationId && prevStationId !== stationId) await this.emitRadioListeners(prevStationId);
+      await this.emitRadioListeners(stationId);
+      this.emitRadioLobbyCounts();
+    }
+
+    if (prevSpaceId && prevSpaceId !== spaceId) {
+      await this.emitSpaceMembers(prevSpaceId);
+    }
+    await this.emitSpaceMembers(spaceId);
+    this.emitSpacesLobbyCounts();
+  }
+
+  @SubscribeMessage('spaces:leave')
+  async handleSpacesLeave(client: Socket): Promise<void> {
+    const roomSpaceId = this.spacesPresence.getRoomSpaceForSocket(client.id);
+    const left = this.spacesPresence.leave(client.id);
+    this.spacesPresence.clearRoomForSocket(client.id);
+    if (roomSpaceId) client.leave(spaceRoom(roomSpaceId));
+    if (left?.wasActive) {
+      await this.emitSpaceMembers(left.spaceId);
+      this.emitSpacesLobbyCounts();
+    }
+
+    // Best-effort legacy cleanup.
+    const radioRoomStationId = this.radio.getRoomStationForSocket(client.id);
+    const radioLeft = this.radio.leave(client.id);
+    this.radio.clearRoomForSocket(client.id);
+    if (radioRoomStationId) client.leave(`radio:${radioRoomStationId}`);
+    if (radioLeft?.wasActive) {
+      await this.emitRadioListeners(radioLeft.stationId);
+      this.emitRadioLobbyCounts();
+    }
+  }
+
+  @SubscribeMessage('spaces:pause')
+  async handleSpacesPause(client: Socket): Promise<void> {
+    const paused = this.spacesPresence.pause(client.id);
+    if (paused?.wasActive && paused.changed) {
+      await this.emitSpaceMembers(paused.spaceId);
+      this.emitSpacesLobbyCounts();
+    }
+  }
+
+  @SubscribeMessage('spaces:mute')
+  async handleSpacesMute(client: Socket, payload: { muted?: boolean }): Promise<void> {
+    const muted = payload?.muted;
+    if (typeof muted !== 'boolean') return;
+    const res = this.spacesPresence.setMuted(client.id, muted);
+    if (res?.wasActive && res.changed) {
+      await this.emitSpaceMembers(res.spaceId);
+      this.emitSpacesLobbyCounts();
+    }
+  }
+
+  @SubscribeMessage('spaces:lobbies:subscribe')
+  handleSpacesLobbiesSubscribe(client: Socket): void {
+    client.join('spaces:lobbies');
+    const payload: SpaceLobbyCountsDto = {
+      countsBySpaceId: this.spacesPresence.getLobbyCountsBySpaceId(),
+    };
+    client.emit('spaces:lobbyCounts', payload);
+  }
+
+  @SubscribeMessage('spaces:lobbies:unsubscribe')
+  handleSpacesLobbiesUnsubscribe(client: Socket): void {
+    client.leave('spaces:lobbies');
+  }
+
+  @SubscribeMessage('spaces:chatSubscribe')
+  handleSpacesChatSubscribe(client: Socket, payload: { spaceId?: string }): void {
+    const spaceId = String(payload?.spaceId ?? '').trim();
+    if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
+
+    const prev = String((client.data as any)?.spaceChatSpaceId ?? '').trim() || null;
+    if (prev && prev !== spaceId) {
+      client.leave(spacesChatRoom(prev));
+    }
+
+    (client.data as any).spaceChatSpaceId = spaceId;
+    client.join(spacesChatRoom(spaceId));
+    client.emit('spaces:chatSnapshot', this.spacesChat.snapshot(spaceId));
+
+    // System message (live-only): joining chat.
+    const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
+    const joinMsg = sender?.id
+      ? this.spacesChat.appendSystemMessage({
+          spaceId,
+          event: 'join',
+          userId: sender.id,
+          username: sender.username ?? null,
+        })
+      : null;
+    if (joinMsg) {
+      const room = spacesChatRoom(spaceId);
+      const out = { spaceId, message: joinMsg };
+      this.server.to(room).emit('spaces:chatMessage', out);
+      void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
+    }
+
+    // Legacy: if this space has a station, keep old room subscription too.
+    const stationId = this.spaces.getStationIdBySpaceId(spaceId);
+    if (stationId && this.radio.isValidStationId(stationId)) {
+      (client.data as any).radioChatStationId = stationId;
+      client.join(radioChatRoom(stationId));
+      // Snapshot for legacy clients (sent only if they subscribed via radio:*).
+    }
+  }
+
+  @SubscribeMessage('spaces:chatUnsubscribe')
+  handleSpacesChatUnsubscribe(client: Socket): void {
+    const prev = String((client.data as any)?.spaceChatSpaceId ?? '').trim() || null;
+    if (prev) {
+      // System message (live-only): leaving chat. Emit before removing socket so the leaver sees it.
+      const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
+      const leftMsg = sender?.id
+        ? this.spacesChat.appendSystemMessage({
+            spaceId: prev,
+            event: 'leave',
+            userId: sender.id,
+            username: sender.username ?? null,
+          })
+        : null;
+      if (leftMsg) {
+        const room = spacesChatRoom(prev);
+        const out = { spaceId: prev, message: leftMsg };
+        this.server.to(room).emit('spaces:chatMessage', out);
+        void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
+      }
+      client.leave(spacesChatRoom(prev));
+    }
+    (client.data as any).spaceChatSpaceId = null;
+  }
+
+  @SubscribeMessage('spaces:chatSend')
+  handleSpacesChatSend(client: Socket, payload: { spaceId?: string; body?: string }): void {
+    const spaceId = String(payload?.spaceId ?? '').trim();
+    const body = String(payload?.body ?? '');
+    if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
+
+    const subscribed = String((client.data as any)?.spaceChatSpaceId ?? '').trim();
+    if (!subscribed || subscribed !== spaceId) return;
+
+    const userId =
+      (client.data as { userId?: string })?.userId ??
+      this.presence.getUserIdForSocket(client.id) ??
+      null;
+    if (!userId) return;
+
+    if (!this.spacesChat.canSend(userId)) return;
+
+    const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
+    if (!sender?.id) return;
+
+    const msg = this.spacesChat.appendMessage({ spaceId, sender, body });
+    if (!msg) return;
+
+    const room = spacesChatRoom(spaceId);
+    const out = { spaceId, message: msg };
+    this.server.to(room).emit('spaces:chatMessage', out);
+    void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
+
+    // Back-compat emit to radio room when the space has a station attached.
+    const stationId = this.spaces.getStationIdBySpaceId(spaceId);
+    if (stationId && this.radio.isValidStationId(stationId)) {
+      const radioRoom = radioChatRoom(stationId);
+      const radioOut = {
+        stationId,
+        message: {
+          id: msg.id,
+          stationId,
+          body: msg.body,
+          createdAt: msg.createdAt,
+          sender: msg.sender,
+        },
+      };
+      this.server.to(radioRoom).emit('radio:chatMessage', radioOut);
+      void this.presenceRedis.publishEmitToRoom({ room: radioRoom, event: 'radio:chatMessage', payload: radioOut }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Realtime typing indicator for Spaces live chat.
+   * Client emits while typing; we fan-out to other sockets in the space chat room.
+   */
+  @SubscribeMessage('spaces:typing')
+  handleSpacesTyping(client: Socket, payload: { spaceId?: string; typing?: boolean }): void {
+    const spaceId = String(payload?.spaceId ?? '').trim();
+    if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
+
+    const subscribed = String((client.data as any)?.spaceChatSpaceId ?? '').trim();
+    if (!subscribed || subscribed !== spaceId) return;
+
+    const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
+    if (!sender?.id) return;
+
+    const typing = payload?.typing !== false;
+
+    // Throttle fanout: at most ~1 per 250ms per (user, space, typing-state).
+    const key = `spaces:${sender.id}:${spaceId}:${typing ? '1' : '0'}`;
+    const now = Date.now();
+    const last = this.typingThrottleByKey.get(key) ?? 0;
+    if (now - last < 250) return;
+    this.typingThrottleByKey.set(key, now);
+
+    const room = spacesChatRoom(spaceId);
+    const out = { spaceId, sender, typing };
+    client.to(room).emit('spaces:typing', out);
+    void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:typing', payload: out }).catch(() => undefined);
+  }
+
   @SubscribeMessage('radio:join')
   async handleRadioJoin(
     client: Socket,
@@ -244,6 +562,17 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     await this.emitRadioListeners(stationId);
     this.emitRadioLobbyCounts();
 
+    // Also join/update the corresponding Space (back-compat).
+    const spaceId = this.spaces.getSpaceIdByStationId(stationId);
+    if (spaceId && this.spacesPresence.isValidSpaceId(spaceId)) {
+      const { prevSpaceId, prevRoomSpaceId } = this.spacesPresence.join({ socketId: client.id, userId, spaceId });
+      if (prevRoomSpaceId && prevRoomSpaceId !== spaceId) client.leave(spaceRoom(prevRoomSpaceId));
+      client.join(spaceRoom(spaceId));
+      if (prevSpaceId && prevSpaceId !== spaceId) await this.emitSpaceMembers(prevSpaceId);
+      await this.emitSpaceMembers(spaceId);
+      this.emitSpacesLobbyCounts();
+    }
+
     // Notify other tabs/windows for this user so they stop their radio (one play per user).
     const otherSocketIds = this.presence.getSocketIdsForUser(userId).filter((id) => id !== client.id);
     for (const sid of otherSocketIds) {
@@ -261,6 +590,15 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     if (paused?.wasActive && paused.changed) {
       await this.emitRadioListeners(paused.stationId);
       this.emitRadioLobbyCounts();
+    }
+
+    const spaceId = paused?.stationId ? this.spaces.getSpaceIdByStationId(paused.stationId) : null;
+    if (spaceId) {
+      const sPaused = this.spacesPresence.pause(client.id);
+      if (sPaused?.wasActive && sPaused.changed) {
+        await this.emitSpaceMembers(spaceId);
+        this.emitSpacesLobbyCounts();
+      }
     }
   }
 
@@ -294,6 +632,20 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     }
     await this.emitRadioListeners(stationId);
     this.emitRadioLobbyCounts();
+
+    const spaceId = this.spaces.getSpaceIdByStationId(stationId);
+    if (spaceId && this.spacesPresence.isValidSpaceId(spaceId)) {
+      const { prevRoomSpaceId } = this.spacesPresence.watch({ socketId: client.id, spaceId });
+      if (prevRoomSpaceId && prevRoomSpaceId !== spaceId) client.leave(spaceRoom(prevRoomSpaceId));
+      client.join(spaceRoom(spaceId));
+
+      const leftSpace = this.spacesPresence.leave(client.id);
+      if (leftSpace?.wasActive) {
+        await this.emitSpaceMembers(leftSpace.spaceId);
+      }
+      await this.emitSpaceMembers(spaceId);
+      this.emitSpacesLobbyCounts();
+    }
   }
 
   @SubscribeMessage('radio:leave')
@@ -306,6 +658,15 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       await this.emitRadioListeners(left.stationId);
       this.emitRadioLobbyCounts();
     }
+
+    const spaceRoomId = this.spacesPresence.getRoomSpaceForSocket(client.id);
+    const leftSpace = this.spacesPresence.leave(client.id);
+    this.spacesPresence.clearRoomForSocket(client.id);
+    if (spaceRoomId) client.leave(spaceRoom(spaceRoomId));
+    if (leftSpace?.wasActive) {
+      await this.emitSpaceMembers(leftSpace.spaceId);
+      this.emitSpacesLobbyCounts();
+    }
   }
 
   @SubscribeMessage('radio:mute')
@@ -316,6 +677,15 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     if (res?.wasActive && res.changed) {
       await this.emitRadioListeners(res.stationId);
       this.emitRadioLobbyCounts();
+    }
+
+    const spaceId = res?.stationId ? this.spaces.getSpaceIdByStationId(res.stationId) : null;
+    if (spaceId) {
+      const sRes = this.spacesPresence.setMuted(client.id, Boolean(payload?.muted));
+      if (sRes?.wasActive && sRes.changed) {
+        await this.emitSpaceMembers(spaceId);
+        this.emitSpacesLobbyCounts();
+      }
     }
   }
 
@@ -331,6 +701,97 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   @SubscribeMessage('radio:lobbies:unsubscribe')
   handleRadioLobbiesUnsubscribe(client: Socket): void {
     client.leave('radio:lobbies');
+  }
+
+  @SubscribeMessage('radio:chatSubscribe')
+  handleRadioChatSubscribe(client: Socket, payload: { stationId?: string }): void {
+    const stationId = String(payload?.stationId ?? '').trim();
+    if (!this.radio.isValidStationId(stationId)) return;
+
+    const prev = String((client.data as any)?.radioChatStationId ?? '').trim() || null;
+    if (prev && prev !== stationId) {
+      client.leave(radioChatRoom(prev));
+    }
+
+    (client.data as any).radioChatStationId = stationId;
+    client.join(radioChatRoom(stationId));
+
+    // Canonical storage is space-scoped. Convert snapshot for legacy radio clients.
+    const spaceId = this.spaces.getSpaceIdByStationId(stationId);
+    if (!spaceId) {
+      client.emit('radio:chatSnapshot', this.radioChat.snapshot(stationId));
+      return;
+    }
+    const snap = this.spacesChat.snapshot(spaceId);
+    client.emit('radio:chatSnapshot', {
+      stationId,
+      messages: snap.messages.map((m) => ({
+        id: m.id,
+        stationId,
+        body: m.body,
+        createdAt: m.createdAt,
+        sender: m.sender,
+      })),
+    });
+  }
+
+  @SubscribeMessage('radio:chatUnsubscribe')
+  handleRadioChatUnsubscribe(client: Socket): void {
+    const prev = String((client.data as any)?.radioChatStationId ?? '').trim() || null;
+    if (!prev) return;
+    client.leave(radioChatRoom(prev));
+    (client.data as any).radioChatStationId = null;
+  }
+
+  @SubscribeMessage('radio:chatSend')
+  handleRadioChatSend(client: Socket, payload: { stationId?: string; body?: string }): void {
+    const stationId = String(payload?.stationId ?? '').trim();
+    const body = String(payload?.body ?? '');
+    if (!this.radio.isValidStationId(stationId)) return;
+
+    const subscribed = String((client.data as any)?.radioChatStationId ?? '').trim();
+    if (!subscribed || subscribed !== stationId) return;
+
+    const userId =
+      (client.data as { userId?: string })?.userId ??
+      this.presence.getUserIdForSocket(client.id) ??
+      null;
+    if (!userId) return;
+
+    const spaceId = this.spaces.getSpaceIdByStationId(stationId);
+    if (!spaceId) return;
+
+    // Rate limit for safety (avoid broadcast spam).
+    if (!this.spacesChat.canSend(userId)) return;
+
+    const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
+    if (!sender?.id) return;
+
+    const msg = this.spacesChat.appendMessage({ spaceId, sender, body });
+    if (!msg) return;
+
+    // Canonical emit (spaces).
+    const spacesRoom = spacesChatRoom(spaceId);
+    const spacesOut = { spaceId, message: msg };
+    this.server.to(spacesRoom).emit('spaces:chatMessage', spacesOut);
+    void this.presenceRedis
+      .publishEmitToRoom({ room: spacesRoom, event: 'spaces:chatMessage', payload: spacesOut })
+      .catch(() => undefined);
+
+    // Legacy emit (radio).
+    const room = radioChatRoom(stationId);
+    const out = {
+      stationId,
+      message: {
+        id: msg.id,
+        stationId,
+        body: msg.body,
+        createdAt: msg.createdAt,
+        sender: msg.sender,
+      },
+    };
+    this.server.to(room).emit('radio:chatMessage', out);
+    void this.presenceRedis.publishEmitToRoom({ room, event: 'radio:chatMessage', payload: out }).catch(() => undefined);
   }
 
   private cancelUserTimers(userId: string): void {

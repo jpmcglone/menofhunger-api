@@ -77,10 +77,10 @@ export class MessagesService {
     const conversation = await this.prisma.messageConversation.findFirst({
       where: {
         id: conversationId,
-        participants: { some: { userId } },
-        ...(blockedUserIds.size > 0
-          ? { participants: { none: { userId: { in: [...blockedUserIds] } } } }
-          : {}),
+        participants: {
+          some: { userId },
+          ...(blockedUserIds.size > 0 ? { none: { userId: { in: [...blockedUserIds] } } } : {}),
+        },
       },
       include: {
         participants: {
@@ -240,10 +240,8 @@ export class MessagesService {
             userId,
             status: tab === 'primary' ? 'accepted' : 'pending',
           },
+          ...(blockedUserIds.size > 0 ? { none: { userId: { in: [...blockedUserIds] } } } : {}),
         },
-        ...(blockedUserIds.size > 0
-          ? { participants: { none: { userId: { in: [...blockedUserIds] } } } }
-          : {}),
       },
       include: {
         participants: {
@@ -282,15 +280,30 @@ export class MessagesService {
         : null;
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const perConversation = slice.map((conversation) => {
-      const viewerParticipant = conversation.participants.find((p) => p.userId === userId);
-      return { conversationId: conversation.id, lastReadAt: viewerParticipant?.lastReadAt ?? null };
-    });
+    const perConversation = slice
+      .map((conversation) => {
+        const viewerParticipant = conversation.participants.find((p) => p.userId === userId);
+        if (!viewerParticipant) {
+          this.logger.warn(
+            `listConversations: missing viewer participant (userId=${userId} conversationId=${conversation.id})`,
+          );
+          return null;
+        }
+        return { conversationId: conversation.id, lastReadAt: viewerParticipant.lastReadAt ?? null };
+      })
+      .filter((v): v is { conversationId: string; lastReadAt: Date | null } => Boolean(v));
     const unreadCountByConversationId = await this.getUnreadCountByConversationId({ userId, perConversation });
 
-    const items: MessageConversationDto[] = slice.map((conversation) => {
+    const items = slice
+      .map((conversation): MessageConversationDto | null => {
       const viewerParticipant = conversation.participants.find((p) => p.userId === userId);
-      if (!viewerParticipant) throw new NotFoundException('Conversation not found.');
+      if (!viewerParticipant) {
+        // Shouldn't happen due to query filter, but avoid taking down the whole list if data is inconsistent.
+        this.logger.warn(
+          `listConversations: skipping conversation without viewer participant (userId=${userId} conversationId=${conversation.id})`,
+        );
+        return null;
+      }
       const unreadCount = unreadCountByConversationId.get(conversation.id) ?? 0;
 
       return {
@@ -321,7 +334,8 @@ export class MessagesService {
         viewerStatus: viewerParticipant.status,
         unreadCount,
       };
-    });
+    })
+    .filter((v): v is MessageConversationDto => Boolean(v));
 
     return { conversations: items, nextCursor };
   }

@@ -1,0 +1,9 @@
+[
+  {"id":"deep-work","name":"The Study","stationId":"dronezone"},
+  {"id":"flow-state","name":"The Hearth","stationId":"groovesalad"},
+  {"id":"mission-briefing","name":"The Map Room","stationId":"missioncontrol"},
+  {"id":"late-night-lounge","name":"The Lounge","stationId":"illstreet"},
+  {"id":"open-waters","name":"The Spring","stationId":"fluid"},
+  {"id":"soft-focus","name":"The Garden","stationId":"lush"},
+  {"id":"sacred-quiet","name":"The Chapel","stationId":"ancientfaith"}
+]

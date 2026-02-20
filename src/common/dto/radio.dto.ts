@@ -22,3 +22,26 @@ export type RadioLobbyCountsDto = {
   countsByStationId: Record<string, number>;
 };
 
+export type RadioChatSenderDto = {
+  id: string;
+  username: string | null;
+  premium: boolean;
+  premiumPlus: boolean;
+  isOrganization: boolean;
+  verifiedStatus: 'none' | 'identity' | 'manual';
+  stewardBadgeEnabled: boolean;
+};
+
+export type RadioChatMessageDto = {
+  id: string;
+  stationId: string;
+  body: string;
+  createdAt: string; // ISO
+  sender: RadioChatSenderDto;
+};
+
+export type RadioChatSnapshotDto = {
+  stationId: string;
+  messages: RadioChatMessageDto[];
+};
+

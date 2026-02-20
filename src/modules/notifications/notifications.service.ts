@@ -620,6 +620,7 @@ export class NotificationsService {
             premium: true,
             isOrganization: true,
             verifiedStatus: true,
+            bannedAt: true,
           },
         },
       },
@@ -1270,7 +1271,7 @@ export class NotificationsService {
     subjectTier: SubjectTier = null,
   ): NotificationDto {
     let actor: NotificationActorDto | null = null;
-    if (n.actor) {
+    if (n.actor && !(n.actor as { bannedAt?: Date | null }).bannedAt) {
       actor = {
         id: n.actor.id,
         username: n.actor.username,
@@ -1326,6 +1327,7 @@ export class NotificationsService {
             premium: true,
             isOrganization: true,
             verifiedStatus: true,
+            bannedAt: true,
           },
         },
       },
