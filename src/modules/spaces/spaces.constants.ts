@@ -7,15 +7,15 @@ export type SpaceConfig = {
   stationId: string | null;
 };
 
-/** Retreat/lodge place names (Men of Hunger is the lodge; these are places within it). */
+/** Retreat/lodge place names (Men of Hunger is the lodge; these are places within it). IDs are URL slugs matching the space names. */
 const FALLBACK_SPACES: SpaceConfig[] = [
-  { id: 'deep-work', name: 'The Study', stationId: 'dronezone' },
-  { id: 'flow-state', name: 'The Hearth', stationId: 'groovesalad' },
-  { id: 'mission-briefing', name: 'The Map Room', stationId: 'missioncontrol' },
-  { id: 'late-night-lounge', name: 'The Lounge', stationId: 'illstreet' },
-  { id: 'open-waters', name: 'The Spring', stationId: 'fluid' },
-  { id: 'soft-focus', name: 'The Garden', stationId: 'lush' },
-  { id: 'sacred-quiet', name: 'The Chapel', stationId: 'ancientfaith' },
+  { id: 'the-study', name: 'The Study', stationId: 'dronezone' },
+  { id: 'the-hearth', name: 'The Hearth', stationId: 'groovesalad' },
+  { id: 'the-map-room', name: 'The Map Room', stationId: 'missioncontrol' },
+  { id: 'the-lounge', name: 'The Lounge', stationId: 'illstreet' },
+  { id: 'the-spring', name: 'The Spring', stationId: 'fluid' },
+  { id: 'the-garden', name: 'The Garden', stationId: 'lush' },
+  { id: 'the-chapel', name: 'The Chapel', stationId: 'ancientfaith' },
 ];
 
 function safeString(v: unknown): string | null {
