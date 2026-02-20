@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Interval } from '@nestjs/schedule';
 import type { RadioChatMessageDto, RadioChatSenderDto, RadioChatSnapshotDto } from '../../common/dto';
 
 type StationState = {
@@ -64,6 +65,11 @@ export class RadioChatService {
     }
   }
 
+  @Interval(60_000)
+  pruneInterval(): void {
+    this.maybePrune();
+  }
+
   canSend(userIdRaw: string): boolean {
     const userId = String(userIdRaw ?? '').trim();
     if (!userId) return false;
@@ -107,6 +113,7 @@ export class RadioChatService {
   appendMessage(params: { stationId: string; sender: RadioChatSenderDto; body: string }): RadioChatMessageDto | null {
     const stationId = String(params.stationId ?? '').trim();
     if (!stationId) return null;
+    this.maybePrune();
     const body = normalizeBody(params.body);
     if (!body) return null;
     const clipped = body.length > this.maxBodyChars ? body.slice(0, this.maxBodyChars) : body;

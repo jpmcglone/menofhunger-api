@@ -26,7 +26,19 @@ function isStripeWebhookPath(req: Request): boolean {
   return path === '/billing/webhook' || path.startsWith('/billing/webhook?');
 }
 
+function installProcessStabilityHandlers(): void {
+  const g = globalThis as any;
+  if (g.__mohProcessHandlersInstalled) return;
+  g.__mohProcessHandlersInstalled = true;
+
+  const logger = new Logger('Process');
+  process.on('unhandledRejection', (reason) => {
+    logger.error(`Unhandled promise rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`);
+  });
+}
+
 async function bootstrap() {
+  installProcessStabilityHandlers();
   const logger = new Logger('HTTP');
   const startup = new Logger('Startup');
   const nodeEnv = (process.env.NODE_ENV ?? 'development').trim().toLowerCase();

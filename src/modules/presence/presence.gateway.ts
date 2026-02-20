@@ -65,6 +65,10 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   private readonly logPresenceVerbose: boolean;
   private readonly userTimers = new Map<string, UserTimers>();
   private readonly typingThrottleByKey = new Map<string, number>();
+  private typingThrottleLastPruneAtMs = 0;
+  private readonly typingThrottlePruneEveryMs = 10_000;
+  private readonly typingThrottleEntryTtlMs = 1000 * 60 * 2;
+  private readonly userPresenceNonce = new Map<string, number>();
 
   @WebSocketServer()
   server!: Server;
@@ -113,6 +117,27 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     });
   }
 
+  private maybePruneTypingThrottle(nowMs: number): void {
+    if (nowMs - this.typingThrottleLastPruneAtMs < this.typingThrottlePruneEveryMs) return;
+    this.typingThrottleLastPruneAtMs = nowMs;
+    const minMs = nowMs - this.typingThrottleEntryTtlMs;
+    for (const [k, lastAt] of this.typingThrottleByKey.entries()) {
+      if (lastAt < minMs) this.typingThrottleByKey.delete(k);
+    }
+  }
+
+  private clearTypingThrottleForUser(userIdRaw: string): void {
+    const userId = String(userIdRaw ?? '').trim();
+    if (!userId) return;
+    const spacesPrefix = `spaces:${userId}:`;
+    const msgPrefix = `${userId}:`;
+    for (const k of this.typingThrottleByKey.keys()) {
+      if (k.startsWith(spacesPrefix) || k.startsWith(msgPrefix)) {
+        this.typingThrottleByKey.delete(k);
+      }
+    }
+  }
+
   async handleConnection(client: Socket): Promise<void> {
     const cookieHeader = client.handshake.headers.cookie as string | undefined;
     const token = parseSessionCookieFromHeader(cookieHeader);
@@ -131,6 +156,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     }
 
     this.cancelUserTimers(user.id);
+    this.userPresenceNonce.set(String(user.id), (this.userPresenceNonce.get(String(user.id)) ?? 0) + 1);
 
     const clientType =
       (Array.isArray(client.handshake.query.client)
@@ -185,36 +211,66 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   handleDisconnect(client: Socket): void {
-    const result = this.presence.unregister(client.id);
-    if (this.logPresenceVerbose) {
-      this.logger.debug(
-        `[presence] DISCONNECT socket=${client.id} userId=${result?.userId ?? '?'} isNowOffline=${result?.isNowOffline ?? false}`,
+    const socketId = client.id;
+    let result: { userId?: string | null; isNowOffline?: boolean } | null = null;
+    try {
+      result = this.presence.unregister(socketId) as any;
+    } catch (err) {
+      this.logger.warn(
+        `[presence] disconnect unregister failed socket=${socketId}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    if (result?.userId) {
+
+    if (this.logPresenceVerbose) {
+      this.logger.debug(
+        `[presence] DISCONNECT socket=${socketId} userId=${result?.userId ?? '?'} isNowOffline=${result?.isNowOffline ?? false}`,
+      );
+    }
+
+    const userId = String(result?.userId ?? '').trim();
+    if (userId) {
+      const nonceAtDisconnect = this.userPresenceNonce.get(userId) ?? 0;
+      this.clearTypingThrottleForUser(userId);
       void this.presenceRedis
-        .unregisterSocket({ socketId: client.id, userId: result.userId })
+        .unregisterSocket({ socketId, userId })
         .then((r) => {
-          if (r.isNowOffline) {
-            this.cancelUserTimers(result.userId);
-            this.emitOffline(result.userId);
+          if (!r?.isNowOffline) return;
+          const currentNonce = this.userPresenceNonce.get(userId) ?? 0;
+          if (currentNonce !== nonceAtDisconnect && this.presence.isUserOnline(userId)) return;
+          try {
+            this.cancelUserTimers(userId);
+            this.emitOffline(userId);
+          } catch {
+            // best-effort
           }
         })
         .catch(() => undefined);
     }
 
     // Radio cleanup (best-effort).
-    const radioLeft = this.radio.onDisconnect(client.id);
-    if (radioLeft?.wasActive) {
-      void this.emitRadioListeners(radioLeft.stationId);
-      this.emitRadioLobbyCounts();
+    try {
+      const radioLeft = this.radio.onDisconnect(socketId);
+      if (radioLeft?.wasActive) {
+        void this.emitRadioListeners(radioLeft.stationId);
+        this.emitRadioLobbyCounts();
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[presence] disconnect radio cleanup failed socket=${socketId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     // Spaces cleanup (best-effort).
-    const spaceLeft = this.spacesPresence.onDisconnect(client.id);
-    if (spaceLeft?.wasActive) {
-      void this.emitSpaceMembers(spaceLeft.spaceId);
-      this.emitSpacesLobbyCounts();
+    try {
+      const spaceLeft = this.spacesPresence.onDisconnect(socketId);
+      if (spaceLeft?.wasActive) {
+        void this.emitSpaceMembers(spaceLeft.spaceId);
+        this.emitSpacesLobbyCounts();
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[presence] disconnect spaces cleanup failed socket=${socketId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -522,6 +578,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     // Throttle fanout: at most ~1 per 250ms per (user, space, typing-state).
     const key = `spaces:${sender.id}:${spaceId}:${typing ? '1' : '0'}`;
     const now = Date.now();
+    this.maybePruneTypingThrottle(now);
     const last = this.typingThrottleByKey.get(key) ?? 0;
     if (now - last < 250) return;
     this.typingThrottleByKey.set(key, now);
@@ -1096,6 +1153,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     // Throttle DB fanout: at most ~1 per 700ms per (user, conversation).
     const key = `${userId}:${conversationId}:${typing ? '1' : '0'}`;
     const now = Date.now();
+    this.maybePruneTypingThrottle(now);
     const last = this.typingThrottleByKey.get(key) ?? 0;
     if (now - last < 700) return;
     this.typingThrottleByKey.set(key, now);

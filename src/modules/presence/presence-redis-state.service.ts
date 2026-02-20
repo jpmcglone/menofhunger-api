@@ -138,23 +138,53 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
     const userSocketsKey = RedisKeys.presenceUserSockets(userId);
     const member = this.memberForSocket(socketId);
 
-    await Promise.allSettled([
-      this.redis.raw().srem(userSocketsKey, member),
-      this.redis.del(socketKey),
-    ]);
+    // Atomic unregister: prevent races where a reconnect happens between SCARD and ZREM.
+    const unregisterLua = `
+      redis.call("srem", KEYS[1], ARGV[1])
+      redis.call("del", KEYS[2])
+      local remaining = redis.call("scard", KEYS[1]) or 0
+      if remaining <= 0 then
+        redis.call("zrem", KEYS[3], ARGV[2])
+        redis.call("srem", KEYS[4], ARGV[2])
+        return 1
+      end
+      return 0
+    `;
 
-    let remaining = 0;
+    let isNowOffline = false;
     try {
-      remaining = await this.redis.raw().scard(userSocketsKey);
+      const res = await this.redis
+        .raw()
+        .eval(
+          unregisterLua,
+          4,
+          userSocketsKey,
+          socketKey,
+          RedisKeys.presenceOnlineZset(),
+          RedisKeys.presenceIdleSet(),
+          member,
+          userId,
+        );
+      isNowOffline = Number(res) === 1;
     } catch {
-      remaining = 0;
+      // Best-effort fallback (non-atomic).
+      await Promise.allSettled([this.redis.raw().srem(userSocketsKey, member), this.redis.del(socketKey)]);
+      let remaining = 0;
+      try {
+        remaining = await this.redis.raw().scard(userSocketsKey);
+      } catch {
+        remaining = 0;
+      }
+      isNowOffline = remaining <= 0;
+      if (isNowOffline) {
+        await Promise.allSettled([
+          this.redis.raw().zrem(RedisKeys.presenceOnlineZset(), userId),
+          this.redis.raw().srem(RedisKeys.presenceIdleSet(), userId),
+        ]);
+      }
     }
-    const isNowOffline = remaining <= 0;
+
     if (isNowOffline) {
-      await Promise.allSettled([
-        this.redis.raw().zrem(RedisKeys.presenceOnlineZset(), userId),
-        this.redis.raw().srem(RedisKeys.presenceIdleSet(), userId),
-      ]);
       await this.publish({ type: 'offline', userId, instanceId: this.instanceId });
     }
     return { isNowOffline };

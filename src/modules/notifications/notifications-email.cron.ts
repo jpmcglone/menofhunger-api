@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -111,6 +112,88 @@ export class NotificationsEmailCron {
     private readonly messages: MessagesService,
   ) {}
 
+  private async listRecentNotificationItemsByRecipientIds(
+    recipientIdsRaw: string[],
+  ): Promise<Map<string, Array<{ title: string | null; body: string | null; subjectPostId: string | null }>>> {
+    const ids = Array.from(new Set((recipientIdsRaw ?? []).map((x) => String(x ?? '').trim()).filter(Boolean)));
+    if (ids.length === 0) return new Map();
+
+    const values = ids.map((id) => Prisma.sql`(${id})`);
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        recipientUserId: string;
+        title: string | null;
+        body: string | null;
+        subjectPostId: string | null;
+      }>
+    >(Prisma.sql`
+      WITH u("userId") AS (VALUES ${Prisma.join(values)}),
+      ranked AS (
+        SELECT
+          n."recipientUserId" as "recipientUserId",
+          n."title" as "title",
+          n."body" as "body",
+          n."subjectPostId" as "subjectPostId",
+          ROW_NUMBER() OVER (
+            PARTITION BY n."recipientUserId"
+            ORDER BY n."createdAt" DESC, n."id" DESC
+          ) as rn
+        FROM "Notification" n
+        INNER JOIN u ON u."userId" = n."recipientUserId"
+      )
+      SELECT "recipientUserId", "title", "body", "subjectPostId"
+      FROM ranked
+      WHERE rn <= 3
+      ORDER BY "recipientUserId" ASC, rn ASC
+    `);
+
+    const out = new Map<string, Array<{ title: string | null; body: string | null; subjectPostId: string | null }>>();
+    for (const r of rows) {
+      const uid = String(r?.recipientUserId ?? '').trim();
+      if (!uid) continue;
+      const list = out.get(uid) ?? [];
+      list.push({
+        title: r?.title ?? null,
+        body: r?.body ?? null,
+        subjectPostId: r?.subjectPostId ?? null,
+      });
+      out.set(uid, list);
+    }
+    return out;
+  }
+
+  private async getUnreadChatTotalsByUserIds(userIdsRaw: string[]): Promise<Map<string, number>> {
+    const ids = Array.from(new Set((userIdsRaw ?? []).map((x) => String(x ?? '').trim()).filter(Boolean)));
+    if (ids.length === 0) return new Map();
+
+    const values = ids.map((id) => Prisma.sql`(${id})`);
+    const rows = await this.prisma.$queryRaw<
+      Array<{ userId: string; status: string; count: number }>
+    >(Prisma.sql`
+      WITH u("userId") AS (VALUES ${Prisma.join(values)})
+      SELECT
+        mp."userId" as "userId",
+        mp."status" as "status",
+        CAST(COUNT(m."id") AS INT) as "count"
+      FROM "MessageParticipant" mp
+      INNER JOIN u ON u."userId" = mp."userId"
+      LEFT JOIN "Message" m
+        ON m."conversationId" = mp."conversationId"
+        AND m."senderId" <> mp."userId"
+        AND (mp."lastReadAt" IS NULL OR m."createdAt" > mp."lastReadAt")
+      GROUP BY mp."userId", mp."status"
+    `);
+
+    const out = new Map<string, number>();
+    for (const r of rows) {
+      const uid = String(r?.userId ?? '').trim();
+      if (!uid) continue;
+      const n = Math.max(0, Math.floor(r?.count ?? 0));
+      out.set(uid, (out.get(uid) ?? 0) + n);
+    }
+    return out;
+  }
+
   /** Every 15 minutes: if you have undelivered notifications, send a lightweight nudge email (if enabled). */
   @Cron('*/15 * * * *')
   async sendNewNotificationsNudges(): Promise<void> {
@@ -132,137 +215,140 @@ export class NotificationsEmailCron {
     const emailCfg = this.appConfig.email();
     if (!emailCfg) return;
 
-    const now = new Date();
-    const cutoff = new Date(now.getTime() - 12 * 60 * 60 * 1000);
-    const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
-    const notificationsUrl = `${baseUrl}/notifications`;
+    try {
+      const now = new Date();
+      const cutoff = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+      const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
+      const notificationsUrl = `${baseUrl}/notifications`;
 
-    // Important: users may not have a NotificationPreferences row yet.
-    // Treat "no row" as defaults-on, and upsert the timestamp after sending.
-    const recipients = await this.prisma.user.findMany({
-      where: {
-        email: { not: null },
-        emailVerifiedAt: { not: null },
-        undeliveredNotificationCount: { gt: 0 },
-        OR: [
-          // No preferences row yet → defaults apply → eligible.
-          { notificationPreferences: { is: null } },
-          // Preferences row exists → only if nudges enabled and not recently sent.
-          {
-            notificationPreferences: {
-              is: {
-                emailNewNotifications: true,
-                OR: [{ lastEmailNewNotificationsSentAt: null }, { lastEmailNewNotificationsSentAt: { lt: cutoff } }],
+      // Important: users may not have a NotificationPreferences row yet.
+      // Treat "no row" as defaults-on, and upsert the timestamp after sending.
+      const recipients = await this.prisma.user.findMany({
+        where: {
+          email: { not: null },
+          emailVerifiedAt: { not: null },
+          undeliveredNotificationCount: { gt: 0 },
+          OR: [
+            // No preferences row yet → defaults apply → eligible.
+            { notificationPreferences: { is: null } },
+            // Preferences row exists → only if nudges enabled and not recently sent.
+            {
+              notificationPreferences: {
+                is: {
+                  emailNewNotifications: true,
+                  OR: [{ lastEmailNewNotificationsSentAt: null }, { lastEmailNewNotificationsSentAt: { lt: cutoff } }],
+                },
               },
             },
-          },
-        ],
-      },
-      orderBy: [{ id: 'asc' }],
-      take: 500,
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        name: true,
-        undeliveredNotificationCount: true,
-      },
-    });
-
-    for (const u of recipients) {
-      const to = (u.email ?? '').trim();
-      if (!to) continue;
-
-      const undelivered = Math.max(0, Math.floor(u.undeliveredNotificationCount ?? 0));
-      if (undelivered <= 0) continue;
-
-      const recent = await this.prisma.notification.findMany({
-        where: { recipientUserId: u.id },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: 3,
-        select: { title: true, body: true, subjectPostId: true },
+          ],
+        },
+        orderBy: [{ id: 'asc' }],
+        take: 500,
+        select: {
+          id: true,
+          email: true,
+          username: true,
+          name: true,
+          undeliveredNotificationCount: true,
+        },
       });
 
-      const recentItems = recent
-        .map((n) => {
-          const title = (n.title ?? 'New notification').trim();
-          const body = (n.body ?? '').trim();
-          const text = `${title}${body ? ` — ${body}` : ''}`.trim();
-          const href = n.subjectPostId ? `${baseUrl}/p/${encodeURIComponent(n.subjectPostId)}` : notificationsUrl;
-          return { text, href };
-        })
-        .filter((x) => Boolean(x.text));
+      const recentByRecipientId = await this.listRecentNotificationItemsByRecipientIds(recipients.map((u) => u.id));
+      for (const u of recipients) {
+        const to = (u.email ?? '').trim();
+        if (!to) continue;
 
-      const lines = recentItems.map((it) => {
-        // Keep plain text concise; only include a direct link when we have a specific destination.
-        const direct = it.href !== notificationsUrl ? ` (${it.href})` : '';
-        return `- ${it.text}${direct}`;
-      });
+        const undelivered = Math.max(0, Math.floor(u.undeliveredNotificationCount ?? 0));
+        if (undelivered <= 0) continue;
 
-      const greetingName = (u.name ?? u.username ?? '').trim();
-      const greeting = greetingName ? `Hey ${greetingName},` : `Hey,`;
+        const recent = recentByRecipientId.get(u.id) ?? [];
 
-      const text = [
-        greeting,
-        '',
-        `You have ${undelivered} new notification${undelivered === 1 ? '' : 's'} on Men of Hunger.`,
-        '',
-        ...(lines.length ? ['Recent:', ...lines, ''] : []),
-        `Open: ${notificationsUrl}`,
-        '',
-        `You can change email notification settings in Settings → Notifications.`,
-      ].join('\n');
+        const recentItems = recent
+          .map((n) => {
+            const title = (n.title ?? 'New notification').trim();
+            const body = (n.body ?? '').trim();
+            const text = `${title}${body ? ` — ${body}` : ''}`.trim();
+            const href = n.subjectPostId ? `${baseUrl}/p/${encodeURIComponent(n.subjectPostId)}` : notificationsUrl;
+            return { text, href };
+          })
+          .filter((x) => Boolean(x.text));
 
-      const recentHtml = recentItems.length
-        ? renderCard(
-            [
-              `<div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7280;">Recent</div>`,
-              `<ul style="margin:10px 0 0 18px;padding:0;color:#111827;font-size:14px;line-height:1.6;">`,
-              ...recentItems.map(
-                (it) =>
-                  `<li style="margin:0 0 8px 0;"><a href="${escapeHtml(it.href)}" style="color:#111827;text-decoration:none;">${escapeHtml(
-                    it.text,
-                  )}</a></li>`,
-              ),
-              `</ul>`,
-            ].join(''),
-          )
-        : '';
-
-      const html = renderMohEmail({
-        title: `Unread notifications`,
-        preheader: `You have ${undelivered} new notification${undelivered === 1 ? '' : 's'}.`,
-        contentHtml: [
-          `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">You have ${undelivered} new notification${
-            undelivered === 1 ? '' : 's'
-          }</div>`,
-          `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(greeting)}</div>`,
-          `<div style="margin-top:10px;display:block;">${renderButton({ href: notificationsUrl, label: 'Open notifications' })}</div>`,
-          recentHtml,
-          `<div style="margin-top:14px;font-size:13px;line-height:1.7;color:#6b7280;">Manage email notification settings: <a href="${escapeHtml(
-            `${baseUrl}/settings/notifications`,
-          )}" style="color:#111827;text-decoration:underline;">Settings → Notifications</a></div>`,
-        ].join(''),
-        footerHtml: `Men of Hunger`,
-      });
-
-      const sent = await this.email.sendText({
-        to,
-        subject: `You have ${undelivered} new notification${undelivered === 1 ? '' : 's'}`,
-        text,
-        html,
-        from: this.appConfig.email()?.fromEmail.notifications ?? undefined,
-      });
-
-      if (sent.sent) {
-        await this.prisma.notificationPreferences.upsert({
-          where: { userId: u.id },
-          create: { userId: u.id, lastEmailNewNotificationsSentAt: now },
-          update: { lastEmailNewNotificationsSentAt: now },
+        const lines = recentItems.map((it) => {
+          // Keep plain text concise; only include a direct link when we have a specific destination.
+          const direct = it.href !== notificationsUrl ? ` (${it.href})` : '';
+          return `- ${it.text}${direct}`;
         });
-      } else {
-        this.logger.debug(`[email-nudges] not sent to userId=${u.id} reason=${sent.reason ?? 'unknown'}`);
+
+        const greetingName = (u.name ?? u.username ?? '').trim();
+        const greeting = greetingName ? `Hey ${greetingName},` : `Hey,`;
+
+        const text = [
+          greeting,
+          '',
+          `You have ${undelivered} new notification${undelivered === 1 ? '' : 's'} on Men of Hunger.`,
+          '',
+          ...(lines.length ? ['Recent:', ...lines, ''] : []),
+          `Open: ${notificationsUrl}`,
+          '',
+          `You can change email notification settings in Settings → Notifications.`,
+        ].join('\n');
+
+        const recentHtml = recentItems.length
+          ? renderCard(
+              [
+                `<div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7280;">Recent</div>`,
+                `<ul style="margin:10px 0 0 18px;padding:0;color:#111827;font-size:14px;line-height:1.6;">`,
+                ...recentItems.map(
+                  (it) =>
+                    `<li style="margin:0 0 8px 0;"><a href="${escapeHtml(it.href)}" style="color:#111827;text-decoration:none;">${escapeHtml(
+                      it.text,
+                    )}</a></li>`,
+                ),
+                `</ul>`,
+              ].join(''),
+            )
+          : '';
+
+        const html = renderMohEmail({
+          title: `Unread notifications`,
+          preheader: `You have ${undelivered} new notification${undelivered === 1 ? '' : 's'}.`,
+          contentHtml: [
+            `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">You have ${undelivered} new notification${
+              undelivered === 1 ? '' : 's'
+            }</div>`,
+            `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(greeting)}</div>`,
+            `<div style="margin-top:10px;display:block;">${renderButton({ href: notificationsUrl, label: 'Open notifications' })}</div>`,
+            recentHtml,
+            `<div style="margin-top:14px;font-size:13px;line-height:1.7;color:#6b7280;">Manage email notification settings: <a href="${escapeHtml(
+              `${baseUrl}/settings/notifications`,
+            )}" style="color:#111827;text-decoration:underline;">Settings → Notifications</a></div>`,
+          ].join(''),
+          footerHtml: `Men of Hunger`,
+        });
+
+        const sent = await this.email.sendText({
+          to,
+          subject: `You have ${undelivered} new notification${undelivered === 1 ? '' : 's'}`,
+          text,
+          html,
+          from: this.appConfig.email()?.fromEmail.notifications ?? undefined,
+        });
+
+        if (sent.sent) {
+          await this.prisma.notificationPreferences.upsert({
+            where: { userId: u.id },
+            create: { userId: u.id, lastEmailNewNotificationsSentAt: now },
+            update: { lastEmailNewNotificationsSentAt: now },
+          });
+        } else {
+          this.logger.debug(`[email-nudges] not sent to userId=${u.id} reason=${sent.reason ?? 'unknown'}`);
+        }
       }
+    } catch (err) {
+      this.logger.error(
+        `[email-nudges] run failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
     }
   }
 
@@ -316,21 +402,22 @@ export class NotificationsEmailCron {
     const emailCfg = this.appConfig.email();
     if (!emailCfg) return;
 
-    const now = new Date();
-    const et = easternYmdHm(now);
-    const minuteOfDay = et.hh * 60 + et.mm;
-    if (minuteOfDay < 16 * 60 || minuteOfDay >= 17 * 60) return;
+    try {
+      const now = new Date();
+      const et = easternYmdHm(now);
+      const minuteOfDay = et.hh * 60 + et.mm;
+      if (minuteOfDay < 16 * 60 || minuteOfDay >= 17 * 60) return;
 
-    const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
-    const homeUrl = `${baseUrl}/home`;
-    const settingsUrl = `${baseUrl}/settings/notifications`;
+      const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
+      const homeUrl = `${baseUrl}/home`;
+      const settingsUrl = `${baseUrl}/settings/notifications`;
 
-    const todayEt = easternYmd(now);
-    const windowStartUtcMs = easternUtcMsForLocal({ ...todayEt, hh: 16, mm: 0 });
-    const sendStartUtc = new Date(windowStartUtcMs);
+      const todayEt = easternYmd(now);
+      const windowStartUtcMs = easternUtcMsForLocal({ ...todayEt, hh: 16, mm: 0 });
+      const sendStartUtc = new Date(windowStartUtcMs);
 
-    const todayKey = easternDayKey(now);
-    const yesterdayKey = easternDayKey(new Date(now.getTime() - 36 * 60 * 60 * 1000));
+      const todayKey = easternDayKey(now);
+      const yesterdayKey = easternDayKey(new Date(now.getTime() - 36 * 60 * 60 * 1000));
 
     type RecipientRow = {
       id: string;
@@ -457,40 +544,47 @@ export class NotificationsEmailCron {
         }
       }
     }
+    } catch (err) {
+      this.logger.error(
+        `[streak-reminder] run failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+    }
   }
 
   async runSendDailyDigest(): Promise<void> {
     const emailCfg = this.appConfig.email();
     if (!emailCfg) return;
 
-    const now = new Date();
-    const et = easternYmdHm(now);
-    const minuteOfDay = et.hh * 60 + et.mm;
-    if (minuteOfDay < 8 * 60 || minuteOfDay >= 9 * 60) return;
+    try {
+      const now = new Date();
+      const et = easternYmdHm(now);
+      const minuteOfDay = et.hh * 60 + et.mm;
+      if (minuteOfDay < 8 * 60 || minuteOfDay >= 9 * 60) return;
 
-    const todayEt = easternYmd(now);
-    const yesterdayEt = easternYmd(new Date(now.getTime() - 36 * 60 * 60 * 1000));
-    const windowEndUtcMs = easternUtcMsForLocal({ ...todayEt, hh: 8, mm: 0 });
-    const windowStartUtcMs = easternUtcMsForLocal({ ...yesterdayEt, hh: 8, mm: 0 });
-    const sendStartUtc = new Date(windowEndUtcMs);
+      const todayEt = easternYmd(now);
+      const yesterdayEt = easternYmd(new Date(now.getTime() - 36 * 60 * 60 * 1000));
+      const windowEndUtcMs = easternUtcMsForLocal({ ...todayEt, hh: 8, mm: 0 });
+      const windowStartUtcMs = easternUtcMsForLocal({ ...yesterdayEt, hh: 8, mm: 0 });
+      const sendStartUtc = new Date(windowEndUtcMs);
 
-    const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
-    const notificationsUrl = `${baseUrl}/notifications`;
-    const messagesUrl = `${baseUrl}/chat`;
-    const settingsUrl = `${baseUrl}/settings/notifications`;
-    const checkinsUrl = `${baseUrl}/home`;
+      const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
+      const notificationsUrl = `${baseUrl}/notifications`;
+      const messagesUrl = `${baseUrl}/chat`;
+      const settingsUrl = `${baseUrl}/settings/notifications`;
+      const checkinsUrl = `${baseUrl}/home`;
 
-    // Ensure daily content exists (quote + definition).
-    await this.dailyContent.refreshForTodayIfNeeded(now);
-    const dayKey = easternDayKey(now);
-    const snap = await this.prisma.dailyContentSnapshot.findUnique({
-      where: { dayKey },
-      select: { quote: true, websters1828: true },
-    });
+      // Ensure daily content exists (quote + definition).
+      await this.dailyContent.refreshForTodayIfNeeded(now);
+      const dayKey = easternDayKey(now);
+      const snap = await this.prisma.dailyContentSnapshot.findUnique({
+        where: { dayKey },
+        select: { quote: true, websters1828: true },
+      });
 
-    const quote = (snap?.quote ?? null) as any;
-    const wotd = (snap?.websters1828 ?? null) as any;
-    const checkinPrompt = pickDailyCheckinPrompt(now).prompt;
+      const quote = (snap?.quote ?? null) as any;
+      const wotd = (snap?.websters1828 ?? null) as any;
+      const checkinPrompt = pickDailyCheckinPrompt(now).prompt;
 
     // Featured post: highest trending score among posts created in window.
     // NOTE: Digest recipients may not have access to all visibilities (verified/premium). Precompute by tier and pick per-user.
@@ -578,10 +672,10 @@ export class NotificationsEmailCron {
       notificationPreferences: { emailDigestDaily: boolean; lastEmailDigestDailySentAt: Date | null } | null;
     };
 
-    let cursorId: string | null = null;
-    const pageSize = 200;
-    for (;;) {
-      const recipients: DigestRecipientRow[] = await this.prisma.user.findMany({
+      let cursorId: string | null = null;
+      const pageSize = 200;
+      for (;;) {
+        const recipients: DigestRecipientRow[] = await this.prisma.user.findMany({
         where: {
           email: { not: null },
           emailVerifiedAt: { not: null },
@@ -606,10 +700,11 @@ export class NotificationsEmailCron {
           notificationPreferences: { select: { emailDigestDaily: true, lastEmailDigestDailySentAt: true } },
         },
       });
-      if (recipients.length === 0) break;
-      cursorId = recipients[recipients.length - 1]?.id ?? null;
+        if (recipients.length === 0) break;
+        cursorId = recipients[recipients.length - 1]?.id ?? null;
 
-      for (const u of recipients) {
+        const unreadChatsByUserId = await this.getUnreadChatTotalsByUserIds(recipients.map((u) => u.id));
+        for (const u of recipients) {
         const to = (u.email ?? '').trim();
         if (!to) continue;
         if (u.notificationPreferences && !u.notificationPreferences.emailDigestDaily) continue;
@@ -618,10 +713,7 @@ export class NotificationsEmailCron {
         if (lastSent && lastSent.getTime() >= sendStartUtc.getTime()) continue;
 
         const unreadNotifs = u.undeliveredNotificationCount ?? 0;
-        const unreadChats = await this.messages
-          .getUnreadSummary(u.id)
-          .then((c) => (c.primary ?? 0) + (c.requests ?? 0))
-          .catch(() => 0);
+        const unreadChats = unreadChatsByUserId.get(u.id) ?? 0;
 
         const greetingName = (u.name ?? u.username ?? '').trim();
         const greeting = greetingName ? `Good morning ${greetingName},` : `Good morning,`;
@@ -819,7 +911,13 @@ export class NotificationsEmailCron {
         } else {
           this.logger.debug(`[daily-digest] not sent to userId=${u.id} reason=${sent.reason ?? 'unknown'}`);
         }
+        }
       }
+    } catch (err) {
+      this.logger.error(
+        `[daily-digest] run failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
     }
   }
 
@@ -834,8 +932,9 @@ export class NotificationsEmailCron {
     const emailCfg = this.appConfig.email();
     if (!emailCfg) return;
 
-    const userId = typeof (payload as any)?.userId === 'string' ? String((payload as any).userId).trim() : '';
-    if (!userId) return;
+    try {
+      const userId = typeof (payload as any)?.userId === 'string' ? String((payload as any).userId).trim() : '';
+      if (!userId) return;
 
     const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
     const notificationsUrl = `${baseUrl}/notifications`;
@@ -1093,12 +1192,18 @@ ${chatPreviewRows
       from: this.appConfig.email()?.fromEmail.notifications ?? undefined,
     });
 
-    if (sent.sent) {
-      await this.prisma.notificationPreferences.upsert({
-        where: { userId },
-        create: { userId, lastEmailInstantHighSignalSentAt: now },
-        update: { lastEmailInstantHighSignalSentAt: now },
-      });
+      if (sent.sent) {
+        await this.prisma.notificationPreferences.upsert({
+          where: { userId },
+          create: { userId, lastEmailInstantHighSignalSentAt: now },
+          update: { lastEmailInstantHighSignalSentAt: now },
+        });
+      }
+    } catch (err) {
+      this.logger.error(
+        `[instant-high-signal] run failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
     }
   }
 

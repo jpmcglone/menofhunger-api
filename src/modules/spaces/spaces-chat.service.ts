@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Interval } from '@nestjs/schedule';
 import type { SpaceChatMessageDto, SpaceChatSenderDto, SpaceChatSnapshotDto } from '../../common/dto';
 
 type SpaceState = {
@@ -69,6 +70,11 @@ export class SpacesChatService {
     }
   }
 
+  @Interval(60_000)
+  pruneInterval(): void {
+    this.maybePrune();
+  }
+
   canSend(userIdRaw: string): boolean {
     const userId = String(userIdRaw ?? '').trim();
     if (!userId) return false;
@@ -111,6 +117,7 @@ export class SpacesChatService {
   appendMessage(params: { spaceId: string; sender: SpaceChatSenderDto; body: string }): SpaceChatMessageDto | null {
     const spaceId = String(params.spaceId ?? '').trim();
     if (!spaceId) return null;
+    this.maybePrune();
     const body = normalizeBody(params.body);
     if (!body) return null;
     const clipped = body.length > this.maxBodyChars ? body.slice(0, this.maxBodyChars) : body;
@@ -145,6 +152,7 @@ export class SpacesChatService {
   }): SpaceChatMessageDto | null {
     const spaceId = String(params.spaceId ?? '').trim();
     if (!spaceId) return null;
+    this.maybePrune();
     const userId = String(params.userId ?? '').trim();
     if (!userId) return null;
     const usernameRaw = (params.username ?? null) as string | null;

@@ -799,10 +799,10 @@ export class PostsController {
   @Patch(':id')
   async update(@Param('id') id: string, @Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = updateSchema.parse(body);
-    const updated = await this.posts.updatePost({ userId, postId: id, body: (parsed.body ?? '').trim() });
-
     const viewer = await this.posts.viewerContext(userId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const updated = await this.posts.updatePost({ userId, postId: id, body: (parsed.body ?? '').trim(), isSiteAdmin: viewerHasAdmin });
+
     return {
       data: toPostDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null, {
         viewerHasBoosted: false,

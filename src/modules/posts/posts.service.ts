@@ -2226,7 +2226,7 @@ export class PostsService {
     return { success: true };
   }
 
-  async updatePost(params: { userId: string; postId: string; body: string }) {
+  async updatePost(params: { userId: string; postId: string; body: string; isSiteAdmin?: boolean }) {
     const { userId, postId } = params;
     const id = (postId ?? '').trim();
     if (!id) throw new NotFoundException('Post not found.');
@@ -2253,8 +2253,8 @@ export class PostsService {
       throw new ForbiddenException('This post can no longer be edited.');
     }
 
-    // Only-me posts behave like notes/drafts: allow edits without age/count limits.
-    if (post.visibility !== 'onlyMe') {
+    // Only-me posts and siteAdmins are exempt from age/count limits.
+    if (post.visibility !== 'onlyMe' && !params.isSiteAdmin) {
       // Enforce edit window + count: 3 edits in first 30 minutes after creation.
       const now = Date.now();
       const createdAtMs = post.createdAt instanceof Date ? post.createdAt.getTime() : new Date(post.createdAt as any).getTime();

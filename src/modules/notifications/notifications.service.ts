@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { NotificationKind } from '@prisma/client';
+import { Prisma, type NotificationKind } from '@prisma/client';
 import * as webpush from 'web-push';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -440,34 +440,98 @@ export class NotificationsService {
     bodySnippet?: string | null;
   }) {
     const { recipientUserId, actorUserId, subjectPostId, bodySnippet } = params;
-    const existing = await this.findExistingBoostNotification(recipientUserId, actorUserId, subjectPostId);
-    if (existing) {
-      await this.prisma.notification.update({
-        where: { id: existing.id },
-        data: { createdAt: new Date(), body: bodySnippet ?? undefined },
-      });
-      // Treat as a new notification row for UI ordering (without changing delivered/read).
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        const dto = await this.buildNotificationDtoForRecipient({
-          recipientUserId,
-          notificationId: existing.id,
-        });
-        if (dto) {
-          this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
+        const res = await this.prisma.$transaction(
+          async (tx) => {
+            const existing = await tx.notification.findFirst({
+              where: {
+                recipientUserId,
+                actorUserId,
+                subjectPostId,
+                kind: 'boost',
+              },
+              select: { id: true, deliveredAt: true, readAt: true },
+            });
+
+            if (existing) {
+              await tx.notification.update({
+                where: { id: existing.id },
+                data: { createdAt: new Date(), body: bodySnippet ?? undefined },
+              });
+              return { kind: 'updated' as const, notificationId: existing.id, undeliveredCount: null as number | null };
+            }
+
+            const notification = await tx.notification.create({
+              data: {
+                recipientUserId,
+                kind: 'boost',
+                actorUserId,
+                subjectPostId,
+                title: 'boosted your post',
+                body: bodySnippet ?? undefined,
+              },
+              select: { id: true },
+            });
+            const user = await tx.user.update({
+              where: { id: recipientUserId },
+              data: { undeliveredNotificationCount: { increment: 1 } },
+              select: { undeliveredNotificationCount: true },
+            });
+            return {
+              kind: 'created' as const,
+              notificationId: notification.id,
+              undeliveredCount: user.undeliveredNotificationCount,
+            };
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+
+        if (res.kind === 'created' && typeof res.undeliveredCount === 'number') {
+          this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount: res.undeliveredCount });
         }
-      } catch {
-        // Best-effort
+
+        // Treat as a new notification row for UI ordering (without changing delivered/read).
+        try {
+          const dto = await this.buildNotificationDtoForRecipient({
+            recipientUserId,
+            notificationId: res.notificationId,
+          });
+          if (dto) {
+            this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
+          }
+        } catch {
+          // Best-effort
+        }
+
+        // Web push is optional (VAPID + user preference). (Boosts are high-signal.)
+        if (res.kind === 'created') {
+          try {
+            const prefs = await this.getPreferencesInternal(recipientUserId);
+            if (this.shouldSendPushForKind(prefs, 'boost')) {
+              this.sendWebPushToRecipient(recipientUserId, {
+                title: 'boosted your post',
+                body: (bodySnippet ?? '').trim().slice(0, 150) || undefined,
+                subjectPostId: subjectPostId ?? null,
+                subjectUserId: null,
+              }).catch((err) => {
+                this.logger.warn(`[push] Failed to send web push: ${err instanceof Error ? err.message : String(err)}`);
+              });
+            }
+          } catch (err) {
+            this.logger.debug(`[push] Failed to evaluate push preferences: ${err}`);
+          }
+        }
+
+        return;
+      } catch (err: unknown) {
+        const code = (err as any)?.code as string | undefined;
+        const isRetryable = code === 'P2034' || /could not serialize access/i.test(String((err as any)?.message ?? err));
+        if (attempt < maxAttempts && isRetryable) continue;
+        throw err;
       }
-      return;
     }
-    await this.create({
-      recipientUserId,
-      kind: 'boost',
-      actorUserId,
-      subjectPostId,
-      title: 'boosted your post',
-      body: bodySnippet ?? undefined,
-    });
   }
 
   /** Remove boost notification when user unboosts; emit updated count if the removed one was undelivered. */
