@@ -47,7 +47,7 @@ export class MessagesService {
     return [a, b].sort().join(':');
   }
 
-  private async getBlockedUserIds(userId: string): Promise<Set<string>> {
+  private async _getBlockedUserIds(userId: string): Promise<Set<string>> {
     const rows = await this.prisma.userBlock.findMany({
       where: {
         OR: [{ blockerId: userId }, { blockedId: userId }],
@@ -63,7 +63,7 @@ export class MessagesService {
 
   private async assertNotBlocked(userId: string, otherUserIds: string[]): Promise<void> {
     if (otherUserIds.length === 0) return;
-    const blocked = await this.getBlockedUserIds(userId);
+    const blocked = await this._getBlockedUserIds(userId);
     for (const otherId of otherUserIds) {
       if (blocked.has(otherId)) {
         throw new ForbiddenException('You cannot message this user.');
@@ -73,7 +73,7 @@ export class MessagesService {
 
   private async getConversationOrThrow(params: { userId: string; conversationId: string }) {
     const { userId, conversationId } = params;
-    const blockedUserIds = await this.getBlockedUserIds(userId);
+    const blockedUserIds = await this._getBlockedUserIds(userId);
     const conversation = await this.prisma.messageConversation.findFirst({
       where: {
         id: conversationId,
@@ -165,7 +165,7 @@ export class MessagesService {
   }
 
   private async getUnreadCounts(userId: string): Promise<{ primary: number; requests: number }> {
-    const blockedUserIds = await this.getBlockedUserIds(userId);
+    const blockedUserIds = await this._getBlockedUserIds(userId);
     const participants = await this.prisma.messageParticipant.findMany({
       where: {
         userId,
@@ -221,7 +221,7 @@ export class MessagesService {
     const { userId, tab } = params;
     const limit = params.limit ?? CONVERSATION_LIST_LIMIT;
     const cursor = this.decodeConversationCursor(params.cursor ?? null);
-    const blockedUserIds = await this.getBlockedUserIds(userId);
+    const blockedUserIds = await this._getBlockedUserIds(userId);
 
     const cursorWhere =
       cursor?.updatedAt && cursor?.id
@@ -400,6 +400,14 @@ export class MessagesService {
       conversationId,
       lastReadAt: viewerParticipant.lastReadAt,
     });
+    const otherParticipant =
+      conversation.type === 'direct'
+        ? conversation.participants.find((p) => p.userId !== userId) ?? null
+        : null;
+    const isBlockedWith = otherParticipant
+      ? await this.isBlockedBetween(userId, otherParticipant.userId)
+      : false;
+
     const dto: MessageConversationDto = {
       id: conversation.id,
       type: conversation.type,
@@ -427,6 +435,7 @@ export class MessagesService {
       ),
       viewerStatus: viewerParticipant.status,
       unreadCount,
+      isBlockedWith,
     };
 
     const messages = await this.listMessages({ userId, conversationId, limit: MESSAGE_LIST_LIMIT });
@@ -666,7 +675,7 @@ export class MessagesService {
     const participant = conversation.participants.find((p) => p.userId === userId);
     if (!participant) throw new NotFoundException('Conversation not found.');
 
-    const blockedIds = await this.getBlockedUserIds(userId);
+    const blockedIds = await this._getBlockedUserIds(userId);
     const otherIds = conversation.participants.filter((p) => p.userId !== userId).map((p) => p.userId);
     for (const otherId of otherIds) {
       if (blockedIds.has(otherId)) throw new ForbiddenException('You cannot message this user.');
@@ -786,7 +795,29 @@ export class MessagesService {
       create: { blockerId: userId, blockedId: targetUserId },
       update: {},
     });
+    // Auto-unfollow: blocker should not be following the blocked user.
+    await this.prisma.follow.deleteMany({
+      where: { followerId: userId, followingId: targetUserId },
+    });
     this.emitUnreadCounts(userId);
+  }
+
+  /** Returns blocked user IDs visible to other services (bidirectional). */
+  async getBlockedUserIds(userId: string): Promise<Set<string>> {
+    return this._getBlockedUserIds(userId);
+  }
+
+  /** Check whether a block exists in either direction between two users. */
+  async isBlockedBetween(userA: string, userB: string): Promise<boolean> {
+    const count = await this.prisma.userBlock.count({
+      where: {
+        OR: [
+          { blockerId: userA, blockedId: userB },
+          { blockerId: userB, blockedId: userA },
+        ],
+      },
+    });
+    return count > 0;
   }
 
   async unblockUser(params: { userId: string; targetUserId: string }) {

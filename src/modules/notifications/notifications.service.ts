@@ -367,6 +367,7 @@ export class NotificationsService {
       return;
     }
 
+    const expiredIds: string[] = [];
     for (const sub of subs) {
       try {
         await webpush.sendNotification(
@@ -380,9 +381,12 @@ export class NotificationsService {
       } catch (err: unknown) {
         const statusCode = (err as { statusCode?: number })?.statusCode;
         if (statusCode === 410 || statusCode === 404) {
-          await this.prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+          expiredIds.push(sub.id);
         }
       }
+    }
+    if (expiredIds.length > 0) {
+      await this.prisma.pushSubscription.deleteMany({ where: { id: { in: expiredIds } } }).catch(() => {});
     }
   }
 
@@ -671,9 +675,19 @@ export class NotificationsService {
           .then((r) => (r ? { id: r.id, createdAt: r.createdAt } : null)),
     });
 
+    // Exclude notifications from blocked users (either direction).
+    const blockRows = await this.prisma.userBlock.findMany({
+      where: { OR: [{ blockerId: recipientUserId }, { blockedId: recipientUserId }] },
+      select: { blockerId: true, blockedId: true },
+    });
+    const blockedActorIds = blockRows.map((r) =>
+      r.blockerId === recipientUserId ? r.blockedId : r.blockerId,
+    );
+
     const notifications = await this.prisma.notification.findMany({
       where: {
         recipientUserId,
+        ...(blockedActorIds.length > 0 ? { NOT: { actorUserId: { in: blockedActorIds } } } : {}),
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },
       include: {

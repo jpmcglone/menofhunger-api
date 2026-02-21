@@ -103,6 +103,8 @@ export type PostDto = {
   viewerHasBoosted?: boolean;
   viewerHasBookmarked?: boolean;
   viewerBookmarkCollectionIds?: string[];
+  /** Set when a block exists between viewer and author. 'viewer_blocked' = viewer blocked the author; 'viewer_blocked_by' = author blocked the viewer. */
+  viewerBlockStatus?: 'viewer_blocked' | 'viewer_blocked_by' | null;
   internal?: {
     boostScore: number | null;
     boostScoreUpdatedAt: string | null;
@@ -211,6 +213,7 @@ export function toPostDto(
     viewerHasBookmarked?: boolean;
     viewerBookmarkCollectionIds?: string[];
     viewerVotedPollOptionId?: string | null;
+    viewerBlockStatus?: 'viewer_blocked' | 'viewer_blocked_by' | null;
     includeInternal?: boolean;
     internalOverride?: {
       boostScore?: number | null;
@@ -358,6 +361,7 @@ export function toPostDto(
     ...(typeof opts?.viewerHasBoosted === 'boolean' ? { viewerHasBoosted: opts.viewerHasBoosted } : {}),
     ...(typeof opts?.viewerHasBookmarked === 'boolean' ? { viewerHasBookmarked: opts.viewerHasBookmarked } : {}),
     ...(Array.isArray(opts?.viewerBookmarkCollectionIds) ? { viewerBookmarkCollectionIds: opts.viewerBookmarkCollectionIds } : {}),
+    ...(typeof opts?.viewerBlockStatus !== 'undefined' ? { viewerBlockStatus: opts.viewerBlockStatus ?? null } : {}),
     ...(opts?.includeInternal
       ? {
           internal: {

@@ -6,7 +6,7 @@ import {
   SubscribeMessage,
   OnGatewayInit,
 } from '@nestjs/websockets';
-import { Logger } from '@nestjs/common';
+import { Logger, OnModuleDestroy } from '@nestjs/common';
 import { Server, type Socket } from 'socket.io';
 import { AuthService } from '../auth/auth.service';
 import { PresenceService } from './presence.service';
@@ -59,16 +59,20 @@ function spacesChatRoom(spaceId: string): string {
     credentials: true,
   },
 })
-export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
+export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
   private readonly logger = new Logger(PresenceGateway.name);
   // Performance: presence events can be very high-frequency. Never spam logs in production.
   private readonly logPresenceVerbose: boolean;
+  private presenceEventUnsubscribe: (() => void) | null = null;
   private readonly userTimers = new Map<string, UserTimers>();
   private readonly typingThrottleByKey = new Map<string, number>();
   private readonly reactionThrottleByKey = new Map<string, number>();
   private typingThrottleLastPruneAtMs = 0;
+  private reactionThrottleLastPruneAtMs = 0;
   private readonly typingThrottlePruneEveryMs = 10_000;
   private readonly typingThrottleEntryTtlMs = 1000 * 60 * 2;
+  private readonly reactionThrottlePruneEveryMs = 30_000;
+  private readonly reactionThrottleEntryTtlMs = 1000 * 60 * 2;
   private readonly userPresenceNonce = new Map<string, number>();
 
   @WebSocketServer()
@@ -98,7 +102,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
     // Cross-instance fanout: emit events from other instances to this instance's subscribers.
     const myInstanceId = this.presenceRedis.getInstanceId();
-    this.presenceRedis.onEvent((evt) => {
+    this.presenceEventUnsubscribe = this.presenceRedis.onEvent((evt) => {
       if (!evt?.userId) return;
       if ((evt as any).instanceId === myInstanceId) return;
       if (evt.type === 'online') this.emitOnline(evt.userId);
@@ -118,12 +122,26 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     });
   }
 
+  onModuleDestroy(): void {
+    this.presenceEventUnsubscribe?.();
+    this.presenceEventUnsubscribe = null;
+  }
+
   private maybePruneTypingThrottle(nowMs: number): void {
     if (nowMs - this.typingThrottleLastPruneAtMs < this.typingThrottlePruneEveryMs) return;
     this.typingThrottleLastPruneAtMs = nowMs;
     const minMs = nowMs - this.typingThrottleEntryTtlMs;
     for (const [k, lastAt] of this.typingThrottleByKey.entries()) {
       if (lastAt < minMs) this.typingThrottleByKey.delete(k);
+    }
+  }
+
+  private maybePruneReactionThrottle(nowMs: number): void {
+    if (nowMs - this.reactionThrottleLastPruneAtMs < this.reactionThrottlePruneEveryMs) return;
+    this.reactionThrottleLastPruneAtMs = nowMs;
+    const minMs = nowMs - this.reactionThrottleEntryTtlMs;
+    for (const [k, lastAt] of this.reactionThrottleByKey.entries()) {
+      if (lastAt < minMs) this.reactionThrottleByKey.delete(k);
     }
   }
 
@@ -586,6 +604,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     // Throttle: at most ~1 per 400ms per user.
     const key = `spaces:reaction:${userId}`;
     const now = Date.now();
+    this.maybePruneReactionThrottle(now);
     const last = this.reactionThrottleByKey.get(key) ?? 0;
     if (now - last < 400) return;
     this.reactionThrottleByKey.set(key, now);

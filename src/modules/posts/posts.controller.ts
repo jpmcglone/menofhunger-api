@@ -386,6 +386,10 @@ export class PostsController {
         const scoreByPostId =
           viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
 
+        const { blockedByViewer, viewerBlockedBy } = viewerUserId
+          ? await this.posts.viewerBlockSets(viewerUserId)
+          : { blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() };
+
         const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
         const attachParentChain = buildAttachParentChain({
           parentMap,
@@ -397,6 +401,8 @@ export class PostsController {
           internalByPostId,
           scoreByPostId,
           toPostDto,
+          blockedByViewer,
+          viewerBlockedBy,
         });
 
         return {
@@ -507,6 +513,10 @@ export class PostsController {
         const scoreByPostIdUser =
           viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
 
+        const { blockedByViewer: blockedByViewerUser, viewerBlockedBy: viewerBlockedByUser } = viewerUserId
+          ? await this.posts.viewerBlockSets(viewerUserId)
+          : { blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() };
+
         const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
         const attachParentChain = buildAttachParentChain({
           parentMap,
@@ -518,6 +528,8 @@ export class PostsController {
           internalByPostId,
           scoreByPostId: scoreByPostIdUser,
           toPostDto,
+          blockedByViewer: blockedByViewerUser,
+          viewerBlockedBy: viewerBlockedByUser,
         });
 
         return {

@@ -61,19 +61,25 @@ export class PollsService {
     if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be voted on.');
     if (post.userId === userId) throw new ForbiddenException('You cannot vote on your own poll.');
 
+    // Fetch poll outside transaction for option validation, but re-check endsAt
+    // inside the transaction to close the race between the check and the vote write.
     const poll = await this.prisma.postPoll.findUnique({
       where: { postId: id },
       include: { options: { orderBy: { position: 'asc' } } },
     });
     if (!poll) throw new NotFoundException('Poll not found.');
 
-    const now = new Date();
-    if (poll.endsAt <= now) throw new BadRequestException('This poll has ended.');
+    if (poll.endsAt <= new Date()) throw new BadRequestException('This poll has ended.');
 
     const opt = poll.options.find((o) => o.id === optId);
     if (!opt) throw new BadRequestException('Invalid poll option.');
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // Re-check endsAt inside the transaction to prevent race conditions where
+      // the poll ends between our pre-check and the vote write.
+      const fresh = await tx.postPoll.findUnique({ where: { id: poll.id }, select: { endsAt: true } });
+      if (!fresh || fresh.endsAt <= new Date()) throw new BadRequestException('This poll has ended.');
+
       try {
         await tx.postPollVote.create({
           data: {

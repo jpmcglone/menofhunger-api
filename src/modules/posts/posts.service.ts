@@ -3188,6 +3188,19 @@ export class PostsService {
           throw new ForbiddenException('Not allowed to reply to this post.');
         }
       }
+      // Block check: cannot reply across a block in either direction.
+      if (parentAuthorUserId && parentAuthorUserId !== userId) {
+        const blockCount = await this.prisma.userBlock.count({
+          where: {
+            OR: [
+              { blockerId: userId, blockedId: parentAuthorUserId },
+              { blockerId: parentAuthorUserId, blockedId: userId },
+            ],
+          },
+        });
+        if (blockCount > 0) throw new ForbiddenException('You cannot reply to this post.');
+      }
+
       visibility = parent.visibility as PostVisibility;
 
       // Use parent's rootId if it exists (parent is also a reply), otherwise parent.id is the root
@@ -3751,6 +3764,19 @@ export class PostsService {
     if (post.deletedAt) throw new BadRequestException('Deleted posts cannot be boosted.');
     if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be boosted.');
 
+    // Block check: neither direction may boost across a block.
+    if (post.user?.id && post.user.id !== userId) {
+      const blockCount = await this.prisma.userBlock.count({
+        where: {
+          OR: [
+            { blockerId: userId, blockedId: post.user.id },
+            { blockerId: post.user.id, blockedId: userId },
+          ],
+        },
+      });
+      if (blockCount > 0) throw new ForbiddenException('You cannot boost this post.');
+    }
+
     const res = await this.prisma.$transaction(async (tx) => {
       const created = await tx.boost.createMany({
         data: [{ postId: id, userId }],
@@ -3862,6 +3888,25 @@ export class PostsService {
     await this.cacheInvalidation.bumpFeedGlobal();
 
     return { success: true, viewerHasBoosted: false, boostCount: res.boostCount };
+  }
+
+  /**
+   * Fetch the block relationship sets for a viewer.
+   * Returns sets of author IDs: those blocked by viewer and those blocking viewer.
+   * Used to annotate post DTOs with `viewerBlockStatus`.
+   */
+  async viewerBlockSets(viewerUserId: string): Promise<{ blockedByViewer: Set<string>; viewerBlockedBy: Set<string> }> {
+    const rows = await this.prisma.userBlock.findMany({
+      where: { OR: [{ blockerId: viewerUserId }, { blockedId: viewerUserId }] },
+      select: { blockerId: true, blockedId: true },
+    });
+    const blockedByViewer = new Set<string>();
+    const viewerBlockedBy = new Set<string>();
+    for (const row of rows) {
+      if (row.blockerId === viewerUserId) blockedByViewer.add(row.blockedId);
+      else viewerBlockedBy.add(row.blockerId);
+    }
+    return { blockedByViewer, viewerBlockedBy };
   }
 }
 

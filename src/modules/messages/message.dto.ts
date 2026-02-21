@@ -29,6 +29,8 @@ export type MessageConversationDto = {
   participants: MessageParticipantDto[];
   viewerStatus: MessageParticipantStatus;
   unreadCount: number;
+  /** True when a block exists in either direction between the viewer and the other participant (direct chats only). */
+  isBlockedWith?: boolean;
 };
 
 export function toMessageDto(params: {

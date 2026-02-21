@@ -162,6 +162,8 @@ type UserPreviewPayload = {
   nudge: NudgeStateDto | null;
   followerCount: number | null;
   followingCount: number | null;
+  viewerHasBlockedUser?: boolean;
+  userHasBlockedViewer?: boolean;
 };
 
 @Controller('users')
@@ -616,6 +618,24 @@ export class UsersController {
       };
     }
 
+    let viewerHasBlockedUser = false;
+    let userHasBlockedViewer = false;
+    if (viewerUserId && profile.id && viewerUserId !== profile.id) {
+      const blockRows = await this.prisma.userBlock.findMany({
+        where: {
+          OR: [
+            { blockerId: viewerUserId, blockedId: profile.id },
+            { blockerId: profile.id, blockedId: viewerUserId },
+          ],
+        },
+        select: { blockerId: true },
+      });
+      for (const row of blockRows) {
+        if (row.blockerId === viewerUserId) viewerHasBlockedUser = true;
+        else userHasBlockedViewer = true;
+      }
+    }
+
     const payload: UserPreviewPayload = {
       id: profile.id,
       username: profile.username,
@@ -635,6 +655,8 @@ export class UsersController {
       nudge,
       followerCount,
       followingCount,
+      viewerHasBlockedUser,
+      userHasBlockedViewer,
     };
 
     // Preview includes viewer-specific relationship when authenticated.
