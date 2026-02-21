@@ -139,6 +139,8 @@ type PublicProfilePayload = {
   bannerUrl: string | null;
   pinnedPostId: string | null;
   lastOnlineAt: string | null;
+  checkinStreakDays: number;
+  longestStreakDays: number;
 };
 
 type UserPreviewPayload = {
@@ -154,6 +156,8 @@ type UserPreviewPayload = {
   avatarUrl: string | null;
   bannerUrl: string | null;
   lastOnlineAt: string | null;
+  checkinStreakDays: number;
+  longestStreakDays: number;
   relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean };
   nudge: NudgeStateDto | null;
   followerCount: number | null;
@@ -291,9 +295,11 @@ export class UsersController {
             pinnedPostId: string | null;
             lastOnlineAt: Date | null;
             bannedAt: Date | null;
+            checkinStreakDays: number;
+            longestStreakDays: number;
           }>
         >`
-          SELECT "id", "createdAt", "username", "name", "bio", "website", "locationDisplay", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt", "bannedAt"
+          SELECT "id", "createdAt", "username", "name", "bio", "website", "locationDisplay", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt", "bannedAt", "checkinStreakDays", "longestStreakDays"
           FROM "User"
           WHERE (
             (${isUuidOrCuid} = true AND "id" = ${raw})
@@ -308,7 +314,7 @@ export class UsersController {
     if (!user) throw new NotFoundException('User not found');
 
     if (user.bannedAt) {
-      return { payload: { banned: true }, cache: 'miss' };
+      return { payload: { banned: true } as any, cache: 'miss' };
     }
 
     // Safety: only-me posts should never be pinnable/show on profiles.
@@ -349,6 +355,8 @@ export class UsersController {
       bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),
       pinnedPostId,
       lastOnlineAt: user.lastOnlineAt ? user.lastOnlineAt.toISOString() : null,
+      checkinStreakDays: Math.max(0, Math.floor(Number(user.checkinStreakDays) || 0)),
+      longestStreakDays: Math.max(0, Math.floor(Number(user.longestStreakDays) || 0)),
     };
 
     // Cache for subsequent reads (both by username and by id).
@@ -621,6 +629,8 @@ export class UsersController {
       avatarUrl: profile.avatarUrl,
       bannerUrl: profile.bannerUrl,
       lastOnlineAt: canSeeLastOnline ? (profile.lastOnlineAt ?? null) : null,
+      checkinStreakDays: Math.max(0, Math.floor(Number((profile as any).checkinStreakDays) || 0)),
+      longestStreakDays: Math.max(0, Math.floor(Number((profile as any).longestStreakDays) || 0)),
       relationship,
       nudge,
       followerCount,

@@ -240,6 +240,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
           if (currentNonce !== nonceAtDisconnect && this.presence.isUserOnline(userId)) return;
           try {
             this.cancelUserTimers(userId);
+            this.presence.persistLastOnlineAt(userId);
             this.emitOffline(userId);
           } catch {
             // best-effort
@@ -1128,6 +1129,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         .catch(() => ({ isNowOffline: wasLastLocal }));
       if (r.isNowOffline) {
         this.cancelUserTimers(userId);
+        this.presence.persistLastOnlineAt(userId);
         this.emitOffline(userId);
       }
     }
@@ -1274,6 +1276,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         this.presence.forceUnregister(socketId);
         socket?.disconnect(true);
       }
+      this.presence.persistLastOnlineAt(userId);
       this.emitOffline(userId);
     }, idleDisconnectMs);
     const existing = this.userTimers.get(userId);
