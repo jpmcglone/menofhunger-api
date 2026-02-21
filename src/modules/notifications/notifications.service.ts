@@ -133,11 +133,14 @@ export class NotificationsService {
     try {
       const prefs = await this.getPreferencesInternal(recipientUserId);
       if (this.shouldSendPushForKind(prefs, kind)) {
+        // Comments should link to the reply (actorPostId), not the original post (subjectPostId).
+        const pushUrl = kind === 'comment' && actorPostId ? `/p/${actorPostId}` : null;
         this.sendWebPushToRecipient(recipientUserId, {
           title: fallbackTitle ?? 'New notification',
           body: (body ?? '').trim().slice(0, 150) || undefined,
           subjectPostId: subjectPostId ?? null,
           subjectUserId: subjectUserId ?? null,
+          url: pushUrl,
         }).catch((err) => {
           this.logger.warn(`[push] Failed to send web push: ${err instanceof Error ? err.message : String(err)}`);
         });
