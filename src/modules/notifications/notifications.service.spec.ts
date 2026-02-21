@@ -8,6 +8,7 @@ function makeService(overrides?: { prisma?: any }) {
       post: { findMany: jest.fn(async () => []), findUnique: jest.fn() },
       user: { findMany: jest.fn(async () => []), findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 0 })) },
       follow: { findMany: jest.fn(async () => []) },
+      userBlock: { findMany: jest.fn(async () => []) },
     } as any);
 
   const appConfig = { r2: jest.fn(() => null) } as any;
@@ -98,6 +99,7 @@ describe('NotificationsService.list batching', () => {
           findMany: jest.fn(async () => [{ id: 'u_subject_1', premium: false, verifiedStatus: 'manual' }]),
         },
         follow: { findMany: jest.fn(async () => []) },
+        userBlock: { findMany: jest.fn(async () => []) },
       } as any,
     });
 
