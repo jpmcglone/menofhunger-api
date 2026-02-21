@@ -1,7 +1,18 @@
 import { Injectable } from '@nestjs/common';
-import type { SpaceDto } from '../../common/dto';
+import type { SpaceDto, SpaceReactionDto } from '../../common/dto';
 import { RADIO_STATIONS } from '../radio/radio.constants';
 import { SPACES } from './spaces.constants';
+
+const REACTIONS: SpaceReactionDto[] = [
+  { id: 'thumbsup', emoji: '👍', label: 'Thumbs up' },
+  { id: 'thumbsdown', emoji: '👎', label: 'Thumbs down' },
+  { id: 'fire', emoji: '🔥', label: 'Fire' },
+  { id: 'muscle', emoji: '💪', label: 'Strength' },
+  { id: 'fist', emoji: '✊', label: 'Fist bump' },
+  { id: 'pray', emoji: '🙏', label: 'Prayer' },
+  { id: 'cross', emoji: '✝️', label: 'Cross' },
+  { id: 'lion', emoji: '🦁', label: 'Lion' },
+];
 
 @Injectable()
 export class SpacesService {
@@ -31,6 +42,16 @@ export class SpacesService {
         isBuiltin: true,
       };
     });
+  }
+
+  listReactions(): SpaceReactionDto[] {
+    return [...REACTIONS];
+  }
+
+  getReactionById(reactionIdRaw: string): SpaceReactionDto | null {
+    const reactionId = String(reactionIdRaw ?? '').trim();
+    if (!reactionId) return null;
+    return REACTIONS.find((r) => r.id === reactionId) ?? null;
   }
 
   getSpaceIdByStationId(stationIdRaw: string): string | null {

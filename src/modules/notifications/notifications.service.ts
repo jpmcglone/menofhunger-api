@@ -974,7 +974,13 @@ export class NotificationsService {
     // When visiting a user's profile we want to clear "new posts" notifications for that actor,
     // even if subjectUserId was not set at creation time.
     const or: Array<Record<string, unknown>> = [];
-    if (postId) or.push({ subjectPostId: postId });
+    if (postId) {
+      // Match notifications where this post is the subject (e.g. boost, mention, poll).
+      or.push({ subjectPostId: postId });
+      // Also match notifications where this post is the actor's post (e.g. comment/reply
+      // notifications: subjectPostId = original post, actorPostId = the reply being viewed).
+      or.push({ actorPostId: postId });
+    }
     if (userId) {
       // Important: do NOT implicitly mark nudges as read when visiting a user's profile.
       // Nudges should only be cleared via explicit actions (ignore / acknowledge / nudge back).

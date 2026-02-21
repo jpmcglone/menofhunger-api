@@ -10,6 +10,10 @@ export type RadioListenerDto = {
   id: string;
   username: string | null;
   avatarUrl: string | null;
+  premium: boolean;
+  premiumPlus: boolean;
+  isOrganization: boolean;
+  verifiedStatus: 'none' | 'identity' | 'manual';
   paused?: boolean;
   muted?: boolean;
 };

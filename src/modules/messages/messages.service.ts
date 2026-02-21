@@ -97,6 +97,7 @@ export class MessagesService {
                 verifiedStatus: true,
                 avatarKey: true,
                 avatarUpdatedAt: true,
+                bannedAt: true,
               },
             },
           },
@@ -258,6 +259,7 @@ export class MessagesService {
                 verifiedStatus: true,
                 avatarKey: true,
                 avatarUpdatedAt: true,
+                bannedAt: true,
               },
             },
           },
@@ -540,11 +542,13 @@ export class MessagesService {
 
     const users = await this.prisma.user.findMany({
       where: { id: { in: uniqueRecipients } },
-      select: { id: true, verifiedStatus: true },
+      select: { id: true, verifiedStatus: true, bannedAt: true },
     });
     if (users.length !== uniqueRecipients.length) throw new NotFoundException('User not found.');
-    // Don't allow starting chats with unverified recipients (they can't access chat anyway).
     for (const u of users) {
+      if (u.bannedAt) {
+        throw new BadRequestException('Cannot message a banned user.');
+      }
       if (!u.verifiedStatus || u.verifiedStatus === 'none') {
         throw new ForbiddenException('You can only start chats with verified members.');
       }

@@ -24,6 +24,10 @@ export type SpaceListenerDto = {
   id: string;
   username: string | null;
   avatarUrl: string | null;
+  premium: boolean;
+  premiumPlus: boolean;
+  isOrganization: boolean;
+  verifiedStatus: 'none' | 'identity' | 'manual';
   paused?: boolean;
   muted?: boolean;
 };
@@ -69,5 +73,18 @@ export type SpaceChatMessageDto =
 export type SpaceChatSnapshotDto = {
   spaceId: string;
   messages: SpaceChatMessageDto[];
+};
+
+export type SpaceReactionDto = {
+  id: string;
+  emoji: string;
+  label: string;
+};
+
+export type SpaceReactionEventDto = {
+  spaceId: string;
+  userId: string;
+  reactionId: string;
+  emoji: string;
 };
 

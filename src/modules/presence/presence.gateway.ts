@@ -65,6 +65,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   private readonly logPresenceVerbose: boolean;
   private readonly userTimers = new Map<string, UserTimers>();
   private readonly typingThrottleByKey = new Map<string, number>();
+  private readonly reactionThrottleByKey = new Map<string, number>();
   private typingThrottleLastPruneAtMs = 0;
   private readonly typingThrottlePruneEveryMs = 10_000;
   private readonly typingThrottleEntryTtlMs = 1000 * 60 * 2;
@@ -295,6 +296,10 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
             id: u.id,
             username: u.username,
             avatarUrl: u.avatarUrl ?? null,
+            premium: u.premium ?? false,
+            premiumPlus: u.premiumPlus ?? false,
+            isOrganization: u.isOrganization ?? false,
+            verifiedStatus: (u.verifiedStatus ?? 'none') as 'none' | 'identity' | 'manual',
             paused: pausedSet.has(u.id),
             muted: mutedSet.has(u.id),
           });
@@ -336,6 +341,10 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
             id: u.id,
             username: u.username,
             avatarUrl: u.avatarUrl ?? null,
+            premium: u.premium ?? false,
+            premiumPlus: u.premiumPlus ?? false,
+            isOrganization: u.isOrganization ?? false,
+            verifiedStatus: (u.verifiedStatus ?? 'none') as 'none' | 'identity' | 'manual',
             paused: pausedSet.has(u.id),
             muted: mutedSet.has(u.id),
           });
@@ -556,6 +565,34 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       this.server.to(radioRoom).emit('radio:chatMessage', radioOut);
       void this.presenceRedis.publishEmitToRoom({ room: radioRoom, event: 'radio:chatMessage', payload: radioOut }).catch(() => undefined);
     }
+  }
+
+  @SubscribeMessage('spaces:reaction')
+  handleSpacesReaction(client: Socket, payload: { spaceId?: string; reactionId?: string }): void {
+    const spaceId = String(payload?.spaceId ?? '').trim();
+    const reactionId = String(payload?.reactionId ?? '').trim();
+    if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
+
+    const userId =
+      (client.data as { userId?: string })?.userId ??
+      this.presence.getUserIdForSocket(client.id) ??
+      null;
+    if (!userId) return;
+
+    const reaction = this.spaces.getReactionById(reactionId);
+    if (!reaction) return;
+
+    // Throttle: at most ~1 per 400ms per user.
+    const key = `spaces:reaction:${userId}`;
+    const now = Date.now();
+    const last = this.reactionThrottleByKey.get(key) ?? 0;
+    if (now - last < 400) return;
+    this.reactionThrottleByKey.set(key, now);
+
+    const room = spaceRoom(spaceId);
+    const out = { spaceId, userId, reactionId: reaction.id, emoji: reaction.emoji };
+    this.server.to(room).emit('spaces:reaction', out);
+    void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:reaction', payload: out }).catch(() => undefined);
   }
 
   /**

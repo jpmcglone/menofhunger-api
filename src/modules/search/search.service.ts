@@ -175,6 +175,7 @@ export class SearchService {
         FROM "User" u, q
         WHERE
           (u."usernameIsSet" = true OR u."name" IS NOT NULL)
+          AND u."bannedAt" IS NULL
           AND to_tsvector(
             'english',
             COALESCE(u."username", '') || ' ' || COALESCE(u."name", '') || ' ' || COALESCE(u."bio", '')
@@ -218,6 +219,7 @@ export class SearchService {
         ? {
             AND: [
               cursorWhere,
+              { bannedAt: null },
               {
                 OR: [
                   { usernameIsSet: true, ...matchClause },
@@ -227,9 +229,14 @@ export class SearchService {
             ],
           }
         : {
-            OR: [
-              { usernameIsSet: true, ...matchClause },
-              nameOnlyMatch,
+            AND: [
+              { bannedAt: null },
+              {
+                OR: [
+                  { usernameIsSet: true, ...matchClause },
+                  nameOnlyMatch,
+                ],
+              },
             ],
           };
 

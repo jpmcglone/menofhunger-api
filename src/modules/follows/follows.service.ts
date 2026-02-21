@@ -123,6 +123,7 @@ export class FollowsService {
       FROM mutuals m
       JOIN "User" u ON u."id" = m."userId"
       WHERE u."usernameIsSet" = true
+        AND u."bannedAt" IS NULL
       ORDER BY
         m."mutualCount" DESC,
         (u."verifiedStatus" <> 'none') DESC,
@@ -156,6 +157,7 @@ export class FollowsService {
             FROM "User" u
             WHERE
               u."usernameIsSet" = true
+              AND u."bannedAt" IS NULL
               AND u."id" <> ${viewerUserId}
               ${excludeSql}
               AND NOT EXISTS (
@@ -242,6 +244,7 @@ export class FollowsService {
       FROM "User" u
       WHERE
         u."usernameIsSet" = true
+        AND u."bannedAt" IS NULL
         ${whereViewerExclusions}
       ORDER BY
         (u."verifiedStatus" <> 'none') DESC,

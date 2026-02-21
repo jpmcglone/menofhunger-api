@@ -7,6 +7,7 @@ export type MessageParticipantDto = {
   role: MessageParticipantRole;
   acceptedAt: string | null;
   lastReadAt: string | null;
+  banned: boolean;
 };
 
 export type MessageDto = {
@@ -45,7 +46,7 @@ export function toMessageDto(params: {
 }
 
 export function toMessageParticipantDto(params: {
-  user: UserListRow;
+  user: UserListRow & { bannedAt?: Date | null };
   status: MessageParticipantStatus;
   role: MessageParticipantRole;
   acceptedAt: Date | null;
@@ -59,5 +60,6 @@ export function toMessageParticipantDto(params: {
     role,
     acceptedAt: acceptedAt ? acceptedAt.toISOString() : null,
     lastReadAt: lastReadAt ? lastReadAt.toISOString() : null,
+    banned: Boolean(user.bannedAt),
   };
 }
