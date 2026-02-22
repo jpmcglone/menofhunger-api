@@ -28,9 +28,11 @@ export class RedisService implements OnModuleDestroy {
     return this.client;
   }
 
-  duplicate(): Redis {
+  duplicate(overrides?: Partial<ConstructorParameters<typeof Redis>[1]>): Redis {
     // ioredis duplicate() is a shallow clone; safe for pub/sub and separate pipelines.
-    return this.client.duplicate();
+    // Pass overrides to allow subscriber connections to disable the ready-check
+    // (subscriber-mode connections only accept SUBSCRIBE/UNSUBSCRIBE commands, not INFO).
+    return this.client.duplicate(overrides ?? {});
   }
 
   async getString(key: string): Promise<string | null> {

@@ -25,7 +25,9 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
     private readonly redis: RedisService,
     private readonly appConfig: AppConfigService,
   ) {
-    this.sub = this.redis.duplicate();
+    // Subscriber connections must not run the ready-check: ioredis sends INFO
+    // for the check, which is rejected in subscriber mode after a reconnect.
+    this.sub = this.redis.duplicate({ enableReadyCheck: false });
   }
 
   getInstanceId(): string {
