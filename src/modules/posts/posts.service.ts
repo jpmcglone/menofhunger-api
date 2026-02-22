@@ -1081,7 +1081,7 @@ export class PostsService {
                       ${PostsService.popularEngagementRateWeight} * (
                         (
                           CASE WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
-                          ELSE p."boostScore" * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.featuredRisingHalfLifeSeconds}) END
+                          ELSE p."boostScore" * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.featuredRisingHalfLifeSeconds})) END
                         )
                         +
                         ((p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.featuredRisingHalfLifeSeconds})))
