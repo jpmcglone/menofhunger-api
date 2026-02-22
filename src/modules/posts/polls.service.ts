@@ -59,7 +59,6 @@ export class PollsService {
     const post = await this.getPostForVoting({ viewerUserId: userId, postId: id });
     if (post.deletedAt) throw new BadRequestException('Deleted posts cannot be voted on.');
     if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be voted on.');
-    if (post.userId === userId) throw new ForbiddenException('You cannot vote on your own poll.');
 
     // Fetch poll outside transaction for option validation, but re-check endsAt
     // inside the transaction to close the race between the check and the vote write.
@@ -104,6 +103,42 @@ export class PollsService {
     });
 
     return { poll: updated, viewerVotedOptionId: optId };
+  }
+
+  /** Creator-only: record that they chose to skip voting (see results without casting a vote). */
+  async skipPoll(params: { userId: string; postId: string }) {
+    const { userId, postId } = params;
+    const id = (postId ?? '').trim();
+    if (!id) throw new NotFoundException('Post not found.');
+
+    const post = await this.getPostForVoting({ viewerUserId: userId, postId: id });
+    if (post.deletedAt) throw new BadRequestException('Deleted posts cannot be voted on.');
+    if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be voted on.');
+    if (post.userId !== userId) throw new ForbiddenException('Only the poll creator can skip voting.');
+
+    const poll = await this.prisma.postPoll.findUnique({
+      where: { postId: id },
+      include: { options: { orderBy: { position: 'asc' } } },
+    });
+    if (!poll) throw new NotFoundException('Poll not found.');
+    if (poll.endsAt <= new Date()) throw new BadRequestException('This poll has ended.');
+
+    const existingVote = await this.prisma.postPollVote.findUnique({
+      where: { pollId_userId: { pollId: poll.id, userId } },
+    });
+    if (existingVote) throw new ForbiddenException('You have already voted on this poll.');
+
+    if (poll.creatorSkippedAt) {
+      return { poll, viewerSkipped: true };
+    }
+
+    const updated = await this.prisma.postPoll.update({
+      where: { id: poll.id },
+      data: { creatorSkippedAt: new Date() },
+      include: { options: { orderBy: { position: 'asc' } } },
+    });
+
+    return { poll: updated, viewerSkipped: true };
   }
 }
 

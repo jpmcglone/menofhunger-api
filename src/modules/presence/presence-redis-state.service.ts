@@ -12,7 +12,8 @@ type PresenceEvent =
   | { type: 'idle'; userId: string; instanceId: string }
   | { type: 'active'; userId: string; instanceId: string }
   | { type: 'emitToUser'; userId: string; instanceId: string; event: string; payload: unknown }
-  | { type: 'emitToRoom'; userId: string; instanceId: string; room: string; event: string; payload: unknown };
+  | { type: 'emitToRoom'; userId: string; instanceId: string; room: string; event: string; payload: unknown }
+  | { type: 'spacesLobbyCounts'; instanceId: string; countsBySpaceId: Record<string, number> };
 
 @Injectable()
 export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy {
@@ -73,7 +74,10 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
       this.sub.on('message', (_channel, message) => {
         try {
           const parsed = JSON.parse(message) as PresenceEvent;
-          if (!parsed || typeof (parsed as any).type !== 'string' || typeof (parsed as any).userId !== 'string') return;
+          if (!parsed || typeof (parsed as any).type !== 'string') return;
+          // Most events require userId; spacesLobbyCounts is a broadcast with no user context.
+          const needsUserId = (parsed as any).type !== 'spacesLobbyCounts';
+          if (needsUserId && typeof (parsed as any).userId !== 'string') return;
           for (const fn of this.listeners) {
             try {
               fn(parsed);
@@ -233,6 +237,14 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
     const event = String(params.event ?? '').trim();
     if (!userId || !event) return;
     await this.publish({ type: 'emitToUser', userId, instanceId: this.instanceId, event, payload: params.payload });
+  }
+
+  /**
+   * Cross-instance broadcast of space lobby counts.
+   * All instances will emit the updated counts to all their connected sockets.
+   */
+  async publishSpacesLobbyCounts(countsBySpaceId: Record<string, number>): Promise<void> {
+    await this.publish({ type: 'spacesLobbyCounts', instanceId: this.instanceId, countsBySpaceId });
   }
 
   /**

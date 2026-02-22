@@ -18,6 +18,7 @@ import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selec
 import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
 import { toUserDto } from '../../common/dto/user.dto';
+import { PostViewsService } from '../post-views/post-views.service';
 
 export type PostCounts = {
   all: number;
@@ -44,6 +45,7 @@ export class PostsService {
     private readonly viewerContextService: ViewerContextService,
     private readonly cacheInvalidation: CacheInvalidationService,
     private readonly appConfig: AppConfigService,
+    private readonly postViews: PostViewsService,
   ) {}
 
   /**
@@ -101,6 +103,11 @@ export class PostsService {
    */
   private static popularTrendingHashtagBaseBonus = 0.05;
   private static popularTrendingHashtagMaxScaledBonus = 0.15;
+
+  /** Engagement-rate bonus: small multiplier when (boost+bookmark+comment) / (views+k) is high. Cap so it never dominates. */
+  private static popularEngagementRateK = 10;
+  private static popularEngagementRateWeight = 0.03;
+  private static popularEngagementRateCap = 0.06;
 
   // "Featured" is an automated, stable subset of trending:
   // - Top-level posts only
@@ -321,6 +328,21 @@ export class PostsService {
                   WHEN root."deletedAt" IS NOT NULL AND (parent."id" IS NULL OR root."id" <> parent."id") THEN 1
                   ELSE 0
                 END)
+              )
+            )
+            * (
+              1 + LEAST(
+                ${PostsService.popularEngagementRateCap},
+                ${PostsService.popularEngagementRateWeight} * (
+                  (
+                    CASE WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
+                    ELSE p."boostScore" * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.popularHalfLifeSeconds})) END
+                  )
+                  +
+                  ((p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.popularHalfLifeSeconds})))
+                  +
+                  ((COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight})
+                ) / GREATEST((p."viewerCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
               )
             )
             AS DOUBLE PRECISION
@@ -1053,6 +1075,21 @@ export class PostsService {
                     END
                   )
                   * ${PostsService.popularTopLevelScoreBoost}
+                  * (
+                    1 + LEAST(
+                      ${PostsService.popularEngagementRateCap},
+                      ${PostsService.popularEngagementRateWeight} * (
+                        (
+                          CASE WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
+                          ELSE p."boostScore" * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.featuredRisingHalfLifeSeconds}) END
+                        )
+                        +
+                        ((p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.featuredRisingHalfLifeSeconds})))
+                        +
+                        ((COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight})
+                      ) / GREATEST((p."viewerCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
+                    )
+                  )
                   AS DOUBLE PRECISION
                 ) as "score"
               FROM "Post" p
@@ -1474,6 +1511,21 @@ export class PostsService {
                 END)
               )
             )
+            * (
+              1 + LEAST(
+                ${PostsService.popularEngagementRateCap},
+                ${PostsService.popularEngagementRateWeight} * (
+                  (
+                    CASE WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
+                    ELSE p."boostScore" * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.popularHalfLifeSeconds})) END
+                  )
+                  +
+                  ((p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.popularHalfLifeSeconds})))
+                  +
+                  ((COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight})
+                ) / GREATEST((p."viewerCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
+              )
+            )
             AS DOUBLE PRECISION
           ) as "score"
         FROM "Post" p
@@ -1816,6 +1868,21 @@ export class PostsService {
                     )
                   ELSE 0
                 END
+              )
+              * (
+                1 + LEAST(
+                  ${PostsService.popularEngagementRateCap},
+                  ${PostsService.popularEngagementRateWeight} * (
+                    (
+                      CASE WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
+                      ELSE p."boostScore" * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.popularHalfLifeSeconds})) END
+                    )
+                    +
+                    ((p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.popularHalfLifeSeconds})))
+                    +
+                    ((COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight})
+                  ) / GREATEST((p."viewerCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
+                )
               )
               AS DOUBLE PRECISION
             ) as "score"
@@ -3565,6 +3632,9 @@ export class PostsService {
         throw e;
       });
 
+    // Creator counts as having seen their own post (optimistic; don't block response).
+    void this.postViews.markViewed(userId, post.id).catch(() => undefined);
+
     // Versioned read caches: bump after successful create so public reads shift namespaces immediately.
     if ((post as any)?.visibility && (post as any).visibility !== 'onlyMe') {
       const topics = Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [];
@@ -3733,11 +3803,21 @@ export class PostsService {
         // Best-effort
       }
     }
+
+    // Commenting on a post implies the commenter saw the parent post.
+    if (parentId) {
+      void this.postViews.markViewed(userId, parentId);
+    }
+
     return withMentions!;
   }
 
   async voteOnPoll(params: { userId: string; postId: string; optionId: string }) {
     return await this.polls.voteOnPoll(params);
+  }
+
+  async skipPoll(params: { userId: string; postId: string }) {
+    return await this.polls.skipPoll(params);
   }
 
   private async ensureUserCanBoost(userId: string) {
@@ -3816,6 +3896,9 @@ export class PostsService {
         })
         .catch(() => {});
     }
+
+    // Boosting implies the user saw the post.
+    void this.postViews.markViewed(userId, id);
 
     // Realtime post interaction update (post author + actor).
     const recipients = new Set<string>([userId, post.userId].filter(Boolean));

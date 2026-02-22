@@ -288,7 +288,7 @@ export class NotificationsService {
   /** Send a single test Web Push to the user (for "Send test notification" in settings). */
   async sendTestPush(userId: string): Promise<{ sent: boolean; message?: string }> {
     if (!this.appConfig.vapidConfigured()) {
-      return { sent: false, message: 'Push notifications are not configured (VAPID).' };
+      return { sent: false, message: 'Browser push (Web Push) is not configured (VAPID).' };
     }
     const subs = await this.prisma.pushSubscription.findMany({
       where: { userId },

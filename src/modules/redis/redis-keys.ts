@@ -125,5 +125,10 @@ export const RedisKeys = {
     const h = crypto.createHash('sha1').update(u).digest('hex').slice(0, 20);
     return `lock:linkmeta:${h}`;
   },
+
+  // Spaces lobby counts — global snapshot (updated on every join/leave)
+  spacesLobbyCounts(): string {
+    return 'spaces:lobbyCounts';
+  },
 } as const;
 

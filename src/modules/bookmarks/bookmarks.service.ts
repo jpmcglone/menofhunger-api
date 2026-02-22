@@ -3,6 +3,7 @@ import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
+import { PostViewsService } from '../post-views/post-views.service';
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean };
 
@@ -24,6 +25,7 @@ export class BookmarksService {
     private readonly prisma: PrismaService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly viewerContext: ViewerContextService,
+    private readonly postViews: PostViewsService,
   ) {}
 
   private async viewer(userId: string): Promise<Viewer> {
@@ -246,6 +248,9 @@ export class BookmarksService {
     } catch {
       // Best-effort
     }
+
+    // Bookmarking implies the user saw the post.
+    void this.postViews.markViewed(userId, postId);
 
     return { success: true, bookmarked: true, bookmarkId: bookmark.id, collectionIds: desired };
   }

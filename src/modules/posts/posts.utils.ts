@@ -13,6 +13,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
   boosted: Set<string>;
   bookmarksByPostId: Map<string, { collectionIds: string[] }>;
   votedPollOptionIdByPostId: Map<string, string>;
+  viewerUserId: string | null;
   viewerHasAdmin: boolean;
   internalByPostId: Map<string, { boostScore?: number | null; boostScoreUpdatedAt?: Date | null; score?: number | null }> | null;
   scoreByPostId: Map<string, number> | undefined;
@@ -28,6 +29,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     boosted,
     bookmarksByPostId,
     votedPollOptionIdByPostId,
+    viewerUserId,
     viewerHasAdmin,
     internalByPostId,
     scoreByPostId,
@@ -46,11 +48,17 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
         : authorId && viewerBlockedBy?.has(authorId)
           ? 'viewer_blocked_by'
           : null;
+    const postWithPoll = post as { user?: { id?: string }; poll?: { creatorSkippedAt?: Date | null } };
+    const viewerCreatorSkipped =
+      Boolean(viewerUserId) &&
+      postWithPoll.user?.id === viewerUserId &&
+      Boolean(postWithPoll.poll?.creatorSkippedAt);
     const dto = toPostDto(post as unknown as PostWithAuthorAndMedia, baseUrl, {
       viewerHasBoosted: boosted.has(post.id),
       viewerHasBookmarked: bookmarksByPostId.has(post.id),
       viewerBookmarkCollectionIds: bookmarksByPostId.get(post.id)?.collectionIds ?? [],
       viewerVotedPollOptionId: votedPollOptionIdByPostId.get(post.id) ?? null,
+      viewerCreatorSkipped: viewerCreatorSkipped || undefined,
       viewerBlockStatus: viewerBlockStatus ?? undefined,
       includeInternal: viewerHasAdmin,
       internalOverride:

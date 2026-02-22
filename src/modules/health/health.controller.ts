@@ -26,6 +26,12 @@ export class HealthController {
       // Twilio can be intentionally disabled in dev; show both flags so it's obvious.
       twilioConfigured: Boolean(this.appConfig.twilioVerify()),
       twilioDisabledInDev: this.appConfig.disableTwilioInDev(),
+      /** Location search / geocode (Mapbox). Unset = profile location lookup will 400. */
+      locationSearchConfigured: Boolean(this.appConfig.mapbox()),
+      stripeConfigured: Boolean(this.appConfig.stripe()),
+      emailConfigured: Boolean(this.appConfig.email()),
+      /** Browser (Web Push) via VAPID. Other push channels (e.g. mobile) are separate. */
+      browserPushConfigured: this.appConfig.vapidConfigured(),
     };
 
     const startedAt = Date.now();

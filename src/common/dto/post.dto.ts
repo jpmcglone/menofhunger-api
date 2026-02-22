@@ -94,6 +94,7 @@ export type PostDto = {
   boostCount: number;
   bookmarkCount: number;
   commentCount: number;
+  viewerCount: number;
   parentId: string | null;
   /** When present, this post is a reply and the parent is included for thread display. */
   parent?: PostDto;
@@ -155,7 +156,7 @@ export type PostWithAuthorAndMedia = Post & {
 export function toPostPollDto(
   poll: (PostPoll & { options: PostPollOption[] }) | null | undefined,
   publicAssetBaseUrl: string | null = null,
-  opts?: { viewerVotedOptionId?: string | null },
+  opts?: { viewerVotedOptionId?: string | null; viewerSkipped?: boolean },
 ): PostPollDto | null {
   if (!poll) return null;
   const endsAtIso = poll.endsAt instanceof Date ? poll.endsAt.toISOString() : new Date(poll.endsAt as any).toISOString();
@@ -164,8 +165,9 @@ export function toPostPollDto(
     typeof (poll as any).totalVoteCount === 'number' && Number.isFinite((poll as any).totalVoteCount)
       ? Math.max(0, Math.floor((poll as any).totalVoteCount))
       : 0;
-  const viewerVotedOptionId = (opts?.viewerVotedOptionId ?? null) || null;
-  const viewerHasVoted = Boolean(viewerVotedOptionId);
+  const viewerSkipped = Boolean(opts?.viewerSkipped);
+  const viewerVotedOptionId = viewerSkipped ? null : ((opts?.viewerVotedOptionId ?? null) || null);
+  const viewerHasVoted = viewerSkipped || Boolean(viewerVotedOptionId);
 
   const options = (poll.options ?? [])
     .slice()
@@ -213,6 +215,8 @@ export function toPostDto(
     viewerHasBookmarked?: boolean;
     viewerBookmarkCollectionIds?: string[];
     viewerVotedPollOptionId?: string | null;
+    /** When true, creator chose to skip voting (see results without casting a vote). */
+    viewerCreatorSkipped?: boolean;
     viewerBlockStatus?: 'viewer_blocked' | 'viewer_blocked_by' | null;
     includeInternal?: boolean;
     internalOverride?: {
@@ -295,6 +299,7 @@ export function toPostDto(
 
   const pollDto = toPostPollDto(post.poll ?? null, publicAssetBaseUrl, {
     viewerVotedOptionId: opts?.viewerVotedPollOptionId ?? null,
+    viewerSkipped: opts?.viewerCreatorSkipped ?? false,
   });
 
   const authorBanned = Boolean((post.user as { bannedAt?: Date | null }).bannedAt);
@@ -317,6 +322,7 @@ export function toPostDto(
       boostCount: post.boostCount,
       bookmarkCount: post.bookmarkCount ?? 0,
       commentCount: post.commentCount ?? 0,
+      viewerCount: (post as any).viewerCount ?? 0,
       parentId: post.parentId ?? null,
       mentions: [],
       media: [],
@@ -354,6 +360,7 @@ export function toPostDto(
     boostCount: post.boostCount,
     bookmarkCount: post.bookmarkCount ?? 0,
     commentCount: post.commentCount ?? 0,
+    viewerCount: (post as any).viewerCount ?? 0,
     parentId: post.parentId ?? null,
     mentions: isPostDeleted ? [] : mentions,
     media: isPostDeleted ? [] : media,

@@ -255,6 +255,7 @@ model User {
   blocksInitiated UserBlock[] @relation("UserBlock_blocker")
   blocksReceived  UserBlock[] @relation("UserBlock_blocked")
   popularScoreSnapshots PostPopularScoreSnapshot[] @relation("PostPopularScoreSnapshot_user")
+  postViews PostView[]
 
   @@index([phone])
   @@index([lastSeenAt])
@@ -408,6 +409,7 @@ model Post {
   boostCount Int            @default(0)
   bookmarkCount Int         @default(0)
   commentCount Int          @default(0)
+  viewerCount Int            @default(0)
   boostScore Float?
   boostScoreUpdatedAt DateTime?
 
@@ -434,6 +436,7 @@ model Post {
   notificationsAsActorPost Notification[] @relation("Notification_actorPost")
   popularScoreSnapshots PostPopularScoreSnapshot[] @relation("PostPopularScoreSnapshot_post")
   reports Report[] @relation("Report_subjectPost")
+  views PostView[]
 
   @@index([userId, createdAt])
   @@index([createdAt])
@@ -460,6 +463,8 @@ model PostPoll {
   totalVoteCount Int @default(0)
   /** When set, "poll results ready" notifications have been created. */
   resultsNotifiedAt DateTime?
+  /** When set, the poll creator chose to skip voting (see results without casting a vote). */
+  creatorSkippedAt DateTime?
 
   postId String @unique
   post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
@@ -761,6 +766,18 @@ model Boost {
   @@unique([postId, userId])
   @@index([postId, createdAt])
   @@index([userId, createdAt])
+}
+
+model PostView {
+  postId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([postId, userId])
+  @@index([postId])
 }
 
 // Singleton-ish table: holds site-wide configurable settings.

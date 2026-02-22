@@ -21,6 +21,8 @@ import { RadioService } from '../radio/radio.service';
 import { SpacesChatService } from '../spaces/spaces-chat.service';
 import { SpacesPresenceService } from '../spaces/spaces-presence.service';
 import { SpacesService } from '../spaces/spaces.service';
+import { RedisService } from '../redis/redis.service';
+import { RedisKeys } from '../redis/redis-keys';
 import type {
   RadioChatSenderDto,
   RadioListenerDto,
@@ -92,6 +94,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     private readonly spacesPresence: SpacesPresenceService,
     private readonly spacesChat: SpacesChatService,
     private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
   ) {
     this.logPresenceVerbose = !this.appConfig.isProd();
   }
@@ -113,11 +116,15 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         const e = String((evt as any).event ?? '').trim();
         if (!e) return;
         this.presence.emitToUser(this.server, evt.userId, e, (evt as any).payload);
-      } else if (evt.type === 'emitToRoom') {
+      }       else if (evt.type === 'emitToRoom') {
         const room = String((evt as any).room ?? '').trim();
         const e = String((evt as any).event ?? '').trim();
         if (!room || !e) return;
         this.server.to(room).emit(e, (evt as any).payload);
+      } else if (evt.type === 'spacesLobbyCounts') {
+        // Another instance updated counts — broadcast to all sockets on this instance.
+        const payload: SpaceLobbyCountsDto = { countsBySpaceId: (evt as any).countsBySpaceId ?? {} };
+        this.server.emit('spaces:lobbyCounts', payload);
       }
     });
   }
@@ -222,6 +229,18 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     }
 
     client.emit('presence:init', {});
+
+    // Push current space lobby counts to the newly connected client.
+    // Try Redis first (cross-instance accurate); fall back to in-memory snapshot.
+    void (async () => {
+      try {
+        const cached = await this.redis.getJson<Record<string, number>>(RedisKeys.spacesLobbyCounts());
+        const countsBySpaceId = cached ?? this.spacesPresence.getLobbyCountsBySpaceId();
+        client.emit('spaces:lobbyCounts', { countsBySpaceId } satisfies SpaceLobbyCountsDto);
+      } catch {
+        // best-effort
+      }
+    })();
 
     if (isNewlyOnline) {
       await this.emitOnline(user.id);
@@ -377,10 +396,20 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   private emitSpacesLobbyCounts(): void {
-    const payload: SpaceLobbyCountsDto = {
-      countsBySpaceId: this.spacesPresence.getLobbyCountsBySpaceId(),
-    };
-    this.server.to('spaces:lobbies').emit('spaces:lobbyCounts', payload);
+    const countsBySpaceId = this.spacesPresence.getLobbyCountsBySpaceId();
+    const payload: SpaceLobbyCountsDto = { countsBySpaceId };
+
+    // Broadcast to every connected socket on this instance immediately.
+    this.server.emit('spaces:lobbyCounts', payload);
+
+    // Persist to Redis so HTTP reads and new connections always get fresh counts.
+    // TTL is generous; counts self-correct on every join/leave/disconnect.
+    void this.redis
+      .setJson(RedisKeys.spacesLobbyCounts(), countsBySpaceId, { ttlSeconds: 120 })
+      .catch(() => undefined);
+
+    // Fanout to other instances via pub/sub — they will broadcast to their own sockets.
+    void this.presenceRedis.publishSpacesLobbyCounts(countsBySpaceId).catch(() => undefined);
   }
 
   @SubscribeMessage('spaces:join')

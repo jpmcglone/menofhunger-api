@@ -152,6 +152,7 @@ export type PostsLiveUpdatedPayloadDto = {
     editCount: number;
     deletedAt: string | null;
     commentCount: number;
+    viewerCount: number;
   }>;
 };
 

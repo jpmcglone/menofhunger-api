@@ -397,6 +397,7 @@ export class PostsController {
           boosted,
           bookmarksByPostId,
           votedPollOptionIdByPostId,
+          viewerUserId,
           viewerHasAdmin,
           internalByPostId,
           scoreByPostId,
@@ -524,6 +525,7 @@ export class PostsController {
           boosted,
           bookmarksByPostId,
           votedPollOptionIdByPostId,
+          viewerUserId,
           viewerHasAdmin,
           internalByPostId,
           scoreByPostId: scoreByPostIdUser,
@@ -562,9 +564,13 @@ export class PostsController {
     const scoreByPostIdOnlyMe =
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(res.posts.map((p) => p.id)) : undefined;
     return {
-      data: res.posts.map((p) =>
-        toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
+      data: res.posts.map((p) => {
+        const pWithPoll = p as { user?: { id?: string }; poll?: { creatorSkippedAt?: Date | null } };
+        const viewerCreatorSkipped =
+          pWithPoll.user?.id === userId && Boolean(pWithPoll.poll?.creatorSkippedAt);
+        return toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: false,
+          viewerCreatorSkipped: viewerCreatorSkipped || undefined,
           includeInternal: viewerHasAdmin,
           internalOverride: (() => {
             const base = internalByPostId?.get(p.id);
@@ -573,8 +579,8 @@ export class PostsController {
               ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
               : undefined;
           })(),
-        }),
-      ),
+        });
+      }),
       pagination: { nextCursor: res.nextCursor },
     };
   }
@@ -632,12 +638,18 @@ export class PostsController {
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(result.comments.map((p) => p.id)) : undefined;
     setReadCache(httpRes, { viewerUserId });
     return {
-      data: result.comments.map((p) =>
-        toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
+      data: result.comments.map((p) => {
+        const pWithPoll = p as { user?: { id?: string }; poll?: { creatorSkippedAt?: Date | null } };
+        const viewerCreatorSkipped =
+          Boolean(viewerUserId) &&
+          pWithPoll.user?.id === viewerUserId &&
+          Boolean(pWithPoll.poll?.creatorSkippedAt);
+        return toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: boosted.has(p.id),
           viewerHasBookmarked: bookmarksByPostId.has(p.id),
           viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
           viewerVotedPollOptionId: votedPollOptionIdByPostId.get(p.id) ?? null,
+          viewerCreatorSkipped: viewerCreatorSkipped || undefined,
           includeInternal: viewerHasAdmin,
           internalOverride: (() => {
             const base = internalByPostId?.get(p.id);
@@ -646,8 +658,8 @@ export class PostsController {
               ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
               : undefined;
           })(),
-        }),
-      ),
+        });
+      }),
       pagination: { nextCursor: result.nextCursor, counts: result.counts ?? null },
     };
   }
@@ -712,11 +724,17 @@ export class PostsController {
     const toDto = (p: (typeof chain)[number], opts: { parent?: ReturnType<typeof toPostDto> }) => {
       const base = internalByPostId?.get(p.id);
       const score = scoreByPostIdGet?.get(p.id);
+      const pWithPoll = p as { user?: { id?: string }; poll?: { creatorSkippedAt?: Date | null } };
+      const viewerCreatorSkipped =
+        Boolean(viewerUserId) &&
+        pWithPoll.user?.id === viewerUserId &&
+        Boolean(pWithPoll.poll?.creatorSkippedAt);
       const dto = toPostDto(p, r2, {
         viewerHasBoosted: boosted.has(p.id),
         viewerHasBookmarked: bookmarksByPostId.has(p.id),
         viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
         viewerVotedPollOptionId: votedPollOptionIdByPostId.get(p.id) ?? null,
+        viewerCreatorSkipped: viewerCreatorSkipped || undefined,
         includeInternal: viewerHasAdmin,
         internalOverride:
           base || (typeof score === 'number' ? { score } : undefined)
@@ -895,6 +913,26 @@ export class PostsController {
       data: {
         poll: toPostPollDto(result.poll as any, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerVotedOptionId: result.viewerVotedOptionId,
+        }),
+      },
+    };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post(':id/poll/skip')
+  async skipPoll(@Param('id') id: string, @CurrentUserId() userId: string) {
+    const result = await this.posts.skipPoll({ userId, postId: id });
+    return {
+      data: {
+        poll: toPostPollDto(result.poll as any, this.appConfig.r2()?.publicBaseUrl ?? null, {
+          viewerVotedOptionId: null,
+          viewerSkipped: true,
         }),
       },
     };
