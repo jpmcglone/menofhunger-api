@@ -28,6 +28,9 @@ export type FollowListUser = {
   username: string | null;
   name: string | null;
   premium: boolean;
+  premiumPlus: boolean;
+  isOrganization: boolean;
+  stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
   relationship: FollowRelationship;

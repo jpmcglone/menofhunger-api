@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import Redis from 'ioredis';
+import Redis, { type RedisOptions } from 'ioredis';
 import { AppConfigService } from '../app/app-config.service';
 import * as crypto from 'node:crypto';
 
@@ -28,7 +28,7 @@ export class RedisService implements OnModuleDestroy {
     return this.client;
   }
 
-  duplicate(overrides?: Partial<ConstructorParameters<typeof Redis>[1]>): Redis {
+  duplicate(overrides?: Partial<RedisOptions>): Redis {
     // ioredis duplicate() is a shallow clone; safe for pub/sub and separate pipelines.
     // Pass overrides to allow subscriber connections to disable the ready-check
     // (subscriber-mode connections only accept SUBSCRIBE/UNSUBSCRIBE commands, not INFO).
