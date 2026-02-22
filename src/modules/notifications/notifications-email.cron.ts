@@ -9,6 +9,7 @@ import { JOBS } from '../jobs/jobs.constants';
 import { DailyContentService } from '../daily-content/daily-content.service';
 import { MessagesService } from '../messages/messages.service';
 import { escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
+import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { CHECKIN_PROMPTS } from '../checkins/checkin-prompts';
 import { dayIndexEastern, easternDayKey as easternDayKey2 } from '../../common/time/eastern-day-key';
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
@@ -16,6 +17,20 @@ import { computeCheckinRewards } from '../checkins/checkin-rewards';
 function safeBaseUrl(raw: string | null): string {
   const base = (raw ?? '').trim() || 'https://menofhunger.com';
   return base.replace(/\/$/, '');
+}
+
+function renderEmailAvatar(params: {
+  profileUrl: string;
+  avatarUrl: string | null;
+  displayName: string;
+  size?: number;
+}): string {
+  const { profileUrl, avatarUrl, displayName, size = 40 } = params;
+  const initial = escapeHtml((displayName || '?')[0].toUpperCase());
+  const inner = avatarUrl
+    ? `<img src="${escapeHtml(avatarUrl)}" width="${size}" height="${size}" alt="${escapeHtml(displayName)}" style="width:${size}px;height:${size}px;border-radius:50%;display:block;object-fit:cover;" />`
+    : `<div style="width:${size}px;height:${size}px;border-radius:50%;background:#111827;color:#ffffff;font-size:${Math.round(size * 0.4)}px;font-weight:700;text-align:center;line-height:${size}px;">${initial}</div>`;
+  return `<a href="${escapeHtml(profileUrl)}" style="display:inline-block;text-decoration:none;">${inner}</a>`;
 }
 
 const ET_ZONE = 'America/New_York';
@@ -632,24 +647,40 @@ export class NotificationsEmailCron {
           })
         : null;
 
+    const featuredPostSelect = { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } } as const;
+    const featuredCreatedAtWindow = { gte: new Date(windowStartUtcMs), lt: new Date(windowEndUtcMs) };
+
     const featuredPostPublic = featuredRowPublic?.postId
       ? await this.prisma.post.findFirst({
           where: { id: featuredRowPublic.postId, deletedAt: null },
-          select: { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } },
+          select: featuredPostSelect,
         })
-      : null;
+      : await this.prisma.post.findFirst({
+          // Fallback: snapshot only includes score > 0 posts; on low-engagement days pick the most recent qualifying post.
+          where: { deletedAt: null, parentId: null, visibility: 'public', createdAt: featuredCreatedAtWindow },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          select: featuredPostSelect,
+        });
     const featuredPostVerified = featuredRowVerified?.postId
       ? await this.prisma.post.findFirst({
           where: { id: featuredRowVerified.postId, deletedAt: null },
-          select: { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } },
+          select: featuredPostSelect,
         })
-      : null;
+      : await this.prisma.post.findFirst({
+          where: { deletedAt: null, parentId: null, visibility: { in: ['public', 'verifiedOnly'] }, createdAt: featuredCreatedAtWindow },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          select: featuredPostSelect,
+        });
     const featuredPostPremium = featuredRowPremium?.postId
       ? await this.prisma.post.findFirst({
           where: { id: featuredRowPremium.postId, deletedAt: null },
-          select: { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } },
+          select: featuredPostSelect,
         })
-      : null;
+      : await this.prisma.post.findFirst({
+          where: { deletedAt: null, parentId: null, visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] }, createdAt: featuredCreatedAtWindow },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          select: featuredPostSelect,
+        });
 
     function pickFeaturedPostForUser(u: { verifiedStatus?: string | null; premium?: boolean | null; premiumPlus?: boolean | null }) {
       const isPremium = Boolean(u.premium || u.premiumPlus);
@@ -669,8 +700,49 @@ export class NotificationsEmailCron {
       premiumPlus: boolean;
       undeliveredNotificationCount: number;
       checkinStreakDays: number;
+      lastCheckinDayKey: string | null;
       notificationPreferences: { emailDigestDaily: boolean; lastEmailDigestDailySentAt: Date | null } | null;
     };
+
+      // Global community data — queried once, included in every digest.
+      const newMembersSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const newMembersUserSelect = {
+        id: true,
+        username: true,
+        name: true,
+        avatarKey: true,
+        avatarUpdatedAt: true,
+      } as const;
+      const newMembers = await this.prisma.user.findMany({
+        where: {
+          emailVerifiedAt: { not: null },
+          bannedAt: null,
+          createdAt: { gte: newMembersSince },
+        },
+        orderBy: [{ createdAt: 'desc' }],
+        take: 4,
+        select: newMembersUserSelect,
+      });
+
+      const leaderboardUserSelect = {
+        id: true,
+        username: true,
+        name: true,
+        avatarKey: true,
+        avatarUpdatedAt: true,
+        checkinStreakDays: true,
+      } as const;
+      const leaderboard = await this.prisma.user.findMany({
+        where: {
+          bannedAt: null,
+          checkinStreakDays: { gt: 0 },
+        },
+        orderBy: [{ checkinStreakDays: 'desc' }, { createdAt: 'asc' }],
+        take: 3,
+        select: leaderboardUserSelect,
+      });
+
+      const r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
       let cursorId: string | null = null;
       const pageSize = 200;
@@ -697,6 +769,7 @@ export class NotificationsEmailCron {
           premiumPlus: true,
           undeliveredNotificationCount: true,
           checkinStreakDays: true,
+          lastCheckinDayKey: true,
           notificationPreferences: { select: { emailDigestDaily: true, lastEmailDigestDailySentAt: true } },
         },
       });
@@ -803,6 +876,14 @@ export class NotificationsEmailCron {
             )
           : renderCard(`<div>${renderPill('Quote of the day', 'info')}</div><div style="margin-top:10px;color:#6b7280;">(unavailable)</div>`);
 
+        // Days since last check-in: null means never posted.
+        const todayDayKey = easternDayKey(now);
+        const lastKey = u.lastCheckinDayKey ?? null;
+        const daysSinceLastPost = lastKey
+          ? Math.round((new Date(todayDayKey).getTime() - new Date(lastKey).getTime()) / (24 * 60 * 60 * 1000))
+          : null;
+        const inactiveDays = daysSinceLastPost !== null && daysSinceLastPost >= 3 ? daysSinceLastPost : null;
+
         const streakDays = postStreakDays;
         const postStreakBlock = renderCard(
           streakDays > 0
@@ -811,14 +892,69 @@ export class NotificationsEmailCron {
                 `<div style="font-size:14px;line-height:1.8;color:#111827;">You’re on a <strong style="color:#111827;">${streakDays}</strong>-day post streak.</div>`,
                 `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">Post or reply today to keep it going.</div>`,
               ].join('')
-            : [
-                `<div style="margin-bottom:10px;">${renderPill('Post streak', 'warning')}</div>`,
-                `<div style="font-size:14px;line-height:1.8;color:#111827;">No post streak yet.</div>`,
-                `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">Post today to start your streak.</div>`,
-                `<div style="margin-top:12px;">${renderButton({ href: checkinsUrl, label: 'Post' })}</div>`,
-              ].join(''),
+            : inactiveDays !== null
+              ? [
+                  `<div style="margin-bottom:10px;">${renderPill('Post streak', 'warning')}</div>`,
+                  `<div style="font-size:14px;line-height:1.8;color:#111827;">You haven’t posted in <strong style="color:#111827;">${inactiveDays}</strong> day${inactiveDays === 1 ? '' : 's'}.</div>`,
+                  `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">Come back and post today.</div>`,
+                  `<div style="margin-top:12px;">${renderButton({ href: checkinsUrl, label: 'Post now' })}</div>`,
+                ].join('')
+              : [
+                  `<div style="margin-bottom:10px;">${renderPill('Post streak', 'warning')}</div>`,
+                  `<div style="font-size:14px;line-height:1.8;color:#111827;">No post streak yet.</div>`,
+                  `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">Post today to start your streak.</div>`,
+                  `<div style="margin-top:12px;">${renderButton({ href: checkinsUrl, label: 'Post' })}</div>`,
+                ].join(''),
         );
-        const checkinBlock = renderCard(
+
+        // New members this week — avatars link to their profiles.
+        const newMembersBlock =
+          newMembers.length > 0
+            ? renderCard(
+                [
+                  `<div style="margin-bottom:10px;">${renderPill('New this week', 'success')}</div>`,
+                  `<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;">`,
+                  ...newMembers.map((m) => {
+                    const profileUrl = `${baseUrl}/u/${encodeURIComponent(m.username ?? m.id)}`;
+                    const mAvatarUrl = publicAssetUrl({ publicBaseUrl: r2PublicBaseUrl, key: m.avatarKey, updatedAt: m.avatarUpdatedAt });
+                    return [
+                      `<div style="display:inline-flex;flex-direction:column;align-items:center;gap:5px;text-align:center;width:72px;">`,
+                      renderEmailAvatar({ profileUrl, avatarUrl: mAvatarUrl, displayName: m.username ?? m.name ?? '?', size: 44 }),
+                      `<a href="${escapeHtml(profileUrl)}" style="font-size:11px;font-weight:700;color:#111827;text-decoration:none;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">@${escapeHtml((m.username ?? '').trim() || m.id)}</a>`,
+                      `</div>`,
+                    ].join('');
+                  }),
+                  `</div>`,
+                ].join(''),
+              )
+            : '';
+
+        // Top streak leaderboard — avatars link to their profiles.
+        const rankEmoji = ['🥇', '🥈', '🥉'] as const;
+        const leaderboardBlock =
+          leaderboard.length > 0
+            ? renderCard(
+                [
+                  `<div style="margin-bottom:10px;">${renderPill('Top streaks', 'warning')}</div>`,
+                  ...leaderboard.map((m, i) => {
+                    const profileUrl = `${baseUrl}/u/${encodeURIComponent(m.username ?? m.id)}`;
+                    const mAvatarUrl = publicAssetUrl({ publicBaseUrl: r2PublicBaseUrl, key: m.avatarKey, updatedAt: m.avatarUpdatedAt });
+                    return [
+                      `<div style="display:flex;align-items:center;gap:10px;${i > 0 ? 'margin-top:10px;' : ''}">`,
+                      `<span style="font-size:18px;width:24px;flex-shrink:0;text-align:center;">${rankEmoji[i] ?? String(i + 1) + '.'}</span>`,
+                      renderEmailAvatar({ profileUrl, avatarUrl: mAvatarUrl, displayName: m.username ?? m.name ?? '?', size: 36 }),
+                      `<div style="min-width:0;flex:1;">`,
+                      `<a href="${escapeHtml(profileUrl)}" style="font-size:13px;font-weight:700;color:#111827;text-decoration:none;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">@${escapeHtml((m.username ?? '').trim() || m.id)}</a>`,
+                      `<div style="font-size:12px;color:#6b7280;">${m.checkinStreakDays} day${m.checkinStreakDays === 1 ? '' : 's'}</div>`,
+                      `</div>`,
+                      `</div>`,
+                    ].join('');
+                  }),
+                ].join(''),
+              )
+            : '';
+
+                const checkinBlock = renderCard(
           [
             `<div style="margin-bottom:10px;">${renderPill('Daily check-in', 'warning')}</div>`,
             `<div style="font-size:14px;line-height:1.8;color:#111827;">${escapeHtml(checkinPrompt || '(unavailable)')}</div>`,
@@ -875,9 +1011,9 @@ export class NotificationsEmailCron {
             `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">Daily digest</div>`,
             `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(greeting)}</div>`,
             `<div style="margin:0 0 14px 0;">${renderPill(unreadLine, unreadNotifs > 0 || unreadChats > 0 ? 'warning' : 'neutral')}</div>`,
-            `<div style="margin-top:6px;">${renderButton({ href: notificationsUrl, label: 'Notifications' })} <span style="display:inline-block;width:8px;"></span> ${renderButton({
+            `<div style="margin-top:6px;">${renderButton({ href: notificationsUrl, label: unreadNotifs > 0 ? `Notifications (${unreadNotifs})` : 'Notifications' })} <span style="display:inline-block;width:8px;"></span> ${renderButton({
               href: messagesUrl,
-              label: 'Messages',
+              label: unreadChats > 0 ? `Messages (${unreadChats})` : 'Messages',
               variant: 'secondary',
             })}</div>`,
             `<div style="height:12px;"></div>`,
@@ -886,6 +1022,8 @@ export class NotificationsEmailCron {
             definitionBlock,
             quoteBlock,
             checkinBlock,
+            ...(newMembersBlock ? [newMembersBlock] : []),
+            ...(leaderboardBlock ? [leaderboardBlock] : []),
             `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(
               settingsUrl,
             )}" style="color:#111827;text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
