@@ -13,7 +13,14 @@ type PresenceEvent =
   | { type: 'active'; userId: string; instanceId: string }
   | { type: 'emitToUser'; userId: string; instanceId: string; event: string; payload: unknown }
   | { type: 'emitToRoom'; userId: string; instanceId: string; room: string; event: string; payload: unknown }
-  | { type: 'spacesLobbyCounts'; instanceId: string; countsBySpaceId: Record<string, number> };
+  | { type: 'spacesLobbyCounts'; instanceId: string; countsBySpaceId: Record<string, number> }
+  | {
+      type: 'userSpaceChanged';
+      userId: string;
+      instanceId: string;
+      spaceId: string | null;
+      previousSpaceId?: string;
+    };
 
 @Injectable()
 export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy {
@@ -245,6 +252,26 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
    */
   async publishSpacesLobbyCounts(countsBySpaceId: Record<string, number>): Promise<void> {
     await this.publish({ type: 'spacesLobbyCounts', instanceId: this.instanceId, countsBySpaceId });
+  }
+
+  /**
+   * Cross-instance: notify subscribers of a user that their space changed.
+   * Each instance emits to its local subscribers of that user.
+   */
+  async publishUserSpaceChanged(params: {
+    userId: string;
+    spaceId: string | null;
+    previousSpaceId?: string;
+  }): Promise<void> {
+    const userId = String(params.userId ?? '').trim();
+    if (!userId) return;
+    await this.publish({
+      type: 'userSpaceChanged',
+      userId,
+      instanceId: this.instanceId,
+      spaceId: params.spaceId ?? null,
+      previousSpaceId: params.previousSpaceId,
+    });
   }
 
   /**

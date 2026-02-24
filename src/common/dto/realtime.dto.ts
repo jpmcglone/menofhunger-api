@@ -120,9 +120,17 @@ export type MessagesNewPayloadDto = {
  * - `posts:*`: post/thread projections and scoped subscriptions (never used for user/account state)
  * - `messages:*`: chat projections only
  */
+/** Emitted to subscribers of a user when that user joins or leaves a space. */
+export type UsersSpaceChangedPayloadDto = {
+  userId: string;
+  spaceId: string | null;
+  previousSpaceId?: string;
+};
+
 export const WsEventNames = {
   usersMeUpdated: 'users:meUpdated',
   usersSelfUpdated: 'users:selfUpdated',
+  usersSpaceChanged: 'users:spaceChanged',
   postsSubscribe: 'posts:subscribe',
   postsUnsubscribe: 'posts:unsubscribe',
   postsSubscribed: 'posts:subscribed',

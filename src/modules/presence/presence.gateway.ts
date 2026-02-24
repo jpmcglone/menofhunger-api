@@ -31,7 +31,11 @@ import type {
   SpaceListenerDto,
   SpaceLobbyCountsDto,
 } from '../../common/dto';
-import { WsEventNames, type PostsSubscribePayloadDto } from '../../common/dto';
+import {
+  WsEventNames,
+  type PostsSubscribePayloadDto,
+  type UsersSpaceChangedPayloadDto,
+} from '../../common/dto';
 import { parseSessionCookieFromHeader } from '../../common/session-cookie';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -125,6 +129,17 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         // Another instance updated counts — broadcast to all sockets on this instance.
         const payload: SpaceLobbyCountsDto = { countsBySpaceId: (evt as any).countsBySpaceId ?? {} };
         this.server.emit('spaces:lobbyCounts', payload);
+      } else if (evt.type === 'userSpaceChanged') {
+        if ((evt as any).instanceId === myInstanceId) return; // we already emitted locally
+        const uid = (evt as any).userId;
+        if (!uid) return;
+        const payload: UsersSpaceChangedPayloadDto = {
+          userId: uid,
+          spaceId: (evt as any).spaceId ?? null,
+          previousSpaceId: (evt as any).previousSpaceId,
+        };
+        const targets = this.getTargetsForUser(uid);
+        this.emitToSockets(targets, WsEventNames.usersSpaceChanged, payload);
       }
     });
   }
@@ -445,6 +460,16 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     }
     await this.emitSpaceMembers(spaceId);
     this.emitSpacesLobbyCounts();
+
+    // Notify subscribers of this user (e.g. profile viewers, post rows) that their space changed.
+    const spaceChangedDto: UsersSpaceChangedPayloadDto = {
+      userId,
+      spaceId,
+      previousSpaceId: prevSpaceId ?? undefined,
+    };
+    const targets = this.getTargetsForUser(userId);
+    this.emitToSockets(targets, WsEventNames.usersSpaceChanged, spaceChangedDto);
+    void this.presenceRedis.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
   }
 
   @SubscribeMessage('spaces:leave')
@@ -456,6 +481,21 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     if (left?.wasActive) {
       await this.emitSpaceMembers(left.spaceId);
       this.emitSpacesLobbyCounts();
+
+      const userId =
+        (client.data as { userId?: string })?.userId ??
+        this.presence.getUserIdForSocket(client.id) ??
+        null;
+      if (userId) {
+        const spaceChangedDto: UsersSpaceChangedPayloadDto = {
+          userId,
+          spaceId: null,
+          previousSpaceId: left.spaceId,
+        };
+        const targets = this.getTargetsForUser(userId);
+        this.emitToSockets(targets, WsEventNames.usersSpaceChanged, spaceChangedDto);
+        void this.presenceRedis.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
+      }
     }
 
     // Best-effort legacy cleanup.
