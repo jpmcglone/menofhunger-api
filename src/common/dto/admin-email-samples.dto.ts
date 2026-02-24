@@ -1,5 +1,6 @@
 export type AdminEmailSampleTypeDto =
   | 'daily_digest'
+  | 'weekly_digest'
   | 'new_notifications'
   | 'instant_high_signal'
   | 'streak_reminder';

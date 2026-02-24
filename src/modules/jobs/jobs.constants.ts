@@ -13,8 +13,10 @@ export const JOBS = {
   // Notifications + email
   notificationsCleanup: 'notifications.cleanup',
   notificationsOrphanCleanup: 'notifications.orphanCleanup',
+  notificationsCountReconcile: 'notifications.countReconcile',
   notificationsEmailNudges: 'notifications.emailNudges',
   notificationsDailyDigest: 'notifications.dailyDigest',
+  notificationsWeeklyDigest: 'notifications.weeklyDigest',
   notificationsInstantHighSignalEmail: 'notifications.instantHighSignalEmail',
   notificationsStreakReminderEmail: 'notifications.streakReminderEmail',
 
@@ -27,6 +29,9 @@ export const JOBS = {
 
   // Link metadata
   linkMetadataBackfill: 'linkMetadata.backfill',
+
+  // Admin
+  adminDailyDigest: 'admin.dailyDigest',
 } as const;
 
 export type JobName = (typeof JOBS)[keyof typeof JOBS];

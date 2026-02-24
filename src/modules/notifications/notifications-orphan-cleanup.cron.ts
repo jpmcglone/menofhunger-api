@@ -42,17 +42,39 @@ export class NotificationsOrphanCleanupCron {
     this.running = true;
     const startedAt = Date.now();
     try {
-      const deleted = await this.prisma.notification.deleteMany({
-        where: {
-          OR: [
-            { subjectPost: { deletedAt: { not: null } } },
-            { actorPost: { deletedAt: { not: null } } },
-          ],
-        },
+      const orphanOR = [
+        { subjectPost: { deletedAt: { not: null as null } } },
+        { actorPost: { deletedAt: { not: null as null } } },
+      ];
+
+      // Find undelivered orphans first so we can correct the denormalized counter.
+      const undelivered = await this.prisma.notification.groupBy({
+        by: ['recipientUserId'],
+        where: { OR: orphanOR, deliveredAt: null },
+        _count: true,
       });
+
+      const deleted = await this.prisma.notification.deleteMany({ where: { OR: orphanOR } });
+
+      // Correct undeliveredNotificationCount for affected users (best-effort).
+      if (undelivered.length > 0) {
+        await Promise.allSettled(
+          undelivered.map((row) =>
+            this.prisma.user.update({
+              where: { id: row.recipientUserId },
+              data: {
+                undeliveredNotificationCount: { decrement: row._count },
+              },
+            }),
+          ),
+        );
+      }
+
       const ms = Date.now() - startedAt;
       if ((deleted.count ?? 0) > 0) {
-        this.logger.log(`Notifications orphan cleanup: deleted=${deleted.count} (${ms}ms)`);
+        this.logger.log(
+          `Notifications orphan cleanup: deleted=${deleted.count} undeliveredFixed=${undelivered.length} (${ms}ms)`,
+        );
       }
     } catch (err) {
       this.logger.warn(`Notifications orphan cleanup failed: ${(err as Error).message}`);

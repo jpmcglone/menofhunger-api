@@ -187,6 +187,7 @@ model User {
   stripeSubscriptionId String? @unique
   stripeSubscriptionStatus String?
   stripeSubscriptionPriceId String?
+  stripeCurrentPeriodStart DateTime?
   stripeCurrentPeriodEnd DateTime?
   stripeCancelAtPeriodEnd Boolean @default(false)
   // Follow list privacy (controls counts + follower/following lists).
@@ -873,6 +874,7 @@ model NotificationPreferences {
 
   // Email preferences (requires user.email).
   emailDigestDaily Boolean @default(true)
+  emailDigestWeekly Boolean @default(true)
   emailNewNotifications Boolean @default(true)
   /** Optional: send near-immediate emails for high-signal events (messages + mentions/replies). */
   emailInstantHighSignal Boolean @default(true)
@@ -881,6 +883,7 @@ model NotificationPreferences {
 
   // Email send timestamps (rate limiting / dedupe).
   lastEmailDigestDailySentAt DateTime?
+  lastEmailDigestWeeklySentAt DateTime?
   lastEmailNewNotificationsSentAt DateTime?
   lastEmailInstantHighSignalSentAt DateTime?
   lastEmailStreakReminderSentAt DateTime?
@@ -1063,5 +1066,16 @@ model LinkMetadata {
   updatedAt   DateTime @updatedAt
 
   @@index([url])
+}
+
+/// Tracks admin digest emails sent per day so we never double-send.
+model AdminEmailLog {
+  id     String   @id @default(cuid())
+  kind   String
+  dayKey String
+  sentAt DateTime @default(now())
+
+  @@unique([kind, dayKey])
+  @@index([sentAt])
 }
 

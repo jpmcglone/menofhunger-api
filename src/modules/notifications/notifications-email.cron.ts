@@ -390,6 +390,32 @@ export class NotificationsEmailCron {
     }
   }
 
+  /** Weekly digest (send once per week on Sundays; target 8am ET, DST-safe). */
+  @Cron('*/5 * * * *')
+  async sendWeeklyDigest(): Promise<void> {
+    if (!this.appConfig.runSchedulers()) return;
+    const emailCfg = this.appConfig.email();
+    if (!emailCfg) return;
+
+    try {
+      const now = new Date();
+      const et = easternYmdHm(now);
+      const minuteOfDay = et.hh * 60 + et.mm;
+      // Only enqueue in the 8:00-8:59am ET window.
+      if (minuteOfDay < 8 * 60 || minuteOfDay >= 9 * 60) return;
+      // Only enqueue on Sundays (ET day-of-week 0).
+      const sundayCheck = new Date(Date.UTC(et.y, et.m - 1, et.d));
+      if (sundayCheck.getUTCDay() !== 0) return;
+      const weekKey = easternDayKey(now); // e.g. "2026-02-22" (the Sunday date)
+      await this.jobs.enqueueCron(JOBS.notificationsWeeklyDigest, {}, `cron:notificationsWeeklyDigest:${weekKey}`, {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5 * 60_000 },
+      });
+    } catch {
+      // likely duplicate jobId; treat as no-op
+    }
+  }
+
   /** Streak reminder (send once per day; target ~4pm ET, DST-safe). */
   @Cron('*/5 * * * *')
   async sendStreakReminderEmail(): Promise<void> {
@@ -705,7 +731,7 @@ export class NotificationsEmailCron {
     };
 
       // Global community data — queried once, included in every digest.
-      const newMembersSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      // "New daily users" = joined since the previous digest window start (yesterday 8am ET).
       const newMembersUserSelect = {
         id: true,
         username: true,
@@ -717,7 +743,7 @@ export class NotificationsEmailCron {
         where: {
           emailVerifiedAt: { not: null },
           bannedAt: null,
-          createdAt: { gte: newMembersSince },
+          createdAt: { gte: new Date(windowStartUtcMs) },
         },
         orderBy: [{ createdAt: 'desc' }],
         take: 4,
@@ -1054,6 +1080,286 @@ export class NotificationsEmailCron {
     } catch (err) {
       this.logger.error(
         `[daily-digest] run failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+    }
+  }
+
+  async runSendWeeklyDigest(): Promise<void> {
+    const emailCfg = this.appConfig.email();
+    if (!emailCfg) return;
+
+    try {
+      const now = new Date();
+      const et = easternYmdHm(now);
+
+      // Only run on Sundays (ET).
+      const sundayCheck = new Date(Date.UTC(et.y, et.m - 1, et.d));
+      if (sundayCheck.getUTCDay() !== 0) return;
+
+      // Weekly window: last Sunday 8am ET → this Sunday 8am ET (7 days).
+      const thisWeekEndUtcMs = easternUtcMsForLocal({ ...easternYmd(now), hh: 8, mm: 0 });
+      const lastSundayEt = easternYmd(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000));
+      const lastWeekStartUtcMs = easternUtcMsForLocal({ ...lastSundayEt, hh: 8, mm: 0 });
+      const weekWindowStart = new Date(lastWeekStartUtcMs);
+      const weekWindowEnd = new Date(thisWeekEndUtcMs);
+
+      const sendStartUtc = weekWindowEnd;
+      const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
+      const settingsUrl = `${baseUrl}/settings/notifications`;
+      const r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+      // Best post of the week (per-tier, same pattern as daily digest).
+      const latestAsOf = await this.prisma.postPopularScoreSnapshot.findFirst({
+        orderBy: [{ asOf: 'desc' }],
+        select: { asOf: true },
+      });
+      const weeklyFeaturedSelect = { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } } as const;
+      const weeklyCreatedAtWindow = { gte: weekWindowStart, lt: weekWindowEnd };
+
+      const weeklyFeaturedRowPublic = latestAsOf?.asOf
+        ? await this.prisma.postPopularScoreSnapshot.findFirst({
+            where: { asOf: latestAsOf.asOf, createdAt: weeklyCreatedAtWindow, parentId: null, visibility: { in: ['public'] } },
+            orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
+            select: { postId: true },
+          })
+        : null;
+      const weeklyFeaturedRowVerified = latestAsOf?.asOf
+        ? await this.prisma.postPopularScoreSnapshot.findFirst({
+            where: { asOf: latestAsOf.asOf, createdAt: weeklyCreatedAtWindow, parentId: null, visibility: { in: ['public', 'verifiedOnly'] } },
+            orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
+            select: { postId: true },
+          })
+        : null;
+      const weeklyFeaturedRowPremium = latestAsOf?.asOf
+        ? await this.prisma.postPopularScoreSnapshot.findFirst({
+            where: {
+              asOf: latestAsOf.asOf,
+              createdAt: weeklyCreatedAtWindow,
+              parentId: null,
+              visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] },
+            },
+            orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
+            select: { postId: true },
+          })
+        : null;
+
+      const weeklyFeaturedPostPublic = weeklyFeaturedRowPublic?.postId
+        ? await this.prisma.post.findFirst({ where: { id: weeklyFeaturedRowPublic.postId, deletedAt: null }, select: weeklyFeaturedSelect })
+        : await this.prisma.post.findFirst({
+            where: { deletedAt: null, parentId: null, visibility: 'public', createdAt: weeklyCreatedAtWindow },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            select: weeklyFeaturedSelect,
+          });
+      const weeklyFeaturedPostVerified = weeklyFeaturedRowVerified?.postId
+        ? await this.prisma.post.findFirst({ where: { id: weeklyFeaturedRowVerified.postId, deletedAt: null }, select: weeklyFeaturedSelect })
+        : await this.prisma.post.findFirst({
+            where: { deletedAt: null, parentId: null, visibility: { in: ['public', 'verifiedOnly'] }, createdAt: weeklyCreatedAtWindow },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            select: weeklyFeaturedSelect,
+          });
+      const weeklyFeaturedPostPremium = weeklyFeaturedRowPremium?.postId
+        ? await this.prisma.post.findFirst({ where: { id: weeklyFeaturedRowPremium.postId, deletedAt: null }, select: weeklyFeaturedSelect })
+        : await this.prisma.post.findFirst({
+            where: {
+              deletedAt: null,
+              parentId: null,
+              visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] },
+              createdAt: weeklyCreatedAtWindow,
+            },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            select: weeklyFeaturedSelect,
+          });
+
+      function pickWeeklyFeaturedPost(u: { verifiedStatus?: string | null; premium?: boolean | null; premiumPlus?: boolean | null }) {
+        const isPremium = Boolean(u.premium || u.premiumPlus);
+        const isVerified = (u.verifiedStatus ?? 'none') !== 'none';
+        if (isPremium) return weeklyFeaturedPostPremium ?? weeklyFeaturedPostVerified ?? weeklyFeaturedPostPublic;
+        if (isVerified) return weeklyFeaturedPostVerified ?? weeklyFeaturedPostPublic;
+        return weeklyFeaturedPostPublic;
+      }
+
+      // New members this week — up to 15 shown, with overflow count.
+      const weeklyNewMembersUserSelect = {
+        id: true,
+        username: true,
+        name: true,
+        avatarKey: true,
+        avatarUpdatedAt: true,
+      } as const;
+      const weeklyNewMembersTotal = await this.prisma.user.count({
+        where: { emailVerifiedAt: { not: null }, bannedAt: null, createdAt: { gte: weekWindowStart, lt: weekWindowEnd } },
+      });
+      const weeklyNewMembers = await this.prisma.user.findMany({
+        where: { emailVerifiedAt: { not: null }, bannedAt: null, createdAt: { gte: weekWindowStart, lt: weekWindowEnd } },
+        orderBy: [{ createdAt: 'desc' }],
+        take: 15,
+        select: weeklyNewMembersUserSelect,
+      });
+
+      type WeeklyRecipientRow = {
+        id: string;
+        email: string | null;
+        username: string | null;
+        name: string | null;
+        verifiedStatus: 'none' | 'identity' | 'manual';
+        premium: boolean;
+        premiumPlus: boolean;
+        notificationPreferences: { emailDigestWeekly: boolean; lastEmailDigestWeeklySentAt: Date | null } | null;
+      };
+
+      let cursorId: string | null = null;
+      const pageSize = 200;
+      for (;;) {
+        const recipients: WeeklyRecipientRow[] = await this.prisma.user.findMany({
+          where: {
+            email: { not: null },
+            emailVerifiedAt: { not: null },
+            ...(cursorId ? { id: { gt: cursorId } } : {}),
+            OR: [
+              { notificationPreferences: { is: null } },
+              { notificationPreferences: { is: { emailDigestWeekly: true } } },
+            ],
+          },
+          orderBy: [{ id: 'asc' }],
+          take: pageSize,
+          select: {
+            id: true,
+            email: true,
+            username: true,
+            name: true,
+            verifiedStatus: true,
+            premium: true,
+            premiumPlus: true,
+            notificationPreferences: { select: { emailDigestWeekly: true, lastEmailDigestWeeklySentAt: true } },
+          },
+        });
+
+        if (recipients.length === 0) break;
+        cursorId = recipients[recipients.length - 1]?.id ?? null;
+
+        for (const u of recipients) {
+          const to = (u.email ?? '').trim();
+          if (!to) continue;
+          if (u.notificationPreferences && !u.notificationPreferences.emailDigestWeekly) continue;
+
+          const lastSent = u.notificationPreferences?.lastEmailDigestWeeklySentAt ?? null;
+          // Skip if already sent this week (within last 6 days).
+          if (lastSent && lastSent.getTime() >= sendStartUtc.getTime()) continue;
+
+          const greetingName = (u.name ?? u.username ?? '').trim();
+          const greeting = greetingName ? `Good morning ${greetingName},` : `Good morning,`;
+
+          const featuredPost = pickWeeklyFeaturedPost(u);
+          const featuredUrl = featuredPost ? `${baseUrl}/p/${encodeURIComponent(featuredPost.id)}` : null;
+
+          const newMembersBlock =
+            weeklyNewMembers.length > 0
+              ? renderCard(
+                  [
+                    `<div style="margin-bottom:10px;">${renderPill(`New this week`, 'success')}</div>`,
+                    `<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;">`,
+                    ...weeklyNewMembers.map((m) => {
+                      const profileUrl = `${baseUrl}/u/${encodeURIComponent(m.username ?? m.id)}`;
+                      const mAvatarUrl = publicAssetUrl({ publicBaseUrl: r2PublicBaseUrl, key: m.avatarKey, updatedAt: m.avatarUpdatedAt });
+                      return [
+                        `<div style="display:inline-flex;flex-direction:column;align-items:center;gap:5px;text-align:center;width:72px;">`,
+                        renderEmailAvatar({ profileUrl, avatarUrl: mAvatarUrl, displayName: m.username ?? m.name ?? '?', size: 44 }),
+                        `<a href="${escapeHtml(profileUrl)}" style="font-size:11px;font-weight:700;color:#111827;text-decoration:none;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">@${escapeHtml((m.username ?? '').trim() || m.id)}</a>`,
+                        `</div>`,
+                      ].join('');
+                    }),
+                    `</div>`,
+                    weeklyNewMembersTotal > weeklyNewMembers.length
+                      ? `<div style="margin-top:10px;font-size:12px;color:#9ca3af;">…and ${weeklyNewMembersTotal - weeklyNewMembers.length} more</div>`
+                      : ``,
+                  ].join(''),
+                )
+              : '';
+
+          const featuredHtml = featuredPost
+            ? renderCard(
+                [
+                  `<div style="margin-bottom:10px;">${renderPill('Best post of the week', 'success')}</div>`,
+                  `<div style="font-size:13px;line-height:1.7;color:#6b7280;">by <strong style="color:#111827;">@${escapeHtml(
+                    (featuredPost.user.username ?? 'unknown').trim(),
+                  )}</strong></div>`,
+                  `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:#111827;">${escapeHtml(
+                    truncate(featuredPost.body ?? '', 260),
+                  )}</div>`,
+                  featuredUrl ? `<div style="margin-top:12px;">${renderButton({ href: featuredUrl, label: 'Open post' })}</div>` : ``,
+                ].join(''),
+              )
+            : '';
+
+          const subject = 'Your weekly Men of Hunger digest';
+
+          const textLines: string[] = [
+            greeting,
+            '',
+            'Weekly digest — Men of Hunger',
+            '',
+          ];
+          if (featuredPost) {
+            textLines.push(
+              'Best post of the week',
+              `by @${(featuredPost.user.username ?? 'unknown').trim()}`,
+              truncate(featuredPost.body ?? '', 240),
+              featuredUrl ? `Open: ${featuredUrl}` : '',
+              '',
+            );
+          }
+          if (weeklyNewMembersTotal > 0) {
+            textLines.push(
+              `New this week: ${weeklyNewMembersTotal} new member${weeklyNewMembersTotal === 1 ? '' : 's'}`,
+              ...weeklyNewMembers.map((m) => `  @${(m.username ?? '').trim() || m.id}`),
+              weeklyNewMembersTotal > weeklyNewMembers.length ? `  …and ${weeklyNewMembersTotal - weeklyNewMembers.length} more` : '',
+              '',
+            );
+          }
+          textLines.push(`Manage notification settings: ${settingsUrl}`);
+          const text = textLines.filter((l) => l !== '').join('\n');
+
+          const html = renderMohEmail({
+            title: `Weekly digest`,
+            preheader: featuredPost
+              ? `This week's best post + ${weeklyNewMembersTotal} new member${weeklyNewMembersTotal === 1 ? '' : 's'}.`
+              : `Your weekly Men of Hunger recap.`,
+            contentHtml: [
+              `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">Weekly digest</div>`,
+              `<div style="margin:0 0 16px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(greeting)}</div>`,
+              ...(featuredPost ? [featuredHtml] : []),
+              ...(newMembersBlock ? [newMembersBlock] : []),
+              `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(
+                settingsUrl,
+              )}" style="color:#111827;text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
+            ].join(''),
+            footerHtml: `Manage notifications in <a href="${escapeHtml(
+              settingsUrl,
+            )}" style="color:#9ca3af;text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
+          });
+
+          const sent = await this.email.sendText({
+            to,
+            subject,
+            text,
+            html,
+            from: emailCfg.fromEmail.notifications ?? undefined,
+          });
+          if (sent.sent) {
+            await this.prisma.notificationPreferences.upsert({
+              where: { userId: u.id },
+              create: { userId: u.id, lastEmailDigestWeeklySentAt: now },
+              update: { lastEmailDigestWeeklySentAt: now },
+            });
+          } else {
+            this.logger.debug(`[weekly-digest] not sent to userId=${u.id} reason=${sent.reason ?? 'unknown'}`);
+          }
+        }
+      }
+    } catch (err) {
+      this.logger.error(
+        `[weekly-digest] run failed: ${err instanceof Error ? err.message : String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
     }

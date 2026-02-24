@@ -204,6 +204,8 @@ export class BillingService {
     const cancelAtPeriodEnd = Boolean((sub as any).cancel_at_period_end);
     const currentPeriodEndSec = (sub as any)?.current_period_end as number | null | undefined;
     const currentPeriodEnd = currentPeriodEndSec ? new Date(currentPeriodEndSec * 1000) : null;
+    const currentPeriodStartSec = (sub as any)?.current_period_start as number | null | undefined;
+    const currentPeriodStart = currentPeriodStartSec ? new Date(currentPeriodStartSec * 1000) : null;
 
     const verified = isVerified(user.verifiedStatus);
     const entitled = verified && entitledStatuses(status) && Boolean(priceId);
@@ -217,6 +219,7 @@ export class BillingService {
         stripeSubscriptionStatus: status || null,
         stripeSubscriptionPriceId: priceId,
         stripeCancelAtPeriodEnd: cancelAtPeriodEnd,
+        stripeCurrentPeriodStart: currentPeriodStart,
         stripeCurrentPeriodEnd: currentPeriodEnd,
         premium: isPremium,
         premiumPlus: isPlus,

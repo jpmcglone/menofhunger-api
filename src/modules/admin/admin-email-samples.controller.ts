@@ -14,7 +14,7 @@ function safeBaseUrl(raw: string | null): string {
 }
 
 const schema = z.object({
-  type: z.enum(['daily_digest', 'new_notifications', 'instant_high_signal', 'streak_reminder']),
+  type: z.enum(['daily_digest', 'weekly_digest', 'new_notifications', 'instant_high_signal', 'streak_reminder']),
 });
 
 type SampleType = z.infer<typeof schema>['type'];
@@ -71,6 +71,7 @@ export class AdminEmailSamplesController {
     ctx: { baseUrl: string; greeting: string },
   ): Promise<{ subject: string; text: string; html: string }> {
     if (type === 'daily_digest') return await this.renderDailyDigestSample(ctx);
+    if (type === 'weekly_digest') return this.renderWeeklyDigestSample(ctx);
     if (type === 'new_notifications') return this.renderNewNotificationsSample(ctx);
     if (type === 'instant_high_signal') return this.renderInstantHighSignalSample(ctx);
     return this.renderStreakReminderSample(ctx);
@@ -167,6 +168,92 @@ export class AdminEmailSamplesController {
             `<div style="margin-top:12px;">${renderButton({ href: homeUrl, label: 'Check in' })}</div>`,
           ].join(''),
         ),
+        `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(
+          settingsUrl,
+        )}" style="color:#111827;text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
+      ].join(''),
+      footerHtml: `Men of Hunger · Sample email`,
+    });
+
+    return { subject, text, html };
+  }
+
+  private renderWeeklyDigestSample(ctx: { baseUrl: string; greeting: string }) {
+    const homeUrl = `${ctx.baseUrl}/home`;
+    const settingsUrl = `${ctx.baseUrl}/settings/notifications`;
+
+    const samplePost = {
+      username: 'john_doe',
+      body: "This week I've been thinking a lot about what it means to be present. Not just physically, but spiritually. Are we here when it counts?",
+      boostCount: 24,
+      commentCount: 11,
+      id: 'sample-post-id',
+    };
+    const samplePostUrl = `${ctx.baseUrl}/p/${samplePost.id}`;
+
+    const sampleNewMembers = [
+      { username: 'new_member_1', name: 'James Wilson' },
+      { username: 'new_member_2', name: 'Michael Scott' },
+      { username: 'new_member_3', name: 'David Clark' },
+    ];
+    const newMembersTotal = 7;
+
+    const subject = 'Sample — Weekly digest';
+    const text = [
+      ctx.greeting,
+      '',
+      'This is a sample of the Weekly digest email.',
+      '',
+      'Best post of the week',
+      `by @${samplePost.username}`,
+      samplePost.body,
+      `Open: ${samplePostUrl}`,
+      '',
+      `New this week: ${newMembersTotal} new members`,
+      ...sampleNewMembers.map((m) => `  @${m.username}`),
+      `  …and ${newMembersTotal - sampleNewMembers.length} more`,
+      '',
+      `Manage notification settings: ${settingsUrl}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const featuredBlock = renderCard(
+      [
+        `<div style="margin-bottom:10px;">${renderPill('Best post of the week', 'success')}</div>`,
+        `<div style="font-size:13px;line-height:1.7;color:#6b7280;">by <strong style="color:#111827;">@${escapeHtml(samplePost.username)}</strong></div>`,
+        `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:#111827;">${escapeHtml(samplePost.body)}</div>`,
+        `<div style="margin-top:10px;font-size:12px;color:#6b7280;">🔁 ${samplePost.boostCount} boosts · 💬 ${samplePost.commentCount} comments</div>`,
+        `<div style="margin-top:12px;">${renderButton({ href: samplePostUrl, label: 'Open post' })}</div>`,
+      ].join(''),
+    );
+
+    const newMembersBlock = renderCard(
+      [
+        `<div style="margin-bottom:10px;">${renderPill(`New this week`, 'success')}</div>`,
+        `<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;">`,
+        ...sampleNewMembers.map(
+          (m) =>
+            `<div style="display:inline-flex;flex-direction:column;align-items:center;gap:5px;text-align:center;width:72px;">` +
+            `<div style="width:44px;height:44px;border-radius:50%;background:#111827;color:#fff;font-size:18px;font-weight:700;text-align:center;line-height:44px;">${escapeHtml(m.name[0].toUpperCase())}</div>` +
+            `<span style="font-size:11px;font-weight:700;color:#111827;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">@${escapeHtml(m.username)}</span>` +
+            `</div>`,
+        ),
+        `</div>`,
+        `<div style="margin-top:10px;font-size:12px;color:#9ca3af;">…and ${newMembersTotal - sampleNewMembers.length} more</div>`,
+      ].join(''),
+    );
+
+    const html = renderMohEmail({
+      title: 'Sample — Weekly digest',
+      preheader: `This week's best post + ${newMembersTotal} new members.`,
+      contentHtml: [
+        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">Weekly digest (sample)</div>`,
+        `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(ctx.greeting)}</div>`,
+        `<div style="margin:0 0 14px 0;">${renderPill('Sample email', 'warning')}</div>`,
+        `<div style="height:4px;"></div>`,
+        featuredBlock,
+        newMembersBlock,
         `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(
           settingsUrl,
         )}" style="color:#111827;text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
