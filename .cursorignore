@@ -1,0 +1,15 @@
+# ──────────────────────────────────────────────
+# API-specific ignores (inherits workspace root rules)
+# ──────────────────────────────────────────────
+
+# Installed packages
+node_modules/
+
+# Compiled output — index the source, not the build
+dist/
+
+# Test coverage reports
+coverage/
+
+# Prisma: migrations are useful context; ignore only the heavy generated client
+node_modules/.prisma/
