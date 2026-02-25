@@ -22,6 +22,10 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
   blockedByViewer?: Set<string>;
   /** Author IDs that have blocked the viewer. */
   viewerBlockedBy?: Set<string>;
+  /** Set of canonical post IDs that the viewer has flat-reposted. */
+  repostedByPostId?: Set<string>;
+  /** Map from repostedPostId to the raw post data for flat reposts. */
+  repostedPostMap?: Map<string, T>;
 }) {
   const {
     parentMap,
@@ -36,6 +40,8 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     toPostDto,
     blockedByViewer,
     viewerBlockedBy,
+    repostedByPostId,
+    repostedPostMap,
   } = opts;
 
   function attachParentChain(post: T): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } {
@@ -53,6 +59,13 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
       Boolean(viewerUserId) &&
       postWithPoll.user?.id === viewerUserId &&
       Boolean(postWithPoll.poll?.creatorSkippedAt);
+
+    // For flat reposts (kind='repost'), attach the nested reposted post DTO.
+    const isRepost = (post as any).kind === 'repost';
+    const repostedPostIdVal = isRepost ? ((post as any).repostedPostId as string | null | undefined) : null;
+    const repostedPostRaw = repostedPostIdVal ? repostedPostMap?.get(repostedPostIdVal) : undefined;
+    const repostedPostDto = repostedPostRaw ? attachParentChain(repostedPostRaw) : undefined;
+
     const dto = toPostDto(post as unknown as PostWithAuthorAndMedia, baseUrl, {
       viewerHasBoosted: boosted.has(post.id),
       viewerHasBookmarked: bookmarksByPostId.has(post.id),
@@ -60,6 +73,8 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
       viewerVotedPollOptionId: votedPollOptionIdByPostId.get(post.id) ?? null,
       viewerCreatorSkipped: viewerCreatorSkipped || undefined,
       viewerBlockStatus: viewerBlockStatus ?? undefined,
+      viewerHasReposted: repostedByPostId ? repostedByPostId.has(post.id) : undefined,
+      repostedPost: repostedPostDto,
       includeInternal: viewerHasAdmin,
       internalOverride:
         internalOverride || (typeof score === 'number' ? { score } : undefined)

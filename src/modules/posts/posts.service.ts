@@ -108,6 +108,9 @@ export class PostsService {
   private static popularEngagementRateK = 10;
   private static popularEngagementRateWeight = 0.03;
   private static popularEngagementRateCap = 0.06;
+  /** Reposts signal content spread / virality; weighted similarly to bookmarks. */
+  private static popularRepostScoreWeight = 0.5;
+  private static popularCandidatesRepostedTake = 1500;
 
   // "Featured" is an automated, stable subset of trending:
   // - Top-level posts only
@@ -430,6 +433,34 @@ export class PostsService {
     return out;
   }
 
+  /** Returns the set of canonical post IDs that the viewer has flat-reposted. */
+  async viewerRepostedPostIds(params: { viewerUserId: string; postIds: string[] }) {
+    const { viewerUserId, postIds } = params;
+    if (!viewerUserId) return new Set<string>();
+    const ids = (postIds ?? []).filter(Boolean);
+    if (ids.length === 0) return new Set<string>();
+
+    const key = `posts.viewerReposted:${viewerUserId}`;
+    const map = this.requestCache.get<Map<string, boolean>>(key) ?? new Map<string, boolean>();
+    if (this.requestCache.get<Map<string, boolean>>(key) == null) {
+      this.requestCache.set(key, map);
+    }
+
+    const missing = ids.filter((id) => !map.has(id));
+    if (missing.length > 0) {
+      const reposts = await (this.prisma.post as any).findMany({
+        where: { userId: viewerUserId, kind: 'repost', repostedPostId: { in: missing }, deletedAt: null },
+        select: { repostedPostId: true },
+      });
+      const repostedSet = new Set((reposts as Array<{ repostedPostId: string | null }>).map((r) => r.repostedPostId).filter(Boolean));
+      for (const id of missing) map.set(id, repostedSet.has(id));
+    }
+
+    const out = new Set<string>();
+    for (const id of ids) if (map.get(id)) out.add(id);
+    return out;
+  }
+
   async viewerBookmarksByPostId(params: { viewerUserId: string; postIds: string[] }) {
     const { viewerUserId, postIds } = params;
     if (!viewerUserId) return new Map<string, { collectionIds: string[] }>();
@@ -718,7 +749,8 @@ export class PostsService {
       where: {
         asOf: snapshotAsOf,
         user: { bannedAt: null },
-        ...(kind ? ({ post: { is: { kind } } } as Prisma.PostPopularScoreSnapshotWhereInput) : {}),
+        // Exclude flat reposts; their signal flows through repostCount on originals.
+        post: { is: { kind: { not: 'repost' }, ...(kind ? { kind } : {}) } },
         ...(authorUserIds?.length ? ({ userId: { in: authorUserIds } } as Prisma.PostPopularScoreSnapshotWhereInput) : {}),
         ...visibilityWhere,
         ...cursorWhere,
@@ -1385,6 +1417,23 @@ export class PostsService {
           )
           UNION
           (
+            -- Posts that have been reposted are signals of content spread/virality.
+            SELECT p."id"
+            FROM "Post" p
+            WHERE
+              p."deletedAt" IS NULL
+              AND p."parentId" IS NULL
+              AND p."createdAt" >= ${snapshotMinCreatedAt}
+              AND p."repostCount" > 0
+              AND p."kind"::text <> 'repost'
+              ${visibilityFilterSql}
+              ${authorFilterSql}
+              ${bannedAuthorSql}
+            ORDER BY p."repostCount" DESC, p."createdAt" DESC, p."id" DESC
+            LIMIT ${PostsService.popularCandidatesRepostedTake}
+          )
+          UNION
+          (
             -- Replies with engagement can become popular; top-level posts get a slight boost in scoring.
             SELECT p."id"
             FROM "Post" p
@@ -1469,6 +1518,17 @@ export class PostsService {
             )
             +
             (
+              -- Reposts signal content spread / virality; decayed like bookmarks.
+              (p."repostCount"::DOUBLE PRECISION) * ${PostsService.popularRepostScoreWeight} * POWER(
+                0.5,
+                GREATEST(
+                  0,
+                  EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                ) / ${PostsService.popularHalfLifeSeconds}
+              )
+            )
+            +
+            (
               (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight}
             )
             +
@@ -1522,6 +1582,8 @@ export class PostsService {
                   +
                   ((p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.popularHalfLifeSeconds})))
                   +
+                  ((p."repostCount"::DOUBLE PRECISION) * ${PostsService.popularRepostScoreWeight} * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.popularHalfLifeSeconds})))
+                  +
                   ((COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight})
                 ) / GREATEST((p."viewerCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
               )
@@ -1536,6 +1598,8 @@ export class PostsService {
         LEFT JOIN comment_scores cs ON cs."postId" = p."id"
         CROSS JOIN hashtag_global hg
         LEFT JOIN post_hashtag_scores hs ON hs."postId" = p."id"
+        -- Flat reposts (kind='repost') are excluded: repostCount on the original already carries their signal.
+        WHERE p."kind"::text <> 'repost'
       )
       SELECT "id", "createdAt", "score"
       FROM scored
@@ -1855,6 +1919,17 @@ export class PostsService {
               )
               +
               (
+                -- Reposts signal content spread / virality; decayed like bookmarks.
+                (p."repostCount"::DOUBLE PRECISION) * ${PostsService.popularRepostScoreWeight} * POWER(
+                  0.5,
+                  GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                  ) / ${PostsService.popularHalfLifeSeconds}
+                )
+              )
+              +
+              (
                 (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight}
               )
               +
@@ -1880,6 +1955,8 @@ export class PostsService {
                     +
                     ((p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.popularHalfLifeSeconds})))
                     +
+                    ((p."repostCount"::DOUBLE PRECISION) * ${PostsService.popularRepostScoreWeight} * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.popularHalfLifeSeconds})))
+                    +
                     ((COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight})
                   ) / GREATEST((p."viewerCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
                 )
@@ -1892,6 +1969,7 @@ export class PostsService {
           WHERE
             p."deletedAt" IS NULL
             AND p."parentId" IS NULL
+            AND p."kind"::text <> 'repost'
             AND p."createdAt" >= ${snapshotMinCreatedAt}
             AND p."userId" = ${user.id}
             AND (u."bannedAt" IS NULL)
@@ -2216,7 +2294,17 @@ export class PostsService {
 
     const post = await this.prisma.post.findUnique({
       where: { id },
-      select: { id: true, userId: true, deletedAt: true, hashtags: true, hashtagCasings: true, topics: true },
+      select: {
+        id: true,
+        userId: true,
+        deletedAt: true,
+        hashtags: true,
+        hashtagCasings: true,
+        topics: true,
+        kind: true,
+        repostedPostId: true,
+        quotedPostId: true,
+      } as any,
     });
     if (!post) throw new NotFoundException('Post not found.');
     if (post.userId !== userId) throw new ForbiddenException('Not allowed to delete this post.');
@@ -2231,6 +2319,21 @@ export class PostsService {
         where: { id },
         data: { deletedAt: now },
       });
+
+      // Decrement repostCount on the target post when a repost/quote repost is deleted.
+      const repostedPostId = (post as any).repostedPostId as string | null | undefined;
+      const quotedPostId = (post as any).quotedPostId as string | null | undefined;
+      if ((post as any).kind === 'repost' && repostedPostId) {
+        await (tx as any).post.update({
+          where: { id: repostedPostId },
+          data: { repostCount: { decrement: 1 } },
+        }).catch(() => { /* ignore if original is gone */ });
+      } else if (quotedPostId) {
+        await (tx as any).post.update({
+          where: { id: quotedPostId },
+          data: { repostCount: { decrement: 1 } },
+        }).catch(() => { /* ignore if quoted is gone */ });
+      }
 
       // Poll cleanup: once a post is deleted, we should never send "poll results ready" notifications.
       // This also prevents notifications if the post is later restored by an admin.
@@ -3565,6 +3668,25 @@ export class PostsService {
           parentCommentCount = typeof parentAfter.commentCount === 'number' ? parentAfter.commentCount : null;
         }
 
+        // Detect embedded post link in body and set quotedPostId + increment that post's repostCount.
+        const detectedQuotedPostId = this.extractQuotedPostIdFromBody(body);
+        if (detectedQuotedPostId && detectedQuotedPostId !== created.id) {
+          const quotedExists = await (tx as any).post.findFirst({
+            where: { id: detectedQuotedPostId, deletedAt: null },
+            select: { id: true },
+          });
+          if (quotedExists) {
+            await (tx as any).post.update({
+              where: { id: created.id },
+              data: { quotedPostId: detectedQuotedPostId },
+            });
+            await (tx as any).post.update({
+              where: { id: detectedQuotedPostId },
+              data: { repostCount: { increment: 1 } },
+            });
+          }
+        }
+
         if (mentionUserIds.length > 0) {
           await tx.postMention.createMany({
             data: mentionUserIds.map((uid) => ({ postId: created.id, userId: uid })),
@@ -3821,6 +3943,52 @@ export class PostsService {
     return await this.polls.skipPoll(params);
   }
 
+  /**
+   * Attempt to extract a local post ID from a URL that looks like
+   * `https://menofhunger.com/p/<id>` (or any configured frontend origin).
+   * Returns null if the URL does not match.
+   */
+  private tryExtractLocalPostIdFromUrl(raw: string): string | null {
+    const s = (raw ?? '').trim();
+    if (!s) return null;
+    try {
+      const u = new URL(s);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+      const parts = u.pathname.split('/').filter(Boolean);
+      if (parts.length !== 2 || parts[0] !== 'p') return null;
+      const id = (parts[1] ?? '').trim();
+      if (!id) return null;
+      // Only accept our own known origins to prevent abuse.
+      const allowed = new Set<string>();
+      allowed.add('menofhunger.com');
+      allowed.add('www.menofhunger.com');
+      const frontendBase = this.appConfig.frontendBaseUrl()?.trim() ?? '';
+      if (frontendBase) {
+        try { allowed.add(new URL(frontendBase).hostname.toLowerCase()); } catch { /* ignore */ }
+      }
+      const host = u.hostname.toLowerCase();
+      if (!allowed.has(host) && !host.endsWith('.menofhunger.com')) return null;
+      return id;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Scan body text for a local post link and return its ID (or null).
+   * Used to populate quotedPostId on new posts.
+   */
+  private extractQuotedPostIdFromBody(body: string): string | null {
+    const urlRegex = /https?:\/\/[^\s<>"']+/g;
+    const matches = body.match(urlRegex) ?? [];
+    // Take the last matching local post link (same as frontend behaviour).
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const id = this.tryExtractLocalPostIdFromUrl(matches[i]!);
+      if (id) return id;
+    }
+    return null;
+  }
+
   private async ensureUserCanBoost(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -3972,6 +4140,151 @@ export class PostsService {
     await this.cacheInvalidation.bumpFeedGlobal();
 
     return { success: true, viewerHasBoosted: false, boostCount: res.boostCount };
+  }
+
+  async repostPost(params: { userId: string; postId: string }) {
+    const { userId, postId } = params;
+    const id = (postId ?? '').trim();
+    if (!id) throw new NotFoundException('Post not found.');
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, usernameIsSet: true, verifiedStatus: true },
+    });
+    if (!user) throw new NotFoundException('User not found.');
+    if (!user.usernameIsSet) throw new ForbiddenException('Set a username to repost.');
+    if (!user.verifiedStatus || user.verifiedStatus === 'none') {
+      throw new ForbiddenException('Verify your account to repost.');
+    }
+
+    // Resolve the canonical original post (flatten repost-of-repost).
+    const targetPost = await (this.prisma.post as any).findFirst({
+      where: { id, deletedAt: null },
+      select: { id: true, userId: true, visibility: true, kind: true, repostedPostId: true },
+    });
+    if (!targetPost) throw new NotFoundException('Post not found.');
+    if (targetPost.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be reposted.');
+
+    // Flatten: if target is itself a flat repost, point to its original.
+    let canonicalId: string = id;
+    if (targetPost.kind === 'repost' && targetPost.repostedPostId) {
+      const canonical = await (this.prisma.post as any).findFirst({
+        where: { id: targetPost.repostedPostId, deletedAt: null },
+        select: { id: true, userId: true, visibility: true },
+      });
+      if (!canonical) throw new NotFoundException('Post not found.');
+      canonicalId = canonical.id;
+    }
+
+    // Block check.
+    const canonicalPost = canonicalId === id ? targetPost : await (this.prisma.post as any).findFirst({ where: { id: canonicalId }, select: { id: true, userId: true, visibility: true } });
+    if (!canonicalPost) throw new NotFoundException('Post not found.');
+
+    if (canonicalPost.userId && canonicalPost.userId !== userId) {
+      const blockCount = await this.prisma.userBlock.count({
+        where: {
+          OR: [
+            { blockerId: userId, blockedId: canonicalPost.userId },
+            { blockerId: canonicalPost.userId, blockedId: userId },
+          ],
+        },
+      });
+      if (blockCount > 0) throw new ForbiddenException('You cannot repost this post.');
+    }
+
+    // Check uniqueness: one flat repost per user per canonical post.
+    const existingRepost = await (this.prisma.post as any).findFirst({
+      where: { userId, kind: 'repost', repostedPostId: canonicalId, deletedAt: null },
+      select: { id: true },
+    });
+    if (existingRepost) {
+      const updated = await (this.prisma.post as any).findUnique({ where: { id: canonicalId }, select: { repostCount: true } });
+      return { reposted: true as const, repostId: existingRepost.id, repostCount: updated?.repostCount ?? 0 };
+    }
+
+    // Create flat repost and increment count.
+    const { repostCount, repostId } = await this.prisma.$transaction(async (tx) => {
+      const repost = await (tx as any).post.create({
+        data: {
+          body: '',
+          userId,
+          kind: 'repost',
+          visibility: 'public',
+          repostedPostId: canonicalId,
+          topics: [],
+          hashtags: [],
+          hashtagCasings: [],
+        },
+        select: { id: true },
+      });
+      const updated = await (tx as any).post.update({
+        where: { id: canonicalId },
+        data: { repostCount: { increment: 1 } },
+        select: { repostCount: true },
+      });
+      return { repostId: repost.id as string, repostCount: updated.repostCount as number };
+    });
+
+    // Notify original author (not self-repost).
+    if (canonicalPost.userId !== userId) {
+      this.notifications.upsertRepostNotification({
+        recipientUserId: canonicalPost.userId,
+        actorUserId: userId,
+        subjectPostId: canonicalId,
+      }).catch(() => {});
+    }
+
+    void this.postViews.markViewed(userId, canonicalId);
+    await this.cacheInvalidation.bumpFeedGlobal();
+
+    return { reposted: true as const, repostId, repostCount };
+  }
+
+  async unrepostPost(params: { userId: string; postId: string }) {
+    const { userId, postId } = params;
+    const id = (postId ?? '').trim();
+    if (!id) throw new NotFoundException('Post not found.');
+
+    // Resolve canonical post (works whether caller passes repostId or original postId).
+    const targetPost = await (this.prisma.post as any).findFirst({
+      where: { id, deletedAt: null },
+      select: { id: true, userId: true, kind: true, repostedPostId: true },
+    });
+    if (!targetPost) throw new NotFoundException('Post not found.');
+
+    // Determine canonical ID.
+    const canonicalId = targetPost.kind === 'repost' && targetPost.repostedPostId
+      ? targetPost.repostedPostId
+      : id;
+
+    // Find the viewer's flat repost of the canonical post.
+    const existingRepost = await (this.prisma.post as any).findFirst({
+      where: { userId, kind: 'repost', repostedPostId: canonicalId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!existingRepost) {
+      const updated = await (this.prisma.post as any).findUnique({ where: { id: canonicalId }, select: { repostCount: true } });
+      return { reposted: false as const, repostCount: updated?.repostCount ?? 0 };
+    }
+
+    const { repostCount } = await this.prisma.$transaction(async (tx) => {
+      await (tx as any).post.delete({ where: { id: existingRepost.id } });
+      const updated = await (tx as any).post.update({
+        where: { id: canonicalId },
+        data: { repostCount: { decrement: 1 } },
+        select: { repostCount: true },
+      });
+      return { repostCount: updated.repostCount as number };
+    });
+
+    // Clean up repost notification.
+    const canonicalPost = await (this.prisma.post as any).findFirst({ where: { id: canonicalId }, select: { userId: true } });
+    if (canonicalPost?.userId && canonicalPost.userId !== userId) {
+      this.notifications.deleteRepostNotification(canonicalPost.userId, userId, canonicalId).catch(() => {});
+    }
+
+    await this.cacheInvalidation.bumpFeedGlobal();
+    return { reposted: false as const, repostCount };
   }
 
   /**

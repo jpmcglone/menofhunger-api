@@ -390,6 +390,26 @@ export class PostsController {
           ? await this.posts.viewerBlockSets(viewerUserId)
           : { blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() };
 
+        // Fetch repost data: which posts the viewer has reposted, and reposted post bodies for flat reposts.
+        const repostedPostIds = filteredPosts
+          .filter((p) => (p as any).kind === 'repost' && (p as any).repostedPostId)
+          .map((p) => (p as any).repostedPostId as string);
+        const repostedPostMap = new Map<string, typeof filteredPosts[number]>();
+        if (repostedPostIds.length > 0) {
+          const repostedResults = await Promise.allSettled(
+            repostedPostIds.map((id) => this.posts.getById({ viewerUserId, id })),
+          );
+          for (let i = 0; i < repostedPostIds.length; i++) {
+            const r = repostedResults[i];
+            if (r?.status === 'fulfilled' && r.value) {
+              repostedPostMap.set(repostedPostIds[i], r.value as any);
+            }
+          }
+        }
+        const repostedByPostId = viewerUserId
+          ? await this.posts.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
+          : new Set<string>();
+
         const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
         const attachParentChain = buildAttachParentChain({
           parentMap,
@@ -404,6 +424,8 @@ export class PostsController {
           toPostDto,
           blockedByViewer,
           viewerBlockedBy,
+          repostedByPostId,
+          repostedPostMap: repostedPostMap as any,
         });
 
         return {
@@ -518,6 +540,26 @@ export class PostsController {
           ? await this.posts.viewerBlockSets(viewerUserId)
           : { blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() };
 
+        // Fetch repost data for flat reposts.
+        const repostedPostIdsUser = filteredPostsUser
+          .filter((p) => (p as any).kind === 'repost' && (p as any).repostedPostId)
+          .map((p) => (p as any).repostedPostId as string);
+        const repostedPostMapUser = new Map<string, typeof filteredPostsUser[number]>();
+        if (repostedPostIdsUser.length > 0) {
+          const repostedResultsUser = await Promise.allSettled(
+            repostedPostIdsUser.map((id) => this.posts.getById({ viewerUserId, id })),
+          );
+          for (let i = 0; i < repostedPostIdsUser.length; i++) {
+            const r = repostedResultsUser[i];
+            if (r?.status === 'fulfilled' && r.value) {
+              repostedPostMapUser.set(repostedPostIdsUser[i], r.value as any);
+            }
+          }
+        }
+        const repostedByPostIdUser = viewerUserId
+          ? await this.posts.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
+          : new Set<string>();
+
         const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
         const attachParentChain = buildAttachParentChain({
           parentMap,
@@ -532,6 +574,8 @@ export class PostsController {
           toPostDto,
           blockedByViewer: blockedByViewerUser,
           viewerBlockedBy: viewerBlockedByUser,
+          repostedByPostId: repostedByPostIdUser,
+          repostedPostMap: repostedPostMapUser as any,
         });
 
         return {
@@ -706,7 +750,14 @@ export class PostsController {
       current = parentId ? await this.posts.getById({ viewerUserId, id: parentId }) : null;
     }
 
-    const postIds = chain.map((p) => p.id);
+    // Also fetch the reposted post if this is a flat repost.
+    const repostedPostId = (post as any).repostedPostId as string | null | undefined;
+    const repostedPostRaw = repostedPostId
+      ? await this.posts.getById({ viewerUserId, id: repostedPostId }).catch(() => null)
+      : null;
+
+    const allPosts = [...chain, ...(repostedPostRaw ? [repostedPostRaw] : [])];
+    const postIds = allPosts.map((p) => p.id);
     const boosted = viewerUserId
       ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds })
       : new Set<string>();
@@ -716,12 +767,15 @@ export class PostsController {
     const votedPollOptionIdByPostId = viewerUserId
       ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds })
       : new Map<string, string>();
+    const repostedByPostId = viewerUserId
+      ? await this.posts.viewerRepostedPostIds({ viewerUserId, postIds })
+      : new Set<string>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(postIds) : null;
     const scoreByPostIdGet =
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(postIds) : undefined;
 
     const r2 = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const toDto = (p: (typeof chain)[number], opts: { parent?: ReturnType<typeof toPostDto> }) => {
+    const toDto = (p: (typeof chain)[number], opts: { parent?: ReturnType<typeof toPostDto>; repostedPost?: ReturnType<typeof toPostDto> }) => {
       const base = internalByPostId?.get(p.id);
       const score = scoreByPostIdGet?.get(p.id);
       const pWithPoll = p as { user?: { id?: string }; poll?: { creatorSkippedAt?: Date | null } };
@@ -734,18 +788,23 @@ export class PostsController {
         viewerHasBookmarked: bookmarksByPostId.has(p.id),
         viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
         viewerVotedPollOptionId: votedPollOptionIdByPostId.get(p.id) ?? null,
+        viewerHasReposted: repostedByPostId.has(p.id),
         viewerCreatorSkipped: viewerCreatorSkipped || undefined,
         includeInternal: viewerHasAdmin,
         internalOverride:
           base || (typeof score === 'number' ? { score } : undefined)
             ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
             : undefined,
+        repostedPost: opts.repostedPost,
       });
       return opts.parent ? { ...dto, parent: opts.parent } : dto;
     };
 
+    // Build reposted post DTO first (if this is a flat repost).
+    const repostedPostDto = repostedPostRaw ? toDto(repostedPostRaw as any, {}) : undefined;
+
     // Build from root down: chain[chain.length-1] is root, chain[0] is leaf (the post we're viewing)
-    let dto = toDto(chain[chain.length - 1], {});
+    let dto = toDto(chain[chain.length - 1], { repostedPost: repostedPostDto });
     for (let i = chain.length - 2; i >= 0; i--) {
       dto = toDto(chain[i], { parent: dto });
     }
@@ -891,6 +950,32 @@ export class PostsController {
   @Delete(':id/boost')
   async unboost(@Param('id') id: string, @CurrentUserId() userId: string) {
     const result = await this.posts.unboostPost({ userId, postId: id });
+    return { data: result };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post(':id/repost')
+  async repost(@Param('id') id: string, @CurrentUserId() userId: string) {
+    const result = await this.posts.repostPost({ userId, postId: id });
+    return { data: result };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Delete(':id/repost')
+  async unrepost(@Param('id') id: string, @CurrentUserId() userId: string) {
+    const result = await this.posts.unrepostPost({ userId, postId: id });
     return { data: result };
   }
 

@@ -23,6 +23,7 @@ enum PostVisibility {
 enum PostKind {
   regular
   checkin
+  repost
 }
 
 enum FollowVisibility {
@@ -52,6 +53,7 @@ enum PostMediaSource {
 enum NotificationKind {
   comment
   boost
+  repost
   follow
   followed_post
   mention
@@ -427,6 +429,8 @@ model Post {
   boostCount Int            @default(0)
   bookmarkCount Int         @default(0)
   commentCount Int          @default(0)
+  /** Denormalized count of flat reposts + quote reposts referencing this post. */
+  repostCount Int           @default(0)
   viewerCount Int            @default(0)
   boostScore Float?
   boostScoreUpdatedAt DateTime?
@@ -442,6 +446,16 @@ model Post {
   rootId String?
   root   Post?   @relation("Post_thread", fields: [rootId], references: [id], onDelete: Cascade)
   threadReplies Post[] @relation("Post_thread")
+
+  // Flat repost: points to the original post being reshared (kind=repost only).
+  repostedPostId String?
+  repostedPost   Post?   @relation("Post_reposts", fields: [repostedPostId], references: [id], onDelete: Cascade)
+  reposts        Post[]  @relation("Post_reposts")
+
+  // Quote repost: the embedded post whose URL was detected in body on save.
+  quotedPostId String?
+  quotedPost   Post?   @relation("Post_quotes", fields: [quotedPostId], references: [id], onDelete: SetNull)
+  quotes       Post[]  @relation("Post_quotes")
 
   boosts   Boost[]
   media    PostMedia[]
@@ -464,6 +478,9 @@ model Post {
   @@index([parentId, createdAt])
   @@index([rootId])
   @@index([rootId, createdAt])
+  @@index([repostedPostId])
+  @@index([repostedPostId, userId])
+  @@index([quotedPostId])
   @@index([topics], type: Gin)
   @@index([hashtags], type: Gin)
   // Feed/trending hot paths (parentId IS NULL + deletedAt IS NULL) benefit from composite indexes matching sort+filters.

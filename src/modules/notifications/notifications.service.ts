@@ -574,6 +574,103 @@ export class NotificationsService {
     if (wasUndelivered) this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
   }
 
+  /**
+   * Create or overwrite repost notification for the original post author.
+   * Grouped per (recipient, subject post): if a notification already exists
+   * for this actor+post, update its timestamp to bubble it up without double-counting.
+   */
+  async upsertRepostNotification(params: {
+    recipientUserId: string;
+    actorUserId: string;
+    subjectPostId: string;
+  }) {
+    const { recipientUserId, actorUserId, subjectPostId } = params;
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const res = await this.prisma.$transaction(
+          async (tx) => {
+            const existing = await tx.notification.findFirst({
+              where: { recipientUserId, actorUserId, subjectPostId, kind: 'repost' },
+              select: { id: true, deliveredAt: true },
+            });
+
+            if (existing) {
+              await tx.notification.update({
+                where: { id: existing.id },
+                data: { createdAt: new Date() },
+              });
+              return { kind: 'updated' as const, notificationId: existing.id, undeliveredCount: null as number | null };
+            }
+
+            const notification = await tx.notification.create({
+              data: {
+                recipientUserId,
+                kind: 'repost',
+                actorUserId,
+                subjectPostId,
+                title: 'reposted your post',
+              },
+              select: { id: true },
+            });
+            const user = await tx.user.update({
+              where: { id: recipientUserId },
+              data: { undeliveredNotificationCount: { increment: 1 } },
+              select: { undeliveredNotificationCount: true },
+            });
+            return { kind: 'created' as const, notificationId: notification.id, undeliveredCount: user.undeliveredNotificationCount };
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+
+        if (res.kind === 'created' && typeof res.undeliveredCount === 'number') {
+          this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount: res.undeliveredCount });
+        }
+
+        try {
+          const dto = await this.buildNotificationDtoForRecipient({ recipientUserId, notificationId: res.notificationId });
+          if (dto) this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
+        } catch { /* best-effort */ }
+
+        return;
+      } catch (err: unknown) {
+        const code = (err as any)?.code as string | undefined;
+        const isRetryable = code === 'P2034' || /could not serialize access/i.test(String((err as any)?.message ?? err));
+        if (attempt < maxAttempts && isRetryable) continue;
+        throw err;
+      }
+    }
+  }
+
+  /** Remove repost notification when user un-reposts. */
+  async deleteRepostNotification(
+    recipientUserId: string,
+    actorUserId: string,
+    subjectPostId: string,
+  ): Promise<void> {
+    const existing = await this.prisma.notification.findFirst({
+      where: { recipientUserId, actorUserId, subjectPostId, kind: 'repost' },
+      select: { id: true, deliveredAt: true },
+    });
+    if (!existing) return;
+    const wasUndelivered = existing.deliveredAt == null;
+    const undeliveredCount = await this.prisma.$transaction(async (tx) => {
+      await tx.notification.delete({ where: { id: existing.id } });
+      if (!wasUndelivered) {
+        const row = await tx.user.findUnique({ where: { id: recipientUserId }, select: { undeliveredNotificationCount: true } });
+        return row?.undeliveredNotificationCount ?? 0;
+      }
+      const user = await tx.user.update({
+        where: { id: recipientUserId },
+        data: { undeliveredNotificationCount: { decrement: 1 } },
+        select: { undeliveredNotificationCount: true },
+      });
+      return user.undeliveredNotificationCount;
+    });
+    this.presenceRealtime.emitNotificationsDeleted(recipientUserId, { notificationIds: [existing.id] });
+    if (wasUndelivered) this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
+  }
+
   private async deleteNotificationRowsAndEmit(
     rows: Array<{ id: string; recipientUserId: string; deliveredAt: Date | null }>,
   ): Promise<number> {
@@ -806,6 +903,7 @@ export class NotificationsService {
 
     function groupKey(n: NotificationDto): string | null {
       if (n.kind === 'boost' && n.subjectPostId) return `boost:post:${n.subjectPostId}`;
+      if (n.kind === 'repost' && n.subjectPostId) return `repost:post:${n.subjectPostId}`;
       if (n.kind === 'comment' && n.subjectPostId) return `comment:post:${n.subjectPostId}`;
       if (n.kind === 'follow') return 'follow';
       if (n.kind === 'followed_post' && n.actor?.id) return `followed_post:actor:${n.actor.id}`;
@@ -815,6 +913,7 @@ export class NotificationsService {
 
     function groupKindFromKey(key: string): NotificationGroupKind | null {
       if (key.startsWith('boost:')) return 'boost';
+      if (key.startsWith('repost:')) return 'repost';
       if (key.startsWith('comment:')) return 'comment';
       if (key === 'follow') return 'follow';
       if (key.startsWith('followed_post:')) return 'followed_post';
@@ -841,7 +940,7 @@ export class NotificationsService {
       const latestBody =
         kind === 'comment' ? (members.find((m) => (m.body ?? '').trim())?.body ?? null) : null;
 
-      const subjectPostId = (kind === 'boost' || kind === 'comment') ? (newest.subjectPostId ?? null) : null;
+      const subjectPostId = (kind === 'boost' || kind === 'repost' || kind === 'comment') ? (newest.subjectPostId ?? null) : null;
       const subjectUserId =
         kind === 'follow'
           ? (newest.actor?.id ?? newest.subjectUserId ?? null)

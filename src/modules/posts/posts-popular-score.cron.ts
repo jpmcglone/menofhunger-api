@@ -121,6 +121,7 @@ export class PostsPopularScoreCron {
                 AND p."parentId" IS NULL
                 AND p."createdAt" >= ${minCreatedAt}
                 AND p."createdAt" >= ${new Date(asOf.getTime() - 72 * 60 * 60 * 1000)}
+                AND p."kind"::text <> 'repost'
               ORDER BY p."createdAt" DESC, p."id" DESC
               LIMIT 8000
             )
@@ -134,6 +135,7 @@ export class PostsPopularScoreCron {
                 AND p."parentId" IS NULL
                 AND p."createdAt" >= ${minCreatedAt}
                 AND p."boostCount" > 0
+                AND p."kind"::text <> 'repost'
               ORDER BY p."boostCount" DESC, p."createdAt" DESC, p."id" DESC
               LIMIT 1500
             )
@@ -147,6 +149,7 @@ export class PostsPopularScoreCron {
                 AND p."parentId" IS NULL
                 AND p."createdAt" >= ${minCreatedAt}
                 AND p."bookmarkCount" > 0
+                AND p."kind"::text <> 'repost'
               ORDER BY p."bookmarkCount" DESC, p."createdAt" DESC, p."id" DESC
               LIMIT 1500
             )
@@ -160,7 +163,23 @@ export class PostsPopularScoreCron {
                 AND p."parentId" IS NULL
                 AND p."createdAt" >= ${minCreatedAt}
                 AND p."commentCount" > 0
+                AND p."kind"::text <> 'repost'
               ORDER BY p."commentCount" DESC, p."createdAt" DESC, p."id" DESC
+              LIMIT 1500
+            )
+            UNION
+            (
+              -- Posts that have been reposted are signals of content spread/virality.
+              SELECT p."id"
+              FROM "Post" p
+              WHERE
+                p."deletedAt" IS NULL
+                AND p."visibility" <> 'onlyMe'
+                AND p."parentId" IS NULL
+                AND p."createdAt" >= ${minCreatedAt}
+                AND p."repostCount" > 0
+                AND p."kind"::text <> 'repost'
+              ORDER BY p."repostCount" DESC, p."createdAt" DESC, p."id" DESC
               LIMIT 1500
             )
             UNION
@@ -238,6 +257,17 @@ export class PostsPopularScoreCron {
               +
               (
                 (p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(
+                  0.5,
+                  GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (${asOf}::timestamptz - p."createdAt"))
+                  ) / (12 * 60 * 60)
+                )
+              )
+              +
+              (
+                -- Reposts signal content spread / virality; decayed like bookmarks.
+                (p."repostCount"::DOUBLE PRECISION) * 0.5 * POWER(
                   0.5,
                   GREATEST(
                     0,

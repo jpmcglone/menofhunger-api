@@ -84,7 +84,7 @@ export type PostDto = {
   editCount: number;
   body: string;
   deletedAt: string | null;
-  kind: 'regular' | 'checkin';
+  kind: 'regular' | 'checkin' | 'repost';
   checkinDayKey: string | null;
   checkinPrompt: string | null;
   visibility: PostVisibility;
@@ -95,6 +95,8 @@ export type PostDto = {
   boostCount: number;
   bookmarkCount: number;
   commentCount: number;
+  /** Denormalized count of flat reposts + quote reposts referencing this post. */
+  repostCount: number;
   viewerCount: number;
   parentId: string | null;
   /** When present, this post is a reply and the parent is included for thread display. */
@@ -105,8 +107,14 @@ export type PostDto = {
   viewerHasBoosted?: boolean;
   viewerHasBookmarked?: boolean;
   viewerBookmarkCollectionIds?: string[];
+  /** True if the viewer has created a flat repost of this post. */
+  viewerHasReposted?: boolean;
   /** Set when a block exists between viewer and author. 'viewer_blocked' = viewer blocked the author; 'viewer_blocked_by' = author blocked the viewer. */
   viewerBlockStatus?: 'viewer_blocked' | 'viewer_blocked_by' | null;
+  /** For kind='repost': the original post being reshared. */
+  repostedPost?: PostDto;
+  /** For posts containing an embedded post link: the quoted post (preloaded). */
+  quotedPost?: PostDto;
   internal?: {
     boostScore: number | null;
     boostScoreUpdatedAt: string | null;
@@ -222,6 +230,11 @@ export function toPostDto(
     /** When true, creator chose to skip voting (see results without casting a vote). */
     viewerCreatorSkipped?: boolean;
     viewerBlockStatus?: 'viewer_blocked' | 'viewer_blocked_by' | null;
+    viewerHasReposted?: boolean;
+    /** Pre-built nested DTO for a flat repost's original post. */
+    repostedPost?: PostDto;
+    /** Pre-built nested DTO for a quote repost's quoted post. */
+    quotedPost?: PostDto;
     includeInternal?: boolean;
     internalOverride?: {
       boostScore?: number | null;
@@ -326,6 +339,7 @@ export function toPostDto(
       boostCount: post.boostCount,
       bookmarkCount: post.bookmarkCount ?? 0,
       commentCount: post.commentCount ?? 0,
+      repostCount: (post as any).repostCount ?? 0,
       viewerCount: (post as any).viewerCount ?? 0,
       parentId: post.parentId ?? null,
       mentions: [],
@@ -365,6 +379,7 @@ export function toPostDto(
     boostCount: post.boostCount,
     bookmarkCount: post.bookmarkCount ?? 0,
     commentCount: post.commentCount ?? 0,
+    repostCount: (post as any).repostCount ?? 0,
     viewerCount: (post as any).viewerCount ?? 0,
     parentId: post.parentId ?? null,
     mentions: isPostDeleted ? [] : mentions,
@@ -373,7 +388,10 @@ export function toPostDto(
     ...(typeof opts?.viewerHasBoosted === 'boolean' ? { viewerHasBoosted: opts.viewerHasBoosted } : {}),
     ...(typeof opts?.viewerHasBookmarked === 'boolean' ? { viewerHasBookmarked: opts.viewerHasBookmarked } : {}),
     ...(Array.isArray(opts?.viewerBookmarkCollectionIds) ? { viewerBookmarkCollectionIds: opts.viewerBookmarkCollectionIds } : {}),
+    ...(typeof opts?.viewerHasReposted === 'boolean' ? { viewerHasReposted: opts.viewerHasReposted } : {}),
     ...(typeof opts?.viewerBlockStatus !== 'undefined' ? { viewerBlockStatus: opts.viewerBlockStatus ?? null } : {}),
+    ...(opts?.repostedPost ? { repostedPost: opts.repostedPost } : {}),
+    ...(opts?.quotedPost ? { quotedPost: opts.quotedPost } : {}),
     ...(opts?.includeInternal
       ? {
           internal: {

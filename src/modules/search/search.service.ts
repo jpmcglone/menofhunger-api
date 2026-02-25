@@ -530,7 +530,8 @@ export class SearchService {
     const visibilityWhere: Prisma.PostWhereInput = viewer?.id
       ? { visibility: { in: allowed } }
       : { visibility: 'public' };
-    const kindWhere: Prisma.PostWhereInput = kind ? ({ kind } as Prisma.PostWhereInput) : {};
+    // Always exclude flat reposts from search; their content is redundant with the original post.
+    const kindWhere: Prisma.PostWhereInput = kind ? ({ kind } as Prisma.PostWhereInput) : { kind: { not: 'repost' } };
 
     const cursorRaw = (cursor ?? '').trim();
     const cursorIsOffset = cursorRaw ? /^\d+$/.test(cursorRaw) : false;
