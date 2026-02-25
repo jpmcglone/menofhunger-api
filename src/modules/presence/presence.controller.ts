@@ -24,16 +24,32 @@ function encodeCursor(params: { tMs: number; id: string }): string {
   return Buffer.from(JSON.stringify(params), 'utf8').toString('base64url');
 }
 
-function decodeCursor(raw: string): { tMs: number; id: string } | null {
+function encodeNeverCursor(params: { cMs: number; id: string }): string {
+  return Buffer.from(JSON.stringify({ section: 'never', cMs: params.cMs, id: params.id }), 'utf8').toString('base64url');
+}
+
+/**
+ * Decodes either a section-A cursor { tMs, id } (backward-compat) or a
+ * section-B cursor { section: 'never', cMs, id }.
+ */
+function decodePageCursor(
+  raw: string,
+): { section: 'recent'; tMs: number; id: string } | { section: 'never'; cMs: number | null; id: string | null } | null {
   const s = (raw ?? '').trim();
   if (!s) return null;
   try {
     const json = Buffer.from(s, 'base64url').toString('utf8');
-    const parsed = JSON.parse(json) as { tMs?: unknown; id?: unknown };
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    if (parsed?.section === 'never') {
+      const cMs = typeof parsed.cMs === 'number' && Number.isFinite(parsed.cMs) ? Math.floor(parsed.cMs) : null;
+      const id = typeof parsed.id === 'string' ? parsed.id.trim() || null : null;
+      return { section: 'never', cMs, id };
+    }
+    // Section A (recent online): backward-compat format { tMs, id }
     const tMs = typeof parsed?.tMs === 'number' && Number.isFinite(parsed.tMs) ? Math.floor(parsed.tMs) : null;
     const id = typeof parsed?.id === 'string' ? parsed.id.trim() : '';
     if (!tMs || !id) return null;
-    return { tMs, id };
+    return { section: 'recent', tMs, id };
   } catch {
     return null;
   }
@@ -138,73 +154,122 @@ export class PresenceController {
     const parsed = recentSchema.parse(query);
     const limit = parsed.limit ?? 30;
     const cursorRaw = (parsed.cursor ?? '').trim();
-    const cursor = decodeCursor(cursorRaw);
+    const cursor = decodePageCursor(cursorRaw);
     if (cursorRaw && !cursor) throw new BadRequestException('Invalid cursor.');
 
     // Exclude currently-online users so "Recently online" is truly "recently" (offline users).
     const onlineIds = await this.presenceRedis.onlineUserIds();
+    const onlineFilter = onlineIds.length ? { id: { notIn: onlineIds } } : {};
 
-    const items = await this.prisma.user.findMany({
-      where: {
-        usernameIsSet: true,
-        lastOnlineAt: { not: null },
-        ...(onlineIds.length ? { id: { notIn: onlineIds } } : {}),
-        ...(cursor
-          ? {
-              // Cursor is a {tMs,id} pair; build deterministic paging that matches ORDER BY lastOnlineAt DESC, id DESC.
-              // Note: compute cursorDate inside this branch so it is always a Date (never null/undefined).
-              // (Prisma filters disallow lt: null.)
-              ...((
-                () => {
-                  const cursorDate = new Date(cursor.tMs);
-                  return {
-                    OR: [
-                      { lastOnlineAt: { lt: cursorDate } },
-                      { lastOnlineAt: cursorDate, id: { lt: cursor.id } },
-                    ],
-                  };
-                }
-              )()),
-            }
-          : {}),
-      },
-      orderBy: [{ lastOnlineAt: 'desc' }, { id: 'desc' }],
-      take: limit + 1,
-      select: {
-        id: true,
-        lastOnlineAt: true,
-      },
-    });
+    let pageItems: Array<{ id: string; lastOnlineAt: string | null }> = [];
+    let nextCursor: string | null = null;
 
-    const page = items.slice(0, limit);
-    const next = items.length > limit ? items[limit] : null;
+    if (cursor?.section !== 'never') {
+      // ── Section A: users with a known lastOnlineAt, newest → oldest ──
+      const aItems = await this.prisma.user.findMany({
+        where: {
+          usernameIsSet: true,
+          bannedAt: null,
+          lastOnlineAt: { not: null },
+          ...onlineFilter,
+          ...(cursor
+            ? {
+                OR: [
+                  { lastOnlineAt: { lt: new Date(cursor.tMs) } },
+                  { lastOnlineAt: new Date(cursor.tMs), id: { lt: cursor.id } },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ lastOnlineAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        select: { id: true, lastOnlineAt: true },
+      });
 
-    const userIds = page.map((r) => r.id);
+      const aHasMore = aItems.length > limit;
+      const aPage = aItems.slice(0, limit);
+
+      if (aHasMore) {
+        const aNext = aItems[limit];
+        nextCursor = encodeCursor({ tMs: aNext.lastOnlineAt!.getTime(), id: aNext.id });
+        pageItems = aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null }));
+      } else {
+        // Section A exhausted — fill remainder of page with section B (never-online users).
+        const remaining = limit - aPage.length;
+        const bItems = await this.prisma.user.findMany({
+          where: {
+            usernameIsSet: true,
+            bannedAt: null,
+            lastOnlineAt: null,
+            ...onlineFilter,
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: remaining + 1,
+          select: { id: true, createdAt: true },
+        });
+
+        const bHasMore = bItems.length > remaining;
+        const bPage = bItems.slice(0, remaining);
+
+        if (bHasMore) {
+          const bNext = bItems[remaining];
+          nextCursor = encodeNeverCursor({ cMs: bNext.createdAt.getTime(), id: bNext.id });
+        }
+
+        pageItems = [
+          ...aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null })),
+          ...bPage.map((r) => ({ id: r.id, lastOnlineAt: null as string | null })),
+        ];
+      }
+    } else {
+      // ── Section B: users with no lastOnlineAt, sorted by newest account first ──
+      const { cMs, id: cId } = cursor;
+      const bItems = await this.prisma.user.findMany({
+        where: {
+          usernameIsSet: true,
+          bannedAt: null,
+          lastOnlineAt: null,
+          ...onlineFilter,
+          ...(cMs != null && cId != null
+            ? {
+                OR: [
+                  { createdAt: { lt: new Date(cMs) } },
+                  { createdAt: new Date(cMs), id: { lt: cId } },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        select: { id: true, createdAt: true },
+      });
+
+      const bHasMore = bItems.length > limit;
+      const bPage = bItems.slice(0, limit);
+
+      if (bHasMore) {
+        const bNext = bItems[limit];
+        nextCursor = encodeNeverCursor({ cMs: bNext.createdAt.getTime(), id: bNext.id });
+      }
+
+      pageItems = bPage.map((r) => ({ id: r.id, lastOnlineAt: null as string | null }));
+    }
+
+    const userIds = pageItems.map((r) => r.id);
     const followListUsers = userIds.length
       ? await this.follows.getFollowListUsersByIds({ viewerUserId, userIds })
       : [];
 
-    // Preserve order: most recently online first.
     const orderMap = new Map(userIds.map((id, i) => [id, i]));
     followListUsers.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
 
-    const lastOnlineAtById = new Map<string, string | null>(
-      page.map((r) => [r.id, r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null]),
-    );
-
+    const lastOnlineAtById = new Map<string, string | null>(pageItems.map((r) => [r.id, r.lastOnlineAt]));
     const data: RecentlyOnlineUserDto[] = followListUsers.map((u) => ({
       ...(u as any),
       lastOnlineAt: lastOnlineAtById.get(u.id) ?? null,
     }));
 
-    return {
-      data,
-      pagination: {
-        nextCursor: next?.lastOnlineAt
-          ? encodeCursor({ tMs: next.lastOnlineAt.getTime(), id: next.id })
-          : null,
-      },
-    };
+    return { data, pagination: { nextCursor } };
   }
 
   /**
@@ -290,58 +355,115 @@ export class PresenceController {
       if (viewerCanSeeLastOnline) {
         const limit = parsed.recentLimit ?? 30;
         const cursorRaw = (parsed.recentCursor ?? '').trim();
-        const cursor = decodeCursor(cursorRaw);
+        const cursor = decodePageCursor(cursorRaw);
         if (cursorRaw && !cursor) throw new BadRequestException('Invalid cursor.');
 
         // Exclude currently-online users so "Recently online" is truly "recently" (offline users).
         const onlineIds = onlineUserIds.length ? onlineUserIds : await this.presenceRedis.onlineUserIds();
+        const onlineFilter = onlineIds.length ? { id: { notIn: onlineIds } } : {};
 
-        const items = await this.prisma.user.findMany({
-          where: {
-            usernameIsSet: true,
-            lastOnlineAt: { not: null },
-            ...(onlineIds.length ? { id: { notIn: onlineIds } } : {}),
-            ...(cursor
-              ? {
-                  ...((
-                    () => {
-                      const cursorDate = new Date(cursor.tMs);
-                      return {
-                        OR: [
-                          { lastOnlineAt: { lt: cursorDate } },
-                          { lastOnlineAt: cursorDate, id: { lt: cursor.id } },
-                        ],
-                      };
-                    }
-                  )()),
-                }
-              : {}),
-          },
-          orderBy: [{ lastOnlineAt: 'desc' }, { id: 'desc' }],
-          take: limit + 1,
-          select: {
-            id: true,
-            lastOnlineAt: true,
-          },
-        });
+        let pageItems: Array<{ id: string; lastOnlineAt: string | null }> = [];
 
-        const page = items.slice(0, limit);
-        const next = items.length > limit ? items[limit] : null;
-        recentNextCursor = next?.lastOnlineAt ? encodeCursor({ tMs: next.lastOnlineAt.getTime(), id: next.id }) : null;
+        if (cursor?.section !== 'never') {
+          // ── Section A: users with a known lastOnlineAt, newest → oldest ──
+          const aItems = await this.prisma.user.findMany({
+            where: {
+              usernameIsSet: true,
+              bannedAt: null,
+              lastOnlineAt: { not: null },
+              ...onlineFilter,
+              ...(cursor
+                ? {
+                    OR: [
+                      { lastOnlineAt: { lt: new Date(cursor.tMs) } },
+                      { lastOnlineAt: new Date(cursor.tMs), id: { lt: cursor.id } },
+                    ],
+                  }
+                : {}),
+            },
+            orderBy: [{ lastOnlineAt: 'desc' }, { id: 'desc' }],
+            take: limit + 1,
+            select: { id: true, lastOnlineAt: true },
+          });
 
-        const recentUserIds = page.map((r) => r.id);
+          const aHasMore = aItems.length > limit;
+          const aPage = aItems.slice(0, limit);
+
+          if (aHasMore) {
+            const aNext = aItems[limit];
+            recentNextCursor = encodeCursor({ tMs: aNext.lastOnlineAt!.getTime(), id: aNext.id });
+            pageItems = aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null }));
+          } else {
+            // Section A exhausted — fill remainder of page with section B (never-online users).
+            const remaining = limit - aPage.length;
+            const bItems = await this.prisma.user.findMany({
+              where: {
+                usernameIsSet: true,
+                bannedAt: null,
+                lastOnlineAt: null,
+                ...onlineFilter,
+              },
+              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+              take: remaining + 1,
+              select: { id: true, createdAt: true },
+            });
+
+            const bHasMore = bItems.length > remaining;
+            const bPage = bItems.slice(0, remaining);
+
+            if (bHasMore) {
+              const bNext = bItems[remaining];
+              recentNextCursor = encodeNeverCursor({ cMs: bNext.createdAt.getTime(), id: bNext.id });
+            }
+
+            pageItems = [
+              ...aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null })),
+              ...bPage.map((r) => ({ id: r.id, lastOnlineAt: null as string | null })),
+            ];
+          }
+        } else {
+          // ── Section B: users with no lastOnlineAt, sorted by newest account first ──
+          const { cMs, id: cId } = cursor;
+          const bItems = await this.prisma.user.findMany({
+            where: {
+              usernameIsSet: true,
+              bannedAt: null,
+              lastOnlineAt: null,
+              ...onlineFilter,
+              ...(cMs != null && cId != null
+                ? {
+                    OR: [
+                      { createdAt: { lt: new Date(cMs) } },
+                      { createdAt: new Date(cMs), id: { lt: cId } },
+                    ],
+                  }
+                : {}),
+            },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            take: limit + 1,
+            select: { id: true, createdAt: true },
+          });
+
+          const bHasMore = bItems.length > limit;
+          const bPage = bItems.slice(0, limit);
+
+          if (bHasMore) {
+            const bNext = bItems[limit];
+            recentNextCursor = encodeNeverCursor({ cMs: bNext.createdAt.getTime(), id: bNext.id });
+          }
+
+          pageItems = bPage.map((r) => ({ id: r.id, lastOnlineAt: null as string | null }));
+        }
+
+        const recentUserIds = pageItems.map((r) => r.id);
         const followListUsers = recentUserIds.length
           ? await this.follows.getFollowListUsersByIds({ viewerUserId, userIds: recentUserIds })
           : [];
 
-        // Preserve order: most recently online first.
         const recentOrderMap = new Map(recentUserIds.map((id, i) => [id, i]));
         followListUsers.sort((a, b) => (recentOrderMap.get(a.id) ?? 999) - (recentOrderMap.get(b.id) ?? 999));
 
-        const lastOnlineAtById = new Map<string, string | null>(
-          page.map((r) => [r.id, r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null]),
-        );
-
+        const lastOnlineAtById = new Map<string, string | null>(pageItems.map((r) => [r.id, r.lastOnlineAt]));
         recentData = followListUsers.map((u) => ({
           ...(u as any),
           lastOnlineAt: lastOnlineAtById.get(u.id) ?? null,

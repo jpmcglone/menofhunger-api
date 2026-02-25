@@ -783,6 +783,7 @@ export class FollowsService {
       where: {
         id: { in: userIds },
         usernameIsSet: true,
+        bannedAt: null,
       },
       select: USER_LIST_SELECT,
     });

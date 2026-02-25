@@ -3085,6 +3085,7 @@ export class PostsService {
     const users = await this.prisma.user.findMany({
       where: {
         usernameIsSet: true,
+        bannedAt: null,
         OR: normalized.map((u) => ({ username: { equals: u, mode: 'insensitive' as const } })),
       },
       select: { id: true, username: true },
