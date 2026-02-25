@@ -215,6 +215,13 @@ export class SpacesPresenceService {
     return this.leave(socketId);
   }
 
+  /** Returns the spaceId the user is currently in, or null if not in any space. */
+  getSpaceForUser(userIdRaw: string): string | null {
+    const userId = (userIdRaw ?? '').trim();
+    if (!userId) return null;
+    return this.currentByUser.get(userId)?.spaceId ?? null;
+  }
+
   getMembersForSpace(spaceIdRaw: string): { userIds: string[]; pausedUserIds: string[]; mutedUserIds: string[] } {
     const spaceId = (spaceIdRaw ?? '').trim();
     if (!spaceId) return { userIds: [], pausedUserIds: [], mutedUserIds: [] };

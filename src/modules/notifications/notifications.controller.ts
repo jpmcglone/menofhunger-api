@@ -40,6 +40,7 @@ const preferencesPatchSchema = z
     pushMention: z.boolean().optional(),
     pushMessage: z.boolean().optional(),
     emailDigestDaily: z.boolean().optional(),
+    emailDigestWeekly: z.boolean().optional(),
     emailNewNotifications: z.boolean().optional(),
     emailInstantHighSignal: z.boolean().optional(),
   })

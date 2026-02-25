@@ -1068,7 +1068,8 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       const users = added.map((uid) => {
         const online = onlineById.get(uid) ?? false;
         const idle = online ? (idleById.get(uid) ?? false) : false;
-        return { userId: uid, online, idle };
+        const spaceId = this.spacesPresence.getSpaceForUser(uid) ?? undefined;
+        return { userId: uid, online, idle, spaceId };
       });
       client.emit('presence:subscribed', { users });
     }

@@ -200,6 +200,7 @@ export class NotificationsService {
       pushMention: Boolean(prefs.pushMention),
       pushMessage: Boolean(prefs.pushMessage),
       emailDigestDaily: Boolean(prefs.emailDigestDaily),
+      emailDigestWeekly: Boolean(prefs.emailDigestWeekly),
       emailNewNotifications: Boolean(prefs.emailNewNotifications),
       emailInstantHighSignal: Boolean((prefs as any).emailInstantHighSignal),
     };
@@ -210,6 +211,7 @@ export class NotificationsService {
     // but prevent toggling them until the user verifies their email.
     const wantsEmailPatch =
       patch.emailDigestDaily !== undefined ||
+      patch.emailDigestWeekly !== undefined ||
       patch.emailNewNotifications !== undefined ||
       (patch as any).emailInstantHighSignal !== undefined;
 
@@ -223,6 +225,7 @@ export class NotificationsService {
       if (!canUseEmail) {
         effectivePatch = { ...patch };
         delete (effectivePatch as any).emailDigestDaily;
+        delete (effectivePatch as any).emailDigestWeekly;
         delete (effectivePatch as any).emailNewNotifications;
         delete (effectivePatch as any).emailInstantHighSignal;
       }
@@ -240,6 +243,7 @@ export class NotificationsService {
       pushMention: Boolean(updated.pushMention),
       pushMessage: Boolean(updated.pushMessage),
       emailDigestDaily: Boolean(updated.emailDigestDaily),
+      emailDigestWeekly: Boolean(updated.emailDigestWeekly),
       emailNewNotifications: Boolean(updated.emailNewNotifications),
       emailInstantHighSignal: Boolean((updated as any).emailInstantHighSignal),
     };

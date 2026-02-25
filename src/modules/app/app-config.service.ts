@@ -4,6 +4,16 @@ import type { Env } from './env';
 
 export type NodeEnv = 'development' | 'test' | 'production';
 
+/**
+ * Adds a display name to a bare email address if one isn't already present.
+ * e.g. "noreply@menofhunger.com" → "Men of Hunger <noreply@menofhunger.com>"
+ * Already-formatted strings like "Men of Hunger <...>" are left unchanged.
+ */
+function withDisplayName(email: string, name: string): string {
+  if (!email || email.includes('<')) return email;
+  return `${name} <${email}>`;
+}
+
 export type TwilioVerifyConfig = {
   accountSid: string;
   authToken: string;
@@ -355,9 +365,9 @@ export class AppConfigService {
         provider: 'resend',
         apiKey: resendApiKey,
         fromEmail: {
-          default: effectiveDefault,
-          notifications: notifications || effectiveDefault,
-          support: support || effectiveDefault,
+          default: withDisplayName(effectiveDefault, 'Men of Hunger'),
+          notifications: withDisplayName(notifications || effectiveDefault, 'Men of Hunger'),
+          support: withDisplayName(support || effectiveDefault, 'Men of Hunger'),
         },
       };
     }
