@@ -4209,7 +4209,7 @@ export class PostsService {
           body: '',
           userId,
           kind: 'repost',
-          visibility: 'public',
+          visibility: canonicalPost.visibility,
           repostedPostId: canonicalId,
           topics: [],
           hashtags: [],
