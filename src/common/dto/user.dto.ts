@@ -1,6 +1,14 @@
 import type { BirthdayVisibility, FollowVisibility, VerifiedStatus } from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
 
+/** Minimal org account summary shown alongside affiliated users. */
+export type OrgAffiliationDto = {
+  id: string;
+  username: string | null;
+  name: string | null;
+  avatarUrl: string | null;
+};
+
 /** Relationship fields for list-user DTOs (follows, search). */
 export type UserListRelationship = {
   viewerFollowsUser: boolean;
@@ -28,6 +36,17 @@ export type NudgeStateDto = {
   outboundExpiresAt: string | null;
 };
 
+/** Raw org membership row from Prisma USER_LIST_SELECT. */
+type OrgMembershipRow = {
+  org: {
+    id: string;
+    username: string | null;
+    name: string | null;
+    avatarKey: string | null;
+    avatarUpdatedAt: Date | null;
+  };
+};
+
 /** Row shape accepted by toUserListDto (e.g. Prisma select or search result). */
 export type UserListRow = {
   id: string;
@@ -41,6 +60,8 @@ export type UserListRow = {
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
   createdAt?: Date;
+  /** Org affiliations (populated when USER_LIST_SELECT is used). */
+  orgMemberships?: OrgMembershipRow[];
 };
 
 /** List-user DTO (follow lists, search users). Optional relationship and createdAt. */
@@ -54,6 +75,7 @@ export type UserListDto = {
   stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
+  orgAffiliations: OrgAffiliationDto[];
   relationship?: UserListRelationship;
   createdAt?: string;
 };
@@ -61,7 +83,7 @@ export type UserListDto = {
 export function toUserListDto(
   row: UserListRow,
   publicBaseUrl: string | null,
-  opts?: { relationship?: UserListRelationship; createdAt?: Date },
+  opts?: { relationship?: UserListRelationship; createdAt?: Date; orgAffiliations?: OrgAffiliationDto[] },
 ): UserListDto {
   const dto: UserListDto = {
     id: row.id,
@@ -77,6 +99,17 @@ export function toUserListDto(
       key: row.avatarKey ?? null,
       updatedAt: row.avatarUpdatedAt ?? null,
     }),
+    // Prefer pre-computed affiliations (e.g. from raw SQL paths), fall back to row.orgMemberships.
+    orgAffiliations: opts?.orgAffiliations ?? (row.orgMemberships ?? []).map((m) => ({
+      id: m.org.id,
+      username: m.org.username,
+      name: m.org.name,
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl,
+        key: m.org.avatarKey ?? null,
+        updatedAt: m.org.avatarUpdatedAt ?? null,
+      }),
+    })),
   };
   if (opts?.relationship) dto.relationship = opts.relationship;
   if (opts?.createdAt !== undefined) dto.createdAt = opts.createdAt.toISOString();

@@ -258,8 +258,25 @@ model User {
   popularScoreSnapshots PostPopularScoreSnapshot[] @relation("PostPopularScoreSnapshot_user")
   postViews PostView[]
 
+  // Org affiliations: orgs this user belongs to (non-org users); members of this org (org users).
+  orgMemberships UserOrgMembership[] @relation("UserMemberships")
+  orgMembers     UserOrgMembership[] @relation("OrgMembers")
+
   @@index([phone])
   @@index([lastSeenAt])
+}
+
+model UserOrgMembership {
+  userId    String
+  orgId     String
+  createdAt DateTime @default(now())
+
+  user User @relation("UserMemberships", fields: [userId], references: [id], onDelete: Cascade)
+  org  User @relation("OrgMembers", fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@id([userId, orgId])
+  @@index([orgId])
+  @@index([userId, createdAt])
 }
 
 model EmailActionToken {

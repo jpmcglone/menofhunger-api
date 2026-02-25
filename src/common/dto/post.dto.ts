@@ -23,6 +23,7 @@ export type PostAuthorDto = {
   stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
+  orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;
   /** When true, author is banned; id/username/name/avatar are redacted. */
   authorBanned?: boolean;
 };
@@ -143,6 +144,9 @@ export type PostAuthorRow = {
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
   bannedAt: Date | null;
+  orgMemberships?: Array<{
+    org: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarUpdatedAt: Date | null };
+  }>;
 };
 
 /** Post with relations included for DTO mapping. Post has bookmarkCount, commentCount, parentId from schema. */
@@ -394,6 +398,16 @@ export function toPostDto(
         key: post.user.avatarKey ?? null,
         updatedAt: post.user.avatarUpdatedAt ?? null,
       }),
+      orgAffiliations: (post.user.orgMemberships ?? []).map((m) => ({
+        id: m.org.id,
+        username: m.org.username,
+        name: m.org.name,
+        avatarUrl: publicAssetUrl({
+          publicBaseUrl: publicAssetBaseUrl,
+          key: m.org.avatarKey ?? null,
+          updatedAt: m.org.avatarUpdatedAt ?? null,
+        }),
+      })),
     },
   };
 }

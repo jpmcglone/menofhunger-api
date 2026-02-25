@@ -4,7 +4,9 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { toUserListDto, type NudgeStateDto } from '../../common/dto';
+import { toUserListDto, type NudgeStateDto, type OrgAffiliationDto } from '../../common/dto';
+import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
+import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
@@ -180,8 +182,12 @@ export class FollowsService {
     const rows: RecRow[] = [...mutualRows, ...fallbackRows];
     if (rows.length === 0) return { users: [] };
 
-    const rel = await this.batchRelationshipForUserIds({ viewerUserId, userIds: rows.map((r) => r.id) });
+    const userIds = rows.map((r) => r.id);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const [rel, orgMap] = await Promise.all([
+      this.batchRelationshipForUserIds({ viewerUserId, userIds }),
+      this.batchOrgAffiliations(userIds, publicBaseUrl),
+    ]);
 
     const users: FollowListUser[] = rows.map((r) =>
       toUserListDto(r, publicBaseUrl, {
@@ -190,6 +196,7 @@ export class FollowsService {
           userFollowsViewer: rel.followsViewer.has(r.id),
           viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(r.id),
         },
+        orgAffiliations: orgMap.get(r.id) ?? [],
       }) as FollowListUser,
     );
 
@@ -259,10 +266,14 @@ export class FollowsService {
 
     if (rows.length === 0) return { users: [] };
 
+    const userIds = rows.map((r) => r.id);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const rel = viewerUserId
-      ? await this.batchRelationshipForUserIds({ viewerUserId, userIds: rows.map((r) => r.id) })
-      : { viewerFollows: new Set<string>(), followsViewer: new Set<string>(), viewerBellEnabled: new Set<string>() };
+    const [rel, orgMap] = await Promise.all([
+      viewerUserId
+        ? this.batchRelationshipForUserIds({ viewerUserId, userIds })
+        : Promise.resolve({ viewerFollows: new Set<string>(), followsViewer: new Set<string>(), viewerBellEnabled: new Set<string>() }),
+      this.batchOrgAffiliations(userIds, publicBaseUrl),
+    ]);
 
     const users: FollowListUser[] = rows.map((r) =>
       toUserListDto(r, publicBaseUrl, {
@@ -271,6 +282,7 @@ export class FollowsService {
           userFollowsViewer: rel.followsViewer.has(r.id),
           viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(r.id),
         },
+        orgAffiliations: orgMap.get(r.id) ?? [],
       }) as FollowListUser,
     );
 
@@ -621,6 +633,32 @@ export class FollowsService {
     };
   }
 
+  /** Batch-fetch org affiliations for a list of user IDs. Returns a map of userId → OrgAffiliationDto[]. */
+  private async batchOrgAffiliations(userIds: string[], publicBaseUrl: string | null): Promise<Map<string, OrgAffiliationDto[]>> {
+    if (userIds.length === 0) return new Map();
+    const memberships = await this.prisma.userOrgMembership.findMany({
+      where: { userId: { in: userIds } },
+      select: {
+        userId: true,
+        org: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const map = new Map<string, OrgAffiliationDto[]>();
+    for (const m of memberships) {
+      const list = map.get(m.userId) ?? [];
+      list.push({
+        id: m.org.id,
+        username: m.org.username,
+        name: m.org.name,
+        avatarUrl: publicAssetUrl({ publicBaseUrl, key: m.org.avatarKey ?? null, updatedAt: m.org.avatarUpdatedAt ?? null }),
+      });
+      map.set(m.userId, list);
+    }
+    return map;
+  }
+
   async listFollowers(params: {
     viewerUserId: string | null;
     username: string;
@@ -651,20 +689,7 @@ export class FollowsService {
         ],
       },
       include: {
-        follower: {
-          select: {
-            id: true,
-            username: true,
-            name: true,
-            premium: true,
-            premiumPlus: true,
-            isOrganization: true,
-            stewardBadgeEnabled: true,
-            verifiedStatus: true,
-            avatarKey: true,
-            avatarUpdatedAt: true,
-          },
-        },
+        follower: { select: USER_LIST_SELECT },
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
@@ -720,20 +745,7 @@ export class FollowsService {
         ],
       },
       include: {
-        following: {
-          select: {
-            id: true,
-            username: true,
-            name: true,
-            premium: true,
-            premiumPlus: true,
-            isOrganization: true,
-            stewardBadgeEnabled: true,
-            verifiedStatus: true,
-            avatarKey: true,
-            avatarUpdatedAt: true,
-          },
-        },
+        following: { select: USER_LIST_SELECT },
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
@@ -772,18 +784,7 @@ export class FollowsService {
         id: { in: userIds },
         usernameIsSet: true,
       },
-      select: {
-        id: true,
-        username: true,
-        name: true,
-        premium: true,
-        premiumPlus: true,
-        isOrganization: true,
-        stewardBadgeEnabled: true,
-        verifiedStatus: true,
-        avatarKey: true,
-        avatarUpdatedAt: true,
-      },
+      select: USER_LIST_SELECT,
     });
 
     const rel = await this.batchRelationshipForUserIds({ viewerUserId, userIds: users.map((u) => u.id) });

@@ -3,6 +3,7 @@ import {
   Body,
   ConflictException,
   Controller,
+  Delete,
   Get,
   Req,
   NotFoundException,
@@ -17,7 +18,8 @@ import { ModuleRef } from '@nestjs/core';
 import { z } from 'zod';
 import { normalizePhone } from '../auth/auth.utils';
 import { AppConfigService } from '../app/app-config.service';
-import { toUserDto } from '../../common/dto';
+import { toUserDto, type OrgAffiliationDto } from '../../common/dto';
+import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { PrismaService } from '../prisma/prisma.service';
 import { validateUsername } from '../users/users.utils';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
@@ -71,6 +73,38 @@ export class AdminUsersController {
     private readonly moduleRef: ModuleRef,
   ) {}
 
+  /** Single-user admin DTO with org affiliations included. */
+  private async toAdminUserDto(user: Parameters<typeof toUserDto>[0], publicBaseUrl: string | null) {
+    const orgMap = await this.batchOrgAffiliations([user.id]);
+    return { ...toUserDto(user, publicBaseUrl), orgAffiliations: orgMap.get(user.id) ?? [] };
+  }
+
+  /** Batch-fetch org affiliations. Returns map of userId → OrgAffiliationDto[]. */
+  private async batchOrgAffiliations(userIds: string[]): Promise<Map<string, OrgAffiliationDto[]>> {
+    if (userIds.length === 0) return new Map();
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const memberships = await this.prisma.userOrgMembership.findMany({
+      where: { userId: { in: userIds } },
+      select: {
+        userId: true,
+        org: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    const map = new Map<string, OrgAffiliationDto[]>();
+    for (const m of memberships) {
+      const list = map.get(m.userId) ?? [];
+      list.push({
+        id: m.org.id,
+        username: m.org.username,
+        name: m.org.name,
+        avatarUrl: publicAssetUrl({ publicBaseUrl, key: m.org.avatarKey ?? null, updatedAt: m.org.avatarUpdatedAt ?? null }),
+      });
+      map.set(m.userId, list);
+    }
+    return map;
+  }
+
   @Get('banned')
   async listBanned(@Query() query: unknown) {
     const { q, limit, cursor } = bannedListSchema.parse(query);
@@ -103,9 +137,10 @@ export class AdminUsersController {
     const slice = users.slice(0, take);
     const nextCursor = users.length > take ? slice[slice.length - 1]?.id ?? null : null;
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const orgMap = await this.batchOrgAffiliations(slice.map((u) => u.id));
 
     return {
-      data: slice.map((u) => toUserDto(u, publicBaseUrl)),
+      data: slice.map((u) => ({ ...toUserDto(u, publicBaseUrl), orgAffiliations: orgMap.get(u.id) ?? [] })),
       pagination: { nextCursor },
     };
   }
@@ -139,9 +174,10 @@ export class AdminUsersController {
     const slice = users.slice(0, take);
     const nextCursor = users.length > take ? slice[slice.length - 1]?.id ?? null : null;
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const orgMap = await this.batchOrgAffiliations(slice.map((u) => u.id));
 
     return {
-      data: slice.map((u) => toUserDto(u, publicBaseUrl)),
+      data: slice.map((u) => ({ ...toUserDto(u, publicBaseUrl), orgAffiliations: orgMap.get(u.id) ?? [] })),
       pagination: { nextCursor },
     };
   }
@@ -211,7 +247,7 @@ export class AdminUsersController {
       // Best-effort
     }
 
-    return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+    return { data: await this.toAdminUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
   }
 
   @Post(':id/unban')
@@ -242,14 +278,14 @@ export class AdminUsersController {
       // Best-effort
     }
 
-    return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+    return { data: await this.toAdminUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
   }
 
   @Get(':id')
   async getUser(@Param('id') id: string) {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found.');
-    return { data: toUserDto(user, this.appConfig.r2()?.publicBaseUrl ?? null) };
+    return { data: await this.toAdminUserDto(user, this.appConfig.r2()?.publicBaseUrl ?? null) };
   }
 
   @Patch(':id/profile')
@@ -372,7 +408,7 @@ export class AdminUsersController {
         // Best-effort
       }
 
-      return { data: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+      return { data: await this.toAdminUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
         throw new NotFoundException('User not found.');
@@ -383,6 +419,83 @@ export class AdminUsersController {
       }
       throw err;
     }
+  }
+
+  @Get(':id/orgs')
+  async listOrgMemberships(@Param('id') id: string) {
+    const user = await this.prisma.user.findUnique({ where: { id }, select: { id: true } });
+    if (!user) throw new NotFoundException('User not found.');
+
+    const memberships = await this.prisma.userOrgMembership.findMany({
+      where: { userId: id },
+      include: {
+        org: {
+          select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const data: OrgAffiliationDto[] = memberships.map((m) => ({
+      id: m.org.id,
+      username: m.org.username,
+      name: m.org.name,
+      avatarUrl: publicAssetUrl({ publicBaseUrl, key: m.org.avatarKey ?? null, updatedAt: m.org.avatarUpdatedAt ?? null }),
+    }));
+
+    return { data };
+  }
+
+  @Post(':id/orgs')
+  async addOrgMembership(@Param('id') id: string, @Body() body: unknown) {
+    const { orgId } = z.object({ orgId: z.string().min(1) }).parse(body);
+
+    const [user, org] = await Promise.all([
+      this.prisma.user.findUnique({ where: { id }, select: { id: true, isOrganization: true } }),
+      this.prisma.user.findUnique({ where: { id: orgId }, select: { id: true, isOrganization: true } }),
+    ]);
+
+    if (!user) throw new NotFoundException('User not found.');
+    if (!org) throw new NotFoundException('Org user not found.');
+    if (!org.isOrganization) throw new BadRequestException('Target account is not an organization.');
+    if (user.isOrganization) throw new BadRequestException('Organization accounts cannot be members of other orgs.');
+    if (user.id === org.id) throw new BadRequestException('A user cannot be affiliated with themselves.');
+
+    try {
+      await this.prisma.userOrgMembership.create({ data: { userId: id, orgId } });
+    } catch (err: unknown) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('Membership already exists.');
+      }
+      throw err;
+    }
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const orgFull = await this.prisma.user.findUniqueOrThrow({
+      where: { id: orgId },
+      select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true },
+    });
+
+    const data: OrgAffiliationDto = {
+      id: orgFull.id,
+      username: orgFull.username,
+      name: orgFull.name,
+      avatarUrl: publicAssetUrl({ publicBaseUrl, key: orgFull.avatarKey ?? null, updatedAt: orgFull.avatarUpdatedAt ?? null }),
+    };
+
+    return { data };
+  }
+
+  @Delete(':id/orgs/:orgId')
+  async removeOrgMembership(@Param('id') id: string, @Param('orgId') orgId: string) {
+    const deleted = await this.prisma.userOrgMembership.deleteMany({
+      where: { userId: id, orgId },
+    });
+
+    if (deleted.count === 0) throw new NotFoundException('Membership not found.');
+
+    return { data: { success: true } };
   }
 
   @Post(':id/email/unverify')
@@ -412,7 +525,7 @@ export class AdminUsersController {
     });
 
     this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'email_unverified');
-    return { data: toUserDto(updated, publicBaseUrl) };
+    return { data: await this.toAdminUserDto(updated, publicBaseUrl) };
   }
 }
 

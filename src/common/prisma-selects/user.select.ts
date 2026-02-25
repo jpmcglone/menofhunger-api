@@ -5,6 +5,14 @@
  * - Avoid `include: { user: true }` overfetch on hot paths (feeds/search/topics).
  * - Make it hard to regress: shared constants are reused across services/DTO mappers.
  */
+export const ORG_AFFILIATION_SELECT = {
+  id: true,
+  username: true,
+  name: true,
+  avatarKey: true,
+  avatarUpdatedAt: true,
+} as const;
+
 export const USER_LIST_SELECT = {
   id: true,
   username: true,
@@ -17,6 +25,12 @@ export const USER_LIST_SELECT = {
   avatarKey: true,
   avatarUpdatedAt: true,
   bannedAt: true,
+  orgMemberships: {
+    select: {
+      org: { select: ORG_AFFILIATION_SELECT },
+    },
+    orderBy: { createdAt: 'asc' as const },
+  },
 } as const;
 
 /**

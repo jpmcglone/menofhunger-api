@@ -10,7 +10,8 @@ import { FollowsService } from '../follows/follows.service';
 import { CurrentUserId, OptionalCurrentUserId } from './users.decorator';
 import { validateUsername } from './users.utils';
 import { toUserDto } from './user.dto';
-import { toUserListDto, type NudgeStateDto } from '../../common/dto';
+import { toUserListDto, type NudgeStateDto, type OrgAffiliationDto } from '../../common/dto';
+import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { Throttle } from '@nestjs/throttler';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
@@ -195,6 +196,32 @@ export class UsersController {
 
   private async emitUserSelfUpdated(userId: string): Promise<void> {
     await this.usersPublicRealtime.emitPublicProfileUpdated(userId);
+  }
+
+  /** Batch-fetch org affiliations for a set of user IDs. Returns a map of userId → OrgAffiliationDto[]. */
+  private async batchOrgAffiliations(userIds: string[]): Promise<Map<string, OrgAffiliationDto[]>> {
+    if (userIds.length === 0) return new Map();
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const memberships = await this.prisma.userOrgMembership.findMany({
+      where: { userId: { in: userIds } },
+      select: {
+        userId: true,
+        org: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    const map = new Map<string, OrgAffiliationDto[]>();
+    for (const m of memberships) {
+      const list = map.get(m.userId) ?? [];
+      list.push({
+        id: m.org.id,
+        username: m.org.username,
+        name: m.org.name,
+        avatarUrl: publicAssetUrl({ publicBaseUrl, key: m.org.avatarKey ?? null, updatedAt: m.org.avatarUpdatedAt ?? null }),
+      });
+      map.set(m.userId, list);
+    }
+    return map;
   }
 
   private async getPublicProfilePayloadByUsernameOrId(
@@ -469,19 +496,7 @@ export class UsersController {
         // Exclude users the viewer already follows.
         followers: { none: { followerId: viewerUserId } },
       },
-      select: {
-        id: true,
-        username: true,
-        name: true,
-        premium: true,
-        premiumPlus: true,
-        isOrganization: true,
-        stewardBadgeEnabled: true,
-        verifiedStatus: true,
-        avatarKey: true,
-        avatarUpdatedAt: true,
-        createdAt: true,
-      },
+      select: USER_LIST_SELECT,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit,
     });
@@ -667,7 +682,8 @@ export class UsersController {
     );
     res.setHeader('Vary', 'Cookie');
 
-    return { data: payload };
+    const orgMap = await this.batchOrgAffiliations([payload.id]);
+    return { data: { ...payload, orgAffiliations: orgMap.get(payload.id) ?? [] } };
   }
 
   @Throttle({
@@ -703,7 +719,16 @@ export class UsersController {
       viewerUserId ? 'private, max-age=60, stale-while-revalidate=120' : 'public, max-age=300, stale-while-revalidate=600',
     );
     if (viewerUserId) res.setHeader('Vary', 'Cookie');
-    return { data: { ...(payload as any), lastOnlineAt: canSeeLastOnline ? (payload as any).lastOnlineAt : null } };
+
+    const profileId = (payload as any).id as string | undefined;
+    const orgMap = profileId ? await this.batchOrgAffiliations([profileId]) : new Map();
+    return {
+      data: {
+        ...(payload as any),
+        lastOnlineAt: canSeeLastOnline ? (payload as any).lastOnlineAt : null,
+        orgAffiliations: orgMap.get(profileId ?? '') ?? [],
+      },
+    };
   }
 
   @UseGuards(AuthGuard)
