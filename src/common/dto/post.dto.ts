@@ -341,6 +341,7 @@ export function toPostDto(
         stewardBadgeEnabled: false,
         verifiedStatus: 'none',
         avatarUrl: null,
+        orgAffiliations: [],
         authorBanned: true,
       },
       authorBanned: true,
