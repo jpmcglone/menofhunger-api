@@ -233,6 +233,26 @@ export class PostsPopularScoreCron {
           WHERE LOWER(TRIM(t)) <> ''
           GROUP BY p."id"
         ),
+        flat_repost_counts AS (
+          -- Flat reposts (kind='repost'): reshared without added commentary.
+          -- Weighted like bookmarks (lower social signal than a reply/quote).
+          SELECT r."repostedPostId" as "postId", COUNT(*)::DOUBLE PRECISION as "count"
+          FROM "Post" r
+          WHERE r."repostedPostId" IS NOT NULL
+            AND r."deletedAt" IS NULL
+            AND r."createdAt" >= ${minCreatedAt}
+          GROUP BY r."repostedPostId"
+        ),
+        quote_repost_counts AS (
+          -- Quote reposts: regular posts that embed another post URL.
+          -- Weighted like replies (meaningful engagement / commentary).
+          SELECT q."quotedPostId" as "postId", COUNT(*)::DOUBLE PRECISION as "count"
+          FROM "Post" q
+          WHERE q."quotedPostId" IS NOT NULL
+            AND q."deletedAt" IS NULL
+            AND q."createdAt" >= ${minCreatedAt}
+          GROUP BY q."quotedPostId"
+        ),
         scored_base AS (
           SELECT
             p."id" as "id",
@@ -266,8 +286,8 @@ export class PostsPopularScoreCron {
               )
               +
               (
-                -- Reposts signal content spread / virality; decayed like bookmarks.
-                (p."repostCount"::DOUBLE PRECISION) * 0.5 * POWER(
+                -- Flat reposts (no commentary): same weight as bookmarks.
+                COALESCE(frc."count", 0) * 0.5 * POWER(
                   0.5,
                   GREATEST(
                     0,
@@ -277,9 +297,22 @@ export class PostsPopularScoreCron {
               )
               +
               (
-                -- commentScore decayed by both comment recency AND post age (72h half-life for post age).
+                -- Quote reposts (with commentary): weighted like replies (0.8), same 72h post-age decay
+                -- so their value degrades at the same rate as reply-based engagement.
+                COALESCE(qrc."count", 0) * 0.8 * POWER(
+                  0.5,
+                  GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (${asOf}::timestamptz - p."createdAt"))
+                  ) / (72 * 60 * 60)
+                )
+              )
+              +
+              (
+                -- Replies: decayed by both comment recency AND post age (72h half-life for post age).
                 -- Without the post-age factor, old posts with recent comments rank disproportionately high.
-                (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * 0.5
+                -- Weight 0.8: meaningfully above bookmarks/flat-reposts, just below boosts.
+                (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * 0.8
                 * POWER(
                   0.5,
                   GREATEST(0, EXTRACT(EPOCH FROM (${asOf}::timestamptz - p."createdAt"))) / (72 * 60 * 60)
@@ -368,6 +401,8 @@ export class PostsPopularScoreCron {
           LEFT JOIN "Post" root ON root."id" = COALESCE(p."rootId", p."id")
           LEFT JOIN comment_scores cs ON cs."postId" = p."id"
           LEFT JOIN "PostPoll" poll ON poll."postId" = p."id"
+          LEFT JOIN flat_repost_counts frc ON frc."postId" = p."id"
+          LEFT JOIN quote_repost_counts qrc ON qrc."postId" = p."id"
           CROSS JOIN hashtag_global hg
           LEFT JOIN post_hashtag_scores hs ON hs."postId" = p."id"
         ),
