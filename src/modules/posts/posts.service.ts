@@ -281,7 +281,20 @@ export class PostsService {
             )
             +
             (
+              -- commentScore decayed by both comment recency AND post age (72h half-life for post age).
               (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight}
+              * POWER(
+                0.5,
+                GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))) / (72 * 60 * 60)
+              )
+            )
+            +
+            (
+              -- Poll votes: direct engagement signal, decayed by post age like bookmarks.
+              COALESCE(poll."totalVoteCount", 0)::DOUBLE PRECISION * 0.3 * POWER(
+                0.5,
+                GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))) / ${PostsService.popularHalfLifeSeconds}
+              )
             )
             +
             (
@@ -355,6 +368,7 @@ export class PostsService {
         LEFT JOIN "Post" parent ON parent."id" = p."parentId"
         LEFT JOIN "Post" root ON root."id" = COALESCE(p."rootId", p."id")
         LEFT JOIN comment_scores cs ON cs."postId" = p."id"
+        LEFT JOIN "PostPoll" poll ON poll."postId" = p."id"
         WHERE p."id" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}`))})
       )
       SELECT "id", "score" FROM scored

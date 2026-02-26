@@ -277,7 +277,21 @@ export class PostsPopularScoreCron {
               )
               +
               (
+                -- commentScore decayed by both comment recency AND post age (72h half-life for post age).
+                -- Without the post-age factor, old posts with recent comments rank disproportionately high.
                 (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * 0.5
+                * POWER(
+                  0.5,
+                  GREATEST(0, EXTRACT(EPOCH FROM (${asOf}::timestamptz - p."createdAt"))) / (72 * 60 * 60)
+                )
+              )
+              +
+              (
+                -- Poll votes: direct engagement signal, decayed by post age like bookmarks.
+                COALESCE(poll."totalVoteCount", 0)::DOUBLE PRECISION * 0.3 * POWER(
+                  0.5,
+                  GREATEST(0, EXTRACT(EPOCH FROM (${asOf}::timestamptz - p."createdAt"))) / (12 * 60 * 60)
+                )
               )
               +
               (
@@ -353,6 +367,7 @@ export class PostsPopularScoreCron {
           LEFT JOIN "Post" parent ON parent."id" = p."parentId"
           LEFT JOIN "Post" root ON root."id" = COALESCE(p."rootId", p."id")
           LEFT JOIN comment_scores cs ON cs."postId" = p."id"
+          LEFT JOIN "PostPoll" poll ON poll."postId" = p."id"
           CROSS JOIN hashtag_global hg
           LEFT JOIN post_hashtag_scores hs ON hs."postId" = p."id"
         ),
