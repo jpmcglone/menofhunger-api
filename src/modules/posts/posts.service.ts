@@ -19,6 +19,8 @@ import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
 import { toUserDto } from '../../common/dto/user.dto';
 import { PostViewsService } from '../post-views/post-views.service';
+import { JobsService } from '../jobs/jobs.service';
+import { JOBS } from '../jobs/jobs.constants';
 
 export type PostCounts = {
   all: number;
@@ -46,6 +48,7 @@ export class PostsService {
     private readonly cacheInvalidation: CacheInvalidationService,
     private readonly appConfig: AppConfigService,
     private readonly postViews: PostViewsService,
+    private readonly jobs: JobsService,
   ) {}
 
   /**
@@ -2313,6 +2316,11 @@ export class PostsService {
       this.notifications.deleteByActorPostId(id),
     ]).catch(() => {});
     await this.cacheInvalidation.bumpForPostWrite({ topics: postTopics });
+
+    // Refresh trending score for the post that lost a comment/repost due to this deletion.
+    const affectedPostId = ((post as any).repostedPostId as string | null | undefined) ?? ((post as any).quotedPostId as string | null | undefined) ?? null;
+    if (affectedPostId) this.enqueueScoreRefresh(affectedPostId);
+
     // Realtime: mark post deleted for live subscribers (best-effort).
     try {
       this.presenceRealtime.emitPostsLiveUpdated(id, {
@@ -3881,6 +3889,14 @@ export class PostsService {
       void this.postViews.markViewed(userId, parentId);
     }
 
+    // Refresh trending score: for comments → parent post; for quote reposts → quoted post; for all posts → the post itself.
+    if (parentId) {
+      this.enqueueScoreRefresh(parentId);
+    } else if (quotedPostNotificationInfo?.quotedPostId) {
+      this.enqueueScoreRefresh(quotedPostNotificationInfo.quotedPostId);
+    }
+    this.enqueueScoreRefresh(post.id);
+
     return withMentions!;
   }
 
@@ -4030,6 +4046,7 @@ export class PostsService {
 
     // Popular/trending/featured feeds are boost-sensitive. Bump so anon caches shift instantly.
     await this.cacheInvalidation.bumpFeedGlobal();
+    this.enqueueScoreRefresh(id);
 
     return { success: true, viewerHasBoosted: true, boostCount: res.boostCount };
   }
@@ -4087,6 +4104,7 @@ export class PostsService {
 
     // Popular/trending/featured feeds are boost-sensitive. Bump so anon caches shift instantly.
     await this.cacheInvalidation.bumpFeedGlobal();
+    this.enqueueScoreRefresh(id);
 
     return { success: true, viewerHasBoosted: false, boostCount: res.boostCount };
   }
@@ -4186,6 +4204,7 @@ export class PostsService {
 
     void this.postViews.markViewed(userId, canonicalId);
     await this.cacheInvalidation.bumpFeedGlobal();
+    this.enqueueScoreRefresh(canonicalId);
 
     return { reposted: true as const, repostId, repostCount };
   }
@@ -4234,7 +4253,41 @@ export class PostsService {
     }
 
     await this.cacheInvalidation.bumpFeedGlobal();
+    this.enqueueScoreRefresh(canonicalId);
     return { reposted: false as const, repostCount };
+  }
+
+  /**
+   * Recompute and persist the trendingScore for a single post.
+   * Called by the per-post BullMQ refresh job so scores update within seconds of engagement.
+   */
+  async refreshAndStoreTrendingScore(postId: string): Promise<void> {
+    if (!postId) return;
+    await this.ensureBoostScoresFresh([postId]);
+    const scores = await this.computeScoresForPostIds([postId]);
+    const score = scores.get(postId) ?? 0;
+    await this.prisma.post.update({
+      where: { id: postId },
+      data: {
+        trendingScore: score > 0 ? score : null,
+        trendingScoreUpdatedAt: new Date(),
+      },
+    });
+  }
+
+  /**
+   * Fire-and-forget: enqueue a deduplicated BullMQ job to refresh a post's trending score.
+   * Uses a stable job ID so multiple rapid engagements collapse into one refresh.
+   */
+  private enqueueScoreRefresh(postId: string): void {
+    if (!postId) return;
+    this.jobs
+      .enqueue(
+        JOBS.postsRefreshSinglePostScore,
+        { postId },
+        { jobId: `score-${postId}`, removeOnComplete: true, removeOnFail: true },
+      )
+      .catch(() => {});
   }
 
   /**

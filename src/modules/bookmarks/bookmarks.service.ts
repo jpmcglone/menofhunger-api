@@ -4,6 +4,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { PostViewsService } from '../post-views/post-views.service';
+import { JobsService } from '../jobs/jobs.service';
+import { JOBS } from '../jobs/jobs.constants';
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean };
 
@@ -26,7 +28,19 @@ export class BookmarksService {
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly viewerContext: ViewerContextService,
     private readonly postViews: PostViewsService,
+    private readonly jobs: JobsService,
   ) {}
+
+  private enqueueScoreRefresh(postId: string): void {
+    if (!postId) return;
+    this.jobs
+      .enqueue(
+        JOBS.postsRefreshSinglePostScore,
+        { postId },
+        { jobId: `score-${postId}`, removeOnComplete: true, removeOnFail: true },
+      )
+      .catch(() => {});
+  }
 
   private async viewer(userId: string): Promise<Viewer> {
     const u = (await this.viewerContext.getViewer(userId)) as any;
@@ -251,6 +265,7 @@ export class BookmarksService {
 
     // Bookmarking implies the user saw the post.
     void this.postViews.markViewed(userId, postId);
+    this.enqueueScoreRefresh(postId);
 
     return { success: true, bookmarked: true, bookmarkId: bookmark.id, collectionIds: desired };
   }
@@ -297,6 +312,7 @@ export class BookmarksService {
       // Best-effort
     }
 
+    this.enqueueScoreRefresh(postId);
     return { success: true, bookmarked: false };
   }
 }

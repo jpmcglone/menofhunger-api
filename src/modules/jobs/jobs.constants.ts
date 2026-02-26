@@ -5,6 +5,7 @@ export const JOBS = {
   postsPollResultsReadySweep: 'posts.pollResultsReadySweep',
   postsTopicsBackfill: 'posts.topicsBackfill',
   postsPopularScoreRefresh: 'posts.popularScoreRefresh',
+  postsRefreshSinglePostScore: 'posts.refreshSinglePostScore',
 
   // Hashtags
   hashtagsTrendingScoreRefresh: 'hashtags.trendingScoreRefresh',
