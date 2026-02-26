@@ -23,7 +23,7 @@ export class NotificationsCleanupCron {
   async cleanupOldReadNotifications() {
     if (!this.appConfig.runSchedulers()) return;
     try {
-      await this.jobs.enqueueCron(JOBS.notificationsCleanup, {}, 'cron:notificationsCleanup', {
+      await this.jobs.enqueueCron(JOBS.notificationsCleanup, {}, 'cron-notificationsCleanup', {
         attempts: 2,
         backoff: { type: 'exponential', delay: 5 * 60_000 },
       });

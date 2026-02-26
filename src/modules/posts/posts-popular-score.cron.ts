@@ -27,12 +27,12 @@ export class PostsPopularScoreCron {
   async refreshPopularSnapshots() {
     if (!this.appConfig.runSchedulers()) return;
     try {
-      await this.jobs.enqueueCron(JOBS.postsPopularScoreRefresh, {}, 'cron:postsPopularScoreRefresh', {
+      await this.jobs.enqueueCron(JOBS.postsPopularScoreRefresh, {}, 'cron-postsPopularScoreRefresh', {
         attempts: 2,
         backoff: { type: 'exponential', delay: 60_000 },
       });
-    } catch {
-      // likely duplicate jobId while previous run is active; treat as no-op
+    } catch (err) {
+      this.logger.debug(`Popular score refresh enqueue skipped: ${(err as Error).message}`);
     }
   }
 
@@ -373,7 +373,12 @@ export class PostsPopularScoreCron {
         ),
         scored AS (
           SELECT
-            sb.*,
+            sb."id",
+            sb."createdAt",
+            sb."userId",
+            sb."visibility",
+            sb."parentId",
+            sb."rootId",
             CAST(
               sb."score"
               * POWER(

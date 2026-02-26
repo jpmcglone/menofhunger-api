@@ -24,7 +24,7 @@ export class AuthCleanupCron {
   async cleanupExpiredAuthRecords() {
     if (!this.appConfig.runSchedulers()) return;
     try {
-      await this.jobs.enqueueCron(JOBS.authCleanup, {}, 'cron:authCleanup', {
+      await this.jobs.enqueueCron(JOBS.authCleanup, {}, 'cron-authCleanup', {
         attempts: 2,
         backoff: { type: 'exponential', delay: 5 * 60_000 },
       });

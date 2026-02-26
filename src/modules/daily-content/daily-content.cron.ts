@@ -18,7 +18,7 @@ export class DailyContentCron {
   async scheduleRefresh(): Promise<void> {
     if (!this.appConfig.runSchedulers()) return;
     try {
-      await this.jobs.enqueueCron(JOBS.dailyContentRefresh, {}, 'cron:dailyContentRefresh', {
+      await this.jobs.enqueueCron(JOBS.dailyContentRefresh, {}, 'cron-dailyContentRefresh', {
         attempts: 2,
         backoff: { type: 'exponential', delay: 60_000 },
       });

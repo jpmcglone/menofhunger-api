@@ -9,6 +9,7 @@ import { SearchModule } from '../search/search.module';
 import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
 import { DailyContentModule } from '../daily-content/daily-content.module';
 import { AdminModule } from '../admin/admin.module';
+import { CheckinsModule } from '../checkins/checkins.module';
 
 /**
  * Worker-only module: all BullMQ processors live here so we can disable job consumption
@@ -27,6 +28,7 @@ import { AdminModule } from '../admin/admin.module';
     LinkMetadataModule,
     DailyContentModule,
     AdminModule,
+    CheckinsModule,
   ],
   providers: [JobsProcessor],
 })

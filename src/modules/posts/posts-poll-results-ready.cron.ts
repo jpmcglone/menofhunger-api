@@ -32,7 +32,7 @@ export class PostsPollResultsReadyCron {
   async notifyEndedPolls() {
     if (!this.appConfig.runSchedulers()) return;
     try {
-      await this.jobs.enqueueCron(JOBS.postsPollResultsReadySweep, {}, 'cron:postsPollResultsReadySweep', {
+      await this.jobs.enqueueCron(JOBS.postsPollResultsReadySweep, {}, 'cron-postsPollResultsReadySweep', {
         attempts: 3,
         backoff: { type: 'exponential', delay: 30_000 },
       });

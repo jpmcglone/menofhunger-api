@@ -30,6 +30,9 @@ export const JOBS = {
   // Link metadata
   linkMetadataBackfill: 'linkMetadata.backfill',
 
+  // Check-ins
+  checkinsStreakReset: 'checkins.streakReset',
+
   // Admin
   adminDailyDigest: 'admin.dailyDigest',
 } as const;

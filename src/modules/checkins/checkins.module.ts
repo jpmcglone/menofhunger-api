@@ -6,11 +6,13 @@ import { UsersModule } from '../users/users.module';
 import { ViewerContextModule } from '../viewer/viewer-context.module';
 import { CheckinsController } from './checkins.controller';
 import { CheckinsService } from './checkins.service';
+import { CheckinsStreakResetCron } from './checkins-streak-reset.cron';
 
 @Module({
   imports: [AuthModule, PrismaModule, PostsModule, UsersModule, ViewerContextModule],
   controllers: [CheckinsController],
-  providers: [CheckinsService],
+  providers: [CheckinsService, CheckinsStreakResetCron],
+  exports: [CheckinsStreakResetCron],
 })
 export class CheckinsModule {}
 

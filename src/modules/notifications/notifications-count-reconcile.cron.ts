@@ -35,7 +35,7 @@ export class NotificationsCountReconcileCron {
       await this.jobs.enqueueCron(
         JOBS.notificationsCountReconcile,
         {},
-        'cron:notificationsCountReconcile',
+        'cron-notificationsCountReconcile',
         { attempts: 2, backoff: { type: 'exponential', delay: 5 * 60_000 } },
       );
     } catch {

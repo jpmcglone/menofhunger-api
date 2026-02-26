@@ -23,7 +23,7 @@ export class SearchCleanupCron {
   async cleanupUserSearchHistory() {
     if (!this.appConfig.runSchedulers()) return;
     try {
-      await this.jobs.enqueueCron(JOBS.searchCleanup, {}, 'cron:searchCleanup', {
+      await this.jobs.enqueueCron(JOBS.searchCleanup, {}, 'cron-searchCleanup', {
         attempts: 2,
         backoff: { type: 'exponential', delay: 5 * 60_000 },
       });

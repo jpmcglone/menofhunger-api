@@ -20,13 +20,25 @@ export class JobsService {
   }
 
   /**
-   * Convenience helpers (stronger call sites + consistent dedupe IDs).
+   * Enqueue a periodic cron job with a stable dedupe ID.
+   *
+   * jobId rules (BullMQ v5):
+   *   - No colons at all (e.g. "cron-postsPopularScoreRefresh")  ← preferred
+   *   - OR exactly 3 colon-separated parts                       ← kept for date-keyed IDs
+   * Any other colon usage throws at the BullMQ layer. We validate early to surface a clear
+   * error instead of a silent swallow in the cron's catch block.
    */
   async enqueueCron(name: JobName, payload: Record<string, any> = {}, jobId: string, opts?: JobsOptions) {
+    if (jobId.includes(':') && jobId.split(':').length !== 3) {
+      throw new Error(
+        `Invalid cron jobId "${jobId}": BullMQ v5 only permits colons in 3-part IDs ` +
+          `(e.g. "cron:name:${new Date().toISOString().slice(0, 10)}"). Use dashes for static IDs (e.g. "cron-${name}").`,
+      );
+    }
     return await this.enqueue(name, payload, {
       jobId,
       removeOnComplete: true,
-      removeOnFail: false,
+      removeOnFail: true,
       ...opts,
     });
   }

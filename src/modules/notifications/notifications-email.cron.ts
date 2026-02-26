@@ -217,7 +217,7 @@ export class NotificationsEmailCron {
     if (!emailCfg) return;
 
     try {
-      await this.jobs.enqueueCron(JOBS.notificationsEmailNudges, {}, 'cron:notificationsEmailNudges', {
+      await this.jobs.enqueueCron(JOBS.notificationsEmailNudges, {}, 'cron-notificationsEmailNudges', {
         attempts: 3,
         backoff: { type: 'exponential', delay: 60_000 },
       });

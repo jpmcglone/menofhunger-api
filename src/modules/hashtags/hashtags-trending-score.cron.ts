@@ -48,12 +48,12 @@ export class HashtagsTrendingScoreCron implements OnModuleInit {
   async refreshTrendingHashtagSnapshots() {
     if (!this.appConfig.runSchedulers()) return;
     try {
-      await this.jobs.enqueueCron(JOBS.hashtagsTrendingScoreRefresh, {}, 'cron:hashtagsTrendingScoreRefresh', {
+      await this.jobs.enqueueCron(JOBS.hashtagsTrendingScoreRefresh, {}, 'cron-hashtagsTrendingScoreRefresh', {
         attempts: 2,
         backoff: { type: 'exponential', delay: 60_000 },
       });
-    } catch {
-      // likely duplicate jobId while previous run is active; treat as no-op
+    } catch (err) {
+      this.logger.debug(`Hashtag trending refresh enqueue skipped: ${(err as Error).message}`);
     }
   }
 

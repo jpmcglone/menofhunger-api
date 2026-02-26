@@ -28,7 +28,7 @@ export class NotificationsOrphanCleanupCron {
   async cleanupDeletedPostNotifications() {
     if (!this.appConfig.runSchedulers()) return;
     try {
-      await this.jobs.enqueueCron(JOBS.notificationsOrphanCleanup, {}, 'cron:notificationsOrphanCleanup', {
+      await this.jobs.enqueueCron(JOBS.notificationsOrphanCleanup, {}, 'cron-notificationsOrphanCleanup', {
         attempts: 2,
         backoff: { type: 'exponential', delay: 5 * 60_000 },
       });

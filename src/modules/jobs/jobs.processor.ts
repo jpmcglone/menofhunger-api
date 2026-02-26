@@ -16,6 +16,7 @@ import { SearchCleanupCron } from '../search/search-cleanup.cron';
 import { LinkMetadataCron } from '../link-metadata/link-metadata.cron';
 import { DailyContentCron } from '../daily-content/daily-content.cron';
 import { AdminDailyDigestCron } from '../admin/admin-digest-email.cron';
+import { CheckinsStreakResetCron } from '../checkins/checkins-streak-reset.cron';
 
 @Processor(MOH_BACKGROUND_QUEUE)
 export class JobsProcessor extends WorkerHost {
@@ -36,6 +37,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly searchCleanup: SearchCleanupCron,
     private readonly linkMetadata: LinkMetadataCron,
     private readonly adminDailyDigest: AdminDailyDigestCron,
+    private readonly checkinsStreakReset: CheckinsStreakResetCron,
   ) {
     super();
   }
@@ -98,6 +100,9 @@ export class JobsProcessor extends WorkerHost {
           return { ok: true };
         case JOBS.adminDailyDigest:
           await this.adminDailyDigest.runSendAdminDailyDigest();
+          return { ok: true };
+        case JOBS.checkinsStreakReset:
+          await this.checkinsStreakReset.runStreakReset();
           return { ok: true };
         default:
           this.logger.warn(`Unknown job name: ${name}`);

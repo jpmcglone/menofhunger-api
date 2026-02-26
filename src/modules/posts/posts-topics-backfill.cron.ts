@@ -26,7 +26,7 @@ export class PostsTopicsBackfillCron {
     if (!this.appConfig.runSchedulers()) return;
     // Cron tick should enqueue only; opts are respected for admin-triggered runs via enqueue.
     try {
-      await this.jobs.enqueueCron(JOBS.postsTopicsBackfill, {}, 'cron:postsTopicsBackfill', {
+      await this.jobs.enqueueCron(JOBS.postsTopicsBackfill, {}, 'cron-postsTopicsBackfill', {
         attempts: 2,
         backoff: { type: 'exponential', delay: 60_000 },
       });

@@ -19,7 +19,7 @@ export class LinkMetadataCron {
   async handleBackfill() {
     try {
       if (!this.appConfig.runSchedulers()) return;
-      await this.jobs.enqueueCron(JOBS.linkMetadataBackfill, {}, 'cron:linkMetadataBackfill', {
+      await this.jobs.enqueueCron(JOBS.linkMetadataBackfill, {}, 'cron-linkMetadataBackfill', {
         attempts: 3,
         backoff: { type: 'exponential', delay: 60_000 },
       });

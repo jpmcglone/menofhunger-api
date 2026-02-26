@@ -24,7 +24,7 @@ export class HashtagsCleanupCron {
   async cleanupOrphanHashtags() {
     if (!this.appConfig.runSchedulers()) return;
     try {
-      await this.jobs.enqueueCron(JOBS.hashtagsCleanup, {}, 'cron:hashtagsCleanup', {
+      await this.jobs.enqueueCron(JOBS.hashtagsCleanup, {}, 'cron-hashtagsCleanup', {
         attempts: 2,
         backoff: { type: 'exponential', delay: 5 * 60_000 },
       });
