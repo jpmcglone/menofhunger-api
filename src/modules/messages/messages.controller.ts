@@ -171,6 +171,18 @@ export class MessagesController {
 
   @Throttle({
     default: {
+      limit: rateLimitLimit('interact', 60),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Delete('conversations/:id')
+  async deleteConversation(@CurrentUserId() userId: string, @Param('id') id: string) {
+    await this.messages.deleteConversation({ userId, conversationId: id });
+    return { data: {} };
+  }
+
+  @Throttle({
+    default: {
       limit: rateLimitLimit('publicRead', 240),
       ttl: rateLimitTtl('publicRead', 60),
     },

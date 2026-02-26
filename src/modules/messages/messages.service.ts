@@ -138,7 +138,9 @@ export class MessagesService {
       .filter((p) => p.conversationId.length > 0);
     if (tuples.length === 0) return new Map<string, number>();
 
-    const values = tuples.map((t) => Prisma.sql`(${t.conversationId}, ${t.lastReadAt})`);
+    // Explicit casts prevent PostgreSQL from inferring the CTE columns as `text`,
+    // which would cause a type error when comparing lastReadAt against the timestamp column.
+    const values = tuples.map((t) => Prisma.sql`(${t.conversationId}::text, ${t.lastReadAt}::timestamptz)`);
 
     const rows = await this.prisma.$queryRaw<Array<{ conversationId: string; count: number }>>(Prisma.sql`
       WITH p("conversationId", "lastReadAt") AS (
@@ -520,11 +522,11 @@ export class MessagesService {
     });
     if (!sender) throw new NotFoundException('User not found.');
     const senderIsVerified = Boolean(sender.verifiedStatus && sender.verifiedStatus !== 'none');
-    if (!senderIsVerified) {
+    const senderIsPremium = Boolean(sender.premium || sender.premiumPlus);
+    if (!senderIsVerified && !senderIsPremium) {
       // Defense-in-depth: MessagesController already uses VerifiedGuard.
       throw new ForbiddenException('Verify to use chat.');
     }
-    const senderIsPremium = Boolean(sender.premium || sender.premiumPlus);
     await this.assertNotBlocked(userId, uniqueRecipients);
 
     const isDirect = uniqueRecipients.length === 1;
@@ -543,11 +545,9 @@ export class MessagesService {
     }
 
     // From this point on, we are creating a new conversation (no existing direct thread matched).
-    if (!senderIsPremium) {
-      throw new ForbiddenException(
-        'Upgrade to Premium to start new chats. Verified members can reply to chats started with them.',
-      );
-    }
+    // Rules:
+    //   - Any verified (or premium) sender can start a chat with any other verified user.
+    //   - Unverified users cannot be messaged.
 
     const users = await this.prisma.user.findMany({
       where: { id: { in: uniqueRecipients } },
@@ -766,6 +766,20 @@ export class MessagesService {
       conversationId,
       userId,
       lastReadAt: now.toISOString(),
+    });
+    this.emitUnreadCounts(userId);
+  }
+
+  async deleteConversation(params: { userId: string; conversationId: string }) {
+    const { userId, conversationId } = params;
+    // Silently succeed if the user is not a participant (idempotent).
+    const participant = await this.prisma.messageParticipant.findUnique({
+      where: { conversationId_userId: { conversationId, userId } },
+      select: { conversationId: true },
+    });
+    if (!participant) return;
+    await this.prisma.messageParticipant.delete({
+      where: { conversationId_userId: { conversationId, userId } },
     });
     this.emitUnreadCounts(userId);
   }

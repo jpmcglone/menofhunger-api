@@ -13,10 +13,12 @@ export class VerifiedGuard implements CanActivate {
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { verifiedStatus: true },
+      select: { verifiedStatus: true, premium: true, premiumPlus: true },
     });
     if (!user) throw new UnauthorizedException();
-    if ((user.verifiedStatus ?? 'none') === 'none') {
+    const isVerified = (user.verifiedStatus ?? 'none') !== 'none';
+    const isPremium = Boolean(user.premium || user.premiumPlus);
+    if (!isVerified && !isPremium) {
       throw new ForbiddenException('Verify to use chat.');
     }
     return true;
