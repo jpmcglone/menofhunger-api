@@ -236,8 +236,6 @@ export class AdminDailyDigestCron {
         activePremiumPlusCount,
         pendingCancellationCount,
         newSubscriberRows,
-        // Top post
-        latestScoreAsOf,
         // Admin recipients
         admins,
       ] = await Promise.all([
@@ -299,11 +297,6 @@ export class AdminDailyDigestCron {
             stripeSubscriptionPriceId: true,
           },
         }),
-        // Latest popularity snapshot timestamp
-        this.prisma.postPopularScoreSnapshot.findFirst({
-          orderBy: { asOf: 'desc' },
-          select: { asOf: true },
-        }),
         // Site admins with verified email
         this.prisma.user.findMany({
           where: { siteAdmin: true, email: { not: null }, emailVerifiedAt: { not: null } },
@@ -311,7 +304,7 @@ export class AdminDailyDigestCron {
         }),
       ]);
 
-      // Top post of yesterday: highest-scoring post (any visibility — admins see all).
+      // Top post of yesterday: highest trendingScore among top-level posts created in window (admins see all).
       type TopPostRow = {
         id: string;
         body: string;
@@ -323,42 +316,24 @@ export class AdminDailyDigestCron {
         visibility: string;
       };
       let topPost: TopPostRow | null = null;
-      if (latestScoreAsOf?.asOf) {
-        const topSnapshot = await this.prisma.postPopularScoreSnapshot.findFirst({
-          where: {
-            asOf: latestScoreAsOf.asOf,
-            createdAt: { gte: windowStart, lt: windowEnd },
-            parentId: null,
-          },
-          orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
-          select: { postId: true, score: true, visibility: true },
-        });
+      {
+        const rawPost = await (this.prisma.post as any).findFirst({
+          where: { deletedAt: null, parentId: null, createdAt: { gte: windowStart, lt: windowEnd }, trendingScore: { gt: 0 } },
+          orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          select: { id: true, body: true, boostCount: true, commentCount: true, viewerCount: true, visibility: true, user: { select: { username: true, name: true } } },
+        }) as { id: string; body: string | null; boostCount: number; commentCount: number; viewerCount: number; visibility: string; user: { username: string | null; name: string | null } | null } | null;
 
-        if (topSnapshot) {
-          const post = await this.prisma.post.findUnique({
-            where: { id: topSnapshot.postId },
-            select: {
-              id: true,
-              body: true,
-              boostCount: true,
-              commentCount: true,
-              viewerCount: true,
-              visibility: true,
-              user: { select: { username: true, name: true } },
-            },
-          });
-          if (post && !post.body?.trim()?.startsWith('[deleted]')) {
-            topPost = {
-              id: post.id,
-              body: post.body ?? '',
-              boostCount: post.boostCount,
-              commentCount: post.commentCount,
-              viewerCount: post.viewerCount,
-              visibility: post.visibility,
-              username: post.user?.username ?? null,
-              name: post.user?.name ?? null,
-            };
-          }
+        if (rawPost && !rawPost.body?.trim()?.startsWith('[deleted]')) {
+          topPost = {
+            id: rawPost.id,
+            body: rawPost.body ?? '',
+            boostCount: rawPost.boostCount,
+            commentCount: rawPost.commentCount,
+            viewerCount: rawPost.viewerCount,
+            visibility: rawPost.visibility,
+            username: rawPost.user?.username ?? null,
+            name: rawPost.user?.name ?? null,
+          };
         }
       }
 

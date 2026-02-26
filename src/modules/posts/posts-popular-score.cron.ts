@@ -44,6 +44,7 @@ export class PostsPopularScoreCron {
       const asOf = new Date();
       const lookbackDays = 30;
       const minCreatedAt = new Date(asOf.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
+      // asOf is used both as the scoring reference time and as the trendingScoreUpdatedAt timestamp.
 
       // Warm up boostScore for likely-top boosted posts so scoring uses fresh boostScore.
       const staleBefore = new Date(asOf.getTime() - 10 * 60 * 1000);
@@ -66,18 +67,8 @@ export class PostsPopularScoreCron {
         await this.posts.ensureBoostScoresFresh(warmup.map((p) => p.id));
       }
 
-      // Compute scored candidates (same formula as request-time trending feed).
-      const rows = await this.prisma.$queryRaw<
-        Array<{
-          id: string;
-          createdAt: Date;
-          score: number;
-          userId: string;
-          visibility: 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe';
-          parentId: string | null;
-          rootId: string | null;
-        }>
-      >(Prisma.sql`
+      // Compute trending scores for all candidate posts, then write directly to Post.trendingScore.
+      const rows = await this.prisma.$queryRaw<Array<{ id: string; score: number }>>(Prisma.sql`
         WITH
         commenter_latest AS (
           SELECT
@@ -410,10 +401,6 @@ export class PostsPopularScoreCron {
           SELECT
             sb."id",
             sb."createdAt",
-            sb."userId",
-            sb."visibility",
-            sb."parentId",
-            sb."rootId",
             CAST(
               sb."score"
               * POWER(
@@ -427,41 +414,37 @@ export class PostsPopularScoreCron {
             ) as "score"
           FROM scored_base sb
         )
-        SELECT "id", "createdAt", "score", "userId", "visibility", "parentId", "rootId"
+        SELECT "id", "score"
         FROM scored
         WHERE "score" > 0
         ORDER BY "score" DESC, "createdAt" DESC, "id" DESC
-        LIMIT 15000
       `);
 
-      const cutoff = new Date(asOf.getTime() - 60 * 60 * 1000);
+      // Bulk-update Post.trendingScore in chunks using a VALUES table join for efficiency.
+      const chunkSize = 500;
+      for (let i = 0; i < rows.length; i += chunkSize) {
+        const chunk = rows.slice(i, i + chunkSize);
+        const values = chunk.map((r) => Prisma.sql`(${r.id}, ${r.score}::double precision)`);
+        await this.prisma.$executeRaw`
+          UPDATE "Post" AS p
+          SET "trendingScore" = v.score,
+              "trendingScoreUpdatedAt" = ${asOf}::timestamptz
+          FROM (VALUES ${Prisma.join(values)}) AS v(id, score)
+          WHERE p."id" = v.id
+        `;
+      }
 
-      // Keep a small rolling window of snapshots so cursor pagination remains stable across refreshes.
-      await this.prisma.$transaction(async (tx) => {
-        await tx.postPopularScoreSnapshot.deleteMany({ where: { asOf: { lt: cutoff } } });
-        // Always delete the exact asOf in case a deploy restarts mid-refresh and reruns.
-        await tx.postPopularScoreSnapshot.deleteMany({ where: { asOf } });
-
-        const chunkSize = 1000;
-        for (let i = 0; i < rows.length; i += chunkSize) {
-          const chunk = rows.slice(i, i + chunkSize);
-          await tx.postPopularScoreSnapshot.createMany({
-            data: chunk.map((r) => ({
-              asOf,
-              postId: r.id,
-              createdAt: r.createdAt,
-              score: r.score,
-              userId: r.userId,
-              visibility: r.visibility,
-              parentId: r.parentId ?? null,
-              rootId: r.rootId ?? null,
-            })),
-          });
-        }
+      // Reset posts older than the lookback window that still carry a stale score.
+      await this.prisma.post.updateMany({
+        where: {
+          trendingScore: { gt: 0 },
+          createdAt: { lt: minCreatedAt },
+        },
+        data: { trendingScore: null, trendingScoreUpdatedAt: asOf },
       });
 
       const ms = Date.now() - startedAt;
-      this.logger.log(`Refreshed trending snapshots: ${rows.length} rows asOf=${asOf.toISOString()} (${ms}ms)`);
+      this.logger.log(`Refreshed trending scores: ${rows.length} posts updated (${ms}ms)`);
     } catch (err) {
       this.logger.warn(`Trending snapshot refresh failed: ${(err as Error).message}`);
     } finally {

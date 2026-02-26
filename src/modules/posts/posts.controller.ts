@@ -383,8 +383,11 @@ export class PostsController {
           ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
           : new Map<string, string>();
         const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)) : null;
-        const scoreByPostId =
-          viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
+        // For popular/featured feeds, use the stored trendingScore (from result.scoreByPostId) so
+        // the displayed score matches the sort order exactly.
+        const scoreByPostId = viewerHasAdmin
+          ? (result.scoreByPostId ?? await this.posts.computeScoresForPostIds(allPostIds))
+          : undefined;
 
         const { blockedByViewer, viewerBlockedBy } = viewerUserId
           ? await this.posts.viewerBlockSets(viewerUserId)

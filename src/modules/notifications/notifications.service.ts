@@ -583,8 +583,12 @@ export class NotificationsService {
     recipientUserId: string;
     actorUserId: string;
     subjectPostId: string;
+    /** The repost/quote post itself — lets the recipient tap through to it. */
+    actorPostId?: string;
+    /** Defaults to 'reposted your post'. Pass 'quoted your post' for quote reposts. */
+    title?: string;
   }) {
-    const { recipientUserId, actorUserId, subjectPostId } = params;
+    const { recipientUserId, actorUserId, subjectPostId, actorPostId, title = 'reposted your post' } = params;
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
@@ -598,7 +602,7 @@ export class NotificationsService {
             if (existing) {
               await tx.notification.update({
                 where: { id: existing.id },
-                data: { createdAt: new Date() },
+                data: { createdAt: new Date(), title, ...(actorPostId ? { actorPostId } : {}) },
               });
               return { kind: 'updated' as const, notificationId: existing.id, undeliveredCount: null as number | null };
             }
@@ -609,7 +613,8 @@ export class NotificationsService {
                 kind: 'repost',
                 actorUserId,
                 subjectPostId,
-                title: 'reposted your post',
+                ...(actorPostId ? { actorPostId } : {}),
+                title,
               },
               select: { id: true },
             });

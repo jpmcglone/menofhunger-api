@@ -257,7 +257,6 @@ model User {
   messageConversationsCreated MessageConversation[] @relation("MessageConversation_createdBy")
   blocksInitiated UserBlock[] @relation("UserBlock_blocker")
   blocksReceived  UserBlock[] @relation("UserBlock_blocked")
-  popularScoreSnapshots PostPopularScoreSnapshot[] @relation("PostPopularScoreSnapshot_user")
   postViews PostView[]
 
   // Org affiliations: orgs this user belongs to (non-org users); members of this org (org users).
@@ -434,6 +433,9 @@ model Post {
   viewerCount Int            @default(0)
   boostScore Float?
   boostScoreUpdatedAt DateTime?
+  /** Precomputed trending score, refreshed every ~10 min by the popular-score cron. NULL = not yet scored. */
+  trendingScore Float?
+  trendingScoreUpdatedAt DateTime?
 
   userId String
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -466,7 +468,6 @@ model Post {
   pinnedByUser User? @relation("PinnedPost")
   notificationsAsSubject Notification[] @relation("Notification_subjectPost")
   notificationsAsActorPost Notification[] @relation("Notification_actorPost")
-  popularScoreSnapshots PostPopularScoreSnapshot[] @relation("PostPopularScoreSnapshot_post")
   reports Report[] @relation("Report_subjectPost")
   views PostView[]
 
@@ -487,6 +488,8 @@ model Post {
   @@index([parentId, deletedAt, createdAt(sort: Desc), id(sort: Desc)])
   @@index([parentId, deletedAt, boostCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
   @@index([parentId, deletedAt, bookmarkCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
+  // Trending feed hot path: sort by precomputed score descending.
+  @@index([trendingScore(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
   @@index([parentId, deletedAt, commentCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
 }
 
@@ -616,29 +619,6 @@ model HashtagBackfillRun {
   lastError String? @db.Text
 
   @@index([status, updatedAt])
-}
-
-// Postgres-backed "cache": periodic snapshots of trending scores.
-// We keep a small rolling window (e.g. last ~1 hour) so cursor pagination remains stable across refreshes.
-model PostPopularScoreSnapshot {
-  asOf      DateTime
-  postId    String
-  createdAt DateTime
-  score     Float
-
-  userId     String
-  visibility PostVisibility
-
-  parentId String?
-  rootId   String?
-
-  post Post @relation("PostPopularScoreSnapshot_post", fields: [postId], references: [id], onDelete: Cascade)
-  user User @relation("PostPopularScoreSnapshot_user", fields: [userId], references: [id], onDelete: Cascade)
-
-  @@id([asOf, postId])
-  @@index([asOf, score(sort: Desc), createdAt(sort: Desc), postId(sort: Desc)])
-  @@index([asOf, userId])
-  @@index([asOf, visibility])
 }
 
 // Postgres-backed "cache": periodic snapshots of trending hashtag scores.

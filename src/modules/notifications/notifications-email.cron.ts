@@ -627,81 +627,46 @@ export class NotificationsEmailCron {
       const wotd = (snap?.websters1828 ?? null) as any;
       const checkinPrompt = pickDailyCheckinPrompt(now).prompt;
 
-    // Featured post: highest trending score among posts created in window.
-    // NOTE: Digest recipients may not have access to all visibilities (verified/premium). Precompute by tier and pick per-user.
-    const latestAsOf = await this.prisma.postPopularScoreSnapshot.findFirst({
-      orderBy: [{ asOf: 'desc' }],
-      select: { asOf: true },
-    });
-    const featuredRowPublic =
-      latestAsOf?.asOf
-        ? await this.prisma.postPopularScoreSnapshot.findFirst({
-            where: {
-              asOf: latestAsOf.asOf,
-              createdAt: { gte: new Date(windowStartUtcMs), lt: new Date(windowEndUtcMs) },
-              parentId: null,
-              visibility: { in: ['public'] },
-            },
-            orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
-            select: { postId: true },
-          })
-        : null;
-    const featuredRowVerified =
-      latestAsOf?.asOf
-        ? await this.prisma.postPopularScoreSnapshot.findFirst({
-            where: {
-              asOf: latestAsOf.asOf,
-              createdAt: { gte: new Date(windowStartUtcMs), lt: new Date(windowEndUtcMs) },
-              parentId: null,
-              visibility: { in: ['public', 'verifiedOnly'] },
-            },
-            orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
-            select: { postId: true },
-          })
-        : null;
-    const featuredRowPremium =
-      latestAsOf?.asOf
-        ? await this.prisma.postPopularScoreSnapshot.findFirst({
-            where: {
-              asOf: latestAsOf.asOf,
-              createdAt: { gte: new Date(windowStartUtcMs), lt: new Date(windowEndUtcMs) },
-              parentId: null,
-              visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] },
-            },
-            orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
-            select: { postId: true },
-          })
-        : null;
+    // Featured post: highest trendingScore among top-level posts created in the digest window.
+    // Precomputed per visibility tier so each user sees the best post they have access to.
+    const dailyWindow = { gte: new Date(windowStartUtcMs), lt: new Date(windowEndUtcMs) };
+    const featuredRowPublic = await (this.prisma.post as any).findFirst({
+      where: { deletedAt: null, parentId: null, createdAt: dailyWindow, visibility: { in: ['public'] }, trendingScore: { gt: 0 } },
+      orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      select: { id: true },
+    }) as { id: string } | null;
+    const featuredRowVerified = await (this.prisma.post as any).findFirst({
+      where: { deletedAt: null, parentId: null, createdAt: dailyWindow, visibility: { in: ['public', 'verifiedOnly'] }, trendingScore: { gt: 0 } },
+      orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      select: { id: true },
+    }) as { id: string } | null;
+    const featuredRowPremium = await (this.prisma.post as any).findFirst({
+      where: { deletedAt: null, parentId: null, createdAt: dailyWindow, visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] }, trendingScore: { gt: 0 } },
+      orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      select: { id: true },
+    }) as { id: string } | null;
 
     const featuredPostSelect = { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } } as const;
     const featuredCreatedAtWindow = { gte: new Date(windowStartUtcMs), lt: new Date(windowEndUtcMs) };
 
-    const featuredPostPublic = featuredRowPublic?.postId
-      ? await this.prisma.post.findFirst({
-          where: { id: featuredRowPublic.postId, deletedAt: null },
-          select: featuredPostSelect,
-        })
+    // Fetch featured post per tier directly from Post.trendingScore.
+    // Falls back to most-recent post in the window when no scored post exists (low-engagement days).
+    const featuredPostPublic = featuredRowPublic?.id
+      ? await this.prisma.post.findFirst({ where: { id: featuredRowPublic.id, deletedAt: null }, select: featuredPostSelect })
       : await this.prisma.post.findFirst({
-          // Fallback: snapshot only includes score > 0 posts; on low-engagement days pick the most recent qualifying post.
           where: { deletedAt: null, parentId: null, visibility: 'public', createdAt: featuredCreatedAtWindow },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           select: featuredPostSelect,
         });
-    const featuredPostVerified = featuredRowVerified?.postId
-      ? await this.prisma.post.findFirst({
-          where: { id: featuredRowVerified.postId, deletedAt: null },
-          select: featuredPostSelect,
-        })
+    const featuredPostVerified = featuredRowVerified?.id
+      ? await this.prisma.post.findFirst({ where: { id: featuredRowVerified.id, deletedAt: null }, select: featuredPostSelect })
       : await this.prisma.post.findFirst({
           where: { deletedAt: null, parentId: null, visibility: { in: ['public', 'verifiedOnly'] }, createdAt: featuredCreatedAtWindow },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           select: featuredPostSelect,
         });
-    const featuredPostPremium = featuredRowPremium?.postId
-      ? await this.prisma.post.findFirst({
-          where: { id: featuredRowPremium.postId, deletedAt: null },
-          select: featuredPostSelect,
-        })
+    const featuredPostPremium = featuredRowPremium?.id
+      ? await this.prisma.post.findFirst({ where: { id: featuredRowPremium.id, deletedAt: null }, select: featuredPostSelect })
       : await this.prisma.post.findFirst({
           where: { deletedAt: null, parentId: null, visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] }, createdAt: featuredCreatedAtWindow },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -1109,67 +1074,25 @@ export class NotificationsEmailCron {
       const settingsUrl = `${baseUrl}/settings/notifications`;
       const r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
-      // Best post of the week (per-tier, same pattern as daily digest).
-      const latestAsOf = await this.prisma.postPopularScoreSnapshot.findFirst({
-        orderBy: [{ asOf: 'desc' }],
-        select: { asOf: true },
-      });
+      // Best post of the week (per-tier): order by trendingScore DESC (NULLS LAST, so unscored posts fall to bottom).
       const weeklyFeaturedSelect = { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } } as const;
       const weeklyCreatedAtWindow = { gte: weekWindowStart, lt: weekWindowEnd };
 
-      const weeklyFeaturedRowPublic = latestAsOf?.asOf
-        ? await this.prisma.postPopularScoreSnapshot.findFirst({
-            where: { asOf: latestAsOf.asOf, createdAt: weeklyCreatedAtWindow, parentId: null, visibility: { in: ['public'] } },
-            orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
-            select: { postId: true },
-          })
-        : null;
-      const weeklyFeaturedRowVerified = latestAsOf?.asOf
-        ? await this.prisma.postPopularScoreSnapshot.findFirst({
-            where: { asOf: latestAsOf.asOf, createdAt: weeklyCreatedAtWindow, parentId: null, visibility: { in: ['public', 'verifiedOnly'] } },
-            orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
-            select: { postId: true },
-          })
-        : null;
-      const weeklyFeaturedRowPremium = latestAsOf?.asOf
-        ? await this.prisma.postPopularScoreSnapshot.findFirst({
-            where: {
-              asOf: latestAsOf.asOf,
-              createdAt: weeklyCreatedAtWindow,
-              parentId: null,
-              visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] },
-            },
-            orderBy: [{ score: 'desc' }, { createdAt: 'desc' }, { postId: 'desc' }],
-            select: { postId: true },
-          })
-        : null;
-
-      const weeklyFeaturedPostPublic = weeklyFeaturedRowPublic?.postId
-        ? await this.prisma.post.findFirst({ where: { id: weeklyFeaturedRowPublic.postId, deletedAt: null }, select: weeklyFeaturedSelect })
-        : await this.prisma.post.findFirst({
-            where: { deletedAt: null, parentId: null, visibility: 'public', createdAt: weeklyCreatedAtWindow },
-            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-            select: weeklyFeaturedSelect,
-          });
-      const weeklyFeaturedPostVerified = weeklyFeaturedRowVerified?.postId
-        ? await this.prisma.post.findFirst({ where: { id: weeklyFeaturedRowVerified.postId, deletedAt: null }, select: weeklyFeaturedSelect })
-        : await this.prisma.post.findFirst({
-            where: { deletedAt: null, parentId: null, visibility: { in: ['public', 'verifiedOnly'] }, createdAt: weeklyCreatedAtWindow },
-            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-            select: weeklyFeaturedSelect,
-          });
-      const weeklyFeaturedPostPremium = weeklyFeaturedRowPremium?.postId
-        ? await this.prisma.post.findFirst({ where: { id: weeklyFeaturedRowPremium.postId, deletedAt: null }, select: weeklyFeaturedSelect })
-        : await this.prisma.post.findFirst({
-            where: {
-              deletedAt: null,
-              parentId: null,
-              visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] },
-              createdAt: weeklyCreatedAtWindow,
-            },
-            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-            select: weeklyFeaturedSelect,
-          });
+      const weeklyFeaturedPostPublic = await (this.prisma.post as any).findFirst({
+        where: { deletedAt: null, parentId: null, visibility: { in: ['public'] }, createdAt: weeklyCreatedAtWindow },
+        orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        select: weeklyFeaturedSelect,
+      }) as Awaited<ReturnType<typeof this.prisma.post.findFirst>> | null;
+      const weeklyFeaturedPostVerified = await (this.prisma.post as any).findFirst({
+        where: { deletedAt: null, parentId: null, visibility: { in: ['public', 'verifiedOnly'] }, createdAt: weeklyCreatedAtWindow },
+        orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        select: weeklyFeaturedSelect,
+      }) as Awaited<ReturnType<typeof this.prisma.post.findFirst>> | null;
+      const weeklyFeaturedPostPremium = await (this.prisma.post as any).findFirst({
+        where: { deletedAt: null, parentId: null, visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] }, createdAt: weeklyCreatedAtWindow },
+        orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        select: weeklyFeaturedSelect,
+      }) as Awaited<ReturnType<typeof this.prisma.post.findFirst>> | null;
 
       function pickWeeklyFeaturedPost(u: { verifiedStatus?: string | null; premium?: boolean | null; premiumPlus?: boolean | null }) {
         const isPremium = Boolean(u.premium || u.premiumPlus);
