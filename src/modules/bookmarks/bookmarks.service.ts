@@ -191,7 +191,11 @@ export class BookmarksService {
 
     const { postUserId } = await this.assertViewerCanBookmarkPost({ viewerUserId: userId, postId });
 
-    const desired = Array.isArray(params.collectionIds)
+    // Invariant: a bookmark is either "unorganized" (no folder memberships) or in one or more
+    // folders — never both. `null` means "keep the existing folder state"; an explicit array
+    // (including `[]`) performs a full replace of folder memberships. Sending `[]` is the only
+    // way to explicitly move a bookmark to "unorganized".
+    const desired: string[] | null = Array.isArray(params.collectionIds)
       ? Array.from(
           new Set(
             params.collectionIds
@@ -199,9 +203,9 @@ export class BookmarksService {
               .filter(Boolean),
           ),
         )
-      : [];
+      : null;
 
-    if (desired.length > 0) {
+    if (desired !== null && desired.length > 0) {
       const ok = await this.prisma.bookmarkCollection.findMany({
         where: { userId, id: { in: desired } },
         select: { id: true },
@@ -229,10 +233,15 @@ export class BookmarksService {
       });
       if (!row) throw new Error('Bookmark upsert failed.');
 
-      // Replace folder membership.
-      if (desired.length === 0) {
+      // Folder membership: null = keep existing; [] = explicitly unorganized; [...] = full replace.
+      if (desired === null) {
+        // Keep existing folder memberships — no change.
+      } else if (desired.length === 0) {
+        // Explicitly unorganized: strip all folder memberships.
         await tx.bookmarkCollectionItem.deleteMany({ where: { bookmarkId: row.id } });
       } else {
+        // Full replace: remove memberships not in the desired set, add any that are missing.
+        // The bookmark cannot be in "unorganized" state once it has at least one folder.
         await tx.bookmarkCollectionItem.deleteMany({
           where: { bookmarkId: row.id, collectionId: { notIn: desired } },
         });
@@ -267,7 +276,19 @@ export class BookmarksService {
     void this.postViews.markViewed(userId, postId);
     this.enqueueScoreRefresh(postId);
 
-    return { success: true, bookmarked: true, bookmarkId: bookmark.id, collectionIds: desired };
+    // When collectionIds was not provided (null), fetch the current folder state from the DB so
+    // the response always reflects the true state of the bookmark.
+    const finalCollectionIds: string[] =
+      desired !== null
+        ? desired
+        : (
+            await this.prisma.bookmarkCollectionItem.findMany({
+              where: { bookmarkId: bookmark.id },
+              select: { collectionId: true },
+            })
+          ).map((item) => item.collectionId);
+
+    return { success: true, bookmarked: true, bookmarkId: bookmark.id, collectionIds: finalCollectionIds };
   }
 
   async removeBookmark(params: { userId: string; postId: string }) {
