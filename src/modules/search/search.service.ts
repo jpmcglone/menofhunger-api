@@ -131,6 +131,19 @@ export class SearchService {
     const qLower = q.toLowerCase();
     const words = queryToWords(q);
 
+    // Exclude users that have a block relationship with the viewer (either direction).
+    const blockedIds: Set<string> = viewerUserId
+      ? await (async () => {
+          const rows = await this.prisma.userBlock.findMany({
+            where: { OR: [{ blockerId: viewerUserId }, { blockedId: viewerUserId }] },
+            select: { blockerId: true, blockedId: true },
+          });
+          const s = new Set<string>();
+          for (const r of rows) s.add(r.blockerId === viewerUserId ? r.blockedId : r.blockerId);
+          return s;
+        })()
+      : new Set<string>();
+
     const fetchSize = Math.min(limit * 5, 50);
     type RawUser = {
       id: string;
@@ -140,10 +153,12 @@ export class SearchService {
       bio: string | null;
       premium: boolean;
       premiumPlus: boolean;
+      isOrganization: boolean;
       stewardBadgeEnabled: boolean;
       verifiedStatus: VerifiedStatus;
       avatarKey: string | null;
       avatarUpdatedAt: Date | null;
+      lastOnlineAt: Date | null;
     };
 
     let raw: RawUser[] = [];
@@ -169,13 +184,21 @@ export class SearchService {
           u."bio",
           u."premium",
           u."premiumPlus",
+          u."isOrganization",
+          u."stewardBadgeEnabled",
           u."verifiedStatus",
           u."avatarKey",
-          u."avatarUpdatedAt"
+          u."avatarUpdatedAt",
+          u."lastOnlineAt"
         FROM "User" u, q
         WHERE
           (u."usernameIsSet" = true OR u."name" IS NOT NULL)
           AND u."bannedAt" IS NULL
+          ${
+            blockedIds.size > 0
+              ? Prisma.sql`AND u."id" NOT IN (${Prisma.join([...blockedIds].map((id) => Prisma.sql`${id}`))})`
+              : Prisma.sql``
+          }
           AND to_tsvector(
             'english',
             COALESCE(u."username", '') || ' ' || COALESCE(u."name", '') || ' ' || COALESCE(u."bio", '')
@@ -215,11 +238,15 @@ export class SearchService {
           { name: { contains: q, mode: 'insensitive' as const } },
         ],
       };
+      const blockExclude: Prisma.UserWhereInput =
+        blockedIds.size > 0 ? { id: { notIn: [...blockedIds] } } : {};
+
       const whereWithCursor: Prisma.UserWhereInput = cursorWhere
         ? {
             AND: [
               cursorWhere,
               { bannedAt: null },
+              blockExclude,
               {
                 OR: [
                   { usernameIsSet: true, ...matchClause },
@@ -231,6 +258,7 @@ export class SearchService {
         : {
             AND: [
               { bannedAt: null },
+              blockExclude,
               {
                 OR: [
                   { usernameIsSet: true, ...matchClause },
@@ -255,6 +283,7 @@ export class SearchService {
           verifiedStatus: true,
           avatarKey: true,
           avatarUpdatedAt: true,
+          lastOnlineAt: true,
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: fetchSize + 1,
@@ -279,14 +308,18 @@ export class SearchService {
       if (words.some((w) => bio.includes(w))) return USER_SCORE.bioAnyWord;
       return 0;
     }
+    // Relationship rank: mutuals first, then people who follow you, then people you follow, then strangers.
     const relRank = (id: string) => {
       const vf = rel.viewerFollows.has(id);
       const fv = rel.followsViewer.has(id);
-      if (vf && fv) return 0;
-      if (vf) return 1;
-      if (fv) return 2;
-      return 3;
+      if (vf && fv) return 0; // mutual
+      if (fv) return 1;       // follows you (but you don't follow them)
+      if (vf) return 2;       // you follow them (but they don't follow you)
+      return 3;               // no relationship
     };
+
+    // Within each rel group, sort by most recently online (nulls last).
+    const onlineMs = (u: (typeof raw)[0]) => u.lastOnlineAt?.getTime() ?? 0;
 
     const sorted = [...raw].sort((a, b) => {
       const sa = userScore(a);
@@ -295,8 +328,9 @@ export class SearchService {
       const ra = relRank(a.id);
       const rb = relRank(b.id);
       if (ra !== rb) return ra - rb;
-      const c = b.createdAt.getTime() - a.createdAt.getTime();
-      if (c !== 0) return c;
+      const oa = onlineMs(a);
+      const ob = onlineMs(b);
+      if (oa !== ob) return ob - oa;
       return b.id.localeCompare(a.id);
     });
 
@@ -310,7 +344,7 @@ export class SearchService {
       name: u.name,
       premium: u.premium,
       premiumPlus: u.premiumPlus,
-      isOrganization: Boolean((u as any).isOrganization),
+      isOrganization: Boolean(u.isOrganization),
       stewardBadgeEnabled: Boolean(u.stewardBadgeEnabled),
       verifiedStatus: u.verifiedStatus,
       avatarKey: u.avatarKey,
