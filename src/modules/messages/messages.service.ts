@@ -649,12 +649,13 @@ export class MessagesService {
       this.emitUnreadCounts(recipientId);
       this.presenceRealtime.emitMessageCreated(recipientId, { conversationId: result.conversationId, message: dto });
     }
-    const acceptedRecipientIds = uniqueRecipients.filter((id) => followerSet.has(id));
-    for (const recipientId of acceptedRecipientIds) {
+    for (const recipientId of uniqueRecipients) {
+      const isPending = !followerSet.has(recipientId);
       this.events.emitMessagePushRequested({
         recipientUserId: recipientId,
         senderName,
-        body: trimmed,
+        // Give pending (request) recipients a neutral preview so they know to check requests.
+        body: isPending ? 'Sent you a message request' : trimmed,
         conversationId: result.conversationId,
       });
     }
