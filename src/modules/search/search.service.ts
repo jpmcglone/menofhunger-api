@@ -71,6 +71,7 @@ export type SearchUserRow = {
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
   relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean };
+  orgMemberships: Array<{ org: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarUpdatedAt: Date | null } }>;
 };
 
 /** Unique, non-empty words from query (lowercase). Used for fuzzy author + body matching (e.g. "john steve" → @john or @steve or body). */
@@ -291,7 +292,24 @@ export class SearchService {
     }
 
     const userIds = raw.map((u) => u.id);
-    const rel = await this.follows.batchRelationshipForUserIds({ viewerUserId, userIds });
+    const [rel, orgMembershipRows] = await Promise.all([
+      this.follows.batchRelationshipForUserIds({ viewerUserId, userIds }),
+      userIds.length > 0
+        ? this.prisma.userOrgMembership.findMany({
+            where: { userId: { in: userIds } },
+            select: {
+              userId: true,
+              org: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } },
+            },
+            orderBy: { createdAt: 'asc' },
+          })
+        : Promise.resolve([]),
+    ]);
+    const orgsByUserId = new Map<string, typeof orgMembershipRows>();
+    for (const row of orgMembershipRows) {
+      if (!orgsByUserId.has(row.userId)) orgsByUserId.set(row.userId, []);
+      orgsByUserId.get(row.userId)!.push(row);
+    }
 
     function userScore(u: (typeof raw)[0]): number {
       const un = (u.username ?? '').trim().toLowerCase();
@@ -349,6 +367,7 @@ export class SearchService {
       verifiedStatus: u.verifiedStatus,
       avatarKey: u.avatarKey,
       avatarUpdatedAt: u.avatarUpdatedAt,
+      orgMemberships: orgsByUserId.get(u.id) ?? [],
       relationship: {
         viewerFollowsUser: rel.viewerFollows.has(u.id),
         userFollowsViewer: rel.followsViewer.has(u.id),
