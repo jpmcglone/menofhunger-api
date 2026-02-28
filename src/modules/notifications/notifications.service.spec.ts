@@ -18,8 +18,9 @@ function makeService(overrides?: { prisma?: any }) {
     emitNotificationNew: jest.fn(),
   } as any;
   const jobs = { enqueueCron: jest.fn(async () => undefined) } as any;
+  const posthog = { capture: jest.fn() } as any;
 
-  const svc = new NotificationsService(prisma, appConfig, presenceRealtime, jobs);
+  const svc = new NotificationsService(prisma, appConfig, presenceRealtime, jobs, posthog);
   return { svc, prisma };
 }
 
