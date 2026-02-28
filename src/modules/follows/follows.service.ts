@@ -10,6 +10,7 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
+import { PosthogService } from '../../common/posthog/posthog.service';
 
 export type FollowRelationship = {
   viewerFollowsUser: boolean;
@@ -46,6 +47,7 @@ export class FollowsService {
     private readonly notifications: NotificationsService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly viewerContext: ViewerContextService,
+    private readonly posthog: PosthogService,
   ) {}
 
   async setPostNotificationsEnabled(params: { viewerUserId: string; username: string; enabled: boolean }) {
@@ -399,6 +401,8 @@ export class FollowsService {
     }
 
     if (created) {
+      this.posthog.capture(viewerUserId, 'follow_created', { target_user_id: target.id });
+
       const followNotifyWithinMs = 24 * 60 * 60 * 1000; // 24h: avoid spam if they unfollow then follow again
       const alreadyNotified = await this.notifications.hasRecentFollowNotification(
         target.id,

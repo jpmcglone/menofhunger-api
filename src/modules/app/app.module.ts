@@ -45,6 +45,7 @@ import { DomainEventsModule } from '../events/domain-events.module';
 import { DailyContentModule } from '../daily-content/daily-content.module';
 import { CheckinsModule } from '../checkins/checkins.module';
 import { PostViewsModule } from '../post-views/post-views.module';
+import { PosthogModule } from '../../common/posthog/posthog.module';
 
 // Module wiring is static; use env flags as a pragmatic switch for which processes host consumers.
 const RUN_JOB_CONSUMERS_RAW = (process.env.RUN_JOB_CONSUMERS ?? 'true').trim().toLowerCase();
@@ -108,6 +109,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     DailyContentModule,
     CheckinsModule,
     PostViewsModule,
+    PosthogModule,
     ...(RUN_JOB_CONSUMERS ? [JobsConsumersModule] : []),
   ],
   controllers: [AppController],

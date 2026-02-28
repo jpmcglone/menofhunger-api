@@ -27,6 +27,7 @@ import { AdminDailyContentController } from './admin-daily-content.controller';
 import { AdminEmailSamplesController } from './admin-email-samples.controller';
 import { EmailModule } from '../email/email.module';
 import { AdminDailyDigestCron } from './admin-digest-email.cron';
+import { AdminAnalyticsController } from './admin-analytics.controller';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { AdminDailyDigestCron } from './admin-digest-email.cron';
     AdminJobsController,
     AdminDailyContentController,
     AdminEmailSamplesController,
+    AdminAnalyticsController,
   ],
   providers: [AdminGuard, AdminImageReviewService, AdminHashtagsService, AdminDailyDigestCron],
   exports: [AdminDailyDigestCron],

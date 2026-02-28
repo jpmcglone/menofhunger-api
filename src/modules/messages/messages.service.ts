@@ -8,6 +8,7 @@ import { DomainEventsService } from '../events/domain-events.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { toUserListDto } from '../../common/dto';
 import { toMessageDto, toMessageParticipantDto, type MessageConversationDto, type MessageDto } from './message.dto';
+import { PosthogService } from '../../common/posthog/posthog.service';
 
 const CONVERSATION_LIST_LIMIT = 30;
 const MESSAGE_LIST_LIMIT = 50;
@@ -24,6 +25,7 @@ export class MessagesService {
     private readonly appConfig: AppConfigService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly events: DomainEventsService,
+    private readonly posthog: PosthogService,
   ) {}
 
   private encodeConversationCursor(cursor: ConversationCursor): string {
@@ -749,6 +751,11 @@ export class MessagesService {
         conversationId,
       });
     }
+
+    this.posthog.capture(userId, 'message_sent', {
+      conversation_id: conversationId,
+      conversation_type: conversation.type,
+    });
 
     return { message: dto };
   }

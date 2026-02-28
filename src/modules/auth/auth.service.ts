@@ -14,6 +14,7 @@ import { toUserDto } from '../users/user.dto';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { USER_DTO_SELECT } from '../../common/prisma-selects/user.select';
 import { dayIndexEastern, easternDayKey, easternDayKeyFromDayIndex } from '../../common/time/eastern-day-key';
+import { PosthogService } from '../../common/posthog/posthog.service';
 
 @Injectable()
 export class AuthService {
@@ -24,6 +25,7 @@ export class AuthService {
     private readonly appConfig: AppConfigService,
     private readonly cacheInvalidation: CacheInvalidationService,
     @Inject(OTP_PROVIDER) private readonly otpProvider: OtpProvider,
+    private readonly posthog: PosthogService,
   ) {}
 
   private maskPhone(phone: string) {
@@ -176,6 +178,12 @@ export class AuthService {
         });
 
     const session = await this.createSessionAndSetCookie(user.id, res);
+
+    if (isNewUser) {
+      this.posthog.capture(user.id, 'user_signed_up', { phone_masked: this.maskPhone(phone) });
+    } else {
+      this.posthog.capture(user.id, 'user_login');
+    }
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     return {

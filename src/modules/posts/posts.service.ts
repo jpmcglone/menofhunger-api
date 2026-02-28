@@ -21,6 +21,7 @@ import { toUserDto } from '../../common/dto/user.dto';
 import { PostViewsService } from '../post-views/post-views.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
+import { PosthogService } from '../../common/posthog/posthog.service';
 
 export type PostCounts = {
   all: number;
@@ -49,6 +50,7 @@ export class PostsService {
     private readonly appConfig: AppConfigService,
     private readonly postViews: PostViewsService,
     private readonly jobs: JobsService,
+    private readonly posthog: PosthogService,
   ) {}
 
   /**
@@ -3896,6 +3898,15 @@ export class PostsService {
       this.enqueueScoreRefresh(quotedPostNotificationInfo.quotedPostId);
     }
     this.enqueueScoreRefresh(post.id);
+
+    const eventName = kind === 'checkin' ? 'checkin_created' : 'post_created';
+    this.posthog.capture(userId, eventName, {
+      post_id: post.id,
+      visibility,
+      has_media: (params.media?.length ?? 0) > 0,
+      has_poll: Boolean(params.poll),
+      is_reply: Boolean(parentId),
+    });
 
     return withMentions!;
   }

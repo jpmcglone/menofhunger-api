@@ -287,6 +287,16 @@ export const envSchema = z.object({
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
   ),
+
+  // PostHog product analytics (optional; events silently no-op when unset)
+  POSTHOG_API_KEY: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  POSTHOG_HOST: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('https://us.i.posthog.com'),
+  ),
 }).superRefine((env, ctx) => {
   if (env.NODE_ENV !== 'production') return;
 

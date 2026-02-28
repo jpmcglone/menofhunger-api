@@ -374,6 +374,15 @@ export class AppConfigService {
     return null;
   }
 
+  posthogApiKey(): string | null {
+    const v = this.config.get<string>('POSTHOG_API_KEY')?.trim() ?? '';
+    return v ? v : null;
+  }
+
+  posthogHost(): string {
+    return (this.config.get<string>('POSTHOG_HOST')?.trim() || 'https://us.i.posthog.com').trim();
+  }
+
   // Optional: typed access to full validated env object if needed later.
   envSnapshot(): Partial<Env> {
     return {

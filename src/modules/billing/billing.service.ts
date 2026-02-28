@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
+import { PosthogService } from '../../common/posthog/posthog.service';
 
 type StripeCtx = { stripe: Stripe; cfg: NonNullable<ReturnType<AppConfigService['stripe']>> };
 
@@ -30,6 +31,7 @@ export class BillingService {
     private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
+    private readonly posthog: PosthogService,
   ) {}
 
   private getStripe(): StripeCtx {
@@ -226,6 +228,15 @@ export class BillingService {
       },
     });
     await this.publicProfileCache.invalidateForUser({ id: user.id, username: user.username ?? null });
+
+    this.posthog.capture(user.id, 'tier_changed', {
+      stripe_status: status,
+      price_id: priceId,
+      is_premium: isPremium,
+      is_premium_plus: isPlus,
+      cancel_at_period_end: cancelAtPeriodEnd,
+    });
+
     // Realtime: update both public tier badge + self auth state.
     void this.usersPublicRealtime.emitPublicProfileUpdated(user.id);
     void this.usersMeRealtime.emitMeUpdated(user.id, 'billing_tier_changed');
