@@ -21,6 +21,7 @@ import { UsersPublicRealtimeService } from './users-public-realtime.service';
 import { canonicalizeTopicValue } from '../../common/topics/topic-utils';
 import { UsersLocationService } from './users-location.service';
 import { EmailVerificationService } from '../email/email-verification.service';
+import { PosthogService } from '../../common/posthog/posthog.service';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -178,6 +179,7 @@ export class UsersController {
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly usersLocation: UsersLocationService,
     private readonly emailVerification: EmailVerificationService,
+    private readonly posthog: PosthogService,
   ) {}
 
   private async viewerCanSeeLastOnline(viewerUserId: string | null): Promise<boolean> {
@@ -722,6 +724,14 @@ export class UsersController {
 
     const profileId = (payload as any).id as string | undefined;
     const orgMap = profileId ? await this.batchOrgAffiliations([profileId]) : new Map();
+
+    if (viewerUserId && profileId) {
+      this.posthog.capture(viewerUserId, 'profile_viewed', {
+        viewed_user_id: profileId,
+        is_own_profile: viewerUserId === profileId,
+      });
+    }
+
     return {
       data: {
         ...(payload as any),
@@ -1003,6 +1013,7 @@ export class UsersController {
 
       if (parsed.username !== undefined && updated.username) {
         await this.ensureStarterFollowsOnFirstUsernameSet(userId, updated.username);
+        this.posthog.capture(userId, 'onboarding_completed', { username: updated.username });
       }
 
       await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });

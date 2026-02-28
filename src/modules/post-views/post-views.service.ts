@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
 import { RedisService } from '../redis/redis.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { PosthogService } from '../../common/posthog/posthog.service';
 
 const BREAKDOWN_TTL_SECONDS = 60;
 const BATCH_MAX = 50;
@@ -27,6 +28,7 @@ export class PostViewsService {
     private readonly cache: CacheService,
     private readonly redis: RedisService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly posthog: PosthogService,
   ) {}
 
   /**
@@ -57,6 +59,8 @@ export class PostViewsService {
         // Already viewed — no-op
         return;
       }
+
+      this.posthog.capture(uid, 'post_viewed', { post_id: pid });
 
       // First unique view: increment the denormalized counter atomically
       const updated = await this.prisma.post.update({

@@ -14,6 +14,7 @@ import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
 import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
+import { PosthogService } from '../../common/posthog/posthog.service';
 
 const searchSchema = z.object({
   q: z.string().trim().max(200).optional(),
@@ -37,6 +38,7 @@ export class SearchController {
     private readonly appConfig: AppConfigService,
     private readonly cache: CacheService,
     private readonly cacheInvalidation: CacheInvalidationService,
+    private readonly posthog: PosthogService,
   ) {}
 
   @Throttle({
@@ -127,6 +129,11 @@ export class SearchController {
       });
       if (viewerUserId && q.length >= 2) {
         void this.search.recordUserSearch({ userId: viewerUserId, query: q }).catch(() => {});
+        this.posthog.capture(viewerUserId, 'search_performed', {
+          query: q.toLowerCase(),
+          result_count: users.length + posts.length,
+          type,
+        });
       }
       return {
         data: { users, posts },

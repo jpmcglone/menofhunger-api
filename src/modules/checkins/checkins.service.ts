@@ -6,6 +6,7 @@ import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { CHECKIN_PROMPTS } from './checkin-prompts';
 import { dayIndexEastern, easternDayKey } from '../../common/time/eastern-day-key';
+import { PosthogService } from '../../common/posthog/posthog.service';
 
 function pickCheckinPrompt(now: Date): { dayKey: string; prompt: string } {
   const list = CHECKIN_PROMPTS.filter(Boolean);
@@ -26,6 +27,7 @@ export class CheckinsService {
     private readonly posts: PostsService,
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly viewerContext: ViewerContextService,
+    private readonly posthog: PosthogService,
   ) {}
 
   async getTodayState(params: { userId: string; now?: Date }) {
@@ -56,6 +58,8 @@ export class CheckinsService {
     const allowedForCreation = this.viewerContext.allowedPostVisibilities(user);
 
     const allowedCheckinVisibilities = (['verifiedOnly', 'premiumOnly'] as const).filter((v) => allowedForCreation.includes(v));
+
+    this.posthog.capture(params.userId, 'checkin_prompt_viewed', { prompt_key: dayKey });
 
     return {
       dayKey,

@@ -4059,6 +4059,10 @@ export class PostsService {
     await this.cacheInvalidation.bumpFeedGlobal();
     this.enqueueScoreRefresh(id);
 
+    if (res.createdCount === 1) {
+      this.posthog.capture(userId, 'boost_tapped', { post_id: id });
+    }
+
     return { success: true, viewerHasBoosted: true, boostCount: res.boostCount };
   }
 

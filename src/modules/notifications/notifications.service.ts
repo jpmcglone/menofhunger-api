@@ -16,6 +16,7 @@ import type {
   NotificationGroupKind,
 } from '../../common/dto/notification-feed.dto';
 import type { NotificationPreferencesDto } from '../../common/dto';
+import { PosthogService } from '../../common/posthog/posthog.service';
 
 export type CreateNotificationParams = {
   recipientUserId: string;
@@ -38,6 +39,7 @@ export class NotificationsService {
     private readonly appConfig: AppConfigService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly jobs: JobsService,
+    private readonly posthog: PosthogService,
   ) {}
 
   private async getUndeliveredCountInternal(recipientUserId: string): Promise<number> {
@@ -1155,6 +1157,11 @@ export class NotificationsService {
     recipientUserId: string,
     notificationId: string,
   ): Promise<boolean> {
+    const notification = await this.prisma.notification.findUnique({
+      where: { id: notificationId },
+      select: { kind: true },
+    });
+
     const res = await this.prisma.$transaction(async (tx) => {
       const now = new Date();
       const readRes = await tx.notification.updateMany({
@@ -1183,6 +1190,10 @@ export class NotificationsService {
     if (res.changed) {
       this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
         undeliveredCount: res.undeliveredCount ?? 0,
+      });
+      this.posthog.capture(recipientUserId, 'notification_tapped', {
+        notification_id: notificationId,
+        kind: notification?.kind ?? null,
       });
     }
     return res.changed;
