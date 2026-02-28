@@ -23,8 +23,9 @@ function makeService(overrides?: {
       emitMessagesUpdated: jest.fn(),
     } as any);
   const events = overrides?.events ?? ({} as any);
+  const posthog = { capture: jest.fn() } as any;
 
-  const svc = new MessagesService(prisma, appConfig, presenceRealtime, events);
+  const svc = new MessagesService(prisma, appConfig, presenceRealtime, events, posthog);
   return { svc, prisma };
 }
 
