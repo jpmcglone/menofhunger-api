@@ -255,6 +255,8 @@ model User {
   messageParticipants MessageParticipant[] @relation("MessageParticipant_user")
   messagesSent        Message[] @relation("Message_sender")
   messageConversationsCreated MessageConversation[] @relation("MessageConversation_createdBy")
+  messageReactions    MessageReaction[] @relation("MessageReaction_user")
+  messageDeletions    MessageDeletion[] @relation("MessageDeletion_user")
   blocksInitiated UserBlock[] @relation("UserBlock_blocker")
   blocksReceived  UserBlock[] @relation("UserBlock_blocked")
   postViews PostView[]
@@ -961,12 +963,50 @@ model Message {
   conversationId String
   senderId String
 
+  /** When set, this message is a reply to another message in the same conversation. */
+  replyToId String?
+
   conversation MessageConversation @relation("MessageConversation_messages", fields: [conversationId], references: [id], onDelete: Cascade)
   sender User @relation("Message_sender", fields: [senderId], references: [id], onDelete: Cascade)
   lastMessageFor MessageConversation? @relation("MessageConversation_lastMessage")
 
+  replyTo  Message?  @relation("Message_replies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies  Message[] @relation("Message_replies")
+  reactions MessageReaction[]
+  deletions MessageDeletion[]
+
   @@index([conversationId, createdAt])
   @@index([senderId, createdAt])
+  @@index([replyToId])
+}
+
+model MessageReaction {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+
+  messageId  String
+  userId     String
+  reactionId String
+  emoji      String
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation("MessageReaction_user", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, reactionId])
+  @@index([messageId])
+  @@index([userId, createdAt])
+}
+
+model MessageDeletion {
+  messageId String
+  userId    String
+  deletedAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation("MessageDeletion_user", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([messageId, userId])
+  @@index([userId, deletedAt])
 }
 
 model UserBlock {

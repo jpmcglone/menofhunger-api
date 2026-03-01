@@ -7,12 +7,40 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { DomainEventsService } from '../events/domain-events.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { toUserListDto } from '../../common/dto';
+import { findReactionById } from '../../common/constants/reactions';
 import { toMessageDto, toMessageParticipantDto, type MessageConversationDto, type MessageDto } from './message.dto';
 import { PosthogService } from '../../common/posthog/posthog.service';
 
 const CONVERSATION_LIST_LIMIT = 30;
 const MESSAGE_LIST_LIMIT = 50;
 const MESSAGE_BODY_MAX = 2000;
+
+const MESSAGE_SENDER_SELECT = {
+  id: true,
+  username: true,
+  name: true,
+  premium: true,
+  premiumPlus: true,
+  isOrganization: true,
+  stewardBadgeEnabled: true,
+  verifiedStatus: true,
+  avatarKey: true,
+  avatarUpdatedAt: true,
+} as const;
+
+const MESSAGE_INCLUDE = {
+  sender: { select: MESSAGE_SENDER_SELECT },
+  reactions: {
+    include: {
+      user: { select: { id: true, username: true, avatarKey: true, avatarUpdatedAt: true } },
+    },
+    orderBy: [{ createdAt: 'asc' as const }],
+  },
+  deletions: { select: { userId: true } },
+  replyTo: {
+    include: { sender: { select: { username: true } } },
+  },
+} as const;
 
 type ConversationCursor = { updatedAt: string; id: string };
 
@@ -470,22 +498,7 @@ export class MessagesService {
         conversationId,
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },
-      include: {
-        sender: {
-          select: {
-            id: true,
-            username: true,
-            name: true,
-            premium: true,
-            premiumPlus: true,
-            isOrganization: true,
-            stewardBadgeEnabled: true,
-            verifiedStatus: true,
-            avatarKey: true,
-            avatarUpdatedAt: true,
-          },
-        },
-      },
+      include: MESSAGE_INCLUDE,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -494,7 +507,7 @@ export class MessagesService {
     const nextCursor = messages.length > limit ? slice[slice.length - 1]?.id ?? null : null;
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     return {
-      messages: slice.map((message) => toMessageDto({ message, publicBaseUrl })),
+      messages: slice.map((message) => toMessageDto({ message, publicBaseUrl, viewerUserId: userId })),
       nextCursor,
     };
   }
@@ -612,22 +625,7 @@ export class MessagesService {
           senderId: userId,
           body: trimmed,
         },
-        include: {
-          sender: {
-            select: {
-              id: true,
-              username: true,
-              name: true,
-              premium: true,
-              premiumPlus: true,
-              isOrganization: true,
-              stewardBadgeEnabled: true,
-              verifiedStatus: true,
-              avatarKey: true,
-              avatarUpdatedAt: true,
-            },
-          },
-        },
+        include: MESSAGE_INCLUDE,
       });
 
       await tx.messageConversation.update({
@@ -639,7 +637,7 @@ export class MessagesService {
     });
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const dto = toMessageDto({ message: result.message, publicBaseUrl });
+    const dto = toMessageDto({ message: result.message, publicBaseUrl, viewerUserId: userId });
     const senderName =
       result.message.sender?.name?.trim() ||
       result.message.sender?.username?.trim() ||
@@ -668,7 +666,7 @@ export class MessagesService {
     };
   }
 
-  async sendMessage(params: { userId: string; conversationId: string; body: string }) {
+  async sendMessage(params: { userId: string; conversationId: string; body: string; replyToId?: string | null }) {
     const { userId, conversationId } = params;
     const trimmed = (params.body ?? '').trim();
     if (!trimmed) throw new BadRequestException('Message body is required.');
@@ -684,6 +682,16 @@ export class MessagesService {
       if (blockedIds.has(otherId)) throw new ForbiddenException('You cannot message this user.');
     }
 
+    // Validate replyToId belongs to the same conversation.
+    const replyToId = params.replyToId ?? null;
+    if (replyToId) {
+      const replyTarget = await this.prisma.message.findFirst({
+        where: { id: replyToId, conversationId },
+        select: { id: true },
+      });
+      if (!replyTarget) throw new BadRequestException('Reply target not found in this conversation.');
+    }
+
     const now = new Date();
     const result = await this.prisma.$transaction(async (tx) => {
       const message = await tx.message.create({
@@ -691,23 +699,9 @@ export class MessagesService {
           conversationId,
           senderId: userId,
           body: trimmed,
+          ...(replyToId ? { replyToId } : {}),
         },
-        include: {
-          sender: {
-            select: {
-              id: true,
-              username: true,
-              name: true,
-              premium: true,
-              premiumPlus: true,
-              isOrganization: true,
-            stewardBadgeEnabled: true,
-              verifiedStatus: true,
-              avatarKey: true,
-              avatarUpdatedAt: true,
-            },
-          },
-        },
+        include: MESSAGE_INCLUDE,
       });
 
       await tx.messageConversation.update({
@@ -731,7 +725,7 @@ export class MessagesService {
     });
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const dto = toMessageDto({ message: result, publicBaseUrl });
+    const dto = toMessageDto({ message: result, publicBaseUrl, viewerUserId: userId });
     const senderName =
       result.sender?.name?.trim() ||
       result.sender?.username?.trim() ||
@@ -880,5 +874,108 @@ export class MessagesService {
 
   async getUnreadSummary(userId: string) {
     return await this.getUnreadCounts(userId);
+  }
+
+  async addReaction(params: {
+    userId: string;
+    conversationId: string;
+    messageId: string;
+    reactionId: string;
+  }): Promise<MessageDto> {
+    const { userId, conversationId, messageId, reactionId } = params;
+
+    const reaction = findReactionById(reactionId);
+    if (!reaction) throw new BadRequestException('Invalid reaction.');
+
+    await this.getConversationOrThrow({ userId, conversationId });
+
+    const message = await this.prisma.message.findFirst({
+      where: { id: messageId, conversationId },
+      select: { id: true },
+    });
+    if (!message) throw new NotFoundException('Message not found.');
+
+    await this.prisma.messageReaction.upsert({
+      where: { messageId_userId_reactionId: { messageId, userId, reactionId } },
+      create: { messageId, userId, reactionId, emoji: reaction.emoji },
+      update: {},
+    });
+
+    const updated = await this.prisma.message.findUniqueOrThrow({
+      where: { id: messageId },
+      include: MESSAGE_INCLUDE,
+    });
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const dto = toMessageDto({ message: updated, publicBaseUrl, viewerUserId: userId });
+
+    const participants = await this.prisma.messageParticipant.findMany({
+      where: { conversationId },
+      select: { userId: true },
+    });
+    for (const p of participants) {
+      const participantDto = toMessageDto({ message: updated, publicBaseUrl, viewerUserId: p.userId });
+      this.presenceRealtime.emitMessageReactionUpdated(p.userId, { conversationId, message: participantDto });
+    }
+
+    return dto;
+  }
+
+  async removeReaction(params: {
+    userId: string;
+    conversationId: string;
+    messageId: string;
+    reactionId: string;
+  }): Promise<void> {
+    const { userId, conversationId, messageId, reactionId } = params;
+
+    await this.getConversationOrThrow({ userId, conversationId });
+
+    await this.prisma.messageReaction.deleteMany({
+      where: { messageId, userId, reactionId },
+    });
+
+    const updated = await this.prisma.message.findFirst({
+      where: { id: messageId, conversationId },
+      include: MESSAGE_INCLUDE,
+    });
+    if (!updated) return;
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const participants = await this.prisma.messageParticipant.findMany({
+      where: { conversationId },
+      select: { userId: true },
+    });
+    for (const p of participants) {
+      const participantDto = toMessageDto({ message: updated, publicBaseUrl, viewerUserId: p.userId });
+      this.presenceRealtime.emitMessageReactionUpdated(p.userId, { conversationId, message: participantDto });
+    }
+  }
+
+  async deleteMessageForMe(params: { userId: string; conversationId: string; messageId: string }): Promise<void> {
+    const { userId, conversationId, messageId } = params;
+
+    await this.getConversationOrThrow({ userId, conversationId });
+
+    const message = await this.prisma.message.findFirst({
+      where: { id: messageId, conversationId },
+      select: { id: true },
+    });
+    if (!message) throw new NotFoundException('Message not found.');
+
+    await this.prisma.messageDeletion.upsert({
+      where: { messageId_userId: { messageId, userId } },
+      create: { messageId, userId },
+      update: {},
+    });
+  }
+
+  async restoreMessageForMe(params: { userId: string; conversationId: string; messageId: string }): Promise<void> {
+    const { userId, conversationId, messageId } = params;
+
+    await this.getConversationOrThrow({ userId, conversationId });
+
+    await this.prisma.messageDeletion.deleteMany({
+      where: { messageId, userId },
+    });
   }
 }

@@ -107,6 +107,10 @@ export class PresenceRealtimeService {
     this.emitToUser(userId, 'messages:new', payload);
   }
 
+  emitMessageReactionUpdated(userId: string, payload: { conversationId: string; message: unknown }): void {
+    this.emitToUser(userId, 'messages:reaction', payload);
+  }
+
   emitFollowsChanged(userId: string, payload: FollowsChangedPayloadDto): void {
     this.emitToUser(userId, 'follows:changed', payload);
   }

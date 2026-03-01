@@ -10,12 +10,29 @@ export type MessageParticipantDto = {
   banned: boolean;
 };
 
+export type MessageReactionSummaryDto = {
+  reactionId: string;
+  emoji: string;
+  count: number;
+  reactedByMe: boolean;
+  reactors: { id: string; username: string | null; avatarUrl: string | null }[];
+};
+
+export type MessageReplySnippetDto = {
+  id: string;
+  senderUsername: string | null;
+  bodyPreview: string;
+};
+
 export type MessageDto = {
   id: string;
   createdAt: string;
   body: string;
   conversationId: string;
   sender: UserListDto;
+  reactions: MessageReactionSummaryDto[];
+  deletedForMe: boolean;
+  replyTo: MessageReplySnippetDto | null;
 };
 
 export type MessageConversationDto = {
@@ -33,17 +50,65 @@ export type MessageConversationDto = {
   isBlockedWith?: boolean;
 };
 
+type MessageReactionRow = {
+  id: string;
+  reactionId: string;
+  emoji: string;
+  userId: string;
+  user: { id: string; username: string | null; avatarKey: string | null; avatarUpdatedAt: Date | null };
+};
+
+type MessageWithRelations = Message & {
+  sender: UserListRow;
+  reactions?: MessageReactionRow[];
+  deletions?: { userId: string }[];
+  replyTo?: (Message & { sender: { username: string | null } }) | null;
+};
+
+function buildReactionSummaries(
+  reactions: MessageReactionRow[],
+  viewerUserId: string,
+  publicBaseUrl: string | null,
+): MessageReactionSummaryDto[] {
+  const byReactionId = new Map<string, MessageReactionSummaryDto>();
+  for (const r of reactions) {
+    let group = byReactionId.get(r.reactionId);
+    if (!group) {
+      group = { reactionId: r.reactionId, emoji: r.emoji, count: 0, reactedByMe: false, reactors: [] };
+      byReactionId.set(r.reactionId, group);
+    }
+    group.count++;
+    if (r.userId === viewerUserId) group.reactedByMe = true;
+    const avatarUrl =
+      r.user.avatarKey && publicBaseUrl
+        ? `${publicBaseUrl}/${r.user.avatarKey}`
+        : null;
+    group.reactors.push({ id: r.user.id, username: r.user.username, avatarUrl });
+  }
+  return [...byReactionId.values()];
+}
+
 export function toMessageDto(params: {
-  message: Message & { sender: UserListRow };
+  message: MessageWithRelations;
   publicBaseUrl: string | null;
+  viewerUserId?: string;
 }): MessageDto {
-  const { message, publicBaseUrl } = params;
+  const { message, publicBaseUrl, viewerUserId = '' } = params;
   return {
     id: message.id,
     createdAt: message.createdAt.toISOString(),
     body: message.body,
     conversationId: message.conversationId,
     sender: toUserListDto(message.sender, publicBaseUrl),
+    reactions: buildReactionSummaries(message.reactions ?? [], viewerUserId, publicBaseUrl),
+    deletedForMe: (message.deletions ?? []).some((d) => d.userId === viewerUserId),
+    replyTo: message.replyTo
+      ? {
+          id: message.replyTo.id,
+          senderUsername: message.replyTo.sender.username,
+          bodyPreview: message.replyTo.body.slice(0, 200),
+        }
+      : null,
   };
 }
 

@@ -5,6 +5,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import { VerifiedGuard } from '../auth/verified.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
+import { ALLOWED_REACTIONS } from '../../common/constants/reactions';
 import { MessagesService } from './messages.service';
 
 const listConversationsSchema = z.object({
@@ -26,6 +27,7 @@ const createConversationSchema = z.object({
 
 const sendMessageSchema = z.object({
   body: z.string().trim().min(1).max(2000),
+  replyToId: z.string().trim().min(1).optional(),
 });
 
 const blockUserSchema = z.object({
@@ -34,6 +36,10 @@ const blockUserSchema = z.object({
 
 const lookupConversationSchema = z.object({
   user_ids: z.array(z.string().trim().min(1)).min(1).max(50),
+});
+
+const addReactionSchema = z.object({
+  reactionId: z.string().trim().min(1),
 });
 
 @Controller('messages')
@@ -141,7 +147,7 @@ export class MessagesController {
   @Post('conversations/:id/messages')
   async sendMessage(@CurrentUserId() userId: string, @Param('id') id: string, @Body() body: unknown) {
     const parsed = sendMessageSchema.parse(body);
-    const result = await this.messages.sendMessage({ userId, conversationId: id, body: parsed.body });
+    const result = await this.messages.sendMessage({ userId, conversationId: id, body: parsed.body, replyToId: parsed.replyToId ?? null });
     return { data: result };
   }
 
@@ -178,6 +184,84 @@ export class MessagesController {
   @Delete('conversations/:id')
   async deleteConversation(@CurrentUserId() userId: string, @Param('id') id: string) {
     await this.messages.deleteConversation({ userId, conversationId: id });
+    return { data: {} };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 240),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get('reactions')
+  listReactions() {
+    return { data: ALLOWED_REACTIONS };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 120),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('conversations/:convId/messages/:msgId/reactions')
+  async addReaction(
+    @CurrentUserId() userId: string,
+    @Param('convId') convId: string,
+    @Param('msgId') msgId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = addReactionSchema.parse(body);
+    const result = await this.messages.addReaction({ userId, conversationId: convId, messageId: msgId, reactionId: parsed.reactionId });
+    return { data: result };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 120),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Delete('conversations/:convId/messages/:msgId/reactions/:reactionId')
+  async removeReaction(
+    @CurrentUserId() userId: string,
+    @Param('convId') convId: string,
+    @Param('msgId') msgId: string,
+    @Param('reactionId') reactionId: string,
+  ) {
+    await this.messages.removeReaction({ userId, conversationId: convId, messageId: msgId, reactionId });
+    return { data: {} };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 60),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Delete('conversations/:convId/messages/:msgId')
+  async deleteMessage(
+    @CurrentUserId() userId: string,
+    @Param('convId') convId: string,
+    @Param('msgId') msgId: string,
+  ) {
+    await this.messages.deleteMessageForMe({ userId, conversationId: convId, messageId: msgId });
+    return { data: {} };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 60),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('conversations/:convId/messages/:msgId/restore')
+  async restoreMessage(
+    @CurrentUserId() userId: string,
+    @Param('convId') convId: string,
+    @Param('msgId') msgId: string,
+  ) {
+    await this.messages.restoreMessageForMe({ userId, conversationId: convId, messageId: msgId });
     return { data: {} };
   }
 
