@@ -40,7 +40,7 @@ const MESSAGE_INCLUDE = {
   replyTo: {
     include: { sender: { select: { username: true } } },
   },
-} as const;
+};
 
 type ConversationCursor = { updatedAt: string; id: string };
 
