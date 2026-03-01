@@ -1,6 +1,27 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import type { MessageConversation } from '@prisma/client';
+import type { MessageConversation, PostMediaKind, PostMediaSource } from '@prisma/client';
+
+export type MessageMediaInput =
+  | {
+      source: 'upload';
+      kind: PostMediaKind;
+      r2Key: string;
+      thumbnailR2Key?: string | null;
+      width?: number | null;
+      height?: number | null;
+      durationSeconds?: number | null;
+      alt?: string | null;
+    }
+  | {
+      source: 'giphy';
+      kind: 'gif';
+      url: string;
+      mp4Url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      alt?: string | null;
+    };
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
@@ -38,8 +59,12 @@ const MESSAGE_INCLUDE = {
   },
   deletions: { select: { userId: true } },
   replyTo: {
-    include: { sender: { select: { username: true } } },
+    include: {
+      sender: { select: { username: true } },
+      media: { take: 1, orderBy: [{ createdAt: 'asc' as const }] },
+    },
   },
+  media: true,
 };
 
 type ConversationCursor = { updatedAt: string; id: string };
@@ -517,10 +542,12 @@ export class MessagesService {
     recipientUserIds: string[];
     title?: string | null;
     body: string;
+    media?: MessageMediaInput[];
   }) {
     const { userId, recipientUserIds, title, body } = params;
     const trimmed = (body ?? '').trim();
-    if (!trimmed) throw new BadRequestException('Message body is required.');
+    const media = params.media ?? [];
+    if (!trimmed && media.length === 0) throw new BadRequestException('Message must have a body or media.');
     if (trimmed.length > MESSAGE_BODY_MAX) throw new BadRequestException('Message body is too long.');
 
     const uniqueRecipients = [...new Set(recipientUserIds.filter(Boolean))].filter((id) => id !== userId);
@@ -554,7 +581,7 @@ export class MessagesService {
         select: { id: true },
       });
       if (existing) {
-        const sent = await this.sendMessage({ userId, conversationId: existing.id, body: trimmed });
+        const sent = await this.sendMessage({ userId, conversationId: existing.id, body: trimmed, media });
         return { conversationId: existing.id, message: sent.message };
       }
     }
@@ -624,6 +651,36 @@ export class MessagesService {
           conversationId: conversation.id,
           senderId: userId,
           body: trimmed,
+          ...(media.length > 0
+            ? {
+                media: {
+                  createMany: {
+                    data: media.map((m) =>
+                      m.source === 'upload'
+                        ? {
+                            source: m.source,
+                            kind: m.kind,
+                            r2Key: m.r2Key,
+                            thumbnailR2Key: m.thumbnailR2Key ?? null,
+                            width: m.width ?? null,
+                            height: m.height ?? null,
+                            durationSeconds: m.durationSeconds ?? null,
+                            alt: m.alt ?? null,
+                          }
+                        : {
+                            source: m.source,
+                            kind: 'gif' as PostMediaKind,
+                            url: m.url,
+                            mp4Url: m.mp4Url ?? null,
+                            width: m.width ?? null,
+                            height: m.height ?? null,
+                            alt: m.alt ?? null,
+                          },
+                    ),
+                  },
+                },
+              }
+            : {}),
         },
         include: MESSAGE_INCLUDE,
       });
@@ -651,11 +708,11 @@ export class MessagesService {
     }
     for (const recipientId of uniqueRecipients) {
       const isPending = !followerSet.has(recipientId);
+      const pushBody = isPending ? 'Sent you a message request' : (trimmed || (media.length > 0 ? '📷 Sent a photo' : ''));
       this.events.emitMessagePushRequested({
         recipientUserId: recipientId,
         senderName,
-        // Give pending (request) recipients a neutral preview so they know to check requests.
-        body: isPending ? 'Sent you a message request' : trimmed,
+        body: pushBody,
         conversationId: result.conversationId,
       });
     }
@@ -666,10 +723,17 @@ export class MessagesService {
     };
   }
 
-  async sendMessage(params: { userId: string; conversationId: string; body: string; replyToId?: string | null }) {
+  async sendMessage(params: {
+    userId: string;
+    conversationId: string;
+    body: string;
+    replyToId?: string | null;
+    media?: MessageMediaInput[];
+  }) {
     const { userId, conversationId } = params;
     const trimmed = (params.body ?? '').trim();
-    if (!trimmed) throw new BadRequestException('Message body is required.');
+    const media = params.media ?? [];
+    if (!trimmed && media.length === 0) throw new BadRequestException('Message must have a body or media.');
     if (trimmed.length > MESSAGE_BODY_MAX) throw new BadRequestException('Message body is too long.');
 
     const conversation = await this.getConversationOrThrow({ userId, conversationId });
@@ -700,6 +764,36 @@ export class MessagesService {
           senderId: userId,
           body: trimmed,
           ...(replyToId ? { replyToId } : {}),
+          ...(media.length > 0
+            ? {
+                media: {
+                  createMany: {
+                    data: media.map((m) =>
+                      m.source === 'upload'
+                        ? {
+                            source: m.source,
+                            kind: m.kind,
+                            r2Key: m.r2Key,
+                            thumbnailR2Key: m.thumbnailR2Key ?? null,
+                            width: m.width ?? null,
+                            height: m.height ?? null,
+                            durationSeconds: m.durationSeconds ?? null,
+                            alt: m.alt ?? null,
+                          }
+                        : {
+                            source: m.source,
+                            kind: 'gif' as PostMediaKind,
+                            url: m.url,
+                            mp4Url: m.mp4Url ?? null,
+                            width: m.width ?? null,
+                            height: m.height ?? null,
+                            alt: m.alt ?? null,
+                          },
+                    ),
+                  },
+                },
+              }
+            : {}),
         },
         include: MESSAGE_INCLUDE,
       });
@@ -734,6 +828,7 @@ export class MessagesService {
       this.presenceRealtime.emitMessageCreated(id, { conversationId, message: dto });
       this.emitUnreadCounts(id);
     }
+    const pushBody = trimmed || (media.length > 0 ? '📷 Sent a photo' : '');
     const pushRecipients = conversation.participants.filter(
       (p) => p.userId !== userId && p.status !== 'pending',
     );
@@ -741,7 +836,7 @@ export class MessagesService {
       this.events.emitMessagePushRequested({
         recipientUserId: recipient.userId,
         senderName,
-        body: trimmed,
+        body: pushBody,
         conversationId,
       });
     }

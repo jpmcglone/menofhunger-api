@@ -1,5 +1,6 @@
-import type { Message, MessageConversation, MessageParticipantStatus, MessageParticipantRole } from '@prisma/client';
+import type { Message, MessageConversation, MessageMedia, MessageParticipantStatus, MessageParticipantRole } from '@prisma/client';
 import { toUserListDto, type UserListDto, type UserListRow } from '../../common/dto';
+import { publicAssetUrl } from '../../common/assets/public-asset-url';
 
 export type MessageParticipantDto = {
   user: UserListDto;
@@ -22,6 +23,21 @@ export type MessageReplySnippetDto = {
   id: string;
   senderUsername: string | null;
   bodyPreview: string;
+  /** Thumbnail URL of the first media item on the replied-to message, if any. */
+  mediaThumbnailUrl: string | null;
+};
+
+export type MessageMediaDto = {
+  id: string;
+  kind: MessageMedia['kind'];
+  source: MessageMedia['source'];
+  url: string;
+  mp4Url: string | null;
+  thumbnailUrl: string | null;
+  width: number | null;
+  height: number | null;
+  durationSeconds: number | null;
+  alt: string | null;
 };
 
 export type MessageDto = {
@@ -33,6 +49,7 @@ export type MessageDto = {
   reactions: MessageReactionSummaryDto[];
   deletedForMe: boolean;
   replyTo: MessageReplySnippetDto | null;
+  media: MessageMediaDto[];
 };
 
 export type MessageConversationDto = {
@@ -62,7 +79,8 @@ type MessageWithRelations = Message & {
   sender: UserListRow;
   reactions?: MessageReactionRow[];
   deletions?: { userId: string }[];
-  replyTo?: (Message & { sender: { username: string | null } }) | null;
+  replyTo?: (Message & { sender: { username: string | null }; media?: MessageMedia[] }) | null;
+  media?: MessageMedia[];
 };
 
 function buildReactionSummaries(
@@ -88,6 +106,29 @@ function buildReactionSummaries(
   return [...byReactionId.values()];
 }
 
+function toMessageMediaDto(m: MessageMedia, publicBaseUrl: string | null): MessageMediaDto {
+  const url =
+    m.source === 'upload'
+      ? (publicAssetUrl({ publicBaseUrl, key: m.r2Key }) ?? '')
+      : (m.url ?? '');
+  const thumbnailUrl =
+    m.source === 'upload' && m.thumbnailR2Key
+      ? (publicAssetUrl({ publicBaseUrl, key: m.thumbnailR2Key }) ?? null)
+      : null;
+  return {
+    id: m.id,
+    kind: m.kind,
+    source: m.source,
+    url,
+    mp4Url: m.mp4Url ?? null,
+    thumbnailUrl,
+    width: m.width ?? null,
+    height: m.height ?? null,
+    durationSeconds: m.durationSeconds ?? null,
+    alt: m.alt ?? null,
+  };
+}
+
 export function toMessageDto(params: {
   message: MessageWithRelations;
   publicBaseUrl: string | null;
@@ -103,12 +144,28 @@ export function toMessageDto(params: {
     reactions: buildReactionSummaries(message.reactions ?? [], viewerUserId, publicBaseUrl),
     deletedForMe: (message.deletions ?? []).some((d) => d.userId === viewerUserId),
     replyTo: message.replyTo
-      ? {
-          id: message.replyTo.id,
-          senderUsername: message.replyTo.sender.username,
-          bodyPreview: message.replyTo.body.slice(0, 200),
-        }
+      ? (() => {
+          const rm = (message.replyTo.media ?? [])[0] ?? null;
+          let mediaThumbnailUrl: string | null = null;
+          if (rm) {
+            if (rm.source === 'upload') {
+              // For videos prefer the thumbnail key; images use r2Key directly.
+              const key = rm.kind === 'video' ? (rm.thumbnailR2Key ?? rm.r2Key) : rm.r2Key;
+              mediaThumbnailUrl = key ? (publicAssetUrl({ publicBaseUrl, key }) ?? null) : null;
+            } else {
+              // Giphy — url is already a CDN URL we can use directly.
+              mediaThumbnailUrl = rm.url ?? null;
+            }
+          }
+          return {
+            id: message.replyTo.id,
+            senderUsername: message.replyTo.sender.username,
+            bodyPreview: message.replyTo.body.slice(0, 200) || (rm ? '📷 Photo' : ''),
+            mediaThumbnailUrl,
+          };
+        })()
       : null,
+    media: (message.media ?? []).map((m) => toMessageMediaDto(m, publicBaseUrl)),
   };
 }
 

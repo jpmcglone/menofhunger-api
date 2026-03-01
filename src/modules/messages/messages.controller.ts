@@ -6,7 +6,7 @@ import { VerifiedGuard } from '../auth/verified.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { ALLOWED_REACTIONS } from '../../common/constants/reactions';
-import { MessagesService } from './messages.service';
+import { MessagesService, type MessageMediaInput } from './messages.service';
 
 const listConversationsSchema = z.object({
   tab: z.enum(['primary', 'requests']).optional(),
@@ -19,16 +19,48 @@ const listMessagesSchema = z.object({
   cursor: z.string().optional(),
 });
 
-const createConversationSchema = z.object({
-  user_ids: z.array(z.string().trim().min(1)).min(1).max(50),
-  title: z.string().trim().max(120).optional(),
-  body: z.string().trim().min(1).max(2000),
-});
+const messageMediaSchema = z.discriminatedUnion('source', [
+  z.object({
+    source: z.literal('upload'),
+    kind: z.enum(['image', 'gif', 'video']),
+    r2Key: z.string().min(1),
+    thumbnailR2Key: z.string().optional().nullable(),
+    width: z.coerce.number().int().positive().optional().nullable(),
+    height: z.coerce.number().int().positive().optional().nullable(),
+    durationSeconds: z.coerce.number().min(0).optional().nullable(),
+    alt: z.string().max(500).optional().nullable(),
+  }),
+  z.object({
+    source: z.literal('giphy'),
+    kind: z.literal('gif'),
+    url: z.string().url(),
+    mp4Url: z.string().url().optional().nullable(),
+    width: z.coerce.number().int().positive().optional().nullable(),
+    height: z.coerce.number().int().positive().optional().nullable(),
+    alt: z.string().max(500).optional().nullable(),
+  }),
+]);
 
-const sendMessageSchema = z.object({
-  body: z.string().trim().min(1).max(2000),
-  replyToId: z.string().trim().min(1).optional(),
-});
+const createConversationSchema = z
+  .object({
+    user_ids: z.array(z.string().trim().min(1)).min(1).max(50),
+    title: z.string().trim().max(120).optional(),
+    body: z.string().trim().max(2000).optional(),
+    media: z.array(messageMediaSchema).max(1).optional(),
+  })
+  .refine((val) => (val.body?.trim()?.length ?? 0) > 0 || (val.media?.length ?? 0) > 0, {
+    message: 'Message must have a body or media.',
+  });
+
+const sendMessageSchema = z
+  .object({
+    body: z.string().trim().max(2000).optional(),
+    replyToId: z.string().trim().min(1).optional(),
+    media: z.array(messageMediaSchema).max(1).optional(),
+  })
+  .refine((val) => (val.body?.trim()?.length ?? 0) > 0 || (val.media?.length ?? 0) > 0, {
+    message: 'Message must have a body or media.',
+  });
 
 const blockUserSchema = z.object({
   user_id: z.string().trim().min(1),
@@ -117,7 +149,8 @@ export class MessagesController {
       userId,
       recipientUserIds: parsed.user_ids,
       title: parsed.title ?? null,
-      body: parsed.body,
+      body: parsed.body ?? '',
+      media: (parsed.media ?? []) as MessageMediaInput[],
     });
     return { data: result };
   }
@@ -147,7 +180,13 @@ export class MessagesController {
   @Post('conversations/:id/messages')
   async sendMessage(@CurrentUserId() userId: string, @Param('id') id: string, @Body() body: unknown) {
     const parsed = sendMessageSchema.parse(body);
-    const result = await this.messages.sendMessage({ userId, conversationId: id, body: parsed.body, replyToId: parsed.replyToId ?? null });
+    const result = await this.messages.sendMessage({
+      userId,
+      conversationId: id,
+      body: parsed.body ?? '',
+      replyToId: parsed.replyToId ?? null,
+      media: (parsed.media ?? []) as MessageMediaInput[],
+    });
     return { data: result };
   }
 

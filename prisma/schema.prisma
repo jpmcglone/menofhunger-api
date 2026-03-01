@@ -974,10 +974,33 @@ model Message {
   replies  Message[] @relation("Message_replies")
   reactions MessageReaction[]
   deletions MessageDeletion[]
+  media     MessageMedia[]
 
   @@index([conversationId, createdAt])
   @@index([senderId, createdAt])
   @@index([replyToId])
+}
+
+model MessageMedia {
+  id        String          @id @default(cuid())
+  createdAt DateTime        @default(now())
+  kind      PostMediaKind
+  source    PostMediaSource
+  // For "upload" sources: r2Key is set; url is computed server-side.
+  r2Key          String?
+  thumbnailR2Key String?
+  // For "giphy" sources: url/mp4Url are stored directly.
+  url            String?
+  mp4Url         String?
+  width          Int?
+  height         Int?
+  durationSeconds Int?
+  alt            String?
+
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
 }
 
 model MessageReaction {
