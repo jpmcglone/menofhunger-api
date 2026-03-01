@@ -758,16 +758,22 @@ export class MessagesService {
     const { userId, conversationId } = params;
     await this.getConversationOrThrow({ userId, conversationId });
     const now = new Date();
-    await this.prisma.messageParticipant.update({
-      where: { conversationId_userId: { conversationId, userId } },
-      data: { lastReadAt: now },
-    });
-    // Cross-tab/device sync for your own account.
-    this.presenceRealtime.emitMessagesRead(userId, {
-      conversationId,
-      userId,
-      lastReadAt: now.toISOString(),
-    });
+    const [, allParticipants] = await Promise.all([
+      this.prisma.messageParticipant.update({
+        where: { conversationId_userId: { conversationId, userId } },
+        data: { lastReadAt: now },
+      }),
+      this.prisma.messageParticipant.findMany({
+        where: { conversationId },
+        select: { userId: true },
+      }),
+    ]);
+
+    const payload = { conversationId, userId, lastReadAt: now.toISOString() };
+    for (const p of allParticipants) {
+      // Emit to self for cross-tab/device sync, and to others so they can update read indicators.
+      this.presenceRealtime.emitMessagesRead(p.userId, payload);
+    }
     this.emitUnreadCounts(userId);
   }
 
