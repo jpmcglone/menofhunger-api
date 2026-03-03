@@ -7,6 +7,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
+import { SlackService } from '../../common/slack/slack.service';
 
 // ─── ET helpers ───────────────────────────────────────────────────────────────
 
@@ -167,6 +168,7 @@ export class AdminDailyDigestCron {
     private readonly email: EmailService,
     private readonly appConfig: AppConfigService,
     private readonly jobs: JobsService,
+    private readonly slack: SlackService,
   ) {}
 
   /** Every 5 min: enqueue in the 8:00–8:59am ET window (same hour as user digest). */
@@ -192,7 +194,8 @@ export class AdminDailyDigestCron {
   }
 
   async runSendAdminDailyDigest(): Promise<void> {
-    if (!this.appConfig.email()) return;
+    const emailCfg = this.appConfig.email();
+    if (!emailCfg && !this.slack.isConfigured) return;
 
     const now = new Date();
     const dayKey = easternDayKey(now);
@@ -358,12 +361,6 @@ export class AdminDailyDigestCron {
         return;
       }
 
-      const validAdmins = admins.filter((a) => !!a.email);
-      if (validAdmins.length === 0) {
-        this.logger.warn('Admin daily digest: no site admins with a verified email — cannot send.');
-        return;
-      }
-
       const dateLabel = windowStart.toLocaleDateString('en-US', {
         timeZone: ET_ZONE,
         weekday: 'long',
@@ -371,56 +368,92 @@ export class AdminDailyDigestCron {
         day: 'numeric',
       });
 
-      const html = this.buildHtml({
+      // Slack digest (fires regardless of email configuration).
+      this.slack.notifyDailyDigest({
         dateLabel,
-        now,
-        baseUrl,
-        newUsers,
         totalNewUserCount,
-        newFeedbackCount,
-        newReportCount,
         newPostCount,
         activeUserCount,
         bannedUserCount,
-        pendingReportCount,
-        unreviewedFeedbackCount,
-        pendingVerificationCount,
         activePremiumCount,
         activePremiumPlusCount,
-        pendingCancellationCount,
-        newSubscriberRows,
-        topPost,
-      });
-
-      const text = this.buildText({
-        dateLabel,
-        totalNewUserCount,
-        newFeedbackCount,
-        newReportCount,
-        newPostCount,
-        activeUserCount,
-        bannedUserCount,
-        pendingReportCount,
-        unreviewedFeedbackCount,
-        pendingVerificationCount,
-        activePremiumCount,
-        activePremiumPlusCount,
-        pendingCancellationCount,
         newSubscriberCount: newSubscriberRows.length,
-        topPost,
-        baseUrl,
+        pendingCancellationCount,
+        pendingReportCount,
+        unreviewedFeedbackCount,
+        pendingVerificationCount,
+        topPost: topPost
+          ? {
+              id: topPost.id,
+              body: topPost.body,
+              boostCount: topPost.boostCount,
+              commentCount: topPost.commentCount,
+              viewerCount: topPost.viewerCount,
+              username: topPost.username,
+            }
+          : null,
+        frontendBaseUrl: baseUrl,
       });
 
-      const subject = `Admin Digest — ${dateLabel}`;
-      let sentCount = 0;
-      for (const admin of validAdmins) {
-        const res = await this.email.sendEmail({ to: admin.email!, subject, text, html });
-        if (res.sent) sentCount++;
-        else this.logger.warn(`Admin daily digest: failed to send to ${admin.email}`);
+      // Email digest (only if email is configured and admins have verified emails).
+      if (emailCfg) {
+        const validAdmins = admins.filter((a) => !!a.email);
+        if (validAdmins.length === 0) {
+          this.logger.warn('Admin daily digest: no site admins with a verified email — cannot send email.');
+        } else {
+          const html = this.buildHtml({
+            dateLabel,
+            now,
+            baseUrl,
+            newUsers,
+            totalNewUserCount,
+            newFeedbackCount,
+            newReportCount,
+            newPostCount,
+            activeUserCount,
+            bannedUserCount,
+            pendingReportCount,
+            unreviewedFeedbackCount,
+            pendingVerificationCount,
+            activePremiumCount,
+            activePremiumPlusCount,
+            pendingCancellationCount,
+            newSubscriberRows,
+            topPost,
+          });
+
+          const text = this.buildText({
+            dateLabel,
+            totalNewUserCount,
+            newFeedbackCount,
+            newReportCount,
+            newPostCount,
+            activeUserCount,
+            bannedUserCount,
+            pendingReportCount,
+            unreviewedFeedbackCount,
+            pendingVerificationCount,
+            activePremiumCount,
+            activePremiumPlusCount,
+            pendingCancellationCount,
+            newSubscriberCount: newSubscriberRows.length,
+            topPost,
+            baseUrl,
+          });
+
+          const subject = `Admin Digest — ${dateLabel}`;
+          let sentCount = 0;
+          for (const admin of validAdmins) {
+            const res = await this.email.sendEmail({ to: admin.email!, subject, text, html });
+            if (res.sent) sentCount++;
+            else this.logger.warn(`Admin daily digest: failed to send to ${admin.email}`);
+          }
+          this.logger.log(`Admin daily digest (${dayKey}) sent to ${sentCount}/${validAdmins.length} admin(s).`);
+        }
       }
 
       await this.prisma.adminEmailLog.create({ data: { kind: 'daily_digest', dayKey } }).catch(() => {});
-      this.logger.log(`Admin daily digest (${dayKey}) sent to ${sentCount}/${validAdmins.length} admin(s).`);
+      this.logger.log(`Admin daily digest (${dayKey}) complete.`);
     } catch (err) {
       this.logger.error(
         `Admin daily digest failed: ${(err as Error)?.message ?? String(err)}`,

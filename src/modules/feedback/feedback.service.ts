@@ -2,10 +2,14 @@ import type { FeedbackCategory, FeedbackStatus, Prisma } from '@prisma/client';
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
+import { SlackService } from '../../common/slack/slack.service';
 
 @Injectable()
 export class FeedbackService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly slack: SlackService,
+  ) {}
 
   async create(input: {
     category: FeedbackCategory;
@@ -66,7 +70,7 @@ export class FeedbackService {
       }
     }
 
-    return await this.prisma.feedback.create({
+    const feedback = await this.prisma.feedback.create({
       data: {
         category: input.category,
         email: input.email,
@@ -76,6 +80,16 @@ export class FeedbackService {
         ...(input.userId ? { user: { connect: { id: input.userId } } } : {}),
       },
     });
+
+    this.slack.notifyFeedbackSubmitted({
+      category: input.category,
+      subject: input.subject,
+      details: input.details,
+      email: input.email,
+      userId: input.userId,
+    });
+
+    return feedback;
   }
 
   async listAdmin(params: {

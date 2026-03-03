@@ -9,6 +9,7 @@ import { PublicProfileCacheService } from '../users/public-profile-cache.service
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
+import { SlackService } from '../../common/slack/slack.service';
 
 type StripeCtx = { stripe: Stripe; cfg: NonNullable<ReturnType<AppConfigService['stripe']>> };
 
@@ -32,6 +33,7 @@ export class BillingService {
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly posthog: PosthogService,
+    private readonly slack: SlackService,
   ) {}
 
   private getStripe(): StripeCtx {
@@ -191,7 +193,7 @@ export class BillingService {
 
     const user = await this.prisma.user.findFirst({
       where: { stripeCustomerId: params.customerId },
-      select: { id: true, username: true, verifiedStatus: true },
+      select: { id: true, username: true, name: true, verifiedStatus: true, premium: true, premiumPlus: true },
     });
     if (!user) return;
 
@@ -228,6 +230,16 @@ export class BillingService {
       },
     });
     await this.publicProfileCache.invalidateForUser({ id: user.id, username: user.username ?? null });
+
+    if (!user.premium && isPremium) {
+      this.slack.notifyPremiumGranted({
+        userId: user.id,
+        username: user.username ?? null,
+        name: user.name ?? null,
+        tier: isPlus ? 'premiumPlus' : 'premium',
+        source: 'stripe',
+      });
+    }
 
     this.posthog.capture(user.id, 'tier_changed', {
       stripe_status: status,

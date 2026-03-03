@@ -2,10 +2,14 @@ import type { Prisma, ReportReason, ReportStatus, ReportTargetType } from '@pris
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
+import { SlackService } from '../../common/slack/slack.service';
 
 @Injectable()
 export class ReportsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly slack: SlackService,
+  ) {}
 
   async create(input: {
     reporterUserId: string;
@@ -25,7 +29,7 @@ export class ReportsService {
       });
       if (!post) throw new NotFoundException();
 
-      return await this.prisma.report.create({
+      const postReport = await this.prisma.report.create({
         data: {
           targetType: 'post',
           reason: input.reason,
@@ -34,6 +38,13 @@ export class ReportsService {
           subjectPost: { connect: { id: postId } },
         },
       });
+      this.slack.notifyReportSubmitted({
+        targetType: 'post',
+        reason: input.reason,
+        details: input.details,
+        reporterUserId: input.reporterUserId,
+      });
+      return postReport;
     }
 
     const userId = input.subjectUserId;
@@ -45,7 +56,7 @@ export class ReportsService {
     });
     if (!user) throw new NotFoundException();
 
-    return await this.prisma.report.create({
+    const userReport = await this.prisma.report.create({
       data: {
         targetType: 'user',
         reason: input.reason,
@@ -54,6 +65,13 @@ export class ReportsService {
         subjectUser: { connect: { id: userId } },
       },
     });
+    this.slack.notifyReportSubmitted({
+      targetType: 'user',
+      reason: input.reason,
+      details: input.details,
+      reporterUserId: input.reporterUserId,
+    });
+    return userReport;
   }
 
   async listAdmin(params: {

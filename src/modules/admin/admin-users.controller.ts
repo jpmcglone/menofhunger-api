@@ -28,6 +28,7 @@ import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
 import { AuthService } from '../auth/auth.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { SlackService } from '../../common/slack/slack.service';
 
 const searchSchema = z.object({
   q: z.string().optional(),
@@ -71,6 +72,7 @@ export class AdminUsersController {
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly auth: AuthService,
     private readonly moduleRef: ModuleRef,
+    private readonly slack: SlackService,
   ) {}
 
   /** Single-user admin DTO with org affiliations included. */
@@ -406,6 +408,16 @@ export class AdminUsersController {
         this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'admin_user_updated');
       } catch {
         // Best-effort
+      }
+
+      if (!current.premium && (updated.premium || updated.premiumPlus)) {
+        this.slack.notifyPremiumGranted({
+          userId: updated.id,
+          username: updated.username ?? null,
+          name: updated.name ?? null,
+          tier: updated.premiumPlus ? 'premiumPlus' : 'premium',
+          source: 'admin',
+        });
       }
 
       return { data: await this.toAdminUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };

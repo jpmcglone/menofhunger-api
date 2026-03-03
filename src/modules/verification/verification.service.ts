@@ -7,11 +7,13 @@ import { PublicProfileCacheService } from '../users/public-profile-cache.service
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
 import { VERIFICATION_ADMIN_USER_SELECT } from '../../common/prisma-selects/user.select';
+import { SlackService } from '../../common/slack/slack.service';
 
 @Injectable()
 export class VerificationService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly slack: SlackService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
     private readonly usersMeRealtime: UsersMeRealtimeService,
@@ -40,13 +42,17 @@ export class VerificationService {
 
     const provider = params.providerHint ? params.providerHint.trim().slice(0, 50) : null;
 
-    return await this.prisma.verificationRequest.create({
+    const created = await this.prisma.verificationRequest.create({
       data: {
         user: { connect: { id: userId } },
         status: 'pending',
         provider: provider || null,
       },
     });
+
+    this.slack.notifyVerificationRequested({ userId, providerHint: provider });
+
+    return created;
   }
 
   async getMyVerificationStatus(params: { userId: string | null }) {
