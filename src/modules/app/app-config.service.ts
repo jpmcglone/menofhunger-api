@@ -374,6 +374,11 @@ export class AppConfigService {
     return null;
   }
 
+  slackWebhookUrl(): string | null {
+    const v = this.config.get<string>('SLACK_WEBHOOK_URL')?.trim() ?? '';
+    return v ? v : null;
+  }
+
   posthogApiKey(): string | null {
     const v = this.config.get<string>('POSTHOG_API_KEY')?.trim() ?? '';
     return v ? v : null;

@@ -288,6 +288,13 @@ export const envSchema = z.object({
     z.string().optional(),
   ),
 
+  // Slack Incoming Webhook URL (optional; notifications silently no-op when unset).
+  // Create one at: https://api.slack.com/apps → your app → Incoming Webhooks
+  SLACK_WEBHOOK_URL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+
   // PostHog product analytics (optional; events silently no-op when unset)
   POSTHOG_API_KEY: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),

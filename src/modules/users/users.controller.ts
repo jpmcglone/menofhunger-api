@@ -22,6 +22,7 @@ import { canonicalizeTopicValue } from '../../common/topics/topic-utils';
 import { UsersLocationService } from './users-location.service';
 import { EmailVerificationService } from '../email/email-verification.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
+import { SlackService } from '../../common/slack/slack.service';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -180,6 +181,7 @@ export class UsersController {
     private readonly usersLocation: UsersLocationService,
     private readonly emailVerification: EmailVerificationService,
     private readonly posthog: PosthogService,
+    private readonly slack: SlackService,
   ) {}
 
   private async viewerCanSeeLastOnline(viewerUserId: string | null): Promise<boolean> {
@@ -1014,6 +1016,17 @@ export class UsersController {
       if (parsed.username !== undefined && updated.username) {
         await this.ensureStarterFollowsOnFirstUsernameSet(userId, updated.username);
         this.posthog.capture(userId, 'onboarding_completed', { username: updated.username });
+        const r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+        const avatarUrl = r2PublicBaseUrl && updated.avatarKey ? `${r2PublicBaseUrl}/${updated.avatarKey}` : null;
+        this.slack.notifyProfileComplete({
+          userId,
+          username: updated.username,
+          name: updated.name ?? null,
+          email: updated.email ?? null,
+          location: updated.locationDisplay ?? updated.locationInput ?? null,
+          interests: updated.interests ?? [],
+          avatarUrl,
+        });
       }
 
       await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });

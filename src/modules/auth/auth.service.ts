@@ -15,6 +15,7 @@ import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { USER_DTO_SELECT } from '../../common/prisma-selects/user.select';
 import { dayIndexEastern, easternDayKey, easternDayKeyFromDayIndex } from '../../common/time/eastern-day-key';
 import { PosthogService } from '../../common/posthog/posthog.service';
+import { SlackService } from '../../common/slack/slack.service';
 
 @Injectable()
 export class AuthService {
@@ -26,6 +27,7 @@ export class AuthService {
     private readonly cacheInvalidation: CacheInvalidationService,
     @Inject(OTP_PROVIDER) private readonly otpProvider: OtpProvider,
     private readonly posthog: PosthogService,
+    private readonly slack: SlackService,
   ) {}
 
   private maskPhone(phone: string) {
@@ -181,6 +183,7 @@ export class AuthService {
 
     if (isNewUser) {
       this.posthog.capture(user.id, 'user_signed_up', { phone_masked: this.maskPhone(phone) });
+      this.slack.notifySignup({ userId: user.id });
     } else {
       this.posthog.capture(user.id, 'user_login');
     }
