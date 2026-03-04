@@ -48,6 +48,10 @@ export type MessageDto = {
   sender: UserListDto;
   reactions: MessageReactionSummaryDto[];
   deletedForMe: boolean;
+  /** True when the sender deleted this message for all participants. */
+  deletedForAll: boolean;
+  /** ISO string of when the message was last edited, or null. */
+  editedAt: string | null;
   replyTo: MessageReplySnippetDto | null;
   media: MessageMediaDto[];
 };
@@ -63,6 +67,8 @@ export type MessageConversationDto = {
   participants: MessageParticipantDto[];
   viewerStatus: MessageParticipantStatus;
   unreadCount: number;
+  /** True when the viewer has muted notifications for this conversation. */
+  isMuted: boolean;
   /** True when a block exists in either direction between the viewer and the other participant (direct chats only). */
   isBlockedWith?: boolean;
 };
@@ -81,6 +87,9 @@ type MessageWithRelations = Message & {
   deletions?: { userId: string }[];
   replyTo?: (Message & { sender: { username: string | null }; media?: MessageMedia[] }) | null;
   media?: MessageMedia[];
+  editedAt?: Date | null;
+  deletedForAll?: boolean;
+  deletedForAllAt?: Date | null;
 };
 
 function buildReactionSummaries(
@@ -143,6 +152,8 @@ export function toMessageDto(params: {
     sender: toUserListDto(message.sender, publicBaseUrl),
     reactions: buildReactionSummaries(message.reactions ?? [], viewerUserId, publicBaseUrl),
     deletedForMe: (message.deletions ?? []).some((d) => d.userId === viewerUserId),
+    deletedForAll: Boolean(message.deletedForAll),
+    editedAt: message.editedAt ? message.editedAt.toISOString() : null,
     replyTo: message.replyTo
       ? (() => {
           const rm = (message.replyTo.media ?? [])[0] ?? null;

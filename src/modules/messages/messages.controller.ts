@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
@@ -12,6 +12,11 @@ const listConversationsSchema = z.object({
   tab: z.enum(['primary', 'requests']).optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
+});
+
+const searchConversationsSchema = z.object({
+  q: z.string().trim().min(1).max(200),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
 const listMessagesSchema = z.object({
@@ -98,6 +103,23 @@ export class MessagesController {
       data: result.conversations,
       pagination: { nextCursor: result.nextCursor },
     };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 120),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get('conversations/search')
+  async searchConversations(@CurrentUserId() userId: string, @Query() query: unknown) {
+    const parsed = searchConversationsSchema.parse(query);
+    const result = await this.messages.searchConversations({
+      userId,
+      query: parsed.q,
+      limit: parsed.limit ?? undefined,
+    });
+    return { data: result.conversations };
   }
 
   @Throttle({
@@ -301,6 +323,64 @@ export class MessagesController {
     @Param('msgId') msgId: string,
   ) {
     await this.messages.restoreMessageForMe({ userId, conversationId: convId, messageId: msgId });
+    return { data: {} };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 60),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('conversations/:id/mute')
+  async muteConversation(@CurrentUserId() userId: string, @Param('id') id: string) {
+    await this.messages.muteConversation({ userId, conversationId: id });
+    return { data: {} };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 60),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Delete('conversations/:id/mute')
+  async unmuteConversation(@CurrentUserId() userId: string, @Param('id') id: string) {
+    await this.messages.unmuteConversation({ userId, conversationId: id });
+    return { data: {} };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 60),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Patch('conversations/:convId/messages/:msgId')
+  async editMessage(
+    @CurrentUserId() userId: string,
+    @Param('convId') convId: string,
+    @Param('msgId') msgId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = z.object({ body: z.string().trim().min(1).max(2000) }).parse(body);
+    await this.messages.editMessage({ userId, conversationId: convId, messageId: msgId, body: parsed.body });
+    return { data: {} };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 30),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Delete('conversations/:convId/messages/:msgId/all')
+  async deleteMessageForAll(
+    @CurrentUserId() userId: string,
+    @Param('convId') convId: string,
+    @Param('msgId') msgId: string,
+  ) {
+    await this.messages.deleteMessageForAll({ userId, conversationId: convId, messageId: msgId });
     return { data: {} };
   }
 

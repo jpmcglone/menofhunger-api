@@ -111,6 +111,14 @@ export class PresenceRealtimeService {
     this.emitToUser(userId, 'messages:reaction', payload);
   }
 
+  emitMessageEdited(userId: string, payload: { conversationId: string; message: unknown }): void {
+    this.emitToUser(userId, 'messages:edited', payload);
+  }
+
+  emitMessageDeletedForAll(userId: string, payload: { conversationId: string; messageId: string }): void {
+    this.emitToUser(userId, 'messages:deleted-for-all', payload);
+  }
+
   emitFollowsChanged(userId: string, payload: FollowsChangedPayloadDto): void {
     this.emitToUser(userId, 'follows:changed', payload);
   }

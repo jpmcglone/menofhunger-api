@@ -65,7 +65,10 @@ const MESSAGE_INCLUDE = {
     },
   },
   media: true,
-};
+} as const;
+
+/** Maximum time window (in ms) after sending a message during which it can be edited. */
+const MESSAGE_EDIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
 type ConversationCursor = { updatedAt: string; id: string };
 
@@ -324,7 +327,7 @@ export class MessagesService {
         lastMessage: {
           select: { id: true, body: true, createdAt: true, senderId: true },
         },
-      },
+      } as const,
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -392,11 +395,120 @@ export class MessagesService {
         ),
         viewerStatus: viewerParticipant.status,
         unreadCount,
+        isMuted: Boolean(viewerParticipant.mutedAt),
       };
     })
     .filter((v): v is MessageConversationDto => Boolean(v));
 
     return { conversations: items, nextCursor };
+  }
+
+  async searchConversations(params: { userId: string; query: string; limit?: number }) {
+    const { userId } = params;
+    const q = (params.query ?? '').trim();
+    const limit = Math.min(params.limit ?? 20, 50);
+    if (!q) return { conversations: [] };
+
+    const blockedUserIds = await this._getBlockedUserIds(userId);
+
+    const conversations = await this.prisma.messageConversation.findMany({
+      where: {
+        participants: {
+          some: { userId, status: 'accepted' },
+          ...(blockedUserIds.size > 0 ? { none: { userId: { in: [...blockedUserIds] } } } : {}),
+        },
+        OR: [
+          { title: { contains: q, mode: 'insensitive' } },
+          {
+            participants: {
+              some: {
+                userId: { not: userId },
+                user: {
+                  OR: [
+                    { name: { contains: q, mode: 'insensitive' } },
+                    { username: { contains: q, mode: 'insensitive' } },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+      include: {
+        participants: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                username: true,
+                name: true,
+                premium: true,
+                premiumPlus: true,
+                isOrganization: true,
+                stewardBadgeEnabled: true,
+                verifiedStatus: true,
+                avatarKey: true,
+                avatarUpdatedAt: true,
+                bannedAt: true,
+              },
+            },
+          },
+        },
+        lastMessage: {
+          select: { id: true, body: true, createdAt: true, senderId: true },
+        },
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+      take: limit,
+    });
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const perConversation = conversations
+      .map((c) => {
+        const vp = c.participants.find((p) => p.userId === userId);
+        return vp ? { conversationId: c.id, lastReadAt: vp.lastReadAt ?? null } : null;
+      })
+      .filter((v): v is { conversationId: string; lastReadAt: Date | null } => Boolean(v));
+    const unreadCountByConversationId = await this.getUnreadCountByConversationId({ userId, perConversation });
+
+    const items = conversations
+      .map((conversation): MessageConversationDto | null => {
+        const viewerParticipant = conversation.participants.find((p) => p.userId === userId);
+        if (!viewerParticipant) return null;
+        const unreadCount = unreadCountByConversationId.get(conversation.id) ?? 0;
+        return {
+          id: conversation.id,
+          type: conversation.type,
+          title: conversation.title ?? null,
+          createdAt: conversation.createdAt.toISOString(),
+          updatedAt: conversation.updatedAt.toISOString(),
+          lastMessageAt: conversation.lastMessageAt ? conversation.lastMessageAt.toISOString() : null,
+          lastMessage: conversation.lastMessage
+            ? {
+                id: conversation.lastMessage.id,
+                body: conversation.lastMessage.body,
+                createdAt: conversation.lastMessage.createdAt.toISOString(),
+                senderId: conversation.lastMessage.senderId,
+              }
+            : null,
+          participants: conversation.participants.map((p) =>
+            toMessageParticipantDto({
+              user: p.user,
+              status: p.status,
+              role: p.role,
+              acceptedAt: p.acceptedAt,
+              lastReadAt: p.lastReadAt,
+              publicBaseUrl,
+            }),
+          ),
+          viewerStatus: viewerParticipant.status,
+          unreadCount,
+          isMuted: Boolean(viewerParticipant.mutedAt),
+        };
+      })
+      .filter((v): v is MessageConversationDto => Boolean(v));
+
+    return { conversations: items };
   }
 
   async lookupConversation(params: { userId: string; recipientUserIds: string[] }) {
@@ -492,6 +604,7 @@ export class MessagesService {
       ),
       viewerStatus: viewerParticipant.status,
       unreadCount,
+      isMuted: Boolean(viewerParticipant.mutedAt),
       isBlockedWith,
     };
 
@@ -1078,5 +1191,79 @@ export class MessagesService {
     await this.prisma.messageDeletion.deleteMany({
       where: { messageId, userId },
     });
+  }
+
+  async muteConversation(params: { userId: string; conversationId: string }): Promise<void> {
+    const { userId, conversationId } = params;
+    await this.getConversationOrThrow({ userId, conversationId });
+    await this.prisma.messageParticipant.update({
+      where: { conversationId_userId: { conversationId, userId } },
+      data: { mutedAt: new Date() },
+    });
+  }
+
+  async unmuteConversation(params: { userId: string; conversationId: string }): Promise<void> {
+    const { userId, conversationId } = params;
+    await this.getConversationOrThrow({ userId, conversationId });
+    await this.prisma.messageParticipant.update({
+      where: { conversationId_userId: { conversationId, userId } },
+      data: { mutedAt: null },
+    });
+  }
+
+  async editMessage(params: { userId: string; conversationId: string; messageId: string; body: string }): Promise<void> {
+    const { userId, conversationId, messageId, body } = params;
+
+    const conversation = await this.getConversationOrThrow({ userId, conversationId });
+
+    const message = await this.prisma.message.findFirst({
+      where: { id: messageId, conversationId },
+      include: MESSAGE_INCLUDE,
+    });
+    if (!message) throw new NotFoundException('Message not found.');
+    if (message.senderId !== userId) throw new ForbiddenException('You can only edit your own messages.');
+    if (message.deletedForAll) throw new BadRequestException('Cannot edit a deleted message.');
+
+    const ageMs = Date.now() - message.createdAt.getTime();
+    if (ageMs > MESSAGE_EDIT_WINDOW_MS) {
+      throw new BadRequestException('Messages can only be edited within 15 minutes of sending.');
+    }
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const now = new Date();
+    const updated = await this.prisma.message.update({
+      where: { id: messageId },
+      data: { body, editedAt: now },
+      include: MESSAGE_INCLUDE,
+    });
+
+    for (const p of conversation.participants) {
+      const dto = toMessageDto({ message: updated, publicBaseUrl, viewerUserId: p.userId });
+      this.presenceRealtime.emitMessageEdited(p.userId, { conversationId, message: dto });
+    }
+  }
+
+  async deleteMessageForAll(params: { userId: string; conversationId: string; messageId: string }): Promise<void> {
+    const { userId, conversationId, messageId } = params;
+
+    const conversation = await this.getConversationOrThrow({ userId, conversationId });
+
+    const message = await this.prisma.message.findFirst({
+      where: { id: messageId, conversationId },
+      select: { id: true, senderId: true, deletedForAll: true },
+    });
+    if (!message) throw new NotFoundException('Message not found.');
+    if (message.senderId !== userId) throw new ForbiddenException('You can only delete your own messages.');
+    if (message.deletedForAll) return; // idempotent
+
+    const now = new Date();
+    await this.prisma.message.update({
+      where: { id: messageId },
+      data: { deletedForAll: true, deletedForAllAt: now },
+    });
+
+    for (const p of conversation.participants) {
+      this.presenceRealtime.emitMessageDeletedForAll(p.userId, { conversationId, messageId });
+    }
   }
 }

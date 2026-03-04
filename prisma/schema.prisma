@@ -946,6 +946,8 @@ model MessageParticipant {
   status MessageParticipantStatus @default(pending)
   acceptedAt DateTime?
   lastReadAt DateTime?
+  /** When set, push notifications for this conversation are silenced for the viewer. */
+  mutedAt DateTime?
 
   conversation MessageConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   user User @relation("MessageParticipant_user", fields: [userId], references: [id], onDelete: Cascade)
@@ -965,6 +967,13 @@ model Message {
 
   /** When set, this message is a reply to another message in the same conversation. */
   replyToId String?
+
+  /** Set when the sender edits the message body. */
+  editedAt DateTime?
+
+  /** True when the sender has deleted the message for all participants. */
+  deletedForAll    Boolean   @default(false)
+  deletedForAllAt  DateTime?
 
   conversation MessageConversation @relation("MessageConversation_messages", fields: [conversationId], references: [id], onDelete: Cascade)
   sender User @relation("Message_sender", fields: [senderId], references: [id], onDelete: Cascade)
