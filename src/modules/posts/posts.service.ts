@@ -1401,6 +1401,7 @@ export class PostsService {
               AND p."kind"::text <> 'repost'
               ${visibilityFilterSql}
               ${authorFilterSql}
+              ${kindFilterSql}
               ${bannedAuthorSql}
             ORDER BY p."repostCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesRepostedTake}
