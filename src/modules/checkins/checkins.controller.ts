@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards, Query } from '@nestjs/common';
 import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
 import { AppConfigService } from '../app/app-config.service';
@@ -17,6 +17,16 @@ export class CheckinsController {
     private readonly checkins: CheckinsService,
     private readonly appConfig: AppConfigService,
   ) {}
+
+  @Get('leaderboard')
+  async getLeaderboard(@Query('limit') limit?: string) {
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const users = await this.checkins.getLeaderboard({
+      publicBaseUrl,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
+    return { data: { users, generatedAt: new Date().toISOString() } };
+  }
 
   @UseGuards(AuthGuard)
   @Get('today')

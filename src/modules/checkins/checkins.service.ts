@@ -7,6 +7,7 @@ import { ViewerContextService } from '../viewer/viewer-context.service';
 import { CHECKIN_PROMPTS } from './checkin-prompts';
 import { dayIndexEastern, easternDayKey } from '../../common/time/eastern-day-key';
 import { PosthogService } from '../../common/posthog/posthog.service';
+import { publicAssetUrl } from '../../common/assets/public-asset-url';
 
 function pickCheckinPrompt(now: Date): { dayKey: string; prompt: string } {
   const list = CHECKIN_PROMPTS.filter(Boolean);
@@ -117,6 +118,50 @@ export class CheckinsService {
       bonusCoinsAwarded,
       checkinStreakDays: after.checkinStreakDays ?? 0,
     };
+  }
+
+  async getLeaderboard(params: { publicBaseUrl: string | null; limit?: number }) {
+    const take = Math.min(Math.max(1, params.limit ?? 25), 50);
+    const users = await this.prisma.user.findMany({
+      where: {
+        bannedAt: null,
+        checkinStreakDays: { gt: 0 },
+      },
+      orderBy: [{ checkinStreakDays: 'desc' }, { createdAt: 'asc' }],
+      take,
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        premium: true,
+        premiumPlus: true,
+        isOrganization: true,
+        stewardBadgeEnabled: true,
+        verifiedStatus: true,
+        avatarKey: true,
+        avatarUpdatedAt: true,
+        checkinStreakDays: true,
+        longestStreakDays: true,
+      },
+    });
+
+    return users.map((u) => ({
+      id: u.id,
+      username: u.username,
+      name: u.name,
+      premium: u.premium,
+      premiumPlus: u.premiumPlus,
+      isOrganization: Boolean(u.isOrganization),
+      stewardBadgeEnabled: Boolean(u.stewardBadgeEnabled),
+      verifiedStatus: u.verifiedStatus as string,
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl: params.publicBaseUrl,
+        key: u.avatarKey ?? null,
+        updatedAt: u.avatarUpdatedAt ?? null,
+      }),
+      checkinStreakDays: u.checkinStreakDays ?? 0,
+      longestStreakDays: Math.max(u.longestStreakDays ?? 0, u.checkinStreakDays ?? 0),
+    }));
   }
 }
 
