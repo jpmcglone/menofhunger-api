@@ -71,6 +71,8 @@ export type MessageConversationDto = {
   isMuted: boolean;
   /** True when a block exists in either direction between the viewer and the other participant (direct chats only). */
   isBlockedWith?: boolean;
+  /** Present on search results when a message body matched (not a name/title match). */
+  matchedMessage?: { id: string; body: string; createdAt: string } | null;
 };
 
 type MessageReactionRow = {

@@ -410,13 +410,37 @@ export class MessagesService {
     if (!q) return { conversations: [] };
 
     const blockedUserIds = await this._getBlockedUserIds(userId);
+    const blockedList = blockedUserIds.size > 0 ? [...blockedUserIds] : [];
 
-    const conversations = await this.prisma.messageConversation.findMany({
-      where: {
-        participants: {
-          some: { userId, status: 'accepted' },
-          ...(blockedUserIds.size > 0 ? { none: { userId: { in: [...blockedUserIds] } } } : {}),
+    const participantInclude = {
+      include: {
+        user: {
+          select: {
+            id: true,
+            username: true,
+            name: true,
+            premium: true,
+            premiumPlus: true,
+            isOrganization: true,
+            stewardBadgeEnabled: true,
+            verifiedStatus: true,
+            avatarKey: true,
+            avatarUpdatedAt: true,
+            bannedAt: true,
+          },
         },
+      },
+    };
+    const lastMessageSelect = { select: { id: true, body: true, createdAt: true, senderId: true } };
+    const participantFilter = {
+      some: { userId, status: 'accepted' as const },
+      ...(blockedList.length > 0 ? { none: { userId: { in: blockedList } } } : {}),
+    };
+
+    // ── 1. Search by conversation title or participant name/username ──────────
+    const byNameConversations = await this.prisma.messageConversation.findMany({
+      where: {
+        participants: participantFilter,
         OR: [
           { title: { contains: q, mode: 'insensitive' } },
           {
@@ -434,36 +458,73 @@ export class MessagesService {
           },
         ],
       },
-      include: {
-        participants: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                username: true,
-                name: true,
-                premium: true,
-                premiumPlus: true,
-                isOrganization: true,
-                stewardBadgeEnabled: true,
-                verifiedStatus: true,
-                avatarKey: true,
-                avatarUpdatedAt: true,
-                bannedAt: true,
-              },
-            },
-          },
-        },
-        lastMessage: {
-          select: { id: true, body: true, createdAt: true, senderId: true },
-        },
-      },
+      include: { participants: participantInclude, lastMessage: lastMessageSelect },
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
       take: limit,
     });
 
+    // ── 2. Search message bodies (trigram GIN index on Message.body) ──────────
+    // Finds the most-recent matching message per conversation, skipping conversations
+    // already surfaced by the name search and any blocked conversations.
+    const nameMatchIds = new Set(byNameConversations.map((c) => c.id));
+
+    type MessageHitRow = { conversationId: string; messageId: string; body: string; createdAt: Date };
+    const ilike = `%${q}%`;
+    // Pass blocked list as a Postgres array — empty array means the NOT IN condition never fires.
+    const blockedArray = blockedList as string[];
+    const messageHits = await this.prisma.$queryRaw<MessageHitRow[]>`
+      SELECT DISTINCT ON (m."conversationId")
+        m."conversationId" AS "conversationId",
+        m.id               AS "messageId",
+        m.body             AS body,
+        m."createdAt"      AS "createdAt"
+      FROM "Message" m
+      INNER JOIN "MessageParticipant" mp
+        ON mp."conversationId" = m."conversationId"
+        AND mp."userId"        = ${userId}
+        AND mp."status"        = 'accepted'
+      WHERE m."deletedForAll" = false
+        AND m.body ILIKE ${ilike}
+        AND (
+          cardinality(${blockedArray}::text[]) = 0
+          OR NOT EXISTS (
+            SELECT 1 FROM "MessageParticipant" bp
+            WHERE bp."conversationId" = m."conversationId"
+              AND bp."userId" = ANY(${blockedArray}::text[])
+          )
+        )
+      ORDER BY m."conversationId", m."createdAt" DESC
+      LIMIT ${limit}
+    `;
+
+    // Fetch full conversation data for message hits not already in the name results.
+    const newMessageHitIds = messageHits
+      .map((h) => h.conversationId)
+      .filter((id) => !nameMatchIds.has(id));
+
+    const byMessageConversations = newMessageHitIds.length > 0
+      ? await this.prisma.messageConversation.findMany({
+          where: { id: { in: newMessageHitIds } },
+          include: { participants: participantInclude, lastMessage: lastMessageSelect },
+        })
+      : [];
+
+    // Build a map from conversationId → matched message for the snippet.
+    const matchedMessageByConvId = new Map(
+      messageHits.map((h) => [h.conversationId, { id: h.messageId, body: h.body, createdAt: h.createdAt }]),
+    );
+
+    // ── 3. Merge + deduplicate, name matches first ─────────────────────────────
+    const allConversations = [...byNameConversations, ...byMessageConversations];
+    const seen = new Set<string>();
+    const unique = allConversations.filter((c) => {
+      if (seen.has(c.id)) return false;
+      seen.add(c.id);
+      return true;
+    });
+
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const perConversation = conversations
+    const perConversation = unique
       .map((c) => {
         const vp = c.participants.find((p) => p.userId === userId);
         return vp ? { conversationId: c.id, lastReadAt: vp.lastReadAt ?? null } : null;
@@ -471,11 +532,12 @@ export class MessagesService {
       .filter((v): v is { conversationId: string; lastReadAt: Date | null } => Boolean(v));
     const unreadCountByConversationId = await this.getUnreadCountByConversationId({ userId, perConversation });
 
-    const items = conversations
+    const items = unique
       .map((conversation): MessageConversationDto | null => {
         const viewerParticipant = conversation.participants.find((p) => p.userId === userId);
         if (!viewerParticipant) return null;
         const unreadCount = unreadCountByConversationId.get(conversation.id) ?? 0;
+        const hit = matchedMessageByConvId.get(conversation.id);
         return {
           id: conversation.id,
           type: conversation.type,
@@ -504,6 +566,7 @@ export class MessagesService {
           viewerStatus: viewerParticipant.status,
           unreadCount,
           isMuted: Boolean(viewerParticipant.mutedAt),
+          matchedMessage: hit ? { id: hit.id, body: hit.body, createdAt: hit.createdAt.toISOString() } : null,
         };
       })
       .filter((v): v is MessageConversationDto => Boolean(v));
@@ -647,6 +710,111 @@ export class MessagesService {
     return {
       messages: slice.map((message) => toMessageDto({ message, publicBaseUrl, viewerUserId: userId })),
       nextCursor,
+    };
+  }
+
+  /**
+   * Returns a window of messages centered on `messageId`.
+   * `half` messages before + the target + `half` messages after.
+   * Also returns `olderCursor` (for load-older) and `newerCursor` (null = already at latest).
+   */
+  async messagesAround(params: { userId: string; conversationId: string; messageId: string; half?: number }) {
+    const { userId, conversationId, messageId } = params;
+    const half = Math.max(1, Math.min(params.half ?? 25, 50));
+    await this.getConversationOrThrow({ userId, conversationId });
+
+    const target = await this.prisma.message.findFirst({
+      where: { id: messageId, conversationId },
+      include: MESSAGE_INCLUDE,
+    });
+    if (!target) throw new NotFoundException('Message not found.');
+
+    // Messages strictly before the target (newest first so we get the closest ones).
+    const before = await this.prisma.message.findMany({
+      where: {
+        conversationId,
+        OR: [
+          { createdAt: { lt: target.createdAt } },
+          { createdAt: target.createdAt, id: { lt: target.id } },
+        ],
+      },
+      include: MESSAGE_INCLUDE,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: half + 1,
+    });
+
+    // Messages strictly after the target (oldest first).
+    const after = await this.prisma.message.findMany({
+      where: {
+        conversationId,
+        OR: [
+          { createdAt: { gt: target.createdAt } },
+          { createdAt: target.createdAt, id: { gt: target.id } },
+        ],
+      },
+      include: MESSAGE_INCLUDE,
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: half + 1,
+    });
+
+    const hasOlderBeyond = before.length > half;
+    const hasNewerBeyond = after.length > half;
+
+    const beforeSlice = before.slice(0, half).reverse(); // oldest-first
+    const afterSlice = after.slice(0, half);            // already oldest-first
+
+    const allMessages = [...beforeSlice, target, ...afterSlice];
+    const olderCursor = hasOlderBeyond ? (beforeSlice[0]?.id ?? null) : null;
+    const newerCursor = hasNewerBeyond ? (afterSlice[afterSlice.length - 1]?.id ?? null) : null;
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    return {
+      messages: allMessages.map((m) => toMessageDto({ message: m, publicBaseUrl, viewerUserId: userId })),
+      olderCursor,
+      newerCursor,
+      targetMessageId: messageId,
+    };
+  }
+
+  /**
+   * Loads messages NEWER than `cursor` (exclusive), oldest-first.
+   * `newerCursor` in the response is null when we've reached the head of the conversation.
+   */
+  async listMessagesNewer(params: {
+    userId: string;
+    conversationId: string;
+    cursor: string;
+    limit?: number;
+  }): Promise<{ messages: MessageDto[]; newerCursor: string | null }> {
+    const { userId, conversationId, cursor } = params;
+    const limit = Math.max(1, Math.min(params.limit ?? MESSAGE_LIST_LIMIT, 100));
+    await this.getConversationOrThrow({ userId, conversationId });
+
+    const cursorMsg = await this.prisma.message.findFirst({
+      where: { id: cursor, conversationId },
+      select: { id: true, createdAt: true },
+    });
+    if (!cursorMsg) throw new NotFoundException('Cursor message not found.');
+
+    const messages = await this.prisma.message.findMany({
+      where: {
+        conversationId,
+        OR: [
+          { createdAt: { gt: cursorMsg.createdAt } },
+          { createdAt: cursorMsg.createdAt, id: { gt: cursorMsg.id } },
+        ],
+      },
+      include: MESSAGE_INCLUDE,
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: limit + 1,
+    });
+
+    const slice = messages.slice(0, limit);
+    const newerCursor = messages.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    return {
+      messages: slice.map((m) => toMessageDto({ message: m, publicBaseUrl, viewerUserId: userId })),
+      newerCursor,
     };
   }
 

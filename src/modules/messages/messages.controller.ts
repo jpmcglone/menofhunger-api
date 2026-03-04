@@ -160,6 +160,46 @@ export class MessagesController {
 
   @Throttle({
     default: {
+      limit: rateLimitLimit('publicRead', 240),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get('conversations/:id/messages/around/:msgId')
+  async messagesAround(
+    @CurrentUserId() userId: string,
+    @Param('id') id: string,
+    @Param('msgId') msgId: string,
+  ) {
+    const result = await this.messages.messagesAround({ userId, conversationId: id, messageId: msgId });
+    return { data: result };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 240),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get('conversations/:id/messages/newer')
+  async listMessagesNewer(@CurrentUserId() userId: string, @Param('id') id: string, @Query() query: unknown) {
+    const parsed = z.object({
+      cursor: z.string().min(1),
+      limit: z.coerce.number().int().min(1).max(50).optional(),
+    }).parse(query);
+    const result = await this.messages.listMessagesNewer({
+      userId,
+      conversationId: id,
+      cursor: parsed.cursor,
+      limit: parsed.limit ?? undefined,
+    });
+    return {
+      data: result.messages,
+      pagination: { newerCursor: result.newerCursor },
+    };
+  }
+
+  @Throttle({
+    default: {
       limit: rateLimitLimit('interact', 60),
       ttl: rateLimitTtl('interact', 60),
     },
