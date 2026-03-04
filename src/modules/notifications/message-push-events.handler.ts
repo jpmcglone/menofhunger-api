@@ -18,6 +18,7 @@ export class MessagePushEventsHandler implements OnModuleInit, OnModuleDestroy {
       void this.notifications
         .sendMessagePush({
           recipientUserId: event.recipientUserId,
+          senderUserId: event.senderUserId,
           senderName: event.senderName,
           body: event.body ?? undefined,
           conversationId: event.conversationId,

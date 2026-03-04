@@ -244,6 +244,7 @@ model User {
   notificationsAsSubjectUser Notification[] @relation("Notification_subjectUser")
   pushSubscriptions PushSubscription[]
   notificationPreferences NotificationPreferences?
+  pushCoalesces PushCoalesce[]
   userSearches     UserSearch[]
   feedbacks        Feedback[]
   reportsMade      Report[] @relation("Report_reporter")
@@ -887,6 +888,9 @@ model NotificationPreferences {
   pushFollow Boolean @default(true)
   pushMention Boolean @default(true)
   pushMessage Boolean @default(true)
+  pushRepost Boolean @default(true)
+  pushNudge Boolean @default(true)
+  pushFollowedPost Boolean @default(true)
 
   // Email preferences (requires user.email).
   emailDigestDaily Boolean @default(true)
@@ -911,6 +915,17 @@ model NotificationPreferences {
   @@index([lastEmailDigestDailySentAt])
   @@index([lastEmailInstantHighSignalSentAt])
   @@index([lastEmailStreakReminderSentAt])
+}
+
+/** Tracks last push sent per user+kind for rate limiting/coalescing. */
+model PushCoalesce {
+  userId String
+  kind   String
+  sentAt DateTime
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, kind])
+  @@index([userId, kind])
 }
 
 model MessageConversation {

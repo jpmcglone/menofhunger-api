@@ -3,6 +3,7 @@ import { Subject, type Subscription } from 'rxjs';
 
 export type MessagePushRequestedEvent = {
   recipientUserId: string;
+  senderUserId: string;
   senderName: string;
   body?: string | null;
   conversationId: string;

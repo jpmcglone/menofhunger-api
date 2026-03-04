@@ -992,6 +992,7 @@ export class MessagesService {
       const pushBody = isPending ? 'Sent you a message request' : (trimmed || (media.length > 0 ? '📷 Sent a photo' : ''));
       this.events.emitMessagePushRequested({
         recipientUserId: recipientId,
+        senderUserId: userId,
         senderName,
         body: pushBody,
         conversationId: result.conversationId,
@@ -1116,6 +1117,7 @@ export class MessagesService {
     for (const recipient of pushRecipients) {
       this.events.emitMessagePushRequested({
         recipientUserId: recipient.userId,
+        senderUserId: userId,
         senderName,
         body: pushBody,
         conversationId,

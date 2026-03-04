@@ -29,6 +29,23 @@ export type CreateNotificationParams = {
   body?: string | null;
 };
 
+type PushActorContext = {
+  id: string;
+  username: string | null;
+  name: string | null;
+  avatarKey: string | null;
+  avatarUpdatedAt: Date | null;
+};
+
+/** Coalesce window (ms) per push kind to reduce fatigue. */
+const PUSH_COALESCE_MS: Partial<Record<string, number>> = {
+  nudge: 15 * 60 * 1000,
+  followed_post: 5 * 60 * 1000,
+  repost: 2 * 60 * 1000,
+  message: 30 * 1000,
+};
+const DEFAULT_COALESCE_MS = 60 * 1000;
+
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
@@ -80,6 +97,10 @@ export class NotificationsService {
       title,
       body,
     } = params;
+
+    // Never notify a user about their own actions — regardless of which call-site triggered this.
+    if (actorUserId && actorUserId === recipientUserId) return;
+
     const fallbackTitle =
       title ??
       ({
@@ -135,14 +156,53 @@ export class NotificationsService {
     try {
       const prefs = await this.getPreferencesInternal(recipientUserId);
       if (this.shouldSendPushForKind(prefs, kind)) {
+        const actor = actorUserId
+          ? await this.prisma.user.findUnique({
+              where: { id: actorUserId },
+              select: {
+                id: true,
+                username: true,
+                name: true,
+                avatarKey: true,
+                avatarUpdatedAt: true,
+              },
+            })
+          : null;
+        const pushCopy = this.buildPushCopy({
+          kind,
+          actor,
+          fallbackTitle,
+          body,
+        });
         // Comments should link to the reply (actorPostId), not the original post (subjectPostId).
         const pushUrl = kind === 'comment' && actorPostId ? `/p/${actorPostId}` : null;
+        const pushTag = this.buildPushTag({
+          recipientUserId,
+          kind,
+          actorUserId: actorUserId ?? null,
+          subjectPostId: subjectPostId ?? null,
+          subjectUserId: subjectUserId ?? null,
+        });
+        const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+        const icon = actor
+          ? publicAssetUrl({
+              publicBaseUrl,
+              key: actor.avatarKey,
+              updatedAt: actor.avatarUpdatedAt,
+            })
+          : null;
         this.sendWebPushToRecipient(recipientUserId, {
-          title: fallbackTitle ?? 'New notification',
-          body: (body ?? '').trim().slice(0, 150) || undefined,
+          title: pushCopy.title,
+          body: pushCopy.body,
           subjectPostId: subjectPostId ?? null,
           subjectUserId: subjectUserId ?? null,
           url: pushUrl,
+          tag: pushTag,
+          icon,
+          badge: '/android-chrome-192x192.png',
+          renotify: true,
+          kind,
+          sourceLabel: 'From notifications',
         }).catch((err) => {
           this.logger.warn(`[push] Failed to send web push: ${err instanceof Error ? err.message : String(err)}`);
         });
@@ -182,15 +242,113 @@ export class NotificationsService {
   }
 
   private shouldSendPushForKind(
-    prefs: Pick<NotificationPreferencesDto, 'pushComment' | 'pushBoost' | 'pushFollow' | 'pushMention'>,
+    prefs: Pick<
+      NotificationPreferencesDto,
+      'pushComment' | 'pushBoost' | 'pushFollow' | 'pushMention' | 'pushRepost' | 'pushNudge' | 'pushFollowedPost'
+    >,
     kind: NotificationKind,
   ): boolean {
     if (kind === 'comment') return Boolean(prefs.pushComment);
     if (kind === 'boost') return Boolean(prefs.pushBoost);
     if (kind === 'follow') return Boolean(prefs.pushFollow);
     if (kind === 'mention') return Boolean(prefs.pushMention);
-    // Other kinds currently don't produce push notifications.
+    if (kind === 'repost') return Boolean(prefs.pushRepost);
+    if (kind === 'nudge') return Boolean(prefs.pushNudge);
+    if (kind === 'followed_post') return Boolean(prefs.pushFollowedPost);
+    // Non-mapped kinds pass through default (allow).
     return true;
+  }
+
+  private actorDisplayName(actor?: PushActorContext | null): string {
+    const name = (actor?.name ?? '').trim();
+    if (name) return name;
+    const username = (actor?.username ?? '').trim();
+    if (username) return `@${username}`;
+    return 'Someone';
+  }
+
+  private trimPushBody(body?: string | null, max = 140): string | null {
+    const text = (body ?? '').trim().replace(/\s+/g, ' ');
+    if (!text) return null;
+    if (text.length <= max) return text;
+    return `${text.slice(0, Math.max(0, max - 1))}…`;
+  }
+
+  private buildPushTag(params: {
+    recipientUserId: string;
+    kind: NotificationKind;
+    actorUserId?: string | null;
+    subjectPostId?: string | null;
+    subjectUserId?: string | null;
+  }): string {
+    const { recipientUserId, kind, actorUserId, subjectPostId, subjectUserId } = params;
+    if (subjectPostId) return `notif-${kind}-post-${subjectPostId}`;
+    if (subjectUserId) return `notif-${kind}-user-${subjectUserId}`;
+    if (actorUserId) return `notif-${kind}-actor-${actorUserId}`;
+    return `notif-${kind}-${recipientUserId}`;
+  }
+
+  private buildPushCopy(params: {
+    kind: NotificationKind;
+    actor?: PushActorContext | null;
+    fallbackTitle?: string | null;
+    body?: string | null;
+  }): { title: string; body?: string } {
+    const { kind, actor, fallbackTitle, body } = params;
+    const actorName = this.actorDisplayName(actor);
+    const snippet = this.trimPushBody(body);
+    if (kind === 'comment') {
+      return {
+        title: `${actorName} replied to your post`,
+        body: snippet ?? 'Open to view the reply.',
+      };
+    }
+    if (kind === 'mention') {
+      return {
+        title: `${actorName} mentioned you`,
+        body: snippet ?? 'Open to view the mention.',
+      };
+    }
+    if (kind === 'follow') {
+      return {
+        title: `${actorName} followed you`,
+        body: snippet ?? 'Open their profile.',
+      };
+    }
+    if (kind === 'boost') {
+      return {
+        title: `${actorName} boosted your post`,
+        body: snippet ?? 'Your post is getting traction.',
+      };
+    }
+    if (kind === 'repost') {
+      return {
+        title: `${actorName} reposted your post`,
+        body: snippet ?? 'Open to view the repost.',
+      };
+    }
+    if (kind === 'followed_post') {
+      return {
+        title: `${actorName} shared a new post`,
+        body: snippet ?? 'Open to read it.',
+      };
+    }
+    if (kind === 'nudge') {
+      return {
+        title: `${actorName} nudged you`,
+        body: snippet ?? 'Open notifications to respond.',
+      };
+    }
+    if (kind === 'poll_results_ready') {
+      return {
+        title: 'Poll results are ready',
+        body: snippet ?? 'Open to see the results.',
+      };
+    }
+    return {
+      title: (fallbackTitle ?? '').trim() || 'New notification',
+      ...(snippet ? { body: snippet } : { body: 'You have a new notification.' }),
+    };
   }
 
   async getPreferences(userId: string): Promise<NotificationPreferencesDto> {
@@ -201,6 +359,9 @@ export class NotificationsService {
       pushFollow: Boolean(prefs.pushFollow),
       pushMention: Boolean(prefs.pushMention),
       pushMessage: Boolean(prefs.pushMessage),
+      pushRepost: Boolean(prefs.pushRepost),
+      pushNudge: Boolean(prefs.pushNudge),
+      pushFollowedPost: Boolean(prefs.pushFollowedPost),
       emailDigestDaily: Boolean(prefs.emailDigestDaily),
       emailDigestWeekly: Boolean(prefs.emailDigestWeekly),
       emailNewNotifications: Boolean(prefs.emailNewNotifications),
@@ -244,6 +405,9 @@ export class NotificationsService {
       pushFollow: Boolean(updated.pushFollow),
       pushMention: Boolean(updated.pushMention),
       pushMessage: Boolean(updated.pushMessage),
+      pushRepost: Boolean(updated.pushRepost),
+      pushNudge: Boolean(updated.pushNudge),
+      pushFollowedPost: Boolean(updated.pushFollowedPost),
       emailDigestDaily: Boolean(updated.emailDigestDaily),
       emailDigestWeekly: Boolean(updated.emailDigestWeekly),
       emailNewNotifications: Boolean(updated.emailNewNotifications),
@@ -261,6 +425,12 @@ export class NotificationsService {
     const p256dh = (keys?.p256dh ?? '').trim();
     const auth = (keys?.auth ?? '').trim();
     if (!endpointTrim || !p256dh || !auth) return;
+
+    // If another user previously registered this endpoint (e.g. user switched without a clean logout),
+    // remove their stale binding so they stop receiving this device's push notifications.
+    await this.prisma.pushSubscription.deleteMany({
+      where: { endpoint: endpointTrim, NOT: { userId } },
+    });
 
     await this.prisma.pushSubscription.upsert({
       where: {
@@ -312,6 +482,25 @@ export class NotificationsService {
     return { sent: true };
   }
 
+  /** Coalesce window (ms) for this kind. Returns false if within window (skip send). */
+  private async isPushCoalesced(recipientUserId: string, kind: string): Promise<boolean> {
+    const windowMs = PUSH_COALESCE_MS[kind] ?? DEFAULT_COALESCE_MS;
+    const since = new Date(Date.now() - windowMs);
+    const row = await this.prisma.pushCoalesce.findUnique({
+      where: { userId_kind: { userId: recipientUserId, kind } },
+      select: { sentAt: true },
+    });
+    return row ? row.sentAt >= since : false;
+  }
+
+  private async recordPushSent(recipientUserId: string, kind: string): Promise<void> {
+    await this.prisma.pushCoalesce.upsert({
+      where: { userId_kind: { userId: recipientUserId, kind } },
+      create: { userId: recipientUserId, kind, sentAt: new Date() },
+      update: { sentAt: new Date() },
+    });
+  }
+
   /** Send Web Push to all of a user's subscriptions; prune expired (410/404). */
   private async sendWebPushToRecipient(
     recipientUserId: string,
@@ -323,9 +512,19 @@ export class NotificationsService {
       test?: boolean;
       url?: string | null;
       tag?: string | null;
+      icon?: string | null;
+      badge?: string | null;
+      renotify?: boolean;
+      kind?: string;
+      sourceLabel?: string;
     },
   ): Promise<void> {
     if (!this.appConfig.vapidConfigured()) return;
+    const kind = params.kind ?? 'generic';
+    if (!params.test && (await this.isPushCoalesced(recipientUserId, kind))) {
+      this.logger.debug(`[push] Coalesced ${kind} for user ${recipientUserId}`);
+      return;
+    }
     if (!this.vapidConfigured) {
       const publicKey = this.appConfig.vapidPublicKey();
       const privateKey = this.appConfig.vapidPrivateKey();
@@ -355,11 +554,20 @@ export class NotificationsService {
     }
 
     const defaultTag = params.test ? `notification-test-${Date.now()}` : `notification-${recipientUserId}`;
+    const tag = params.tag?.trim() || defaultTag;
+    let body = params.body ?? 'You have a new notification.';
+    if (params.sourceLabel) {
+      body = body ? `${body} · ${params.sourceLabel}` : params.sourceLabel;
+    }
     const payload = JSON.stringify({
       title: params.title,
-      body: params.body ?? 'You have a new notification.',
+      body,
       url,
-      tag: params.tag?.trim() || defaultTag,
+      tag,
+      kind,
+      icon: params.icon ?? undefined,
+      badge: params.badge ?? '/android-chrome-192x192.png',
+      renotify: Boolean(params.renotify),
       test: params.test === true,
     });
 
@@ -394,10 +602,14 @@ export class NotificationsService {
     if (expiredIds.length > 0) {
       await this.prisma.pushSubscription.deleteMany({ where: { id: { in: expiredIds } } }).catch(() => {});
     }
+    if (!params.test) {
+      await this.recordPushSent(recipientUserId, kind).catch(() => {});
+    }
   }
 
   async sendMessagePush(params: {
     recipientUserId: string;
+    senderUserId: string;
     senderName: string;
     body?: string | null;
     conversationId: string;
@@ -410,15 +622,32 @@ export class NotificationsService {
     }
     const sender = (params.senderName ?? '').trim();
     const title = sender ? `New message from ${sender}` : 'New message';
-    const body = (params.body ?? '').trim().slice(0, 150) || undefined;
+    const body = this.trimPushBody(params.body, 150) ?? 'Open chat to read the message.';
     const url = `/chat?c=${encodeURIComponent(params.conversationId)}`;
-    const tag = `message-${params.conversationId}`;
+    const tag = `message-conversation-${params.conversationId}`;
+    const senderUser = await this.prisma.user.findUnique({
+      where: { id: params.senderUserId },
+      select: { avatarKey: true, avatarUpdatedAt: true },
+    });
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const icon = senderUser
+      ? publicAssetUrl({
+          publicBaseUrl,
+          key: senderUser.avatarKey,
+          updatedAt: senderUser.avatarUpdatedAt,
+        })
+      : null;
     try {
       await this.sendWebPushToRecipient(params.recipientUserId, {
         title,
         body,
         url,
         tag,
+        icon,
+        badge: '/android-chrome-192x192.png',
+        renotify: true,
+        kind: 'message',
+        sourceLabel: 'From chat',
       });
     } catch (err) {
       this.logger.warn(`[push] Failed to send DM web push: ${err instanceof Error ? err.message : String(err)}`);
@@ -523,11 +752,47 @@ export class NotificationsService {
           try {
             const prefs = await this.getPreferencesInternal(recipientUserId);
             if (this.shouldSendPushForKind(prefs, 'boost')) {
+              const actor = await this.prisma.user.findUnique({
+                where: { id: actorUserId },
+                select: {
+                  id: true,
+                  username: true,
+                  name: true,
+                  avatarKey: true,
+                  avatarUpdatedAt: true,
+                },
+              });
+              const pushCopy = this.buildPushCopy({
+                kind: 'boost',
+                actor,
+                fallbackTitle: 'boosted your post',
+                body: bodySnippet ?? null,
+              });
+              const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+              const icon = actor
+                ? publicAssetUrl({
+                    publicBaseUrl,
+                    key: actor.avatarKey,
+                    updatedAt: actor.avatarUpdatedAt,
+                  })
+                : null;
               this.sendWebPushToRecipient(recipientUserId, {
-                title: 'boosted your post',
-                body: (bodySnippet ?? '').trim().slice(0, 150) || undefined,
+                title: pushCopy.title,
+                body: pushCopy.body,
                 subjectPostId: subjectPostId ?? null,
                 subjectUserId: null,
+                tag: this.buildPushTag({
+                  recipientUserId,
+                  kind: 'boost',
+                  actorUserId,
+                  subjectPostId,
+                  subjectUserId: null,
+                }),
+                icon,
+                badge: '/android-chrome-192x192.png',
+                renotify: true,
+                kind: 'boost',
+                sourceLabel: 'From notifications',
               }).catch((err) => {
                 this.logger.warn(`[push] Failed to send web push: ${err instanceof Error ? err.message : String(err)}`);
               });
