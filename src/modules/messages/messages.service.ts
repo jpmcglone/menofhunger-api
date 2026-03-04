@@ -1399,14 +1399,20 @@ export class MessagesService {
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const now = new Date();
-    const updated = await this.prisma.message.update({
+    await this.prisma.message.update({
       where: { id: messageId },
       data: { body, editedAt: now },
-      include: MESSAGE_INCLUDE,
+      include: MESSAGE_INCLUDE as Prisma.MessageInclude,
     });
 
+    const full = await this.prisma.message.findUnique({
+      where: { id: messageId },
+      include: MESSAGE_INCLUDE,
+    });
+    if (!full) throw new NotFoundException('Message not found.');
+
     for (const p of conversation.participants) {
-      const dto = toMessageDto({ message: updated, publicBaseUrl, viewerUserId: p.userId });
+      const dto = toMessageDto({ message: full, publicBaseUrl, viewerUserId: p.userId });
       this.presenceRealtime.emitMessageEdited(p.userId, { conversationId, message: dto });
     }
   }
