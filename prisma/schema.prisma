@@ -182,9 +182,9 @@ model User {
   bannedAt DateTime?
   bannedReason String?
   bannedByAdminId String?
-  // Premium flag (paid product access; used for visibility gating).
+  // Premium flag (paid product access; used for visibility gating). Computed by EntitlementService.
   premium Boolean @default(false)
-  // Premium+ (superset of premium; special supporters tier).
+  // Premium+ (superset of premium; special supporters tier). Computed by EntitlementService.
   premiumPlus Boolean @default(false)
   // Organization account (special badge + avatar shape in clients).
   isOrganization Boolean @default(false)

@@ -39,7 +39,8 @@ export type BillingPortalSessionDto = {
   url: string;
 };
 
-export type AdminGrantMonthsDto = {
-  grants: AdminSubscriptionGrantDto[];
-  effectiveExpiresAt: string | null;
+/** Summary of banked free months for admin grant management UI. */
+export type AdminGrantSummaryDto = {
+  premiumMonthsRemaining: number;
+  premiumPlusMonthsRemaining: number;
 };

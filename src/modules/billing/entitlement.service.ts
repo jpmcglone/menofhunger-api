@@ -103,6 +103,78 @@ export class EntitlementService {
     return { grant, entitlement };
   }
 
+  /**
+   * Set the total free months for a tier to an exact value.
+   * All currently active grants for that tier are revoked and replaced with a single
+   * consolidated grant from now to `now + months`. Pass 0 to clear entirely.
+   *
+   * Use this for admin edits. For automated stacking (e.g. referral rewards), use `grantMonths`.
+   */
+  async setGrantMonths(params: {
+    userId: string;
+    tier: GrantTier;
+    months: number;
+    grantedByAdminId?: string | null;
+    reason?: string | null;
+  }): Promise<EntitlementResult> {
+    const now = new Date();
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: params.userId },
+      select: { id: true },
+    });
+    if (!user) throw new NotFoundException('User not found.');
+
+    // Revoke all currently active grants for this tier.
+    await this.prisma.subscriptionGrant.updateMany({
+      where: { userId: params.userId, tier: params.tier, revokedAt: null, endsAt: { gt: now } },
+      data: { revokedAt: now },
+    });
+
+    if (params.months > 0) {
+      const endsAt = addMonths(now, params.months);
+      await this.prisma.subscriptionGrant.create({
+        data: {
+          userId: params.userId,
+          tier: params.tier,
+          source: 'admin',
+          months: params.months,
+          startsAt: now,
+          endsAt,
+          reason: params.reason ?? null,
+          grantedByAdminId: params.grantedByAdminId ?? null,
+        },
+      });
+    }
+
+    return this.recomputeAndApply(params.userId);
+  }
+
+  /**
+   * Returns the total remaining months of free premium and premium+ the user has banked.
+   * Calculated from the wall-clock time remaining across all active grants per tier.
+   */
+  async getGrantSummary(userId: string): Promise<{ premiumMonthsRemaining: number; premiumPlusMonthsRemaining: number }> {
+    const now = new Date();
+    const grants = await this.prisma.subscriptionGrant.findMany({
+      where: { userId, revokedAt: null, endsAt: { gt: now } },
+    });
+
+    const MS_PER_MONTH = 30.44 * 24 * 60 * 60 * 1000;
+    let premiumMs = 0;
+    let premiumPlusMs = 0;
+    for (const g of grants) {
+      const remaining = Math.max(0, g.endsAt.getTime() - now.getTime());
+      if (g.tier === 'premiumPlus') premiumPlusMs += remaining;
+      else premiumMs += remaining;
+    }
+
+    return {
+      premiumMonthsRemaining: Math.round(premiumMs / MS_PER_MONTH),
+      premiumPlusMonthsRemaining: Math.round(premiumPlusMs / MS_PER_MONTH),
+    };
+  }
+
   /** Revoke an active grant early. Re-resolves the user's effective tier. */
   async revokeGrant(params: { grantId: string; userId: string }): Promise<EntitlementResult> {
     const grant = await this.prisma.subscriptionGrant.findFirst({
@@ -178,6 +250,9 @@ export class EntitlementService {
     const stripeExpiresAt = stripeEntitled ? (user.stripeCurrentPeriodEnd ?? null) : null;
 
     const activeGrants = user.subscriptionGrants.map(this.toGrantInfo);
+
+    // Grants work standalone — no active Stripe subscription required.
+    // Priority: Premium+ grant > Premium grant > Stripe > none.
     const grantTier: EffectiveTier =
       activeGrants.length === 0
         ? 'none'
@@ -186,7 +261,7 @@ export class EntitlementService {
           : 'premium';
     const grantExpiresAt = activeGrants.length > 0 ? activeGrants[0]!.endsAt : null;
 
-    const effectiveTier = maxTier(stripeTier, grantTier);
+    const effectiveTier = maxTier(grantTier, stripeTier);
     const isPremiumPlus = effectiveTier === 'premiumPlus';
     const isPremium = effectiveTier !== 'none';
 

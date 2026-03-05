@@ -29,6 +29,7 @@ import { UsersPublicRealtimeService } from '../users/users-public-realtime.servi
 import { AuthService } from '../auth/auth.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { SlackService } from '../../common/slack/slack.service';
+import { EntitlementService } from '../billing/entitlement.service';
 
 const searchSchema = z.object({
   q: z.string().optional(),
@@ -55,8 +56,6 @@ const updateUserSchema = z.object({
   username: z.union([z.string().trim().min(1), z.null()]).optional(),
   name: z.string().trim().max(50).nullable().optional(),
   bio: z.string().trim().max(160).nullable().optional(),
-  premium: z.boolean().optional(),
-  premiumPlus: z.boolean().optional(),
   isOrganization: z.boolean().optional(),
   verifiedStatus: z.enum(['none', 'identity', 'manual']).optional(),
 });
@@ -73,6 +72,7 @@ export class AdminUsersController {
     private readonly auth: AuthService,
     private readonly moduleRef: ModuleRef,
     private readonly slack: SlackService,
+    private readonly entitlementService: EntitlementService,
   ) {}
 
   /** Single-user admin DTO with org affiliations included. */
@@ -331,43 +331,11 @@ export class AdminUsersController {
       data.bio = parsed.bio === null ? null : (parsed.bio || null);
     }
 
-    const isSettingPremium = parsed.premium !== undefined || parsed.premiumPlus !== undefined;
-
-    // When setting premium/premiumPlus, enforce verified prerequisite.
-    if (isSettingPremium) {
-      const verifiedNow =
-        parsed.verifiedStatus !== undefined ? parsed.verifiedStatus !== 'none' : current.verifiedStatus !== 'none';
-
-      const wantsPremium = parsed.premium === true || parsed.premiumPlus === true;
-      if (wantsPremium && !verifiedNow) {
-        throw new BadRequestException('User must be verified before enabling Premium or Premium+.');
-      }
-    }
-
-    if (parsed.premium !== undefined) {
-      data.premium = parsed.premium;
-    }
-
-    if (parsed.premiumPlus !== undefined) {
-      data.premiumPlus = parsed.premiumPlus;
-    }
-
-    // Enforce invariants:
-    // - premiumPlus implies premium
-    // - disabling premium disables premiumPlus
-    if (data.premiumPlus === true) data.premium = true;
-    if (data.premium === false) data.premiumPlus = false;
-
-    // Compute effective next-state values (current + patch), so admins can update multiple fields atomically.
+    // Org invariant: org accounts must be verified AND have at least some form of premium access.
+    // current.premium reflects all sources (Stripe + grants) as computed by EntitlementService.
     const effectiveVerifiedStatus = parsed.verifiedStatus ?? current.verifiedStatus;
-    let effectivePremium = parsed.premium ?? current.premium;
-    const effectivePremiumPlus = parsed.premiumPlus ?? current.premiumPlus;
-    if (effectivePremiumPlus === true) effectivePremium = true;
-    // Enforce "premium=false disables premiumPlus" invariant for effective state.
-    if (parsed.premium === false && parsed.premiumPlus !== true) effectivePremium = false;
-
     const effectiveIsOrganization = parsed.isOrganization ?? current.isOrganization;
-    if (effectiveIsOrganization === true && (effectivePremium !== true || effectiveVerifiedStatus === 'none')) {
+    if (effectiveIsOrganization === true && (!current.premium || effectiveVerifiedStatus === 'none')) {
       throw new BadRequestException('Organization accounts must be verified and premium.');
     }
 
@@ -388,10 +356,17 @@ export class AdminUsersController {
     }
 
     try {
-      const updated = await this.prisma.user.update({
-        where: { id },
-        data,
-      });
+      await this.prisma.user.update({ where: { id }, data });
+
+      // Recompute premium/premiumPlus when verified status changes, since grants
+      // and Stripe tiers factor verification into effective access.
+      if (parsed.verifiedStatus !== undefined) {
+        await this.entitlementService.recomputeAndApply(id);
+      }
+
+      // Fetch the fresh user after all writes so the response reflects the computed state.
+      const updated = await this.prisma.user.findUnique({ where: { id } });
+      if (!updated) throw new NotFoundException('User not found.');
 
       // Invalidate public profile caches (profile + preview) so tier changes reflect immediately.
       try {
@@ -404,7 +379,6 @@ export class AdminUsersController {
       // Realtime: user tier/profile changes should update their own UI and any related users.
       try {
         await this.usersPublicRealtime.emitPublicProfileUpdated(updated.id);
-        // Also update the user across their own devices (auth/settings state).
         this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'admin_user_updated');
       } catch {
         // Best-effort

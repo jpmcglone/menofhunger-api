@@ -133,6 +133,30 @@ export class BillingService {
       });
     }
 
+    // Apply banked free-month grants as a Stripe trial period so the user is
+    // not billed until their grant window runs out.
+    //
+    // How it works:
+    //   - Grants are stacked sequentially, so the latest endsAt represents the
+    //     full remaining free window.
+    //   - We convert that to whole days and pass it as trial_period_days.
+    //   - The Stripe trial end (≈ now + trialDays) aligns with the grant endsAt,
+    //     so both expire together and billing begins at the right time.
+    //   - No explicit grant revocation is needed — they expire naturally.
+    const now = new Date();
+    const activeGrants = await this.entitlement.getActiveGrants(user.id);
+    let trialDays = 0;
+    if (activeGrants.length > 0) {
+      const latestEndsAt = activeGrants.reduce(
+        (latest, g) => (g.endsAt > latest ? g.endsAt : latest),
+        activeGrants[0]!.endsAt,
+      );
+      const remainingMs = latestEndsAt.getTime() - now.getTime();
+      if (remainingMs > 0) {
+        trialDays = Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
+      }
+    }
+
     const successUrl = `${cfg.frontendBaseUrl}/settings/billing?checkout=success`;
     const cancelUrl = `${cfg.frontendBaseUrl}/settings/billing?checkout=cancel`;
 
@@ -145,6 +169,18 @@ export class BillingService {
       success_url: successUrl,
       cancel_url: cancelUrl,
       allow_promotion_codes: true,
+      ...(trialDays > 0
+        ? {
+            subscription_data: {
+              trial_period_days: trialDays,
+              metadata: {
+                userId: user.id,
+                tier: params.tier,
+                grantTrialDays: String(trialDays),
+              },
+            },
+          }
+        : {}),
     });
 
     const url = (session as any)?.url as string | null | undefined;
