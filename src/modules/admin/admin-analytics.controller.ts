@@ -22,6 +22,13 @@ function granularityForSpan(days: number): AnalyticsGranularity {
   return 'month';
 }
 
+function toTimeSeries(rows: Array<{ bucket: Date; count: bigint }>) {
+  return rows.map((r) => ({
+    bucket: r.bucket.toISOString().split('T')[0]!,
+    count: Number(r.count),
+  }));
+}
+
 @Controller('admin/analytics')
 @UseGuards(AdminGuard)
 export class AdminAnalyticsController {
@@ -53,6 +60,7 @@ export class AdminAnalyticsController {
 
     const [
       summaryRow,
+      activeGrantsCountRow,
       dauMauRow,
       signupsRaw,
       postsRaw,
@@ -73,14 +81,24 @@ export class AdminAnalyticsController {
       // Note: premiumPlus users also have premium=true, so premium_users already
       // includes all paid tiers. Don't add premium_users + premium_plus_users in the UI.
       this.prisma.$queryRaw<
-        Array<{ total_users: bigint; premium_users: bigint; premium_plus_users: bigint }>
+        Array<{ total_users: bigint; verified_users: bigint; premium_users: bigint; premium_plus_users: bigint }>
       >`
         SELECT
           COUNT(*)::bigint AS total_users,
+          COUNT(*) FILTER (WHERE "verifiedStatus" != 'none')::bigint AS verified_users,
           COUNT(*) FILTER (WHERE "premium" = true)::bigint AS premium_users,
           COUNT(*) FILTER (WHERE "premiumPlus" = true)::bigint AS premium_plus_users
         FROM "User"
         WHERE "bannedAt" IS NULL
+      `,
+
+      // Users with at least one active grant (non-revoked, not yet expired).
+      // Range-independent: shows the current banked state regardless of filter.
+      this.prisma.$queryRaw<Array<{ cnt: bigint }>>`
+        SELECT COUNT(DISTINCT "userId")::bigint AS cnt
+        FROM "SubscriptionGrant"
+        WHERE "revokedAt" IS NULL
+          AND "endsAt" > ${now}::timestamptz
       `,
 
       // DAU = average unique daily active users across the last 30 *complete* days
@@ -303,6 +321,11 @@ export class AdminAnalyticsController {
       // Monetization totals — single row, no GROUP BY.
       // Kept separate from the status breakdown so that FILTER counts apply to the
       // whole table, not per-group (which would give wrong numbers).
+      //
+      // "Paying" = premium=true backed by an active Stripe subscription.
+      // "Comped"  = premium=true backed only by SubscriptionGrant records (no active Stripe sub).
+      //             Uses a correlated EXISTS subquery so we count grant-backed premium accurately
+      //             instead of inferring from the absence of a Stripe subscription.
       this.prisma.$queryRaw<
         Array<{
           free: bigint;
@@ -330,11 +353,25 @@ export class AdminAnalyticsController {
             WHERE "premiumPlus" = false AND "premium" = true
               AND ("stripeSubscriptionId" IS NULL
                 OR "stripeSubscriptionStatus" NOT IN ('active', 'trialing', 'past_due'))
+              AND EXISTS (
+                SELECT 1 FROM "SubscriptionGrant" sg
+                WHERE sg."userId" = "User"."id"
+                  AND sg."tier" = 'premium'
+                  AND sg."revokedAt" IS NULL
+                  AND sg."endsAt" > ${now}::timestamptz
+              )
           )::bigint AS comped_premium,
           COUNT(*) FILTER (
             WHERE "premiumPlus" = true
               AND ("stripeSubscriptionId" IS NULL
                 OR "stripeSubscriptionStatus" NOT IN ('active', 'trialing', 'past_due'))
+              AND EXISTS (
+                SELECT 1 FROM "SubscriptionGrant" sg
+                WHERE sg."userId" = "User"."id"
+                  AND sg."tier" = 'premiumPlus'
+                  AND sg."revokedAt" IS NULL
+                  AND sg."endsAt" > ${now}::timestamptz
+              )
           )::bigint AS comped_premium_plus
         FROM "User"
         WHERE "bannedAt" IS NULL
@@ -364,17 +401,10 @@ export class AdminAnalyticsController {
       `),
     ]);
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    const toTimeSeries = (rows: Array<{ bucket: Date; count: bigint }>) =>
-      rows.map((r) => ({
-        bucket: r.bucket.toISOString().split('T')[0],
-        count: Number(r.count),
-      }));
-
     // ── Summary ───────────────────────────────────────────────────────────────
 
     const summary = summaryRow[0];
+    const activeGrantsCount = Number(activeGrantsCountRow[0]?.cnt ?? 0);
     const dauMau = dauMauRow[0];
 
     // ── Monetization ──────────────────────────────────────────────────────────
@@ -386,15 +416,8 @@ export class AdminAnalyticsController {
     const compedPremium   = Number(totals?.comped_premium  ?? 0);
     const compedPremiumPlus = Number(totals?.comped_premium_plus ?? 0);
 
-    const byStatus: Record<string, number> = {};
-    for (const row of monetizationByStatusRaw) {
-      byStatus[row.stripe_status] = Number(row.cnt);
-    }
-
-    const postsByVisibility: Record<string, number> = {};
-    for (const row of postVisibilityRaw) {
-      postsByVisibility[row.visibility] = Number(row.cnt);
-    }
+    const byStatus = Object.fromEntries(monetizationByStatusRaw.map((r) => [r.stripe_status, Number(r.cnt)]));
+    const postsByVisibility = Object.fromEntries(postVisibilityRaw.map((r) => [r.visibility, Number(r.cnt)]));
 
     // ── Engagement ────────────────────────────────────────────────────────────
 
@@ -441,11 +464,13 @@ export class AdminAnalyticsController {
       range: (rangeParam as AnalyticsRange) || '30d',
       granularity,
       summary: {
-        totalUsers:      Number(summary?.total_users       ?? 0),
+        totalUsers:           Number(summary?.total_users       ?? 0),
+        verifiedUsers:        Number(summary?.verified_users    ?? 0),
         // premiumUsers includes ALL paid tiers (premium-only + premiumPlus),
         // because billing sets premium=true for both. Don't add premiumPlusUsers to it.
-        premiumUsers:    Number(summary?.premium_users     ?? 0),
-        premiumPlusUsers: Number(summary?.premium_plus_users ?? 0),
+        premiumUsers:         Number(summary?.premium_users     ?? 0),
+        premiumPlusUsers:     Number(summary?.premium_plus_users ?? 0),
+        usersWithActiveGrants: activeGrantsCount,
         dau: Math.round(Number(dauMau?.dau ?? 0)),
         mau: Number(dauMau?.mau ?? 0),
       },

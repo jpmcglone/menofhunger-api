@@ -5,8 +5,11 @@ export type TimeSeriesPoint = { bucket: string; count: number };
 
 export type AdminAnalyticsSummaryDto = {
   totalUsers: number;
+  verifiedUsers: number;
   premiumUsers: number;
   premiumPlusUsers: number;
+  /** Users with at least one active (non-revoked, non-expired) subscription grant */
+  usersWithActiveGrants: number;
   dau: number;
   mau: number;
 };

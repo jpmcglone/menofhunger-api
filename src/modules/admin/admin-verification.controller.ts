@@ -1,7 +1,9 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Logger, Param, Patch, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { toVerificationRequestAdminDto } from '../../common/dto';
 import { VerificationService } from '../verification/verification.service';
+import { BillingService } from '../billing/billing.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { AdminGuard } from './admin.guard';
 import { CurrentUserId } from '../users/users.decorator';
 
@@ -24,7 +26,13 @@ const rejectSchema = z.object({
 @UseGuards(AdminGuard)
 @Controller('admin/verification')
 export class AdminVerificationController {
-  constructor(private readonly verification: VerificationService) {}
+  private readonly logger = new Logger(AdminVerificationController.name);
+
+  constructor(
+    private readonly verification: VerificationService,
+    private readonly billing: BillingService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   @Get()
   async list(@Query() query: unknown) {
@@ -49,11 +57,25 @@ export class AdminVerificationController {
     const parsed = approveSchema.parse(body ?? {});
     if (!adminUserId) throw new BadRequestException('Missing admin user.');
 
+    // Read the user's unverifiedAt BEFORE approval clears it — needed to restore banked grant time.
+    const request = await this.prisma.verificationRequest.findUnique({
+      where: { id },
+      select: { userId: true, user: { select: { unverifiedAt: true } } },
+    });
+    const previousUnverifiedAt = request?.user?.unverifiedAt ?? null;
+
     const updated = await this.verification.approveAdmin({
       requestId: id,
       adminUserId,
       adminNote: parsed.adminNote ?? null,
     });
+
+    // Extend banked grants, resume Stripe sub, recompute premium tier.
+    try {
+      await this.billing.onUserVerified(updated.userId, previousUnverifiedAt);
+    } catch (err) {
+      this.logger.warn(`Failed to run billing hooks for verified user ${updated.userId}: ${err}`);
+    }
 
     return { data: toVerificationRequestAdminDto(updated) };
   }
@@ -73,4 +95,3 @@ export class AdminVerificationController {
     return { data: toVerificationRequestAdminDto(updated) };
   }
 }
-

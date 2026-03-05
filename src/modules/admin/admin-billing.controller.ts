@@ -2,11 +2,13 @@ import { Body, Controller, Get, NotFoundException, Param, Put, Req, UseGuards } 
 import { z } from 'zod';
 import { AdminGuard, type AdminRequest } from './admin.guard';
 import { EntitlementService } from '../billing/entitlement.service';
+import { BillingService } from '../billing/billing.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
 import { SlackService } from '../../common/slack/slack.service';
+import { PosthogService } from '../../common/posthog/posthog.service';
 import type { AdminGrantSummaryDto } from '../../common/dto';
 
 const setGrantsSchema = z.object({
@@ -19,11 +21,13 @@ const setGrantsSchema = z.object({
 export class AdminBillingController {
   constructor(
     private readonly entitlement: EntitlementService,
+    private readonly billing: BillingService,
     private readonly prisma: PrismaService,
     private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly slack: SlackService,
+    private readonly posthog: PosthogService,
   ) {}
 
   private async requireUser(id: string) {
@@ -92,6 +96,21 @@ export class AdminBillingController {
         source: 'admin',
       });
     }
+
+    if (lastEntitlement) {
+      this.posthog.capture(id, 'grant_months_set', {
+        granted_by_admin_id: adminId,
+        premium_months: premiumMonths,
+        premium_plus_months: premiumPlusMonths,
+        is_premium: lastEntitlement.isPremium,
+        is_premium_plus: lastEntitlement.isPremiumPlus,
+        effective_tier: lastEntitlement.effectiveTier,
+        grant_expires_at: lastEntitlement.grantExpiresAt?.toISOString() ?? null,
+      });
+    }
+
+    // Sync Stripe trial window: pause or end billing to match the grant window.
+    await this.billing.syncGrantTrialToSubscription(id);
 
     try {
       await this.publicProfileCache.invalidateForUser({ id, username: user.username ?? null });

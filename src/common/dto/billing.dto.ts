@@ -11,10 +11,6 @@ export type ActiveSubscriptionGrantDto = {
   reason: string | null;
 };
 
-export type AdminSubscriptionGrantDto = ActiveSubscriptionGrantDto & {
-  grantedByAdminId: string | null;
-  createdAt: string;
-};
 
 export type BillingMeDto = {
   premium: boolean;

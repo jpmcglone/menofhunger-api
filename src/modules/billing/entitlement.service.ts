@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { SubscriptionGrant } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -45,6 +45,13 @@ function addMonths(date: Date, months: number): Date {
 
 const ENTITLED_STRIPE_STATUSES = new Set(['active', 'trialing', 'past_due']);
 
+const MS_PER_MONTH = 30.44 * 24 * 60 * 60 * 1000;
+
+/** Returns the later of two nullable dates, or null if both are null. */
+export function laterDate(a: Date | null, b: Date | null): Date | null {
+  return a && b ? (a > b ? a : b) : a ?? b;
+}
+
 @Injectable()
 export class EntitlementService {
   private readonly logger = new Logger(EntitlementService.name);
@@ -55,60 +62,9 @@ export class EntitlementService {
   ) {}
 
   /**
-   * Grant N months of premium to a user.
-   * Grants stack: if the user already has an active grant, the new grant starts
-   * from the latest endsAt so the time accumulates cleanly.
-   *
-   * This is the single callable entry point for all grant sources (admin, future referral, etc.).
-   */
-  async grantMonths(params: {
-    userId: string;
-    tier: GrantTier;
-    months: number;
-    source: 'admin' | 'referral';
-    grantedByAdminId?: string | null;
-    reason?: string | null;
-  }): Promise<{ grant: SubscriptionGrant; entitlement: EntitlementResult }> {
-    const now = new Date();
-
-    const user = await this.prisma.user.findUnique({
-      where: { id: params.userId },
-      select: { id: true, verifiedStatus: true },
-    });
-    if (!user) throw new NotFoundException('User not found.');
-
-    // Stack: new grant starts from the latest active grant end, or now.
-    const latest = await this.prisma.subscriptionGrant.findFirst({
-      where: { userId: params.userId, revokedAt: null, endsAt: { gt: now } },
-      orderBy: { endsAt: 'desc' },
-    });
-
-    const startsAt = latest ? latest.endsAt : now;
-    const endsAt = addMonths(startsAt, params.months);
-
-    const grant = await this.prisma.subscriptionGrant.create({
-      data: {
-        userId: params.userId,
-        tier: params.tier,
-        source: params.source,
-        months: params.months,
-        startsAt,
-        endsAt,
-        reason: params.reason ?? null,
-        grantedByAdminId: params.grantedByAdminId ?? null,
-      },
-    });
-
-    const entitlement = await this.recomputeAndApply(params.userId);
-    return { grant, entitlement };
-  }
-
-  /**
    * Set the total free months for a tier to an exact value.
    * All currently active grants for that tier are revoked and replaced with a single
    * consolidated grant from now to `now + months`. Pass 0 to clear entirely.
-   *
-   * Use this for admin edits. For automated stacking (e.g. referral rewards), use `grantMonths`.
    */
   async setGrantMonths(params: {
     userId: string;
@@ -151,6 +107,37 @@ export class EntitlementService {
   }
 
   /**
+   * Called when a user is re-verified after a period of being unverified.
+   * Extends the endsAt of any grants that were still active when they lost verification
+   * by the length of the unverified window, so they get credit for time they couldn't use.
+   *
+   * Safe to call with a null unverifiedAt (no-op) — e.g. for first-time verifications.
+   */
+  async extendGrantsAfterPause(userId: string, unverifiedAt: Date | null): Promise<void> {
+    if (!unverifiedAt) return;
+    const now = new Date();
+    const pauseMs = now.getTime() - unverifiedAt.getTime();
+    if (pauseMs <= 0) return;
+
+    // Find all non-revoked grants that were still running when they lost verification.
+    const grants = await this.prisma.subscriptionGrant.findMany({
+      where: { userId, revokedAt: null, endsAt: { gt: unverifiedAt } },
+    });
+
+    for (const g of grants) {
+      await this.prisma.subscriptionGrant.update({
+        where: { id: g.id },
+        data: { endsAt: new Date(g.endsAt.getTime() + pauseMs) },
+      });
+    }
+
+    if (grants.length > 0) {
+      const days = Math.round(pauseMs / (1000 * 60 * 60 * 24));
+      this.logger.log(`[entitlement] Extended ${grants.length} grant(s) for user ${userId} by ${days}d (unverified period)`);
+    }
+  }
+
+  /**
    * Returns the total remaining months of free premium and premium+ the user has banked.
    * Calculated from the wall-clock time remaining across all active grants per tier.
    */
@@ -160,7 +147,6 @@ export class EntitlementService {
       where: { userId, revokedAt: null, endsAt: { gt: now } },
     });
 
-    const MS_PER_MONTH = 30.44 * 24 * 60 * 60 * 1000;
     let premiumMs = 0;
     let premiumPlusMs = 0;
     for (const g of grants) {
@@ -175,37 +161,12 @@ export class EntitlementService {
     };
   }
 
-  /** Revoke an active grant early. Re-resolves the user's effective tier. */
-  async revokeGrant(params: { grantId: string; userId: string }): Promise<EntitlementResult> {
-    const grant = await this.prisma.subscriptionGrant.findFirst({
-      where: { id: params.grantId, userId: params.userId },
-    });
-    if (!grant) throw new NotFoundException('Grant not found.');
-    if (grant.revokedAt) throw new BadRequestException('Grant is already revoked.');
-
-    await this.prisma.subscriptionGrant.update({
-      where: { id: params.grantId },
-      data: { revokedAt: new Date() },
-    });
-
-    return this.recomputeAndApply(params.userId);
-  }
-
   /** Get all active (non-revoked, non-expired) grants for a user, sorted with latest end first. */
   async getActiveGrants(userId: string): Promise<ActiveGrantInfo[]> {
     const now = new Date();
     const rows = await this.prisma.subscriptionGrant.findMany({
       where: { userId, revokedAt: null, endsAt: { gt: now } },
       orderBy: { endsAt: 'desc' },
-    });
-    return rows.map(this.toGrantInfo);
-  }
-
-  /** Get all grants for a user (including revoked/expired), sorted newest first. */
-  async getAllGrants(userId: string): Promise<ActiveGrantInfo[]> {
-    const rows = await this.prisma.subscriptionGrant.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
     });
     return rows.map(this.toGrantInfo);
   }
@@ -251,28 +212,22 @@ export class EntitlementService {
 
     const activeGrants = user.subscriptionGrants.map(this.toGrantInfo);
 
-    // Grants work standalone — no active Stripe subscription required.
-    // Priority: Premium+ grant > Premium grant > Stripe > none.
+    // Grants require verification — unverified users bank months but cannot use them.
+    // Priority when verified: Premium+ grant > Premium grant > Stripe > none.
     const grantTier: EffectiveTier =
-      activeGrants.length === 0
+      !verified || activeGrants.length === 0
         ? 'none'
         : activeGrants.some((g) => g.tier === 'premiumPlus')
           ? 'premiumPlus'
           : 'premium';
-    const grantExpiresAt = activeGrants.length > 0 ? activeGrants[0]!.endsAt : null;
+    const grantExpiresAt = verified && activeGrants.length > 0 ? activeGrants[0]!.endsAt : null;
 
     const effectiveTier = maxTier(grantTier, stripeTier);
     const isPremiumPlus = effectiveTier === 'premiumPlus';
     const isPremium = effectiveTier !== 'none';
 
-    // effectiveExpiresAt: for the current effective tier, what is the furthest access window.
-    // Take the maximum of stripe expiry and grant expiry.
-    let effectiveExpiresAt: Date | null = null;
-    if (stripeExpiresAt && grantExpiresAt) {
-      effectiveExpiresAt = stripeExpiresAt > grantExpiresAt ? stripeExpiresAt : grantExpiresAt;
-    } else {
-      effectiveExpiresAt = stripeExpiresAt ?? grantExpiresAt;
-    }
+    // effectiveExpiresAt: latest access window across Stripe + grant.
+    const effectiveExpiresAt = laterDate(stripeExpiresAt, grantExpiresAt);
 
     await this.prisma.user.update({
       where: { id: userId },

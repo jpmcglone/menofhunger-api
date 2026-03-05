@@ -30,6 +30,7 @@ import { AuthService } from '../auth/auth.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { SlackService } from '../../common/slack/slack.service';
 import { EntitlementService } from '../billing/entitlement.service';
+import { BillingService } from '../billing/billing.service';
 
 const searchSchema = z.object({
   q: z.string().optional(),
@@ -73,6 +74,7 @@ export class AdminUsersController {
     private readonly moduleRef: ModuleRef,
     private readonly slack: SlackService,
     private readonly entitlementService: EntitlementService,
+    private readonly billingService: BillingService,
   ) {}
 
   /** Single-user admin DTO with org affiliations included. */
@@ -296,7 +298,7 @@ export class AdminUsersController {
 
     const current = await this.prisma.user.findUnique({
       where: { id },
-      select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, isOrganization: true },
+      select: { id: true, username: true, verifiedStatus: true, unverifiedAt: true, premium: true, premiumPlus: true, isOrganization: true },
     });
     if (!current) throw new NotFoundException('User not found.');
 
@@ -358,10 +360,20 @@ export class AdminUsersController {
     try {
       await this.prisma.user.update({ where: { id }, data });
 
-      // Recompute premium/premiumPlus when verified status changes, since grants
-      // and Stripe tiers factor verification into effective access.
+      // Run verification lifecycle hooks when verifiedStatus changes.
       if (parsed.verifiedStatus !== undefined) {
-        await this.entitlementService.recomputeAndApply(id);
+        const wasVerified = current.verifiedStatus !== 'none';
+        const nowVerified = parsed.verifiedStatus !== 'none';
+        if (!wasVerified && nowVerified) {
+          // Re-verifying: restore banked grant time, resume Stripe sub, recompute tier.
+          await this.billingService.onUserVerified(id, current.unverifiedAt);
+        } else if (wasVerified && !nowVerified) {
+          // Unverifying: pause Stripe sub, recompute tier (strips premium access).
+          await this.billingService.onUserUnverified(id);
+        } else {
+          // Same verified/unverified category (e.g. identity → manual): just recompute.
+          await this.entitlementService.recomputeAndApply(id);
+        }
       }
 
       // Fetch the fresh user after all writes so the response reflects the computed state.

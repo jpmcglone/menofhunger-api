@@ -10,17 +10,12 @@ import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
-import { EntitlementService } from './entitlement.service';
+import { EntitlementService, laterDate } from './entitlement.service';
 
 type StripeCtx = { stripe: Stripe; cfg: NonNullable<ReturnType<AppConfigService['stripe']>> };
 
 function isVerified(status: VerifiedStatus | string | null | undefined): boolean {
   return Boolean(status && status !== 'none');
-}
-
-function entitledStatuses(status: string): boolean {
-  // Keep a small grace window for payment retries (past_due). Stripe may flip through states quickly.
-  return status === 'active' || status === 'trialing' || status === 'past_due';
 }
 
 @Injectable()
@@ -67,12 +62,7 @@ export class BillingService {
     const activeGrants = await this.entitlement.getActiveGrants(userId);
     const grantExpiresAt = activeGrants.length > 0 ? activeGrants[0]!.endsAt : null;
     const stripeExpiresAt = user.stripeCurrentPeriodEnd ?? null;
-    let effectiveExpiresAt: Date | null = null;
-    if (stripeExpiresAt && grantExpiresAt) {
-      effectiveExpiresAt = stripeExpiresAt > grantExpiresAt ? stripeExpiresAt : grantExpiresAt;
-    } else {
-      effectiveExpiresAt = stripeExpiresAt ?? grantExpiresAt;
-    }
+    const effectiveExpiresAt = laterDate(stripeExpiresAt, grantExpiresAt);
 
     return {
       premium: Boolean(user.premium),
@@ -113,6 +103,136 @@ export class BillingService {
     return user;
   }
 
+  /**
+   * Call after a user's verifiedStatus is set to a non-'none' value.
+   * - Extends banked grant time by the unverified window so the user doesn't lose months.
+   * - Resumes their Stripe subscription if it was paused during unverification.
+   * - Re-syncs the Stripe trial window to any remaining active grants.
+   * - Recomputes their effective premium tier.
+   *
+   * Pass previousUnverifiedAt (read before clearing it in the DB) so the extension is accurate.
+   */
+  async onUserVerified(userId: string, previousUnverifiedAt: Date | null): Promise<void> {
+    await this.entitlement.extendGrantsAfterPause(userId, previousUnverifiedAt);
+
+    // Resume Stripe subscription if it was paused during unverification (best-effort).
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { stripeSubscriptionId: true },
+      });
+      if (user?.stripeSubscriptionId) {
+        const { stripe } = this.getStripe();
+        const sub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
+        if (sub.pause_collection) {
+          await stripe.subscriptions.update(user.stripeSubscriptionId, { pause_collection: '' });
+          this.logger.log(`[billing] Resumed Stripe subscription for user ${userId}`);
+        }
+      }
+    } catch (err) {
+      this.logger.warn(`[billing] Could not resume Stripe subscription for user ${userId}: ${err}`);
+    }
+
+    // Re-sync grant trial window — grants may have been extended by the unverified pause.
+    await this.syncGrantTrialToSubscription(userId);
+
+    const result = await this.entitlement.recomputeAndApply(userId);
+    this.posthog.capture(userId, 'user_verified', {
+      is_premium: result.isPremium,
+      is_premium_plus: result.isPremiumPlus,
+      effective_tier: result.effectiveTier,
+      grant_expires_at: result.grantExpiresAt?.toISOString() ?? null,
+      stripe_expires_at: result.stripeExpiresAt?.toISOString() ?? null,
+      extended_grants_from: previousUnverifiedAt?.toISOString() ?? null,
+    });
+  }
+
+  /**
+   * Syncs the Stripe subscription's trial window to align with the user's active grants.
+   *
+   * If the user has active grants:
+   *   - Sets trial_end on the Stripe subscription to the latest grant endsAt so Stripe
+   *     won't charge until the free period runs out.
+   * If there are no active grants but the subscription is still trialing (e.g. grants
+   * were just cleared by an admin):
+   *   - Ends the trial immediately so billing resumes without waiting.
+   * If the subscription is already active with no grants:
+   *   - No-op; billing is already running on schedule.
+   *
+   * Uses proration_behavior: 'none' so no credits or refunds are issued when a trial
+   * is applied mid-period — the user's existing payment stands, future charges are
+   * simply deferred.
+   *
+   * Always best-effort — never throws.
+   */
+  async syncGrantTrialToSubscription(userId: string): Promise<void> {
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { stripeSubscriptionId: true, stripeSubscriptionStatus: true },
+      });
+
+      const subId = user?.stripeSubscriptionId;
+      const status = user?.stripeSubscriptionStatus ?? '';
+      if (!subId || !['active', 'trialing'].includes(status)) return;
+
+      const { stripe } = this.getStripe();
+      const activeGrants = await this.entitlement.getActiveGrants(userId);
+      const latestGrantEnd = activeGrants[0]?.endsAt ?? null;
+
+      if (latestGrantEnd && latestGrantEnd > new Date()) {
+        // Defer next Stripe charge until the grant window closes.
+        await stripe.subscriptions.update(subId, {
+          trial_end: Math.floor(latestGrantEnd.getTime() / 1000),
+          proration_behavior: 'none',
+        });
+        this.logger.log(`[billing] Grant trial set for user ${userId} until ${latestGrantEnd.toISOString()}`);
+      } else if (status === 'trialing') {
+        // Grants are gone but the sub is still in trial — end it now so Stripe charges.
+        await stripe.subscriptions.update(subId, { trial_end: 'now' });
+        this.logger.log(`[billing] Grant trial ended early for user ${userId} — no active grants`);
+      }
+      // status === 'active' with no grants: billing is already running, nothing to do.
+    } catch (err) {
+      this.logger.warn(`[billing] Could not sync grant trial for user ${userId}: ${err}`);
+    }
+  }
+
+  /**
+   * Call after a user's verifiedStatus is set to 'none'.
+   * - Pauses their Stripe subscription so they aren't billed while unverified.
+   * - Recomputes their effective premium tier (grants and Stripe both require verification).
+   */
+  async onUserUnverified(userId: string): Promise<void> {
+    // Snapshot premium state before changes so we know what was lost.
+    const before = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { premium: true, premiumPlus: true, stripeSubscriptionId: true },
+    });
+
+    // Pause Stripe subscription (best-effort — graceful if Stripe is not configured).
+    let stripePaused = false;
+    try {
+      if (before?.stripeSubscriptionId) {
+        const { stripe } = this.getStripe();
+        await stripe.subscriptions.update(before.stripeSubscriptionId, {
+          pause_collection: { behavior: 'void' },
+        });
+        stripePaused = true;
+        this.logger.log(`[billing] Paused Stripe subscription for user ${userId}`);
+      }
+    } catch (err) {
+      this.logger.warn(`[billing] Could not pause Stripe subscription for user ${userId}: ${err}`);
+    }
+
+    await this.entitlement.recomputeAndApply(userId);
+    this.posthog.capture(userId, 'user_unverified', {
+      had_premium: before?.premium ?? false,
+      had_premium_plus: before?.premiumPlus ?? false,
+      stripe_subscription_paused: stripePaused,
+    });
+  }
+
   async createCheckoutSession(params: { userId: string; tier: BillingTier }): Promise<BillingCheckoutSessionDto> {
     const { stripe, cfg } = this.getStripe();
     const user = await this.requireVerifiedUser(params.userId);
@@ -133,29 +253,14 @@ export class BillingService {
       });
     }
 
-    // Apply banked free-month grants as a Stripe trial period so the user is
-    // not billed until their grant window runs out.
-    //
-    // How it works:
-    //   - Grants are stacked sequentially, so the latest endsAt represents the
-    //     full remaining free window.
-    //   - We convert that to whole days and pass it as trial_period_days.
-    //   - The Stripe trial end (≈ now + trialDays) aligns with the grant endsAt,
-    //     so both expire together and billing begins at the right time.
-    //   - No explicit grant revocation is needed — they expire naturally.
+    // Convert banked grant time to a Stripe trial period so the user isn't billed
+    // until their free window runs out. Grants are ordered desc by endsAt, so
+    // index 0 is always the furthest-out expiry — no reduce needed.
     const now = new Date();
     const activeGrants = await this.entitlement.getActiveGrants(user.id);
-    let trialDays = 0;
-    if (activeGrants.length > 0) {
-      const latestEndsAt = activeGrants.reduce(
-        (latest, g) => (g.endsAt > latest ? g.endsAt : latest),
-        activeGrants[0]!.endsAt,
-      );
-      const remainingMs = latestEndsAt.getTime() - now.getTime();
-      if (remainingMs > 0) {
-        trialDays = Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
-      }
-    }
+    const latestGrantEnd = activeGrants[0]?.endsAt ?? null;
+    const remainingMs = latestGrantEnd ? latestGrantEnd.getTime() - now.getTime() : 0;
+    const trialDays = remainingMs > 0 ? Math.ceil(remainingMs / (24 * 60 * 60 * 1000)) : 0;
 
     const successUrl = `${cfg.frontendBaseUrl}/settings/billing?checkout=success`;
     const cancelUrl = `${cfg.frontendBaseUrl}/settings/billing?checkout=cancel`;
@@ -329,4 +434,3 @@ export class BillingService {
     void this.usersMeRealtime.emitMeUpdated(user.id, 'billing_tier_changed');
   }
 }
-
