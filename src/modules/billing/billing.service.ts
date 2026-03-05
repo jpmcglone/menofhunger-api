@@ -10,6 +10,7 @@ import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
+import { EntitlementService } from './entitlement.service';
 
 type StripeCtx = { stripe: Stripe; cfg: NonNullable<ReturnType<AppConfigService['stripe']>> };
 
@@ -34,6 +35,7 @@ export class BillingService {
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly posthog: PosthogService,
     private readonly slack: SlackService,
+    private readonly entitlement: EntitlementService,
   ) {}
 
   private getStripe(): StripeCtx {
@@ -61,6 +63,17 @@ export class BillingService {
       },
     });
     if (!user) throw new NotFoundException('User not found.');
+
+    const activeGrants = await this.entitlement.getActiveGrants(userId);
+    const grantExpiresAt = activeGrants.length > 0 ? activeGrants[0]!.endsAt : null;
+    const stripeExpiresAt = user.stripeCurrentPeriodEnd ?? null;
+    let effectiveExpiresAt: Date | null = null;
+    if (stripeExpiresAt && grantExpiresAt) {
+      effectiveExpiresAt = stripeExpiresAt > grantExpiresAt ? stripeExpiresAt : grantExpiresAt;
+    } else {
+      effectiveExpiresAt = stripeExpiresAt ?? grantExpiresAt;
+    }
+
     return {
       premium: Boolean(user.premium),
       premiumPlus: Boolean(user.premiumPlus),
@@ -68,6 +81,16 @@ export class BillingService {
       subscriptionStatus: user.stripeSubscriptionStatus ?? null,
       cancelAtPeriodEnd: Boolean(user.stripeCancelAtPeriodEnd),
       currentPeriodEnd: user.stripeCurrentPeriodEnd ? user.stripeCurrentPeriodEnd.toISOString() : null,
+      effectiveExpiresAt: effectiveExpiresAt ? effectiveExpiresAt.toISOString() : null,
+      grants: activeGrants.map((g) => ({
+        id: g.id,
+        tier: g.tier,
+        source: g.source,
+        months: g.months,
+        startsAt: g.startsAt.toISOString(),
+        endsAt: g.endsAt.toISOString(),
+        reason: g.reason,
+      })),
     };
   }
 
@@ -179,17 +202,34 @@ export class BillingService {
       return;
     }
 
-    if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted') {
+    if (
+      event.type === 'customer.subscription.created' ||
+      event.type === 'customer.subscription.updated' ||
+      event.type === 'customer.subscription.deleted'
+    ) {
       const sub = event.data.object as Stripe.Subscription;
       const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id ?? null;
       if (!customerId) return;
       await this.syncSubscriptionToUser({ customerId, subscriptionId: sub.id, subscription: sub });
       return;
     }
+
+    // Refresh entitlement on every successful payment to keep period dates in sync.
+    if (event.type === 'invoice.payment_succeeded') {
+      const invoice = event.data.object as Stripe.Invoice;
+      const customerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id ?? null;
+      const subscriptionId =
+        typeof (invoice as any).subscription === 'string'
+          ? (invoice as any).subscription
+          : (invoice as any).subscription?.id ?? null;
+      if (!customerId || !subscriptionId) return;
+      await this.syncSubscriptionToUser({ customerId, subscriptionId });
+      return;
+    }
   }
 
   private async syncSubscriptionToUser(params: { customerId: string; subscriptionId: string; subscription?: Stripe.Subscription }) {
-    const { stripe, cfg } = this.getStripe();
+    const { stripe } = this.getStripe();
 
     const user = await this.prisma.user.findFirst({
       where: { stripeCustomerId: params.customerId },
@@ -211,11 +251,8 @@ export class BillingService {
     const currentPeriodStartSec = (sub as any)?.current_period_start as number | null | undefined;
     const currentPeriodStart = currentPeriodStartSec ? new Date(currentPeriodStartSec * 1000) : null;
 
-    const verified = isVerified(user.verifiedStatus);
-    const entitled = verified && entitledStatuses(status) && Boolean(priceId);
-    const isPlus = entitled && priceId === cfg.pricePremiumPlusMonthly;
-    const isPremium = entitled && (priceId === cfg.pricePremiumMonthly || isPlus);
-
+    // Save Stripe state to DB first, then let EntitlementService resolve the effective tier
+    // (which may be elevated by active grants).
     await this.prisma.user.update({
       where: { id: user.id },
       data: {
@@ -225,10 +262,12 @@ export class BillingService {
         stripeCancelAtPeriodEnd: cancelAtPeriodEnd,
         stripeCurrentPeriodStart: currentPeriodStart,
         stripeCurrentPeriodEnd: currentPeriodEnd,
-        premium: isPremium,
-        premiumPlus: isPlus,
       },
     });
+
+    const result = await this.entitlement.recomputeAndApply(user.id);
+    const { isPremium, isPremiumPlus } = result;
+
     await this.publicProfileCache.invalidateForUser({ id: user.id, username: user.username ?? null });
 
     if (!user.premium && isPremium) {
@@ -236,7 +275,7 @@ export class BillingService {
         userId: user.id,
         username: user.username ?? null,
         name: user.name ?? null,
-        tier: isPlus ? 'premiumPlus' : 'premium',
+        tier: isPremiumPlus ? 'premiumPlus' : 'premium',
         source: 'stripe',
       });
     }
@@ -245,7 +284,7 @@ export class BillingService {
       stripe_status: status,
       price_id: priceId,
       is_premium: isPremium,
-      is_premium_plus: isPlus,
+      is_premium_plus: isPremiumPlus,
       cancel_at_period_end: cancelAtPeriodEnd,
     });
 

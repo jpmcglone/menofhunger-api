@@ -123,6 +123,16 @@ enum EmailActionTokenPurpose {
   unsubscribeDailyDigest
 }
 
+enum SubscriptionGrantTier {
+  premium
+  premiumPlus
+}
+
+enum SubscriptionGrantSource {
+  admin
+  referral
+}
+
 // Start minimal. Add real domain models as you solidify your product.
 model Example {
   id        String   @id @default(cuid())
@@ -253,6 +263,8 @@ model User {
   verificationRequests VerificationRequest[] @relation("VerificationRequest_user")
   verificationRequestsReviewed VerificationRequest[] @relation("VerificationRequest_reviewedBy")
   emailActionTokens EmailActionToken[]
+  subscriptionGrants SubscriptionGrant[] @relation("SubscriptionGrant_user")
+  subscriptionGrantsGiven SubscriptionGrant[] @relation("SubscriptionGrant_grantedByAdmin")
   messageParticipants MessageParticipant[] @relation("MessageParticipant_user")
   messagesSent        Message[] @relation("Message_sender")
   messageConversationsCreated MessageConversation[] @relation("MessageConversation_createdBy")
@@ -326,6 +338,42 @@ model StripeWebhookEvent {
   id        String   @id
   createdAt DateTime @default(now())
 
+  @@index([createdAt])
+}
+
+/**
+ * Time-boxed premium entitlement grant (admin comp, future referral rewards, etc.).
+ * Grants stack: the latest active endsAt determines effective access window.
+ * source=admin: created by a site admin; source=referral: future automated rewards.
+ */
+model SubscriptionGrant {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation("SubscriptionGrant_user", fields: [userId], references: [id], onDelete: Cascade)
+
+  tier   SubscriptionGrantTier
+  source SubscriptionGrantSource
+
+  /** Number of months this grant covers. */
+  months Int
+
+  startsAt DateTime
+  endsAt   DateTime
+
+  /** Optional internal note (reason for the grant). */
+  reason String? @db.Text
+
+  /** Admin who created this grant (null for automated sources). */
+  grantedByAdminId String?
+  grantedByAdmin   User?   @relation("SubscriptionGrant_grantedByAdmin", fields: [grantedByAdminId], references: [id], onDelete: SetNull)
+
+  /** Set when an admin revokes the grant early (null = still active). */
+  revokedAt DateTime?
+
+  @@index([userId, endsAt])
+  @@index([userId, revokedAt, endsAt])
   @@index([createdAt])
 }
 

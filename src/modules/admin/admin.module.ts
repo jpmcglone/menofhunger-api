@@ -28,6 +28,8 @@ import { AdminEmailSamplesController } from './admin-email-samples.controller';
 import { EmailModule } from '../email/email.module';
 import { AdminDailyDigestCron } from './admin-digest-email.cron';
 import { AdminAnalyticsController } from './admin-analytics.controller';
+import { AdminBillingController } from './admin-billing.controller';
+import { BillingModule } from '../billing/billing.module';
 
 @Module({
   imports: [
@@ -45,6 +47,7 @@ import { AdminAnalyticsController } from './admin-analytics.controller';
     LinkMetadataModule,
     DailyContentModule,
     EmailModule,
+    BillingModule,
   ],
   controllers: [
     AdminUsersController,
@@ -58,6 +61,7 @@ import { AdminAnalyticsController } from './admin-analytics.controller';
     AdminDailyContentController,
     AdminEmailSamplesController,
     AdminAnalyticsController,
+    AdminBillingController,
   ],
   providers: [AdminGuard, AdminImageReviewService, AdminHashtagsService, AdminDailyDigestCron],
   exports: [AdminDailyDigestCron],

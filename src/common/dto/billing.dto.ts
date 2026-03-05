@@ -1,4 +1,20 @@
 export type BillingTier = 'premium' | 'premiumPlus';
+export type SubscriptionGrantSource = 'admin' | 'referral';
+
+export type ActiveSubscriptionGrantDto = {
+  id: string;
+  tier: BillingTier;
+  source: SubscriptionGrantSource;
+  months: number;
+  startsAt: string;
+  endsAt: string;
+  reason: string | null;
+};
+
+export type AdminSubscriptionGrantDto = ActiveSubscriptionGrantDto & {
+  grantedByAdminId: string | null;
+  createdAt: string;
+};
 
 export type BillingMeDto = {
   premium: boolean;
@@ -7,7 +23,12 @@ export type BillingMeDto = {
   /** Stripe subscription status (when known). */
   subscriptionStatus: string | null;
   cancelAtPeriodEnd: boolean;
+  /** When the current Stripe billing period ends (null if no active Stripe sub). */
   currentPeriodEnd: string | null;
+  /** Latest access expiry across Stripe + active grants. */
+  effectiveExpiresAt: string | null;
+  /** Active (non-expired, non-revoked) subscription grants. */
+  grants: ActiveSubscriptionGrantDto[];
 };
 
 export type BillingCheckoutSessionDto = {
@@ -18,3 +39,7 @@ export type BillingPortalSessionDto = {
   url: string;
 };
 
+export type AdminGrantMonthsDto = {
+  grants: AdminSubscriptionGrantDto[];
+  effectiveExpiresAt: string | null;
+};
