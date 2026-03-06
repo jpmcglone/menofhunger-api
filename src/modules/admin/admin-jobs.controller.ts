@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JobsStatusService } from '../jobs/jobs-status.service';
 import { JOBS } from '../jobs/jobs.constants';
+import { EntitlementService } from '../billing/entitlement.service';
 
 const hashtagBackfillSchema = z.object({
   /** Existing run id. If omitted, a new run is started. */
@@ -43,6 +44,7 @@ export class AdminJobsController {
     private readonly adminHashtags: AdminHashtagsService,
     private readonly jobs: JobsService,
     private readonly jobsStatus: JobsStatusService,
+    private readonly entitlement: EntitlementService,
   ) {}
 
   @Get('hashtags/backfill')
@@ -190,6 +192,35 @@ export class AdminJobsController {
   async runLinkMetadataBackfill() {
     const job = await this.jobs.enqueue(JOBS.linkMetadataBackfill, {}, { removeOnComplete: true, removeOnFail: false });
     return { data: { ok: true, jobId: String(job.id) } };
+  }
+
+  /**
+   * Recompute entitlements for every user who has premium/premiumPlus set in the
+   * database but has no active Stripe subscription and no active grants. These are
+   * legacy users whose premium flag was set directly in the DB before the entitlement
+   * system existed. The recompute will clear the stale flag down to verified.
+   */
+  @Post('entitlements-backfill')
+  async runEntitlementsBackfill() {
+    const now = new Date();
+
+    // Find users whose premium flag is stale: premium but no active Stripe sub and no active grants.
+    const staleUsers = await this.prisma.user.findMany({
+      where: {
+        OR: [{ premium: true }, { premiumPlus: true }],
+        stripeSubscriptionStatus: { notIn: ['active', 'trialing', 'past_due'] },
+        subscriptionGrants: { none: { revokedAt: null, endsAt: { gt: now } } },
+      },
+      select: { id: true },
+    });
+
+    let fixed = 0;
+    for (const user of staleUsers) {
+      await this.entitlement.recomputeAndApply(user.id);
+      fixed++;
+    }
+
+    return { data: { ok: true, scanned: staleUsers.length, fixed } };
   }
 }
 
