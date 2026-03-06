@@ -205,11 +205,19 @@ export class AdminJobsController {
     const now = new Date();
 
     // Find users whose premium flag is stale: premium but no active Stripe sub and no active grants.
+    // NOTE: Prisma/SQL `notIn` does not match NULL rows, so we must explicitly include the null case.
     const staleUsers = await this.prisma.user.findMany({
       where: {
         OR: [{ premium: true }, { premiumPlus: true }],
-        stripeSubscriptionStatus: { notIn: ['active', 'trialing', 'past_due'] },
-        subscriptionGrants: { none: { revokedAt: null, endsAt: { gt: now } } },
+        AND: [
+          {
+            OR: [
+              { stripeSubscriptionStatus: null },
+              { stripeSubscriptionStatus: { notIn: ['active', 'trialing', 'past_due'] } },
+            ],
+          },
+          { subscriptionGrants: { none: { revokedAt: null, endsAt: { gt: now } } } },
+        ],
       },
       select: { id: true },
     });
