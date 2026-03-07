@@ -17,6 +17,7 @@ import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.includ
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
+import { computeCheckinStreakStats } from '../checkins/checkin-streaks';
 import { toUserDto } from '../../common/dto/user.dto';
 import { PostViewsService } from '../post-views/post-views.service';
 import { JobsService } from '../jobs/jobs.service';
@@ -59,6 +60,28 @@ export class PostsService {
    */
   private notDeletedWhere(): Prisma.PostWhereInput {
     return { deletedAt: null };
+  }
+
+  private async recomputeStreakFromPostsTx(tx: Prisma.TransactionClient, userId: string, now: Date): Promise<void> {
+    const posts = await tx.post.findMany({
+      where: { userId, visibility: { not: 'onlyMe' }, deletedAt: null, isDraft: false },
+      select: { createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const dayKeys = [...new Set(posts.map((p) => easternDayKey(p.createdAt)))].sort();
+    const stats = computeCheckinStreakStats({
+      dayKeys,
+      todayKey: easternDayKey(now),
+      yesterdayKey: yesterdayEasternDayKey(now),
+    });
+    await tx.user.update({
+      where: { id: userId },
+      data: {
+        checkinStreakDays: stats.currentStreakDays,
+        longestStreakDays: stats.longestStreakDays,
+        lastCheckinDayKey: stats.lastCheckinDayKey,
+      },
+    });
   }
 
   /**
@@ -2310,6 +2333,10 @@ export class PostsService {
         await tx.hashtagVariant.deleteMany({ where: { tag: { in: tags }, count: { lte: 0 } } });
         await tx.hashtag.deleteMany({ where: { tag: { in: tags }, usageCount: { lte: 0 } } });
       }
+
+      // Deleted posts should no longer contribute to current/best streaks.
+      // Recompute from remaining non-deleted, non-onlyMe post days.
+      await this.recomputeStreakFromPostsTx(tx as Prisma.TransactionClient, userId, now);
     });
 
     // Delete all notifications that reference this post (as subject) or were caused by this post (as actorPost).

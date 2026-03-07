@@ -8,7 +8,8 @@ import { JobsService } from '../jobs/jobs.service';
 import { JobsStatusService } from '../jobs/jobs-status.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { EntitlementService } from '../billing/entitlement.service';
-import { easternDayKey } from '../../common/time/eastern-day-key';
+import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
+import { computeCheckinStreakStats } from '../checkins/checkin-streaks';
 
 const hashtagBackfillSchema = z.object({
   /** Existing run id. If omitted, a new run is started. */
@@ -243,48 +244,57 @@ export class AdminJobsController {
    */
   @Post('streaks-backfill')
   async runStreaksBackfill() {
-    const users = await this.prisma.user.findMany({ select: { id: true } });
+    const now = new Date();
+    const todayKey = easternDayKey(now);
+    const yesterdayKey = yesterdayEasternDayKey(now);
+    const users = await this.prisma.user.findMany({
+      select: { id: true, checkinStreakDays: true, longestStreakDays: true, lastCheckinDayKey: true },
+    });
 
     let updated = 0;
 
-    for (const { id: userId } of users) {
+    for (const user of users) {
+      const userId = user.id;
       const posts = await this.prisma.post.findMany({
-        where: { userId, visibility: { not: 'onlyMe' } },
+        where: { userId, visibility: { not: 'onlyMe' }, deletedAt: null, isDraft: false },
         select: { createdAt: true },
         orderBy: { createdAt: 'asc' },
       });
 
-      if (posts.length === 0) continue;
-
       // Deduplicate to one entry per ET calendar day then sort.
-      const dayKeys = [
-        ...new Set(posts.map((p) => easternDayKey(p.createdAt))),
-      ].sort();
-
-      // Walk sorted day keys to reconstruct streak progression.
-      let streak = 1;
-      let longestStreak = 1;
-
-      for (let i = 1; i < dayKeys.length; i++) {
-        // Compare as UTC-noon dates so DST transitions don't affect the diff.
-        const prevMs = new Date(dayKeys[i - 1] + 'T12:00:00Z').getTime();
-        const currMs = new Date(dayKeys[i] + 'T12:00:00Z').getTime();
-        const diffDays = Math.round((currMs - prevMs) / 86_400_000);
-        streak = diffDays === 1 ? streak + 1 : 1;
-        if (streak > longestStreak) longestStreak = streak;
-      }
-
-      const lastCheckinDayKey = dayKeys[dayKeys.length - 1];
+      const dayKeys = [...new Set(posts.map((p) => easternDayKey(p.createdAt)))].sort();
+      const stats = computeCheckinStreakStats({ dayKeys, todayKey, yesterdayKey });
+      const noChange =
+        (user.checkinStreakDays ?? 0) === stats.currentStreakDays &&
+        (user.longestStreakDays ?? 0) === stats.longestStreakDays &&
+        (user.lastCheckinDayKey ?? null) === stats.lastCheckinDayKey;
+      if (noChange) continue;
 
       await this.prisma.user.update({
         where: { id: userId },
-        data: { checkinStreakDays: streak, longestStreakDays: longestStreak, lastCheckinDayKey },
+        data: {
+          checkinStreakDays: stats.currentStreakDays,
+          longestStreakDays: stats.longestStreakDays,
+          lastCheckinDayKey: stats.lastCheckinDayKey,
+        },
       });
 
       updated++;
     }
 
     return { data: { ok: true, scanned: users.length, updated } };
+  }
+
+  /**
+   * Emergency/admin utility: reset all user coin balances to a fixed baseline.
+   * Useful when transitioning coin economics to a fully grant-driven model.
+   */
+  @Post('coins-reset')
+  async runCoinsReset() {
+    const result = await this.prisma.user.updateMany({
+      data: { coins: 1 },
+    });
+    return { data: { ok: true, updated: result.count, newValue: 1 } };
   }
 }
 
