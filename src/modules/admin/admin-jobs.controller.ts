@@ -8,6 +8,7 @@ import { JobsService } from '../jobs/jobs.service';
 import { JobsStatusService } from '../jobs/jobs-status.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { EntitlementService } from '../billing/entitlement.service';
+import { easternDayKey } from '../../common/time/eastern-day-key';
 
 const hashtagBackfillSchema = z.object({
   /** Existing run id. If omitted, a new run is started. */
@@ -229,6 +230,61 @@ export class AdminJobsController {
     }
 
     return { data: { ok: true, scanned: staleUsers.length, fixed } };
+  }
+
+  /**
+   * Recompute checkinStreakDays, longestStreakDays, and lastCheckinDayKey for every
+   * user by walking their full post history (any non-onlyMe post counts, same rule
+   * as live streak awarding). Useful to backfill users who posted before the streak
+   * feature launched or whose streak fields are otherwise stale/missing.
+   *
+   * The nightly streak-reset cron will still zero out stale current streaks after
+   * this runs — no double-handling needed.
+   */
+  @Post('streaks-backfill')
+  async runStreaksBackfill() {
+    const users = await this.prisma.user.findMany({ select: { id: true } });
+
+    let updated = 0;
+
+    for (const { id: userId } of users) {
+      const posts = await this.prisma.post.findMany({
+        where: { authorId: userId, visibility: { not: 'onlyMe' } },
+        select: { createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      if (posts.length === 0) continue;
+
+      // Deduplicate to one entry per ET calendar day then sort.
+      const dayKeys = [
+        ...new Set(posts.map((p) => easternDayKey(p.createdAt))),
+      ].sort();
+
+      // Walk sorted day keys to reconstruct streak progression.
+      let streak = 1;
+      let longestStreak = 1;
+
+      for (let i = 1; i < dayKeys.length; i++) {
+        // Compare as UTC-noon dates so DST transitions don't affect the diff.
+        const prevMs = new Date(dayKeys[i - 1] + 'T12:00:00Z').getTime();
+        const currMs = new Date(dayKeys[i] + 'T12:00:00Z').getTime();
+        const diffDays = Math.round((currMs - prevMs) / 86_400_000);
+        streak = diffDays === 1 ? streak + 1 : 1;
+        if (streak > longestStreak) longestStreak = streak;
+      }
+
+      const lastCheckinDayKey = dayKeys[dayKeys.length - 1];
+
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { checkinStreakDays: streak, longestStreakDays: longestStreak, lastCheckinDayKey },
+      });
+
+      updated++;
+    }
+
+    return { data: { ok: true, scanned: users.length, updated } };
   }
 }
 

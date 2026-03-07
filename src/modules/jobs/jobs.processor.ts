@@ -88,6 +88,9 @@ export class JobsProcessor extends WorkerHost {
         case JOBS.notificationsStreakReminderEmail:
           await this.notificationsEmail.runSendStreakReminderEmail();
           return { ok: true };
+        case JOBS.notificationsProfileReminderEmail:
+          await this.notificationsEmail.runSendProfileReminderEmail();
+          return { ok: true };
         case JOBS.dailyContentRefresh:
           await this.dailyContent.runRefreshDailyContent();
           return { ok: true };

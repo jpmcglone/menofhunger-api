@@ -227,6 +227,10 @@ model User {
   lastCheckinDayKey String?
   /** Longest streak achieved (private). */
   longestStreakDays Int @default(0)
+  /** One-time profile reminder email sent at ~24h after signup. */
+  profileReminder24hSentAt DateTime?
+  /** One-time profile reminder email sent at ~7d after signup. */
+  profileReminder7dSentAt DateTime?
   dailyActivityDays UserDailyActivity[]
   sessions  Session[]
   posts     Post[]

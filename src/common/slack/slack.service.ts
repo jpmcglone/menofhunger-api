@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { AppConfigService } from '../../modules/app/app-config.service';
+import { describeMissingProfileFields, type MissingProfileField } from '../../modules/email/email-content';
 
 type SlackBlock = Record<string, unknown>;
 
@@ -39,6 +40,14 @@ export interface SlackFeedbackPayload {
   details: string;
   email: string | null;
   userId?: string | null;
+}
+
+export interface SlackProfileReminderPayload {
+  userId: string;
+  username: string | null;
+  email: string | null;
+  checkpoint: '24h' | '7d';
+  missingFields: MissingProfileField[];
 }
 
 export interface SlackDailyDigestPayload {
@@ -92,15 +101,8 @@ export class SlackService {
     const adminLink = this.link(`/admin/users`, 'View in Admin →');
 
     void this.send(':wave: New sign-up', [
-      {
-        type: 'section',
-        text: { type: 'mrkdwn', text: ':wave: *New Sign-Up*\nA new account was created.' },
-        ...(adminLink ? { accessory: this.button('View in Admin', `/admin/users`) } : {}),
-      },
-      {
-        type: 'context',
-        elements: [{ type: 'mrkdwn', text: [`\`${userId}\``, adminLink, ts].filter(Boolean).join(' · ') }],
-      },
+      this.section(':wave: *New Sign-Up*\nA new account was created.', this.button('View in Admin', `/admin/users`)),
+      this.contextBlock(`\`${userId}\``, adminLink, ts),
     ]);
   }
 
@@ -115,17 +117,17 @@ export class SlackService {
       headerSection.accessory = { type: 'image', image_url: avatarUrl, alt_text: username ?? 'avatar' };
     }
 
-    const fields: SlackBlock[] = [
-      { type: 'mrkdwn', text: `*Username*\n${username ? this.link(`/u/${username}`, `@${username}`) ?? `@${username}` : '—'}` },
-      { type: 'mrkdwn', text: `*Name*\n${name || '—'}` },
+    const fields: Array<[string, string]> = [
+      ['Username', this.userReference(username)],
+      ['Name', name || '—'],
     ];
-    if (email) fields.push({ type: 'mrkdwn', text: `*Email*\n${email}` });
-    if (location) fields.push({ type: 'mrkdwn', text: `*Location*\n${location}` });
+    if (email) fields.push(['Email', email]);
+    if (location) fields.push(['Location', location]);
 
     const blocks: SlackBlock[] = [
       headerSection,
       { type: 'divider' },
-      { type: 'section', fields },
+      this.fieldsSection(fields),
     ];
 
     if (interests.length > 0) {
@@ -135,17 +137,9 @@ export class SlackService {
       });
     }
 
-    const contextParts: string[] = [`\`${userId}\``];
     const profileLink = username ? this.link(`/u/${username}`, 'View profile') : null;
     const adminLink = this.link(`/admin/users`, 'Admin');
-    if (profileLink) contextParts.push(profileLink);
-    if (adminLink) contextParts.push(adminLink);
-    contextParts.push(ts);
-
-    blocks.push({
-      type: 'context',
-      elements: [{ type: 'mrkdwn', text: contextParts.join(' · ') }],
-    });
+    blocks.push(this.contextBlock(`\`${userId}\``, profileLink, adminLink, ts));
 
     void this.send(`Profile complete: @${username ?? userId}`, blocks);
   }
@@ -156,33 +150,19 @@ export class SlackService {
     const sourceLabel = source === 'stripe' ? 'via Stripe' : 'via Admin';
     const emoji = tier === 'premiumPlus' ? ':star2:' : ':star:';
 
-    const contextParts: string[] = [`\`${userId}\``];
     const profileLink = username ? this.link(`/u/${username}`, 'View profile') : null;
     const adminLink = this.link(`/admin/users`, 'Admin');
-    if (profileLink) contextParts.push(profileLink);
-    if (adminLink) contextParts.push(adminLink);
-    contextParts.push(ts);
 
     void this.send(`${emoji} New ${tierLabel} subscriber`, [
-      {
-        type: 'section',
-        text: { type: 'mrkdwn', text: `${emoji} *New ${tierLabel} Subscriber*` },
-        ...(username && this.baseUrl ? { accessory: this.button('View Profile', `/u/${username}`) } : {}),
-      },
+      this.section(`${emoji} *New ${tierLabel} Subscriber*`, username ? this.button('View Profile', `/u/${username}`) : undefined),
       { type: 'divider' },
-      {
-        type: 'section',
-        fields: [
-          { type: 'mrkdwn', text: `*Username*\n${username ? this.link(`/u/${username}`, `@${username}`) ?? `@${username}` : '—'}` },
-          { type: 'mrkdwn', text: `*Name*\n${name || '—'}` },
-          { type: 'mrkdwn', text: `*Tier*\n${tierLabel}` },
-          { type: 'mrkdwn', text: `*Source*\n${sourceLabel}` },
-        ],
-      },
-      {
-        type: 'context',
-        elements: [{ type: 'mrkdwn', text: contextParts.join(' · ') }],
-      },
+      this.fieldsSection([
+        ['Username', this.userReference(username)],
+        ['Name', name || '—'],
+        ['Tier', tierLabel],
+        ['Source', sourceLabel],
+      ]),
+      this.contextBlock(`\`${userId}\``, profileLink, adminLink, ts),
     ]);
   }
 
@@ -193,27 +173,17 @@ export class SlackService {
     const reviewLink = this.link(`/admin/reports`, 'Review Reports →');
 
     void this.send(':rotating_light: New report submitted', [
-      {
-        type: 'section',
-        text: { type: 'mrkdwn', text: ':rotating_light: *New Report Submitted*' },
-        ...(this.baseUrl ? { accessory: this.button('Review Reports', `/admin/reports`) } : {}),
-      },
+      this.section(':rotating_light: *New Report Submitted*', this.button('Review Reports', `/admin/reports`)),
       { type: 'divider' },
-      {
-        type: 'section',
-        fields: [
-          { type: 'mrkdwn', text: `*Target*\n${targetLabel}` },
-          { type: 'mrkdwn', text: `*Reason*\n${reason}` },
-        ],
-      },
+      this.fieldsSection([
+        ['Target', targetLabel],
+        ['Reason', reason],
+      ]),
       {
         type: 'section',
         text: { type: 'mrkdwn', text: `*Details*\n${snippet}` },
       },
-      {
-        type: 'context',
-        elements: [{ type: 'mrkdwn', text: [`Reporter: \`${reporterUserId}\``, reviewLink, ts].filter(Boolean).join(' · ') }],
-      },
+      this.contextBlock(`Reporter: \`${reporterUserId}\``, reviewLink, ts),
     ]);
   }
 
@@ -223,22 +193,12 @@ export class SlackService {
     const reviewLink = this.link(`/admin/verification`, 'Review Requests →');
 
     void this.send(':shield: Verification request submitted', [
-      {
-        type: 'section',
-        text: { type: 'mrkdwn', text: ':shield: *Verification Request Submitted*' },
-        ...(this.baseUrl ? { accessory: this.button('Review Requests', `/admin/verification`) } : {}),
-      },
-      {
-        type: 'section',
-        fields: [
-          { type: 'mrkdwn', text: `*User ID*\n\`${userId}\`` },
-          { type: 'mrkdwn', text: `*Provider hint*\n${providerText}` },
-        ],
-      },
-      {
-        type: 'context',
-        elements: [{ type: 'mrkdwn', text: [reviewLink, ts].filter(Boolean).join(' · ') }],
-      },
+      this.section(':shield: *Verification Request Submitted*', this.button('Review Requests', `/admin/verification`)),
+      this.fieldsSection([
+        ['User ID', `\`${userId}\``],
+        ['Provider hint', providerText],
+      ]),
+      this.contextBlock(reviewLink, ts),
     ]);
   }
 
@@ -249,27 +209,36 @@ export class SlackService {
     const reviewLink = this.link(`/admin/feedback`, 'Review Feedback →');
 
     void this.send(':speech_balloon: New feedback submitted', [
-      {
-        type: 'section',
-        text: { type: 'mrkdwn', text: ':speech_balloon: *New Feedback Submitted*' },
-        ...(this.baseUrl ? { accessory: this.button('Review Feedback', `/admin/feedback`) } : {}),
-      },
+      this.section(':speech_balloon: *New Feedback Submitted*', this.button('Review Feedback', `/admin/feedback`)),
       { type: 'divider' },
-      {
-        type: 'section',
-        fields: [
-          { type: 'mrkdwn', text: `*Category*\n${category}` },
-          { type: 'mrkdwn', text: `*From*\n${submitter}` },
-        ],
-      },
+      this.fieldsSection([
+        ['Category', category],
+        ['From', submitter],
+      ]),
       {
         type: 'section',
         text: { type: 'mrkdwn', text: `*"${subject}"*\n${snippet}` },
       },
-      {
-        type: 'context',
-        elements: [{ type: 'mrkdwn', text: [reviewLink, ts].filter(Boolean).join(' · ') }],
-      },
+      this.contextBlock(reviewLink, ts),
+    ]);
+  }
+
+  notifyProfileReminderSent({ userId, username, email, checkpoint, missingFields }: SlackProfileReminderPayload): void {
+    const ts = this.formatTime(new Date());
+    const checkpointLabel = checkpoint === '24h' ? '24-hour' : '7-day';
+    const missingLabel = describeMissingProfileFields(missingFields);
+    const profileLink = username ? this.link(`/u/${username}`, `@${username}`) : null;
+    const adminLink = this.link(`/admin/users`, 'Admin');
+
+    void this.send(`:envelope: Profile reminder sent (${checkpointLabel})`, [
+      this.section(`:envelope: *Profile Reminder Sent (${checkpointLabel})*`),
+      this.fieldsSection([
+        ['User', profileLink ?? this.userReference(username, userId)],
+        ['Email', email ?? '—'],
+        ['Missing', missingLabel],
+        ['Checkpoint', `${checkpointLabel} after signup`],
+      ]),
+      this.contextBlock(`\`${userId}\``, adminLink, ts),
     ]);
   }
 
@@ -287,7 +256,7 @@ export class SlackService {
     blocks.push({ type: 'divider' });
 
     // Yesterday's Activity
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Yesterday\'s Activity*' } });
+      blocks.push(this.section('*Yesterday\'s Activity*'));
     const activityFields: SlackBlock[] = [
       { type: 'mrkdwn', text: `*New Members*\n${base ? `<${base}/admin/users|${p.totalNewUserCount}>` : String(p.totalNewUserCount)}` },
       { type: 'mrkdwn', text: `*New Posts*\n${p.newPostCount}` },
@@ -296,11 +265,11 @@ export class SlackService {
     if (p.bannedUserCount > 0) {
       activityFields.push({ type: 'mrkdwn', text: `*Users Banned*\n:rotating_light: ${p.bannedUserCount}` });
     }
-    blocks.push({ type: 'section', fields: activityFields });
+    blocks.push(this.fieldsFromBlocks(activityFields));
     blocks.push({ type: 'divider' });
 
     // Revenue & Subscriptions
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Revenue & Subscriptions*' } });
+    blocks.push(this.section('*Revenue & Subscriptions*'));
     const revenueFields: SlackBlock[] = [
       { type: 'mrkdwn', text: `*Active Premium*\n${p.activePremiumCount}` },
       { type: 'mrkdwn', text: `*Active Premium+*\n${p.activePremiumPlusCount}` },
@@ -312,7 +281,7 @@ export class SlackService {
     if (p.pendingCancellationCount > 0) {
       revenueFields.push({ type: 'mrkdwn', text: `*Cancelling*\n:warning: ${p.pendingCancellationCount}` });
     }
-    blocks.push({ type: 'section', fields: revenueFields });
+    blocks.push(this.fieldsFromBlocks(revenueFields));
 
     // Open Backlog
     const hasBacklog = p.pendingReportCount > 0 || p.unreviewedFeedbackCount > 0 || p.pendingVerificationCount > 0;
@@ -331,7 +300,7 @@ export class SlackService {
         const n = p.pendingVerificationCount;
         backlogLines.push(`:large_blue_circle: ${base ? `<${base}/admin/verification|${n} pending verification${n !== 1 ? 's' : ''}>` : `${n} pending verifications`}`);
       }
-      blocks.push({ type: 'section', text: { type: 'mrkdwn', text: backlogLines.join('\n') } });
+      blocks.push(this.section(backlogLines.join('\n')));
     }
 
     // Top Post
@@ -350,14 +319,11 @@ export class SlackService {
         stats,
         ...(postUrl ? [`<${postUrl}|View post →>`] : []),
       ].join('\n');
-      blocks.push({ type: 'section', text: { type: 'mrkdwn', text: bodyText } });
+      blocks.push(this.section(bodyText));
     }
 
     // Footer
-    blocks.push({
-      type: 'context',
-      elements: [{ type: 'mrkdwn', text: `Men of Hunger · ${ts}` }],
-    });
+    blocks.push(this.contextBlock(`Men of Hunger`, ts));
 
     void this.send(`Daily Digest — ${p.dateLabel}`, blocks);
   }
@@ -375,7 +341,8 @@ export class SlackService {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        this.logger.warn(`Slack webhook returned ${res.status}`);
+        const responseText = this.truncate(await res.text().catch(() => ''), 200);
+        this.logger.warn(`Slack webhook returned ${res.status}${responseText ? `: ${responseText}` : ''}`);
       }
     } catch (err) {
       this.logger.warn(`Slack webhook failed: ${(err as Error)?.message}`);
@@ -388,6 +355,38 @@ export class SlackService {
   private link(path: string, label: string): string | null {
     if (!this.baseUrl) return null;
     return `<${this.baseUrl}${path}|${label}>`;
+  }
+
+  private section(text: string, accessory?: SlackBlock): SlackBlock {
+    return {
+      type: 'section',
+      text: { type: 'mrkdwn', text },
+      ...(accessory ? { accessory } : {}),
+    };
+  }
+
+  private field(label: string, value: string): SlackBlock {
+    return { type: 'mrkdwn', text: `*${label}*\n${value}` };
+  }
+
+  private fieldsSection(fields: Array<[label: string, value: string]>): SlackBlock {
+    return { type: 'section', fields: fields.map(([label, value]) => this.field(label, value)) };
+  }
+
+  private fieldsFromBlocks(fields: SlackBlock[]): SlackBlock {
+    return { type: 'section', fields };
+  }
+
+  private contextBlock(...parts: Array<string | null | undefined | false>): SlackBlock {
+    return {
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: parts.filter(Boolean).join(' · ') }],
+    };
+  }
+
+  private userReference(username: string | null, fallbackUserId?: string): string {
+    if (username) return this.link(`/u/${username}`, `@${username}`) ?? `@${username}`;
+    return fallbackUserId ? `\`${fallbackUserId}\`` : '—';
   }
 
   /** Returns a Slack button accessory block, or undefined if baseUrl is not configured. */

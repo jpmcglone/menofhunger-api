@@ -4,6 +4,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { AppConfigService } from '../app/app-config.service';
+import { buildProfileReminderEmail, getMissingProfileFields } from '../email/email-content';
+import { buildGreeting, getRecipientEmail, getVerifiedRecipientEmail } from '../email/email-send.helpers';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { DailyContentService } from '../daily-content/daily-content.service';
@@ -13,6 +15,7 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { CHECKIN_PROMPTS } from '../checkins/checkin-prompts';
 import { dayIndexEastern, easternDayKey as easternDayKey2 } from '../../common/time/eastern-day-key';
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
+import { SlackService } from '../../common/slack/slack.service';
 
 function safeBaseUrl(raw: string | null): string {
   const base = (raw ?? '').trim() || 'https://menofhunger.com';
@@ -125,7 +128,37 @@ export class NotificationsEmailCron {
     private readonly jobs: JobsService,
     private readonly dailyContent: DailyContentService,
     private readonly messages: MessagesService,
+    private readonly slack: SlackService,
   ) {}
+
+  private notificationsFromAddress(): string | undefined {
+    return this.appConfig.email()?.fromEmail.notifications ?? undefined;
+  }
+
+  private async sendEmailAndHandle(params: {
+    to: string;
+    subject: string;
+    text: string;
+    html: string;
+    userId: string;
+    logTag: string;
+    onSent?: () => Promise<void>;
+  }): Promise<void> {
+    const sent = await this.email.sendText({
+      to: params.to,
+      subject: params.subject,
+      text: params.text,
+      html: params.html,
+      from: this.notificationsFromAddress(),
+    });
+
+    if (sent.sent) {
+      if (params.onSent) await params.onSent();
+      return;
+    }
+
+    this.logger.debug(`[${params.logTag}] not sent to userId=${params.userId} reason=${sent.reason ?? 'unknown'}`);
+  }
 
   private async listRecentNotificationItemsByRecipientIds(
     recipientIdsRaw: string[],
@@ -270,7 +303,7 @@ export class NotificationsEmailCron {
 
       const recentByRecipientId = await this.listRecentNotificationItemsByRecipientIds(recipients.map((u) => u.id));
       for (const u of recipients) {
-        const to = (u.email ?? '').trim();
+        const to = getRecipientEmail(u.email);
         if (!to) continue;
 
         const undelivered = Math.max(0, Math.floor(u.undeliveredNotificationCount ?? 0));
@@ -294,8 +327,7 @@ export class NotificationsEmailCron {
           return `- ${it.text}${direct}`;
         });
 
-        const greetingName = (u.name ?? u.username ?? '').trim();
-        const greeting = greetingName ? `Hey ${greetingName},` : `Hey,`;
+        const greeting = buildGreeting({ name: u.name, username: u.username, tone: 'hey' });
 
         const text = [
           greeting,
@@ -341,23 +373,21 @@ export class NotificationsEmailCron {
           footerHtml: `Men of Hunger`,
         });
 
-        const sent = await this.email.sendText({
+        await this.sendEmailAndHandle({
           to,
           subject: `You have ${undelivered} new notification${undelivered === 1 ? '' : 's'}`,
           text,
           html,
-          from: this.appConfig.email()?.fromEmail.notifications ?? undefined,
+          userId: u.id,
+          logTag: 'email-nudges',
+          onSent: async () => {
+            await this.prisma.notificationPreferences.upsert({
+              where: { userId: u.id },
+              create: { userId: u.id, lastEmailNewNotificationsSentAt: now },
+              update: { lastEmailNewNotificationsSentAt: now },
+            });
+          },
         });
-
-        if (sent.sent) {
-          await this.prisma.notificationPreferences.upsert({
-            where: { userId: u.id },
-            create: { userId: u.id, lastEmailNewNotificationsSentAt: now },
-            update: { lastEmailNewNotificationsSentAt: now },
-          });
-        } else {
-          this.logger.debug(`[email-nudges] not sent to userId=${u.id} reason=${sent.reason ?? 'unknown'}`);
-        }
       }
     } catch (err) {
       this.logger.error(
@@ -501,7 +531,7 @@ export class NotificationsEmailCron {
       cursorId = recipients[recipients.length - 1]?.id ?? null;
 
       for (const u of recipients) {
-        const to = (u.email ?? '').trim();
+        const to = getRecipientEmail(u.email);
         if (!to) continue;
         if (u.notificationPreferences && !u.notificationPreferences.emailStreakReminder) continue;
 
@@ -522,8 +552,7 @@ export class NotificationsEmailCron {
           currentStreakDays: currentStreak,
         });
 
-        const greetingName = (u.name ?? u.username ?? '').trim();
-        const greeting = greetingName ? `Hey ${greetingName},` : `Hey,`;
+        const greeting = buildGreeting({ name: u.name, username: u.username, tone: 'hey' });
 
         const subject = `Don’t lose your streak (${currentStreak} day${currentStreak === 1 ? '' : 's'})`;
 
@@ -566,23 +595,21 @@ export class NotificationsEmailCron {
           )}" style="color:#9ca3af;text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
         });
 
-        const sent = await this.email.sendText({
+        await this.sendEmailAndHandle({
           to,
           subject,
           text,
           html,
-          from: this.appConfig.email()?.fromEmail.notifications ?? undefined,
+          userId: u.id,
+          logTag: 'streak-reminder',
+          onSent: async () => {
+            await this.prisma.notificationPreferences.upsert({
+              where: { userId: u.id },
+              create: { userId: u.id, lastEmailStreakReminderSentAt: now },
+              update: { lastEmailStreakReminderSentAt: now },
+            });
+          },
         });
-
-        if (sent.sent) {
-          await this.prisma.notificationPreferences.upsert({
-            where: { userId: u.id },
-            create: { userId: u.id, lastEmailStreakReminderSentAt: now },
-            update: { lastEmailStreakReminderSentAt: now },
-          });
-        } else {
-          this.logger.debug(`[streak-reminder] not sent to userId=${u.id} reason=${sent.reason ?? 'unknown'}`);
-        }
       }
     }
     } catch (err) {
@@ -769,7 +796,7 @@ export class NotificationsEmailCron {
 
         const unreadChatsByUserId = await this.getUnreadChatTotalsByUserIds(recipients.map((u) => u.id));
         for (const u of recipients) {
-        const to = (u.email ?? '').trim();
+        const to = getRecipientEmail(u.email);
         if (!to) continue;
         if (u.notificationPreferences && !u.notificationPreferences.emailDigestDaily) continue;
 
@@ -779,8 +806,7 @@ export class NotificationsEmailCron {
         const unreadNotifs = u.undeliveredNotificationCount ?? 0;
         const unreadChats = unreadChatsByUserId.get(u.id) ?? 0;
 
-        const greetingName = (u.name ?? u.username ?? '').trim();
-        const greeting = greetingName ? `Good morning ${greetingName},` : `Good morning,`;
+        const greeting = buildGreeting({ name: u.name, username: u.username, tone: 'morning' });
 
         let subject = 'Your daily Men of Hunger digest';
         if (unreadNotifs > 0 && unreadChats > 0) {
@@ -1024,22 +1050,21 @@ export class NotificationsEmailCron {
           )}" style="color:#9ca3af;text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
         });
 
-        const sent = await this.email.sendText({
+        await this.sendEmailAndHandle({
           to,
           subject,
           text,
           html,
-          from: this.appConfig.email()?.fromEmail.notifications ?? undefined,
+          userId: u.id,
+          logTag: 'daily-digest',
+          onSent: async () => {
+            await this.prisma.notificationPreferences.upsert({
+              where: { userId: u.id },
+              create: { userId: u.id, lastEmailDigestDailySentAt: now },
+              update: { lastEmailDigestDailySentAt: now },
+            });
+          },
         });
-        if (sent.sent) {
-          await this.prisma.notificationPreferences.upsert({
-            where: { userId: u.id },
-            create: { userId: u.id, lastEmailDigestDailySentAt: now },
-            update: { lastEmailDigestDailySentAt: now },
-          });
-        } else {
-          this.logger.debug(`[daily-digest] not sent to userId=${u.id} reason=${sent.reason ?? 'unknown'}`);
-        }
         }
       }
     } catch (err) {
@@ -1162,7 +1187,7 @@ export class NotificationsEmailCron {
         cursorId = recipients[recipients.length - 1]?.id ?? null;
 
         for (const u of recipients) {
-          const to = (u.email ?? '').trim();
+          const to = getRecipientEmail(u.email);
           if (!to) continue;
           if (u.notificationPreferences && !u.notificationPreferences.emailDigestWeekly) continue;
 
@@ -1170,8 +1195,7 @@ export class NotificationsEmailCron {
           // Skip if already sent this week (within last 6 days).
           if (lastSent && lastSent.getTime() >= sendStartUtc.getTime()) continue;
 
-          const greetingName = (u.name ?? u.username ?? '').trim();
-          const greeting = greetingName ? `Good morning ${greetingName},` : `Good morning,`;
+          const greeting = buildGreeting({ name: u.name, username: u.username, tone: 'morning' });
 
           const featuredPost = pickWeeklyFeaturedPost(u);
           const featuredUrl = featuredPost ? `${baseUrl}/p/${encodeURIComponent(featuredPost.id)}` : null;
@@ -1262,22 +1286,21 @@ export class NotificationsEmailCron {
             )}" style="color:#9ca3af;text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
           });
 
-          const sent = await this.email.sendText({
+          await this.sendEmailAndHandle({
             to,
             subject,
             text,
             html,
-            from: emailCfg.fromEmail.notifications ?? undefined,
+            userId: u.id,
+            logTag: 'weekly-digest',
+            onSent: async () => {
+              await this.prisma.notificationPreferences.upsert({
+                where: { userId: u.id },
+                create: { userId: u.id, lastEmailDigestWeeklySentAt: now },
+                update: { lastEmailDigestWeeklySentAt: now },
+              });
+            },
           });
-          if (sent.sent) {
-            await this.prisma.notificationPreferences.upsert({
-              where: { userId: u.id },
-              create: { userId: u.id, lastEmailDigestWeeklySentAt: now },
-              update: { lastEmailDigestWeeklySentAt: now },
-            });
-          } else {
-            this.logger.debug(`[weekly-digest] not sent to userId=${u.id} reason=${sent.reason ?? 'unknown'}`);
-          }
         }
       }
     } catch (err) {
@@ -1320,9 +1343,11 @@ export class NotificationsEmailCron {
       },
     });
 
-    const to = (prefs.user.email ?? '').trim();
+    const to = getVerifiedRecipientEmail({
+      email: prefs.user.email,
+      emailVerifiedAt: prefs.user.emailVerifiedAt,
+    });
     if (!to) return;
-    if (!prefs.user.emailVerifiedAt) return;
     if (!prefs.emailInstantHighSignal) return;
 
     const lastSent = prefs.lastEmailInstantHighSignalSentAt;
@@ -1385,8 +1410,7 @@ export class NotificationsEmailCron {
     const notifsNoun =
       mentionCount > 0 && replyCount > 0 ? 'mentions and replies' : mentionCount > 0 ? 'mentions' : replyCount > 0 ? 'replies' : 'activity';
 
-    const greetingName = (prefs.user.name ?? prefs.user.username ?? '').trim();
-    const greeting = greetingName ? `Hey ${greetingName},` : `Hey,`;
+    const greeting = buildGreeting({ name: prefs.user.name, username: prefs.user.username, tone: 'hey' });
 
     const subject =
       hasUnreadChats && hasHighSignalNotifs
@@ -1551,21 +1575,21 @@ ${chatPreviewRows
       footerHtml: `Men of Hunger`,
     });
 
-    const sent = await this.email.sendText({
+    await this.sendEmailAndHandle({
       to,
       subject,
       text,
       html,
-      from: this.appConfig.email()?.fromEmail.notifications ?? undefined,
-    });
-
-      if (sent.sent) {
+      userId,
+      logTag: 'instant-high-signal',
+      onSent: async () => {
         await this.prisma.notificationPreferences.upsert({
           where: { userId },
           create: { userId, lastEmailInstantHighSignalSentAt: now },
           update: { lastEmailInstantHighSignalSentAt: now },
         });
-      }
+      },
+    });
     } catch (err) {
       this.logger.error(
         `[instant-high-signal] run failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -1590,6 +1614,170 @@ ${chatPreviewRows
       );
     } catch {
       // likely duplicate jobId; treat as no-op (batching).
+    }
+  }
+
+  /** Every 15 minutes: enqueue the profile-reminder sweep with a deduped job id per hour. */
+  @Cron('*/15 * * * *')
+  async sendProfileReminderEmail(): Promise<void> {
+    if (!this.appConfig.runSchedulers()) return;
+    const emailCfg = this.appConfig.email();
+    if (!emailCfg) return;
+
+    try {
+      const now = new Date();
+      const et = easternYmdHm(now);
+      // Dedupe by ET hour so at most one sweep per hour runs even across multiple instances.
+      const hourKey = `${et.y}-${String(et.m).padStart(2, '0')}-${String(et.d).padStart(2, '0')}-${String(et.hh).padStart(2, '0')}`;
+      await this.jobs.enqueueCron(JOBS.notificationsProfileReminderEmail, {}, `cron:notificationsProfileReminderEmail:${hourKey}`, {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5 * 60_000 },
+      });
+    } catch {
+      // likely duplicate jobId while previous run is active; treat as no-op
+    }
+  }
+
+  async runSendProfileReminderEmail(): Promise<void> {
+    const emailCfg = this.appConfig.email();
+    if (!emailCfg) return;
+
+    try {
+      const now = new Date();
+      const MS_24H = 24 * 60 * 60 * 1000;
+      const MS_7D = 7 * 24 * 60 * 60 * 1000;
+      // Only consider users created within the last 30 days. Anyone older is an established
+      // user; emailing them now would feel out-of-place and could flood on first deploy.
+      const MS_MAX_LOOKBACK = 30 * 24 * 60 * 60 * 1000;
+      const threshold24h = new Date(now.getTime() - MS_24H);
+      const threshold7d = new Date(now.getTime() - MS_7D);
+      const maxLookback = new Date(now.getTime() - MS_MAX_LOOKBACK);
+
+      const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
+      const settingsUrl = `${baseUrl}/settings/account`;
+
+      type ProfileReminderRow = {
+        id: string;
+        email: string | null;
+        username: string | null;
+        name: string | null;
+        createdAt: Date;
+        avatarKey: string | null;
+        bannerKey: string | null;
+        bio: string | null;
+        profileReminder24hSentAt: Date | null;
+        profileReminder7dSentAt: Date | null;
+      };
+
+      let cursorId: string | null = null;
+      const pageSize = 400;
+
+      for (;;) {
+        // Fetch users who are past the 24h threshold but haven't had BOTH reminders sent yet.
+        // We'll decide per-user which checkpoint(s) to send.
+        const users: ProfileReminderRow[] = await this.prisma.user.findMany({
+          where: {
+            email: { not: null },
+            emailVerifiedAt: { not: null },
+            bannedAt: null,
+            // Must be at least 24h old, but no older than 30 days (flood + staleness guard).
+            createdAt: { lte: threshold24h, gte: maxLookback },
+            OR: [
+              { profileReminder24hSentAt: null },
+              {
+                profileReminder7dSentAt: null,
+                createdAt: { lte: threshold7d },
+              },
+            ],
+            ...(cursorId ? { id: { gt: cursorId } } : {}),
+          },
+          orderBy: [{ id: 'asc' }],
+          take: pageSize,
+          select: {
+            id: true,
+            email: true,
+            username: true,
+            name: true,
+            createdAt: true,
+            avatarKey: true,
+            bannerKey: true,
+            bio: true,
+            profileReminder24hSentAt: true,
+            profileReminder7dSentAt: true,
+          },
+        });
+
+        if (users.length === 0) break;
+        cursorId = users[users.length - 1]?.id ?? null;
+
+        for (const u of users) {
+          const to = getRecipientEmail(u.email);
+          if (!to) continue;
+
+          const missingFields = getMissingProfileFields({
+            avatarKey: u.avatarKey,
+            bio: u.bio,
+            bannerKey: u.bannerKey,
+          });
+          const missingAvatar = missingFields.includes('avatar');
+          const missingBio = missingFields.includes('bio');
+          const missingBanner = missingFields.includes('banner');
+
+          // Only remind if avatar or bio is missing (banner alone is not enough).
+          if (!missingAvatar && !missingBio) continue;
+
+          const greeting = buildGreeting({ name: u.name, username: u.username, tone: 'hey' });
+
+          // Determine which checkpoint to fire. Only ever send one email per run per user.
+          // When both are due (e.g. catch-up on first deploy), send the 7d version — it's
+          // more complete and we mark both flags so the 24h never fires retroactively.
+          const signupMs = u.createdAt.getTime();
+          const needs24h = !u.profileReminder24hSentAt && now.getTime() - signupMs >= MS_24H;
+          const needs7d = !u.profileReminder7dSentAt && now.getTime() - signupMs >= MS_7D;
+
+          const checkpoint: '24h' | '7d' | null = needs7d ? '7d' : needs24h ? '24h' : null;
+          if (!checkpoint) continue;
+
+          const { subject, text, html } = buildProfileReminderEmail({
+            greeting,
+            missingAvatar,
+            missingBio,
+            missingBanner,
+            settingsUrl,
+            checkpoint,
+          });
+
+          await this.sendEmailAndHandle({
+            to,
+            subject,
+            text,
+            html,
+            userId: u.id,
+            logTag: `profile-reminder:${checkpoint}`,
+            onSent: async () => {
+              // Always stamp the 24h flag. When sending the 7d email on a catch-up run (both
+              // flags still null), we stamp both so the 24h reminder never fires after the fact.
+              const data: { profileReminder24hSentAt?: Date; profileReminder7dSentAt?: Date } = {};
+              if (!u.profileReminder24hSentAt) data.profileReminder24hSentAt = now;
+              if (checkpoint === '7d') data.profileReminder7dSentAt = now;
+              await this.prisma.user.update({ where: { id: u.id }, data });
+
+              this.slack.notifyProfileReminderSent({
+                userId: u.id,
+                username: u.username,
+                email: to,
+                checkpoint,
+                missingFields,
+              });
+            },
+          });
+        }
+      }
+    } catch (err) {
+      this.logger.error(
+        `[profile-reminder] run failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
     }
   }
 }
