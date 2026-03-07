@@ -249,7 +249,7 @@ export class AdminJobsController {
 
     for (const { id: userId } of users) {
       const posts = await this.prisma.post.findMany({
-        where: { authorId: userId, visibility: { not: 'onlyMe' } },
+        where: { userId, visibility: { not: 'onlyMe' } },
         select: { createdAt: true },
         orderBy: { createdAt: 'asc' },
       });
