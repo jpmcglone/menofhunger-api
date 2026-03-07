@@ -125,9 +125,12 @@ export class CheckinsService {
     const users = await this.prisma.user.findMany({
       where: {
         bannedAt: null,
-        checkinStreakDays: { gt: 0 },
+        // Include members with either an active streak OR historical streak record.
+        // This keeps the leaderboard useful even on days where few/no users are currently streaking.
+        OR: [{ checkinStreakDays: { gt: 0 } }, { longestStreakDays: { gt: 0 } }],
       },
-      orderBy: [{ checkinStreakDays: 'desc' }, { createdAt: 'asc' }],
+      // Active streak ranks first, then best-ever streak for tie-break/fallback, then older account first.
+      orderBy: [{ checkinStreakDays: 'desc' }, { longestStreakDays: 'desc' }, { createdAt: 'asc' }],
       take,
       select: {
         id: true,
