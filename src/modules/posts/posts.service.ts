@@ -2262,6 +2262,7 @@ export class PostsService {
         hashtagCasings: true,
         topics: true,
         kind: true,
+        parentId: true,
         repostedPostId: true,
         quotedPostId: true,
       } as any,
@@ -2279,6 +2280,15 @@ export class PostsService {
         where: { id },
         data: { deletedAt: now },
       });
+
+      // Decrement commentCount on the parent post when a comment is deleted.
+      const parentId = (post as any).parentId as string | null | undefined;
+      if (parentId) {
+        await (tx as any).post.update({
+          where: { id: parentId },
+          data: { commentCount: { decrement: 1 } },
+        }).catch(() => { /* ignore if parent is gone */ });
+      }
 
       // Decrement repostCount on the target post when a repost/quote repost is deleted.
       const repostedPostId = (post as any).repostedPostId as string | null | undefined;
@@ -2362,6 +2372,28 @@ export class PostsService {
     } catch {
       // Best-effort
     }
+
+    // Realtime: decrement parent commentCount for live subscribers (best-effort).
+    const deletedParentId = (post as any).parentId as string | null | undefined;
+    if (deletedParentId) {
+      try {
+        const updatedParent = await this.prisma.post.findUnique({
+          where: { id: deletedParentId },
+          select: { commentCount: true },
+        });
+        if (updatedParent && typeof updatedParent.commentCount === 'number') {
+          this.presenceRealtime.emitPostsLiveUpdated(deletedParentId, {
+            postId: deletedParentId,
+            version: now.toISOString(),
+            reason: 'comment_deleted',
+            patch: { commentCount: updatedParent.commentCount },
+          });
+        }
+      } catch {
+        // Best-effort
+      }
+    }
+
     return { success: true };
   }
 
