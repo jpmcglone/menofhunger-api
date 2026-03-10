@@ -2282,12 +2282,14 @@ export class PostsService {
       });
 
       // Decrement commentCount on the parent post when a comment is deleted.
+      // Use raw SQL GREATEST(0, ...) to prevent the counter going negative under races.
       const parentId = (post as any).parentId as string | null | undefined;
       if (parentId) {
-        await (tx as any).post.update({
-          where: { id: parentId },
-          data: { commentCount: { decrement: 1 } },
-        }).catch(() => { /* ignore if parent is gone */ });
+        await tx.$executeRaw`
+          UPDATE "Post"
+          SET "commentCount" = GREATEST(0, "commentCount" - 1)
+          WHERE "id" = ${parentId}
+        `.catch(() => { /* ignore if parent is gone */ });
       }
 
       // Decrement repostCount on the target post when a repost/quote repost is deleted.
