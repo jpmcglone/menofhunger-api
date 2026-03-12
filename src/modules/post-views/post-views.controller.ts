@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
@@ -49,8 +49,13 @@ export class PostViewsController {
     },
   })
   @Get('posts/:id/views/breakdown')
-  async getBreakdown(@OptionalCurrentUserId() userId: string | undefined, @Param('id') postId: string) {
-    const result = await this.postViews.getBreakdown(postId, userId ?? null);
+  async getBreakdown(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('id') postId: string,
+    @Query('fresh') fresh: string | undefined,
+  ) {
+    const forceFresh = fresh === '1' || fresh === 'true';
+    const result = await this.postViews.getBreakdown(postId, userId ?? null, { fresh: forceFresh });
     return { data: result };
   }
 }
