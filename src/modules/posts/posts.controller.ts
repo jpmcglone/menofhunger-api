@@ -194,7 +194,7 @@ const createSchema = z
         });
       }
     }
-    // Video uploads: require dimensions and duration, enforce 1440p and 5 min
+    // Video uploads: require dimensions and duration; MB + duration limits enforced server-side.
     for (let i = 0; i < (val.media ?? []).length; i++) {
       const item = val.media![i];
       if (item.source !== 'upload' || item.kind !== 'video') continue;
@@ -211,9 +211,6 @@ const createSchema = z
       }
       if (durationSeconds > 5 * 60) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Video must be 5 minutes or shorter.', path: ['media', i, 'durationSeconds'] });
-      }
-      if (width > 2560 || height > 1440) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Video must be 1440p or smaller.', path: ['media', i, 'width'] });
       }
     }
   });
