@@ -36,6 +36,7 @@ export type PostViewBreakdown = {
   premium: number;
   verified: number;
   unverified: number;
+  guest: number;
   total: number;
 };
 
@@ -251,24 +252,28 @@ export class PostViewsService {
       key: breakdownCacheKey(pid),
       ttlSeconds: BREAKDOWN_TTL_SECONDS,
       compute: async () => {
-        const rows = await this.prisma.$queryRaw<
-          Array<{ premium: bigint; verified: bigint; unverified: bigint }>
-        >`
-          SELECT
-            COUNT(*) FILTER (WHERE u.premium OR u."premiumPlus")                                        AS premium,
-            COUNT(*) FILTER (WHERE u."verifiedStatus" != 'none' AND NOT (u.premium OR u."premiumPlus")) AS verified,
-            COUNT(*) FILTER (WHERE u."verifiedStatus" = 'none'  AND NOT (u.premium OR u."premiumPlus")) AS unverified
-          FROM "PostView" pv
-          JOIN "User" u ON u.id = pv."userId"
-          WHERE pv."postId" = ${pid}
-        `;
+        const [rows, anonRows] = await Promise.all([
+          this.prisma.$queryRaw<
+            Array<{ premium: bigint; verified: bigint; unverified: bigint }>
+          >`
+            SELECT
+              COUNT(*) FILTER (WHERE u.premium OR u."premiumPlus")                                        AS premium,
+              COUNT(*) FILTER (WHERE u."verifiedStatus" != 'none' AND NOT (u.premium OR u."premiumPlus")) AS verified,
+              COUNT(*) FILTER (WHERE u."verifiedStatus" = 'none'  AND NOT (u.premium OR u."premiumPlus")) AS unverified
+            FROM "PostView" pv
+            JOIN "User" u ON u.id = pv."userId"
+            WHERE pv."postId" = ${pid}
+          `,
+          this.prisma.postAnonView.count({ where: { postId: pid } }),
+        ]);
 
         const row = rows[0] ?? { premium: 0n, verified: 0n, unverified: 0n };
         const premium = Number(row.premium ?? 0);
         const verified = Number(row.verified ?? 0);
         const unverified = Number(row.unverified ?? 0);
+        const guest = anonRows;
 
-        return { premium, verified, unverified, total: premium + verified + unverified };
+        return { premium, verified, unverified, guest, total: premium + verified + unverified + guest };
       },
     });
   }
