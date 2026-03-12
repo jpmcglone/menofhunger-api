@@ -160,10 +160,16 @@ export class ArticlesService {
       return { articles: [], nextCursor: null };
     }
 
-    const effectiveVisibilities =
-      opts.visibilityFilter && allowedVisibilities.includes(opts.visibilityFilter)
-        ? [opts.visibilityFilter]
-        : allowedVisibilities;
+    if (!opts.includeRestricted && opts.visibilityFilter && !allowedVisibilities.includes(opts.visibilityFilter)) {
+      if (opts.visibilityFilter === 'verifiedOnly') {
+        throw new ForbiddenException('Verify to view verified-only posts.');
+      }
+      if (opts.visibilityFilter === 'premiumOnly') {
+        throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+      }
+    }
+
+    const effectiveVisibilities = opts.visibilityFilter ? [opts.visibilityFilter] : allowedVisibilities;
 
     const authorFilter = opts.mine
       ? { authorId: opts.viewerUserId ?? '__none__' }

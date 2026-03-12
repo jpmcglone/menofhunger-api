@@ -637,7 +637,9 @@ export class PostsService {
       if (!viewer || viewer.verifiedStatus === 'none') throw new ForbiddenException('Verify to view verified-only posts.');
     }
     if (visibility === 'premiumOnly') {
-      if (!viewer || !viewer.premium) throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+      if (!viewer || !this.viewerContextService.isPremium(viewer)) {
+        throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+      }
     }
 
     if (followingOnly && !viewerUserId) {
@@ -1199,7 +1201,9 @@ export class PostsService {
       if (!viewer || viewer.verifiedStatus === 'none') throw new ForbiddenException('Verify to view verified-only posts.');
     }
     if (visibility === 'premiumOnly') {
-      if (!viewer || !viewer.premium) throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+      if (!viewer || !this.viewerContextService.isPremium(viewer)) {
+        throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+      }
     }
 
     if (followingOnly && !viewerUserId) {
@@ -1676,7 +1680,9 @@ export class PostsService {
       if (!viewer || viewer.verifiedStatus === 'none') throw new ForbiddenException('Verify to view verified-only posts.');
     }
     if (visibility === 'premiumOnly') {
-      if (!viewer || !viewer.premium) throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+      if (!viewer || !this.viewerContextService.isPremium(viewer)) {
+        throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+      }
     }
 
     if (followingOnly && !viewerUserId) {
@@ -1786,7 +1792,9 @@ export class PostsService {
         if (!viewer || viewer.verifiedStatus === 'none') throw new ForbiddenException('Verify to view verified-only posts.');
       }
       if (visibility === 'premiumOnly' && !isSelf) {
-        if (!viewer || !viewer.premium) throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+        if (!viewer || !this.viewerContextService.isPremium(viewer)) {
+          throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+        }
       }
     }
 
