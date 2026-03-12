@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
 import { RedisService } from '../redis/redis.service';
@@ -244,8 +244,31 @@ export class PostViewsService {
    * verified: verifiedStatus != 'none' AND NOT (premium OR premiumPlus)
    * unverified: verifiedStatus == 'none' AND NOT (premium OR premiumPlus)
    */
-  async getBreakdown(postId: string): Promise<PostViewBreakdown> {
+  async getBreakdown(postId: string, viewerUserId?: string | null): Promise<PostViewBreakdown> {
     const pid = (postId ?? '').trim();
+    const uid = (viewerUserId ?? '').trim() || null;
+
+    const post = await this.prisma.post.findFirst({
+      where: { id: pid, deletedAt: null },
+      select: { visibility: true, userId: true },
+    });
+    if (!post) throw new NotFoundException('Post not found.');
+
+    // Keep private/tier-gated post breakdowns hidden from unauthorized viewers.
+    const isSelf = Boolean(uid && post.userId === uid);
+    if (!isSelf) {
+      if (!uid) {
+        if (post.visibility !== 'public') throw new NotFoundException('Post not found.');
+      } else {
+        const viewer = await this.prisma.user.findFirst({
+          where: { id: uid },
+          select: { verifiedStatus: true, premium: true, premiumPlus: true },
+        });
+        if (!viewerCanAccessVisibility(post.visibility, viewer)) {
+          throw new NotFoundException('Post not found.');
+        }
+      }
+    }
 
     return this.cache.getOrSetJson<PostViewBreakdown>({
       enabled: true,

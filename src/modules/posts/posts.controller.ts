@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Logger, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
@@ -259,12 +259,41 @@ const publishFromOnlyMeSchema = z.object({
 
 @Controller('posts')
 export class PostsController {
+  private readonly logger = new Logger(PostsController.name);
+
   constructor(
     private readonly posts: PostsService,
     private readonly appConfig: AppConfigService,
     private readonly cache: CacheService,
     private readonly cacheInvalidation: CacheInvalidationService,
   ) {}
+
+  private async collectParentMap(viewerUserId: string | null, seedParentIds: Array<string | null | undefined>) {
+    const parentMap = new Map<string, Awaited<ReturnType<typeof this.posts.getById>>>();
+    let toFetch = new Set<string>((seedParentIds ?? []).filter((id): id is string => Boolean(id)));
+    while (toFetch.size > 0) {
+      const batch = [...toFetch].filter((id) => !parentMap.has(id));
+      if (batch.length === 0) break;
+      const rows = await this.posts.getByIds({ viewerUserId, ids: batch });
+      const byId = new Map(rows.map((p) => [p.id, p] as const));
+      const next = new Set<string>();
+      for (const id of batch) {
+        const post = byId.get(id);
+        if (!post) continue;
+        parentMap.set(id, post as Awaited<ReturnType<typeof this.posts.getById>>);
+        if (post.parentId) next.add(post.parentId);
+      }
+      toFetch = next;
+    }
+    return parentMap;
+  }
+
+  private async collectRepostedMap(viewerUserId: string | null, repostedPostIds: string[]) {
+    const ids = [...new Set((repostedPostIds ?? []).map((id) => (id ?? '').trim()).filter(Boolean))];
+    if (!ids.length) return new Map<string, Awaited<ReturnType<typeof this.posts.getById>>>();
+    const rows = await this.posts.getByIds({ viewerUserId, ids });
+    return new Map(rows.map((p) => [p.id, p as Awaited<ReturnType<typeof this.posts.getById>>] as const));
+  }
 
   @UseGuards(OptionalAuthGuard)
   @Throttle({
@@ -279,6 +308,8 @@ export class PostsController {
     @Query() query: unknown,
     @Res({ passthrough: true }) httpRes: Response,
   ) {
+    const reqStartMs = Date.now();
+    const stageMs: Record<string, number> = {};
     const parsed = listSchema.parse(query);
     const viewerUserId = userId ?? null;
     const limit = parsed.limit ?? 30;
@@ -294,8 +325,19 @@ export class PostsController {
     const sortKind = sort === 'trending' ? 'popular' : sort;
 
     const anonCache = viewerUserId == null;
-    const feedVer = anonCache ? await this.cacheInvalidation.feedGlobalVersion() : null;
-    const paramsHash = anonCache
+    const authFirstPageCache = Boolean(viewerUserId) && !cursor;
+    const authCursorCache = Boolean(viewerUserId)
+      && Boolean(cursor)
+      && sortKind === 'new'
+      && !authorUserIds.length
+      && !(parsed.kind ?? null)
+      && !(parsed.followingOnly ?? false)
+      && String(cursor).trim().length <= 64;
+    const feedVer = (anonCache || authFirstPageCache || authCursorCache)
+      ? await this.cacheInvalidation.feedGlobalVersion()
+      : null;
+    const cacheEnabled = Boolean(feedVer) && (anonCache || authFirstPageCache || authCursorCache);
+    const paramsHash = cacheEnabled
       ? stableJsonHash({
           endpoint: 'posts:list',
           sort: sortKind,
@@ -307,13 +349,21 @@ export class PostsController {
           authorUserIds,
         })
       : null;
-    const cacheKey = anonCache && feedVer ? RedisKeys.anonPostsList(paramsHash!, feedVer) : null;
+    const cacheKey =
+      cacheEnabled && feedVer && paramsHash
+        ? (anonCache
+            ? RedisKeys.anonPostsList(paramsHash, feedVer)
+            : RedisKeys.authPostsList(viewerUserId!, paramsHash, feedVer))
+        : null;
 
     const out = await this.cache.getOrSetJson<{ data: any; pagination: any }>({
-      enabled: anonCache && Boolean(cacheKey),
+      enabled: cacheEnabled && Boolean(cacheKey),
       key: cacheKey ?? '',
-      ttlSeconds: CacheTtl.anonFeedSeconds,
+      ttlSeconds: anonCache
+        ? CacheTtl.anonFeedSeconds
+        : (authFirstPageCache ? CacheTtl.authFeedSeconds : CacheTtl.authCursorFeedSeconds),
       compute: async () => {
+        const listStartMs = Date.now();
         const result =
           sortKind === 'featured'
             ? await this.posts.listFeaturedFeed({
@@ -344,11 +394,11 @@ export class PostsController {
                   kind: parsed.kind ?? null,
                   authorUserIds: authorUserIds.length ? authorUserIds : null,
                 });
+        stageMs.list = Date.now() - listStartMs;
 
-        const viewer = await this.posts.viewerContext(viewerUserId);
-        const viewerHasAdmin = Boolean(viewer?.siteAdmin);
         // Dedupe: keep only leaf posts (posts that are not an ancestor of any other post). So A→B→C returns only C, not A or B.
         // O(leaves × max chain depth) in-memory; no extra DB queries or indexes needed.
+        const dedupeStartMs = Date.now();
         const idToPost = new Map(result.posts.map((p) => [p.id, p]));
         const strictAncestorIds = new Set<string>();
         for (const p of result.posts) {
@@ -360,73 +410,60 @@ export class PostsController {
           }
         }
         const filteredPosts = result.posts.filter((p) => !strictAncestorIds.has(p.id));
-
-        // Collect full ancestor chain (walk parentId until null) and fetch all ancestors.
-        const parentMap = new Map<string, (Awaited<ReturnType<typeof this.posts.getById>>)>();
-        let toFetch = new Set<string>(filteredPosts.map((p) => p.parentId).filter(Boolean) as string[]);
-        while (toFetch.size > 0) {
-          const batch = [...toFetch].filter((id) => !parentMap.has(id));
-          if (batch.length === 0) break;
-          const results = await Promise.allSettled(
-            batch.map((id) => this.posts.getById({ viewerUserId, id })),
-          );
-          const nextIds = new Set<string>();
-          for (let i = 0; i < batch.length; i++) {
-            const r = results[i];
-            if (r?.status === 'fulfilled' && r.value) {
-              const parent = r.value;
-              parentMap.set(batch[i], parent);
-              if (parent.parentId) nextIds.add(parent.parentId);
-            }
-          }
-          toFetch = nextIds;
-        }
-
-        const allPostIds = [...filteredPosts.map((p) => p.id), ...parentMap.keys()];
-        const boosted = viewerUserId
-          ? await this.posts.viewerBoostedPostIds({
-              viewerUserId,
-              postIds: allPostIds,
-            })
-          : new Set<string>();
-        const bookmarksByPostId = viewerUserId
-          ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
-          : new Map<string, { collectionIds: string[] }>();
-        const votedPollOptionIdByPostId = viewerUserId
-          ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
-          : new Map<string, string>();
-        const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)) : null;
-        // For popular/featured feeds, use the stored trendingScore (from result.scoreByPostId) so
-        // the displayed score matches the sort order exactly.
-        const scoreByPostId = viewerHasAdmin
-          ? (result.scoreByPostId ?? await this.posts.computeScoresForPostIds(allPostIds))
-          : undefined;
-
-        const { blockedByViewer, viewerBlockedBy } = viewerUserId
-          ? await this.posts.viewerBlockSets(viewerUserId)
-          : { blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() };
-
+        stageMs.dedupe = Date.now() - dedupeStartMs;
         // Fetch repost data: which posts the viewer has reposted, and reposted post bodies for flat reposts.
         const repostedPostIds = filteredPosts
           .filter((p) => (p as any).kind === 'repost' && (p as any).repostedPostId)
           .map((p) => (p as any).repostedPostId as string);
-        const repostedPostMap = new Map<string, typeof filteredPosts[number]>();
-        if (repostedPostIds.length > 0) {
-          const repostedResults = await Promise.allSettled(
-            repostedPostIds.map((id) => this.posts.getById({ viewerUserId, id })),
-          );
-          for (let i = 0; i < repostedPostIds.length; i++) {
-            const r = repostedResults[i];
-            if (r?.status === 'fulfilled' && r.value) {
-              repostedPostMap.set(repostedPostIds[i], r.value as any);
-            }
-          }
-        }
-        const repostedByPostId = viewerUserId
-          ? await this.posts.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
-          : new Set<string>();
+        const contextStartMs = Date.now();
+        const [viewer, parentMap, repostedPostMap] = await Promise.all([
+          this.posts.viewerContext(viewerUserId),
+          this.collectParentMap(viewerUserId, filteredPosts.map((p) => p.parentId)),
+          this.collectRepostedMap(viewerUserId, repostedPostIds),
+        ]);
+        stageMs.context = Date.now() - contextStartMs;
+        const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+        const allPostIds = [...filteredPosts.map((p) => p.id), ...parentMap.keys()];
+
+        const enrichStartMs = Date.now();
+        const [
+          boosted,
+          bookmarksByPostId,
+          votedPollOptionIdByPostId,
+          blockSets,
+          repostedByPostId,
+          internalByPostId,
+          scoreByPostId,
+        ] = await Promise.all([
+          viewerUserId
+            ? this.posts.viewerBoostedPostIds({ viewerUserId, postIds: allPostIds })
+            : Promise.resolve(new Set<string>()),
+          viewerUserId
+            ? this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
+            : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
+          viewerUserId
+            ? this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
+            : Promise.resolve(new Map<string, string>()),
+          viewerUserId
+            ? this.posts.viewerBlockSets(viewerUserId)
+            : Promise.resolve({ blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() }),
+          viewerUserId
+            ? this.posts.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
+            : Promise.resolve(new Set<string>()),
+          viewerHasAdmin
+            ? this.posts.ensureBoostScoresFresh(filteredPosts.map((p) => p.id))
+            : Promise.resolve(null),
+          viewerHasAdmin
+            ? (result.scoreByPostId
+                ? Promise.resolve(result.scoreByPostId)
+                : this.posts.computeScoresForPostIds(allPostIds))
+            : Promise.resolve(undefined),
+        ]);
+        stageMs.enrich = Date.now() - enrichStartMs;
+        const { blockedByViewer, viewerBlockedBy } = blockSets;
 
         const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+        const dtoStartMs = Date.now();
         const attachParentChain = buildAttachParentChain({
           parentMap,
           baseUrl,
@@ -444,13 +481,33 @@ export class PostsController {
           repostedPostMap: repostedPostMap as any,
         });
 
-        return {
+        const payload = {
           data: filteredPosts.map((p) => attachParentChain(p)),
           pagination: { nextCursor: result.nextCursor },
         };
+        stageMs.dto = Date.now() - dtoStartMs;
+        return payload;
       },
     });
 
+    const totalMs = Date.now() - reqStartMs;
+    httpRes.setHeader('x-feed-total-ms', String(totalMs));
+    if (Object.keys(stageMs).length > 0) {
+      const serverTiming = Object.entries(stageMs)
+        .filter(([, ms]) => Number.isFinite(ms))
+        .map(([name, ms]) => `${name};dur=${Math.max(0, Math.round(ms))}`)
+        .join(', ');
+      if (serverTiming) httpRes.setHeader('server-timing', serverTiming);
+    }
+    httpRes.setHeader(
+      'x-feed-cache-mode',
+      anonCache
+        ? 'anon'
+        : (authFirstPageCache ? 'auth_first_page' : (authCursorCache ? 'auth_cursor' : 'none')),
+    );
+    if (totalMs >= 800) {
+      this.logger.warn(`GET /posts slow request: ${totalMs}ms (sort=${sortKind}, cursor=${cursor ? 'yes' : 'no'}, mode=${anonCache ? 'anon' : (authFirstPageCache ? 'auth_first_page' : (authCursorCache ? 'auth_cursor' : 'none'))})`);
+    }
     setReadCache(httpRes, { viewerUserId });
     return out;
   }
@@ -502,18 +559,6 @@ export class PostsController {
           includeRestricted: parsed.includeRestricted ?? false,
         });
 
-        const viewer = await this.posts.viewerContext(viewerUserId);
-        const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-
-        // Compute per-post viewerCanAccess when includeRestricted=true.
-        let viewerCanAccessByPostId: Map<string, boolean> | undefined;
-        if (parsed.includeRestricted) {
-          const allowed = this.posts.allowedVisibilities(viewer);
-          viewerCanAccessByPostId = new Map(
-            result.posts.map((p) => [p.id, allowed.includes(p.visibility) || p.userId === viewerUserId]),
-          );
-        }
-
         // Dedupe: keep only leaf posts (same as list()). O(leaves × max chain depth) in-memory.
         const idToPostUser = new Map(result.posts.map((p) => [p.id, p]));
         const strictAncestorIdsUser = new Set<string>();
@@ -526,68 +571,59 @@ export class PostsController {
           }
         }
         const filteredPostsUser = result.posts.filter((p) => !strictAncestorIdsUser.has(p.id));
-
-        // Collect full ancestor chain (walk parentId until null) and fetch all ancestors.
-        const parentMap = new Map<string, (Awaited<ReturnType<typeof this.posts.getById>>)>();
-        let toFetch = new Set<string>(filteredPostsUser.map((p) => p.parentId).filter(Boolean) as string[]);
-        while (toFetch.size > 0) {
-          const batch = [...toFetch].filter((id) => !parentMap.has(id));
-          if (batch.length === 0) break;
-          const results = await Promise.allSettled(
-            batch.map((id) => this.posts.getById({ viewerUserId, id })),
-          );
-          const nextIds = new Set<string>();
-          for (let i = 0; i < batch.length; i++) {
-            const r = results[i];
-            if (r?.status === 'fulfilled' && r.value) {
-              const parent = r.value;
-              parentMap.set(batch[i], parent);
-              if (parent.parentId) nextIds.add(parent.parentId);
-            }
-          }
-          toFetch = nextIds;
-        }
-
-        const allPostIds = [...filteredPostsUser.map((p) => p.id), ...parentMap.keys()];
-        const boosted = viewerUserId
-          ? await this.posts.viewerBoostedPostIds({
-              viewerUserId,
-              postIds: allPostIds,
-            })
-          : new Set<string>();
-        const bookmarksByPostId = viewerUserId
-          ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
-          : new Map<string, { collectionIds: string[] }>();
-        const votedPollOptionIdByPostId = viewerUserId
-          ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
-          : new Map<string, string>();
-        const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(filteredPostsUser.map((p) => p.id)) : null;
-        const scoreByPostIdUser =
-          viewerHasAdmin ? await this.posts.computeScoresForPostIds(allPostIds) : undefined;
-
-        const { blockedByViewer: blockedByViewerUser, viewerBlockedBy: viewerBlockedByUser } = viewerUserId
-          ? await this.posts.viewerBlockSets(viewerUserId)
-          : { blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() };
-
         // Fetch repost data for flat reposts.
         const repostedPostIdsUser = filteredPostsUser
           .filter((p) => (p as any).kind === 'repost' && (p as any).repostedPostId)
           .map((p) => (p as any).repostedPostId as string);
-        const repostedPostMapUser = new Map<string, typeof filteredPostsUser[number]>();
-        if (repostedPostIdsUser.length > 0) {
-          const repostedResultsUser = await Promise.allSettled(
-            repostedPostIdsUser.map((id) => this.posts.getById({ viewerUserId, id })),
+        const [viewer, parentMap, repostedPostMapUser] = await Promise.all([
+          this.posts.viewerContext(viewerUserId),
+          this.collectParentMap(viewerUserId, filteredPostsUser.map((p) => p.parentId)),
+          this.collectRepostedMap(viewerUserId, repostedPostIdsUser),
+        ]);
+        const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+
+        // Compute per-post viewerCanAccess when includeRestricted=true.
+        let viewerCanAccessByPostId: Map<string, boolean> | undefined;
+        if (parsed.includeRestricted) {
+          const allowed = this.posts.allowedVisibilities(viewer);
+          viewerCanAccessByPostId = new Map(
+            result.posts.map((p) => [p.id, allowed.includes(p.visibility) || p.userId === viewerUserId]),
           );
-          for (let i = 0; i < repostedPostIdsUser.length; i++) {
-            const r = repostedResultsUser[i];
-            if (r?.status === 'fulfilled' && r.value) {
-              repostedPostMapUser.set(repostedPostIdsUser[i], r.value as any);
-            }
-          }
         }
-        const repostedByPostIdUser = viewerUserId
-          ? await this.posts.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
-          : new Set<string>();
+
+        const allPostIds = [...filteredPostsUser.map((p) => p.id), ...parentMap.keys()];
+        const [
+          boosted,
+          bookmarksByPostId,
+          votedPollOptionIdByPostId,
+          blockSetsUser,
+          repostedByPostIdUser,
+          internalByPostId,
+          scoreByPostIdUser,
+        ] = await Promise.all([
+          viewerUserId
+            ? this.posts.viewerBoostedPostIds({ viewerUserId, postIds: allPostIds })
+            : Promise.resolve(new Set<string>()),
+          viewerUserId
+            ? this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
+            : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
+          viewerUserId
+            ? this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
+            : Promise.resolve(new Map<string, string>()),
+          viewerUserId
+            ? this.posts.viewerBlockSets(viewerUserId)
+            : Promise.resolve({ blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() }),
+          viewerUserId
+            ? this.posts.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
+            : Promise.resolve(new Set<string>()),
+          viewerHasAdmin
+            ? this.posts.ensureBoostScoresFresh(filteredPostsUser.map((p) => p.id))
+            : Promise.resolve(null),
+          viewerHasAdmin
+            ? this.posts.computeScoresForPostIds(allPostIds)
+            : Promise.resolve(undefined),
+        ]);
+        const { blockedByViewer: blockedByViewerUser, viewerBlockedBy: viewerBlockedByUser } = blockSetsUser;
 
         const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
         const attachParentChain = buildAttachParentChain({

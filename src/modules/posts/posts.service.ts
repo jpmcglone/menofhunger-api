@@ -23,6 +23,7 @@ import { PostViewsService } from '../post-views/post-views.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { PosthogService } from '../../common/posthog/posthog.service';
+import { LOGGED_IN_VIEW_WEIGHT } from '../views/view-tracking.utils';
 
 export type PostCounts = {
   all: number;
@@ -2274,6 +2275,61 @@ export class PostsService {
   }
 
   /**
+   * Batch variant of getById used by feed controllers to reduce per-id round trips.
+   * Applies the same visibility rules as getById and omits inaccessible/missing ids.
+   */
+  async getByIds(params: { viewerUserId: string | null; ids: string[] }): Promise<FeedPost[]> {
+    const viewerUserId = params.viewerUserId ?? null;
+    const ids = [...new Set((params.ids ?? []).map((id) => (id ?? '').trim()).filter(Boolean))];
+    if (!ids.length) return [];
+
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
+    const allowed = this.allowedVisibilitiesForViewer(viewer);
+
+    const cached: FeedPost[] = [];
+    const missingIds: string[] = [];
+    for (const id of ids) {
+      const cacheKey = `posts.getById:${viewerUserId ?? 'anon'}:${id}`;
+      const cachedPost = this.requestCache.get<FeedPost>(cacheKey);
+      if (cachedPost) {
+        cached.push(cachedPost);
+      } else {
+        missingIds.push(id);
+      }
+    }
+
+    const fetched = missingIds.length
+      ? await this.prisma.post.findMany({
+          where: { id: { in: missingIds } },
+          include: {
+            user: { select: USER_LIST_SELECT },
+            media: { orderBy: { position: 'asc' } },
+            poll: { include: { options: { orderBy: { position: 'asc' } } } },
+            mentions: { include: { user: { select: MENTION_USER_SELECT } } },
+          },
+        })
+      : [];
+
+    const visibleFetched = fetched.filter((post) => {
+      const isSelf = Boolean(viewer && viewer.id === post.userId);
+      if (isSelf) return true;
+      if (post.visibility === 'onlyMe') return Boolean(viewer?.siteAdmin);
+      return allowed.includes(post.visibility);
+    });
+
+    for (const post of visibleFetched) {
+      const cacheKey = `posts.getById:${viewerUserId ?? 'anon'}:${post.id}`;
+      this.requestCache.set(cacheKey, post as FeedPost);
+    }
+
+    const byId = new Map<string, FeedPost>([
+      ...cached.map((p) => [p.id, p] as const),
+      ...visibleFetched.map((p) => [p.id, p as FeedPost] as const),
+    ]);
+    return ids.map((id) => byId.get(id)).filter((p): p is FeedPost => Boolean(p));
+  }
+
+  /**
    * Like getById but for permalink preview: returns the post even when the viewer's tier
    * can't access it (verifiedOnly / premiumOnly). onlyMe posts still throw 404.
    * The caller is responsible for passing `viewerCanAccess: false` to toPostDto.
@@ -3797,6 +3853,24 @@ export class PostsService {
           }
         }
 
+        // Seed creator self-view synchronously so create response always reflects at least 1 view.
+        const seededView = await tx.postView.createMany({
+          data: [{ postId: created.id, userId }],
+          skipDuplicates: true,
+        });
+        if (seededView.count > 0) {
+          const updatedCounts = await tx.post.update({
+            where: { id: created.id },
+            data: {
+              viewerCount: { increment: 1 },
+              weightedViewCount: { increment: LOGGED_IN_VIEW_WEIGHT },
+            },
+            select: { viewerCount: true, weightedViewCount: true },
+          });
+          (created as any).viewerCount = updatedCounts.viewerCount;
+          (created as any).weightedViewCount = updatedCounts.weightedViewCount;
+        }
+
         return created;
       })
       .catch((e: unknown) => {
@@ -3808,9 +3882,6 @@ export class PostsService {
         }
         throw e;
       });
-
-    // Creator counts as having seen their own post (optimistic; don't block response).
-    void this.postViews.markViewed(userId, post.id).catch(() => undefined);
 
     // Versioned read caches: bump after successful create so public reads shift namespaces immediately.
     if ((post as any)?.visibility && (post as any).visibility !== 'onlyMe') {

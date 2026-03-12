@@ -64,6 +64,9 @@ export const RedisKeys = {
   anonPostsList(paramsHash: string, feedVer: number): string {
     return `cache:posts:list:v${feedVer}:${clean(paramsHash)}`;
   },
+  authPostsList(userId: string, paramsHash: string, feedVer: number): string {
+    return `cache:posts:list:user:${clean(userId)}:v${feedVer}:${clean(paramsHash)}`;
+  },
   anonPostsUser(username: string, paramsHash: string, feedVer: number): string {
     return `cache:posts:user:${encodeURIComponent(cleanLower(username))}:v${feedVer}:${clean(paramsHash)}`;
   },

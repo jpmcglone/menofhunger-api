@@ -33,12 +33,14 @@ export class ArticleViewsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async markViewed(@OptionalCurrentUserId() userId: string | undefined, @Body() body: unknown): Promise<void> {
     const parsed = markViewedBatchSchema.parse(body);
-    await this.articleViews.markViewedBatch(
-      userId ?? null,
-      parsed.articleIds,
-      parsed.anon_id ?? null,
-      parsed.source ?? null,
-    );
+    void this.articleViews
+      .markViewedBatch(
+        userId ?? null,
+        parsed.articleIds,
+        parsed.anon_id ?? null,
+        parsed.source ?? null,
+      )
+      .catch(() => undefined);
   }
 
   /**

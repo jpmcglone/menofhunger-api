@@ -566,6 +566,14 @@ model Post {
   // Trending feed hot path: sort by precomputed score descending.
   @@index([trendingScore(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
   @@index([parentId, deletedAt, commentCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
+  // New feed (sort=new) hot path: deleted + visibility filter + createdAt/id pagination.
+  @@index([deletedAt, visibility, createdAt(sort: Desc), id(sort: Desc)])
+  // Profile posts/replies hot path: user + deleted + visibility + createdAt/id pagination.
+  @@index([userId, deletedAt, visibility, createdAt(sort: Desc), id(sort: Desc)])
+  // Profile top-level tab: same as above, plus parentId NULL filter.
+  @@index([userId, parentId, deletedAt, visibility, createdAt(sort: Desc), id(sort: Desc)])
+  // Trending feed path with visibility gating.
+  @@index([deletedAt, visibility, trendingScore(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
 }
 
 model PostPoll {
@@ -806,6 +814,8 @@ model PostMedia {
   @@index([postId, position])
   @@index([postId, createdAt])
   @@index([deletedAt])
+  // User media newest grid: source/kind/deleted filter + createdAt/id pagination.
+  @@index([source, kind, deletedAt, createdAt(sort: Desc), id(sort: Desc)])
 }
 
 // Dedupe: one row per unique file content (by SHA-256). Reuse existing R2 key when same file uploaded again.
@@ -1347,6 +1357,14 @@ model Article {
   @@index([publishedAt(sort: Desc), id(sort: Desc)])
   @@index([trendingScore(sort: Desc), publishedAt(sort: Desc)])
   @@index([deletedAt])
+  // Global article feeds (new): published + visibility with stable cursor ordering.
+  @@index([deletedAt, isDraft, visibility, publishedAt(sort: Desc), id(sort: Desc)])
+  // Global article feeds (trending): score-first ordering with visibility gating.
+  @@index([deletedAt, isDraft, visibility, trendingScore(sort: Desc), publishedAt(sort: Desc), id(sort: Desc)])
+  // Author-scoped article feeds (profile/author pages), new sort.
+  @@index([authorId, deletedAt, isDraft, visibility, publishedAt(sort: Desc), id(sort: Desc)])
+  // Author-scoped article feeds, trending sort.
+  @@index([authorId, deletedAt, isDraft, visibility, trendingScore(sort: Desc), publishedAt(sort: Desc), id(sort: Desc)])
   @@unique([slug])
 }
 
@@ -1406,6 +1424,9 @@ model ArticleComment {
   @@index([articleId, createdAt])
   @@index([parentId, createdAt])
   @@index([authorId, createdAt])
+  // Top-level and reply list queries: article+parent+deleted with createdAt cursoring.
+  @@index([articleId, parentId, deletedAt, createdAt(sort: Desc), id(sort: Desc)], map: "ArticleComment_article_parent_deleted_created_desc_idx")
+  @@index([articleId, parentId, deletedAt, createdAt(sort: Asc), id(sort: Asc)], map: "ArticleComment_article_parent_deleted_created_asc_idx")
 }
 
 model ArticleCommentReaction {

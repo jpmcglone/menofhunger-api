@@ -1,9 +1,8 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
-import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
-import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
+import { OptionalCurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { PostViewsService } from './post-views.service';
 
@@ -33,14 +32,16 @@ export class PostViewsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async markViewed(@OptionalCurrentUserId() userId: string | undefined, @Body() body: unknown): Promise<void> {
     const parsed = markViewedBatchSchema.parse(body);
-    await this.postViews.markViewedBatch(userId ?? null, parsed.postIds, parsed.anon_id ?? null, parsed.source ?? null);
+    void this.postViews
+      .markViewedBatch(userId ?? null, parsed.postIds, parsed.anon_id ?? null, parsed.source ?? null)
+      .catch(() => undefined);
   }
 
   /**
    * Get the viewer breakdown for a post (premium / verified / unverified).
    * Cached for 60 seconds; invalidated on new unique view.
    */
-  @UseGuards(AuthGuard)
+  @UseGuards(OptionalAuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('interact', 120),
@@ -48,9 +49,8 @@ export class PostViewsController {
     },
   })
   @Get('posts/:id/views/breakdown')
-  async getBreakdown(@CurrentUserId() userId: string, @Param('id') postId: string) {
-    void userId; // auth guard ensures user is logged in; breakdown itself is not viewer-specific
-    const result = await this.postViews.getBreakdown(postId);
+  async getBreakdown(@OptionalCurrentUserId() userId: string | undefined, @Param('id') postId: string) {
+    const result = await this.postViews.getBreakdown(postId, userId ?? null);
     return { data: result };
   }
 }

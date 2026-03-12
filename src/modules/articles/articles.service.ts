@@ -11,7 +11,6 @@ import { ViewerContextService } from '../viewer/viewer-context.service';
 import { AppConfigService } from '../app/app-config.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { ArticleViewsService } from '../article-views/article-views.service';
 import {
   toArticleDto,
   toArticleCommentDto,
@@ -25,6 +24,7 @@ import { toPostDto } from '../../common/dto/post.dto';
 import { findReactionById } from '../../common/constants/reactions';
 import { parseMentionsFromBody } from '../../common/mentions/mention-regex';
 import type { PostVisibility } from '@prisma/client';
+import { LOGGED_IN_VIEW_WEIGHT } from '../views/view-tracking.utils';
 
 function slugify(text: string): string {
   return text
@@ -63,7 +63,6 @@ export class ArticlesService {
     private readonly appConfig: AppConfigService,
     private readonly notifications: NotificationsService,
     private readonly presenceRealtime: PresenceRealtimeService,
-    private readonly articleViews: ArticleViewsService,
   ) {}
 
   private get r2BaseUrl(): string | null {
@@ -379,23 +378,39 @@ export class ArticlesService {
 
     const isFirstPublish = !article.publishedAt;
 
-    const updated = await this.prisma.article.update({
-      where: { id: articleId },
-      data: {
-        isDraft: false,
-        publishedAt: article.publishedAt ?? new Date(),
-        editedAt: article.publishedAt ? new Date() : null,
-        lastSavedAt: new Date(),
-      },
-      include: this.articleIncludes(true, true, userId),
-    }) as ArticleWithAuthor;
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const published = await tx.article.update({
+        where: { id: articleId },
+        data: {
+          isDraft: false,
+          publishedAt: article.publishedAt ?? new Date(),
+          editedAt: article.publishedAt ? new Date() : null,
+          lastSavedAt: new Date(),
+        },
+        include: this.articleIncludes(true, true, userId),
+      }) as ArticleWithAuthor;
 
-    // Count the author as the first viewer on first publish.
-    if (isFirstPublish) {
-      this.articleViews.markViewed(userId, articleId).catch((err) => {
-        this.logger.warn(`[article-views] Failed to seed author view on publish: ${err instanceof Error ? err.message : String(err)}`);
-      });
-    }
+      // Seed author self-view synchronously so publish response reflects at least 1 view.
+      if (isFirstPublish) {
+        const seededView = await tx.articleView.createMany({
+          data: [{ articleId, userId }],
+          skipDuplicates: true,
+        });
+        if (seededView.count > 0) {
+          const updatedCounts = await tx.article.update({
+            where: { id: articleId },
+            data: {
+              viewCount: { increment: 1 },
+              weightedViewCount: { increment: LOGGED_IN_VIEW_WEIGHT },
+            },
+            select: { viewCount: true, weightedViewCount: true },
+          });
+          (published as any).viewCount = updatedCounts.viewCount;
+          (published as any).weightedViewCount = updatedCounts.weightedViewCount;
+        }
+      }
+      return published;
+    });
 
     // Fire follower notifications only on first publish.
     if (isFirstPublish) {

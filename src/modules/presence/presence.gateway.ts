@@ -191,62 +191,61 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     try {
       user = await this.auth.meFromSessionToken(token);
     } catch (err) {
-      this.logger.warn(`[presence] Connection auth failed socket=${client.id}: ${err}`);
-      client.disconnect(true);
-      return;
+      this.logger.warn(`[presence] Connection auth failed socket=${client.id}; continuing as anonymous: ${err}`);
     }
-    if (!user) {
-      this.logger.debug(`Presence connection rejected: no session for socket ${client.id}`);
-      client.disconnect(true);
-      return;
-    }
-
-    this.cancelUserTimers(user.id);
-    this.userPresenceNonce.set(String(user.id), (this.userPresenceNonce.get(String(user.id)) ?? 0) + 1);
 
     const clientType =
       (Array.isArray(client.handshake.query.client)
         ? client.handshake.query.client[0]
         : client.handshake.query.client) ?? 'web';
 
-    // Local (per-instance) socket tracking for targeted emits.
-    this.presence.register(client.id, user.id, String(clientType));
-    // Global (cross-instance) presence state in Redis.
-    const { isNewlyOnline } = await this.presenceRedis.registerSocket({
-      socketId: client.id,
-      userId: user.id,
-      client: String(clientType),
-    });
-    // Best-effort: mark reading/being in-app as active for metrics (DAU/MAU).
-    this.presence.persistLastSeenAt(user.id);
-    this.presence.persistDailyActivity(user.id);
+    const userId = String(user?.id ?? '').trim() || null;
+    let isNewlyOnline = false;
+    if (userId) {
+      this.cancelUserTimers(userId);
+      this.userPresenceNonce.set(userId, (this.userPresenceNonce.get(userId) ?? 0) + 1);
+
+      // Local (per-instance) socket tracking for targeted emits.
+      this.presence.register(client.id, userId, String(clientType));
+      // Global (cross-instance) presence state in Redis.
+      const registration = await this.presenceRedis.registerSocket({
+        socketId: client.id,
+        userId,
+        client: String(clientType),
+      });
+      isNewlyOnline = Boolean(registration?.isNewlyOnline);
+      // Best-effort: mark reading/being in-app as active for metrics (DAU/MAU).
+      this.presence.persistLastSeenAt(userId);
+      this.presence.persistDailyActivity(userId);
+    }
+
     // Store for downstream event handlers (radio, etc).
-    (client.data as { userId?: string; presenceClient?: string }).userId = user.id;
+    (client.data as { userId?: string; presenceClient?: string }).userId = userId ?? undefined;
     (client.data as { userId?: string; presenceClient?: string }).presenceClient = String(clientType);
     (client.data as any).viewer = {
-      verified: Boolean(user?.verifiedStatus && user.verifiedStatus !== 'none'),
-      premium: Boolean(user?.premium),
-      premiumPlus: Boolean((user as any)?.premiumPlus),
-      isOrganization: Boolean((user as any)?.isOrganization),
-      verifiedStatus: (user?.verifiedStatus ?? 'none') as 'none' | 'identity' | 'manual',
-      stewardBadgeEnabled: Boolean((user as any)?.stewardBadgeEnabled ?? true),
-      siteAdmin: Boolean((user as any)?.siteAdmin),
+      verified: Boolean(userId && user?.verifiedStatus && user.verifiedStatus !== 'none'),
+      premium: Boolean(userId && user?.premium),
+      premiumPlus: Boolean(userId && (user as any)?.premiumPlus),
+      isOrganization: Boolean(userId && (user as any)?.isOrganization),
+      verifiedStatus: ((userId ? user?.verifiedStatus : 'none') ?? 'none') as 'none' | 'identity' | 'manual',
+      stewardBadgeEnabled: Boolean(userId ? (user as any)?.stewardBadgeEnabled ?? true : true),
+      siteAdmin: Boolean(userId && (user as any)?.siteAdmin),
     };
     (client.data as any).radioChatUser = {
-      id: String(user?.id ?? '').trim(),
+      id: userId ?? '',
       username: (user?.username ?? null) as string | null,
-      premium: Boolean(user?.premium),
-      premiumPlus: Boolean((user as any)?.premiumPlus),
-      isOrganization: Boolean((user as any)?.isOrganization),
-      verifiedStatus: (user?.verifiedStatus ?? 'none') as 'none' | 'identity' | 'manual',
-      stewardBadgeEnabled: Boolean((user as any)?.stewardBadgeEnabled ?? true),
+      premium: Boolean(userId && user?.premium),
+      premiumPlus: Boolean(userId && (user as any)?.premiumPlus),
+      isOrganization: Boolean(userId && (user as any)?.isOrganization),
+      verifiedStatus: ((userId ? user?.verifiedStatus : 'none') ?? 'none') as 'none' | 'identity' | 'manual',
+      stewardBadgeEnabled: Boolean(userId ? (user as any)?.stewardBadgeEnabled ?? true : true),
     } satisfies RadioChatSenderDto;
     // Spaces chat sender is the same shape; keep both keys for a smooth transition.
     (client.data as any).spaceChatUser = (client.data as any).radioChatUser satisfies SpaceChatSenderDto;
     (client.data as any).postSubs = new Set<string>();
     (client.data as any).articleSubs = new Set<string>();
     if (this.logPresenceVerbose) {
-      this.logger.debug(`[presence] CONNECT socket=${client.id} userId=${user.id} isNewlyOnline=${isNewlyOnline}`);
+      this.logger.debug(`[presence] CONNECT socket=${client.id} userId=${userId ?? 'anon'} isNewlyOnline=${isNewlyOnline}`);
     }
 
     client.emit('presence:init', {});
@@ -263,21 +262,26 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       }
     })();
 
-    if (isNewlyOnline) {
-      await this.emitOnline(user.id);
+    if (userId && isNewlyOnline) {
+      await this.emitOnline(userId);
     }
-    this.scheduleIdleMarkTimer(user.id);
+    if (userId) {
+      this.scheduleIdleMarkTimer(userId);
+    }
   }
 
   handleDisconnect(client: Socket): void {
     const socketId = client.id;
     let result: { userId?: string | null; isNowOffline?: boolean } | null = null;
-    try {
-      result = this.presence.unregister(socketId) as any;
-    } catch (err) {
-      this.logger.warn(
-        `[presence] disconnect unregister failed socket=${socketId}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+    const hadUser = Boolean((client.data as { userId?: string }).userId);
+    if (hadUser) {
+      try {
+        result = this.presence.unregister(socketId) as any;
+      } catch (err) {
+        this.logger.warn(
+          `[presence] disconnect unregister failed socket=${socketId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     if (this.logPresenceVerbose) {

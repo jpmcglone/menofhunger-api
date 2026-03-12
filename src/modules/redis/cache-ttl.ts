@@ -1,6 +1,8 @@
 export const CacheTtl = {
   // Anonymous read caches (fast invalidation via version bumps).
   anonFeedSeconds: 30,
+  authFeedSeconds: 15,
+  authCursorFeedSeconds: 8,
   anonTopicsListSeconds: 60,
   anonTopicPostsSeconds: 30,
   anonSearchPostsSeconds: 30,
