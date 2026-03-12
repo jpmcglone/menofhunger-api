@@ -30,7 +30,6 @@ function makeService(opts?: { allowedVisibilities?: Array<'public' | 'verifiedOn
     appConfig,
     {} as any,
     {} as any,
-    {} as any,
   );
 
   return { service, prisma, viewer };
