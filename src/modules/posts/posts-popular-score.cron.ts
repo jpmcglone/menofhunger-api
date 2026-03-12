@@ -277,6 +277,18 @@ export class PostsPopularScoreCron {
               )
               +
               (
+                -- Weighted unique views: logged-in views contribute 1.0, anonymous public views contribute 0.5.
+                -- Keep the weight modest so views inform ranking without overpowering direct engagement.
+                COALESCE(p."weightedViewCount", 0)::DOUBLE PRECISION * 0.15 * POWER(
+                  0.5,
+                  GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (${asOf}::timestamptz - p."createdAt"))
+                  ) / (24 * 60 * 60)
+                )
+              )
+              +
+              (
                 -- Flat reposts (no commentary): same weight as bookmarks.
                 COALESCE(frc."count", 0) * 0.5 * POWER(
                   0.5,

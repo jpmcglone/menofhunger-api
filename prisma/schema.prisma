@@ -283,6 +283,7 @@ model User {
   blocksInitiated UserBlock[] @relation("UserBlock_blocker")
   blocksReceived  UserBlock[] @relation("UserBlock_blocked")
   postViews    PostView[]
+  viewerIdentities ViewerIdentity[]
   articleViews ArticleView[]
   articles  Article[]
   articleBoosts ArticleBoost[]
@@ -498,6 +499,7 @@ model Post {
   /** Denormalized count of flat reposts + quote reposts referencing this post. */
   repostCount Int           @default(0)
   viewerCount Int            @default(0)
+  weightedViewCount Float    @default(0)
   boostScore Float?
   boostScoreUpdatedAt DateTime?
   /** Precomputed trending score, refreshed every ~10 min by the popular-score cron. NULL = not yet scored. */
@@ -536,6 +538,7 @@ model Post {
   bookmarks Bookmark[]
   mentions PostMention[]
   versions PostVersion[]
+  anonViews PostAnonView[]
   pinnedByUser User? @relation("PinnedPost")
   notificationsAsSubject Notification[] @relation("Notification_subjectPost")
   notificationsAsActorPost Notification[] @relation("Notification_actorPost")
@@ -867,6 +870,29 @@ model PostView {
   @@index([postId])
 }
 
+model PostAnonView {
+  postId      String
+  anonId      String
+  createdAt   DateTime @default(now())
+  lastViewedAt DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([postId, anonId])
+  @@index([postId])
+}
+
+model ViewerIdentity {
+  anonId    String   @id
+  userId    String
+  linkedAt  DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
 model ArticleView {
   articleId String
   userId    String
@@ -876,6 +902,18 @@ model ArticleView {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([articleId, userId])
+  @@index([articleId])
+}
+
+model ArticleAnonView {
+  articleId   String
+  anonId      String
+  createdAt   DateTime @default(now())
+  lastViewedAt DateTime @default(now())
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@id([articleId, anonId])
   @@index([articleId])
 }
 
@@ -1289,6 +1327,7 @@ model Article {
   boostCount   Int @default(0)
   commentCount Int @default(0)
   viewCount    Int @default(0)
+  weightedViewCount Float @default(0)
 
   trendingScore          Float?
   trendingScoreUpdatedAt DateTime?
@@ -1300,6 +1339,7 @@ model Article {
   reactions ArticleReaction[]
   comments  ArticleComment[]
   views     ArticleView[]
+  anonViews ArticleAnonView[]
   sharePosts Post[]
   notifications Notification[] @relation("Notification_subjectArticle")
 

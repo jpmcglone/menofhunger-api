@@ -228,6 +228,7 @@ export class AdminDailyDigestCron {
         newFeedbackCount,
         newReportCount,
         newPostCount,
+        newArticleCount,
         activeUserCount,
         bannedUserCount,
         // Open backlog (all-time)
@@ -263,6 +264,9 @@ export class AdminDailyDigestCron {
         this.prisma.report.count({ where: { createdAt: { gte: windowStart, lt: windowEnd } } }),
         this.prisma.post.count({
           where: { createdAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false },
+        }),
+        this.prisma.article.count({
+          where: { publishedAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false },
         }),
         this.prisma.user.count({ where: { lastSeenAt: { gte: windowStart, lt: windowEnd } } }),
         this.prisma.user.count({ where: { bannedAt: { gte: windowStart, lt: windowEnd } } }),
@@ -339,6 +343,42 @@ export class AdminDailyDigestCron {
           };
         }
       }
+      type TopArticleRow = {
+        id: string;
+        title: string;
+        excerpt: string | null;
+        boostCount: number;
+        commentCount: number;
+        viewCount: number;
+        username: string | null;
+      };
+      const topArticlesRaw = await this.prisma.article.findMany({
+        where: {
+          isDraft: false,
+          deletedAt: null,
+          publishedAt: { gte: windowStart, lt: windowEnd },
+        },
+        orderBy: [{ trendingScore: { sort: 'desc', nulls: 'last' } }, { publishedAt: 'desc' }, { id: 'desc' }],
+        take: 3,
+        select: {
+          id: true,
+          title: true,
+          excerpt: true,
+          boostCount: true,
+          commentCount: true,
+          viewCount: true,
+          author: { select: { username: true } },
+        },
+      });
+      const topArticles: TopArticleRow[] = topArticlesRaw.map((a) => ({
+        id: a.id,
+        title: a.title ?? '',
+        excerpt: a.excerpt ?? null,
+        boostCount: a.boostCount,
+        commentCount: a.commentCount,
+        viewCount: a.viewCount,
+        username: a.author?.username ?? null,
+      }));
 
       // Skip send if there's nothing at all to report.
       const totalActiveSubs = activePremiumCount + activePremiumPlusCount;
@@ -347,13 +387,15 @@ export class AdminDailyDigestCron {
         newFeedbackCount > 0 ||
         newReportCount > 0 ||
         newPostCount > 0 ||
+        newArticleCount > 0 ||
         pendingReportCount > 0 ||
         unreviewedFeedbackCount > 0 ||
         pendingVerificationCount > 0 ||
         bannedUserCount > 0 ||
         totalActiveSubs > 0 ||
         newSubscriberRows.length > 0 ||
-        topPost !== null;
+        topPost !== null ||
+        topArticles.length > 0;
 
       if (!hasAnything) {
         this.logger.log(`Admin daily digest (${dayKey}): nothing to report — skipping email.`);
@@ -373,6 +415,7 @@ export class AdminDailyDigestCron {
         dateLabel,
         totalNewUserCount,
         newPostCount,
+        newArticleCount,
         activeUserCount,
         bannedUserCount,
         activePremiumCount,
@@ -392,6 +435,16 @@ export class AdminDailyDigestCron {
               username: topPost.username,
             }
           : null,
+        topArticles: topArticles.length > 0
+          ? topArticles.map((a) => ({
+              id: a.id,
+              title: a.title,
+              boostCount: a.boostCount,
+              commentCount: a.commentCount,
+              viewCount: a.viewCount,
+              username: a.username,
+            }))
+          : [],
         frontendBaseUrl: baseUrl,
       });
 
@@ -410,6 +463,7 @@ export class AdminDailyDigestCron {
             newFeedbackCount,
             newReportCount,
             newPostCount,
+            newArticleCount,
             activeUserCount,
             bannedUserCount,
             pendingReportCount,
@@ -420,6 +474,7 @@ export class AdminDailyDigestCron {
             pendingCancellationCount,
             newSubscriberRows,
             topPost,
+            topArticles,
           });
 
           const text = this.buildText({
@@ -428,6 +483,7 @@ export class AdminDailyDigestCron {
             newFeedbackCount,
             newReportCount,
             newPostCount,
+            newArticleCount,
             activeUserCount,
             bannedUserCount,
             pendingReportCount,
@@ -438,6 +494,7 @@ export class AdminDailyDigestCron {
             pendingCancellationCount,
             newSubscriberCount: newSubscriberRows.length,
             topPost,
+            topArticles,
             baseUrl,
           });
 
@@ -474,6 +531,7 @@ export class AdminDailyDigestCron {
     newFeedbackCount: number;
     newReportCount: number;
     newPostCount: number;
+    newArticleCount: number;
     activeUserCount: number;
     bannedUserCount: number;
     pendingReportCount: number;
@@ -502,15 +560,24 @@ export class AdminDailyDigestCron {
       username: string | null;
       name: string | null;
     } | null;
+    topArticles: Array<{
+      id: string;
+      title: string;
+      excerpt: string | null;
+      boostCount: number;
+      commentCount: number;
+      viewCount: number;
+      username: string | null;
+    }>;
   }): string {
     const {
       dateLabel, now, baseUrl,
       newUsers, totalNewUserCount,
-      newFeedbackCount, newReportCount, newPostCount,
+      newFeedbackCount, newReportCount, newPostCount, newArticleCount,
       activeUserCount, bannedUserCount,
       pendingReportCount, unreviewedFeedbackCount, pendingVerificationCount,
       activePremiumCount, activePremiumPlusCount, pendingCancellationCount,
-      newSubscriberRows, topPost,
+      newSubscriberRows, topPost, topArticles,
     } = params;
 
     const sections: string[] = [];
@@ -545,6 +612,7 @@ export class AdminDailyDigestCron {
     {
       let body = '';
       body += renderStatRow('New posts published', newPostCount);
+      body += renderStatRow('New articles published', newArticleCount);
       body += renderStatRow('Active users (sessions)', activeUserCount);
       if (bannedUserCount > 0) {
         body += renderStatRow('Users banned', bannedUserCount, { color: '#dc2626' });
@@ -584,6 +652,26 @@ export class AdminDailyDigestCron {
         renderButton({ href: postUrl, label: 'View Post →', variant: 'secondary' });
 
       sections.push(renderCard(sectionTitle('Top Post of the Day') + body));
+    }
+
+    // ── Top Articles of the Day ──
+    if (topArticles.length > 0) {
+      const body = [
+        ...topArticles.map((article, idx) => {
+          const articleUrl = `${baseUrl}/a/${article.id}`;
+          const authorHandle = article.username ? `@${article.username}` : '@unknown';
+          return [
+            `<div style="${idx > 0 ? 'margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6;' : ''}">`,
+            `<a href="${escapeHtml(articleUrl)}" style="font-size:14px;line-height:1.6;color:#111827;text-decoration:none;font-weight:700;">${escapeHtml(truncate(article.title || 'Untitled article', 140))}</a>`,
+            `<div style="margin-top:4px;font-size:12px;color:#6b7280;">${escapeHtml(authorHandle)} · 👁 ${article.viewCount} · 🔁 ${article.boostCount} · 💬 ${article.commentCount}</div>`,
+            article.excerpt
+              ? `<div style="margin-top:4px;font-size:12px;line-height:1.6;color:#6b7280;">${escapeHtml(truncate(article.excerpt, 150))}</div>`
+              : '',
+            `</div>`,
+          ].join('');
+        }),
+      ].join('');
+      sections.push(renderCard(sectionTitle('Top Articles of the Day') + body));
     }
 
     // ── Revenue & Subscriptions ──
@@ -688,6 +776,7 @@ export class AdminDailyDigestCron {
     if (newReportCount > 0) preheaderParts.push(plural(newReportCount, 'new report'));
     if (newFeedbackCount > 0) preheaderParts.push(plural(newFeedbackCount, 'new feedback'));
     if (newPostCount > 0) preheaderParts.push(plural(newPostCount, 'new post'));
+    if (newArticleCount > 0) preheaderParts.push(plural(newArticleCount, 'new article'));
     const preheader = preheaderParts.length > 0 ? preheaderParts.join(' · ') : 'Daily admin summary';
 
     return renderMohEmail({
@@ -706,6 +795,7 @@ export class AdminDailyDigestCron {
     newFeedbackCount: number;
     newReportCount: number;
     newPostCount: number;
+    newArticleCount: number;
     activeUserCount: number;
     bannedUserCount: number;
     pendingReportCount: number;
@@ -716,14 +806,15 @@ export class AdminDailyDigestCron {
     pendingCancellationCount: number;
     newSubscriberCount: number;
     topPost: { id: string; body: string; username: string | null; boostCount: number; commentCount: number } | null;
+    topArticles: Array<{ id: string; title: string; username: string | null; boostCount: number; commentCount: number; viewCount: number }>;
     baseUrl: string;
   }): string {
     const {
       dateLabel, totalNewUserCount, newFeedbackCount, newReportCount,
-      newPostCount, activeUserCount, bannedUserCount,
+      newPostCount, newArticleCount, activeUserCount, bannedUserCount,
       pendingReportCount, unreviewedFeedbackCount, pendingVerificationCount,
       activePremiumCount, activePremiumPlusCount, pendingCancellationCount,
-      newSubscriberCount, topPost, baseUrl,
+      newSubscriberCount, topPost, topArticles, baseUrl,
     } = params;
 
     const lines: string[] = [
@@ -732,6 +823,7 @@ export class AdminDailyDigestCron {
       '── Yesterday ──────────────────────',
       `New members:   ${totalNewUserCount}`,
       `New posts:     ${newPostCount}`,
+      `New articles:  ${newArticleCount}`,
       `Active users:  ${activeUserCount}`,
     ];
 
@@ -751,6 +843,16 @@ export class AdminDailyDigestCron {
       lines.push(truncate(topPost.body, 200));
       lines.push(`Boosts: ${topPost.boostCount}  Comments: ${topPost.commentCount}`);
       lines.push(`${baseUrl}/p/${topPost.id}`);
+    }
+    if (topArticles.length > 0) {
+      lines.push('');
+      lines.push('── Top Articles of the Day ─────────');
+      for (const [idx, article] of topArticles.entries()) {
+        const handle = article.username ? `@${article.username}` : '@unknown';
+        lines.push(`${idx + 1}. ${truncate(article.title, 140)} (${handle})`);
+        lines.push(`   👁 ${article.viewCount}  🔁 ${article.boostCount}  💬 ${article.commentCount}`);
+        lines.push(`   ${baseUrl}/a/${article.id}`);
+      }
     }
 
     lines.push('');

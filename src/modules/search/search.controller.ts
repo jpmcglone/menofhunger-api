@@ -5,7 +5,8 @@ import type { Response } from 'express';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
 import type { PostWithAuthorAndMedia } from '../../common/dto/post.dto';
-import { toPostDto, toUserListDto } from '../../common/dto';
+import type { ArticleWithAuthor } from '../../common/dto/article.dto';
+import { toArticleDto, toPostDto, toUserListDto } from '../../common/dto';
 import { PostsService } from '../posts/posts.service';
 import { SearchService } from './search.service';
 import { Throttle } from '@nestjs/throttler';
@@ -25,6 +26,7 @@ const searchSchema = z.object({
   cursor: z.string().optional(),
   userCursor: z.string().optional(),
   postCursor: z.string().optional(),
+  articleCursor: z.string().optional(),
   collectionId: z.string().trim().min(1).optional(),
   unorganized: z.string().trim().optional(),
 });
@@ -61,6 +63,7 @@ export class SearchController {
     const cursor = parsed.cursor ?? null;
     const userCursor = parsed.userCursor ?? null;
     const postCursor = parsed.postCursor ?? null;
+    const articleCursor = parsed.articleCursor ?? null;
     const kind = parsed.kind ?? null;
     const q = (parsed.q ?? '').trim();
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
@@ -80,14 +83,17 @@ export class SearchController {
 
     if (type === 'all') {
       const userLimit = Math.min(10, limit);
-      const postLimit = Math.min(20, Math.max(limit - userLimit, 10));
+      const articleLimit = Math.min(10, Math.max(limit - userLimit, 10));
+      const postLimit = Math.min(20, Math.max(limit - userLimit - articleLimit, 10));
       const res = await this.search.searchMixed({
         viewerUserId,
         q,
         userLimit,
         postLimit,
+        articleLimit,
         userCursor,
         postCursor,
+        articleCursor,
         kind,
       });
       const users = res.users.map((u) =>
@@ -127,17 +133,27 @@ export class SearchController {
               : undefined,
         });
       });
+      const articles = (res.articles ?? []).map((a) =>
+        toArticleDto(a as unknown as ArticleWithAuthor, publicBaseUrl, {
+          viewerUserId,
+          viewerCanAccess: a.viewerCanAccess,
+        }),
+      );
       if (viewerUserId && q.length >= 2) {
         void this.search.recordUserSearch({ userId: viewerUserId, query: q }).catch(() => {});
         this.posthog.capture(viewerUserId, 'search_performed', {
           query: q.toLowerCase(),
-          result_count: users.length + posts.length,
+          result_count: users.length + posts.length + articles.length,
           type,
         });
       }
       return {
-        data: { users, posts },
-        pagination: { nextUserCursor: res.nextUserCursor, nextPostCursor: res.nextPostCursor },
+        data: { users, posts, articles },
+        pagination: {
+          nextUserCursor: res.nextUserCursor,
+          nextPostCursor: res.nextPostCursor,
+          nextArticleCursor: res.nextArticleCursor,
+        },
       };
     }
 

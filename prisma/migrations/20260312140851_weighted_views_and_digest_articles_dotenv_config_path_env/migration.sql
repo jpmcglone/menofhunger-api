@@ -1,0 +1,2 @@
+-- No-op migration. Kept intentionally to avoid duplicate application of the
+-- subsequent correctly named migration in this same timestamp window.

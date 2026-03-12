@@ -54,6 +54,7 @@ export interface SlackDailyDigestPayload {
   dateLabel: string;
   totalNewUserCount: number;
   newPostCount: number;
+  newArticleCount: number;
   activeUserCount: number;
   bannedUserCount: number;
   activePremiumCount: number;
@@ -71,6 +72,14 @@ export interface SlackDailyDigestPayload {
     viewerCount: number;
     username: string | null;
   } | null;
+  topArticles: Array<{
+    id: string;
+    title: string;
+    boostCount: number;
+    commentCount: number;
+    viewCount: number;
+    username: string | null;
+  }>;
   frontendBaseUrl: string | null;
 }
 
@@ -260,6 +269,7 @@ export class SlackService {
     const activityFields: SlackBlock[] = [
       { type: 'mrkdwn', text: `*New Members*\n${base ? `<${base}/admin/users|${p.totalNewUserCount}>` : String(p.totalNewUserCount)}` },
       { type: 'mrkdwn', text: `*New Posts*\n${p.newPostCount}` },
+      { type: 'mrkdwn', text: `*New Articles*\n${p.newArticleCount}` },
       { type: 'mrkdwn', text: `*Active Users*\n${p.activeUserCount}` },
     ];
     if (p.bannedUserCount > 0) {
@@ -320,6 +330,18 @@ export class SlackService {
         ...(postUrl ? [`<${postUrl}|View post →>`] : []),
       ].join('\n');
       blocks.push(this.section(bodyText));
+    }
+    if (p.topArticles.length > 0) {
+      blocks.push({ type: 'divider' });
+      const lines = [':newspaper: *Top Articles of the Day*'];
+      for (const [idx, article] of p.topArticles.entries()) {
+        const articleUrl = base ? `${base}/a/${article.id}` : null;
+        const handle = article.username ? `@${article.username}` : '@unknown';
+        lines.push(
+          `${idx + 1}. ${articleUrl ? `<${articleUrl}|${this.truncate(article.title, 80)}>` : this.truncate(article.title, 80)} (${handle}) · :eye: ${article.viewCount} · :repeat: ${article.boostCount} · :speech_balloon: ${article.commentCount}`,
+        );
+      }
+      blocks.push(this.section(lines.join('\n')));
     }
 
     // Footer

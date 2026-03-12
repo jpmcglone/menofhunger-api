@@ -386,7 +386,7 @@ export class PostsService {
                   ((p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.popularHalfLifeSeconds})))
                   +
                   ((COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight})
-                ) / GREATEST((p."viewerCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
+                ) / GREATEST((p."weightedViewCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
               )
             )
             AS DOUBLE PRECISION
@@ -1120,7 +1120,7 @@ export class PostsService {
                         ((p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${now}::timestamptz - p."createdAt")) / ${PostsService.featuredRisingHalfLifeSeconds})))
                         +
                         ((COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight})
-                      ) / GREATEST((p."viewerCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
+                      ) / GREATEST((p."weightedViewCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
                     )
                   )
                   AS DOUBLE PRECISION
@@ -1587,7 +1587,7 @@ export class PostsService {
                   ((p."repostCount"::DOUBLE PRECISION) * ${PostsService.popularRepostScoreWeight} * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.popularHalfLifeSeconds})))
                   +
                   ((COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight})
-                ) / GREATEST((p."viewerCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
+                ) / GREATEST((p."weightedViewCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
               )
             )
             AS DOUBLE PRECISION
@@ -1937,7 +1937,7 @@ export class PostsService {
                     ((p."repostCount"::DOUBLE PRECISION) * ${PostsService.popularRepostScoreWeight} * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${PostsService.popularHalfLifeSeconds})))
                     +
                     ((COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${PostsService.commentScoreWeight})
-                  ) / GREATEST((p."viewerCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
+                  ) / GREATEST((p."weightedViewCount" + ${PostsService.popularEngagementRateK})::DOUBLE PRECISION, ${PostsService.popularEngagementRateK}::DOUBLE PRECISION)
                 )
               )
               AS DOUBLE PRECISION

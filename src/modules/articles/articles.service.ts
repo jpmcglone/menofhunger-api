@@ -23,6 +23,7 @@ import {
 } from '../../common/dto/article.dto';
 import { toPostDto } from '../../common/dto/post.dto';
 import { findReactionById } from '../../common/constants/reactions';
+import { parseMentionsFromBody } from '../../common/mentions/mention-regex';
 import type { PostVisibility } from '@prisma/client';
 
 function slugify(text: string): string {
@@ -762,20 +763,49 @@ export class ArticlesService {
 
     setImmediate(async () => {
       try {
+        const bodySnippet = commentDto.body?.slice(0, 150) ?? null;
+        const mentionUsernames = parseMentionsFromBody(commentDto.body ?? '');
+        const mentionUsers = mentionUsernames.length
+          ? await this.prisma.user.findMany({
+              where: { username: { in: mentionUsernames } },
+              select: { id: true },
+            })
+          : [];
+        const mentionUserIds = new Set<string>(mentionUsers.map((u) => u.id));
+
         const art = await this.prisma.article.findUnique({ where: { id: articleId }, select: { authorId: true } });
-        if (!art || art.authorId === userId) return;
+        if (!art) return;
+
         const recipientId = data.parentId
           ? (await this.prisma.articleComment.findUnique({ where: { id: data.parentId }, select: { authorId: true } }))?.authorId ?? art.authorId
           : art.authorId;
-        if (recipientId === userId) return;
-        await this.notifications.create({
-          recipientUserId: recipientId,
-          kind: 'comment',
-          actorUserId: userId,
-          subjectArticleId: articleId,
-          title: data.parentId ? 'replied to your comment' : 'commented on your article',
-          body: commentDto.body?.slice(0, 150) ?? null,
-        });
+
+        // Keep parity with post comment behavior: explicit @mentions take priority over comment notifications.
+        if (recipientId !== userId && !mentionUserIds.has(recipientId)) {
+          await this.notifications.create({
+            recipientUserId: recipientId,
+            kind: 'comment',
+            actorUserId: userId,
+            subjectArticleId: articleId,
+            title: data.parentId ? 'replied to your comment' : 'commented on your article',
+            body: bodySnippet,
+          });
+        }
+
+        const mentionTitle = data.parentId
+          ? 'mentioned you in an article reply'
+          : 'mentioned you in an article comment';
+        for (const mentionedUserId of mentionUserIds) {
+          if (mentionedUserId === userId) continue;
+          await this.notifications.create({
+            recipientUserId: mentionedUserId,
+            kind: 'mention',
+            actorUserId: userId,
+            subjectArticleId: articleId,
+            title: mentionTitle,
+            body: bodySnippet,
+          });
+        }
       } catch (err) {
         this.logger.warn(`[notifications] Failed to create article comment notification: ${err instanceof Error ? err.message : String(err)}`);
       }

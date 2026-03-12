@@ -700,12 +700,60 @@ export class NotificationsEmailCron {
           select: featuredPostSelect,
         });
 
+    const topArticleSelect = {
+      id: true,
+      title: true,
+      excerpt: true,
+      publishedAt: true,
+      author: { select: { username: true, name: true } },
+    } as const;
+    const topArticlesPublic = await this.prisma.article.findMany({
+      where: {
+        isDraft: false,
+        deletedAt: null,
+        visibility: { in: ['public'] },
+        publishedAt: dailyWindow,
+      },
+      orderBy: [{ trendingScore: { sort: 'desc', nulls: 'last' } }, { publishedAt: 'desc' }, { id: 'desc' }],
+      take: 3,
+      select: topArticleSelect,
+    });
+    const topArticlesVerified = await this.prisma.article.findMany({
+      where: {
+        isDraft: false,
+        deletedAt: null,
+        visibility: { in: ['public', 'verifiedOnly'] },
+        publishedAt: dailyWindow,
+      },
+      orderBy: [{ trendingScore: { sort: 'desc', nulls: 'last' } }, { publishedAt: 'desc' }, { id: 'desc' }],
+      take: 3,
+      select: topArticleSelect,
+    });
+    const topArticlesPremium = await this.prisma.article.findMany({
+      where: {
+        isDraft: false,
+        deletedAt: null,
+        visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] },
+        publishedAt: dailyWindow,
+      },
+      orderBy: [{ trendingScore: { sort: 'desc', nulls: 'last' } }, { publishedAt: 'desc' }, { id: 'desc' }],
+      take: 3,
+      select: topArticleSelect,
+    });
+
     function pickFeaturedPostForUser(u: { verifiedStatus?: string | null; premium?: boolean | null; premiumPlus?: boolean | null }) {
       const isPremium = Boolean(u.premium || u.premiumPlus);
       const isVerified = (u.verifiedStatus ?? 'none') !== 'none';
       if (isPremium) return featuredPostPremium ?? featuredPostVerified ?? featuredPostPublic;
       if (isVerified) return featuredPostVerified ?? featuredPostPublic;
       return featuredPostPublic;
+    }
+    function pickTopArticlesForUser(u: { verifiedStatus?: string | null; premium?: boolean | null; premiumPlus?: boolean | null }) {
+      const isPremium = Boolean(u.premium || u.premiumPlus);
+      const isVerified = (u.verifiedStatus ?? 'none') !== 'none';
+      if (isPremium) return topArticlesPremium;
+      if (isVerified) return topArticlesVerified;
+      return topArticlesPublic;
     }
 
     type DigestRecipientRow = {
@@ -831,11 +879,23 @@ export class NotificationsEmailCron {
 
         const featuredPost = pickFeaturedPostForUser(u);
         const featuredUrl = featuredPost ? `${baseUrl}/p/${encodeURIComponent(featuredPost.id)}` : null;
+        const topArticles = pickTopArticlesForUser(u);
 
         const featuredTextLines = featuredPost
           ? [
               'Featured post (last 24 hours, since 8am ET yesterday)',
               `by @${(featuredPost.user.username ?? 'unknown').trim()}\n${truncate(featuredPost.body ?? '', 240)}\nOpen: ${featuredUrl ?? ''}`.trim(),
+              '',
+            ]
+          : [];
+        const topArticlesTextLines = topArticles.length > 0
+          ? [
+              'Top articles today',
+              ...topArticles.map((a, idx) => {
+                const authorHandle = (a.author?.username ?? 'unknown').trim();
+                const articleUrl = `${baseUrl}/a/${encodeURIComponent(a.id)}`;
+                return `${idx + 1}. ${truncate(a.title ?? 'Untitled article', 120)} — @${authorHandle}\n${articleUrl}`;
+              }),
               '',
             ]
           : [];
@@ -865,6 +925,7 @@ export class NotificationsEmailCron {
           '',
           ...postStreakTextLines,
           ...featuredTextLines,
+          ...topArticlesTextLines,
           'Definition of the day',
           word ? word : '(unavailable)',
           definition ? definition : '',
@@ -1009,6 +1070,24 @@ export class NotificationsEmailCron {
               ].join(''),
             )
           : '';
+        const topArticlesHtml = topArticles.length > 0
+          ? renderCard(
+              [
+                `<div style="margin-bottom:10px;">${renderPill('Top articles today', 'success')}</div>`,
+                ...topArticles.map((a, idx) => {
+                  const articleUrl = `${baseUrl}/a/${encodeURIComponent(a.id)}`;
+                  const authorHandle = (a.author?.username ?? 'unknown').trim();
+                  return [
+                    `<div style="${idx > 0 ? 'margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6;' : ''}">`,
+                    `<a href="${escapeHtml(articleUrl)}" style="font-size:14px;line-height:1.6;color:#111827;text-decoration:none;font-weight:700;">${escapeHtml(truncate(a.title ?? 'Untitled article', 140))}</a>`,
+                    `<div style="margin-top:4px;font-size:12px;color:#6b7280;">by @${escapeHtml(authorHandle)}</div>`,
+                    a.excerpt ? `<div style="margin-top:4px;font-size:12px;line-height:1.6;color:#6b7280;">${escapeHtml(truncate(a.excerpt, 150))}</div>` : '',
+                    `</div>`,
+                  ].join('');
+                }),
+              ].join(''),
+            )
+          : '';
 
         const unreadLine =
           unreadNotifs > 0 && unreadChats > 0
@@ -1036,6 +1115,7 @@ export class NotificationsEmailCron {
             `<div style="height:12px;"></div>`,
             postStreakBlock,
             ...(featuredPost ? [featuredHtml] : []),
+            ...(topArticles.length > 0 ? [topArticlesHtml] : []),
             definitionBlock,
             quoteBlock,
             checkinBlock,
@@ -1119,12 +1199,67 @@ export class NotificationsEmailCron {
         select: weeklyFeaturedSelect,
       }) as Awaited<ReturnType<typeof this.prisma.post.findFirst>> | null;
 
+      const weeklyNewArticleCount = await this.prisma.article.count({
+        where: {
+          isDraft: false,
+          deletedAt: null,
+          publishedAt: { gte: weekWindowStart, lt: weekWindowEnd },
+        },
+      });
+      const weeklyTopArticleSelect = {
+        id: true,
+        title: true,
+        excerpt: true,
+        publishedAt: true,
+        author: { select: { username: true, name: true } },
+      } as const;
+      const weeklyTopArticlesPublic = await this.prisma.article.findMany({
+        where: {
+          isDraft: false,
+          deletedAt: null,
+          visibility: { in: ['public'] },
+          publishedAt: { gte: weekWindowStart, lt: weekWindowEnd },
+        },
+        orderBy: [{ trendingScore: { sort: 'desc', nulls: 'last' } }, { publishedAt: 'desc' }, { id: 'desc' }],
+        take: 3,
+        select: weeklyTopArticleSelect,
+      });
+      const weeklyTopArticlesVerified = await this.prisma.article.findMany({
+        where: {
+          isDraft: false,
+          deletedAt: null,
+          visibility: { in: ['public', 'verifiedOnly'] },
+          publishedAt: { gte: weekWindowStart, lt: weekWindowEnd },
+        },
+        orderBy: [{ trendingScore: { sort: 'desc', nulls: 'last' } }, { publishedAt: 'desc' }, { id: 'desc' }],
+        take: 3,
+        select: weeklyTopArticleSelect,
+      });
+      const weeklyTopArticlesPremium = await this.prisma.article.findMany({
+        where: {
+          isDraft: false,
+          deletedAt: null,
+          visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] },
+          publishedAt: { gte: weekWindowStart, lt: weekWindowEnd },
+        },
+        orderBy: [{ trendingScore: { sort: 'desc', nulls: 'last' } }, { publishedAt: 'desc' }, { id: 'desc' }],
+        take: 3,
+        select: weeklyTopArticleSelect,
+      });
+
       function pickWeeklyFeaturedPost(u: { verifiedStatus?: string | null; premium?: boolean | null; premiumPlus?: boolean | null }) {
         const isPremium = Boolean(u.premium || u.premiumPlus);
         const isVerified = (u.verifiedStatus ?? 'none') !== 'none';
         if (isPremium) return weeklyFeaturedPostPremium ?? weeklyFeaturedPostVerified ?? weeklyFeaturedPostPublic;
         if (isVerified) return weeklyFeaturedPostVerified ?? weeklyFeaturedPostPublic;
         return weeklyFeaturedPostPublic;
+      }
+      function pickWeeklyTopArticles(u: { verifiedStatus?: string | null; premium?: boolean | null; premiumPlus?: boolean | null }) {
+        const isPremium = Boolean(u.premium || u.premiumPlus);
+        const isVerified = (u.verifiedStatus ?? 'none') !== 'none';
+        if (isPremium) return weeklyTopArticlesPremium;
+        if (isVerified) return weeklyTopArticlesVerified;
+        return weeklyTopArticlesPublic;
       }
 
       // New members this week — up to 15 shown, with overflow count.
@@ -1199,6 +1334,7 @@ export class NotificationsEmailCron {
 
           const featuredPost = pickWeeklyFeaturedPost(u);
           const featuredUrl = featuredPost ? `${baseUrl}/p/${encodeURIComponent(featuredPost.id)}` : null;
+          const topArticles = pickWeeklyTopArticles(u);
 
           const newMembersBlock =
             weeklyNewMembers.length > 0
@@ -1238,6 +1374,25 @@ export class NotificationsEmailCron {
                 ].join(''),
               )
             : '';
+          const topArticlesHtml = topArticles.length > 0
+            ? renderCard(
+                [
+                  `<div style="margin-bottom:10px;">${renderPill('Best articles this week', 'success')}</div>`,
+                  ...topArticles.map((a, idx) => {
+                    const articleUrl = `${baseUrl}/a/${encodeURIComponent(a.id)}`;
+                    const authorHandle = (a.author?.username ?? 'unknown').trim();
+                    return [
+                      `<div style="${idx > 0 ? 'margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6;' : ''}">`,
+                      `<a href="${escapeHtml(articleUrl)}" style="font-size:14px;line-height:1.6;color:#111827;text-decoration:none;font-weight:700;">${escapeHtml(truncate(a.title ?? 'Untitled article', 140))}</a>`,
+                      `<div style="margin-top:4px;font-size:12px;color:#6b7280;">by @${escapeHtml(authorHandle)}</div>`,
+                      a.excerpt ? `<div style="margin-top:4px;font-size:12px;line-height:1.6;color:#6b7280;">${escapeHtml(truncate(a.excerpt, 150))}</div>` : '',
+                      `</div>`,
+                    ].join('');
+                  }),
+                  `<div style="margin-top:12px;font-size:12px;color:#6b7280;">${weeklyNewArticleCount} new article${weeklyNewArticleCount === 1 ? '' : 's'} this week</div>`,
+                ].join(''),
+              )
+            : '';
 
           const subject = 'Your weekly Men of Hunger digest';
 
@@ -1256,6 +1411,18 @@ export class NotificationsEmailCron {
               '',
             );
           }
+          if (topArticles.length > 0) {
+            textLines.push(
+              'Best articles this week',
+              ...topArticles.map((a, idx) => {
+                const articleUrl = `${baseUrl}/a/${encodeURIComponent(a.id)}`;
+                const authorHandle = (a.author?.username ?? 'unknown').trim();
+                return `${idx + 1}. ${truncate(a.title ?? 'Untitled article', 120)} — @${authorHandle}\n${articleUrl}`;
+              }),
+              '',
+            );
+          }
+          textLines.push(`New articles this week: ${weeklyNewArticleCount}`);
           if (weeklyNewMembersTotal > 0) {
             textLines.push(
               `New this week: ${weeklyNewMembersTotal} new member${weeklyNewMembersTotal === 1 ? '' : 's'}`,
@@ -1270,12 +1437,13 @@ export class NotificationsEmailCron {
           const html = renderMohEmail({
             title: `Weekly digest`,
             preheader: featuredPost
-              ? `This week's best post + ${weeklyNewMembersTotal} new member${weeklyNewMembersTotal === 1 ? '' : 's'}.`
-              : `Your weekly Men of Hunger recap.`,
+              ? `This week's best post + ${weeklyNewArticleCount} new article${weeklyNewArticleCount === 1 ? '' : 's'}.`
+              : `Your weekly Men of Hunger recap (${weeklyNewArticleCount} new articles).`,
             contentHtml: [
               `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">Weekly digest</div>`,
               `<div style="margin:0 0 16px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(greeting)}</div>`,
               ...(featuredPost ? [featuredHtml] : []),
+              ...(topArticles.length > 0 ? [topArticlesHtml] : []),
               ...(newMembersBlock ? [newMembersBlock] : []),
               `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(
                 settingsUrl,

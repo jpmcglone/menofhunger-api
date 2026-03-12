@@ -10,6 +10,7 @@ import { ViewerContextService } from '../viewer/viewer-context.service';
 import { queryToTopicValues } from '../../common/topics/topic-utils';
 import { HASHTAG_IN_TEXT_DISPLAY_RE, parseHashtagsFromText } from '../../common/hashtags/hashtag-regex';
 import { POST_BASE_INCLUDE } from '../../common/prisma-includes/post.include';
+import { articleAuthorInclude } from '../../common/dto/article.dto';
 
 /**
  * Search scoring (higher = better). Used for ranking only; tie-breaks: relationship (users), createdAt (posts).
@@ -50,13 +51,35 @@ const POST_SCORE = {
   authorNameAnyWord: 30,
 } as const;
 
+const ARTICLE_SCORE = {
+  titleExact: 110,
+  titlePhrase: 100,
+  titleAllWords: 90,
+  excerptPhrase: 80,
+  excerptAllWords: 70,
+  authorExactUsername: 65,
+  authorExactName: 60,
+  titleAnyWord: 50,
+  excerptAnyWord: 40,
+  authorUsernameAnyWord: 35,
+  authorNameAnyWord: 30,
+} as const;
+
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
 
 const SEARCH_POST_INCLUDE = POST_BASE_INCLUDE;
+const SEARCH_ARTICLE_INCLUDE = {
+  author: { select: articleAuthorInclude },
+  reactions: true,
+} as const;
 
 type SearchPostRow = Prisma.PostGetPayload<{
   include: typeof SEARCH_POST_INCLUDE;
 }>;
+type SearchArticleBaseRow = Prisma.ArticleGetPayload<{
+  include: typeof SEARCH_ARTICLE_INCLUDE;
+}>;
+export type SearchArticleRow = SearchArticleBaseRow & { viewerCanAccess: boolean };
 
 export type SearchUserRow = {
   id: string;
@@ -448,6 +471,168 @@ export class SearchService {
       orConditions.push({ user: { name: { contains: w, mode: 'insensitive' as const } } });
     }
     return { OR: orConditions };
+  }
+
+  private articleSearchMatchWhere(q: string, words: string[]): object {
+    const trimmed = (q ?? '').trim();
+    if (!trimmed) return {};
+    const orConditions: any[] = [
+      { title: { contains: trimmed, mode: 'insensitive' as const } },
+      { excerpt: { contains: trimmed, mode: 'insensitive' as const } },
+      { author: { username: { contains: trimmed, mode: 'insensitive' as const } } },
+      { author: { name: { contains: trimmed, mode: 'insensitive' as const } } },
+    ];
+    for (const w of words) {
+      if (w === trimmed.toLowerCase()) continue;
+      orConditions.push({ title: { contains: w, mode: 'insensitive' as const } });
+      orConditions.push({ excerpt: { contains: w, mode: 'insensitive' as const } });
+      orConditions.push({ author: { username: { contains: w, mode: 'insensitive' as const } } });
+      orConditions.push({ author: { name: { contains: w, mode: 'insensitive' as const } } });
+    }
+    return { OR: orConditions };
+  }
+
+  async searchArticles(params: {
+    viewerUserId: string | null;
+    q: string;
+    limit: number;
+    cursor: string | null;
+  }): Promise<{ articles: SearchArticleRow[]; nextCursor: string | null }> {
+    const q = (params.q ?? '').trim();
+    if (!q) return { articles: [], nextCursor: null };
+
+    const limit = Math.max(1, Math.min(50, params.limit || 30));
+    const cursor = (params.cursor ?? '').trim() || null;
+    const words = queryToWords(q);
+    const qLower = q.toLowerCase();
+    const phrases = extractQuotedPhrases(q).map((p) => p.toLowerCase());
+
+    const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
+    const allowed = this.allowedVisibilitiesForViewer(viewer);
+    const baseWhere: Prisma.ArticleWhereInput = {
+      deletedAt: null,
+      isDraft: false,
+      publishedAt: { not: null },
+      visibility: { not: 'onlyMe' },
+    };
+
+    const fetchSize = Math.min(200, limit * 10);
+    const useFts = q.length >= 3;
+    let raw: SearchArticleBaseRow[] = [];
+
+    if (useFts) {
+      const cursorRow = cursor
+        ? await this.prisma.article.findUnique({ where: { id: cursor }, select: { id: true, publishedAt: true } })
+        : null;
+      const cursorSql = cursorRow?.publishedAt
+        ? Prisma.sql`AND (
+            a."publishedAt" < ${cursorRow.publishedAt}
+            OR (a."publishedAt" = ${cursorRow.publishedAt} AND a."id" < ${cursorRow.id})
+          )`
+        : Prisma.sql``;
+
+      const ids = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        WITH q AS (SELECT websearch_to_tsquery('english', ${q}) AS tsq)
+        SELECT a."id" as "id"
+        FROM "Article" a
+        JOIN "User" u ON u."id" = a."authorId"
+        CROSS JOIN q
+        WHERE
+          a."deletedAt" IS NULL
+          AND a."isDraft" = false
+          AND a."publishedAt" IS NOT NULL
+          AND a."visibility" <> 'onlyMe'
+          ${cursorSql}
+          AND (
+            to_tsvector('english', COALESCE(a."title", '') || ' ' || COALESCE(a."excerpt", '')) @@ q.tsq
+            OR to_tsvector(
+              'english',
+              COALESCE(u."username", '') || ' ' || COALESCE(u."name", '') || ' ' || COALESCE(u."bio", '')
+            ) @@ q.tsq
+          )
+        ORDER BY a."publishedAt" DESC, a."id" DESC
+        LIMIT ${fetchSize}
+      `);
+
+      const articleIds = ids.map((r) => r.id);
+      raw = articleIds.length
+        ? await this.prisma.article.findMany({
+            where: { id: { in: articleIds } },
+            include: SEARCH_ARTICLE_INCLUDE,
+          })
+        : [];
+    } else {
+      const matchWhere = this.articleSearchMatchWhere(q, words) as Prisma.ArticleWhereInput;
+      const cursorRow = cursor
+        ? await this.prisma.article.findUnique({ where: { id: cursor }, select: { id: true, publishedAt: true } })
+        : null;
+      const cursorWhere: Prisma.ArticleWhereInput =
+        cursorRow?.publishedAt
+          ? {
+              OR: [
+                { publishedAt: { lt: cursorRow.publishedAt } },
+                { AND: [{ publishedAt: cursorRow.publishedAt }, { id: { lt: cursorRow.id } }] },
+              ],
+            }
+          : {};
+
+      raw = await this.prisma.article.findMany({
+        where: {
+          AND: [baseWhere, cursorWhere, matchWhere],
+        },
+        include: SEARCH_ARTICLE_INCLUDE,
+        orderBy: [{ publishedAt: 'desc' }, { id: 'desc' }],
+        take: fetchSize,
+      });
+    }
+
+    const articleScore = (a: SearchArticleBaseRow): number => {
+      const title = (a.title ?? '').trim().toLowerCase();
+      const excerpt = (a.excerpt ?? '').trim().toLowerCase();
+      const un = (a.author?.username ?? '').trim().toLowerCase();
+      const nm = (a.author?.name ?? '').trim().toLowerCase();
+      let score = 0;
+
+      if (title === qLower) score = Math.max(score, ARTICLE_SCORE.titleExact);
+      if (phrases.length > 0) {
+        if (phrases.some((p) => title.includes(p))) score = Math.max(score, ARTICLE_SCORE.titlePhrase);
+        if (phrases.some((p) => excerpt.includes(p))) score = Math.max(score, ARTICLE_SCORE.excerptPhrase);
+      } else {
+        if (qLower && title.includes(qLower)) score = Math.max(score, ARTICLE_SCORE.titlePhrase);
+        if (qLower && excerpt.includes(qLower)) score = Math.max(score, ARTICLE_SCORE.excerptPhrase);
+      }
+      if (words.length > 0 && words.every((w) => title.includes(w))) score = Math.max(score, ARTICLE_SCORE.titleAllWords);
+      if (words.length > 0 && words.every((w) => excerpt.includes(w))) score = Math.max(score, ARTICLE_SCORE.excerptAllWords);
+      if (un === qLower) score = Math.max(score, ARTICLE_SCORE.authorExactUsername);
+      if (nm === qLower) score = Math.max(score, ARTICLE_SCORE.authorExactName);
+      if (words.some((w) => title.includes(w))) score = Math.max(score, ARTICLE_SCORE.titleAnyWord);
+      if (words.some((w) => excerpt.includes(w))) score = Math.max(score, ARTICLE_SCORE.excerptAnyWord);
+      if (words.some((w) => un.includes(w))) score = Math.max(score, ARTICLE_SCORE.authorUsernameAnyWord);
+      if (words.some((w) => nm.includes(w))) score = Math.max(score, ARTICLE_SCORE.authorNameAnyWord);
+      return score;
+    };
+
+    const sorted = [...raw].sort((a, b) => {
+      const relA = articleScore(a);
+      const relB = articleScore(b);
+      const popA = (a.boostCount ?? 0) * 3 + (a.commentCount ?? 0) * 2 + (a.viewCount ?? 0);
+      const popB = (b.boostCount ?? 0) * 3 + (b.commentCount ?? 0) * 2 + (b.viewCount ?? 0);
+      const scoreA = relA * 10 + Math.log10(1 + popA);
+      const scoreB = relB * 10 + Math.log10(1 + popB);
+      if (scoreA !== scoreB) return scoreB - scoreA;
+      const ap = a.publishedAt?.getTime() ?? 0;
+      const bp = b.publishedAt?.getTime() ?? 0;
+      if (ap !== bp) return bp - ap;
+      return b.id.localeCompare(a.id);
+    });
+
+    const slice = sorted.slice(0, limit);
+    const articles: SearchArticleRow[] = slice.map((a) => ({
+      ...a,
+      viewerCanAccess: allowed.includes(a.visibility) || a.authorId === params.viewerUserId,
+    }));
+    const nextCursor = slice.length > 0 ? (slice[slice.length - 1]?.id ?? null) : null;
+    return { articles, nextCursor };
   }
 
   private async fetchHashtagFallbackTextPosts(params: {
@@ -853,26 +1038,32 @@ export class SearchService {
     q: string;
     userLimit: number;
     postLimit: number;
+    articleLimit: number;
     userCursor: string | null;
     postCursor: string | null;
+    articleCursor: string | null;
     kind: 'regular' | 'checkin' | null;
   }): Promise<{
     users: SearchUserRow[];
     posts: Awaited<ReturnType<SearchService['searchPosts']>>['posts'];
+    articles: SearchArticleRow[];
     nextUserCursor: string | null;
     nextPostCursor: string | null;
+    nextArticleCursor: string | null;
   }> {
     const q = (params.q ?? '').trim();
     if (q.length < 2) {
       return {
         users: [],
         posts: [],
+        articles: [],
         nextUserCursor: null,
         nextPostCursor: null,
+        nextArticleCursor: null,
       };
     }
 
-    const [userResult, postResult] = await Promise.all([
+    const [userResult, postResult, articleResult] = await Promise.all([
       this.searchUsers({
         q,
         limit: params.userLimit,
@@ -886,13 +1077,21 @@ export class SearchService {
         cursor: params.postCursor,
         kind: params.kind ?? null,
       }),
+      this.searchArticles({
+        viewerUserId: params.viewerUserId,
+        q,
+        limit: params.articleLimit,
+        cursor: params.articleCursor,
+      }),
     ]);
 
     return {
       users: userResult.users,
       posts: postResult.posts,
+      articles: articleResult.articles,
       nextUserCursor: userResult.nextCursor,
       nextPostCursor: postResult.nextCursor,
+      nextArticleCursor: articleResult.nextCursor,
     };
   }
 

@@ -177,13 +177,18 @@ export class NotificationsService {
           actor,
           fallbackTitle,
           body,
+          subjectArticleId,
         });
         // Comments link to the reply; article notifications link to the article page.
-        const pushUrl = kind === 'comment' && actorPostId
-          ? `/p/${actorPostId}`
-          : kind === 'followed_article' && subjectArticleId
-            ? `/a/${subjectArticleId}`
-            : null;
+        const pushUrl = kind === 'comment' && subjectArticleId
+          ? `/a/${subjectArticleId}`
+          : kind === 'comment' && actorPostId
+            ? `/p/${actorPostId}`
+            : kind === 'mention' && subjectArticleId
+              ? `/a/${subjectArticleId}`
+              : kind === 'followed_article' && subjectArticleId
+                ? `/a/${subjectArticleId}`
+                : null;
         const pushTag = this.buildPushTag({
           recipientUserId,
           kind,
@@ -302,17 +307,30 @@ export class NotificationsService {
     actor?: PushActorContext | null;
     fallbackTitle?: string | null;
     body?: string | null;
+    subjectArticleId?: string | null;
   }): { title: string; body?: string } {
-    const { kind, actor, fallbackTitle, body } = params;
+    const { kind, actor, fallbackTitle, body, subjectArticleId } = params;
     const actorName = this.actorDisplayName(actor);
     const snippet = this.trimPushBody(body);
     if (kind === 'comment') {
+      if (subjectArticleId) {
+        return {
+          title: `${actorName} commented on your article`,
+          body: snippet ?? 'Open to view the comment.',
+        };
+      }
       return {
         title: `${actorName} replied to your post`,
         body: snippet ?? 'Open to view the reply.',
       };
     }
     if (kind === 'mention') {
+      if (subjectArticleId) {
+        return {
+          title: `${actorName} mentioned you in an article comment`,
+          body: snippet ?? 'Open to view the mention.',
+        };
+      }
       return {
         title: `${actorName} mentioned you`,
         body: snippet ?? 'Open to view the mention.',
@@ -1394,10 +1412,10 @@ export class NotificationsService {
 
   async markReadBySubject(
     recipientUserId: string,
-    params: { postId?: string | null; userId?: string | null },
+    params: { postId?: string | null; userId?: string | null; articleId?: string | null },
   ): Promise<void> {
-    const { postId, userId } = params;
-    if (!postId && !userId) return;
+    const { postId, userId, articleId } = params;
+    if (!postId && !userId && !articleId) return;
 
     // Back-compat: followed_post notifications were historically keyed only by actorUserId.
     // When visiting a user's profile we want to clear "new posts" notifications for that actor,
@@ -1415,6 +1433,9 @@ export class NotificationsService {
       // Nudges should only be cleared via explicit actions (ignore / acknowledge / nudge back).
       or.push({ subjectUserId: userId, kind: { not: 'nudge' } });
       or.push({ kind: 'followed_post', actorUserId: userId });
+    }
+    if (articleId) {
+      or.push({ subjectArticleId: articleId });
     }
     const where = {
       recipientUserId,

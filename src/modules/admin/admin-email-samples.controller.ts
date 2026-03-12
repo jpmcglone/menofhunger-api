@@ -82,6 +82,11 @@ export class AdminEmailSamplesController {
     const messagesUrl = `${ctx.baseUrl}/chat`;
     const settingsUrl = `${ctx.baseUrl}/settings/notifications`;
     const homeUrl = `${ctx.baseUrl}/home`;
+    const sampleArticles = [
+      { id: 'sample-article-1', title: 'A quiet hour before sunrise', username: 'john_doe' },
+      { id: 'sample-article-2', title: 'Why disciplined men need brotherhood', username: 'mike_ross' },
+      { id: 'sample-article-3', title: 'A weekly reset that actually works', username: 'david_c' },
+    ];
 
     const snap = await this.dailyContent.getToday().catch(() => null);
     const quoteText = (snap?.quote?.text ?? '').trim();
@@ -112,6 +117,9 @@ export class AdminEmailSamplesController {
       'Quote of the day',
       quoteText ? `“${quoteText}”` : '(unavailable)',
       quoteAttr ? `— ${quoteAttr}` : '',
+      '',
+      'Top articles today',
+      ...sampleArticles.map((a, idx) => `${idx + 1}. ${a.title} — @${a.username} (${ctx.baseUrl}/a/${a.id})`),
       '',
       `Open: ${homeUrl}`,
       '',
@@ -163,6 +171,17 @@ export class AdminEmailSamplesController {
         quoteBlock,
         renderCard(
           [
+            `<div style="margin-bottom:10px;">${renderPill('Top articles today', 'success')}</div>`,
+            ...sampleArticles.map((a, idx) => {
+              const url = `${ctx.baseUrl}/a/${a.id}`;
+              return `<div style="${idx > 0 ? 'margin-top:8px;' : ''}"><a href="${escapeHtml(url)}" style="color:#111827;text-decoration:none;font-size:13px;font-weight:700;">${escapeHtml(
+                a.title,
+              )}</a><div style="font-size:12px;color:#6b7280;">by @${escapeHtml(a.username)}</div></div>`;
+            }),
+          ].join(''),
+        ),
+        renderCard(
+          [
             `<div style="margin-bottom:10px;">${renderPill('Daily check-in', 'warning')}</div>`,
             `<div style="font-size:14px;line-height:1.8;color:#111827;">How are you doing today?</div>`,
             `<div style="margin-top:12px;">${renderButton({ href: homeUrl, label: 'Check in' })}</div>`,
@@ -190,6 +209,12 @@ export class AdminEmailSamplesController {
       id: 'sample-post-id',
     };
     const samplePostUrl = `${ctx.baseUrl}/p/${samplePost.id}`;
+    const weeklyArticleCount = 11;
+    const sampleArticles = [
+      { id: 'sample-article-1', title: 'Lead your home with steadiness', username: 'john_doe' },
+      { id: 'sample-article-2', title: 'How to rebuild discipline after burnout', username: 'michael_s' },
+      { id: 'sample-article-3', title: 'Prayer, planning, and consistency', username: 'david_c' },
+    ];
 
     const sampleNewMembers = [
       { username: 'new_member_1', name: 'James Wilson' },
@@ -208,6 +233,9 @@ export class AdminEmailSamplesController {
       `by @${samplePost.username}`,
       samplePost.body,
       `Open: ${samplePostUrl}`,
+      '',
+      `New articles this week: ${weeklyArticleCount}`,
+      ...sampleArticles.map((a, idx) => `${idx + 1}. ${a.title} — @${a.username} (${ctx.baseUrl}/a/${a.id})`),
       '',
       `New this week: ${newMembersTotal} new members`,
       ...sampleNewMembers.map((m) => `  @${m.username}`),
@@ -253,6 +281,18 @@ export class AdminEmailSamplesController {
         `<div style="margin:0 0 14px 0;">${renderPill('Sample email', 'warning')}</div>`,
         `<div style="height:4px;"></div>`,
         featuredBlock,
+        renderCard(
+          [
+            `<div style="margin-bottom:10px;">${renderPill('Best articles this week', 'success')}</div>`,
+            ...sampleArticles.map((a, idx) => {
+              const url = `${ctx.baseUrl}/a/${a.id}`;
+              return `<div style="${idx > 0 ? 'margin-top:8px;' : ''}"><a href="${escapeHtml(url)}" style="color:#111827;text-decoration:none;font-size:13px;font-weight:700;">${escapeHtml(
+                a.title,
+              )}</a><div style="font-size:12px;color:#6b7280;">by @${escapeHtml(a.username)}</div></div>`;
+            }),
+            `<div style="margin-top:10px;font-size:12px;color:#6b7280;">${weeklyArticleCount} new articles this week</div>`,
+          ].join(''),
+        ),
         newMembersBlock,
         `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(
           settingsUrl,

@@ -40,7 +40,7 @@ export function renderPill(
           ? { bg: '#EFF6FF', border: '#BFDBFE', text: '#1D4ED8' }
           : { bg: '#F3F4F6', border: '#E5E7EB', text: '#111827' });
 
-  return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${colors.bg};border:1px solid ${colors.border};font-size:12px;color:${colors.text};white-space:nowrap;">${escapeHtml(
+  return `<span style="display:inline-block;padding:3px 8px;border-radius:999px;background:${colors.bg};border:1px solid ${colors.border};font-size:11px;color:${colors.text};white-space:nowrap;">${escapeHtml(
     label,
   )}</span>`;
 }
@@ -52,14 +52,14 @@ export function renderButton(params: { href: string; label: string; variant?: 'p
 
   const style =
     variant === 'secondary'
-      ? 'display:inline-block;padding:11px 14px;border-radius:12px;background:#ffffff;color:#111827;text-decoration:none;font-weight:700;font-size:14px;border:1px solid #e5e7eb;'
-      : 'display:inline-block;padding:11px 14px;border-radius:12px;background:#111827;color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;';
+      ? 'display:inline-block;padding:8px 12px;border-radius:10px;background:#ffffff;color:#111827;text-decoration:none;font-weight:700;font-size:13px;border:1px solid #e5e7eb;'
+      : 'display:inline-block;padding:8px 12px;border-radius:10px;background:#111827;color:#ffffff;text-decoration:none;font-weight:700;font-size:13px;';
 
   return `<a href="${href}" style="${style}">${label}</a>`;
 }
 
 export function renderCard(innerHtml: string): string {
-  return `<div style="margin-top:12px;padding:14px 14px;border:1px solid #e5e7eb;background:#ffffff;border-radius:14px;">${innerHtml}</div>`;
+  return `<div style="margin-top:8px;padding:10px 10px;border:1px solid #e5e7eb;background:#ffffff;border-radius:12px;">${innerHtml}</div>`;
 }
 
 export function renderMohEmail(params: {
@@ -83,15 +83,15 @@ export function renderMohEmail(params: {
     `</head>`,
     `<body style="margin:0;padding:0;background:#f6f7f9;color:#111827;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">`,
     `<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">${preheader}</div>`,
-    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f6f7f9;padding:26px 0;">`,
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f6f7f9;padding:20px 0;">`,
     `<tr><td align="center" style="padding:0 12px;">`,
-    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="width:100%;max-width:600px;background:#ffffff;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden;">`,
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="width:100%;max-width:600px;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;">`,
     // top accent bar
-    `<tr><td style="height:6px;background:linear-gradient(90deg,#111827 0%, #f59e0b 55%, #111827 100%);"></td></tr>`,
-    `<tr><td style="padding:18px 22px 10px 22px;">`,
-    `<div style="font-size:13px;font-weight:800;letter-spacing:0.10em;text-transform:uppercase;color:#111827;">Men of Hunger</div>`,
+    `<tr><td style="height:5px;background:linear-gradient(90deg,#111827 0%, #f59e0b 55%, #111827 100%);"></td></tr>`,
+    `<tr><td style="padding:14px 18px 8px 18px;">`,
+    `<div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#111827;">Men of Hunger</div>`,
     `</td></tr>`,
-    `<tr><td style="padding:10px 22px 18px 22px;">`,
+    `<tr><td style="padding:8px 18px 14px 18px;">`,
     params.contentHtml,
     `</td></tr>`,
     `</table>`,

@@ -17,7 +17,7 @@ export class ArticlesTrendingScoreCron {
   /**
    * Compute trending scores for articles every 10 minutes.
    * Score formula uses a 24-hour half-life (articles trend longer than posts).
-   * Components: boostCount * decay + commentCount * 0.8 * decay + shareCount * 0.5 * decay
+   * Components: boostCount * decay + commentCount * 0.8 * decay + shareCount * 0.5 * decay + weightedViewCount * 0.2 * decay
    */
   @Cron('*/10 * * * *')
   async refreshTrendingScores() {
@@ -51,6 +51,7 @@ export class ArticlesTrendingScoreCron {
               a."boostCount" * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${asOf}::timestamptz - a."publishedAt")) / (24 * 60 * 60)))
               + a."commentCount" * 0.8 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${asOf}::timestamptz - a."publishedAt")) / (24 * 60 * 60)))
               + COALESCE(sc."shareCount", 0) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${asOf}::timestamptz - a."publishedAt")) / (24 * 60 * 60)))
+              + COALESCE(a."weightedViewCount", 0) * 0.2 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${asOf}::timestamptz - a."publishedAt")) / (24 * 60 * 60)))
             )::double precision as "score"
           FROM "Article" a
           LEFT JOIN share_counts sc ON sc."articleId" = a."id"

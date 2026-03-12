@@ -2,12 +2,15 @@ import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } f
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
-import { CurrentUserId } from '../users/users.decorator';
+import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { PostViewsService } from './post-views.service';
 
 const markViewedBatchSchema = z.object({
   postIds: z.array(z.string().trim().min(1)).min(1).max(50),
+  anon_id: z.string().trim().min(12).max(128).optional(),
+  source: z.string().trim().min(1).max(80).optional(),
 });
 
 @Controller()
@@ -19,7 +22,7 @@ export class PostViewsController {
    * Idempotent: safe to call multiple times for the same posts.
    * Returns 204 No Content — fire-and-forget friendly.
    */
-  @UseGuards(AuthGuard)
+  @UseGuards(OptionalAuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('interact', 120),
@@ -28,9 +31,9 @@ export class PostViewsController {
   })
   @Post('posts/views')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async markViewed(@CurrentUserId() userId: string, @Body() body: unknown): Promise<void> {
+  async markViewed(@OptionalCurrentUserId() userId: string | undefined, @Body() body: unknown): Promise<void> {
     const parsed = markViewedBatchSchema.parse(body);
-    await this.postViews.markViewedBatch(userId, parsed.postIds);
+    await this.postViews.markViewedBatch(userId ?? null, parsed.postIds, parsed.anon_id ?? null, parsed.source ?? null);
   }
 
   /**

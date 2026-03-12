@@ -3,6 +3,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
 import { RedisService } from '../redis/redis.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import {
+  ANON_VIEW_WEIGHT,
+  LOGGED_IN_VIEW_WEIGHT,
+  cutoffForAnonRecount,
+  sanitizeAnonViewerId,
+} from '../views/view-tracking.utils';
 
 const BREAKDOWN_TTL_SECONDS = 60;
 const BATCH_MAX = 50;
@@ -40,6 +47,7 @@ export class ArticleViewsService {
     private readonly cache: CacheService,
     private readonly redis: RedisService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -47,10 +55,16 @@ export class ArticleViewsService {
    * (userId, articleId) pair are safe and will not double-count.
    * Emits a WebSocket event if this is the first (unique) view.
    */
-  async markViewed(userId: string, articleId: string): Promise<void> {
+  async markViewed(
+    userId: string | null | undefined,
+    articleId: string,
+    anonViewerId?: string | null,
+    _source?: string | null,
+  ): Promise<void> {
     const uid = (userId ?? '').trim();
     const aid = (articleId ?? '').trim();
-    if (!uid || !aid) return;
+    const anonId = sanitizeAnonViewerId(anonViewerId);
+    if (!aid || (!uid && !anonId)) return;
 
     try {
       const article = await this.prisma.article.findFirst({
@@ -59,25 +73,121 @@ export class ArticleViewsService {
       });
       if (!article) return;
 
-      // Authors can always view their own articles; everyone else must meet the tier requirement
-      if (article.authorId !== uid) {
+      // Authors can always view their own articles; everyone else must meet the tier requirement.
+      if (uid && article.authorId !== uid) {
         const viewer = await this.prisma.user.findFirst({
           where: { id: uid },
           select: { verifiedStatus: true, premium: true, premiumPlus: true },
         });
         if (!viewerCanAccessVisibility(article.visibility, viewer)) return;
       }
+      if (!uid && article.visibility !== 'public') return;
 
-      const created = await this.prisma.articleView.createMany({
-        data: [{ articleId: aid, userId: uid }],
-        skipDuplicates: true,
-      });
+      if (uid && anonId) {
+        await this.prisma.viewerIdentity.upsert({
+          where: { anonId },
+          create: { anonId, userId: uid },
+          update: { userId: uid },
+        });
+      }
 
-      if (created.count === 0) return;
+      let weightedIncrement = 0;
+      let viewIncrement = 0;
+      if (uid) {
+        const now = new Date();
+        const result = await this.prisma.$transaction(async (tx) => {
+          const created = await tx.articleView.createMany({
+            data: [{ articleId: aid, userId: uid }],
+            skipDuplicates: true,
+          });
+          const consumedAnonCount = anonId
+            ? (
+                await tx.articleAnonView.deleteMany({
+                  where: { articleId: aid, anonId },
+                })
+              ).count
+            : 0;
+
+          let weightedIncrementLocal = 0;
+          let viewIncrementLocal = 0;
+          if (created.count > 0) {
+            viewIncrementLocal = consumedAnonCount > 0 ? 0 : 1;
+            weightedIncrementLocal = consumedAnonCount > 0 ? 0.5 : LOGGED_IN_VIEW_WEIGHT;
+          }
+
+          if (viewIncrementLocal !== 0 || weightedIncrementLocal !== 0) {
+            const updated = await tx.article.update({
+              where: { id: aid },
+              data: {
+                viewCount: { increment: viewIncrementLocal },
+                weightedViewCount: { increment: weightedIncrementLocal },
+              },
+              select: { viewCount: true },
+            });
+            return { viewIncrementLocal, weightedIncrementLocal, viewCount: updated.viewCount };
+          }
+
+          const unchanged = await tx.article.findUnique({
+            where: { id: aid },
+            select: { viewCount: true },
+          });
+          return { viewIncrementLocal, weightedIncrementLocal, viewCount: unchanged?.viewCount ?? 0 };
+        });
+
+        viewIncrement = result.viewIncrementLocal;
+        weightedIncrement = result.weightedIncrementLocal;
+
+        if (viewIncrement !== 0 || weightedIncrement !== 0) {
+          void this.redis.del(breakdownCacheKey(aid)).catch(() => undefined);
+          this.presenceRealtime.emitArticlesLiveUpdated(aid, {
+            articleId: aid,
+            version: now.toISOString(),
+            reason: 'viewCount',
+            patch: { viewCount: result.viewCount },
+          });
+        }
+        await this.notifications.markReadBySubject(uid, { articleId: aid });
+        return;
+      } else if (anonId) {
+        const linkedIdentity = await this.prisma.viewerIdentity.findUnique({
+          where: { anonId },
+          select: { userId: true },
+        });
+        if (linkedIdentity?.userId) {
+          const alreadyViewedAsUser = await this.prisma.articleView.findUnique({
+            where: { articleId_userId: { articleId: aid, userId: linkedIdentity.userId } },
+            select: { articleId: true },
+          });
+          if (alreadyViewedAsUser) return;
+        }
+
+        const now = new Date();
+        const created = await this.prisma.articleAnonView.createMany({
+          data: [{ articleId: aid, anonId, lastViewedAt: now }],
+          skipDuplicates: true,
+        });
+        if (created.count > 0) {
+          viewIncrement = 1;
+          weightedIncrement = ANON_VIEW_WEIGHT;
+        } else {
+          const refreshed = await this.prisma.articleAnonView.updateMany({
+            where: { articleId: aid, anonId, lastViewedAt: { lt: cutoffForAnonRecount(now) } },
+            data: { lastViewedAt: now },
+          });
+          if (refreshed.count > 0) {
+            viewIncrement = 1;
+            weightedIncrement = ANON_VIEW_WEIGHT;
+          }
+        }
+      }
+      if (weightedIncrement <= 0) return;
 
       const updated = await this.prisma.article.update({
         where: { id: aid },
-        data: { viewCount: { increment: 1 } },
+        data: {
+          viewCount: { increment: viewIncrement },
+          weightedViewCount: { increment: weightedIncrement },
+        },
         select: { viewCount: true },
       });
 
@@ -97,14 +207,20 @@ export class ArticleViewsService {
   /**
    * Batch version of markViewed. Caps at BATCH_MAX IDs to prevent abuse.
    */
-  async markViewedBatch(userId: string, articleIds: string[]): Promise<void> {
+  async markViewedBatch(
+    userId: string | null | undefined,
+    articleIds: string[],
+    anonViewerId?: string | null,
+    source?: string | null,
+  ): Promise<void> {
     const uid = (userId ?? '').trim();
-    if (!uid || !Array.isArray(articleIds) || articleIds.length === 0) return;
+    const anonId = sanitizeAnonViewerId(anonViewerId);
+    if ((!uid && !anonId) || !Array.isArray(articleIds) || articleIds.length === 0) return;
 
     const ids = [...new Set(articleIds.map((id) => (id ?? '').trim()).filter(Boolean))].slice(0, BATCH_MAX);
     if (ids.length === 0) return;
 
-    await Promise.all(ids.map((aid) => this.markViewed(uid, aid)));
+    await Promise.all(ids.map((aid) => this.markViewed(uid || null, aid, anonId, source)));
   }
 
   /**
