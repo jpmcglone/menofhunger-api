@@ -49,6 +49,50 @@ export type AdminAnalyticsEngagementDto = {
   connectedUserPct: number | null;
 };
 
+export type AdminAnalyticsTopArticleDto = {
+  id: string;
+  title: string;
+  slug: string;
+  visibility: string;
+  authorUsername: string;
+  viewCount: number;
+  boostCount: number;
+  commentCount: number;
+  reactionCount: number;
+  publishedAt: string;
+};
+
+export type AdminAnalyticsArticleKpiDto = {
+  /** All-time published article count */
+  totalPublished: number;
+  /** All-time draft count */
+  totalDrafts: number;
+  /** Unique authors who have published at least one article */
+  uniqueAuthors: number;
+  /** Article views recorded in the selected range */
+  totalViewsInRange: number;
+  /** Article boosts recorded in the selected range */
+  totalBoostsInRange: number;
+  /** Article reactions recorded in the selected range */
+  totalReactionsInRange: number;
+  /** Article comments (non-deleted) created in the selected range */
+  totalCommentsInRange: number;
+  /** Average views per published article for articles published in the range */
+  avgViewsPerArticle: number;
+};
+
+export type AdminAnalyticsArticlesDto = {
+  kpis: AdminAnalyticsArticleKpiDto;
+  /** Time series — articles published per bucket in the selected range */
+  published: TimeSeriesPoint[];
+  /** Time series — article views recorded per bucket in the selected range */
+  views: TimeSeriesPoint[];
+  /** Published (non-deleted) article count by visibility tier (all time) */
+  byVisibility: Record<string, number>;
+  /** Top articles by view count in the selected range */
+  topArticles: AdminAnalyticsTopArticleDto[];
+};
+
 export type AdminAnalyticsMonetizationDto = {
   free: number;
   payingPremium: number;
@@ -73,5 +117,6 @@ export type AdminAnalyticsDto = {
   retention: AdminAnalyticsRetentionRow[];
   engagement: AdminAnalyticsEngagementDto;
   monetization: AdminAnalyticsMonetizationDto;
+  articles: AdminAnalyticsArticlesDto;
   asOf: string;
 };

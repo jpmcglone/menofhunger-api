@@ -71,6 +71,7 @@ export const USER_DTO_SELECT = {
   interests: true,
   menOnlyConfirmed: true,
   siteAdmin: true,
+  featureToggles: true,
   bannedAt: true,
   bannedReason: true,
   bannedByAdminId: true,

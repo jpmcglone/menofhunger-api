@@ -1,6 +1,7 @@
 import type { MessageDto } from '../../modules/messages/message.dto';
 import type { NotificationDto } from '../../modules/notifications/notification.dto';
 import type { UserDto } from './user.dto';
+import type { ArticleCommentDto, ArticleReactionSummaryDto } from './article.dto';
 
 /**
  * Websocket (Socket.IO) payload DTOs.
@@ -135,6 +136,14 @@ export const WsEventNames = {
   postsUnsubscribe: 'posts:unsubscribe',
   postsSubscribed: 'posts:subscribed',
   postsLiveUpdated: 'posts:liveUpdated',
+  articlesSubscribe: 'articles:subscribe',
+  articlesUnsubscribe: 'articles:unsubscribe',
+  articlesSubscribed: 'articles:subscribed',
+  articlesLiveUpdated: 'articles:liveUpdated',
+  articlesCommentAdded: 'articles:commentAdded',
+  articlesCommentDeleted: 'articles:commentDeleted',
+  articlesCommentUpdated: 'articles:commentUpdated',
+  articlesCommentReactionChanged: 'articles:commentReactionChanged',
 } as const;
 
 export type PostsSubscribePayloadDto = {
@@ -162,5 +171,53 @@ export type PostsLiveUpdatedPayloadDto = {
     commentCount: number;
     viewerCount: number;
   }>;
+};
+
+export type ArticlesSubscribePayloadDto = {
+  articleIds: string[];
+};
+
+export type ArticlesSubscribedPayloadDto = {
+  articleIds: string[];
+};
+
+/**
+ * Minimal article patch for live updates.
+ * NOTE: Keep this intentionally small; clients should treat unknown fields as best-effort.
+ */
+export type ArticlesLiveUpdatedPayloadDto = {
+  articleId: string;
+  /** Monotonic-ish version (ISO timestamp string). Used for client-side stale checks. */
+  version: string;
+  reason: string;
+  patch: Partial<{
+    commentCount: number;
+    viewCount: number;
+    boostCount: number;
+    reactions: ArticleReactionSummaryDto[];
+  }>;
+};
+
+export type ArticlesCommentAddedPayloadDto = {
+  articleId: string;
+  comment: ArticleCommentDto;
+};
+
+export type ArticlesCommentDeletedPayloadDto = {
+  articleId: string;
+  commentId: string;
+  parentId: string | null;
+};
+
+export type ArticlesCommentUpdatedPayloadDto = {
+  articleId: string;
+  comment: ArticleCommentDto;
+};
+
+export type ArticlesCommentReactionChangedPayloadDto = {
+  articleId: string;
+  commentId: string;
+  parentId: string | null;
+  reactions: ArticleReactionSummaryDto[];
 };
 

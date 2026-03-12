@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
@@ -16,6 +16,13 @@ import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
 import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
 
+const readThrottle = {
+  default: {
+    limit: rateLimitLimit('read', 120),
+    ttl: rateLimitTtl('read', 60),
+  },
+};
+
 const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
@@ -32,6 +39,15 @@ const listSchema = z.object({
 const userListSchema = listSchema.extend({
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
   includeCounts: z.coerce.boolean().optional(),
+  topLevelOnly: z.coerce.boolean().optional(),
+  includeRestricted: z.coerce.boolean().optional(),
+});
+
+const userMediaListSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  cursor: z.string().optional(),
+  visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
+  sort: z.enum(['new', 'trending']).optional(),
 });
 
 const createUploadMediaItemSchema = z.object({
@@ -467,6 +483,7 @@ export class PostsController {
           cursor,
           visibility: parsed.visibility ?? 'all',
           includeCounts: parsed.includeCounts ?? true,
+          topLevelOnly: parsed.topLevelOnly ?? false,
         })
       : null;
     const cacheKey = anonCache && feedVer ? RedisKeys.anonPostsUser(username, paramsHash!, feedVer) : null;
@@ -484,10 +501,22 @@ export class PostsController {
           visibility: parsed.visibility ?? 'all',
           includeCounts: parsed.includeCounts ?? true,
           sort: sortKind === 'popular' ? 'popular' : 'new',
+          topLevelOnly: parsed.topLevelOnly ?? false,
+          includeRestricted: parsed.includeRestricted ?? false,
         });
 
         const viewer = await this.posts.viewerContext(viewerUserId);
         const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+
+        // Compute per-post viewerCanAccess when includeRestricted=true.
+        let viewerCanAccessByPostId: Map<string, boolean> | undefined;
+        if (parsed.includeRestricted) {
+          const allowed = this.posts.allowedVisibilities(viewer);
+          viewerCanAccessByPostId = new Map(
+            result.posts.map((p) => [p.id, allowed.includes(p.visibility) || p.userId === viewerUserId]),
+          );
+        }
+
         // Dedupe: keep only leaf posts (same as list()). O(leaves × max chain depth) in-memory.
         const idToPostUser = new Map(result.posts.map((p) => [p.id, p]));
         const strictAncestorIdsUser = new Set<string>();
@@ -579,6 +608,7 @@ export class PostsController {
           viewerBlockedBy: viewerBlockedByUser,
           repostedByPostId: repostedByPostIdUser,
           repostedPostMap: repostedPostMapUser as any,
+          viewerCanAccessByPostId,
         });
 
         return {
@@ -590,6 +620,28 @@ export class PostsController {
 
     setReadCache(httpRes, { viewerUserId });
     return out;
+  }
+
+  // ─── User media grid ───────────────────────────────────────────────────────
+
+  @UseGuards(OptionalAuthGuard)
+  @Throttle(readThrottle)
+  @Get('user/:username/media')
+  async listUserMedia(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('username') username: string,
+    @Query() query: unknown,
+  ) {
+    const parsed = userMediaListSchema.parse(query);
+    const result = await this.posts.listMediaForUsername({
+      viewerUserId: userId ?? null,
+      username,
+      limit: parsed.limit ?? 30,
+      cursor: parsed.cursor ?? null,
+      visibility: parsed.visibility ?? 'all',
+      sort: parsed.sort ?? 'new',
+    });
+    return { data: result.items, pagination: { nextCursor: result.nextCursor } };
   }
 
   @UseGuards(AuthGuard)
@@ -739,7 +791,21 @@ export class PostsController {
     @Res({ passthrough: true }) httpRes: Response,
   ) {
     const viewerUserId = userId ?? null;
-    const post = await this.posts.getById({ viewerUserId, id });
+
+    // Try to fetch the post with normal access rules; if forbidden (tier too low),
+    // fall back to a stripped preview so /p/:id can still render the gated treatment.
+    let viewerCanAccess = true;
+    let post: Awaited<ReturnType<typeof this.posts.getById>>;
+    try {
+      post = await this.posts.getById({ viewerUserId, id });
+    } catch (e) {
+      if (e instanceof ForbiddenException) {
+        post = await this.posts.getByIdNoAccess(id);
+        viewerCanAccess = false;
+      } else {
+        throw e;
+      }
+    }
 
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
@@ -778,7 +844,7 @@ export class PostsController {
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(postIds) : undefined;
 
     const r2 = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const toDto = (p: (typeof chain)[number], opts: { parent?: ReturnType<typeof toPostDto>; repostedPost?: ReturnType<typeof toPostDto> }) => {
+    const toDto = (p: (typeof chain)[number], opts: { parent?: ReturnType<typeof toPostDto>; repostedPost?: ReturnType<typeof toPostDto>; isGatedRoot?: boolean }) => {
       const base = internalByPostId?.get(p.id);
       const score = scoreByPostIdGet?.get(p.id);
       const pWithPoll = p as { user?: { id?: string }; poll?: { creatorSkippedAt?: Date | null } };
@@ -799,6 +865,8 @@ export class PostsController {
             ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
             : undefined,
         repostedPost: opts.repostedPost,
+        // Only the root (requested) post is gated; ancestors are accessible.
+        viewerCanAccess: opts.isGatedRoot ? false : undefined,
       });
       return opts.parent ? { ...dto, parent: opts.parent } : dto;
     };
@@ -809,7 +877,13 @@ export class PostsController {
     // Build from root down: chain[chain.length-1] is root, chain[0] is leaf (the post we're viewing)
     let dto = toDto(chain[chain.length - 1], { repostedPost: repostedPostDto });
     for (let i = chain.length - 2; i >= 0; i--) {
-      dto = toDto(chain[i], { parent: dto });
+      // chain[0] is the leaf post (the one actually requested); mark it gated if access was denied.
+      dto = toDto(chain[i], { parent: dto, isGatedRoot: !viewerCanAccess && i === 0 });
+    }
+    // Single-post case (no parent): the chain has only one entry, already built above.
+    if (!viewerCanAccess && chain.length === 1) {
+      // Rebuild with gated flag
+      dto = toDto(chain[0], { repostedPost: repostedPostDto, isGatedRoot: true });
     }
 
     setReadCache(httpRes, { viewerUserId });

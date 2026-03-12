@@ -84,7 +84,7 @@ export type PostDto = {
   editCount: number;
   body: string;
   deletedAt: string | null;
-  kind: 'regular' | 'checkin' | 'repost';
+  kind: 'regular' | 'checkin' | 'repost' | 'articleShare';
   checkinDayKey: string | null;
   checkinPrompt: string | null;
   visibility: PostVisibility;
@@ -115,6 +115,8 @@ export type PostDto = {
   repostedPost?: PostDto;
   /** For posts containing an embedded post link: the quoted post (preloaded). */
   quotedPost?: PostDto;
+  /** For kind='articleShare': the shared article preview. */
+  article?: import('./article.dto').ArticleSharePreviewDto;
   internal?: {
     boostScore: number | null;
     boostScoreUpdatedAt: string | null;
@@ -124,6 +126,8 @@ export type PostDto = {
   author: PostAuthorDto;
   /** When true, post body/media/mentions/poll are redacted and author is placeholder. */
   authorBanned?: boolean;
+  /** False when the viewer's tier does not grant access to this post (preview-only; body/media stripped). */
+  viewerCanAccess?: boolean;
 };
 
 /** Mention row with user included (from Prisma include). */
@@ -219,6 +223,14 @@ export function toPostPollDto(
   };
 }
 
+/** Returns first ~22 characters (mid-word cut) + "…" if body has ≥ `minWords` words, else empty string. */
+function gatedPostBody(body: string, minWords = 10, previewChars = 22): string {
+  const text = (body ?? '').trim();
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length < minWords) return '';
+  return text.slice(0, previewChars) + '…';
+}
+
 export function toPostDto(
   post: PostWithAuthorAndMedia,
   publicAssetBaseUrl: string | null = null,
@@ -241,6 +253,8 @@ export function toPostDto(
       boostScoreUpdatedAt?: Date | null;
       score?: number | null;
     };
+    /** When false, body/media/mentions/poll are stripped (viewer tier too low). */
+    viewerCanAccess?: boolean;
   },
 ): PostDto {
   const internalBoostScore =
@@ -362,6 +376,61 @@ export function toPostDto(
     };
   }
 
+  const canAccess = opts?.viewerCanAccess !== false;
+
+  if (!canAccess) {
+    return {
+      id: post.id,
+      createdAt: post.createdAt.toISOString(),
+      editedAt: null,
+      editCount: 0,
+      body: gatedPostBody(post.body),
+      deletedAt: postDeletedAt,
+      kind: ((post as any).kind ?? 'regular') as any,
+      checkinDayKey: null,
+      checkinPrompt: null,
+      visibility: post.visibility,
+      isDraft: Boolean((post as any).isDraft),
+      topics: [],
+      hashtags: [],
+      boostCount: post.boostCount,
+      bookmarkCount: post.bookmarkCount ?? 0,
+      commentCount: post.commentCount ?? 0,
+      repostCount: (post as any).repostCount ?? 0,
+      viewerCount: (post as any).viewerCount ?? 0,
+      parentId: post.parentId ?? null,
+      mentions: [],
+      media: [],
+      poll: null,
+      author: {
+        id: post.user.id,
+        username: post.user.username,
+        name: post.user.name,
+        premium: post.user.premium,
+        premiumPlus: post.user.premiumPlus,
+        isOrganization: Boolean((post.user as any).isOrganization),
+        stewardBadgeEnabled: Boolean(post.user.stewardBadgeEnabled),
+        verifiedStatus: post.user.verifiedStatus,
+        avatarUrl: publicAssetUrl({
+          publicBaseUrl: publicAssetBaseUrl,
+          key: post.user.avatarKey ?? null,
+          updatedAt: post.user.avatarUpdatedAt ?? null,
+        }),
+        orgAffiliations: (post.user.orgMemberships ?? []).map((m) => ({
+          id: m.org.id,
+          username: m.org.username,
+          name: m.org.name,
+          avatarUrl: publicAssetUrl({
+            publicBaseUrl: publicAssetBaseUrl,
+            key: m.org.avatarKey ?? null,
+            updatedAt: m.org.avatarUpdatedAt ?? null,
+          }),
+        })),
+      },
+      viewerCanAccess: false,
+    };
+  }
+
   return {
     id: post.id,
     createdAt: post.createdAt.toISOString(),
@@ -403,6 +472,7 @@ export function toPostDto(
           },
         }
       : {}),
+    viewerCanAccess: true,
     author: {
       id: post.user.id,
       username: post.user.username,

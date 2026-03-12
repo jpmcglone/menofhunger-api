@@ -149,5 +149,57 @@ export class UploadsController {
     });
     return { data: result };
   }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('upload', 60),
+      ttl: rateLimitTtl('upload', 60),
+    },
+  })
+  @Post('article-thumbnail/init')
+  async initArticleThumbnail(@Body() body: unknown, @CurrentUserId() userId: string) {
+    const { contentType } = z.object({ contentType: z.string().min(1) }).parse(body);
+    const result = await this.uploads.initArticleThumbnailUpload(userId, contentType);
+    return { data: result };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('upload', 60),
+      ttl: rateLimitTtl('upload', 60),
+    },
+  })
+  @Post('article-thumbnail/commit')
+  async commitArticleThumbnail(@Body() body: unknown, @CurrentUserId() userId: string) {
+    const { key } = z.object({ key: z.string().min(1) }).parse(body);
+    const result = await this.uploads.commitArticleThumbnailUpload(userId, key);
+    return { data: result };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('upload', 60),
+      ttl: rateLimitTtl('upload', 60),
+    },
+  })
+  @Post('article-media/init')
+  async initArticleMedia(@Body() body: unknown, @CurrentUserId() userId: string) {
+    const { contentType } = z.object({ contentType: z.string().min(1) }).parse(body);
+    const result = await this.uploads.initArticleMediaUpload(userId, contentType);
+    return { data: result };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('upload', 60),
+      ttl: rateLimitTtl('upload', 60),
+    },
+  })
+  @Post('article-media/commit')
+  async commitArticleMedia(@Body() body: unknown, @CurrentUserId() userId: string) {
+    const { key } = z.object({ key: z.string().min(1) }).parse(body);
+    const result = await this.uploads.commitArticleMediaUpload(userId, key);
+    return { data: result };
+  }
 }
 

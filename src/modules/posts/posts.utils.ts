@@ -26,6 +26,8 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
   repostedByPostId?: Set<string>;
   /** Map from repostedPostId to the raw post data for flat reposts. */
   repostedPostMap?: Map<string, T>;
+  /** When set, used to determine per-post viewerCanAccess. Posts not in the map default to true. */
+  viewerCanAccessByPostId?: Map<string, boolean>;
 }) {
   const {
     parentMap,
@@ -42,6 +44,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     viewerBlockedBy,
     repostedByPostId,
     repostedPostMap,
+    viewerCanAccessByPostId,
   } = opts;
 
   function attachParentChain(post: T): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } {
@@ -66,6 +69,8 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     const repostedPostRaw = repostedPostIdVal ? repostedPostMap?.get(repostedPostIdVal) : undefined;
     const repostedPostDto = repostedPostRaw ? attachParentChain(repostedPostRaw) : undefined;
 
+    const postViewerCanAccess = viewerCanAccessByPostId ? (viewerCanAccessByPostId.get(post.id) ?? true) : undefined;
+
     const dto = toPostDto(post as unknown as PostWithAuthorAndMedia, baseUrl, {
       viewerHasBoosted: boosted.has(post.id),
       viewerHasBookmarked: bookmarksByPostId.has(post.id),
@@ -80,6 +85,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
         internalOverride || (typeof score === 'number' ? { score } : undefined)
           ? { ...internalOverride, ...(typeof score === 'number' ? { score } : {}) }
           : undefined,
+      viewerCanAccess: postViewerCanAccess,
     }) as ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> };
     const parent = post.parentId ? parentMap.get(post.parentId) : null;
     if (parent) {

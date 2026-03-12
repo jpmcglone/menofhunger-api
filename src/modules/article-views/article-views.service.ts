@@ -1,0 +1,153 @@
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { CacheService } from '../redis/cache.service';
+import { RedisService } from '../redis/redis.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+
+const BREAKDOWN_TTL_SECONDS = 60;
+const BATCH_MAX = 50;
+
+function viewerCanAccessVisibility(
+  visibility: string,
+  viewer: { verifiedStatus: string; premium: boolean; premiumPlus: boolean } | null,
+): boolean {
+  if (visibility === 'public') return true;
+  if (!viewer) return false;
+  const isPremium = viewer.premium || viewer.premiumPlus;
+  const isVerified = viewer.verifiedStatus !== 'none' || isPremium;
+  if (visibility === 'verifiedOnly') return isVerified;
+  if (visibility === 'premiumOnly') return isPremium;
+  return false; // onlyMe — author check handles this before we're called
+}
+
+function breakdownCacheKey(articleId: string): string {
+  return `cache:article-view-breakdown:${articleId}`;
+}
+
+export type ArticleViewBreakdown = {
+  premium: number;
+  verified: number;
+  unverified: number;
+  total: number;
+};
+
+@Injectable()
+export class ArticleViewsService {
+  private readonly logger = new Logger(ArticleViewsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
+    private readonly redis: RedisService,
+    private readonly presenceRealtime: PresenceRealtimeService,
+  ) {}
+
+  /**
+   * Record that a user viewed an article. Idempotent: multiple calls for the same
+   * (userId, articleId) pair are safe and will not double-count.
+   * Emits a WebSocket event if this is the first (unique) view.
+   */
+  async markViewed(userId: string, articleId: string): Promise<void> {
+    const uid = (userId ?? '').trim();
+    const aid = (articleId ?? '').trim();
+    if (!uid || !aid) return;
+
+    try {
+      const article = await this.prisma.article.findFirst({
+        where: { id: aid, deletedAt: null },
+        select: { id: true, visibility: true, authorId: true },
+      });
+      if (!article) return;
+
+      // Authors can always view their own articles; everyone else must meet the tier requirement
+      if (article.authorId !== uid) {
+        const viewer = await this.prisma.user.findFirst({
+          where: { id: uid },
+          select: { verifiedStatus: true, premium: true, premiumPlus: true },
+        });
+        if (!viewerCanAccessVisibility(article.visibility, viewer)) return;
+      }
+
+      const created = await this.prisma.articleView.createMany({
+        data: [{ articleId: aid, userId: uid }],
+        skipDuplicates: true,
+      });
+
+      if (created.count === 0) return;
+
+      const updated = await this.prisma.article.update({
+        where: { id: aid },
+        data: { viewCount: { increment: 1 } },
+        select: { viewCount: true },
+      });
+
+      void this.redis.del(breakdownCacheKey(aid)).catch(() => undefined);
+
+      this.presenceRealtime.emitArticlesLiveUpdated(aid, {
+        articleId: aid,
+        version: new Date().toISOString(),
+        reason: 'viewCount',
+        patch: { viewCount: updated.viewCount },
+      });
+    } catch (err) {
+      this.logger.warn(`markViewed failed for articleId=${aid} userId=${uid}: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Batch version of markViewed. Caps at BATCH_MAX IDs to prevent abuse.
+   */
+  async markViewedBatch(userId: string, articleIds: string[]): Promise<void> {
+    const uid = (userId ?? '').trim();
+    if (!uid || !Array.isArray(articleIds) || articleIds.length === 0) return;
+
+    const ids = [...new Set(articleIds.map((id) => (id ?? '').trim()).filter(Boolean))].slice(0, BATCH_MAX);
+    if (ids.length === 0) return;
+
+    await Promise.all(ids.map((aid) => this.markViewed(uid, aid)));
+  }
+
+  /**
+   * Returns a breakdown of viewers by tier (cached for BREAKDOWN_TTL_SECONDS).
+   * premium: users with premium OR premiumPlus
+   * verified: verifiedStatus != 'none' AND NOT (premium OR premiumPlus)
+   * unverified: verifiedStatus == 'none' AND NOT (premium OR premiumPlus)
+   */
+  async getBreakdown(articleId: string, viewerUserId: string): Promise<ArticleViewBreakdown> {
+    const aid = (articleId ?? '').trim();
+
+    const article = await this.prisma.article.findUnique({
+      where: { id: aid },
+      select: { authorId: true },
+    });
+    if (!article || article.authorId !== viewerUserId) {
+      throw new NotFoundException('Article not found.');
+    }
+
+    return this.cache.getOrSetJson<ArticleViewBreakdown>({
+      enabled: true,
+      key: breakdownCacheKey(aid),
+      ttlSeconds: BREAKDOWN_TTL_SECONDS,
+      compute: async () => {
+        const rows = await this.prisma.$queryRaw<
+          Array<{ premium: bigint; verified: bigint; unverified: bigint }>
+        >`
+          SELECT
+            COUNT(*) FILTER (WHERE u.premium OR u."premiumPlus")                                        AS premium,
+            COUNT(*) FILTER (WHERE u."verifiedStatus" != 'none' AND NOT (u.premium OR u."premiumPlus")) AS verified,
+            COUNT(*) FILTER (WHERE u."verifiedStatus" = 'none'  AND NOT (u.premium OR u."premiumPlus")) AS unverified
+          FROM "ArticleView" av
+          JOIN "User" u ON u.id = av."userId"
+          WHERE av."articleId" = ${aid}
+        `;
+
+        const row = rows[0] ?? { premium: 0n, verified: 0n, unverified: 0n };
+        const premium = Number(row.premium ?? 0);
+        const verified = Number(row.verified ?? 0);
+        const unverified = Number(row.unverified ?? 0);
+
+        return { premium, verified, unverified, total: premium + verified + unverified };
+      },
+    });
+  }
+}

@@ -1,5 +1,6 @@
 import type { BirthdayVisibility, FollowVisibility, VerifiedStatus } from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
+import { sanitizeFeatureToggles, type AppFeatureToggle } from '../feature-toggles';
 
 /** Minimal org account summary shown alongside affiliated users. */
 export type OrgAffiliationDto = {
@@ -140,6 +141,7 @@ export type UserDto = {
   interests: string[];
   menOnlyConfirmed: boolean;
   siteAdmin: boolean;
+  featureToggles: AppFeatureToggle[];
   bannedAt: string | null;
   bannedReason: string | null;
   bannedByAdminId: string | null;
@@ -204,6 +206,7 @@ export type UserDtoRow = {
   interests: string[];
   menOnlyConfirmed: boolean;
   siteAdmin: boolean;
+  featureToggles: string[];
   bannedAt: Date | null;
   bannedReason: string | null;
   bannedByAdminId: string | null;
@@ -253,6 +256,7 @@ export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = 
     interests: user.interests ?? [],
     menOnlyConfirmed: Boolean(user.menOnlyConfirmed),
     siteAdmin: user.siteAdmin,
+    featureToggles: sanitizeFeatureToggles((user as any).featureToggles),
     bannedAt: user.bannedAt ? user.bannedAt.toISOString() : null,
     bannedReason: user.bannedReason ?? null,
     bannedByAdminId: user.bannedByAdminId ?? null,

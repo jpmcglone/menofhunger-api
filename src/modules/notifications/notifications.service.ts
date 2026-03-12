@@ -8,7 +8,7 @@ import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cu
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
-import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectPostVisibility, SubjectTier } from './notification.dto';
+import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectArticlePreviewDto, SubjectPostVisibility, SubjectTier } from './notification.dto';
 import type {
   FollowedPostsRollupDto,
   NotificationFeedItemDto,
@@ -25,6 +25,7 @@ export type CreateNotificationParams = {
   actorPostId?: string | null;
   subjectPostId?: string | null;
   subjectUserId?: string | null;
+  subjectArticleId?: string | null;
   title?: string | null;
   body?: string | null;
 };
@@ -94,6 +95,7 @@ export class NotificationsService {
       actorPostId,
       subjectPostId,
       subjectUserId,
+      subjectArticleId,
       title,
       body,
     } = params;
@@ -107,6 +109,7 @@ export class NotificationsService {
         follow: 'followed you',
         boost: 'boosted your post',
         followed_post: 'posted',
+        followed_article: 'published an article',
         mention: 'mentioned you',
         comment: 'replied to you',
         poll_results_ready: 'Poll results are ready',
@@ -122,6 +125,7 @@ export class NotificationsService {
           actorPostId: actorPostId ?? undefined,
           subjectPostId: subjectPostId ?? undefined,
           subjectUserId: subjectUserId ?? undefined,
+          subjectArticleId: subjectArticleId ?? undefined,
           title: fallbackTitle ?? undefined,
           body: body ?? undefined,
         },
@@ -174,8 +178,12 @@ export class NotificationsService {
           fallbackTitle,
           body,
         });
-        // Comments should link to the reply (actorPostId), not the original post (subjectPostId).
-        const pushUrl = kind === 'comment' && actorPostId ? `/p/${actorPostId}` : null;
+        // Comments link to the reply; article notifications link to the article page.
+        const pushUrl = kind === 'comment' && actorPostId
+          ? `/p/${actorPostId}`
+          : kind === 'followed_article' && subjectArticleId
+            ? `/a/${subjectArticleId}`
+            : null;
         const pushTag = this.buildPushTag({
           recipientUserId,
           kind,
@@ -255,6 +263,7 @@ export class NotificationsService {
     if (kind === 'repost') return Boolean(prefs.pushRepost);
     if (kind === 'nudge') return Boolean(prefs.pushNudge);
     if (kind === 'followed_post') return Boolean(prefs.pushFollowedPost);
+    if (kind === 'followed_article') return Boolean(prefs.pushFollowedPost);
     // Non-mapped kinds pass through default (allow).
     return true;
   }
@@ -1140,13 +1149,41 @@ export class NotificationsService {
       subjectTierByUserId.set(u.id, tier);
     }
 
+    const subjectArticleIds = [
+      ...new Set(
+        raw
+          .filter((n) => n.kind === 'followed_article' && n.subjectArticleId)
+          .map((n) => n.subjectArticleId as string),
+      ),
+    ];
+    const subjectArticles =
+      subjectArticleIds.length > 0
+        ? await this.prisma.article.findMany({
+            where: { id: { in: subjectArticleIds } },
+            select: { id: true, title: true, excerpt: true, thumbnailR2Key: true, visibility: true },
+          })
+        : [];
+    const subjectArticlePreviewById = new Map<string, SubjectArticlePreviewDto>();
+    for (const a of subjectArticles) {
+      const thumbnailUrl = a.thumbnailR2Key
+        ? (publicAssetUrl({ publicBaseUrl, key: a.thumbnailR2Key }) ?? null)
+        : null;
+      subjectArticlePreviewById.set(a.id, {
+        title: a.title ?? null,
+        excerpt: a.excerpt ?? null,
+        thumbnailUrl,
+        visibility: a.visibility ?? null,
+      });
+    }
+
     const dtos: NotificationDto[] = raw.map((n) => {
       const preview = n.subjectPostId ? subjectPreviewByPostId.get(n.subjectPostId) ?? null : null;
+      const articlePreview = n.subjectArticleId ? subjectArticlePreviewById.get(n.subjectArticleId) ?? null : null;
       const subjectPostVisibility = n.subjectPostId ? subjectVisibilityByPostId.get(n.subjectPostId) ?? null : null;
       let subjectTier: SubjectTier = null;
       if (n.subjectPostId) subjectTier = subjectTierByPostId.get(n.subjectPostId) ?? null;
       else if (n.subjectUserId) subjectTier = subjectTierByUserId.get(n.subjectUserId) ?? null;
-      return this.toNotificationDto(n, publicBaseUrl, preview, subjectPostVisibility, subjectTier);
+      return this.toNotificationDto(n, publicBaseUrl, preview, subjectPostVisibility, subjectTier, articlePreview);
     });
 
     // Follow bell settings: which followed_post actors have “every post” enabled.
@@ -1723,6 +1760,7 @@ export class NotificationsService {
       actorPostId: string | null;
       subjectPostId: string | null;
       subjectUserId: string | null;
+      subjectArticleId?: string | null;
       title: string | null;
       body: string | null;
       actor: {
@@ -1740,6 +1778,7 @@ export class NotificationsService {
     subjectPostPreview?: SubjectPostPreviewDto | null,
     subjectPostVisibility: SubjectPostVisibility | null = null,
     subjectTier: SubjectTier = null,
+    subjectArticlePreview?: SubjectArticlePreviewDto | null,
   ): NotificationDto {
     let actor: NotificationActorDto | null = null;
     if (n.actor && !(n.actor as { bannedAt?: Date | null }).bannedAt) {
@@ -1769,9 +1808,11 @@ export class NotificationsService {
       actorPostId: n.actorPostId,
       subjectPostId: n.subjectPostId,
       subjectUserId: n.subjectUserId,
+      subjectArticleId: n.subjectArticleId ?? null,
       title: n.title,
       body: n.body,
       subjectPostPreview: subjectPostPreview ?? null,
+      subjectArticlePreview: subjectArticlePreview ?? null,
       subjectPostVisibility,
       subjectTier,
     };

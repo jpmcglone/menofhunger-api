@@ -586,6 +586,11 @@ export class PostsService {
     return this.viewerContextService.allowedPostVisibilities(viewer);
   }
 
+  /** Public helper: returns the visibility tiers the viewer can access. */
+  allowedVisibilities(viewer: Pick<ViewerContext, 'verifiedStatus' | 'premium' | 'premiumPlus'> | null) {
+    return this.viewerContextService.allowedPostVisibilities(viewer);
+  }
+
   async listOnlyMe(params: { userId: string; limit: number; cursor: string | null }) {
     const { userId, limit, cursor } = params;
 
@@ -1729,6 +1734,10 @@ export class PostsService {
     visibility: 'all' | PostVisibility;
     includeCounts: boolean;
     sort: 'new' | 'popular';
+    topLevelOnly?: boolean;
+    /** When true, include posts of all visibility tiers.
+     *  Posts the viewer cannot access are returned with viewerCanAccess=false and stripped body/media. */
+    includeRestricted?: boolean;
   }) {
     const { viewerUserId, username, limit, cursor, visibility, includeCounts, sort } = params;
     const normalized = (username ?? '').trim();
@@ -1772,21 +1781,30 @@ export class PostsService {
     const allowed =
       isSelf ? (['public', 'verifiedOnly', 'premiumOnly'] as PostVisibility[]) : this.allowedVisibilitiesForViewer(viewer);
 
-    if (visibility === 'verifiedOnly' && !isSelf) {
-      if (!viewer || viewer.verifiedStatus === 'none') throw new ForbiddenException('Verify to view verified-only posts.');
-    }
-    if (visibility === 'premiumOnly' && !isSelf) {
-      if (!viewer || !viewer.premium) throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+    if (!params.includeRestricted) {
+      if (visibility === 'verifiedOnly' && !isSelf) {
+        if (!viewer || viewer.verifiedStatus === 'none') throw new ForbiddenException('Verify to view verified-only posts.');
+      }
+      if (visibility === 'premiumOnly' && !isSelf) {
+        if (!viewer || !viewer.premium) throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+      }
     }
 
+    const topLevelFilter: Prisma.PostWhereInput = params.topLevelOnly ? { parentId: null } : {};
+
+    // When includeRestricted=true, omit visibility filter so all tiers are returned.
+    const allVisibilities: PostVisibility[] = ['public', 'verifiedOnly', 'premiumOnly'];
+    const effectiveAllowed = params.includeRestricted ? allVisibilities : allowed;
+
     const baseWhere =
-      visibility === 'all'
+      params.includeRestricted || visibility === 'all'
         ? ({
             userId: user.id,
-            visibility: { in: allowed },
+            visibility: { in: effectiveAllowed },
             ...this.notDeletedWhere(),
+            ...topLevelFilter,
           } as Prisma.PostWhereInput)
-        : ({ userId: user.id, visibility, ...this.notDeletedWhere() } as Prisma.PostWhereInput);
+        : ({ userId: user.id, visibility, ...this.notDeletedWhere(), ...topLevelFilter } as Prisma.PostWhereInput);
 
     if (sort === 'popular') {
       // Trending for profile: same half-life boost + bookmark scoring as home feed, scoped to this user.
@@ -2245,6 +2263,28 @@ export class PostsService {
 
     this.requestCache.set(cacheKey, post as FeedPost);
     return post;
+  }
+
+  /**
+   * Like getById but for permalink preview: returns the post even when the viewer's tier
+   * can't access it (verifiedOnly / premiumOnly). onlyMe posts still throw 404.
+   * The caller is responsible for passing `viewerCanAccess: false` to toPostDto.
+   */
+  async getByIdNoAccess(id: string): Promise<FeedPost> {
+    const postId = (id ?? '').trim();
+    if (!postId) throw new NotFoundException('Post not found.');
+
+    const post = await this.prisma.post.findFirst({
+      where: { id: postId, visibility: { not: 'onlyMe' }, deletedAt: null },
+      include: {
+        user: { select: USER_LIST_SELECT },
+        media: { orderBy: { position: 'asc' } },
+        poll: { include: { options: { orderBy: { position: 'asc' } } } },
+        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
+      },
+    });
+    if (!post) throw new NotFoundException('Post not found.');
+    return post as FeedPost;
   }
 
   async deletePost(params: { userId: string; postId: string }) {
@@ -4384,6 +4424,117 @@ export class PostsService {
       else viewerBlockedBy.add(row.blockerId);
     }
     return { blockedByViewer, viewerBlockedBy };
+  }
+
+  // ─── User media grid ──────────────────────────────────────────────────────
+
+  async listMediaForUsername(params: {
+    viewerUserId: string | null;
+    username: string;
+    limit: number;
+    cursor: string | null;
+    visibility: 'all' | PostVisibility;
+    sort: 'new' | 'trending';
+  }) {
+    const { viewerUserId, username, limit, cursor, visibility, sort } = params;
+    const normalized = (username ?? '').trim();
+    if (!normalized) throw new NotFoundException('User not found.');
+
+    const user = await this.prisma.user.findFirst({
+      where: { username: { equals: normalized, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    if (!user) throw new NotFoundException('User not found.');
+
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
+    const isSelf = Boolean(viewer && viewer.id === user.id);
+    const allowed = isSelf
+      ? (['public', 'verifiedOnly', 'premiumOnly'] as PostVisibility[])
+      : this.allowedVisibilitiesForViewer(viewer);
+
+    const visibilityFilter: PostVisibility[] =
+      visibility === 'all'
+        ? allowed
+        : allowed.includes(visibility as PostVisibility)
+          ? [visibility as PostVisibility]
+          : [];
+
+    const r2BaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    // Trending sort: join through post.trendingScore. Use numeric offset cursor
+    // (encoded as base64) because score order is volatile and ID-lt breaks pages.
+    const offset = sort === 'trending' && cursor ? (() => {
+      try { return parseInt(Buffer.from(cursor, 'base64').toString('utf8'), 10) || 0; } catch { return 0; }
+    })() : 0;
+
+    const baseWhere = {
+      kind: { in: ['image', 'video'] as const },
+      source: 'upload' as const,
+      deletedAt: null,
+      post: {
+        userId: user.id,
+        deletedAt: null,
+        visibility: { in: visibilityFilter },
+      },
+    };
+
+    let mediaRows: Array<{
+      id: string; kind: string; r2Key: string | null; thumbnailR2Key: string | null;
+      width: number | null; height: number | null; durationSeconds: number | null; postId: string;
+    }>;
+
+    if (sort === 'trending') {
+      // Include all media (including zero/unscored posts), but rank by parent post score.
+      // Unscored/null scores sort to the bottom so "trending" remains score-first.
+      mediaRows = await this.prisma.postMedia.findMany({
+        where: baseWhere,
+        orderBy: [
+          { post: { trendingScore: { sort: 'desc', nulls: 'last' } } },
+          { post: { boostCount: 'desc' } },
+          { post: { bookmarkCount: 'desc' } },
+          { post: { repostCount: 'desc' } },
+          { post: { commentCount: 'desc' } },
+          { post: { createdAt: 'desc' } },
+          { id: 'desc' },
+        ],
+        skip: offset,
+        take: limit + 1,
+        select: { id: true, kind: true, r2Key: true, thumbnailR2Key: true, width: true, height: true, durationSeconds: true, postId: true },
+      });
+    } else {
+      mediaRows = await this.prisma.postMedia.findMany({
+        where: { ...baseWhere, ...(cursor ? { id: { lt: cursor } } : {}) },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        select: { id: true, kind: true, r2Key: true, thumbnailR2Key: true, width: true, height: true, durationSeconds: true, postId: true },
+      });
+    }
+
+    const hasMore = mediaRows.length > limit;
+    const items = hasMore ? mediaRows.slice(0, limit) : mediaRows;
+
+    let nextCursor: string | null = null;
+    if (hasMore) {
+      if (sort === 'trending') {
+        nextCursor = Buffer.from(String(offset + limit)).toString('base64');
+      } else {
+        nextCursor = items[items.length - 1]?.id ?? null;
+      }
+    }
+
+    return {
+      items: items.map((m) => ({
+        id: m.id,
+        postId: m.postId,
+        kind: m.kind as 'image' | 'video',
+        url: r2BaseUrl && m.r2Key ? `${r2BaseUrl}/${m.r2Key}` : null,
+        thumbnailUrl: r2BaseUrl && m.thumbnailR2Key ? `${r2BaseUrl}/${m.thumbnailR2Key}` : null,
+        width: m.width,
+        height: m.height,
+        durationSeconds: m.durationSeconds ?? null,
+      })),
+      nextCursor,
+    };
   }
 }
 

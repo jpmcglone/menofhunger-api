@@ -5,6 +5,11 @@ import { PresenceRedisStateService } from './presence-redis-state.service';
 import { WsEventNames } from '../../common/dto';
 import type {
   AdminUpdatedPayloadDto,
+  ArticlesLiveUpdatedPayloadDto,
+  ArticlesCommentAddedPayloadDto,
+  ArticlesCommentDeletedPayloadDto,
+  ArticlesCommentUpdatedPayloadDto,
+  ArticlesCommentReactionChangedPayloadDto,
   FollowsChangedPayloadDto,
   MessagesReadPayloadDto,
   PostsLiveUpdatedPayloadDto,
@@ -145,6 +150,37 @@ export class PresenceRealtimeService {
     const pid = (postId ?? '').trim();
     if (!pid) return;
     this.emitToRoom(`post:${pid}`, WsEventNames.postsLiveUpdated, payload);
+  }
+
+  /** Scoped article live updates (delivered only to sockets subscribed to this article). */
+  emitArticlesLiveUpdated(articleId: string, payload: ArticlesLiveUpdatedPayloadDto): void {
+    const aid = (articleId ?? '').trim();
+    if (!aid) return;
+    this.emitToRoom(`article:${aid}`, WsEventNames.articlesLiveUpdated, payload);
+  }
+
+  emitArticlesCommentAdded(articleId: string, payload: ArticlesCommentAddedPayloadDto): void {
+    const aid = (articleId ?? '').trim();
+    if (!aid) return;
+    this.emitToRoom(`article:${aid}`, WsEventNames.articlesCommentAdded, payload);
+  }
+
+  emitArticlesCommentDeleted(articleId: string, payload: ArticlesCommentDeletedPayloadDto): void {
+    const aid = (articleId ?? '').trim();
+    if (!aid) return;
+    this.emitToRoom(`article:${aid}`, WsEventNames.articlesCommentDeleted, payload);
+  }
+
+  emitArticlesCommentUpdated(articleId: string, payload: ArticlesCommentUpdatedPayloadDto): void {
+    const aid = (articleId ?? '').trim();
+    if (!aid) return;
+    this.emitToRoom(`article:${aid}`, WsEventNames.articlesCommentUpdated, payload);
+  }
+
+  emitArticlesCommentReactionChanged(articleId: string, payload: ArticlesCommentReactionChangedPayloadDto): void {
+    const aid = (articleId ?? '').trim();
+    if (!aid) return;
+    this.emitToRoom(`article:${aid}`, WsEventNames.articlesCommentReactionChanged, payload);
   }
 }
 

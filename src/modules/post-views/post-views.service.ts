@@ -8,6 +8,19 @@ import { PosthogService } from '../../common/posthog/posthog.service';
 const BREAKDOWN_TTL_SECONDS = 60;
 const BATCH_MAX = 50;
 
+function viewerCanAccessVisibility(
+  visibility: string,
+  viewer: { verifiedStatus: string; premium: boolean; premiumPlus: boolean } | null,
+): boolean {
+  if (visibility === 'public') return true;
+  if (!viewer) return false;
+  const isPremium = viewer.premium || viewer.premiumPlus;
+  const isVerified = viewer.verifiedStatus !== 'none' || isPremium;
+  if (visibility === 'verifiedOnly') return isVerified;
+  if (visibility === 'premiumOnly') return isPremium;
+  return false; // onlyMe — author check is handled before this is called
+}
+
 function breakdownCacheKey(postId: string): string {
   return `cache:post-view-breakdown:${postId}`;
 }
@@ -42,12 +55,21 @@ export class PostViewsService {
     if (!uid || !pid) return;
 
     try {
-      // Verify post exists (lightweight check — don't throw if missing, just skip)
-      const postExists = await this.prisma.post.findFirst({
+      // Fetch post with visibility so we can enforce access (author always allowed)
+      const post = await this.prisma.post.findFirst({
         where: { id: pid, deletedAt: null },
-        select: { id: true },
+        select: { id: true, visibility: true, userId: true },
       });
-      if (!postExists) return;
+      if (!post) return;
+
+      // Authors can always view their own posts; everyone else must meet the tier requirement
+      if (post.userId !== uid) {
+        const viewer = await this.prisma.user.findFirst({
+          where: { id: uid },
+          select: { verifiedStatus: true, premium: true, premiumPlus: true },
+        });
+        if (!viewerCanAccessVisibility(post.visibility, viewer)) return;
+      }
 
       // Upsert: createMany with skipDuplicates is the idiomatic Prisma pattern
       const created = await this.prisma.postView.createMany({

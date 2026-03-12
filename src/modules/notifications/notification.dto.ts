@@ -16,6 +16,14 @@ export type SubjectPostPreviewDto = {
   media: Array<{ url: string; thumbnailUrl: string | null; kind: string }>;
 };
 
+/** Preview of the subject article for display in the notification row. */
+export type SubjectArticlePreviewDto = {
+  title: string | null;
+  excerpt: string | null;
+  thumbnailUrl: string | null;
+  visibility: string | null;
+};
+
 export type SubjectPostVisibility = 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe';
 
 /** Tier of the notification subject (post visibility or user tier) for unseen row highlight. */
@@ -34,10 +42,13 @@ export type NotificationDto = {
   actorPostId: string | null;
   subjectPostId: string | null;
   subjectUserId: string | null;
+  subjectArticleId: string | null;
   title: string | null;
   body: string | null;
   /** When set (e.g. boost), for quote + stacked images / video thumbnail in the UI. */
   subjectPostPreview?: SubjectPostPreviewDto | null;
+  /** When subject is an article (followed_article), article card preview. */
+  subjectArticlePreview?: SubjectArticlePreviewDto | null;
   /** When subject is a post, its visibility (used for UI tinting). */
   subjectPostVisibility?: SubjectPostVisibility | null;
   /** Tier of subject (post or user) for unseen row highlight. */

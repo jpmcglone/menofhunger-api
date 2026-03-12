@@ -31,6 +31,7 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { SlackService } from '../../common/slack/slack.service';
 import { EntitlementService } from '../billing/entitlement.service';
 import { BillingService } from '../billing/billing.service';
+import { APP_FEATURE_TOGGLES, sanitizeFeatureToggles } from '../../common/feature-toggles';
 
 const searchSchema = z.object({
   q: z.string().optional(),
@@ -59,6 +60,7 @@ const updateUserSchema = z.object({
   bio: z.string().trim().max(160).nullable().optional(),
   isOrganization: z.boolean().optional(),
   verifiedStatus: z.enum(['none', 'identity', 'manual']).optional(),
+  featureToggles: z.array(z.enum(APP_FEATURE_TOGGLES)).max(50).optional(),
 });
 
 @UseGuards(AdminGuard)
@@ -298,7 +300,15 @@ export class AdminUsersController {
 
     const current = await this.prisma.user.findUnique({
       where: { id },
-      select: { id: true, username: true, verifiedStatus: true, unverifiedAt: true, premium: true, premiumPlus: true, isOrganization: true },
+      select: {
+        id: true,
+        username: true,
+        verifiedStatus: true,
+        unverifiedAt: true,
+        premium: true,
+        premiumPlus: true,
+        isOrganization: true,
+      },
     });
     if (!current) throw new NotFoundException('User not found.');
 
@@ -355,6 +365,10 @@ export class AdminUsersController {
         data.verifiedAt = now;
         data.unverifiedAt = null;
       }
+    }
+
+    if (parsed.featureToggles !== undefined) {
+      data.featureToggles = sanitizeFeatureToggles(parsed.featureToggles);
     }
 
     try {

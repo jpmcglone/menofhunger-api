@@ -24,6 +24,7 @@ enum PostKind {
   regular
   checkin
   repost
+  articleShare
 }
 
 enum FollowVisibility {
@@ -56,6 +57,7 @@ enum NotificationKind {
   repost
   follow
   followed_post
+  followed_article
   mention
   nudge
   poll_results_ready
@@ -178,6 +180,8 @@ model User {
   usernameIsSet Boolean @default(false)
   // Minimal admin flag (will be replaced by real roles later).
   siteAdmin Boolean @default(false)
+  // App entrypoint/feature switches controlled by admins (e.g., "articles").
+  featureToggles String[] @default([])
   // Account state: banned users cannot log in (sessions revoked) and should see a clear message.
   bannedAt DateTime?
   bannedReason String?
@@ -211,6 +215,8 @@ model User {
   avatarUpdatedAt DateTime?
   bannerKey String?
   bannerUpdatedAt DateTime?
+  /** Override bio shown in the author section at the bottom of articles. Uses regular bio if null. */
+  articleBio String?
   // When the user last went offline (set by presence disconnect).
   lastOnlineAt DateTime?
   // When the user last had in-app activity (presence connect/ping). Used for DAU/MAU.
@@ -276,7 +282,13 @@ model User {
   messageDeletions    MessageDeletion[] @relation("MessageDeletion_user")
   blocksInitiated UserBlock[] @relation("UserBlock_blocker")
   blocksReceived  UserBlock[] @relation("UserBlock_blocked")
-  postViews PostView[]
+  postViews    PostView[]
+  articleViews ArticleView[]
+  articles  Article[]
+  articleBoosts ArticleBoost[]
+  articleReactions ArticleReaction[]
+  articleComments ArticleComment[]
+  articleCommentReactions ArticleCommentReaction[]
 
   // Org affiliations: orgs this user belongs to (non-org users); members of this org (org users).
   orgMemberships UserOrgMembership[] @relation("UserMemberships")
@@ -509,6 +521,10 @@ model Post {
   repostedPost   Post?   @relation("Post_reposts", fields: [repostedPostId], references: [id], onDelete: Cascade)
   reposts        Post[]  @relation("Post_reposts")
 
+  // Article share: points to the article being shared (kind=articleShare only).
+  articleId String?
+  article   Article? @relation(fields: [articleId], references: [id], onDelete: SetNull)
+
   // Quote repost: the embedded post whose URL was detected in body on save.
   quotedPostId String?
   quotedPost   Post?   @relation("Post_quotes", fields: [quotedPostId], references: [id], onDelete: SetNull)
@@ -537,6 +553,7 @@ model Post {
   @@index([repostedPostId])
   @@index([repostedPostId, userId])
   @@index([quotedPostId])
+  @@index([articleId])
   @@index([topics], type: Gin)
   @@index([hashtags], type: Gin)
   // Feed/trending hot paths (parentId IS NULL + deletedAt IS NULL) benefit from composite indexes matching sort+filters.
@@ -850,6 +867,18 @@ model PostView {
   @@index([postId])
 }
 
+model ArticleView {
+  articleId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([articleId, userId])
+  @@index([articleId])
+}
+
 // Singleton-ish table: holds site-wide configurable settings.
 // Use `id=1` row as the canonical config.
 model SiteConfig {
@@ -909,6 +938,7 @@ model Notification {
   actorPostId    String?
   subjectPostId  String?
   subjectUserId  String?
+  subjectArticleId String?
   title     String?
   body      String?
 
@@ -917,6 +947,7 @@ model Notification {
   actorPost Post? @relation("Notification_actorPost", fields: [actorPostId], references: [id], onDelete: SetNull)
   subjectPost Post? @relation("Notification_subjectPost", fields: [subjectPostId], references: [id], onDelete: SetNull)
   subjectUser User? @relation("Notification_subjectUser", fields: [subjectUserId], references: [id], onDelete: SetNull)
+  subjectArticle Article? @relation("Notification_subjectArticle", fields: [subjectArticleId], references: [id], onDelete: SetNull)
 
   @@index([recipientUserId, createdAt])
   @@index([recipientUserId, deliveredAt])
@@ -925,6 +956,7 @@ model Notification {
   @@index([recipientUserId, nudgedBackAt])
   @@index([actorPostId])
   @@index([subjectPostId])
+  @@index([subjectArticleId])
   // Common list ordering/pagination: ORDER BY createdAt DESC, id DESC.
   @@index([recipientUserId, createdAt(sort: Desc), id(sort: Desc)])
 }
@@ -1230,5 +1262,126 @@ model AdminEmailLog {
 
   @@unique([kind, dayKey])
   @@index([sentAt])
+}
+
+// ─── Articles ────────────────────────────────────────────────────────────────
+
+model Article {
+  id          String          @id @default(cuid())
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  publishedAt DateTime?
+  editedAt    DateTime?
+  deletedAt   DateTime?
+
+  title       String
+  slug        String
+  /** Tiptap document stored as stringified JSON. */
+  body        String          @default("{}")
+  /** Auto-generated plain-text excerpt (~200 chars). */
+  excerpt     String?
+  thumbnailR2Key String?
+
+  visibility  PostVisibility  @default(public)
+  isDraft     Boolean         @default(true)
+  lastSavedAt DateTime        @default(now())
+
+  boostCount   Int @default(0)
+  commentCount Int @default(0)
+  viewCount    Int @default(0)
+
+  trendingScore          Float?
+  trendingScoreUpdatedAt DateTime?
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  boosts    ArticleBoost[]
+  reactions ArticleReaction[]
+  comments  ArticleComment[]
+  views     ArticleView[]
+  sharePosts Post[]
+  notifications Notification[] @relation("Notification_subjectArticle")
+
+  @@index([authorId, createdAt])
+  @@index([publishedAt(sort: Desc), id(sort: Desc)])
+  @@index([trendingScore(sort: Desc), publishedAt(sort: Desc)])
+  @@index([deletedAt])
+  @@unique([slug])
+}
+
+model ArticleBoost {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  articleId String
+  userId    String
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([articleId, userId])
+  @@index([articleId, createdAt])
+  @@index([userId, createdAt])
+}
+
+model ArticleReaction {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+
+  articleId  String
+  userId     String
+  reactionId String
+  emoji      String
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([articleId, userId, reactionId])
+  @@index([articleId])
+  @@index([userId, createdAt])
+}
+
+model ArticleComment {
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  editedAt  DateTime?
+  deletedAt DateTime?
+
+  body String
+
+  articleId String
+  authorId  String
+  parentId  String?
+
+  /** Denormalized reply count (only meaningful on top-level comments). */
+  replyCount Int @default(0)
+
+  article  Article          @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  author   User             @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent   ArticleComment?  @relation("ArticleComment_replies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies  ArticleComment[] @relation("ArticleComment_replies")
+  reactions ArticleCommentReaction[]
+
+  @@index([articleId, createdAt])
+  @@index([parentId, createdAt])
+  @@index([authorId, createdAt])
+}
+
+model ArticleCommentReaction {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+
+  commentId  String
+  userId     String
+  reactionId String
+  emoji      String
+
+  comment ArticleComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, userId, reactionId])
+  @@index([commentId])
+  @@index([userId, createdAt])
 }
 

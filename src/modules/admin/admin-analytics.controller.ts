@@ -2,7 +2,7 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminGuard } from './admin.guard';
-import type { AdminAnalyticsDto, AdminAnalyticsEngagementDto, AnalyticsGranularity, AnalyticsRange } from '../../common/dto/admin-analytics.dto';
+import type { AdminAnalyticsArticlesDto, AdminAnalyticsDto, AdminAnalyticsEngagementDto, AnalyticsGranularity, AnalyticsRange } from '../../common/dto/admin-analytics.dto';
 
 function resolveSince(range: string, now: Date): Date | null {
   const ms = (days: number) => new Date(now.getTime() - days * 86400000);
@@ -75,6 +75,12 @@ export class AdminAnalyticsController {
       monetizationTotalsRaw,
       monetizationByStatusRaw,
       postVisibilityRaw,
+      articleSummaryRaw,
+      articleVisibilityRaw,
+      articlePublishedRaw,
+      articleViewsRaw,
+      articleEngagementRaw,
+      articleTopRaw,
     ] = await Promise.all([
 
       // All-time summary counts (range-independent).
@@ -399,6 +405,119 @@ export class AdminAnalyticsController {
         GROUP BY "visibility"
         ORDER BY cnt DESC
       `),
+
+      // ── Article queries ────────────────────────────────────────────────────
+
+      // Article summary.
+      // total_published / unique_authors are range-scoped via publishedAt.
+      // total_drafts is always all-time (current pending state, not a time-series concept).
+      this.prisma.$queryRaw<Array<{
+        total_published: bigint;
+        total_drafts: bigint;
+        unique_authors: bigint;
+      }>>(Prisma.sql`
+        SELECT
+          (SELECT COUNT(*)::bigint FROM "Article"
+           WHERE "isDraft" = false AND "deletedAt" IS NULL AND "publishedAt" IS NOT NULL
+           ${sinceAnd(Prisma.sql`"publishedAt"`)}) AS total_published,
+          (SELECT COUNT(*)::bigint FROM "Article"
+           WHERE "isDraft" = true AND "deletedAt" IS NULL) AS total_drafts,
+          (SELECT COUNT(DISTINCT "authorId")::bigint FROM "Article"
+           WHERE "isDraft" = false AND "deletedAt" IS NULL AND "publishedAt" IS NOT NULL
+           ${sinceAnd(Prisma.sql`"publishedAt"`)}) AS unique_authors
+      `),
+
+      // Article visibility breakdown — published, non-deleted, range-filtered by publishedAt.
+      this.prisma.$queryRaw<Array<{ visibility: string; cnt: bigint }>>(Prisma.sql`
+        SELECT "visibility", COUNT(*)::bigint AS cnt
+        FROM "Article"
+        WHERE "isDraft" = false AND "deletedAt" IS NULL AND "publishedAt" IS NOT NULL
+        ${sinceAnd(Prisma.sql`"publishedAt"`)}
+        GROUP BY "visibility"
+        ORDER BY cnt DESC
+      `),
+
+      // Articles published per bucket in the selected range.
+      this.prisma.$queryRaw<Array<{ bucket: Date; count: bigint }>>(Prisma.sql`
+        SELECT DATE_TRUNC(${granularity}, "publishedAt") AS bucket, COUNT(*)::bigint AS count
+        FROM "Article"
+        WHERE "isDraft" = false
+          AND "deletedAt" IS NULL
+          AND "publishedAt" IS NOT NULL
+        ${sinceAnd(Prisma.sql`"publishedAt"`)}
+        GROUP BY 1
+        ORDER BY 1
+      `),
+
+      // Article views per bucket in the selected range.
+      this.prisma.$queryRaw<Array<{ bucket: Date; count: bigint }>>(Prisma.sql`
+        SELECT DATE_TRUNC(${granularity}, "createdAt") AS bucket, COUNT(*)::bigint AS count
+        FROM "ArticleView"
+        WHERE 1=1
+        ${sinceAnd(Prisma.sql`"createdAt"`)}
+        GROUP BY 1
+        ORDER BY 1
+      `),
+
+      // Range-scoped article engagement totals.
+      this.prisma.$queryRaw<Array<{
+        total_views: bigint;
+        total_boosts: bigint;
+        total_reactions: bigint;
+        total_comments: bigint;
+      }>>(Prisma.sql`
+        SELECT
+          (SELECT COUNT(*)::bigint FROM "ArticleView"
+           WHERE 1=1 ${sinceAnd(Prisma.sql`"createdAt"`)}) AS total_views,
+          (SELECT COUNT(*)::bigint FROM "ArticleBoost"
+           WHERE 1=1 ${sinceAnd(Prisma.sql`"createdAt"`)}) AS total_boosts,
+          (SELECT COUNT(*)::bigint FROM "ArticleReaction"
+           WHERE 1=1 ${sinceAnd(Prisma.sql`"createdAt"`)}) AS total_reactions,
+          (SELECT COUNT(*)::bigint FROM "ArticleComment"
+           WHERE "deletedAt" IS NULL ${sinceAnd(Prisma.sql`"createdAt"`)}) AS total_comments
+      `),
+
+      // Top 10 articles by view count in the range.
+      this.prisma.$queryRaw<Array<{
+        id: string;
+        title: string;
+        slug: string;
+        visibility: string;
+        author_username: string;
+        view_count: bigint;
+        boost_count: bigint;
+        comment_count: bigint;
+        reaction_count: bigint;
+        published_at: Date;
+      }>>(Prisma.sql`
+        SELECT
+          a.id,
+          a.title,
+          a.slug,
+          a.visibility,
+          u.username AS author_username,
+          COUNT(DISTINCT av."userId")::bigint AS view_count,
+          (SELECT COUNT(*)::bigint FROM "ArticleBoost" ab
+           WHERE ab."articleId" = a.id
+           ${since ? Prisma.sql`AND ab."createdAt" >= ${since}::timestamptz` : Prisma.sql``}) AS boost_count,
+          (SELECT COUNT(*)::bigint FROM "ArticleComment" ac
+           WHERE ac."articleId" = a.id AND ac."deletedAt" IS NULL
+           ${since ? Prisma.sql`AND ac."createdAt" >= ${since}::timestamptz` : Prisma.sql``}) AS comment_count,
+          (SELECT COUNT(*)::bigint FROM "ArticleReaction" ar
+           WHERE ar."articleId" = a.id
+           ${since ? Prisma.sql`AND ar."createdAt" >= ${since}::timestamptz` : Prisma.sql``}) AS reaction_count,
+          a."publishedAt"
+        FROM "Article" a
+        JOIN "User" u ON u.id = a."authorId"
+        LEFT JOIN "ArticleView" av ON av."articleId" = a.id
+          ${since ? Prisma.sql`AND av."createdAt" >= ${since}::timestamptz` : Prisma.sql``}
+        WHERE a."isDraft" = false
+          AND a."deletedAt" IS NULL
+          AND a."publishedAt" IS NOT NULL
+        GROUP BY a.id, u.username
+        ORDER BY view_count DESC
+        LIMIT 10
+      `),
     ]);
 
     // ── Summary ───────────────────────────────────────────────────────────────
@@ -458,6 +577,55 @@ export class AdminAnalyticsController {
         : null,
     };
 
+    // ── Articles ──────────────────────────────────────────────────────────────
+
+    const artSummary = articleSummaryRaw[0];
+    const totalPublished  = Number(artSummary?.total_published  ?? 0);
+    const totalDrafts     = Number(artSummary?.total_drafts     ?? 0);
+    const uniqueAuthors   = Number(artSummary?.unique_authors   ?? 0);
+
+    const artEngagement = articleEngagementRaw[0];
+    const totalViewsInRange    = Number(artEngagement?.total_views     ?? 0);
+    const totalBoostsInRange   = Number(artEngagement?.total_boosts    ?? 0);
+    const totalReactionsInRange = Number(artEngagement?.total_reactions ?? 0);
+    const totalCommentsInRange = Number(artEngagement?.total_comments  ?? 0);
+
+    // avg views per article that was published in the range
+    const articlesPublishedInRange = articlePublishedRaw.reduce((s, r) => s + Number(r.count), 0);
+    const avgViewsPerArticle = articlesPublishedInRange > 0
+      ? Math.round((totalViewsInRange / articlesPublishedInRange) * 10) / 10
+      : 0;
+
+    const articles: AdminAnalyticsArticlesDto = {
+      kpis: {
+        totalPublished,
+        totalDrafts,
+        uniqueAuthors,
+        totalViewsInRange,
+        totalBoostsInRange,
+        totalReactionsInRange,
+        totalCommentsInRange,
+        avgViewsPerArticle,
+      },
+      published: toTimeSeries(articlePublishedRaw),
+      views: toTimeSeries(articleViewsRaw),
+      byVisibility: Object.fromEntries(articleVisibilityRaw.map((r) => [r.visibility, Number(r.cnt)])),
+      topArticles: articleTopRaw
+        .filter((r) => r.published_at != null)
+        .map((r) => ({
+          id: r.id,
+          title: r.title,
+          slug: r.slug,
+          visibility: r.visibility,
+          authorUsername: r.author_username,
+          viewCount: Number(r.view_count),
+          boostCount: Number(r.boost_count),
+          commentCount: Number(r.comment_count),
+          reactionCount: Number(r.reaction_count),
+          publishedAt: r.published_at!.toISOString(),
+        })),
+    };
+
     // ── Response ──────────────────────────────────────────────────────────────
 
     const data: AdminAnalyticsDto = {
@@ -495,6 +663,7 @@ export class AdminAnalyticsController {
         compedPremiumPlus,
         byStatus,
       },
+      articles,
       asOf: now.toISOString(),
     };
 

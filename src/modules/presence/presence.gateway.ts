@@ -33,6 +33,7 @@ import type {
 } from '../../common/dto';
 import {
   WsEventNames,
+  type ArticlesSubscribePayloadDto,
   type PostsSubscribePayloadDto,
   type UsersSpaceChangedPayloadDto,
 } from '../../common/dto';
@@ -45,8 +46,12 @@ type UserTimers = {
 };
 
 const MAX_POST_SUBSCRIPTIONS_PER_SOCKET = 60;
+const MAX_ARTICLE_SUBSCRIPTIONS_PER_SOCKET = 20;
 function postRoom(postId: string): string {
   return `post:${postId}`;
+}
+function articleRoom(articleId: string): string {
+  return `article:${articleId}`;
 }
 function radioChatRoom(stationId: string): string {
   return `radioChat:${stationId}`;
@@ -239,6 +244,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     // Spaces chat sender is the same shape; keep both keys for a smooth transition.
     (client.data as any).spaceChatUser = (client.data as any).radioChatUser satisfies SpaceChatSenderDto;
     (client.data as any).postSubs = new Set<string>();
+    (client.data as any).articleSubs = new Set<string>();
     if (this.logPresenceVerbose) {
       this.logger.debug(`[presence] CONNECT socket=${client.id} userId=${user.id} isNewlyOnline=${isNewlyOnline}`);
     }
@@ -1144,6 +1150,64 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       client.leave(postRoom(postId));
     }
     (client.data as any).postSubs = subs;
+  }
+
+  @SubscribeMessage('articles:subscribe')
+  async handleArticlesSubscribe(client: Socket, payload: Partial<ArticlesSubscribePayloadDto>): Promise<void> {
+    const raw = Array.isArray((payload as any)?.articleIds) ? ((payload as any).articleIds as unknown[]) : [];
+    const requested = raw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 200);
+    if (requested.length === 0) return;
+
+    const subs: Set<string> = (client.data as any).articleSubs ?? new Set<string>();
+    (client.data as any).articleSubs = subs;
+    const remainingCap = Math.max(0, MAX_ARTICLE_SUBSCRIPTIONS_PER_SOCKET - subs.size);
+    if (remainingCap <= 0) return;
+
+    const toConsider = Array.from(new Set(requested)).filter((id) => !subs.has(id)).slice(0, remainingCap);
+    if (toConsider.length === 0) return;
+
+    const viewerId = (client.data as { userId?: string })?.userId ?? null;
+    const viewer = (client.data as any)?.viewer ?? {};
+    const viewerIsVerified = Boolean(viewer?.siteAdmin) || Boolean(viewer?.verified);
+    const viewerIsPremium = Boolean(viewer?.siteAdmin) || Boolean(viewer?.premium) || Boolean(viewer?.premiumPlus);
+
+    const rows = await this.prisma.article.findMany({
+      where: { id: { in: toConsider }, deletedAt: null },
+      select: { id: true, authorId: true, visibility: true },
+    });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const accepted: string[] = [];
+
+    for (const articleId of toConsider) {
+      const row = byId.get(articleId);
+      if (!row) continue;
+      const vis = String((row as any).visibility ?? '');
+      const isSelf = Boolean(viewerId && row.authorId === viewerId);
+      if (vis === 'onlyMe' && !isSelf) continue;
+      if (vis === 'verifiedOnly' && !viewerIsVerified && !isSelf) continue;
+      if (vis === 'premiumOnly' && !viewerIsPremium && !isSelf) continue;
+
+      subs.add(articleId);
+      accepted.push(articleId);
+      client.join(articleRoom(articleId));
+    }
+
+    if (accepted.length > 0) {
+      client.emit(WsEventNames.articlesSubscribed, { articleIds: accepted });
+    }
+  }
+
+  @SubscribeMessage('articles:unsubscribe')
+  handleArticlesUnsubscribe(client: Socket, payload: Partial<ArticlesSubscribePayloadDto>): void {
+    const raw = Array.isArray((payload as any)?.articleIds) ? ((payload as any).articleIds as unknown[]) : [];
+    const ids = raw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 200);
+    if (ids.length === 0) return;
+    const subs: Set<string> = (client.data as any).articleSubs ?? new Set<string>();
+    for (const articleId of ids) {
+      subs.delete(articleId);
+      client.leave(articleRoom(articleId));
+    }
+    (client.data as any).articleSubs = subs;
   }
 
   @SubscribeMessage('presence:subscribeOnlineFeed')
