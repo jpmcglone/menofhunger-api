@@ -1832,7 +1832,7 @@ export class PostsService {
           where: {
             AND: [
               { userId: user.id },
-              { parentId: null },
+              ...(params.topLevelOnly ? [{ parentId: null }] : []),
               { visibility: { in: visibilitiesForQuery } },
               this.notDeletedWhere(),
               { createdAt: { gte: minCreatedAt } },
@@ -1955,7 +1955,7 @@ export class PostsService {
           LEFT JOIN comment_scores cs ON cs."postId" = p."id"
           WHERE
             p."deletedAt" IS NULL
-            AND p."parentId" IS NULL
+            ${params.topLevelOnly ? Prisma.sql`AND p."parentId" IS NULL` : Prisma.sql``}
             AND p."kind"::text <> 'repost'
             AND p."createdAt" >= ${snapshotMinCreatedAt}
             AND p."userId" = ${user.id}
