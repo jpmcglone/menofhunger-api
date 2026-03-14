@@ -15,6 +15,7 @@ import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
 import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
+import { collapseFeedByRoot } from '../../common/feed-collapse/collapse-by-root';
 
 const readThrottle = {
   default: {
@@ -34,6 +35,9 @@ const listSchema = z.object({
   // "trending" is the UI-friendly name for our half-life boost scoring feed.
   // Keep "popular" for backwards compatibility / internal naming.
   sort: z.enum(['new', 'popular', 'trending', 'featured']).optional(),
+  collapseByRoot: z.coerce.boolean().optional(),
+  collapseMode: z.enum(['root', 'parent']).optional(),
+  prefer: z.enum(['reply', 'root']).optional(),
 });
 
 const userListSchema = listSchema.extend({
@@ -396,20 +400,14 @@ export class PostsController {
                 });
         stageMs.list = Date.now() - listStartMs;
 
-        // Dedupe: keep only leaf posts (posts that are not an ancestor of any other post). So A→B→C returns only C, not A or B.
-        // O(leaves × max chain depth) in-memory; no extra DB queries or indexes needed.
         const dedupeStartMs = Date.now();
-        const idToPost = new Map(result.posts.map((p) => [p.id, p]));
-        const strictAncestorIds = new Set<string>();
-        for (const p of result.posts) {
-          let currentId = p.parentId ?? null;
-          while (currentId) {
-            strictAncestorIds.add(currentId);
-            const parentPost = idToPost.get(currentId);
-            currentId = parentPost?.parentId ?? null;
-          }
-        }
-        const filteredPosts = result.posts.filter((p) => !strictAncestorIds.has(p.id));
+        const filteredPosts = collapseFeedByRoot(result.posts, {
+          collapseByRoot: parsed.collapseByRoot ?? false,
+          collapseMode: parsed.collapseMode ?? 'root',
+          prefer: parsed.prefer ?? 'reply',
+          getId: (post) => post.id,
+          getParentId: (post) => post.parentId ?? null,
+        });
         stageMs.dedupe = Date.now() - dedupeStartMs;
         // Fetch repost data: which posts the viewer has reposted, and reposted post bodies for flat reposts.
         const repostedPostIds = filteredPosts
@@ -559,18 +557,13 @@ export class PostsController {
           includeRestricted: parsed.includeRestricted ?? false,
         });
 
-        // Dedupe: keep only leaf posts (same as list()). O(leaves × max chain depth) in-memory.
-        const idToPostUser = new Map(result.posts.map((p) => [p.id, p]));
-        const strictAncestorIdsUser = new Set<string>();
-        for (const p of result.posts) {
-          let currentId = p.parentId ?? null;
-          while (currentId) {
-            strictAncestorIdsUser.add(currentId);
-            const parentPost = idToPostUser.get(currentId);
-            currentId = parentPost?.parentId ?? null;
-          }
-        }
-        const filteredPostsUser = result.posts.filter((p) => !strictAncestorIdsUser.has(p.id));
+        const filteredPostsUser = collapseFeedByRoot(result.posts, {
+          collapseByRoot: parsed.collapseByRoot ?? false,
+          collapseMode: parsed.collapseMode ?? 'root',
+          prefer: parsed.prefer ?? 'reply',
+          getId: (post) => post.id,
+          getParentId: (post) => post.parentId ?? null,
+        });
         // Fetch repost data for flat reposts.
         const repostedPostIdsUser = filteredPostsUser
           .filter((p) => (p as any).kind === 'repost' && (p as any).repostedPostId)

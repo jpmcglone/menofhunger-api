@@ -32,14 +32,9 @@ import { SlackService } from '../../common/slack/slack.service';
 import { EntitlementService } from '../billing/entitlement.service';
 import { BillingService } from '../billing/billing.service';
 import { APP_FEATURE_TOGGLES, sanitizeFeatureToggles } from '../../common/feature-toggles';
+import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 
-const searchSchema = z.object({
-  q: z.string().optional(),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-});
-
-const bannedListSchema = z.object({
+const paginatedSearchSchema = z.object({
   q: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
@@ -63,6 +58,15 @@ const updateUserSchema = z.object({
   featureToggles: z.array(z.enum(APP_FEATURE_TOGGLES)).max(50).optional(),
 });
 
+const usernameParamSchema = z.object({
+  username: z.string().trim().min(1),
+});
+
+const recentListSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  cursor: z.string().optional(),
+});
+
 @UseGuards(AdminGuard)
 @Controller('admin/users')
 export class AdminUsersController {
@@ -79,16 +83,72 @@ export class AdminUsersController {
     private readonly billingService: BillingService,
   ) {}
 
+  private get publicBaseUrl(): string | null {
+    return this.appConfig.r2()?.publicBaseUrl ?? null;
+  }
+
   /** Single-user admin DTO with org affiliations included. */
-  private async toAdminUserDto(user: Parameters<typeof toUserDto>[0], publicBaseUrl: string | null) {
+  private async toAdminUserDto(user: Parameters<typeof toUserDto>[0]) {
     const orgMap = await this.batchOrgAffiliations([user.id]);
-    return { ...toUserDto(user, publicBaseUrl), orgAffiliations: orgMap.get(user.id) ?? [] };
+    return { ...toUserDto(user, this.publicBaseUrl), orgAffiliations: orgMap.get(user.id) ?? [] };
+  }
+
+  private maskPhone(phone: string): string {
+    const trimmed = (phone ?? '').trim();
+    if (!trimmed) return '';
+    const visible = trimmed.slice(-2);
+    const maskedLen = Math.max(0, trimmed.length - visible.length);
+    return `${'*'.repeat(maskedLen)}${visible}`;
+  }
+
+  private maskEmail(email: string | null): string | null {
+    const raw = (email ?? '').trim();
+    if (!raw) return null;
+    const [local, domain] = raw.split('@');
+    if (!local || !domain) return '***';
+    const localVisible = local.slice(0, 1);
+    return `${localVisible}${'*'.repeat(Math.max(1, local.length - 1))}@${domain}`;
+  }
+
+  private maskBirthdate(iso: string | null): string | null {
+    const raw = (iso ?? '').trim();
+    if (!raw) return null;
+    return '****-**-**';
+  }
+
+  private normalizeSearchQueryForDedupe(query: string): string {
+    return String(query ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
+  private async findByUsernameOrThrow(usernameRaw: string) {
+    const username = usernameRaw.trim().toLowerCase();
+    const user = await this.prisma.user.findFirst({
+      where: {
+        username: {
+          equals: username,
+          mode: 'insensitive',
+        },
+      },
+    });
+    if (!user) throw new NotFoundException('User not found.');
+    return user;
+  }
+
+  /** Slice a take+1 user list into a paginated response with org affiliations. */
+  private async paginatedUserResult(users: Parameters<typeof toUserDto>[0][], take: number) {
+    const slice = users.slice(0, take);
+    const nextCursor = users.length > take ? slice[slice.length - 1]?.id ?? null : null;
+    const orgMap = await this.batchOrgAffiliations(slice.map((u) => u.id));
+    return {
+      data: slice.map((u) => ({ ...toUserDto(u, this.publicBaseUrl), orgAffiliations: orgMap.get(u.id) ?? [] })),
+      pagination: { nextCursor },
+    };
   }
 
   /** Batch-fetch org affiliations. Returns map of userId → OrgAffiliationDto[]. */
   private async batchOrgAffiliations(userIds: string[]): Promise<Map<string, OrgAffiliationDto[]>> {
     if (userIds.length === 0) return new Map();
-    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const publicBaseUrl = this.publicBaseUrl;
     const memberships = await this.prisma.userOrgMembership.findMany({
       where: { userId: { in: userIds } },
       select: {
@@ -113,7 +173,7 @@ export class AdminUsersController {
 
   @Get('banned')
   async listBanned(@Query() query: unknown) {
-    const { q, limit, cursor } = bannedListSchema.parse(query);
+    const { q, limit, cursor } = paginatedSearchSchema.parse(query);
     const take = limit ?? 25;
 
     const raw = (q ?? '').trim();
@@ -140,20 +200,12 @@ export class AdminUsersController {
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
 
-    const slice = users.slice(0, take);
-    const nextCursor = users.length > take ? slice[slice.length - 1]?.id ?? null : null;
-    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const orgMap = await this.batchOrgAffiliations(slice.map((u) => u.id));
-
-    return {
-      data: slice.map((u) => ({ ...toUserDto(u, publicBaseUrl), orgAffiliations: orgMap.get(u.id) ?? [] })),
-      pagination: { nextCursor },
-    };
+    return this.paginatedUserResult(users, take);
   }
 
   @Get('search')
   async search(@Query() query: unknown) {
-    const { q, limit, cursor } = searchSchema.parse(query);
+    const { q, limit, cursor } = paginatedSearchSchema.parse(query);
     const take = limit ?? 20;
 
     const raw = (q ?? '').trim();
@@ -172,20 +224,12 @@ export class AdminUsersController {
 
     const users = await this.prisma.user.findMany({
       where,
-      orderBy: { id: 'desc' },
+      orderBy: [{ lastSeenAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       take: take + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
 
-    const slice = users.slice(0, take);
-    const nextCursor = users.length > take ? slice[slice.length - 1]?.id ?? null : null;
-    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const orgMap = await this.batchOrgAffiliations(slice.map((u) => u.id));
-
-    return {
-      data: slice.map((u) => ({ ...toUserDto(u, publicBaseUrl), orgAffiliations: orgMap.get(u.id) ?? [] })),
-      pagination: { nextCursor },
-    };
+    return this.paginatedUserResult(users, take);
   }
 
   @Get('username/available')
@@ -253,7 +297,7 @@ export class AdminUsersController {
       // Best-effort
     }
 
-    return { data: await this.toAdminUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+    return { data: await this.toAdminUserDto(updated) };
   }
 
   @Post(':id/unban')
@@ -284,14 +328,221 @@ export class AdminUsersController {
       // Best-effort
     }
 
-    return { data: await this.toAdminUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+    return { data: await this.toAdminUserDto(updated) };
   }
 
   @Get(':id')
   async getUser(@Param('id') id: string) {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found.');
-    return { data: await this.toAdminUserDto(user, this.appConfig.r2()?.publicBaseUrl ?? null) };
+    return { data: await this.toAdminUserDto(user) };
+  }
+
+  @Get('by-username/:username')
+  async getUserByUsername(@Param() params: unknown) {
+    const { username } = usernameParamSchema.parse(params);
+    const user = await this.findByUsernameOrThrow(username);
+    const full = await this.toAdminUserDto(user);
+
+    return {
+      data: {
+        ...full,
+        sensitive: {
+          phone: this.maskPhone(full.phone),
+          email: this.maskEmail(full.email),
+          birthdate: this.maskBirthdate(full.birthdate),
+        },
+        canRevealSensitive: true,
+      },
+    };
+  }
+
+  @Post('by-username/:username/reveal-sensitive')
+  async revealSensitiveByUsername(@Param() params: unknown) {
+    const { username } = usernameParamSchema.parse(params);
+    const user = await this.findByUsernameOrThrow(username);
+    const dto = toUserDto(user, this.publicBaseUrl);
+    return {
+      data: {
+        phone: dto.phone,
+        email: dto.email,
+        birthdate: dto.birthdate,
+      },
+    };
+  }
+
+  @Get('by-username/:username/recent/posts')
+  async recentPostsByUsername(@Param() params: unknown, @Query() query: unknown) {
+    const { username } = usernameParamSchema.parse(params);
+    const { limit, cursor } = recentListSchema.parse(query);
+    const take = limit ?? 20;
+    const user = await this.findByUsernameOrThrow(username);
+
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor: cursor ?? null,
+      lookup: async (id) =>
+        this.prisma.post.findUnique({
+          where: { id },
+          select: { id: true, createdAt: true, userId: true },
+        }),
+    });
+
+    const rows = await this.prisma.post.findMany({
+      where: {
+        userId: user.id,
+        deletedAt: null,
+        ...(cursorWhere ?? {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: take + 1,
+      select: {
+        id: true,
+        createdAt: true,
+        body: true,
+        parentId: true,
+        rootId: true,
+        kind: true,
+        visibility: true,
+        commentCount: true,
+        boostCount: true,
+        bookmarkCount: true,
+      },
+    });
+
+    const slice = rows.slice(0, take);
+    const nextCursor = rows.length > take ? slice[slice.length - 1]?.id ?? null : null;
+
+    return {
+      data: slice.map((row) => ({
+        id: row.id,
+        createdAt: row.createdAt.toISOString(),
+        body: row.body,
+        parentId: row.parentId,
+        rootId: row.rootId,
+        kind: row.kind,
+        visibility: row.visibility,
+        commentCount: row.commentCount,
+        boostCount: row.boostCount,
+        bookmarkCount: row.bookmarkCount,
+      })),
+      pagination: { nextCursor },
+    };
+  }
+
+  @Get('by-username/:username/recent/articles')
+  async recentArticlesByUsername(@Param() params: unknown, @Query() query: unknown) {
+    const { username } = usernameParamSchema.parse(params);
+    const { limit, cursor } = recentListSchema.parse(query);
+    const take = limit ?? 20;
+    const user = await this.findByUsernameOrThrow(username);
+
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor: cursor ?? null,
+      lookup: async (id) =>
+        this.prisma.article.findUnique({
+          where: { id },
+          select: { id: true, publishedAt: true, createdAt: true, authorId: true },
+        }),
+    });
+
+    const rows = await this.prisma.article.findMany({
+      where: {
+        authorId: user.id,
+        deletedAt: null,
+        ...(cursorWhere ?? {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: take + 1,
+      select: {
+        id: true,
+        title: true,
+        slug: true,
+        excerpt: true,
+        createdAt: true,
+        publishedAt: true,
+        isDraft: true,
+        visibility: true,
+        viewCount: true,
+        boostCount: true,
+        commentCount: true,
+      },
+    });
+
+    const slice = rows.slice(0, take);
+    const nextCursor = rows.length > take ? slice[slice.length - 1]?.id ?? null : null;
+
+    return {
+      data: slice.map((row) => ({
+        id: row.id,
+        title: row.title,
+        slug: row.slug,
+        excerpt: row.excerpt,
+        createdAt: row.createdAt.toISOString(),
+        publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
+        isDraft: row.isDraft,
+        visibility: row.visibility,
+        viewCount: row.viewCount,
+        boostCount: row.boostCount,
+        commentCount: row.commentCount,
+      })),
+      pagination: { nextCursor },
+    };
+  }
+
+  @Get('by-username/:username/recent/searches')
+  async recentSearchesByUsername(@Param() params: unknown, @Query() query: unknown) {
+    const { username } = usernameParamSchema.parse(params);
+    const { limit, cursor } = recentListSchema.parse(query);
+    const take = limit ?? 20;
+    const user = await this.findByUsernameOrThrow(username);
+
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor: cursor ?? null,
+      lookup: async (id) =>
+        this.prisma.userSearch.findUnique({
+          where: { id },
+          select: { id: true, createdAt: true, userId: true },
+        }),
+    });
+
+    const rows = await this.prisma.userSearch.findMany({
+      where: {
+        userId: user.id,
+        ...(cursorWhere ?? {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: Math.max(take * 5, take + 1),
+      select: {
+        id: true,
+        query: true,
+        createdAt: true,
+      },
+    });
+
+    const uniqueRows: Array<{ id: string; query: string; createdAt: Date }> = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const key = this.normalizeSearchQueryForDedupe(row.query);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      uniqueRows.push(row);
+      if (uniqueRows.length >= take + 1) break;
+    }
+
+    const slice = uniqueRows.slice(0, take);
+    const nextCursor =
+      uniqueRows.length > take
+        ? slice[slice.length - 1]?.id ?? null
+        : (rows.length >= Math.max(take * 5, take + 1) ? (slice[slice.length - 1]?.id ?? null) : null);
+
+    return {
+      data: slice.map((row) => ({
+        id: row.id,
+        query: row.query,
+        createdAt: row.createdAt.toISOString(),
+      })),
+      pagination: { nextCursor },
+    };
   }
 
   @Patch(':id/profile')
@@ -420,7 +671,7 @@ export class AdminUsersController {
         });
       }
 
-      return { data: await this.toAdminUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+      return { data: await this.toAdminUserDto(updated) };
     } catch (err: unknown) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
         throw new NotFoundException('User not found.');
@@ -448,12 +699,11 @@ export class AdminUsersController {
       orderBy: { createdAt: 'asc' },
     });
 
-    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const data: OrgAffiliationDto[] = memberships.map((m) => ({
       id: m.org.id,
       username: m.org.username,
       name: m.org.name,
-      avatarUrl: publicAssetUrl({ publicBaseUrl, key: m.org.avatarKey ?? null, updatedAt: m.org.avatarUpdatedAt ?? null }),
+      avatarUrl: publicAssetUrl({ publicBaseUrl: this.publicBaseUrl, key: m.org.avatarKey ?? null, updatedAt: m.org.avatarUpdatedAt ?? null }),
     }));
 
     return { data };
@@ -483,7 +733,6 @@ export class AdminUsersController {
       throw err;
     }
 
-    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const orgFull = await this.prisma.user.findUniqueOrThrow({
       where: { id: orgId },
       select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true },
@@ -493,7 +742,7 @@ export class AdminUsersController {
       id: orgFull.id,
       username: orgFull.username,
       name: orgFull.name,
-      avatarUrl: publicAssetUrl({ publicBaseUrl, key: orgFull.avatarKey ?? null, updatedAt: orgFull.avatarUpdatedAt ?? null }),
+      avatarUrl: publicAssetUrl({ publicBaseUrl: this.publicBaseUrl, key: orgFull.avatarKey ?? null, updatedAt: orgFull.avatarUpdatedAt ?? null }),
     };
 
     return { data };
@@ -513,8 +762,6 @@ export class AdminUsersController {
   @Post(':id/email/unverify')
   async unverifyEmail(@Param('id') id: string) {
     const now = new Date();
-    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-
     const existing = await this.prisma.user.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('User not found.');
 
@@ -537,7 +784,7 @@ export class AdminUsersController {
     });
 
     this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'email_unverified');
-    return { data: await this.toAdminUserDto(updated, publicBaseUrl) };
+    return { data: await this.toAdminUserDto(updated) };
   }
 }
 

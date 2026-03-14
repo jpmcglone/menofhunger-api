@@ -9,6 +9,8 @@ import { OTP_CODE_LENGTH } from './auth.constants';
 import { normalizePhone } from './auth.utils';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { MessagesService } from '../messages/messages.service';
 
 const startSchema = z.object({
   phone: z.string().min(1),
@@ -89,7 +91,35 @@ export class AuthController {
   async me(@Req() req: Request) {
     const token = getSessionCookie(req);
     const user = await this.auth.meFromSessionToken(token);
-    return { data: user ?? null };
+    if (!user?.id) return { data: null };
+
+    const notifications = this.moduleRef.get(NotificationsService, { strict: false });
+    const messages = this.moduleRef.get(MessagesService, { strict: false });
+
+    const [notificationCountRes, messageCountsRes] = await Promise.allSettled([
+      notifications?.getUndeliveredCount(user.id) ?? Promise.resolve(0),
+      messages?.getUnreadSummary(user.id) ?? Promise.resolve({ primary: 0, requests: 0 }),
+    ]);
+
+    const notificationUndeliveredCount =
+      notificationCountRes.status === 'fulfilled'
+        ? Math.max(0, Math.floor(Number(notificationCountRes.value) || 0))
+        : 0;
+    const messageUnreadCounts =
+      messageCountsRes.status === 'fulfilled'
+        ? {
+            primary: Math.max(0, Math.floor(Number(messageCountsRes.value?.primary) || 0)),
+            requests: Math.max(0, Math.floor(Number(messageCountsRes.value?.requests) || 0)),
+          }
+        : { primary: 0, requests: 0 };
+
+    return {
+      data: {
+        ...user,
+        notificationUndeliveredCount,
+        messageUnreadCounts,
+      },
+    };
   }
 
   @Post('logout')

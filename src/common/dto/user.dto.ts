@@ -164,6 +164,50 @@ export type UserDto = {
   longestStreakDays: number;
 };
 
+export type AdminUserSensitiveFieldsDto = {
+  phone: string;
+  email: string | null;
+  birthdate: string | null;
+};
+
+export type AdminUserDetailDto = UserDto & {
+  sensitive: AdminUserSensitiveFieldsDto;
+  canRevealSensitive: boolean;
+};
+
+export type AdminUserRecentPostDto = {
+  id: string;
+  createdAt: string;
+  body: string;
+  parentId: string | null;
+  rootId: string | null;
+  kind: string;
+  visibility: string;
+  commentCount: number;
+  boostCount: number;
+  bookmarkCount: number;
+};
+
+export type AdminUserRecentArticleDto = {
+  id: string;
+  title: string;
+  slug: string;
+  excerpt: string | null;
+  createdAt: string;
+  publishedAt: string | null;
+  isDraft: boolean;
+  visibility: string;
+  viewCount: number;
+  boostCount: number;
+  commentCount: number;
+};
+
+export type AdminUserRecentSearchDto = {
+  id: string;
+  query: string;
+  createdAt: string;
+};
+
 export type UserPreviewDto = {
   id: string;
   username: string | null;

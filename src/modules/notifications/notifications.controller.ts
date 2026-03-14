@@ -10,6 +10,9 @@ import type { NotificationPreferencesDto } from '../../common/dto';
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
+  collapseByRoot: z.coerce.boolean().optional(),
+  collapseMode: z.enum(['root', 'parent']).optional(),
+  prefer: z.enum(['reply', 'root']).optional(),
 });
 
 const markReadBodySchema = z.object({
@@ -71,6 +74,9 @@ export class NotificationsController {
       recipientUserId: userId,
       limit,
       cursor,
+      collapseByRoot: parsed.collapseByRoot ?? false,
+      collapseMode: parsed.collapseMode ?? 'root',
+      prefer: parsed.prefer ?? 'reply',
     });
     return {
       data: res.posts,
@@ -78,6 +84,19 @@ export class NotificationsController {
         nextCursor: res.nextCursor,
       },
     };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 240),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get('unread-count')
+  async unreadCount(@CurrentUserId() userId: string) {
+    const count = await this.notifications.getUndeliveredCount(userId);
+    return { data: { count } };
   }
 
   @UseGuards(AuthGuard)

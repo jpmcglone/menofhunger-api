@@ -1099,6 +1099,21 @@ export class SearchService {
   async recordUserSearch(params: { userId: string; query: string }) {
     const query = (params.query ?? '').trim().slice(0, 200);
     if (!query) return;
+    const normalized = query.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!normalized) return;
+
+    // Tight dedupe: skip writing repeated identical searches within a short window.
+    const latest = await this.prisma.userSearch.findFirst({
+      where: { userId: params.userId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: { query: true, createdAt: true },
+    });
+    if (latest) {
+      const latestNormalized = String(latest.query ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+      const ageMs = Date.now() - latest.createdAt.getTime();
+      if (latestNormalized === normalized && ageMs < 1000 * 60 * 30) return;
+    }
+
     await this.prisma.userSearch.create({
       data: { userId: params.userId, query },
     });

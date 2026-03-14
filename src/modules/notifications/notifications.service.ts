@@ -21,6 +21,7 @@ import { PosthogService } from '../../common/posthog/posthog.service';
 import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
 import { buildAttachParentChain } from '../posts/posts.utils';
 import { toPostDto } from '../../common/dto/post.dto';
+import { collapseFeedByRoot, type FeedCollapseMode, type FeedCollapsePrefer } from '../../common/feed-collapse/collapse-by-root';
 
 export type CreateNotificationParams = {
   recipientUserId: string;
@@ -1466,6 +1467,9 @@ export class NotificationsService {
     recipientUserId: string;
     limit: number;
     cursor: string | null;
+    collapseByRoot?: boolean;
+    collapseMode?: FeedCollapseMode;
+    prefer?: FeedCollapsePrefer;
   }) {
     const { recipientUserId, limit, cursor } = params;
     const desiredPostLimit = Math.max(1, Math.min(limit, 50));
@@ -1491,17 +1495,46 @@ export class NotificationsService {
       r.blockerId === recipientUserId ? r.blockedId : r.blockerId,
     );
 
+    // New-posts should include followed users' reply events even when they were
+    // emitted as comment/mention notifications (higher-priority in notifications UI).
+    const followedRows = await this.prisma.follow.findMany({
+      where: { followerId: recipientUserId },
+      select: { followingId: true },
+    });
+    const followedActorIds = followedRows
+      .map((r) => (r.followingId ?? '').trim())
+      .filter(Boolean);
+
     const notifications = await this.prisma.notification.findMany({
       where: {
         recipientUserId,
-        kind: 'followed_post',
-        subjectPostId: { not: null },
+        OR: [
+          // Canonical "new post from someone you follow".
+          { kind: 'followed_post', subjectPostId: { not: null } },
+          // Replies can show up as comment/mention notifications for the same action.
+          // Include them when the actor is someone the viewer follows so /new-posts
+          // remains "posts from followed users", regardless of notification kind.
+          ...(followedActorIds.length > 0
+            ? [
+                {
+                  kind: 'comment' as const,
+                  actorPostId: { not: null },
+                  actorUserId: { in: followedActorIds },
+                },
+                {
+                  kind: 'mention' as const,
+                  actorPostId: { not: null },
+                  actorUserId: { in: followedActorIds },
+                },
+              ]
+            : []),
+        ],
         ...(blockedActorIds.length > 0 ? { NOT: { actorUserId: { in: blockedActorIds } } } : {}),
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: rawFetchLimit + 1,
-      select: { id: true, subjectPostId: true },
+      select: { id: true, kind: true, subjectPostId: true, actorPostId: true },
     });
 
     const raw = notifications.slice(0, rawFetchLimit);
@@ -1510,7 +1543,9 @@ export class NotificationsService {
     const orderedSubjectPostIds: string[] = [];
     const seenSubjectPostIds = new Set<string>();
     for (const n of raw) {
-      const postId = (n.subjectPostId ?? '').trim();
+      const postId = (n.kind === 'followed_post'
+        ? (n.subjectPostId ?? '')
+        : (n.actorPostId ?? '')).trim();
       if (!postId || seenSubjectPostIds.has(postId)) continue;
       seenSubjectPostIds.add(postId);
       orderedSubjectPostIds.push(postId);
@@ -1527,24 +1562,24 @@ export class NotificationsService {
       .map((id) => visibleById.get(id))
       .filter((p): p is (typeof visiblePosts)[number] => Boolean(p));
 
-    // Keep only leaf posts (if A -> B -> C all present, return C only), same as /posts.
-    const idToPost = new Map(orderedVisiblePosts.map((p) => [p.id, p] as const));
-    const strictAncestorIds = new Set<string>();
-    for (const p of orderedVisiblePosts) {
-      let currentId = p.parentId ?? null;
-      while (currentId) {
-        strictAncestorIds.add(currentId);
-        const parentPost = idToPost.get(currentId);
-        currentId = parentPost?.parentId ?? null;
-      }
-    }
-    const dedupedPosts = orderedVisiblePosts.filter((p) => !strictAncestorIds.has(p.id));
-    const pagePosts = dedupedPosts.slice(0, desiredPostLimit);
+    // Preserve notification-event ordering for /new-posts: if both a root and a reply
+    // are notified, both can appear in the feed (UI layer handles thread collapsing).
+    const collapsedVisiblePosts = collapseFeedByRoot(orderedVisiblePosts, {
+      collapseByRoot: params.collapseByRoot ?? false,
+      collapseMode: params.collapseMode ?? 'root',
+      prefer: params.prefer ?? 'reply',
+      getId: (post) => post.id,
+      getParentId: (post) => post.parentId ?? null,
+    });
+    const pagePosts = collapsedVisiblePosts.slice(0, desiredPostLimit);
     const returnedPostIds = new Set(pagePosts.map((p) => p.id));
 
     let boundaryIndex = -1;
     for (let i = 0; i < raw.length; i++) {
-      const postId = (raw[i]?.subjectPostId ?? '').trim();
+      const row = raw[i];
+      const postId = (row?.kind === 'followed_post'
+        ? (row?.subjectPostId ?? '')
+        : (row?.actorPostId ?? '')).trim();
       if (postId && returnedPostIds.has(postId)) boundaryIndex = i;
     }
     if (boundaryIndex < 0 && raw.length > 0) boundaryIndex = raw.length - 1;

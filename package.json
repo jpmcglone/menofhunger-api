@@ -8,6 +8,7 @@
     "node": ">=20.19.0"
   },
   "scripts": {
+    "prebuild": "npm test",
     "dev": "nest start --watch",
     "dev:check": "node scripts/check-port.mjs",
     "dev:kill": "node scripts/kill-port.mjs",

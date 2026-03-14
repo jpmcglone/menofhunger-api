@@ -20,6 +20,8 @@ import { PosthogService } from '../../common/posthog/posthog.service';
 const searchSchema = z.object({
   q: z.string().trim().max(200).optional(),
   type: z.enum(['posts', 'users', 'bookmarks', 'all', 'hashtags']).optional(),
+  // Source hint for analytics/search-history recording.
+  source: z.enum(['explore', 'external']).optional(),
   // Posts-only: filter by kind (e.g. allow "check-ins only" in search UI)
   kind: z.enum(['regular', 'checkin']).optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -139,7 +141,7 @@ export class SearchController {
           viewerCanAccess: a.viewerCanAccess,
         }),
       );
-      if (viewerUserId && q.length >= 2) {
+      if (viewerUserId && q.length >= 2 && parsed.source === 'explore') {
         void this.search.recordUserSearch({ userId: viewerUserId, query: q }).catch(() => {});
         this.posthog.capture(viewerUserId, 'search_performed', {
           query: q.toLowerCase(),
