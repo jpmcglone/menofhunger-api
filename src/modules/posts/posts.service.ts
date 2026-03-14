@@ -3924,8 +3924,12 @@ export class PostsService {
     // Only explicit @mentions in body get "mention" notifications (and override "comment" for that user).
     const bodySnippet = body.trim().slice(0, 150);
 
+    // Hoisted so the follower notification block can exclude thread participants who already
+    // received a higher-priority "comment" notification.
+    let threadRoles: Map<string, keyof typeof PostsService.REPLY_TITLE> | null = null;
+
     if (parentId && parentAuthorUserId !== userId) {
-      const threadRoles = await this.getThreadParticipantRoles(parentId);
+      threadRoles = await this.getThreadParticipantRoles(parentId);
       const parentRole = threadRoles.get(parentAuthorUserId ?? '');
       const parentTitle =
         parentRole === 'reply_author'
@@ -3973,9 +3977,17 @@ export class PostsService {
     }
 
     // Explicit @mentions in body: one notification each. These take priority over comment notifications.
-    const mentionTitle = parentId ? 'mentioned you in a reply' : 'mentioned you in a post';
+    // Title is context-aware: whether the mention is in a reply to the recipient's own post or someone else's.
     for (const uid of bodyMentionIds) {
       if (uid === userId) continue;
+      let mentionTitle: string;
+      if (!parentId) {
+        mentionTitle = 'mentioned you in a post';
+      } else if (uid === parentAuthorUserId) {
+        mentionTitle = 'mentioned you in a reply to your post';
+      } else {
+        mentionTitle = 'mentioned you in a reply to a post';
+      }
       this.notifications
         .create({
           recipientUserId: uid,
@@ -3991,9 +4003,14 @@ export class PostsService {
         });
     }
 
-    // Follower notifications: when someone you follow publishes a top-level post.
+    // Follower notifications: when someone you follow publishes a post or reply.
+    // Replies also generate followed_post notifications so they appear in followers' feeds,
+    // grouped in the rollup (or standalone when bell is enabled for that person).
+    // Skip followers who already received a higher-priority notification for this same action:
+    //   - @mention → they got a "mention" notification
+    //   - thread participant → they got a "comment" notification
     // Filter recipients by post visibility so we don't notify followers who can't view it.
-    if (!parentId && visibility !== 'onlyMe') {
+    if (visibility !== 'onlyMe') {
       try {
         const follows = await this.prisma.follow.findMany({
           where: { followingId: userId },
@@ -4006,8 +4023,10 @@ export class PostsService {
         for (const f of follows) {
           const recipientUserId = f.followerId;
           if (!recipientUserId || recipientUserId === userId) continue;
-          // If the follower is explicitly @mentioned, keep only the mention notification.
+          // Already getting a mention notification — that's the highest-priority one.
           if (bodyMentionSet.has(recipientUserId)) continue;
+          // Already getting a comment notification as a thread participant.
+          if (parentId && (recipientUserId === parentAuthorUserId || threadRoles?.has(recipientUserId))) continue;
 
           if (visibility === 'verifiedOnly') {
             const vs = f.follower?.verifiedStatus ?? 'none';

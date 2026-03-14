@@ -59,6 +59,34 @@ export class NotificationsController {
       ttl: rateLimitTtl('publicRead', 60),
     },
   })
+  @Get('new-posts')
+  async listNewPosts(
+    @CurrentUserId() userId: string,
+    @Query() query: unknown,
+  ) {
+    const parsed = listQuerySchema.parse(query);
+    const limit = parsed.limit ?? 30;
+    const cursor = parsed.cursor ?? null;
+    const res = await this.notifications.listNewPostsFeed({
+      recipientUserId: userId,
+      limit,
+      cursor,
+    });
+    return {
+      data: res.posts,
+      pagination: {
+        nextCursor: res.nextCursor,
+      },
+    };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 240),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
   @Get()
   async list(
     @CurrentUserId() userId: string,

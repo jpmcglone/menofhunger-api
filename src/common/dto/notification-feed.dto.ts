@@ -1,4 +1,5 @@
 import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectPostVisibility, SubjectTier } from '../../modules/notifications/notification.dto';
+import type { PostDto } from './post.dto';
 
 export type NotificationGroupKind = 'comment' | 'boost' | 'repost' | 'follow' | 'followed_post' | 'nudge';
 
@@ -58,4 +59,12 @@ export type NotificationFeedItemDto =
   | { type: 'single'; notification: NotificationDto }
   | { type: 'group'; group: NotificationGroupDto }
   | { type: 'followed_posts_rollup'; rollup: FollowedPostsRollupDto };
+
+/** Data shape for GET /notifications/new-posts. */
+export type NotificationNewPostsFeedDto = {
+  data: PostDto[];
+  pagination: {
+    nextCursor: string | null;
+  };
+};
 

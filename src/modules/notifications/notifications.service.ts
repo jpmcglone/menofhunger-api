@@ -8,6 +8,7 @@ import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cu
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
+import { ViewerContextService } from '../viewer/viewer-context.service';
 import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectArticlePreviewDto, SubjectPostVisibility, SubjectTier } from './notification.dto';
 import type {
   FollowedPostsRollupDto,
@@ -17,6 +18,9 @@ import type {
 } from '../../common/dto/notification-feed.dto';
 import type { NotificationPreferencesDto } from '../../common/dto';
 import { PosthogService } from '../../common/posthog/posthog.service';
+import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
+import { buildAttachParentChain } from '../posts/posts.utils';
+import { toPostDto } from '../../common/dto/post.dto';
 
 export type CreateNotificationParams = {
   recipientUserId: string;
@@ -58,7 +62,78 @@ export class NotificationsService {
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly jobs: JobsService,
     private readonly posthog: PosthogService,
+    private readonly viewerContextService: ViewerContextService,
   ) {}
+
+  private async getVisiblePostsByIds(params: {
+    viewerUserId: string;
+    ids: string[];
+    includeDeleted?: boolean;
+    excludeBannedAuthors?: boolean;
+  }) {
+    const { viewerUserId, ids, includeDeleted = false, excludeBannedAuthors = false } = params;
+    const uniqueIds = [...new Set((ids ?? []).map((id) => (id ?? '').trim()).filter(Boolean))];
+    if (!uniqueIds.length) return [] as Prisma.PostGetPayload<{ include: typeof POST_WITH_POLL_INCLUDE }>[];
+
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
+    const allowed = this.viewerContextService.allowedPostVisibilities(viewer);
+
+    const fetched = await this.prisma.post.findMany({
+      where: {
+        id: { in: uniqueIds },
+        ...(includeDeleted ? {} : { deletedAt: null }),
+        ...(excludeBannedAuthors ? { user: { bannedAt: null } } : {}),
+      },
+      include: POST_WITH_POLL_INCLUDE,
+    });
+
+    const visibleFetched = fetched.filter((post) => {
+      const isSelf = Boolean(viewer && viewer.id === post.userId);
+      if (isSelf) return true;
+      if (post.visibility === 'onlyMe') return Boolean(viewer?.siteAdmin);
+      return allowed.includes(post.visibility);
+    });
+
+    const byId = new Map(visibleFetched.map((p) => [p.id, p] as const));
+    return uniqueIds.map((id) => byId.get(id)).filter((p): p is (typeof visibleFetched)[number] => Boolean(p));
+  }
+
+  private async collectParentMapForViewer(viewerUserId: string, seedParentIds: Array<string | null | undefined>) {
+    const parentMap = new Map<string, Prisma.PostGetPayload<{ include: typeof POST_WITH_POLL_INCLUDE }>>();
+    let toFetch = new Set<string>((seedParentIds ?? []).filter((id): id is string => Boolean(id)));
+    while (toFetch.size > 0) {
+      const batch = [...toFetch].filter((id) => !parentMap.has(id));
+      if (batch.length === 0) break;
+      const rows = await this.getVisiblePostsByIds({
+        viewerUserId,
+        ids: batch,
+        includeDeleted: true,
+        excludeBannedAuthors: false,
+      });
+      const byId = new Map(rows.map((p) => [p.id, p] as const));
+      const next = new Set<string>();
+      for (const id of batch) {
+        const post = byId.get(id);
+        if (!post) continue;
+        parentMap.set(id, post);
+        if (post.parentId) next.add(post.parentId);
+      }
+      toFetch = next;
+    }
+    return parentMap;
+  }
+
+  private async collectRepostedMapForViewer(viewerUserId: string, repostedPostIds: string[]) {
+    const ids = [...new Set((repostedPostIds ?? []).map((id) => (id ?? '').trim()).filter(Boolean))];
+    if (!ids.length) return new Map<string, Prisma.PostGetPayload<{ include: typeof POST_WITH_POLL_INCLUDE }>>();
+    const rows = await this.getVisiblePostsByIds({
+      viewerUserId,
+      ids,
+      includeDeleted: true,
+      excludeBannedAuthors: false,
+    });
+    return new Map(rows.map((p) => [p.id, p] as const));
+  }
 
   private async getUndeliveredCountInternal(recipientUserId: string): Promise<number> {
     const row = await this.prisma.user.findUnique({
@@ -1330,6 +1405,13 @@ export class NotificationsService {
         i += 1;
         continue;
       }
+      // Bell-enabled followed_post notifications should always be standalone.
+      // This guarantees "every post" delivery semantics in the feed UI.
+      if (n.kind === 'followed_post' && isBellEnabledFollowedPost(n)) {
+        items.push({ type: 'single', notification: n });
+        i += 1;
+        continue;
+      }
 
       const key = groupKey(n);
       if (!key) {
@@ -1377,6 +1459,186 @@ export class NotificationsService {
       items,
       nextCursor,
       undeliveredCount,
+    };
+  }
+
+  async listNewPostsFeed(params: {
+    recipientUserId: string;
+    limit: number;
+    cursor: string | null;
+  }) {
+    const { recipientUserId, limit, cursor } = params;
+    const desiredPostLimit = Math.max(1, Math.min(limit, 50));
+    const rawFetchLimit = Math.min(desiredPostLimit * 8, 300);
+
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor,
+      lookup: async (id) =>
+        this.prisma.notification
+          .findUnique({
+            where: { id, recipientUserId },
+            select: { id: true, createdAt: true },
+          })
+          .then((r) => (r ? { id: r.id, createdAt: r.createdAt } : null)),
+    });
+
+    // Keep notification and feed behavior consistent: hide items from blocked users.
+    const blockRows = await this.prisma.userBlock.findMany({
+      where: { OR: [{ blockerId: recipientUserId }, { blockedId: recipientUserId }] },
+      select: { blockerId: true, blockedId: true },
+    });
+    const blockedActorIds = blockRows.map((r) =>
+      r.blockerId === recipientUserId ? r.blockedId : r.blockerId,
+    );
+
+    const notifications = await this.prisma.notification.findMany({
+      where: {
+        recipientUserId,
+        kind: 'followed_post',
+        subjectPostId: { not: null },
+        ...(blockedActorIds.length > 0 ? { NOT: { actorUserId: { in: blockedActorIds } } } : {}),
+        ...(cursorWhere ? { AND: [cursorWhere] } : {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: rawFetchLimit + 1,
+      select: { id: true, subjectPostId: true },
+    });
+
+    const raw = notifications.slice(0, rawFetchLimit);
+    const hasMoreRaw = notifications.length > rawFetchLimit;
+
+    const orderedSubjectPostIds: string[] = [];
+    const seenSubjectPostIds = new Set<string>();
+    for (const n of raw) {
+      const postId = (n.subjectPostId ?? '').trim();
+      if (!postId || seenSubjectPostIds.has(postId)) continue;
+      seenSubjectPostIds.add(postId);
+      orderedSubjectPostIds.push(postId);
+    }
+
+    const visiblePosts = await this.getVisiblePostsByIds({
+      viewerUserId: recipientUserId,
+      ids: orderedSubjectPostIds,
+      includeDeleted: false,
+      excludeBannedAuthors: true,
+    });
+    const visibleById = new Map(visiblePosts.map((p) => [p.id, p] as const));
+    const orderedVisiblePosts = orderedSubjectPostIds
+      .map((id) => visibleById.get(id))
+      .filter((p): p is (typeof visiblePosts)[number] => Boolean(p));
+
+    // Keep only leaf posts (if A -> B -> C all present, return C only), same as /posts.
+    const idToPost = new Map(orderedVisiblePosts.map((p) => [p.id, p] as const));
+    const strictAncestorIds = new Set<string>();
+    for (const p of orderedVisiblePosts) {
+      let currentId = p.parentId ?? null;
+      while (currentId) {
+        strictAncestorIds.add(currentId);
+        const parentPost = idToPost.get(currentId);
+        currentId = parentPost?.parentId ?? null;
+      }
+    }
+    const dedupedPosts = orderedVisiblePosts.filter((p) => !strictAncestorIds.has(p.id));
+    const pagePosts = dedupedPosts.slice(0, desiredPostLimit);
+    const returnedPostIds = new Set(pagePosts.map((p) => p.id));
+
+    let boundaryIndex = -1;
+    for (let i = 0; i < raw.length; i++) {
+      const postId = (raw[i]?.subjectPostId ?? '').trim();
+      if (postId && returnedPostIds.has(postId)) boundaryIndex = i;
+    }
+    if (boundaryIndex < 0 && raw.length > 0) boundaryIndex = raw.length - 1;
+
+    const hasMore = hasMoreRaw || (boundaryIndex >= 0 && boundaryIndex < raw.length - 1);
+    const nextCursor = hasMore && boundaryIndex >= 0 ? raw[boundaryIndex]!.id : null;
+
+    if (pagePosts.length === 0) {
+      return { posts: [], nextCursor };
+    }
+
+    const repostedPostIds = pagePosts
+      .filter((p) => (p as { kind?: string; repostedPostId?: string | null }).kind === 'repost' && (p as { repostedPostId?: string | null }).repostedPostId)
+      .map((p) => (p as { repostedPostId?: string | null }).repostedPostId as string);
+    const [viewer, parentMap, repostedPostMap] = await Promise.all([
+      this.viewerContextService.getViewer(recipientUserId),
+      this.collectParentMapForViewer(recipientUserId, pagePosts.map((p) => p.parentId)),
+      this.collectRepostedMapForViewer(recipientUserId, repostedPostIds),
+    ]);
+    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const allPostIds = [...pagePosts.map((p) => p.id), ...parentMap.keys()];
+
+    const [
+      boostedRows,
+      bookmarksRows,
+      votedRows,
+      repostedRows,
+      blockSets,
+    ] = await Promise.all([
+      this.prisma.boost.findMany({
+        where: { userId: recipientUserId, postId: { in: allPostIds } },
+        select: { postId: true },
+      }),
+      this.prisma.bookmark.findMany({
+        where: { userId: recipientUserId, postId: { in: allPostIds } },
+        select: { postId: true, collections: { select: { collectionId: true } } },
+      }).catch((e: unknown) => {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2021') return [];
+        throw e;
+      }),
+      this.prisma.postPollVote.findMany({
+        where: { userId: recipientUserId, poll: { postId: { in: allPostIds } } },
+        select: { optionId: true, poll: { select: { postId: true } } },
+      }),
+      (this.prisma.post as any).findMany({
+        where: { userId: recipientUserId, kind: 'repost', repostedPostId: { in: allPostIds }, deletedAt: null },
+        select: { repostedPostId: true },
+      }) as Promise<Array<{ repostedPostId: string | null }>>,
+      this.prisma.userBlock.findMany({
+        where: { OR: [{ blockerId: recipientUserId }, { blockedId: recipientUserId }] },
+        select: { blockerId: true, blockedId: true },
+      }),
+    ]);
+
+    const boosted = new Set(boostedRows.map((r) => r.postId));
+    const bookmarksByPostId = new Map<string, { collectionIds: string[] }>();
+    for (const row of bookmarksRows) {
+      bookmarksByPostId.set(row.postId, { collectionIds: (row.collections ?? []).map((c) => c.collectionId) });
+    }
+    const votedPollOptionIdByPostId = new Map<string, string>();
+    for (const row of votedRows) votedPollOptionIdByPostId.set(row.poll.postId, row.optionId);
+    const repostedByPostId = new Set(
+      repostedRows
+        .map((r) => (r.repostedPostId ?? '').trim())
+        .filter(Boolean),
+    );
+    const blockedByViewer = new Set<string>();
+    const viewerBlockedBy = new Set<string>();
+    for (const row of blockSets) {
+      if (row.blockerId === recipientUserId) blockedByViewer.add(row.blockedId);
+      if (row.blockedId === recipientUserId) viewerBlockedBy.add(row.blockerId);
+    }
+
+    const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const attachParentChain = buildAttachParentChain({
+      parentMap,
+      baseUrl,
+      boosted,
+      bookmarksByPostId,
+      votedPollOptionIdByPostId,
+      viewerUserId: recipientUserId,
+      viewerHasAdmin,
+      internalByPostId: null,
+      scoreByPostId: undefined,
+      toPostDto,
+      blockedByViewer,
+      viewerBlockedBy,
+      repostedByPostId,
+      repostedPostMap: repostedPostMap as any,
+    });
+
+    return {
+      posts: pagePosts.map((p) => attachParentChain(p)),
+      nextCursor,
     };
   }
 

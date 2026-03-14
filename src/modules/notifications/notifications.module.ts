@@ -4,6 +4,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { EmailModule } from '../email/email.module';
 import { DailyContentModule } from '../daily-content/daily-content.module';
 import { MessagesModule } from '../messages/messages.module';
+import { ViewerContextModule } from '../viewer/viewer-context.module';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsCleanupCron } from './notifications-cleanup.cron';
 import { NotificationsOrphanCleanupCron } from './notifications-orphan-cleanup.cron';
@@ -14,7 +15,7 @@ import { MessagePushEventsHandler } from './message-push-events.handler';
 import { MessageInstantEmailEventsHandler } from './message-instant-email-events.handler';
 
 @Module({
-  imports: [AuthModule, RealtimeModule, EmailModule, DailyContentModule, MessagesModule],
+  imports: [AuthModule, RealtimeModule, EmailModule, DailyContentModule, MessagesModule, ViewerContextModule],
   controllers: [NotificationsController],
   providers: [
     NotificationsService,
