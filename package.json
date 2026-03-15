@@ -8,13 +8,13 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "prebuild": "npm test",
     "dev": "nest start --watch",
     "dev:check": "node scripts/check-port.mjs",
     "dev:kill": "node scripts/kill-port.mjs",
     "dev:clean": "npm run dev:kill && npm run dev",
     "start": "node dist/main.js",
     "build": "nest build",
+    "build:ci": "nest build",
     "build:typecheck": "tsc --noEmit",
     "postinstall": "prisma generate",
     "seed:prod": "node scripts/seed-prod.js",
@@ -22,6 +22,7 @@
     "lint": "eslint src --ext .ts",
     "format": "prettier --write .",
     "test": "jest --passWithNoTests",
+    "test:ci": "jest --ci --runInBand --passWithNoTests",
     "test:watch": "jest --watch --passWithNoTests",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "prisma:generate": "prisma generate",
