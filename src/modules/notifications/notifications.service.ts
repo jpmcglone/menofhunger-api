@@ -189,6 +189,7 @@ export class NotificationsService {
         mention: 'mentioned you',
         comment: 'replied to you',
         poll_results_ready: 'Poll results are ready',
+        coin_transfer: 'sent you coins',
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
@@ -264,7 +265,9 @@ export class NotificationsService {
               ? `/a/${subjectArticleId}`
               : kind === 'followed_article' && subjectArticleId
                 ? `/a/${subjectArticleId}`
-                : null;
+                : kind === 'coin_transfer'
+                  ? '/coins'
+                  : null;
         const pushTag = this.buildPushTag({
           recipientUserId,
           kind,
@@ -446,6 +449,12 @@ export class NotificationsService {
       return {
         title: 'Poll results are ready',
         body: snippet ?? 'Open to see the results.',
+      };
+    }
+    if (kind === 'coin_transfer') {
+      return {
+        title: `${actorName} sent you coins`,
+        body: snippet ?? 'Open to view your coin activity.',
       };
     }
     return {

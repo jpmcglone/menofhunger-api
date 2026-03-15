@@ -30,6 +30,7 @@ import { AdminDailyDigestCron } from './admin-digest-email.cron';
 import { AdminAnalyticsController } from './admin-analytics.controller';
 import { AdminBillingController } from './admin-billing.controller';
 import { BillingModule } from '../billing/billing.module';
+import { CoinsModule } from '../coins/coins.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { BillingModule } from '../billing/billing.module';
     DailyContentModule,
     EmailModule,
     BillingModule,
+    CoinsModule,
   ],
   controllers: [
     AdminUsersController,

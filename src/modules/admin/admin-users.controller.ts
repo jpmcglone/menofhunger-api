@@ -33,6 +33,7 @@ import { EntitlementService } from '../billing/entitlement.service';
 import { BillingService } from '../billing/billing.service';
 import { APP_FEATURE_TOGGLES, sanitizeFeatureToggles } from '../../common/feature-toggles';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
+import { CoinsService } from '../coins/coins.service';
 
 const paginatedSearchSchema = z.object({
   q: z.string().optional(),
@@ -58,6 +59,11 @@ const updateUserSchema = z.object({
   featureToggles: z.array(z.enum(APP_FEATURE_TOGGLES)).max(50).optional(),
 });
 
+const adjustCoinsSchema = z.object({
+  delta: z.number().int().refine((v) => v !== 0, 'delta must be non-zero'),
+  reason: z.string().trim().max(200).optional().nullable(),
+});
+
 const usernameParamSchema = z.object({
   username: z.string().trim().min(1),
 });
@@ -81,6 +87,7 @@ export class AdminUsersController {
     private readonly slack: SlackService,
     private readonly entitlementService: EntitlementService,
     private readonly billingService: BillingService,
+    private readonly coinsService: CoinsService,
   ) {}
 
   private get publicBaseUrl(): string | null {
@@ -682,6 +689,20 @@ export class AdminUsersController {
       }
       throw err;
     }
+  }
+
+  @Post(':id/coins/adjust')
+  async adjustCoins(@Req() req: AdminRequest, @Param('id') id: string, @Body() body: unknown) {
+    const adminId = String(req.user?.id ?? '').trim();
+    if (!adminId) throw new NotFoundException();
+    const parsed = adjustCoinsSchema.parse(body);
+    const data = await this.coinsService.adminAdjustCoins({
+      adminUserId: adminId,
+      targetUserId: id,
+      delta: parsed.delta,
+      reason: parsed.reason ?? null,
+    });
+    return { data };
   }
 
   @Get(':id/orgs')

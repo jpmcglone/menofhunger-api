@@ -88,10 +88,16 @@ export class AuthController {
   }
 
   @Get('me')
-  async me(@Req() req: Request) {
+  async me(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const token = getSessionCookie(req);
-    const user = await this.auth.meFromSessionToken(token);
-    if (!user?.id) return { data: null };
+    const sessionResult = await this.auth.meFromSessionToken(token);
+    if (!sessionResult?.user?.id) return { data: null };
+
+    if (sessionResult.renewed && token) {
+      this.auth.setSessionCookie(token, sessionResult.expiresAt, res);
+    }
+
+    const { user } = sessionResult;
 
     const notifications = this.moduleRef.get(NotificationsService, { strict: false });
     const messages = this.moduleRef.get(MessagesService, { strict: false });
@@ -125,13 +131,13 @@ export class AuthController {
   @Post('logout')
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const token = getSessionCookie(req);
-    const user = await this.auth.meFromSessionToken(token);
+    const sessionResult = await this.auth.meFromSessionToken(token);
     const result = await this.auth.logout(token, res);
     // Disconnect all active sockets for this user immediately on logout.
-    if (user?.id) {
+    if (sessionResult?.user?.id) {
       // Avoid module import cycles by resolving at runtime (PresenceModule is loaded in AppModule).
       const presenceRealtime = this.moduleRef.get(PresenceRealtimeService, { strict: false });
-      presenceRealtime?.disconnectUserSockets(user.id);
+      presenceRealtime?.disconnectUserSockets(sessionResult.user.id);
     }
     return { data: result };
   }

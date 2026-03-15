@@ -49,6 +49,7 @@ import { ArticleViewsModule } from '../article-views/article-views.module';
 import { PosthogModule } from '../../common/posthog/posthog.module';
 import { SlackModule } from '../../common/slack/slack.module';
 import { ArticlesModule } from '../articles/articles.module';
+import { CoinsModule } from '../coins/coins.module';
 
 // Module wiring is static; use env flags as a pragmatic switch for which processes host consumers.
 const RUN_JOB_CONSUMERS_RAW = (process.env.RUN_JOB_CONSUMERS ?? 'true').trim().toLowerCase();
@@ -116,6 +117,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     PosthogModule,
     SlackModule,
     ArticlesModule,
+    CoinsModule,
     ...(RUN_JOB_CONSUMERS ? [JobsConsumersModule] : []),
   ],
   controllers: [AppController],

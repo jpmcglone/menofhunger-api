@@ -189,7 +189,11 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const token = parseSessionCookieFromHeader(cookieHeader);
     let user: any = null;
     try {
-      user = await this.auth.meFromSessionToken(token);
+      const result = await this.auth.meFromSessionToken(token);
+      // WebSocket connections have no HTTP Response to set cookies on, so we
+      // intentionally skip session renewal cookie writes here -- the next HTTP
+      // request will handle it via the guard.
+      user = result?.user ?? null;
     } catch (err) {
       this.logger.warn(`[presence] Connection auth failed socket=${client.id}; continuing as anonymous: ${err}`);
     }

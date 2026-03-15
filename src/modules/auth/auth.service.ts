@@ -5,6 +5,7 @@ import { AppConfigService } from '../app/app-config.service';
 import {
   AUTH_COOKIE_NAME,
   OTP_RESEND_SECONDS,
+  SESSION_RENEWAL_THRESHOLD_DAYS,
   SESSION_TTL_DAYS,
 } from './auth.constants';
 import { hmacSha256Hex, randomSessionToken } from './auth.utils';
@@ -16,6 +17,13 @@ import { USER_DTO_SELECT } from '../../common/prisma-selects/user.select';
 import { dayIndexEastern, easternDayKey, easternDayKeyFromDayIndex } from '../../common/time/eastern-day-key';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
+
+export interface SessionResult {
+  user: ReturnType<typeof toUserDto>;
+  sessionId: string;
+  expiresAt: Date;
+  renewed: boolean;
+}
 
 @Injectable()
 export class AuthService {
@@ -281,7 +289,34 @@ export class AuthService {
     } catch {
       // Best-effort only; never block auth/me.
     }
-    return toUserDto(session.user, this.appConfig.r2()?.publicBaseUrl ?? null);
+
+    // Sliding-window renewal: push expiresAt out by SESSION_TTL_DAYS whenever
+    // the session is within SESSION_RENEWAL_THRESHOLD_DAYS of expiring. This
+    // keeps active users logged in indefinitely without requiring a re-login.
+    const renewalThresholdMs = SESSION_RENEWAL_THRESHOLD_DAYS * 24 * 60 * 60_000;
+    const timeUntilExpiryMs = session.expiresAt.getTime() - now.getTime();
+    let renewed = false;
+    let effectiveExpiresAt = session.expiresAt;
+
+    if (timeUntilExpiryMs < renewalThresholdMs) {
+      effectiveExpiresAt = new Date(now.getTime() + SESSION_TTL_DAYS * 24 * 60 * 60_000);
+      try {
+        await this.prisma.session.update({
+          where: { id: session.id },
+          data: { expiresAt: effectiveExpiresAt },
+        });
+        renewed = true;
+      } catch {
+        // Best-effort — if the update fails the session is still valid until original expiry.
+      }
+    }
+
+    return {
+      user: toUserDto(session.user, this.appConfig.r2()?.publicBaseUrl ?? null),
+      sessionId: session.id,
+      expiresAt: effectiveExpiresAt,
+      renewed,
+    };
   }
 
   async revokeAllSessionsForUser(userId: string): Promise<void> {
@@ -334,7 +369,7 @@ export class AuthService {
     };
   }
 
-  private setAuthCookie(token: string, expires: Date, res: Response) {
+  setSessionCookie(token: string, expires: Date, res: Response) {
     res.cookie(AUTH_COOKIE_NAME, token, this.cookieOptions(expires));
   }
 
@@ -355,7 +390,7 @@ export class AuthService {
       data: { userId, tokenHash, expiresAt },
     });
 
-    this.setAuthCookie(token, expiresAt, res);
+    this.setSessionCookie(token, expiresAt, res);
     return session;
   }
 }
