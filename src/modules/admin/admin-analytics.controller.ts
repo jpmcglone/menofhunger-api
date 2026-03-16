@@ -2,7 +2,7 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminGuard } from './admin.guard';
-import type { AdminAnalyticsArticlesDto, AdminAnalyticsDto, AdminAnalyticsEngagementDto, AnalyticsGranularity, AnalyticsRange } from '../../common/dto/admin-analytics.dto';
+import type { AdminAnalyticsArticlesDto, AdminAnalyticsCoinsDto, AdminAnalyticsDto, AdminAnalyticsEngagementDto, AnalyticsGranularity, AnalyticsRange } from '../../common/dto/admin-analytics.dto';
 
 function resolveSince(range: string, now: Date): Date | null {
   const ms = (days: number) => new Date(now.getTime() - days * 86400000);
@@ -80,7 +80,13 @@ export class AdminAnalyticsController {
       articlePublishedRaw,
       articleViewsRaw,
       articleEngagementRaw,
+      totalCoinsRow,
       articleTopRaw,
+      coinsMintedSummaryRaw,
+      coinsTransferredSummaryRaw,
+      coinsMintedSeriesRaw,
+      coinsMintedByMultiplierRaw,
+      coinsGiniRaw,
     ] = await Promise.all([
 
       // All-time summary counts (range-independent).
@@ -477,6 +483,13 @@ export class AdminAnalyticsController {
            WHERE "deletedAt" IS NULL ${sinceAnd(Prisma.sql`"createdAt"`)}) AS total_comments
       `),
 
+      // Total coins across all non-banned users — all-time economy total.
+      this.prisma.$queryRaw<Array<{ total_coins: bigint }>>`
+        SELECT COALESCE(SUM("coins"), 0)::bigint AS total_coins
+        FROM "User"
+        WHERE "bannedAt" IS NULL
+      `,
+
       // Top 10 articles by view count in the range.
       this.prisma.$queryRaw<Array<{
         id: string;
@@ -518,6 +531,71 @@ export class AdminAnalyticsController {
         ORDER BY view_count DESC
         LIMIT 10
       `),
+
+      // ── Coin queries ────────────────────────────────────────────────────────
+
+      // Coins minted from streak rewards in the selected range.
+      this.prisma.$queryRaw<Array<{ minted_total: bigint; unique_earners: bigint }>>(Prisma.sql`
+        SELECT
+          COALESCE(SUM(amount), 0)::bigint AS minted_total,
+          COUNT(DISTINCT "senderId")::bigint AS unique_earners
+        FROM "CoinTransfer"
+        WHERE kind = 'streak_reward'
+        ${sinceAnd(Prisma.sql`"createdAt"`)}
+      `),
+
+      // Coins sent peer-to-peer in the selected range.
+      this.prisma.$queryRaw<Array<{ transferred_total: bigint; unique_senders: bigint }>>(Prisma.sql`
+        SELECT
+          COALESCE(SUM(amount), 0)::bigint AS transferred_total,
+          COUNT(DISTINCT "senderId")::bigint AS unique_senders
+        FROM "CoinTransfer"
+        WHERE kind = 'transfer'
+        ${sinceAnd(Prisma.sql`"createdAt"`)}
+      `),
+
+      // Time series: coins minted from streaks per time bucket.
+      this.prisma.$queryRaw<Array<{ bucket: Date; count: bigint }>>(Prisma.sql`
+        SELECT DATE_TRUNC(${granularity}, "createdAt") AS bucket, SUM(amount)::bigint AS count
+        FROM "CoinTransfer"
+        WHERE kind = 'streak_reward'
+        ${sinceAnd(Prisma.sql`"createdAt"`)}
+        GROUP BY 1
+        ORDER BY 1
+      `),
+
+      // Coins minted grouped by multiplier amount (amount = 1, 2, 3, or 4).
+      this.prisma.$queryRaw<Array<{ amount: number; cnt: bigint }>>(Prisma.sql`
+        SELECT amount, COUNT(*)::bigint AS cnt
+        FROM "CoinTransfer"
+        WHERE kind = 'streak_reward'
+        ${sinceAnd(Prisma.sql`"createdAt"`)}
+        GROUP BY amount
+        ORDER BY amount
+      `),
+
+      // Gini coefficient of the coin distribution (all non-banned users with coins > 0).
+      // Formula: G = (2 * Σ(rank_i * coins_i) / (n * Σcoins_i)) - (n + 1) / n
+      this.prisma.$queryRaw<Array<{ gini: number | null }>>`
+        WITH ranked AS (
+          SELECT coins,
+                 ROW_NUMBER() OVER (ORDER BY coins) AS rank,
+                 COUNT(*) OVER () AS n,
+                 SUM(coins) OVER () AS total_coins
+          FROM "User"
+          WHERE "bannedAt" IS NULL AND coins > 0
+        )
+        SELECT
+          CASE
+            WHEN MAX(n) = 0 OR MAX(total_coins) = 0 THEN 0
+            ELSE ROUND(
+              (2.0 * SUM(rank * coins) / (MAX(n)::numeric * MAX(total_coins)::numeric)
+               - (MAX(n)::numeric + 1) / MAX(n)::numeric)::numeric,
+              4
+            )
+          END AS gini
+        FROM ranked
+      `,
     ]);
 
     // ── Summary ───────────────────────────────────────────────────────────────
@@ -626,6 +704,29 @@ export class AdminAnalyticsController {
         })),
     };
 
+    // ── Coins ─────────────────────────────────────────────────────────────────
+
+    const coinsMintedSummary = coinsMintedSummaryRaw[0];
+    const coinsTransferredSummary = coinsTransferredSummaryRaw[0];
+
+    const mintedInRange = Number(coinsMintedSummary?.minted_total ?? 0);
+    const transferredInRange = Number(coinsTransferredSummary?.transferred_total ?? 0);
+    const velocityRatio = mintedInRange > 0
+      ? Math.round((transferredInRange / mintedInRange) * 1000) / 1000
+      : null;
+
+    const coins: AdminAnalyticsCoinsDto = {
+      totalInEconomy:       Number(totalCoinsRow[0]?.total_coins ?? 0),
+      mintedInRange,
+      transferredInRange,
+      uniqueEarnersInRange: Number(coinsMintedSummary?.unique_earners ?? 0),
+      uniqueSendersInRange: Number(coinsTransferredSummary?.unique_senders ?? 0),
+      minted:               toTimeSeries(coinsMintedSeriesRaw),
+      mintedByMultiplier:   Object.fromEntries(coinsMintedByMultiplierRaw.map((r) => [String(r.amount), Number(r.cnt)])),
+      velocityRatio,
+      giniCoefficient:      coinsGiniRaw[0]?.gini != null ? Number(coinsGiniRaw[0].gini) : null,
+    };
+
     // ── Response ──────────────────────────────────────────────────────────────
 
     const data: AdminAnalyticsDto = {
@@ -641,6 +742,7 @@ export class AdminAnalyticsController {
         usersWithActiveGrants: activeGrantsCount,
         dau: Math.round(Number(dauMau?.dau ?? 0)),
         mau: Number(dauMau?.mau ?? 0),
+        totalCoinsInEconomy: coins.totalInEconomy,
       },
       signups:   toTimeSeries(signupsRaw),
       postsByVisibility,
@@ -663,6 +765,7 @@ export class AdminAnalyticsController {
         compedPremiumPlus,
         byStatus,
       },
+      coins,
       articles,
       asOf: now.toISOString(),
     };

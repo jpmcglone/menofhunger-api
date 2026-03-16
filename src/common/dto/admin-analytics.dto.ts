@@ -12,6 +12,8 @@ export type AdminAnalyticsSummaryDto = {
   usersWithActiveGrants: number;
   dau: number;
   mau: number;
+  /** Sum of all user coin balances — total coins in the economy */
+  totalCoinsInEconomy: number;
 };
 
 export type AdminAnalyticsRetentionRow = {
@@ -102,6 +104,35 @@ export type AdminAnalyticsMonetizationDto = {
   byStatus: Record<string, number>;
 };
 
+export type AdminAnalyticsCoinsDto = {
+  /** Sum of all user coin balances (all time, all non-banned users). */
+  totalInEconomy: number;
+  /** Coins minted from streak rewards in the selected range. */
+  mintedInRange: number;
+  /** Coins sent peer-to-peer in the selected range. */
+  transferredInRange: number;
+  /** Distinct users who earned streak coins in the selected range. */
+  uniqueEarnersInRange: number;
+  /** Distinct users who sent coins to others in the selected range. */
+  uniqueSendersInRange: number;
+  /** Coins minted per time bucket in the selected range. */
+  minted: TimeSeriesPoint[];
+  /** Coins minted grouped by multiplier amount (1, 2, 3, 4). */
+  mintedByMultiplier: Record<string, number>;
+  /**
+   * Velocity ratio: transferred / minted in the selected range.
+   * > 1 means more coins are moving than being created (unusual; could indicate re-circling).
+   * Null when minted = 0.
+   */
+  velocityRatio: number | null;
+  /**
+   * Gini coefficient of the all-time coin distribution (0 = perfect equality, 1 = extreme inequality).
+   * Computed over all non-banned users with coins > 0.
+   * Null when there are no holders.
+   */
+  giniCoefficient: number | null;
+};
+
 export type AdminAnalyticsDto = {
   range: AnalyticsRange;
   granularity: AnalyticsGranularity;
@@ -117,6 +148,7 @@ export type AdminAnalyticsDto = {
   retention: AdminAnalyticsRetentionRow[];
   engagement: AdminAnalyticsEngagementDto;
   monetization: AdminAnalyticsMonetizationDto;
+  coins: AdminAnalyticsCoinsDto;
   articles: AdminAnalyticsArticlesDto;
   asOf: string;
 };

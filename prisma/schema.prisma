@@ -68,6 +68,8 @@ enum NotificationKind {
 enum CoinTransferKind {
   transfer
   admin_adjust
+  streak_reward
+  verification_gift
 }
 
 enum FeedbackCategory {

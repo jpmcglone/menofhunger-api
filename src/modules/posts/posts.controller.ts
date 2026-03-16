@@ -948,7 +948,7 @@ export class PostsController {
             };
           })()
         : null;
-    const created = await this.posts.createPost({
+    const { post: created, streakReward } = await this.posts.createPost({
       userId,
       body: (parsed.body ?? '').trim(),
       visibility: parsed.visibility ?? 'public',
@@ -961,10 +961,13 @@ export class PostsController {
     const viewer = await this.posts.viewerContext(userId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
     return {
-      data: toPostDto(created, this.appConfig.r2()?.publicBaseUrl ?? null, {
-        viewerHasBoosted: false,
-        includeInternal: viewerHasAdmin,
-      }),
+      data: {
+        post: toPostDto(created, this.appConfig.r2()?.publicBaseUrl ?? null, {
+          viewerHasBoosted: false,
+          includeInternal: viewerHasAdmin,
+        }),
+        streakReward: streakReward ?? null,
+      },
     };
   }
 

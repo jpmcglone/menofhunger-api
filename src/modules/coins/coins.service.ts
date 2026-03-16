@@ -186,6 +186,33 @@ export class CoinsService {
     };
   }
 
+  /** Gift a fixed number of coins to a newly verified user. Idempotent — skips if the user already has a verification_gift transfer. */
+  async giftVerificationCoins(userId: string, amount = 5): Promise<void> {
+    const existing = await this.prisma.coinTransfer.findFirst({
+      where: { recipientId: userId, kind: 'verification_gift' },
+      select: { id: true },
+    });
+    if (existing) return;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: { coins: { increment: amount } },
+      });
+      await tx.coinTransfer.create({
+        data: {
+          senderId: userId,
+          recipientId: userId,
+          kind: 'verification_gift',
+          amount,
+          note: 'Welcome gift for getting verified',
+        },
+      });
+    });
+
+    await this.usersMeRealtime.emitMeUpdated(userId, 'coin_admin_adjusted').catch(() => undefined);
+  }
+
   async listTransfers(params: {
     userId: string;
     cursor?: string | null;
@@ -229,6 +256,26 @@ export class CoinsService {
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
     const items: CoinTransferDto[] = page.map((t) => {
+      if (t.kind === 'streak_reward' || t.kind === 'verification_gift') {
+        return {
+          id: t.id,
+          createdAt: t.createdAt.toISOString(),
+          amount: t.amount,
+          note: t.note ?? null,
+          direction: t.kind,
+          counterparty: {
+            userId: t.sender.id,
+            username: t.sender.username ?? '',
+            displayName: t.sender.name ?? null,
+            avatarUrl: publicAssetUrl({
+              publicBaseUrl,
+              key: t.sender.avatarKey,
+              updatedAt: t.sender.avatarUpdatedAt ?? null,
+            }),
+          },
+        };
+      }
+
       if (t.kind === 'admin_adjust') {
         const adminAdded = t.recipientId === userId;
         const counterparty = adminAdded ? t.sender : t.recipient;
@@ -323,15 +370,21 @@ export class CoinsService {
         updatedAt: transfer.recipient.avatarUpdatedAt ?? null,
       }),
     };
+    const isStreakReward = transfer.kind === 'streak_reward';
+    const isVerificationGift = transfer.kind === 'verification_gift';
     const isAdminAddedForRecipient = transfer.kind === 'admin_adjust' && transfer.recipientId === userId;
     const isAdminRemovedForRecipient = transfer.kind === 'admin_adjust' && transfer.senderId === userId;
     const isSender = transfer.senderId === userId;
     const counterparty = isSender ? recipient : sender;
-    const direction: CoinTransferReceiptDto['direction'] = isAdminAddedForRecipient
-      ? 'admin_added'
-      : isAdminRemovedForRecipient
-        ? 'admin_removed'
-      : (isSender ? 'sent' : 'received');
+    const direction: CoinTransferReceiptDto['direction'] = isStreakReward
+      ? 'streak_reward'
+      : isVerificationGift
+        ? 'verification_gift'
+        : isAdminAddedForRecipient
+          ? 'admin_added'
+          : isAdminRemovedForRecipient
+            ? 'admin_removed'
+            : (isSender ? 'sent' : 'received');
 
     return {
       id: transfer.id,

@@ -3711,6 +3711,7 @@ export class PostsService {
 
     let parentCommentCount: number | null = null;
     let didAwardStreak = false;
+    let streakRewardOut: { coinsEarned: number; streakDays: number; multiplier: 1 | 2 | 3 | 4 } | null = null;
     let quotedPostNotificationInfo: { quotedAuthorId: string; quotedPostId: string } | null = null;
     const post = await this.prisma
       .$transaction(async (tx) => {
@@ -3849,7 +3850,17 @@ export class PostsService {
                 coins: { increment: out.coinsAdd },
               },
             });
+            await tx.coinTransfer.create({
+              data: {
+                senderId: userId,
+                recipientId: userId,
+                kind: 'streak_reward',
+                amount: out.coinsAdd,
+                note: `Day ${out.nextStreakDays} streak (${out.multiplier}x)`,
+              },
+            });
             didAwardStreak = true;
+            streakRewardOut = { coinsEarned: out.coinsAdd, streakDays: out.nextStreakDays, multiplier: out.multiplier };
           }
         }
 
@@ -4108,7 +4119,7 @@ export class PostsService {
       is_reply: Boolean(parentId),
     });
 
-    return withMentions!;
+    return { post: withMentions!, streakReward: streakRewardOut };
   }
 
   async voteOnPoll(params: { userId: string; postId: string; optionId: string }) {

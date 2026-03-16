@@ -4,6 +4,7 @@ import { toVerificationRequestAdminDto } from '../../common/dto';
 import { VerificationService } from '../verification/verification.service';
 import { BillingService } from '../billing/billing.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { CoinsService } from '../coins/coins.service';
 import { AdminGuard } from './admin.guard';
 import { CurrentUserId } from '../users/users.decorator';
 
@@ -32,6 +33,7 @@ export class AdminVerificationController {
     private readonly verification: VerificationService,
     private readonly billing: BillingService,
     private readonly prisma: PrismaService,
+    private readonly coins: CoinsService,
   ) {}
 
   @Get()
@@ -75,6 +77,13 @@ export class AdminVerificationController {
       await this.billing.onUserVerified(updated.userId, previousUnverifiedAt);
     } catch (err) {
       this.logger.warn(`Failed to run billing hooks for verified user ${updated.userId}: ${err}`);
+    }
+
+    // Gift welcome coins (idempotent — skips if already gifted).
+    try {
+      await this.coins.giftVerificationCoins(updated.userId, 5);
+    } catch (err) {
+      this.logger.warn(`Failed to gift verification coins for user ${updated.userId}: ${err}`);
     }
 
     return { data: toVerificationRequestAdminDto(updated) };

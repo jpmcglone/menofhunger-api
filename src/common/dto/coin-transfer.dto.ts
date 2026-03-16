@@ -10,7 +10,7 @@ export type CoinTransferDto = {
   createdAt: string;
   amount: number;
   note: string | null;
-  direction: 'sent' | 'received' | 'admin_added' | 'admin_removed';
+  direction: 'sent' | 'received' | 'admin_added' | 'admin_removed' | 'streak_reward' | 'verification_gift';
   counterparty: CoinTransferCounterpartyDto;
 };
 
@@ -26,7 +26,7 @@ export type CoinTransferReceiptDto = {
   createdAt: string;
   amount: number;
   note: string | null;
-  direction: 'sent' | 'received' | 'admin_added' | 'admin_removed';
+  direction: 'sent' | 'received' | 'admin_added' | 'admin_removed' | 'streak_reward' | 'verification_gift';
   sender: CoinTransferReceiptPartyDto;
   recipient: CoinTransferReceiptPartyDto;
   counterparty: CoinTransferCounterpartyDto;
