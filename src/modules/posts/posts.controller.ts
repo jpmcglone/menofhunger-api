@@ -52,6 +52,7 @@ const userMediaListSchema = z.object({
   cursor: z.string().optional(),
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
   sort: z.enum(['new', 'trending']).optional(),
+  includeRestricted: z.coerce.boolean().optional(),
 });
 
 const createUploadMediaItemSchema = z.object({
@@ -666,6 +667,7 @@ export class PostsController {
       cursor: parsed.cursor ?? null,
       visibility: parsed.visibility ?? 'all',
       sort: parsed.sort ?? 'new',
+      includeRestricted: parsed.includeRestricted ?? false,
     });
     return { data: result.items, pagination: { nextCursor: result.nextCursor } };
   }

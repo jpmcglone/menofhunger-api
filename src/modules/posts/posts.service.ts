@@ -4544,8 +4544,9 @@ export class PostsService {
     cursor: string | null;
     visibility: 'all' | PostVisibility;
     sort: 'new' | 'trending';
+    includeRestricted?: boolean;
   }) {
-    const { viewerUserId, username, limit, cursor, visibility, sort } = params;
+    const { viewerUserId, username, limit, cursor, visibility, sort, includeRestricted } = params;
     const normalized = (username ?? '').trim();
     if (!normalized) throw new NotFoundException('User not found.');
 
@@ -4561,12 +4562,16 @@ export class PostsService {
       ? (['public', 'verifiedOnly', 'premiumOnly'] as PostVisibility[])
       : this.allowedVisibilitiesForViewer(viewer);
 
-    const visibilityFilter: PostVisibility[] =
-      visibility === 'all'
-        ? allowed
-        : allowed.includes(visibility as PostVisibility)
-          ? [visibility as PostVisibility]
-          : [];
+    // When includeRestricted, fetch all tiers and compute access per item.
+    // When a specific visibility is requested via filter, honour it even in restricted mode.
+    const allVisibilities: PostVisibility[] = ['public', 'verifiedOnly', 'premiumOnly'];
+    const visibilityFilter: PostVisibility[] = includeRestricted
+      ? (visibility !== 'all' ? [visibility as PostVisibility] : allVisibilities)
+      : (visibility === 'all'
+          ? allowed
+          : allowed.includes(visibility as PostVisibility)
+            ? [visibility as PostVisibility]
+            : []);
 
     const r2BaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
@@ -4590,6 +4595,7 @@ export class PostsService {
     let mediaRows: Array<{
       id: string; kind: string; r2Key: string | null; thumbnailR2Key: string | null;
       width: number | null; height: number | null; durationSeconds: number | null; postId: string;
+      post: { visibility: string };
     }>;
 
     if (sort === 'trending') {
@@ -4608,14 +4614,14 @@ export class PostsService {
         ],
         skip: offset,
         take: limit + 1,
-        select: { id: true, kind: true, r2Key: true, thumbnailR2Key: true, width: true, height: true, durationSeconds: true, postId: true },
+        select: { id: true, kind: true, r2Key: true, thumbnailR2Key: true, width: true, height: true, durationSeconds: true, postId: true, post: { select: { visibility: true } } },
       });
     } else {
       mediaRows = await this.prisma.postMedia.findMany({
         where: { ...baseWhere, ...(cursor ? { id: { lt: cursor } } : {}) },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: limit + 1,
-        select: { id: true, kind: true, r2Key: true, thumbnailR2Key: true, width: true, height: true, durationSeconds: true, postId: true },
+        select: { id: true, kind: true, r2Key: true, thumbnailR2Key: true, width: true, height: true, durationSeconds: true, postId: true, post: { select: { visibility: true } } },
       });
     }
 
@@ -4632,16 +4638,24 @@ export class PostsService {
     }
 
     return {
-      items: items.map((m) => ({
-        id: m.id,
-        postId: m.postId,
-        kind: m.kind as 'image' | 'video',
-        url: r2BaseUrl && m.r2Key ? `${r2BaseUrl}/${m.r2Key}` : null,
-        thumbnailUrl: r2BaseUrl && m.thumbnailR2Key ? `${r2BaseUrl}/${m.thumbnailR2Key}` : null,
-        width: m.width,
-        height: m.height,
-        durationSeconds: m.durationSeconds ?? null,
-      })),
+      items: items.map((m) => {
+        const vis = m.post.visibility as PostVisibility;
+        const viewerCanAccess = includeRestricted
+          ? (isSelf || allowed.includes(vis))
+          : true;
+        return {
+          id: m.id,
+          postId: m.postId,
+          kind: m.kind as 'image' | 'video',
+          url: r2BaseUrl && m.r2Key ? `${r2BaseUrl}/${m.r2Key}` : null,
+          thumbnailUrl: r2BaseUrl && m.thumbnailR2Key ? `${r2BaseUrl}/${m.thumbnailR2Key}` : null,
+          width: m.width,
+          height: m.height,
+          durationSeconds: m.durationSeconds ?? null,
+          visibility: vis,
+          viewerCanAccess,
+        };
+      }),
       nextCursor,
     };
   }
