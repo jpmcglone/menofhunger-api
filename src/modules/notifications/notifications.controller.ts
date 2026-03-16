@@ -13,6 +13,11 @@ const listQuerySchema = z.object({
   collapseByRoot: z.coerce.boolean().optional(),
   collapseMode: z.enum(['root', 'parent']).optional(),
   prefer: z.enum(['reply', 'root']).optional(),
+  kind: z.enum([
+    'comment', 'boost', 'repost', 'follow', 'followed_post',
+    'followed_article', 'mention', 'nudge', 'coin_transfer',
+    'poll_results_ready', 'generic',
+  ]).optional(),
 });
 
 const markReadBodySchema = z.object({
@@ -118,6 +123,7 @@ export class NotificationsController {
       recipientUserId: userId,
       limit,
       cursor,
+      kind: parsed.kind,
     });
     return {
       data: res.items,

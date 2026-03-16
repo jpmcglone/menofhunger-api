@@ -1143,8 +1143,9 @@ export class NotificationsService {
     recipientUserId: string;
     limit: number;
     cursor: string | null;
+    kind?: NotificationKind;
   }) {
-    const { recipientUserId, limit, cursor } = params;
+    const { recipientUserId, limit, cursor, kind } = params;
     const desiredItemLimit = Math.max(1, Math.min(limit, 50));
     const maxGroupNotifications = 50;
     const rawFetchLimit = Math.min(desiredItemLimit * 6, 250);
@@ -1172,6 +1173,7 @@ export class NotificationsService {
     const notifications = await this.prisma.notification.findMany({
       where: {
         recipientUserId,
+        ...(kind ? { kind } : {}),
         ...(blockedActorIds.length > 0 ? { NOT: { actorUserId: { in: blockedActorIds } } } : {}),
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },
