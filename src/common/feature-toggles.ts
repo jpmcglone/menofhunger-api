@@ -1,4 +1,4 @@
-export const APP_FEATURE_TOGGLES = ['articles'] as const;
+export const APP_FEATURE_TOGGLES = [] as const;
 
 export type AppFeatureToggle = (typeof APP_FEATURE_TOGGLES)[number];
 

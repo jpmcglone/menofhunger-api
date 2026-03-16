@@ -154,8 +154,8 @@ export class ArticlesService {
     const viewerCtx = opts.viewerUserId ? await this.viewer.getViewer(opts.viewerUserId) : null;
     const allowedVisibilities = this.viewer.allowedPostVisibilities(viewerCtx);
 
-    // followingOnly with no authenticated viewer returns nothing
-    if (opts.followingOnly && !opts.viewerUserId) {
+    // followingOnly / mine with no authenticated viewer returns nothing
+    if ((opts.followingOnly || opts.mine) && !opts.viewerUserId) {
       return { articles: [], nextCursor: null };
     }
 
@@ -171,7 +171,7 @@ export class ArticlesService {
     const effectiveVisibilities = opts.visibilityFilter ? [opts.visibilityFilter] : allowedVisibilities;
 
     const authorFilter = opts.mine
-      ? { authorId: opts.viewerUserId ?? '__none__' }
+      ? { authorId: opts.viewerUserId! }
       : opts.authorUsername
         ? { author: { username: opts.authorUsername } }
         : opts.followingOnly && opts.viewerUserId
@@ -361,6 +361,8 @@ export class ArticlesService {
           typeof data.thumbnailR2Key !== 'undefined' ? data.thumbnailR2Key : article.thumbnailR2Key,
         visibility: data.visibility ?? article.visibility,
         lastSavedAt: new Date(),
+        // Only mark as edited if the article was already published.
+        ...(article.publishedAt ? { editedAt: new Date() } : {}),
       },
       include: this.articleIncludes(false, false),
     }) as ArticleWithAuthor;

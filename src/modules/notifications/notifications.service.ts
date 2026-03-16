@@ -256,15 +256,17 @@ export class NotificationsService {
           body,
           subjectArticleId,
         });
-        // Comments link to the reply; article notifications link to the article page.
-        const pushUrl = kind === 'comment' && subjectArticleId
+        // Route to the article page for all article-related notification kinds.
+        const pushUrl = subjectArticleId && (
+          kind === 'comment' || kind === 'mention' || kind === 'followed_article' || kind === 'boost'
+        )
           ? `/a/${subjectArticleId}`
           : kind === 'comment' && actorPostId
             ? `/p/${actorPostId}`
-            : kind === 'mention' && subjectArticleId
-              ? `/a/${subjectArticleId}`
-              : kind === 'followed_article' && subjectArticleId
-                ? `/a/${subjectArticleId}`
+            : kind === 'mention' && actorPostId
+              ? `/p/${actorPostId}`
+              : kind === 'boost' && subjectPostId
+                ? `/p/${subjectPostId}`
                 : kind === 'coin_transfer'
                   ? '/coins'
                   : null;
