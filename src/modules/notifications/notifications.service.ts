@@ -1382,6 +1382,19 @@ export class NotificationsService {
       };
     }
 
+    // When filtering by a specific kind, skip all grouping and return individual items.
+    // The user opted in to see this kind explicitly — collapsing defeats the purpose.
+    if (kind) {
+      const page = dtos.slice(0, desiredItemLimit);
+      const lastItem = page.at(-1);
+      const hasMore = dtos.length > desiredItemLimit || hasMoreRaw;
+      return {
+        items: page.map((n) => ({ type: 'single' as const, notification: n })),
+        nextCursor: hasMore ? (lastItem?.id ?? null) : null,
+        undeliveredCount,
+      };
+    }
+
     const items: NotificationFeedItemDto[] = [];
     let rollupInsertIndex: number | null = null;
     let rollupNewest: NotificationDto | null = null;
