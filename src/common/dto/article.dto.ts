@@ -105,7 +105,8 @@ export type ArticleWithAuthor = Article & {
   author: ArticleAuthorRow;
   boosts?: ArticleBoost[];
   reactions?: ArticleReaction[];
-  tags?: ArticleTag[];
+  // Queries commonly select only lightweight tag fields via include/select.
+  tags?: Array<Pick<ArticleTag, 'tag' | 'label'>>;
 };
 
 export type ArticleCommentWithAuthorAndReactions = ArticleComment & {
