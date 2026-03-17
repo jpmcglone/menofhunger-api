@@ -87,7 +87,7 @@ export class CheckinsService {
     if (!before) throw new NotFoundException('User not found.');
 
     // Note: reward + one-per-day enforcement is handled inside PostsService.createPost when kind=checkin.
-    const post = await this.posts.createPost({
+    const { post } = await this.posts.createPost({
       userId: params.userId,
       body: params.body,
       visibility: params.visibility,
