@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { AppConfigService } from '../app/app-config.service';
+import { NotificationsService } from './notifications.service';
 import { buildProfileReminderEmail, getMissingProfileFields } from '../email/email-content';
 import { buildGreeting, getRecipientEmail, getVerifiedRecipientEmail } from '../email/email-send.helpers';
 import { JobsService } from '../jobs/jobs.service';
@@ -129,6 +130,7 @@ export class NotificationsEmailCron {
     private readonly dailyContent: DailyContentService,
     private readonly messages: MessagesService,
     private readonly slack: SlackService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private notificationsFromAddress(): string | undefined {
@@ -620,6 +622,90 @@ export class NotificationsEmailCron {
     }
   }
 
+  /** Streak-at-risk push notification (target ~9pm ET, once per day, per user). */
+  @Cron('*/5 * * * *')
+  async scheduleStreakReminderPush(): Promise<void> {
+    if (!this.appConfig.runSchedulers()) return;
+    if (!this.appConfig.vapidConfigured()) return;
+    const now = new Date();
+    const et = easternYmdHm(now);
+    const minuteOfDay = et.hh * 60 + et.mm;
+    // Only enqueue in the 9:00–9:59 PM ET window.
+    if (minuteOfDay < 21 * 60 || minuteOfDay >= 22 * 60) return;
+    const dayKey = easternDayKey(now);
+    try {
+      await this.jobs.enqueueCron(JOBS.checkinsStreakReminderPush, {}, `cron:checkinsStreakReminderPush:${dayKey}`, {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5 * 60_000 },
+      });
+    } catch {
+      // likely duplicate jobId; treat as no-op
+    }
+  }
+
+  async runSendStreakReminderPush(): Promise<void> {
+    if (!this.appConfig.vapidConfigured()) return;
+    const now = new Date();
+    const et = easternYmdHm(now);
+    const minuteOfDay = et.hh * 60 + et.mm;
+    if (minuteOfDay < 21 * 60 || minuteOfDay >= 22 * 60) return;
+
+    const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
+    const homeUrl = `${baseUrl}/home`;
+    const todayKey = easternDayKey(now);
+    const yesterdayKey = easternDayKey(new Date(now.getTime() - 36 * 60 * 60 * 1000));
+
+    let cursorId: string | null = null;
+    const pageSize = 400;
+    let total = 0;
+
+    try {
+      for (;;) {
+        const recipients = await this.prisma.user.findMany({
+          where: {
+            checkinStreakDays: { gt: 0 },
+            lastCheckinDayKey: yesterdayKey, // at risk: last activity was yesterday (ET)
+            ...(cursorId ? { id: { gt: cursorId } } : {}),
+            pushSubscriptions: { some: {} }, // only users with a registered push subscription
+          },
+          orderBy: [{ id: 'asc' }],
+          take: pageSize,
+          select: {
+            id: true,
+            checkinStreakDays: true,
+            lastCheckinDayKey: true,
+          },
+        });
+        if (recipients.length === 0) break;
+        cursorId = recipients[recipients.length - 1]?.id ?? null;
+
+        for (const u of recipients) {
+          // Defensive: skip if they already checked in today.
+          if ((u.lastCheckinDayKey ?? null) === todayKey) continue;
+          const streak = Math.max(0, Math.floor(u.checkinStreakDays ?? 0));
+          if (streak <= 0) continue;
+
+          try {
+            await this.notifications.sendStreakReminderPush({
+              recipientUserId: u.id,
+              streakDays: streak,
+              url: homeUrl,
+            });
+            total++;
+          } catch {
+            // best-effort per user
+          }
+        }
+      }
+      this.logger.log(`[streak-reminder-push] Sent to ${total} user(s)`);
+    } catch (err) {
+      this.logger.error(
+        `[streak-reminder-push] run failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+    }
+  }
+
   async runSendDailyDigest(): Promise<void> {
     const emailCfg = this.appConfig.email();
     if (!emailCfg) return;
@@ -892,9 +978,11 @@ export class NotificationsEmailCron {
           ? [
               'Top articles today',
               ...topArticles.map((a, idx) => {
-                const authorHandle = (a.author?.username ?? 'unknown').trim();
+                const authorRealName = (a.author?.name ?? '').trim();
+                const authorUser = (a.author?.username ?? '').trim();
+                const authorDisplay = authorRealName || (authorUser ? `@${authorUser}` : 'Unknown');
                 const articleUrl = `${baseUrl}/a/${encodeURIComponent(a.id)}`;
-                return `${idx + 1}. ${truncate(a.title ?? 'Untitled article', 120)} — @${authorHandle}\n${articleUrl}`;
+                return `${idx + 1}. ${truncate(a.title ?? 'Untitled article', 120)} — ${authorDisplay}\n${articleUrl}`;
               }),
               '',
             ]
@@ -1076,11 +1164,13 @@ export class NotificationsEmailCron {
                 `<div style="margin-bottom:10px;">${renderPill('Top articles today', 'success')}</div>`,
                 ...topArticles.map((a, idx) => {
                   const articleUrl = `${baseUrl}/a/${encodeURIComponent(a.id)}`;
-                  const authorHandle = (a.author?.username ?? 'unknown').trim();
+                  const authorRealName = (a.author?.name ?? '').trim();
+                  const authorUser = (a.author?.username ?? '').trim();
+                  const authorDisplay = authorRealName || (authorUser ? `@${authorUser}` : 'Unknown');
                   return [
                     `<div style="${idx > 0 ? 'margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6;' : ''}">`,
                     `<a href="${escapeHtml(articleUrl)}" style="font-size:14px;line-height:1.6;color:#111827;text-decoration:none;font-weight:700;">${escapeHtml(truncate(a.title ?? 'Untitled article', 140))}</a>`,
-                    `<div style="margin-top:4px;font-size:12px;color:#6b7280;">by @${escapeHtml(authorHandle)}</div>`,
+                    `<div style="margin-top:4px;font-size:12px;color:#6b7280;">by ${escapeHtml(authorDisplay)}</div>`,
                     a.excerpt ? `<div style="margin-top:4px;font-size:12px;line-height:1.6;color:#6b7280;">${escapeHtml(truncate(a.excerpt, 150))}</div>` : '',
                     `</div>`,
                   ].join('');
@@ -1380,11 +1470,13 @@ export class NotificationsEmailCron {
                   `<div style="margin-bottom:10px;">${renderPill('Best articles this week', 'success')}</div>`,
                   ...topArticles.map((a, idx) => {
                     const articleUrl = `${baseUrl}/a/${encodeURIComponent(a.id)}`;
-                    const authorHandle = (a.author?.username ?? 'unknown').trim();
+                    const authorRealName = (a.author?.name ?? '').trim();
+                    const authorUser = (a.author?.username ?? '').trim();
+                    const authorDisplay = authorRealName || (authorUser ? `@${authorUser}` : 'Unknown');
                     return [
                       `<div style="${idx > 0 ? 'margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6;' : ''}">`,
                       `<a href="${escapeHtml(articleUrl)}" style="font-size:14px;line-height:1.6;color:#111827;text-decoration:none;font-weight:700;">${escapeHtml(truncate(a.title ?? 'Untitled article', 140))}</a>`,
-                      `<div style="margin-top:4px;font-size:12px;color:#6b7280;">by @${escapeHtml(authorHandle)}</div>`,
+                      `<div style="margin-top:4px;font-size:12px;color:#6b7280;">by ${escapeHtml(authorDisplay)}</div>`,
                       a.excerpt ? `<div style="margin-top:4px;font-size:12px;line-height:1.6;color:#6b7280;">${escapeHtml(truncate(a.excerpt, 150))}</div>` : '',
                       `</div>`,
                     ].join('');
@@ -1416,8 +1508,10 @@ export class NotificationsEmailCron {
               'Best articles this week',
               ...topArticles.map((a, idx) => {
                 const articleUrl = `${baseUrl}/a/${encodeURIComponent(a.id)}`;
-                const authorHandle = (a.author?.username ?? 'unknown').trim();
-                return `${idx + 1}. ${truncate(a.title ?? 'Untitled article', 120)} — @${authorHandle}\n${articleUrl}`;
+                const authorRealName = (a.author?.name ?? '').trim();
+                const authorUser = (a.author?.username ?? '').trim();
+                const authorDisplay = authorRealName || (authorUser ? `@${authorUser}` : 'Unknown');
+                return `${idx + 1}. ${truncate(a.title ?? 'Untitled article', 120)} — ${authorDisplay}\n${articleUrl}`;
               }),
               '',
             );
@@ -1610,10 +1704,12 @@ export class NotificationsEmailCron {
     const chatUrl = chatPreviewRows[0]?.href ?? chatBaseUrl;
 
     const notifLines = notifs.map((n) => {
-      const actor = (n.actor?.username ?? n.actor?.name ?? 'Someone').trim();
+      const actorRealName = (n.actor?.name ?? '').trim();
+      const actorUser = (n.actor?.username ?? '').trim();
+      const actor = actorRealName || (actorUser ? `@${actorUser}` : 'Someone');
       const label = n.kind === 'comment' ? 'Reply' : 'Mention';
       const msg = truncate((n.body ?? n.title ?? '').trim(), 140);
-      return `- ${label} from @${actor}: ${msg}`.trim();
+      return `- ${label} from ${actor}: ${msg}`.trim();
     });
 
     type ActorTier = 'premium' | 'verified' | 'organization' | null;
@@ -1695,7 +1791,9 @@ ${chatPreviewRows
             `<div style="margin-bottom:10px;">${renderPill('Mentions & replies', 'info')}</div>`,
             `<ul style="margin:0 0 0 18px;padding:0;color:#111827;font-size:14px;line-height:1.6;">`,
             ...notifs.slice(0, 5).map((n) => {
-              const actor = (n.actor?.username ?? n.actor?.name ?? 'Someone').trim();
+              const actorRealName = (n.actor?.name ?? '').trim();
+              const actorUser = (n.actor?.username ?? '').trim();
+              const actor = actorRealName || (actorUser ? `@${actorUser}` : 'Someone');
               const label = n.kind === 'comment' ? 'Reply' : 'Mention';
               const msg = truncate((n.body ?? n.title ?? '').trim(), 140);
               const href = n.subjectPostId ? `${baseUrl}/p/${encodeURIComponent(n.subjectPostId)}` : notificationsUrl;
@@ -1708,7 +1806,7 @@ ${chatPreviewRows
                   : '';
               return `<li style="margin:0 0 10px 0;"><a href="${escapeHtml(
                 href,
-              )}" style="color:#111827;text-decoration:none;"><strong>${escapeHtml(label)}</strong> from <strong>@${escapeHtml(
+              )}" style="color:#111827;text-decoration:none;"><strong>${escapeHtml(label)}</strong> from <strong>${escapeHtml(
                 actor,
               )}</strong>${tierPill}${visPill} — ${escapeHtml(msg)}</a></li>`;
             }),

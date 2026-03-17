@@ -18,6 +18,7 @@ import { DailyContentCron } from '../daily-content/daily-content.cron';
 import { AdminDailyDigestCron } from '../admin/admin-digest-email.cron';
 import { CheckinsStreakResetCron } from '../checkins/checkins-streak-reset.cron';
 import { PostsService } from '../posts/posts.service';
+import { ArticlesTrendingScoreCron } from '../articles/articles-trending-score.cron';
 
 @Processor(MOH_BACKGROUND_QUEUE)
 export class JobsProcessor extends WorkerHost {
@@ -40,6 +41,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly adminDailyDigest: AdminDailyDigestCron,
     private readonly checkinsStreakReset: CheckinsStreakResetCron,
     private readonly postsService: PostsService,
+    private readonly articlesTrendingScore: ArticlesTrendingScoreCron,
   ) {
     super();
   }
@@ -108,6 +110,12 @@ export class JobsProcessor extends WorkerHost {
           return { ok: true };
         case JOBS.checkinsStreakReset:
           await this.checkinsStreakReset.runStreakReset();
+          return { ok: true };
+        case JOBS.checkinsStreakReminderPush:
+          await this.notificationsEmail.runSendStreakReminderPush();
+          return { ok: true };
+        case JOBS.articlesViewMilestoneSweep:
+          await this.articlesTrendingScore.runViewMilestoneSweep();
           return { ok: true };
         case JOBS.postsRefreshSinglePostScore:
           await this.postsService.refreshAndStoreTrendingScore(job.data?.postId);

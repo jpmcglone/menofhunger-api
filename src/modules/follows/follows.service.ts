@@ -206,6 +206,114 @@ export class FollowsService {
   }
 
   /**
+   * Returns users who share interests with the viewer (arena overlap), excluding
+   * users the viewer already follows. Users are ranked by overlap count descending.
+   * Falls back to the standard recommendations if there are not enough arena matches.
+   */
+  async recommendArenaUsersToFollow(params: {
+    viewerUserId: string;
+    interestKeys: string[];
+    limit: number;
+  }): Promise<{ users: FollowListUser[] }> {
+    const { viewerUserId, interestKeys } = params;
+    const limit = Math.max(1, Math.min(50, Math.floor(params.limit)));
+
+    if (interestKeys.length === 0) {
+      return this.recommendUsersToFollow({ viewerUserId, limit });
+    }
+
+    type RecRow = {
+      id: string;
+      username: string | null;
+      name: string | null;
+      premium: boolean;
+      premiumPlus: boolean;
+      isOrganization: boolean;
+      stewardBadgeEnabled: boolean;
+      verifiedStatus: string;
+      avatarKey: string | null;
+      avatarUpdatedAt: Date | null;
+      createdAt: Date;
+      overlapCount: number;
+    };
+
+    // Use Postgres array overlap (&&) and array_length of the intersection.
+    const arenaRows = await this.prisma.$queryRaw<RecRow[]>(Prisma.sql`
+      SELECT
+        u."id",
+        u."username",
+        u."name",
+        u."premium",
+        u."premiumPlus",
+        u."isOrganization",
+        u."stewardBadgeEnabled",
+        u."verifiedStatus",
+        u."avatarKey",
+        u."avatarUpdatedAt",
+        u."createdAt",
+        COALESCE(
+          array_length(
+            ARRAY(SELECT unnest(u."interests") INTERSECT SELECT unnest(${interestKeys}::text[])),
+            1
+          ),
+          0
+        ) AS "overlapCount"
+      FROM "User" u
+      WHERE
+        u."usernameIsSet" = true
+        AND u."bannedAt" IS NULL
+        AND u."id" <> ${viewerUserId}
+        AND u."interests" && ${interestKeys}::text[]
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "Follow" f
+          WHERE f."followerId" = ${viewerUserId}
+            AND f."followingId" = u."id"
+        )
+      ORDER BY
+        "overlapCount" DESC,
+        (u."verifiedStatus" <> 'none') DESC,
+        u."premium" DESC,
+        u."createdAt" DESC
+      LIMIT ${limit}
+    `);
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    const buildUsers = async (rows: RecRow[]) => {
+      if (rows.length === 0) return [];
+      const userIds = rows.map((r) => r.id);
+      const [rel, orgMap] = await Promise.all([
+        this.batchRelationshipForUserIds({ viewerUserId, userIds }),
+        this.batchOrgAffiliations(userIds, publicBaseUrl),
+      ]);
+      return rows.map((r) =>
+        toUserListDto(r, publicBaseUrl, {
+          relationship: {
+            viewerFollowsUser: rel.viewerFollows.has(r.id),
+            userFollowsViewer: rel.followsViewer.has(r.id),
+            viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(r.id),
+          },
+          orgAffiliations: orgMap.get(r.id) ?? [],
+        }) as FollowListUser,
+      );
+    };
+
+    if (arenaRows.length >= limit) {
+      return { users: await buildUsers(arenaRows) };
+    }
+
+    // Fall back to padding with regular recommendations.
+    const arenaIds = new Set(arenaRows.map((r) => r.id));
+    const remaining = limit - arenaRows.length;
+    const fallback = await this.recommendUsersToFollow({ viewerUserId, limit: remaining + arenaRows.length });
+    const fallbackFiltered = fallback.users.filter((u) => !arenaIds.has(u.id)).slice(0, remaining);
+
+    return { users: [...(await buildUsers(arenaRows)), ...fallbackFiltered] };
+  }
+
+
+  /**
    * Public-friendly “top users” list (used when logged out).
    * Ranking: verified/premium/newest.
    * When viewer is present, exclude self and already-followed users.

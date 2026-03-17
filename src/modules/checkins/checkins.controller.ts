@@ -1,8 +1,9 @@
 import { Body, Controller, Get, Post, UseGuards, Query } from '@nestjs/common';
 import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
+import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
-import { CurrentUserId } from '../users/users.decorator';
+import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { toPostDto } from '../posts/post.dto';
 import { CheckinsService } from './checkins.service';
 
@@ -18,14 +19,32 @@ export class CheckinsController {
     private readonly appConfig: AppConfigService,
   ) {}
 
+  @UseGuards(OptionalAuthGuard)
   @Get('leaderboard')
-  async getLeaderboard(@Query('limit') limit?: string) {
+  async getLeaderboard(
+    @OptionalCurrentUserId() viewerUserId: string | undefined,
+    @Query('limit') limit?: string,
+    @Query('scope') scope?: string,
+  ) {
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const users = await this.checkins.getLeaderboard({
+    const parsedLimit = limit ? parseInt(limit, 10) : undefined;
+    const isWeekly = scope === 'weekly';
+
+    if (isWeekly) {
+      const { users, viewerRank, weekStart } = await this.checkins.getWeeklyLeaderboard({
+        publicBaseUrl,
+        limit: parsedLimit,
+        viewerUserId: viewerUserId ?? null,
+      });
+      return { data: { users, viewerRank: viewerRank ?? null, weekStart: weekStart.toISOString(), generatedAt: new Date().toISOString() } };
+    }
+
+    const { users, viewerRank } = await this.checkins.getLeaderboard({
       publicBaseUrl,
-      limit: limit ? parseInt(limit, 10) : undefined,
+      limit: parsedLimit,
+      viewerUserId: viewerUserId ?? null,
     });
-    return { data: { users, generatedAt: new Date().toISOString() } };
+    return { data: { users, viewerRank: viewerRank ?? null, generatedAt: new Date().toISOString() } };
   }
 
   @UseGuards(AuthGuard)

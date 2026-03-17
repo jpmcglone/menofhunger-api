@@ -1353,6 +1353,9 @@ model Article {
   trendingScore          Float?
   trendingScoreUpdatedAt DateTime?
 
+  /** The highest view-count milestone (50/100/500/1000) already notified to the author. */
+  viewMilestoneNotified  Int?
+
   authorId String
   author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
 

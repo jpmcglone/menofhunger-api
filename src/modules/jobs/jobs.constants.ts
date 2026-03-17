@@ -34,6 +34,10 @@ export const JOBS = {
 
   // Check-ins
   checkinsStreakReset: 'checkins.streakReset',
+  checkinsStreakReminderPush: 'checkins.streakReminderPush',
+
+  // Articles
+  articlesViewMilestoneSweep: 'articles.viewMilestoneSweep',
 
   // Admin
   adminDailyDigest: 'admin.dailyDigest',

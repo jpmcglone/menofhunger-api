@@ -441,6 +441,12 @@ export class NotificationsService {
         body: snippet ?? 'Open to read it.',
       };
     }
+    if (kind === 'followed_article') {
+      return {
+        title: `${actorName} published an article`,
+        body: snippet ?? 'Open to read it.',
+      };
+    }
     if (kind === 'nudge') {
       return {
         title: `${actorName} nudged you`,
@@ -719,6 +725,29 @@ export class NotificationsService {
     if (!params.test) {
       await this.recordPushSent(recipientUserId, kind).catch(() => {});
     }
+  }
+
+  /**
+   * Send a streak-at-risk push notification to a single user.
+   * Called by the nightly streak-reminder push cron (9 PM ET).
+   * Only fires if the user has push subscriptions; silently skips if not.
+   */
+  async sendStreakReminderPush(params: {
+    recipientUserId: string;
+    streakDays: number;
+    url: string;
+  }): Promise<void> {
+    if (!this.appConfig.vapidConfigured()) return;
+    const { streakDays } = params;
+    const title = `${streakDays}-day streak at risk`;
+    const body = `Post today before midnight ET — or your streak resets.`;
+    await this.sendWebPushToRecipient(params.recipientUserId, {
+      title,
+      body,
+      url: params.url,
+      tag: `streak-reminder-${params.recipientUserId}`,
+      kind: 'streak_reminder',
+    });
   }
 
   async sendMessagePush(params: {

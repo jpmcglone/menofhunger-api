@@ -3,15 +3,31 @@ import { Cron } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
+import { JobsService } from '../jobs/jobs.service';
+import { JOBS } from '../jobs/jobs.constants';
+import { NotificationsService } from '../notifications/notifications.service';
+
+const VIEW_MILESTONES = [50, 100, 500, 1000] as const;
+
+function nextMilestone(currentCount: number, lastNotified: number | null): number | null {
+  const alreadyNotified = lastNotified ?? 0;
+  for (const m of VIEW_MILESTONES) {
+    if (currentCount >= m && m > alreadyNotified) return m;
+  }
+  return null;
+}
 
 @Injectable()
 export class ArticlesTrendingScoreCron {
   private readonly logger = new Logger(ArticlesTrendingScoreCron.name);
   private running = false;
+  private milestoneRunning = false;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
+    private readonly jobs: JobsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -109,6 +125,94 @@ export class ArticlesTrendingScoreCron {
       );
     } finally {
       this.running = false;
+    }
+  }
+
+  /** Enqueue article view milestone sweep every 30 minutes. */
+  @Cron('*/30 * * * *')
+  async scheduleViewMilestoneSweep() {
+    if (!this.appConfig.runSchedulers()) return;
+    try {
+      await this.jobs.enqueueCron(JOBS.articlesViewMilestoneSweep, {}, 'cron-articlesViewMilestoneSweep', {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5 * 60_000 },
+      });
+    } catch {
+      // likely duplicate jobId; treat as no-op
+    }
+  }
+
+  /**
+   * For each published article that has crossed a view milestone (50/100/500/1000)
+   * that hasn't been notified yet, send a generic in-app + push notification to the author.
+   */
+  async runViewMilestoneSweep(): Promise<void> {
+    if (this.milestoneRunning) return;
+    this.milestoneRunning = true;
+    const startedAt = Date.now();
+    let total = 0;
+
+    try {
+      // Pull published articles that have views and might have crossed a new milestone.
+      // Limit to articles with at least 50 views and whose last-notified milestone may be stale.
+      const articles = await this.prisma.article.findMany({
+        where: {
+          isDraft: false,
+          deletedAt: null,
+          publishedAt: { not: null },
+          viewCount: { gte: VIEW_MILESTONES[0] },
+        },
+        select: {
+          id: true,
+          title: true,
+          viewCount: true,
+          viewMilestoneNotified: true,
+          authorId: true,
+        },
+      });
+
+      for (const article of articles) {
+        const milestone = nextMilestone(article.viewCount, article.viewMilestoneNotified);
+        if (!milestone) continue;
+
+        // Atomically mark this milestone so concurrent runs don't double-notify.
+        const updated = await this.prisma.article.updateMany({
+          where: {
+            id: article.id,
+            OR: [
+              { viewMilestoneNotified: null },
+              { viewMilestoneNotified: { lt: milestone } },
+            ],
+          },
+          data: { viewMilestoneNotified: milestone },
+        });
+        if (updated.count !== 1) continue; // already handled by another run
+
+        const titleSnippet = (article.title ?? 'Your article').slice(0, 80).trim();
+        const body = `${titleSnippet} has been read ${milestone.toLocaleString()} time${milestone === 1 ? '' : 's'}.`;
+
+        await this.notifications.create({
+          recipientUserId: article.authorId,
+          actorUserId: null,
+          kind: 'generic',
+          title: `${milestone.toLocaleString()} views`,
+          body,
+          subjectArticleId: article.id,
+          subjectPostId: null,
+        });
+
+        total++;
+      }
+
+      if (total > 0) {
+        this.logger.log(`[article-milestones] Notified authors for ${total} milestone(s) in ${Date.now() - startedAt}ms`);
+      }
+    } catch (err) {
+      this.logger.error(
+        `[article-milestones] Sweep failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      this.milestoneRunning = false;
     }
   }
 }

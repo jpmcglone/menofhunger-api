@@ -11,6 +11,6 @@ import { ArticlesTrendingScoreCron } from './articles-trending-score.cron';
   imports: [AuthModule, NotificationsModule, RealtimeModule, ArticleViewsModule],
   controllers: [ArticlesController],
   providers: [ArticlesService, ArticlesTrendingScoreCron],
-  exports: [ArticlesService],
+  exports: [ArticlesService, ArticlesTrendingScoreCron],
 })
 export class ArticlesModule {}

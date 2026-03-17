@@ -16,6 +16,8 @@ const listSchema = z.object({
 
 const recommendationsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
+  /** Comma-separated interest keys; when present, returns users sorted by overlap count. */
+  interests: z.string().optional(),
 });
 
 const topUsersSchema = z.object({
@@ -48,6 +50,15 @@ export class FollowsController {
   async recommendations(@CurrentUserId() viewerUserId: string, @Query() query: unknown) {
     const parsed = recommendationsSchema.parse(query);
     const limit = parsed.limit ?? 12;
+    const interestKeys = parsed.interests
+      ? parsed.interests.split(',').map((s) => s.trim()).filter(Boolean)
+      : null;
+
+    if (interestKeys && interestKeys.length > 0) {
+      const result = await this.follows.recommendArenaUsersToFollow({ viewerUserId, interestKeys, limit });
+      return { data: result.users };
+    }
+
     const result = await this.follows.recommendUsersToFollow({ viewerUserId, limit });
     return { data: result.users };
   }
