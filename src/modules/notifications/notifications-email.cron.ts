@@ -1351,6 +1351,13 @@ export class NotificationsEmailCron {
         if (isVerified) return weeklyTopArticlesVerified;
         return weeklyTopArticlesPublic;
       }
+      function allowedWeeklyVisibilities(u: { verifiedStatus?: string | null; premium?: boolean | null; premiumPlus?: boolean | null }) {
+        const isPremium = Boolean(u.premium || u.premiumPlus);
+        const isVerified = (u.verifiedStatus ?? 'none') !== 'none';
+        if (isPremium) return ['public', 'verifiedOnly', 'premiumOnly'] as const;
+        if (isVerified) return ['public', 'verifiedOnly'] as const;
+        return ['public'] as const;
+      }
 
       // New members this week — up to 15 shown, with overflow count.
       const weeklyNewMembersUserSelect = {
@@ -1410,6 +1417,20 @@ export class NotificationsEmailCron {
 
         if (recipients.length === 0) break;
         cursorId = recipients[recipients.length - 1]?.id ?? null;
+        const recipientIds = recipients.map((r) => r.id);
+        const preferenceRows = recipientIds.length > 0
+          ? await this.prisma.userTaxonomyPreference.findMany({
+              where: { userId: { in: recipientIds } },
+              select: { userId: true, term: { select: { slug: true, label: true } } },
+              orderBy: [{ userId: 'asc' }, { createdAt: 'asc' }],
+            })
+          : [];
+        const preferencesByUser = new Map<string, Array<{ tag: string; label: string }>>();
+        for (const row of preferenceRows) {
+          const list = preferencesByUser.get(row.userId) ?? [];
+          list.push({ tag: row.term.slug, label: row.term.label });
+          preferencesByUser.set(row.userId, list);
+        }
 
         for (const u of recipients) {
           const to = getRecipientEmail(u.email);
@@ -1425,6 +1446,67 @@ export class NotificationsEmailCron {
           const featuredPost = pickWeeklyFeaturedPost(u);
           const featuredUrl = featuredPost ? `${baseUrl}/p/${encodeURIComponent(featuredPost.id)}` : null;
           const topArticles = pickWeeklyTopArticles(u);
+          const preferredTags = preferencesByUser.get(u.id) ?? [];
+          const allowedVis = allowedWeeklyVisibilities(u);
+          const seenTaggedArticleIds = new Set<string>();
+          const taggedArticleGroups: Array<{
+            tag: string;
+            label: string;
+            articles: typeof topArticles;
+            posts: Array<{ id: string; body: string; user: { username: string | null; name: string | null } }>;
+          }> = [];
+          // Keep weekly email compact: up to 3 tag groups, 2 articles each.
+          const prefCandidates = preferredTags.slice(0, 5);
+          const prefResults = await Promise.all(prefCandidates.map(async (pref) => {
+            const [byTag, topPostsByTerm] = await Promise.all([
+              this.prisma.article.findMany({
+                where: {
+                  isDraft: false,
+                  deletedAt: null,
+                  visibility: { in: allowedVis },
+                  publishedAt: { gte: weekWindowStart, lt: weekWindowEnd },
+                  tags: { some: { tag: pref.tag } },
+                },
+                orderBy: [{ trendingScore: { sort: 'desc', nulls: 'last' } }, { publishedAt: 'desc' }, { id: 'desc' }],
+                take: 6,
+                select: weeklyTopArticleSelect,
+              }),
+              this.prisma.post.findMany({
+                where: {
+                  deletedAt: null,
+                  parentId: null,
+                  visibility: { in: allowedVis },
+                  createdAt: { gte: weekWindowStart, lt: weekWindowEnd },
+                  topics: { has: pref.tag },
+                },
+                orderBy: [{ boostCount: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+                take: 1,
+                select: {
+                  id: true,
+                  body: true,
+                  user: { select: { username: true, name: true } },
+                },
+              }),
+            ]);
+            return { pref, byTag, topPostsByTerm };
+          }));
+          for (const result of prefResults) {
+            if (taggedArticleGroups.length >= 3) break;
+            if (!result.byTag.length && result.topPostsByTerm.length === 0) continue;
+            const deduped = result.byTag.filter((a) => {
+              if (seenTaggedArticleIds.has(a.id)) return false;
+              seenTaggedArticleIds.add(a.id);
+              return true;
+            }).slice(0, 2);
+            if (deduped.length > 0 || result.topPostsByTerm.length > 0) {
+              taggedArticleGroups.push({
+                tag: result.pref.tag,
+                label: result.pref.label || result.pref.tag,
+                articles: deduped as typeof topArticles,
+                posts: result.topPostsByTerm,
+              });
+            }
+          }
 
           const newMembersBlock =
             weeklyNewMembers.length > 0
@@ -1485,6 +1567,44 @@ export class NotificationsEmailCron {
                 ].join(''),
               )
             : '';
+          const pickedForYouHtml = taggedArticleGroups.length > 0
+            ? renderCard(
+                [
+                  `<div style="margin-bottom:10px;">${renderPill('Picked for you', 'success')}</div>`,
+                  ...taggedArticleGroups.map((group, groupIdx) => {
+                    const groupLabel = group.label;
+                    return [
+                      `<div style="${groupIdx > 0 ? 'margin-top:12px;padding-top:12px;border-top:1px solid #f3f4f6;' : ''}">`,
+                      `<div style="font-size:12px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;color:#6b7280;">${escapeHtml(groupLabel)}</div>`,
+                      ...group.articles.map((a, idx) => {
+                        const articleUrl = `${baseUrl}/a/${encodeURIComponent(a.id)}`;
+                        const authorRealName = (a.author?.name ?? '').trim();
+                        const authorUser = (a.author?.username ?? '').trim();
+                        const authorDisplay = authorRealName || (authorUser ? `@${authorUser}` : 'Unknown');
+                        return [
+                          `<div style="${idx > 0 ? 'margin-top:8px;padding-top:8px;border-top:1px dashed #f3f4f6;' : 'margin-top:6px'}">`,
+                          `<a href="${escapeHtml(articleUrl)}" style="font-size:14px;line-height:1.6;color:#111827;text-decoration:none;font-weight:700;">${escapeHtml(truncate(a.title ?? 'Untitled article', 120))}</a>`,
+                          `<div style="margin-top:4px;font-size:12px;color:#6b7280;">by ${escapeHtml(authorDisplay)}</div>`,
+                          `</div>`,
+                        ].join('');
+                      }),
+                      ...group.posts.map((p) => {
+                        const postUrl = `${baseUrl}/p/${encodeURIComponent(p.id)}`;
+                        const authorDisplay = (p.user.name ?? '').trim() || ((p.user.username ?? '').trim() ? `@${(p.user.username ?? '').trim()}` : 'Unknown');
+                        return [
+                          `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #f3f4f6;">`,
+                          `<a href="${escapeHtml(postUrl)}" style="font-size:13px;line-height:1.6;color:#111827;text-decoration:none;font-weight:700;">Top post this week</a>`,
+                          `<div style="margin-top:4px;font-size:12px;color:#6b7280;">by ${escapeHtml(authorDisplay)}</div>`,
+                          `<div style="margin-top:4px;font-size:12px;line-height:1.6;color:#6b7280;">${escapeHtml(truncate(p.body ?? '', 140))}</div>`,
+                          `</div>`,
+                        ].join('');
+                      }),
+                      `</div>`,
+                    ].join('');
+                  }),
+                ].join(''),
+              )
+            : '';
 
           const subject = 'Your weekly Men of Hunger digest';
 
@@ -1516,6 +1636,29 @@ export class NotificationsEmailCron {
               '',
             );
           }
+          if (taggedArticleGroups.length > 0) {
+            textLines.push('Picked for you');
+            for (const group of taggedArticleGroups) {
+              textLines.push(group.label);
+              textLines.push(
+                ...group.articles.map((a, idx) => {
+                  const articleUrl = `${baseUrl}/a/${encodeURIComponent(a.id)}`;
+                  const authorRealName = (a.author?.name ?? '').trim();
+                  const authorUser = (a.author?.username ?? '').trim();
+                  const authorDisplay = authorRealName || (authorUser ? `@${authorUser}` : 'Unknown');
+                  return `  ${idx + 1}. ${truncate(a.title ?? 'Untitled article', 120)} — ${authorDisplay}\n  ${articleUrl}`;
+                }),
+              );
+              textLines.push(
+                ...group.posts.map((p) => {
+                  const postUrl = `${baseUrl}/p/${encodeURIComponent(p.id)}`;
+                  const authorDisplay = (p.user.name ?? '').trim() || ((p.user.username ?? '').trim() ? `@${(p.user.username ?? '').trim()}` : 'Unknown');
+                  return `  Post: ${truncate(p.body ?? '', 120)} — ${authorDisplay}\n  ${postUrl}`;
+                }),
+              );
+            }
+            textLines.push('');
+          }
           textLines.push(`New articles this week: ${weeklyNewArticleCount}`);
           if (weeklyNewMembersTotal > 0) {
             textLines.push(
@@ -1537,6 +1680,7 @@ export class NotificationsEmailCron {
               `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">Weekly digest</div>`,
               `<div style="margin:0 0 16px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(greeting)}</div>`,
               ...(featuredPost ? [featuredHtml] : []),
+              ...(taggedArticleGroups.length > 0 ? [pickedForYouHtml] : []),
               ...(topArticles.length > 0 ? [topArticlesHtml] : []),
               ...(newMembersBlock ? [newMembersBlock] : []),
               `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(

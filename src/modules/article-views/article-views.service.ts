@@ -229,15 +229,29 @@ export class ArticleViewsService {
    * verified: verifiedStatus != 'none' AND NOT (premium OR premiumPlus)
    * unverified: verifiedStatus == 'none' AND NOT (premium OR premiumPlus)
    */
-  async getBreakdown(articleId: string, viewerUserId: string): Promise<ArticleViewBreakdown> {
+  async getBreakdown(articleId: string, viewerUserId?: string | null): Promise<ArticleViewBreakdown> {
     const aid = (articleId ?? '').trim();
+    const uid = (viewerUserId ?? '').trim() || null;
 
-    const article = await this.prisma.article.findUnique({
-      where: { id: aid },
-      select: { authorId: true },
+    const article = await this.prisma.article.findFirst({
+      where: { id: aid, deletedAt: null },
+      select: { visibility: true, authorId: true },
     });
-    if (!article || article.authorId !== viewerUserId) {
-      throw new NotFoundException('Article not found.');
+    if (!article) throw new NotFoundException('Article not found.');
+
+    const isSelf = Boolean(uid && article.authorId === uid);
+    if (!isSelf) {
+      if (!uid) {
+        if (article.visibility !== 'public') throw new NotFoundException('Article not found.');
+      } else {
+        const viewer = await this.prisma.user.findFirst({
+          where: { id: uid },
+          select: { verifiedStatus: true, premium: true, premiumPlus: true },
+        });
+        if (!viewerCanAccessVisibility(article.visibility, viewer)) {
+          throw new NotFoundException('Article not found.');
+        }
+      }
     }
 
     return this.cache.getOrSetJson<ArticleViewBreakdown>({

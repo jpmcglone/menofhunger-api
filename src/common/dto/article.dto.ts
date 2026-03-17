@@ -1,4 +1,4 @@
-import type { Article, ArticleComment, ArticleBoost, ArticleReaction, ArticleCommentReaction, PostVisibility, VerifiedStatus } from '@prisma/client';
+import type { Article, ArticleComment, ArticleBoost, ArticleReaction, ArticleCommentReaction, ArticleTag, PostVisibility, VerifiedStatus } from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
 import type { PostAuthorRow } from './post.dto';
 
@@ -65,6 +65,13 @@ export type ArticleCommentDto = {
 
 // ─── Article ─────────────────────────────────────────────────────────────────
 
+export type ArticleTagDto = {
+  /** Normalized slug (lowercase, alphanumeric + hyphens). Used as URL param. */
+  tag: string;
+  /** Display label as the author typed it (may have uppercase). */
+  label: string;
+};
+
 export type ArticleDto = {
   id: string;
   createdAt: string;
@@ -86,6 +93,7 @@ export type ArticleDto = {
   readingTimeMinutes: number;
   author: ArticleAuthorDto;
   reactions: ArticleReactionSummaryDto[];
+  tags: ArticleTagDto[];
   viewerHasBoosted?: boolean;
   /** False when the viewer's tier does not grant access to this article (preview-only). */
   viewerCanAccess: boolean;
@@ -97,6 +105,7 @@ export type ArticleWithAuthor = Article & {
   author: ArticleAuthorRow;
   boosts?: ArticleBoost[];
   reactions?: ArticleReaction[];
+  tags?: ArticleTag[];
 };
 
 export type ArticleCommentWithAuthorAndReactions = ArticleComment & {
@@ -255,6 +264,7 @@ export function toArticleDto(
     readingTimeMinutes: canAccess ? estimateReadingTimeMinutes(article.body) : 0,
     author: toArticleAuthorDto(article.author, publicAssetBaseUrl),
     reactions,
+    tags: (article.tags ?? []).map((t) => ({ tag: t.tag, label: t.label })),
     viewerCanAccess: canAccess,
     ...(typeof opts?.viewerHasBoosted === 'boolean' ? { viewerHasBoosted: opts.viewerHasBoosted } : {}),
   };

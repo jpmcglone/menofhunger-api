@@ -36,6 +36,18 @@ function slugify(text: string): string {
     .substring(0, 80);
 }
 
+/** Normalize a tag to a stable slug key (lowercase, alphanumeric + hyphens). */
+function normalizeTag(raw: string): string {
+  return raw
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/[\s_]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .substring(0, 50);
+}
+
 function extractExcerpt(tiptapJson: string, maxLength = 200): string {
   try {
     const doc = JSON.parse(tiptapJson);
@@ -95,6 +107,7 @@ export class ArticlesService {
   private articleIncludes(includeReactions = true, includeBoosts = true, viewerUserId?: string | null) {
     return {
       author: this.articleAuthorSelect(),
+      tags: { select: { tag: true, label: true }, orderBy: { createdAt: 'asc' as const } },
       ...(includeReactions ? { reactions: true } : {}),
       ...(includeBoosts ? {
         boosts: viewerUserId
@@ -102,6 +115,103 @@ export class ArticlesService {
           : false,
       } : {}),
     };
+  }
+
+  /** Sync tags for an article inside an existing transaction (or the main client). */
+  private async syncTags(
+    db: PrismaService | Parameters<Parameters<PrismaService['$transaction']>[0]>[0],
+    articleId: string,
+    rawTags: string[],
+  ) {
+    const MAX_TAGS = 10;
+    const tags = rawTags
+      .map((r) => ({ label: r.trim().substring(0, 50), tag: normalizeTag(r) }))
+      .filter((t) => t.tag.length >= 1)
+      .slice(0, MAX_TAGS);
+
+    // Delete all existing tags then re-insert — simpler than diffing for N≤10.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (db as any).articleTag.deleteMany({ where: { articleId } });
+    if (tags.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (db as any).articleTag.createMany({
+        data: tags.map((t) => ({
+          id: require('crypto').randomUUID(),
+          articleId,
+          tag: t.tag,
+          label: t.label,
+        })),
+        skipDuplicates: true,
+      });
+
+      // Keep canonical taxonomy in sync with article tag writes.
+      for (const t of tags) {
+        const alias = t.label.toLowerCase().trim().slice(0, 80);
+        if (!alias) continue;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const term = await (db as any).taxonomyTerm.upsert({
+          where: { slug: t.tag },
+          update: { label: t.label, kind: 'tag', status: 'active' },
+          create: { slug: t.tag, label: t.label, kind: 'tag', status: 'active' },
+          select: { id: true },
+        });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (db as any).taxonomyAlias.upsert({
+          where: { alias },
+          update: { termId: term.id, source: 'article_tag' },
+          create: { alias, termId: term.id, source: 'article_tag' },
+        });
+      }
+    }
+  }
+
+  /** Return tag suggestions for autocomplete — most-used first. */
+  async listTagSuggestions(q: string): Promise<Array<{ tag: string; label: string; count: number }>> {
+    const normalized = normalizeTag(q);
+
+    // Aggregate across all published articles; pick the most-common label per slug.
+    const grouped = await this.prisma.articleTag.groupBy({
+      by: ['tag'],
+      where: {
+        ...(normalized ? { tag: { startsWith: normalized } } : {}),
+        article: {
+          deletedAt: null,
+          isDraft: false,
+          publishedAt: { not: null },
+        },
+      },
+      _count: { tag: true },
+      orderBy: { _count: { tag: 'desc' } },
+      take: 20,
+    });
+
+    if (!grouped.length) return [];
+
+    // For each slug, pick the most-used label variant.
+    const labelRows = await this.prisma.articleTag.findMany({
+      where: { tag: { in: grouped.map((r) => r.tag) } },
+      select: { tag: true, label: true },
+    });
+
+    // Count label occurrences per tag slug → pick winner.
+    const labelMap = new Map<string, Map<string, number>>();
+    for (const r of labelRows) {
+      if (!labelMap.has(r.tag)) labelMap.set(r.tag, new Map());
+      const m = labelMap.get(r.tag)!;
+      m.set(r.label, (m.get(r.label) ?? 0) + 1);
+    }
+
+    return grouped.map((g) => {
+      const variants = labelMap.get(g.tag);
+      let bestLabel = g.tag;
+      if (variants) {
+        let bestCount = 0;
+        for (const [label, count] of variants) {
+          if (count > bestCount) { bestLabel = label; bestCount = count; }
+        }
+      }
+      return { tag: g.tag, label: bestLabel, count: g._count.tag };
+    });
   }
 
   // ─── List trending articles ──────────────────────────────────────────────────
@@ -145,6 +255,7 @@ export class ArticlesService {
     visibilityFilter?: PostVisibility | null;
     mine?: boolean | null;
     followingOnly?: boolean | null;
+    tag?: string | null;
     /** When true (e.g. "More from this author"), include articles of all visibility tiers.
      *  Articles the viewer cannot access are returned with viewerCanAccess=false and stripped body/excerpt. */
     includeRestricted?: boolean | null;
@@ -178,6 +289,10 @@ export class ArticlesService {
           ? { author: { followers: { some: { followerId: opts.viewerUserId } } } }
           : {};
 
+    const tagFilter = opts.tag
+      ? { tags: { some: { tag: normalizeTag(opts.tag) } } }
+      : {};
+
     // When includeRestricted is set we normally skip the visibility WHERE so all tiers appear.
     // However, if the caller also provides an explicit visibilityFilter (e.g. the user picked
     // "public only"), honour that filter even in restricted-include mode.
@@ -208,6 +323,7 @@ export class ArticlesService {
           publishedAt: { not: null },
           ...visibilityFilter,
           ...authorFilter,
+          ...tagFilter,
         },
         orderBy: [{ trendingScore: { sort: 'desc', nulls: 'last' } }, { publishedAt: 'desc' }],
         skip,
@@ -230,6 +346,7 @@ export class ArticlesService {
         publishedAt: { not: null },
         ...visibilityFilter,
         ...authorFilter,
+        ...tagFilter,
         ...(opts.cursor ? { id: { lt: opts.cursor } } : {}),
       },
       orderBy: [{ publishedAt: 'desc' }, { id: 'desc' }],
@@ -336,7 +453,7 @@ export class ArticlesService {
   async save(
     userId: string,
     articleId: string,
-    data: { title?: string; body?: string; thumbnailR2Key?: string | null; visibility?: PostVisibility },
+    data: { title?: string; body?: string; thumbnailR2Key?: string | null; visibility?: PostVisibility; tags?: string[] },
   ) {
     const article = await this.prisma.article.findUnique({ where: { id: articleId } });
     if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
@@ -366,6 +483,16 @@ export class ArticlesService {
       },
       include: this.articleIncludes(false, false),
     }) as ArticleWithAuthor;
+
+    // Sync tags if provided (null/undefined = leave unchanged).
+    if (Array.isArray(data.tags)) {
+      await this.syncTags(this.prisma, articleId, data.tags);
+      updated.tags = await this.prisma.articleTag.findMany({
+        where: { articleId },
+        select: { tag: true, label: true } as any,
+        orderBy: { createdAt: 'asc' },
+      }) as any;
+    }
 
     return toArticleDto(updated, this.r2BaseUrl);
   }

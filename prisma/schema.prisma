@@ -143,6 +143,30 @@ enum SubscriptionGrantSource {
   referral
 }
 
+enum TaxonomyTermKind {
+  topic
+  subtopic
+  tag
+}
+
+enum TaxonomyTermStatus {
+  active
+  hidden
+}
+
+enum TaxonomyAliasSource {
+  topic_config
+  article_tag
+  hashtag
+  manual
+}
+
+enum TaxonomyEdgeRelation {
+  parent
+  related
+  synonym
+}
+
 // Start minimal. Add real domain models as you solidify your product.
 model Example {
   id        String   @id @default(cuid())
@@ -272,6 +296,8 @@ model User {
   notificationsAsSubjectUser Notification[] @relation("Notification_subjectUser")
   pushSubscriptions PushSubscription[]
   notificationPreferences NotificationPreferences?
+  articleTagPreferences UserArticleTagPreference[]
+  taxonomyPreferences UserTaxonomyPreference[]
   pushCoalesces PushCoalesce[]
   userSearches     UserSearch[]
   feedbacks        Feedback[]
@@ -1060,6 +1086,106 @@ model NotificationPreferences {
   @@index([lastEmailStreakReminderSentAt])
 }
 
+model UserArticleTagPreference {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  /** Normalized tag slug (lowercase, alphanumeric + hyphens). */
+  tag       String
+  /** Display label for UI/email sections. */
+  label     String
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tag])
+  @@index([userId])
+  @@index([tag])
+}
+
+model TaxonomyTerm {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  slug   String
+  label  String
+  kind   TaxonomyTermKind
+  status TaxonomyTermStatus @default(active)
+
+  aliases TaxonomyAlias[]
+  outgoingEdges TaxonomyEdge[] @relation("TaxonomyEdge_from")
+  incomingEdges TaxonomyEdge[] @relation("TaxonomyEdge_to")
+  userPreferences UserTaxonomyPreference[]
+  metrics TaxonomyTermMetric?
+
+  @@unique([slug])
+  @@index([kind, status])
+}
+
+model TaxonomyAlias {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  alias  String
+  source TaxonomyAliasSource
+
+  termId String
+  term   TaxonomyTerm @relation(fields: [termId], references: [id], onDelete: Cascade)
+
+  @@unique([alias])
+  @@index([termId, source])
+}
+
+model TaxonomyEdge {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  relation TaxonomyEdgeRelation
+
+  fromTermId String
+  toTermId   String
+  fromTerm TaxonomyTerm @relation("TaxonomyEdge_from", fields: [fromTermId], references: [id], onDelete: Cascade)
+  toTerm   TaxonomyTerm @relation("TaxonomyEdge_to", fields: [toTermId], references: [id], onDelete: Cascade)
+
+  @@unique([fromTermId, toTermId, relation])
+  @@index([fromTermId, relation])
+  @@index([toTermId, relation])
+}
+
+model UserTaxonomyPreference {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId String
+  termId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  term TaxonomyTerm @relation(fields: [termId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, termId])
+  @@index([userId])
+  @@index([termId])
+}
+
+model TaxonomyTermMetric {
+  termId String @id
+  updatedAt DateTime @updatedAt
+  articleCount Int @default(0)
+  postCount Int @default(0)
+  hashtagCount Int @default(0)
+  recentVelocity Float @default(0)
+  engagementScore Float @default(0)
+
+  term TaxonomyTerm @relation(fields: [termId], references: [id], onDelete: Cascade)
+
+  @@index([engagementScore(sort: Desc)])
+  @@index([recentVelocity(sort: Desc)])
+}
+
 /** Tracks last push sent per user+kind for rate limiting/coalescing. */
 model PushCoalesce {
   userId String
@@ -1365,6 +1491,7 @@ model Article {
   views     ArticleView[]
   anonViews ArticleAnonView[]
   sharePosts Post[]
+  tags      ArticleTag[]
   notifications Notification[] @relation("Notification_subjectArticle")
 
   @@index([authorId, createdAt])
@@ -1380,6 +1507,23 @@ model Article {
   // Author-scoped article feeds, trending sort.
   @@index([authorId, deletedAt, isDraft, visibility, trendingScore(sort: Desc), publishedAt(sort: Desc), id(sort: Desc)])
   @@unique([slug])
+}
+
+model ArticleTag {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  /** Normalized slug used as the uniqueness key (lowercase, alphanumeric + hyphens). */
+  tag       String
+  /** Display label as the author typed it (may have uppercase, e.g. "Stoicism"). */
+  label     String
+
+  articleId String
+  article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@unique([articleId, tag])
+  @@index([articleId])
+  @@index([tag])
 }
 
 model ArticleBoost {

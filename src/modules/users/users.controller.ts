@@ -102,6 +102,26 @@ const newestUsersSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
+const articleTagPreferencesSchema = z.object({
+  tags: z.array(z.string().trim().min(1).max(50)).max(20),
+});
+
+const taxonomyPreferencesSchema = z.object({
+  termIds: z.array(z.string().trim().min(1)).max(30).optional(),
+  slugs: z.array(z.string().trim().min(1).max(80)).max(30).optional(),
+});
+
+function normalizeTag(raw: string): string {
+  return raw
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/[\s_]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .substring(0, 50);
+}
+
 function isAtLeast18(birthdateUtcMidnight: Date): boolean {
   // Compare by YYYY-MM-DD using UTC to avoid timezone edge cases.
   const yyyy = birthdateUtcMidnight.getUTCFullYear();
@@ -521,6 +541,166 @@ export class UsersController {
     );
 
     return { data: users };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Get('me/article-tag-preferences')
+  async getMyArticleTagPreferences(@CurrentUserId() userId: string) {
+    // Legacy endpoint: read canonical taxonomy preferences first, fallback to historical rows.
+    const canonical = await this.prisma.userTaxonomyPreference.findMany({
+      where: { userId },
+      include: { term: { select: { slug: true, label: true } } },
+      orderBy: [{ createdAt: 'asc' }],
+    });
+    if (canonical.length > 0) {
+      return {
+        data: canonical.map((r) => ({ tag: r.term.slug, label: r.term.label })),
+      };
+    }
+    const legacy = await this.prisma.userArticleTagPreference.findMany({
+      where: { userId },
+      select: { tag: true, label: true },
+      orderBy: [{ createdAt: 'asc' }, { tag: 'asc' }],
+    });
+    return { data: legacy };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Put('me/article-tag-preferences')
+  async setMyArticleTagPreferences(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = articleTagPreferencesSchema.parse(body);
+    const deduped = new Map<string, string>();
+    for (const raw of parsed.tags) {
+      const tag = normalizeTag(raw);
+      const label = raw.trim().substring(0, 50);
+      if (!tag || !label) continue;
+      if (!deduped.has(tag)) deduped.set(tag, label);
+    }
+    const rows = [...deduped.entries()].map(([tag, label]) => ({ userId, tag, label }));
+
+    const slugs = rows.map((r) => r.tag);
+    const terms = slugs.length > 0
+      ? await this.prisma.taxonomyTerm.findMany({
+          where: { slug: { in: slugs }, status: 'active' },
+          select: { id: true, slug: true, label: true },
+        })
+      : [];
+    const bySlug = new Map(terms.map((t) => [t.slug, t]));
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.userArticleTagPreference.deleteMany({ where: { userId } });
+      if (rows.length > 0) {
+        await tx.userArticleTagPreference.createMany({ data: rows, skipDuplicates: true });
+      }
+      await tx.userTaxonomyPreference.deleteMany({ where: { userId } });
+      const prefRows = rows
+        .map((r) => bySlug.get(r.tag))
+        .filter(Boolean)
+        .map((t) => ({ userId, termId: (t as { id: string }).id }));
+      if (prefRows.length > 0) {
+        await tx.userTaxonomyPreference.createMany({ data: prefRows, skipDuplicates: true });
+      }
+    });
+
+    return {
+      data: rows.map((r) => ({ tag: r.tag, label: r.label })),
+    };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Get('me/taxonomy-preferences')
+  async getMyTaxonomyPreferences(@CurrentUserId() userId: string) {
+    const rows = await this.prisma.userTaxonomyPreference.findMany({
+      where: { userId },
+      include: {
+        term: { select: { id: true, slug: true, label: true, kind: true } },
+      },
+      orderBy: [{ createdAt: 'asc' }],
+    });
+    return {
+      data: rows.map((r) => ({
+        termId: r.term.id,
+        slug: r.term.slug,
+        label: r.term.label,
+        kind: r.term.kind,
+      })),
+    };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Put('me/taxonomy-preferences')
+  async setMyTaxonomyPreferences(@CurrentUserId() userId: string, @Body() body: unknown) {
+    const parsed = taxonomyPreferencesSchema.parse(body);
+    const termIds = [...new Set((parsed.termIds ?? []).map((v) => v.trim()).filter(Boolean))];
+    const slugs = [...new Set((parsed.slugs ?? []).map((v) => normalizeTag(v)).filter(Boolean))];
+
+    const terms = (termIds.length > 0 || slugs.length > 0)
+      ? await this.prisma.taxonomyTerm.findMany({
+          where: {
+            status: 'active',
+            OR: [
+              ...(termIds.length > 0 ? [{ id: { in: termIds } }] : []),
+              ...(slugs.length > 0 ? [{ slug: { in: slugs } }] : []),
+            ],
+          },
+          select: { id: true, slug: true, label: true, kind: true },
+          take: 30,
+        })
+      : [];
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.userTaxonomyPreference.deleteMany({ where: { userId } });
+      if (terms.length > 0) {
+        await tx.userTaxonomyPreference.createMany({
+          data: terms.map((t) => ({ userId, termId: t.id })),
+          skipDuplicates: true,
+        });
+      }
+      // Keep legacy table dual-written during rollout.
+      await tx.userArticleTagPreference.deleteMany({ where: { userId } });
+      if (terms.length > 0) {
+        await tx.userArticleTagPreference.createMany({
+          data: terms.map((t) => ({ userId, tag: t.slug, label: t.label.slice(0, 50) })),
+          skipDuplicates: true,
+        });
+      }
+    });
+
+    return {
+      data: terms.map((t) => ({
+        termId: t.id,
+        slug: t.slug,
+        label: t.label,
+        kind: t.kind,
+      })),
+    };
   }
 
   @UseGuards(AuthGuard)

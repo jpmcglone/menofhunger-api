@@ -24,11 +24,18 @@ const createSchema = z.object({
   visibility: visibilitySchema.optional(),
 });
 
+const tagSchema = z
+  .array(z.string().trim().min(1).max(50))
+  .max(10)
+  .optional()
+  .transform((tags) => tags?.map((t) => t.trim()).filter(Boolean));
+
 const saveSchema = z.object({
   title: z.string().trim().max(200).optional(),
   body: z.string().max(500_000).optional(),
   thumbnailR2Key: z.string().nullable().optional(),
   visibility: visibilitySchema.optional(),
+  tags: tagSchema,
 });
 
 const listSchema = z.object({
@@ -40,6 +47,7 @@ const listSchema = z.object({
   mine: z.coerce.boolean().optional(),
   followingOnly: z.coerce.boolean().optional(),
   includeRestricted: z.coerce.boolean().optional(),
+  tag: z.string().trim().max(60).optional(),
 });
 
 const draftsListSchema = z.object({
@@ -89,6 +97,16 @@ const readThrottle = {
 export class ArticlesController {
   constructor(private readonly articles: ArticlesService) {}
 
+  // ─── Tag autocomplete ──────────────────────────────────────────────────────
+
+  @Throttle(readThrottle)
+  @Get('tags')
+  async listTags(@Query() query: unknown) {
+    const { q } = z.object({ q: z.string().trim().max(60).optional() }).parse(query);
+    const tags = await this.articles.listTagSuggestions(q ?? '');
+    return { data: tags };
+  }
+
   // ─── Trending articles ─────────────────────────────────────────────────────
 
   @UseGuards(OptionalAuthGuard)
@@ -117,6 +135,7 @@ export class ArticlesController {
       mine: parsed.mine,
       followingOnly: parsed.followingOnly,
       includeRestricted: parsed.includeRestricted,
+      tag: parsed.tag,
     });
     return { data: result.articles, pagination: { nextCursor: result.nextCursor } };
   }
@@ -168,7 +187,10 @@ export class ArticlesController {
   @Patch(':id/save')
   async save(@CurrentUserId() userId: string, @Param('id') id: string, @Body() body: unknown) {
     const parsed = saveSchema.parse(body);
-    const article = await this.articles.save(userId, id, parsed);
+    const article = await this.articles.save(userId, id, {
+      ...parsed,
+      tags: parsed.tags ?? undefined,
+    });
     return { data: article };
   }
 

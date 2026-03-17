@@ -1,9 +1,8 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
-import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
-import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
+import { OptionalCurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { ArticleViewsService } from './article-views.service';
 
@@ -47,7 +46,7 @@ export class ArticleViewsController {
    * Get the viewer breakdown for an article (premium / verified / unverified).
    * Cached for 60 seconds; invalidated on new unique view.
    */
-  @UseGuards(AuthGuard)
+  @UseGuards(OptionalAuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('read', 120),
@@ -55,8 +54,8 @@ export class ArticleViewsController {
     },
   })
   @Get('articles/:id/views/breakdown')
-  async getBreakdown(@CurrentUserId() userId: string, @Param('id') articleId: string) {
-    const result = await this.articleViews.getBreakdown(articleId, userId);
+  async getBreakdown(@OptionalCurrentUserId() userId: string | undefined, @Param('id') articleId: string) {
+    const result = await this.articleViews.getBreakdown(articleId, userId ?? null);
     return { data: result };
   }
 }

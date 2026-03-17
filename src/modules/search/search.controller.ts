@@ -16,10 +16,11 @@ import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
 import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
 import { PosthogService } from '../../common/posthog/posthog.service';
+import { TaxonomyService } from '../taxonomy/taxonomy.service';
 
 const searchSchema = z.object({
   q: z.string().trim().max(200).optional(),
-  type: z.enum(['posts', 'users', 'bookmarks', 'all', 'hashtags']).optional(),
+  type: z.enum(['posts', 'users', 'bookmarks', 'all', 'hashtags', 'taxonomy']).optional(),
   // Source hint for analytics/search-history recording.
   source: z.enum(['explore', 'external']).optional(),
   // Posts-only: filter by kind (e.g. allow "check-ins only" in search UI)
@@ -43,6 +44,7 @@ export class SearchController {
     private readonly cache: CacheService,
     private readonly cacheInvalidation: CacheInvalidationService,
     private readonly posthog: PosthogService,
+    private readonly taxonomy: TaxonomyService,
   ) {}
 
   @Throttle({
@@ -81,6 +83,10 @@ export class SearchController {
     if (type === 'hashtags') {
       const res = await this.search.searchHashtags({ q, limit, cursor });
       return { data: res.hashtags, pagination: { nextCursor: res.nextCursor } };
+    }
+    if (type === 'taxonomy') {
+      const data = await this.taxonomy.search({ q, limit });
+      return { data, pagination: { nextCursor: null } };
     }
 
     if (type === 'all') {
@@ -141,16 +147,19 @@ export class SearchController {
           viewerCanAccess: a.viewerCanAccess,
         }),
       );
+      const taxonomyMatches = q.length >= 2
+        ? await this.taxonomy.search({ q, limit: Math.min(8, limit) })
+        : [];
       if (viewerUserId && q.length >= 2 && parsed.source === 'explore') {
         void this.search.recordUserSearch({ userId: viewerUserId, query: q }).catch(() => {});
         this.posthog.capture(viewerUserId, 'search_performed', {
           query: q.toLowerCase(),
-          result_count: users.length + posts.length + articles.length,
+          result_count: users.length + posts.length + articles.length + taxonomyMatches.length,
           type,
         });
       }
       return {
-        data: { users, posts, articles },
+        data: { users, posts, articles, taxonomyMatches },
         pagination: {
           nextUserCursor: res.nextUserCursor,
           nextPostCursor: res.nextPostCursor,

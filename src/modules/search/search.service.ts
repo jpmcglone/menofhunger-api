@@ -52,6 +52,8 @@ const POST_SCORE = {
 } as const;
 
 const ARTICLE_SCORE = {
+  tagExact: 120,     // tag slug exactly matches query (e.g. ?q=stoicism → tag "stoicism")
+  tagStartsWith: 105, // tag slug starts with query
   titleExact: 110,
   titlePhrase: 100,
   titleAllWords: 90,
@@ -71,6 +73,7 @@ const SEARCH_POST_INCLUDE = POST_BASE_INCLUDE;
 const SEARCH_ARTICLE_INCLUDE = {
   author: { select: articleAuthorInclude },
   reactions: true,
+  tags: { select: { tag: true, label: true }, orderBy: { createdAt: 'asc' as const } },
 } as const;
 
 type SearchPostRow = Prisma.PostGetPayload<{
@@ -506,6 +509,19 @@ export class SearchService {
     const words = queryToWords(q);
     const qLower = q.toLowerCase();
     const phrases = extractQuotedPhrases(q).map((p) => p.toLowerCase());
+    const taxonomyAliasTerms = await this.prisma.taxonomyAlias.findMany({
+      where: {
+        OR: [
+          { alias: qLower },
+          { alias: { startsWith: qLower } },
+          ...words.map((w) => ({ alias: { contains: w } })),
+        ],
+        term: { status: 'active' },
+      },
+      select: { term: { select: { slug: true } } },
+      take: 40,
+    });
+    const taxonomySlugs = new Set(taxonomyAliasTerms.map((r) => r.term.slug));
 
     const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
     const allowed = this.allowedVisibilitiesForViewer(viewer);
@@ -544,7 +560,10 @@ export class SearchService {
           AND a."visibility" <> 'onlyMe'
           ${cursorSql}
           AND (
-            to_tsvector('english', COALESCE(a."title", '') || ' ' || COALESCE(a."excerpt", '')) @@ q.tsq
+            to_tsvector('english',
+              COALESCE(a."title", '') || ' ' || COALESCE(a."excerpt", '') || ' ' ||
+              COALESCE((SELECT string_agg(at."label", ' ') FROM "ArticleTag" at WHERE at."articleId" = a."id"), '')
+            ) @@ q.tsq
             OR to_tsvector(
               'english',
               COALESCE(u."username", '') || ' ' || COALESCE(u."name", '') || ' ' || COALESCE(u."bio", '')
@@ -591,7 +610,18 @@ export class SearchService {
       const excerpt = (a.excerpt ?? '').trim().toLowerCase();
       const un = (a.author?.username ?? '').trim().toLowerCase();
       const nm = (a.author?.name ?? '').trim().toLowerCase();
+      // Tags come from the joined relation (if included).
+      const articleTags = ((a as any).tags as Array<{ tag: string }> | undefined) ?? [];
+      const tagSlugs = articleTags.map((t) => t.tag.toLowerCase());
       let score = 0;
+
+      // Tag matching: an exact tag hit is the strongest signal — the author explicitly categorized it.
+      if (taxonomySlugs.size > 0 && tagSlugs.some((t) => taxonomySlugs.has(t))) {
+        score = Math.max(score, ARTICLE_SCORE.tagExact + 5);
+      }
+      if (tagSlugs.some((t) => t === qLower)) score = Math.max(score, ARTICLE_SCORE.tagExact);
+      else if (qLower && tagSlugs.some((t) => t.startsWith(qLower))) score = Math.max(score, ARTICLE_SCORE.tagStartsWith);
+      else if (words.length > 0 && tagSlugs.some((t) => words.some((w) => t.includes(w)))) score = Math.max(score, ARTICLE_SCORE.tagStartsWith - 10);
 
       if (title === qLower) score = Math.max(score, ARTICLE_SCORE.titleExact);
       if (phrases.length > 0) {
