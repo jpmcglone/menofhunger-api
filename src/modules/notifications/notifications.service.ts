@@ -1619,7 +1619,7 @@ export class NotificationsService {
 
     // Preserve notification-event ordering for /new-posts: if both a root and a reply
     // are notified, both can appear in the feed (UI layer handles thread collapsing).
-    const collapsedVisiblePosts = collapseFeedByRoot(orderedVisiblePosts, {
+    const { items: collapsedVisiblePosts } = collapseFeedByRoot(orderedVisiblePosts, {
       collapseByRoot: params.collapseByRoot ?? false,
       collapseMode: params.collapseMode ?? 'root',
       prefer: params.prefer ?? 'reply',
