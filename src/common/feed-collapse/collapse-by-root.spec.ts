@@ -171,3 +171,101 @@ describe('collapseFeedByRoot – maxPerRoot=2', () => {
     expect(out).toHaveLength(2);
   });
 });
+
+// ─── End-to-end scenario: "40 comments, but only 3 new replies" ──────────────
+
+describe('collapseFeedByRoot – realistic scenario: 40 comments, 4 in new feed', () => {
+  it('keeps 2 of 4 trending replies and reports collapsed count of 2', () => {
+    // John's post has 40 comments total. The new/trending feed includes 4 of
+    // them as individual feed items. maxPerRoot=2 keeps the first 2 and
+    // collapses the other 2.
+    const john = p('john');
+    const nick = p('nick', 'john');   // reply 1 (kept)
+    const peter = p('peter', 'nick'); // reply 2 (kept) — deeper chain
+    const bob = p('bob', 'john');     // reply 3 (collapsed)
+    const alice = p('alice', 'john'); // reply 4 (collapsed)
+
+    const { items: out, collapsedCountByKey, collapsedCountByItemId } = collapseFeedByRoot(
+      [nick, peter, bob, alice],
+      { collapseByRoot: true, maxPerRoot: 2, ...opts },
+    );
+
+    expect(out).toHaveLength(2);
+    expect(out.map((i) => i.id)).toEqual(['nick', 'peter']);
+
+    // 4 total in group, 2 kept → 2 collapsed
+    expect(collapsedCountByKey.get('john')).toBe(2);
+
+    // Both kept items know about the 2 collapsed ones
+    expect(collapsedCountByItemId.get('nick')).toBe(2);
+    expect(collapsedCountByItemId.get('peter')).toBe(2);
+
+    // Collapsed items don't appear in the output or the per-item map
+    expect(out.some((i) => i.id === 'bob')).toBe(false);
+    expect(out.some((i) => i.id === 'alice')).toBe(false);
+    expect(collapsedCountByItemId.has('bob')).toBe(false);
+    expect(collapsedCountByItemId.has('alice')).toBe(false);
+  });
+
+  it('only 1 reply from a 40-comment thread → nothing collapsed, no threadCollapsedCount', () => {
+    // Only 1 reply made the new feed. maxPerRoot=2 keeps it, collapses nothing.
+    const john = p('john');
+    const nick = p('nick', 'john');
+
+    // Other independent post in the feed
+    const dave = p('dave');
+
+    const { items: out, collapsedCountByKey, collapsedCountByItemId } = collapseFeedByRoot(
+      [nick, dave],
+      { collapseByRoot: true, maxPerRoot: 2, ...opts },
+    );
+
+    expect(out).toHaveLength(2);
+    expect(out.map((i) => i.id)).toEqual(['nick', 'dave']);
+    expect(collapsedCountByKey.has('john')).toBe(false);
+    expect(collapsedCountByItemId.has('nick')).toBe(false);
+  });
+
+  it('exactly 2 replies from a thread → both kept, nothing collapsed', () => {
+    const john = p('john');
+    const nick = p('nick', 'john');
+    const peter = p('peter', 'nick');
+
+    const { items: out, collapsedCountByKey } = collapseFeedByRoot(
+      [nick, peter],
+      { collapseByRoot: true, maxPerRoot: 2, ...opts },
+    );
+
+    expect(out).toHaveLength(2);
+    expect(collapsedCountByKey.has('john')).toBe(false);
+  });
+
+  it('mixed threads: one thread has 4 items, another has 1', () => {
+    // Thread A (john): 4 replies in feed → keep 2, collapse 2
+    // Thread B (mary): 1 reply in feed → keep 1, collapse 0
+    const john = p('john');
+    const r1 = p('r1', 'john');
+    const r2 = p('r2', 'john');
+    const r3 = p('r3', 'john');
+    const r4 = p('r4', 'john');
+
+    const mary = p('mary');
+    const s1 = p('s1', 'mary');
+
+    const { items: out, collapsedCountByKey, collapsedCountByItemId } = collapseFeedByRoot(
+      [r1, r2, s1, r3, r4],
+      { collapseByRoot: true, maxPerRoot: 2, ...opts },
+    );
+
+    // r1 + r2 kept from john's thread; s1 kept from mary's thread
+    expect(out).toHaveLength(3);
+    expect(out.map((i) => i.id)).toEqual(['r1', 'r2', 's1']);
+
+    expect(collapsedCountByKey.get('john')).toBe(2);
+    expect(collapsedCountByKey.has('mary')).toBe(false);
+
+    expect(collapsedCountByItemId.get('r1')).toBe(2);
+    expect(collapsedCountByItemId.get('r2')).toBe(2);
+    expect(collapsedCountByItemId.has('s1')).toBe(false);
+  });
+});
