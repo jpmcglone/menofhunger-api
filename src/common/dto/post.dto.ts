@@ -128,6 +128,12 @@ export type PostDto = {
   authorBanned?: boolean;
   /** False when the viewer's tier does not grant access to this post (preview-only; body/media stripped). */
   viewerCanAccess?: boolean;
+  /**
+   * When set, this many other trending/new items from the same root thread were
+   * collapsed by the API and are not shown in the feed. Used by the client to
+   * render an accurate "View N more trending replies" footer.
+   */
+  threadCollapsedCount?: number;
 };
 
 /** Mention row with user included (from Prisma include). */

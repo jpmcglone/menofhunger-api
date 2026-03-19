@@ -38,6 +38,7 @@ const listSchema = z.object({
   collapseByRoot: z.coerce.boolean().optional(),
   collapseMode: z.enum(['root', 'parent']).optional(),
   prefer: z.enum(['reply', 'root']).optional(),
+  collapseMaxPerRoot: z.coerce.number().int().min(1).max(5).optional(),
 });
 
 const userListSchema = listSchema.extend({
@@ -402,10 +403,11 @@ export class PostsController {
         stageMs.list = Date.now() - listStartMs;
 
         const dedupeStartMs = Date.now();
-        const filteredPosts = collapseFeedByRoot(result.posts, {
+        const { items: filteredPosts, collapsedCountByItemId } = collapseFeedByRoot(result.posts, {
           collapseByRoot: parsed.collapseByRoot ?? false,
           collapseMode: parsed.collapseMode ?? 'root',
           prefer: parsed.prefer ?? 'reply',
+          maxPerRoot: parsed.collapseMaxPerRoot ?? 1,
           getId: (post) => post.id,
           getParentId: (post) => post.parentId ?? null,
         });
@@ -480,8 +482,14 @@ export class PostsController {
           repostedPostMap: repostedPostMap as any,
         });
 
+        const dtos = filteredPosts.map((p) => {
+          const dto = attachParentChain(p);
+          const collapsed = collapsedCountByItemId.get(p.id);
+          if (collapsed && collapsed > 0) (dto as any).threadCollapsedCount = collapsed;
+          return dto;
+        });
         const payload = {
-          data: filteredPosts.map((p) => attachParentChain(p)),
+          data: dtos,
           pagination: { nextCursor: result.nextCursor },
         };
         stageMs.dto = Date.now() - dtoStartMs;
@@ -558,10 +566,11 @@ export class PostsController {
           includeRestricted: parsed.includeRestricted ?? false,
         });
 
-        const filteredPostsUser = collapseFeedByRoot(result.posts, {
+        const { items: filteredPostsUser, collapsedCountByItemId: collapsedCountByItemIdUser } = collapseFeedByRoot(result.posts, {
           collapseByRoot: parsed.collapseByRoot ?? false,
           collapseMode: parsed.collapseMode ?? 'root',
           prefer: parsed.prefer ?? 'reply',
+          maxPerRoot: parsed.collapseMaxPerRoot ?? 1,
           getId: (post) => post.id,
           getParentId: (post) => post.parentId ?? null,
         });
@@ -639,7 +648,12 @@ export class PostsController {
         });
 
         return {
-          data: filteredPostsUser.map((p) => attachParentChain(p)),
+          data: filteredPostsUser.map((p) => {
+            const dto = attachParentChain(p);
+            const collapsed = collapsedCountByItemIdUser.get(p.id);
+            if (collapsed && collapsed > 0) (dto as any).threadCollapsedCount = collapsed;
+            return dto;
+          }),
           pagination: { nextCursor: result.nextCursor, counts: result.counts ?? null },
         };
       },
