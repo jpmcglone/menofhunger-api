@@ -62,7 +62,7 @@ export class GroupsService {
     }
   }
 
-  async getShellBySlug(params: { slug: string; viewerUserId: string }) {
+  async getShellBySlug(params: { slug: string; viewerUserId: string | null }) {
     const slug = (params.slug ?? '').trim();
     if (!slug) throw new NotFoundException('Group not found.');
     const g = await this.prisma.communityGroup.findFirst({
@@ -70,14 +70,19 @@ export class GroupsService {
     });
     if (!g) throw new NotFoundException('Group not found.');
 
-    const row = await this.prisma.communityGroupMember.findUnique({
-      where: { groupId_userId: { groupId: g.id, userId: params.viewerUserId } },
-      select: { status: true, role: true },
-    });
-    const viewerMembership = row
-      ? { status: row.status, role: row.role }
-      : null;
-    return { data: toCommunityGroupShellDto(g, viewerMembership) };
+    let viewerMembership: { status: string; role: string } | null = null;
+    if (params.viewerUserId) {
+      const row = await this.prisma.communityGroupMember.findUnique({
+        where: { groupId_userId: { groupId: g.id, userId: params.viewerUserId } },
+        select: { status: true, role: true },
+      });
+      viewerMembership = row ? { status: row.status, role: row.role } : null;
+    }
+
+    const dto = toCommunityGroupShellDto(g, viewerMembership as Parameters<typeof toCommunityGroupShellDto>[1]);
+    // Don't expose rules to anonymous viewers
+    if (!params.viewerUserId) dto.rules = null;
+    return { data: dto };
   }
 
   async listFeatured(params: { viewerUserId: string }) {
@@ -602,17 +607,26 @@ export class GroupsService {
     const cursorMember = cursorUserId
       ? await this.prisma.communityGroupMember.findUnique({
           where: { groupId_userId: { groupId: params.groupId, userId: cursorUserId } },
-          select: { userId: true, createdAt: true },
+          select: { userId: true, createdAt: true, role: true },
         })
       : null;
+    // Sort: owner first, then moderator, then member; within each role, earliest join first.
+    // Cursor WHERE mirrors orderBy [role desc, createdAt asc, userId asc].
     const cursorWhere: Prisma.CommunityGroupMemberWhereInput | null = cursorMember
       ? {
           OR: [
-            { createdAt: { lt: cursorMember.createdAt } },
+            { role: { lt: cursorMember.role } },
             {
               AND: [
+                { role: cursorMember.role },
+                { createdAt: { gt: cursorMember.createdAt } },
+              ],
+            },
+            {
+              AND: [
+                { role: cursorMember.role },
                 { createdAt: cursorMember.createdAt },
-                { userId: { lt: cursorMember.userId } },
+                { userId: { gt: cursorMember.userId } },
               ],
             },
           ],
@@ -630,7 +644,7 @@ export class GroupsService {
         ...(andParts.length ? { AND: andParts } : {}),
       },
       include: { user: { select: USER_LIST_SELECT } },
-      orderBy: [{ createdAt: 'desc' }, { userId: 'desc' }],
+      orderBy: [{ role: 'desc' }, { createdAt: 'asc' }, { userId: 'asc' }],
       take: limit + 1,
     });
 

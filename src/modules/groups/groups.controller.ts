@@ -94,13 +94,13 @@ export class GroupsController {
     return await this.groups.listExploreSpotlight(userId ?? null);
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(OptionalAuthGuard)
   @Throttle({
     default: { limit: rateLimitLimit('publicRead', 120), ttl: rateLimitTtl('publicRead', 60) },
   })
   @Get('by-slug/:slug')
-  async bySlug(@CurrentUserId() viewerUserId: string, @Param('slug') slug: string) {
-    return await this.groups.getShellBySlug({ slug, viewerUserId });
+  async bySlug(@OptionalCurrentUserId() viewerUserId: string | undefined, @Param('slug') slug: string) {
+    return await this.groups.getShellBySlug({ slug, viewerUserId: viewerUserId ?? null });
   }
 
   @UseGuards(AuthGuard)
