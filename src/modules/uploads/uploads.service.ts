@@ -596,6 +596,7 @@ export class UploadsService {
     const imagesPrefix = `${prefix}uploads/${userId}/images/`;
     const videosPrefix = `${prefix}uploads/${userId}/videos/`;
     const thumbnailsPrefix = `${prefix}uploads/${userId}/thumbnails/`;
+    const groupImagesPrefix = `${prefix}uploads/${userId}/group-images/`;
 
     // Reuse path: key was returned from init with skipUpload: true (existing in MediaContentHash).
     // Check this first so we accept keys under any user path when reusing by content hash.
@@ -671,7 +672,7 @@ export class UploadsService {
       };
     }
 
-    if (!cleaned.startsWith(imagesPrefix) && !cleaned.startsWith(videosPrefix)) {
+    if (!cleaned.startsWith(imagesPrefix) && !cleaned.startsWith(videosPrefix) && !cleaned.startsWith(groupImagesPrefix)) {
       throw new BadRequestException('Invalid media key.');
     }
 
