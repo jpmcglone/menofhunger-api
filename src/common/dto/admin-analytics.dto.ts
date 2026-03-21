@@ -133,6 +133,33 @@ export type AdminAnalyticsCoinsDto = {
   giniCoefficient: number | null;
 };
 
+export type AdminAnalyticsGroupsTopRowDto = {
+  id: string;
+  slug: string;
+  name: string;
+  memberCount: number;
+  rootPostsInRange: number;
+  /** % of roots (in range) that got ≥1 reply within 24h; null when no roots in range. */
+  replyRate24hPct: number | null;
+};
+
+export type AdminAnalyticsGroupsDto = {
+  /** Distinct non-banned users with at least one active group membership. */
+  usersInAnyGroup: number;
+  /** usersInAnyGroup ÷ total non-banned users (null if no users). */
+  pctUsersInAnyGroup: number | null;
+  /** Groups not soft-deleted. */
+  activeGroups: number;
+  /** Active memberships where member row was created in range (open joins; approximates growth). */
+  newActiveMembershipsInRange: number;
+  pendingApprovals: number;
+  groupRootPostsInRange: number;
+  groupRepliesInRange: number;
+  /** Among group root posts created in range: % with ≥1 reply within 24h. */
+  pctGroupRootsWithReplyWithin24h: number | null;
+  topGroups: AdminAnalyticsGroupsTopRowDto[];
+};
+
 export type AdminAnalyticsDto = {
   range: AnalyticsRange;
   granularity: AnalyticsGranularity;
@@ -150,5 +177,6 @@ export type AdminAnalyticsDto = {
   monetization: AdminAnalyticsMonetizationDto;
   coins: AdminAnalyticsCoinsDto;
   articles: AdminAnalyticsArticlesDto;
+  groups: AdminAnalyticsGroupsDto;
   asOf: string;
 };

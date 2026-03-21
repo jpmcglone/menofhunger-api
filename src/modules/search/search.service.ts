@@ -11,6 +11,7 @@ import { queryToTopicValues } from '../../common/topics/topic-utils';
 import { HASHTAG_IN_TEXT_DISPLAY_RE, parseHashtagsFromText } from '../../common/hashtags/hashtag-regex';
 import { POST_BASE_INCLUDE } from '../../common/prisma-includes/post.include';
 import { articleAuthorInclude } from '../../common/dto/article.dto';
+import { toCommunityGroupShellDto, type CommunityGroupShellDto } from '../../common/dto/community-group.dto';
 
 /**
  * Search scoring (higher = better). Used for ranking only; tie-breaks: relationship (users), createdAt (posts).
@@ -476,6 +477,24 @@ export class SearchService {
     return { OR: orConditions };
   }
 
+  private visibleBookmarkedPostWhere(userId: string): Prisma.PostWhereInput {
+    return {
+      OR: [
+        { communityGroupId: null },
+        {
+          communityGroup: {
+            members: {
+              some: {
+                userId,
+                status: 'active',
+              },
+            },
+          },
+        },
+      ],
+    };
+  }
+
   private articleSearchMatchWhere(q: string, words: string[]): object {
     const trimmed = (q ?? '').trim();
     if (!trimmed) return {};
@@ -717,6 +736,7 @@ export class SearchService {
         CROSS JOIN q
         WHERE
           p."deletedAt" IS NULL
+          AND p."communityGroupId" IS NULL
           ${visibilitySql}
           ${excludeHashtagsSql}
           ${cursorSql}
@@ -758,6 +778,7 @@ export class SearchService {
       where: {
         AND: [
           { deletedAt: null },
+          { communityGroupId: null },
           params.visibilityWhere,
           ...(hashtags.length > 0 ? [({ NOT: hashtagWhere } as Prisma.PostWhereInput)] : []),
           ...(cursorWhere ? [cursorWhere] : []),
@@ -820,7 +841,7 @@ export class SearchService {
       if (cursorIsOffset) {
         const rows = await this.prisma.post.findMany({
           where: {
-            AND: [{ deletedAt: null }, visibilityWhere, kindWhere, hashtagWhere],
+            AND: [{ deletedAt: null }, { communityGroupId: null }, visibilityWhere, kindWhere, hashtagWhere],
           },
           include: {
             user: POST_BASE_INCLUDE.user,
@@ -858,6 +879,7 @@ export class SearchService {
           where: {
             AND: [
               { deletedAt: null },
+              { communityGroupId: null },
               visibilityWhere,
               kindWhere,
               hashtagWhere,
@@ -953,6 +975,7 @@ export class SearchService {
         CROSS JOIN q
         WHERE
           p."deletedAt" IS NULL
+          AND p."communityGroupId" IS NULL
           ${visibilitySql}
           AND (
             to_tsvector('english', p."body") @@ q.tsq
@@ -986,6 +1009,7 @@ export class SearchService {
           ? {
               AND: [
                 { deletedAt: null },
+                { communityGroupId: null },
                 visibilityWhere,
                 kindWhere,
                 {
@@ -1000,6 +1024,7 @@ export class SearchService {
           : {
               AND: [
                 { deletedAt: null },
+                { communityGroupId: null },
                 visibilityWhere,
                 kindWhere,
                 topicValues.length > 0 ? ({ OR: [matchWhere, topicWhere] } as Prisma.PostWhereInput) : matchWhere,
@@ -1063,12 +1088,54 @@ export class SearchService {
     return { posts: slice, nextCursor };
   }
 
+  async searchCommunityGroups(params: {
+    viewerUserId: string | null;
+    q: string;
+    limit: number;
+  }): Promise<{ groups: CommunityGroupShellDto[] }> {
+    const q = (params.q ?? '').trim();
+    if (q.length < 2) return { groups: [] };
+    const lim = Math.min(20, Math.max(1, params.limit));
+    const needle = q.slice(0, 200);
+
+    const rows = await this.prisma.communityGroup.findMany({
+      where: {
+        deletedAt: null,
+        OR: [
+          { name: { contains: needle, mode: 'insensitive' } },
+          { slug: { contains: needle, mode: 'insensitive' } },
+          { description: { contains: needle, mode: 'insensitive' } },
+        ],
+      },
+      orderBy: [{ memberCount: 'desc' }, { createdAt: 'desc' }],
+      take: lim,
+    });
+
+    if (!rows.length) return { groups: [] };
+    if (!params.viewerUserId) {
+      return { groups: rows.map((g) => toCommunityGroupShellDto(g, null)) };
+    }
+    const memberships = await this.prisma.communityGroupMember.findMany({
+      where: { userId: params.viewerUserId, groupId: { in: rows.map((r) => r.id) } },
+      select: { groupId: true, status: true, role: true },
+    });
+    const byGroup = new Map(memberships.map((m) => [m.groupId, m] as const));
+    return {
+      groups: rows.map((g) => {
+        const m = byGroup.get(g.id);
+        const viewerMembership = m ? { status: m.status, role: m.role } : null;
+        return toCommunityGroupShellDto(g, viewerMembership);
+      }),
+    };
+  }
+
   async searchMixed(params: {
     viewerUserId: string | null;
     q: string;
     userLimit: number;
     postLimit: number;
     articleLimit: number;
+    groupLimit: number;
     userCursor: string | null;
     postCursor: string | null;
     articleCursor: string | null;
@@ -1077,6 +1144,7 @@ export class SearchService {
     users: SearchUserRow[];
     posts: Awaited<ReturnType<SearchService['searchPosts']>>['posts'];
     articles: SearchArticleRow[];
+    groups: CommunityGroupShellDto[];
     nextUserCursor: string | null;
     nextPostCursor: string | null;
     nextArticleCursor: string | null;
@@ -1087,13 +1155,14 @@ export class SearchService {
         users: [],
         posts: [],
         articles: [],
+        groups: [],
         nextUserCursor: null,
         nextPostCursor: null,
         nextArticleCursor: null,
       };
     }
 
-    const [userResult, postResult, articleResult] = await Promise.all([
+    const [userResult, postResult, articleResult, groupResult] = await Promise.all([
       this.searchUsers({
         q,
         limit: params.userLimit,
@@ -1113,12 +1182,18 @@ export class SearchService {
         limit: params.articleLimit,
         cursor: params.articleCursor,
       }),
+      this.searchCommunityGroups({
+        viewerUserId: params.viewerUserId,
+        q,
+        limit: params.groupLimit,
+      }),
     ]);
 
     return {
       users: userResult.users,
       posts: postResult.posts,
       articles: articleResult.articles,
+      groups: groupResult.groups,
       nextUserCursor: userResult.nextCursor,
       nextPostCursor: postResult.nextCursor,
       nextArticleCursor: articleResult.nextCursor,
@@ -1193,6 +1268,7 @@ export class SearchService {
     const where: Prisma.BookmarkWhereInput = {
       AND: [
         { userId },
+        { post: this.visibleBookmarkedPostWhere(userId) },
         folderWhere,
         ...(cursorWhere ? [cursorWhere] : []),
         q

@@ -2,7 +2,15 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminGuard } from './admin.guard';
-import type { AdminAnalyticsArticlesDto, AdminAnalyticsCoinsDto, AdminAnalyticsDto, AdminAnalyticsEngagementDto, AnalyticsGranularity, AnalyticsRange } from '../../common/dto/admin-analytics.dto';
+import type {
+  AdminAnalyticsArticlesDto,
+  AdminAnalyticsCoinsDto,
+  AdminAnalyticsDto,
+  AdminAnalyticsEngagementDto,
+  AdminAnalyticsGroupsDto,
+  AnalyticsGranularity,
+  AnalyticsRange,
+} from '../../common/dto/admin-analytics.dto';
 
 function resolveSince(range: string, now: Date): Date | null {
   const ms = (days: number) => new Date(now.getTime() - days * 86400000);
@@ -598,6 +606,163 @@ export class AdminAnalyticsController {
       `,
     ]);
 
+    const [
+      groupUsersInAnyRow,
+      groupActiveGroupsRow,
+      groupNewMembershipsRow,
+      groupPendingRow,
+      groupRootsRow,
+      groupRepliesRow,
+      groupReplyRateRow,
+      groupTopRaw,
+    ] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ cnt: bigint }>>`
+        SELECT COUNT(DISTINCT m."userId")::bigint AS cnt
+        FROM "CommunityGroupMember" m
+        JOIN "User" u ON u.id = m."userId"
+        WHERE m.status = 'active'
+          AND u."bannedAt" IS NULL
+      `,
+      this.prisma.$queryRaw<Array<{ cnt: bigint }>>`
+        SELECT COUNT(*)::bigint AS cnt
+        FROM "CommunityGroup"
+        WHERE "deletedAt" IS NULL
+      `,
+      this.prisma.$queryRaw<Array<{ cnt: bigint }>>(Prisma.sql`
+        SELECT COUNT(*)::bigint AS cnt
+        FROM "CommunityGroupMember" m
+        JOIN "CommunityGroup" g ON g.id = m."groupId"
+        WHERE m.status = 'active'
+          AND g."deletedAt" IS NULL
+        ${sinceAnd(Prisma.sql`m."createdAt"`)}
+      `),
+      this.prisma.$queryRaw<Array<{ cnt: bigint }>>`
+        SELECT COUNT(*)::bigint AS cnt
+        FROM "CommunityGroupMember" m
+        JOIN "CommunityGroup" g ON g.id = m."groupId"
+        WHERE m.status = 'pending'
+          AND g."deletedAt" IS NULL
+      `,
+      this.prisma.$queryRaw<Array<{ cnt: bigint }>>(Prisma.sql`
+        SELECT COUNT(*)::bigint AS cnt
+        FROM "Post"
+        WHERE "deletedAt" IS NULL
+          AND "isDraft" = false
+          AND "communityGroupId" IS NOT NULL
+          AND "parentId" IS NULL
+        ${sinceAnd(Prisma.sql`"createdAt"`)}
+      `),
+      this.prisma.$queryRaw<Array<{ cnt: bigint }>>(Prisma.sql`
+        SELECT COUNT(*)::bigint AS cnt
+        FROM "Post"
+        WHERE "deletedAt" IS NULL
+          AND "isDraft" = false
+          AND "communityGroupId" IS NOT NULL
+          AND "parentId" IS NOT NULL
+        ${sinceAnd(Prisma.sql`"createdAt"`)}
+      `),
+      this.prisma.$queryRaw<Array<{ total_roots: bigint; with_reply_24h: bigint }>>(Prisma.sql`
+        WITH roots AS (
+          SELECT id, "createdAt"
+          FROM "Post"
+          WHERE "deletedAt" IS NULL
+            AND "isDraft" = false
+            AND "communityGroupId" IS NOT NULL
+            AND "parentId" IS NULL
+          ${sinceAnd(Prisma.sql`"createdAt"`)}
+        )
+        SELECT
+          COUNT(*)::bigint AS total_roots,
+          COUNT(*) FILTER (WHERE EXISTS (
+            SELECT 1
+            FROM "Post" c
+            WHERE c."deletedAt" IS NULL
+              AND c."rootId" = roots.id
+              AND c.id <> roots.id
+              AND c."createdAt" <= roots."createdAt" + INTERVAL '24 hours'
+          ))::bigint AS with_reply_24h
+        FROM roots
+      `),
+      this.prisma.$queryRaw<
+        Array<{
+          id: string;
+          slug: string;
+          name: string;
+          member_count: number;
+          root_posts_in_range: bigint;
+          roots_with_reply_24h: bigint;
+        }>
+      >(Prisma.sql`
+        WITH roots_in_range AS (
+          SELECT "communityGroupId" AS gid, id, "createdAt"
+          FROM "Post"
+          WHERE "deletedAt" IS NULL
+            AND "isDraft" = false
+            AND "communityGroupId" IS NOT NULL
+            AND "parentId" IS NULL
+          ${sinceAnd(Prisma.sql`"createdAt"`)}
+        ),
+        per_group AS (
+          SELECT
+            r.gid,
+            COUNT(*)::bigint AS root_cnt,
+            COUNT(*) FILTER (WHERE EXISTS (
+              SELECT 1
+              FROM "Post" c
+              WHERE c."deletedAt" IS NULL
+                AND c."rootId" = r.id
+                AND c.id <> r.id
+                AND c."createdAt" <= r."createdAt" + INTERVAL '24 hours'
+            ))::bigint AS answered_cnt
+          FROM roots_in_range r
+          GROUP BY r.gid
+        )
+        SELECT
+          g.id,
+          g.slug,
+          g.name,
+          g."memberCount" AS member_count,
+          COALESCE(p.root_cnt, 0)::bigint AS root_posts_in_range,
+          COALESCE(p.answered_cnt, 0)::bigint AS roots_with_reply_24h
+        FROM "CommunityGroup" g
+        LEFT JOIN per_group p ON p.gid = g.id
+        WHERE g."deletedAt" IS NULL
+        ORDER BY COALESCE(p.root_cnt, 0) DESC, g."memberCount" DESC, g.name ASC
+        LIMIT 12
+      `),
+    ]);
+
+    const usersInAnyGroup = Number(groupUsersInAnyRow[0]?.cnt ?? 0);
+    const totalUsersForPct = Number(summaryRow[0]?.total_users ?? 0);
+    const groupsBlock: AdminAnalyticsGroupsDto = {
+      usersInAnyGroup,
+      pctUsersInAnyGroup:
+        totalUsersForPct > 0 ? Math.round((usersInAnyGroup / totalUsersForPct) * 1000) / 10 : null,
+      activeGroups: Number(groupActiveGroupsRow[0]?.cnt ?? 0),
+      newActiveMembershipsInRange: Number(groupNewMembershipsRow[0]?.cnt ?? 0),
+      pendingApprovals: Number(groupPendingRow[0]?.cnt ?? 0),
+      groupRootPostsInRange: Number(groupRootsRow[0]?.cnt ?? 0),
+      groupRepliesInRange: Number(groupRepliesRow[0]?.cnt ?? 0),
+      pctGroupRootsWithReplyWithin24h: (() => {
+        const tr = Number(groupReplyRateRow[0]?.total_roots ?? 0);
+        const wr = Number(groupReplyRateRow[0]?.with_reply_24h ?? 0);
+        if (tr <= 0) return null;
+        return Math.round((wr / tr) * 1000) / 10;
+      })(),
+      topGroups: groupTopRaw.map((r) => {
+        const roots = Number(r.root_posts_in_range ?? 0);
+        const answered = Number(r.roots_with_reply_24h ?? 0);
+        return {
+          id: r.id,
+          slug: r.slug,
+          name: r.name,
+          memberCount: r.member_count,
+          rootPostsInRange: roots,
+          replyRate24hPct: roots > 0 ? Math.round((answered / roots) * 1000) / 10 : null,
+        };
+      }),
+    };
+
     // ── Summary ───────────────────────────────────────────────────────────────
 
     const summary = summaryRow[0];
@@ -767,6 +932,7 @@ export class AdminAnalyticsController {
       },
       coins,
       articles,
+      groups: groupsBlock,
       asOf: now.toISOString(),
     };
 

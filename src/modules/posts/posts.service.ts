@@ -8,6 +8,8 @@ import { PollsService } from './polls.service';
 import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
 import { AppConfigService } from '../app/app-config.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
+import { groupTrendingCursorWhere } from '../../common/pagination/group-trending-cursor';
+import { toCommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
 import { parseMentionsFromBody as parseMentionsFromBodyText } from '../../common/mentions/mention-regex';
 import { parseHashtagTokensFromText, type HashtagToken } from '../../common/hashtags/hashtag-regex';
@@ -19,6 +21,10 @@ import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
 import { computeCheckinStreakStats } from '../checkins/checkin-streaks';
 import { toUserDto } from '../../common/dto/user.dto';
+import { collapseFeedByRoot } from '../../common/feed-collapse/collapse-by-root';
+import { toPostDto, type PostDto } from '../../common/dto/post.dto';
+import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
+import { buildAttachParentChain } from './posts.utils';
 import { PostViewsService } from '../post-views/post-views.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
@@ -61,6 +67,62 @@ export class PostsService {
    */
   private notDeletedWhere(): Prisma.PostWhereInput {
     return { deletedAt: null };
+  }
+
+  /** Community-group posts must not appear on global/profile/trending feeds. */
+  private excludeCommunityGroupPostsWhere(): Prisma.PostWhereInput {
+    return { communityGroupId: null };
+  }
+
+  private async assertReadableCommunityGroupPost(
+    post: { userId: string; communityGroupId: string | null },
+    viewerUserId: string | null,
+    viewer: ViewerContext | null,
+    opts?: { knownActiveMember?: boolean },
+  ): Promise<void> {
+    const gid = post.communityGroupId;
+    if (!gid) return;
+    if (viewer?.siteAdmin) return;
+    if (viewerUserId && post.userId === viewerUserId) return;
+    if (!viewerUserId) throw new ForbiddenException('Sign in to view this post.');
+    if (opts?.knownActiveMember) return;
+    const m = await this.prisma.communityGroupMember.findUnique({
+      where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
+      select: { status: true },
+    });
+    if (!m || m.status !== 'active') {
+      throw new ForbiddenException('This post is only visible to group members.');
+    }
+  }
+
+  private async filterPostsByCommunityGroupAccess(params: {
+    viewerUserId: string | null;
+    viewer: ViewerContext | null;
+    posts: FeedPost[];
+  }): Promise<FeedPost[]> {
+    const { viewerUserId, viewer, posts } = params;
+    const groupIds = [
+      ...new Set(
+        posts
+          .map((p) => (p as { communityGroupId?: string | null }).communityGroupId)
+          .filter((x): x is string => Boolean(x)),
+      ),
+    ];
+    let memberGroupIds = new Set<string>();
+    if (viewerUserId && groupIds.length > 0) {
+      const rows = await this.prisma.communityGroupMember.findMany({
+        where: { userId: viewerUserId, groupId: { in: groupIds }, status: 'active' },
+        select: { groupId: true },
+      });
+      memberGroupIds = new Set(rows.map((r) => r.groupId));
+    }
+    return posts.filter((p) => {
+      const gid = (p as { communityGroupId?: string | null }).communityGroupId ?? null;
+      if (!gid) return true;
+      if (viewer?.siteAdmin) return true;
+      if (viewerUserId && p.userId === viewerUserId) return true;
+      return memberGroupIds.has(gid);
+    });
   }
 
   private async recomputeStreakFromPostsTx(tx: Prisma.TransactionClient, userId: string, now: Date): Promise<void> {
@@ -677,6 +739,7 @@ export class PostsService {
           AND: [
             visibilityWhere,
             this.notDeletedWhere(),
+            this.excludeCommunityGroupPostsWhere(),
             this.userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
@@ -692,6 +755,7 @@ export class PostsService {
           AND: [
             visibilityWhere,
             this.notDeletedWhere(),
+            this.excludeCommunityGroupPostsWhere(),
             this.userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
@@ -715,6 +779,314 @@ export class PostsService {
     const nextCursor = posts.length > limit ? slice[slice.length - 1]?.id ?? null : null;
 
     return { posts: slice, nextCursor };
+  }
+
+  async listActiveCommunityGroupIdsForUser(viewerUserId: string): Promise<string[]> {
+    const rows = await this.prisma.communityGroupMember.findMany({
+      where: { userId: viewerUserId, status: 'active' },
+      select: { groupId: true },
+    });
+    return rows.map((r) => r.groupId);
+  }
+
+  async assertViewerActiveMemberOfGroup(viewerUserId: string, groupId: string): Promise<void> {
+    const gid = (groupId ?? '').trim();
+    if (!gid) throw new ForbiddenException('Group not found.');
+    const m = await this.prisma.communityGroupMember.findUnique({
+      where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
+      select: { status: true },
+    });
+    if (!m || m.status !== 'active') {
+      throw new ForbiddenException('You are not a member of this group.');
+    }
+  }
+
+  /**
+   * Timeline posts inside one or more community groups (roots + replies), for the same collapse pipeline as GET /posts.
+   * When `applyPinnedHead` and a single group, the owner-pinned root post is prepended on the first chronological page only.
+   */
+  async listCommunityGroupsTimelinePosts(params: {
+    groupIds: string[];
+    limit: number;
+    cursor: string | null;
+    sort: 'new' | 'trending';
+    applyPinnedHead: boolean;
+  }): Promise<FeedResult> {
+    const { groupIds, limit, cursor, sort } = params;
+    if (groupIds.length === 0) return { posts: [], nextCursor: null };
+
+    const groupWhere: Prisma.PostWhereInput =
+      groupIds.length === 1 ? { communityGroupId: groupIds[0]! } : { communityGroupId: { in: groupIds } };
+
+    const applyPin =
+      Boolean(params.applyPinnedHead && sort === 'new' && !cursor && groupIds.length === 1) && groupIds[0];
+
+    let pinned: FeedPost | null = null;
+    let pinnedId: string | null = null;
+    if (applyPin && groupIds[0]) {
+      const p = await this.prisma.post.findFirst({
+        where: {
+          communityGroupId: groupIds[0],
+          parentId: null,
+          ...this.notDeletedWhere(),
+          pinnedInGroupAt: { not: null },
+        },
+        orderBy: { pinnedInGroupAt: 'desc' },
+        include: feedPostInclude,
+      });
+      pinned = p as FeedPost | null;
+      pinnedId = pinned?.id ?? null;
+    }
+
+    const takeMain = pinnedId && !cursor ? Math.max(1, limit - 1) : limit;
+
+    const baseAnd: Prisma.PostWhereInput[] = [groupWhere, this.notDeletedWhere(), this.userNotBannedWhere()];
+    if (pinnedId) baseAnd.push({ id: { not: pinnedId } });
+
+    if (sort === 'trending') {
+      baseAnd.push({ trendingScore: { gt: 0 } });
+      const tCursor = await groupTrendingCursorWhere({
+        cursor,
+        lookup: async (id) => {
+          const row = await this.prisma.post.findFirst({
+            where: {
+              id,
+              ...groupWhere,
+              ...this.notDeletedWhere(),
+            },
+            select: { id: true, createdAt: true, trendingScore: true },
+          });
+          return row;
+        },
+      });
+      if (tCursor) baseAnd.push(tCursor);
+
+      const posts = await this.prisma.post.findMany({
+        where: { AND: baseAnd },
+        include: feedPostInclude,
+        orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        take: takeMain + 1,
+      });
+      const slice = posts.slice(0, takeMain);
+      const nextCursor = posts.length > takeMain ? slice[slice.length - 1]?.id ?? null : null;
+      const out: FeedPost[] = pinned && !cursor ? [pinned, ...slice] : slice;
+      return { posts: out, nextCursor };
+    }
+
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor,
+      lookup: async (id) =>
+        this.prisma.post.findFirst({
+          where: { id, ...groupWhere, ...this.notDeletedWhere() },
+          select: { id: true, createdAt: true },
+        }),
+    });
+    if (cursorWhere) baseAnd.push(cursorWhere);
+
+    const posts = await this.prisma.post.findMany({
+      where: { AND: baseAnd },
+      include: feedPostInclude,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: takeMain + 1,
+    });
+    const slice = posts.slice(0, takeMain);
+    const nextCursor = posts.length > takeMain ? slice[slice.length - 1]?.id ?? null : null;
+    const out: FeedPost[] = pinned && !cursor ? [pinned, ...slice] : slice;
+    return { posts: out, nextCursor };
+  }
+
+  async collectParentMapForFeed(
+    viewerUserId: string | null,
+    seedParentIds: Array<string | null | undefined>,
+  ): Promise<Map<string, FeedPost>> {
+    const parentMap = new Map<string, FeedPost>();
+    let toFetch = new Set<string>((seedParentIds ?? []).filter((id): id is string => Boolean(id)));
+    while (toFetch.size > 0) {
+      const batch = [...toFetch].filter((id) => !parentMap.has(id));
+      if (batch.length === 0) break;
+      const rows = await this.getByIds({ viewerUserId, ids: batch });
+      const byId = new Map(rows.map((p) => [p.id, p] as const));
+      const next = new Set<string>();
+      for (const id of batch) {
+        const post = byId.get(id);
+        if (!post) continue;
+        parentMap.set(id, post);
+        if (post.parentId) next.add(post.parentId);
+      }
+      toFetch = next;
+    }
+    return parentMap;
+  }
+
+  async collectRepostedMapForFeed(viewerUserId: string | null, repostedPostIds: string[]): Promise<Map<string, FeedPost>> {
+    const ids = [...new Set((repostedPostIds ?? []).map((id) => (id ?? '').trim()).filter(Boolean))];
+    if (!ids.length) return new Map<string, FeedPost>();
+    const rows = await this.getByIds({ viewerUserId, ids });
+    return new Map(rows.map((p) => [p.id, p] as const));
+  }
+
+  async communityGroupPreviewMapForFeed(
+    viewerUserId: string | null,
+    groupIds: string[],
+  ): Promise<Map<string, CommunityGroupPreviewDto>> {
+    const uniq = [...new Set((groupIds ?? []).map((id) => (id ?? '').trim()).filter(Boolean))];
+    const map = new Map<string, CommunityGroupPreviewDto>();
+    await Promise.all(
+      uniq.map(async (gid) => {
+        const prev = await this.communityGroupPreviewForGroup(gid, viewerUserId);
+        if (prev) map.set(gid, prev);
+      }),
+    );
+    return map;
+  }
+
+  async composeFeedPostDtos(params: {
+    viewerUserId: string | null;
+    filteredPosts: FeedPost[];
+    collapsedCountByItemId: Map<string, number>;
+    scoreByPostId?: Map<string, number>;
+  }): Promise<PostDto[]> {
+    const { viewerUserId, filteredPosts, collapsedCountByItemId } = params;
+    const repostedPostIds = filteredPosts
+      .filter((p) => (p as { kind?: string }).kind === 'repost' && (p as { repostedPostId?: string }).repostedPostId)
+      .map((p) => (p as { repostedPostId: string }).repostedPostId);
+
+    const [viewer, parentMap, repostedPostMap] = await Promise.all([
+      this.viewerContext(viewerUserId),
+      this.collectParentMapForFeed(
+        viewerUserId,
+        filteredPosts.map((p) => p.parentId),
+      ),
+      this.collectRepostedMapForFeed(viewerUserId, repostedPostIds),
+    ]);
+    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const allPostIds = [...filteredPosts.map((p) => p.id), ...parentMap.keys()];
+
+    const [
+      boosted,
+      bookmarksByPostId,
+      votedPollOptionIdByPostId,
+      blockSets,
+      repostedByPostId,
+      internalByPostId,
+      scoreByPostIdResolved,
+    ] = await Promise.all([
+      viewerUserId
+        ? this.viewerBoostedPostIds({ viewerUserId, postIds: allPostIds })
+        : Promise.resolve(new Set<string>()),
+      viewerUserId
+        ? this.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
+        : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
+      viewerUserId
+        ? this.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
+        : Promise.resolve(new Map<string, string>()),
+      viewerUserId
+        ? this.viewerBlockSets(viewerUserId)
+        : Promise.resolve({ blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() }),
+      viewerUserId
+        ? this.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
+        : Promise.resolve(new Set<string>()),
+      viewerHasAdmin ? this.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)) : Promise.resolve(null),
+      viewerHasAdmin
+        ? params.scoreByPostId
+          ? Promise.resolve(params.scoreByPostId)
+          : this.computeScoresForPostIds(allPostIds)
+        : Promise.resolve(undefined),
+    ]);
+    const { blockedByViewer, viewerBlockedBy } = blockSets;
+
+    const communityGroupIdsForPage = new Set<string>();
+    const accCommunityGroupId = (row: { communityGroupId?: string | null } | null | undefined) => {
+      const g = String(row?.communityGroupId ?? '').trim();
+      if (g) communityGroupIdsForPage.add(g);
+    };
+    for (const p of filteredPosts) accCommunityGroupId(p as { communityGroupId?: string | null });
+    for (const p of parentMap.values()) accCommunityGroupId(p as { communityGroupId?: string | null });
+    for (const p of repostedPostMap.values()) accCommunityGroupId(p as { communityGroupId?: string | null });
+    const groupPreviewByGroupId = await this.communityGroupPreviewMapForFeed(viewerUserId, [
+      ...communityGroupIdsForPage,
+    ]);
+
+    const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const attachParentChain = buildAttachParentChain({
+      parentMap,
+      baseUrl,
+      boosted,
+      bookmarksByPostId,
+      votedPollOptionIdByPostId,
+      viewerUserId,
+      viewerHasAdmin,
+      internalByPostId,
+      scoreByPostId: scoreByPostIdResolved,
+      toPostDto,
+      blockedByViewer,
+      viewerBlockedBy,
+      repostedByPostId,
+      repostedPostMap: repostedPostMap as any,
+      groupPreviewByGroupId,
+    });
+
+    return filteredPosts.map((p) => {
+      const dto = attachParentChain(p);
+      const collapsed = collapsedCountByItemId.get(p.id);
+      if (collapsed && collapsed > 0) (dto as { threadCollapsedCount?: number }).threadCollapsedCount = collapsed;
+      return dto;
+    });
+  }
+
+  async listComposedGroupScopedFeed(params: {
+    viewerUserId: string;
+    groupIds: string[];
+    limit: number;
+    cursor: string | null;
+    sort: 'new' | 'trending';
+    applyPinnedHead: boolean;
+    collapseByRoot: boolean;
+    collapseMode: 'root' | 'parent';
+    prefer: 'reply' | 'root';
+    collapseMaxPerRoot: number;
+  }): Promise<{ data: PostDto[]; pagination: { nextCursor: string | null } }> {
+    const raw = await this.listCommunityGroupsTimelinePosts({
+      groupIds: params.groupIds,
+      limit: params.limit,
+      cursor: params.cursor,
+      sort: params.sort,
+      applyPinnedHead: params.applyPinnedHead,
+    });
+    const { items: filteredPosts, collapsedCountByItemId } = collapseFeedByRoot(raw.posts, {
+      collapseByRoot: params.collapseByRoot,
+      collapseMode: params.collapseMode,
+      prefer: params.prefer,
+      maxPerRoot: params.collapseMaxPerRoot,
+      getId: (p) => p.id,
+      getParentId: (p) => p.parentId ?? null,
+    });
+    const data = await this.composeFeedPostDtos({
+      viewerUserId: params.viewerUserId,
+      filteredPosts,
+      collapsedCountByItemId,
+    });
+    return { data, pagination: { nextCursor: raw.nextCursor } };
+  }
+
+  /** Public-ish group shell for gated permalink + join CTAs (viewer may be null). */
+  async communityGroupPreviewForGroup(groupId: string, viewerUserId: string | null) {
+    const gid = (groupId ?? '').trim();
+    if (!gid) return null;
+    const g = await this.prisma.communityGroup.findFirst({
+      where: { id: gid, deletedAt: null },
+    });
+    if (!g) return null;
+    let viewerMembership: { status: 'active' | 'pending'; role: 'owner' | 'moderator' | 'member' } | null =
+      null;
+    if (viewerUserId) {
+      const row = await this.prisma.communityGroupMember.findUnique({
+        where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
+        select: { status: true, role: true },
+      });
+      viewerMembership = row ?? null;
+    }
+    return toCommunityGroupPreviewDto(g, viewerMembership);
   }
 
   /**
@@ -782,6 +1154,7 @@ export class PostsService {
     const posts = await (this.prisma.post as any).findMany({
       where: {
         deletedAt: null,
+        communityGroupId: null,
         trendingScore: { gt: 0 },
         kind: { not: 'repost' },
         user: { bannedAt: null },
@@ -853,6 +1226,7 @@ export class PostsService {
       const rows = await (this.prisma.post as any).findMany({
         where: {
           deletedAt: null,
+          communityGroupId: null,
           trendingScore: { gt: 0 },
           kind: { not: 'repost' },
           parentId: null,
@@ -918,6 +1292,7 @@ export class PostsService {
     const topRows = await (this.prisma.post as any).findMany({
       where: {
         deletedAt: null,
+        communityGroupId: null,
         trendingScore: { gt: 0 },
         kind: { not: 'repost' },
         parentId: null,
@@ -1005,6 +1380,7 @@ export class PostsService {
               FROM "Post" p
               WHERE
                 p."deletedAt" IS NULL
+                AND p."communityGroupId" IS NULL
                 AND p."parentId" IS NULL
                 AND p."createdAt" >= ${risingMinCreatedAt}
                 ${risingVisibilityFilterSql}
@@ -1288,6 +1664,7 @@ export class PostsService {
           AND: [
             popularVisibilityWhere,
             { parentId: null },
+            this.excludeCommunityGroupPostsWhere(),
             ...(warmupAuthorFilter ? [warmupAuthorFilter] : []),
             ...(warmupKindFilter ? [warmupKindFilter] : []),
             this.notDeletedWhere(),
@@ -1457,6 +1834,7 @@ export class PostsService {
             LIMIT ${PostsService.popularCandidatesRepliesTake}
           )
         ) u
+        JOIN "Post" _cg ON _cg."id" = u."id" AND _cg."communityGroupId" IS NULL
         GROUP BY u."id"
       ),
       latest_hashtag_snapshot AS (
@@ -1764,7 +2142,12 @@ export class PostsService {
       ? await (async () => {
           const grouped = await this.prisma.post.groupBy({
             by: ['visibility'],
-            where: { userId: user.id, visibility: { not: 'onlyMe' }, ...this.notDeletedWhere() },
+            where: {
+              userId: user.id,
+              visibility: { not: 'onlyMe' },
+              ...this.notDeletedWhere(),
+              ...this.excludeCommunityGroupPostsWhere(),
+            },
             _count: { _all: true },
           });
 
@@ -1811,9 +2194,16 @@ export class PostsService {
             userId: user.id,
             visibility: { in: effectiveAllowed },
             ...this.notDeletedWhere(),
+            ...this.excludeCommunityGroupPostsWhere(),
             ...topLevelFilter,
           } as Prisma.PostWhereInput)
-        : ({ userId: user.id, visibility, ...this.notDeletedWhere(), ...topLevelFilter } as Prisma.PostWhereInput);
+        : ({
+            userId: user.id,
+            visibility,
+            ...this.notDeletedWhere(),
+            ...this.excludeCommunityGroupPostsWhere(),
+            ...topLevelFilter,
+          } as Prisma.PostWhereInput);
 
     if (sort === 'popular') {
       // Trending for profile: same half-life boost + bookmark scoring as home feed, scoped to this user.
@@ -1836,6 +2226,7 @@ export class PostsService {
               ...(params.topLevelOnly ? [{ parentId: null }] : []),
               { visibility: { in: visibilitiesForQuery } },
               this.notDeletedWhere(),
+              this.excludeCommunityGroupPostsWhere(),
               { createdAt: { gte: minCreatedAt } },
               { boostCount: { gt: 0 } },
               { OR: [{ boostScoreUpdatedAt: null }, { boostScoreUpdatedAt: { lt: staleBefore } }] },
@@ -1956,6 +2347,7 @@ export class PostsService {
           LEFT JOIN comment_scores cs ON cs."postId" = p."id"
           WHERE
             p."deletedAt" IS NULL
+            AND p."communityGroupId" IS NULL
             ${params.topLevelOnly ? Prisma.sql`AND p."parentId" IS NULL` : Prisma.sql``}
             AND p."kind"::text <> 'repost'
             AND p."createdAt" >= ${snapshotMinCreatedAt}
@@ -2258,17 +2650,40 @@ export class PostsService {
     });
     if (!post) throw new NotFoundException('Post not found.');
 
+    const gid = (post as { communityGroupId?: string | null }).communityGroupId ?? null;
+
     // Author can always view their own posts.
     const isSelf = Boolean(viewer && viewer.id === post.userId);
+    let knownActiveGroupMember = false;
+    if (!isSelf && gid && viewerUserId && !viewer?.siteAdmin) {
+      const m = await this.prisma.communityGroupMember.findUnique({
+        where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
+        select: { status: true },
+      });
+      knownActiveGroupMember = m?.status === 'active';
+    }
+
     if (!isSelf) {
       // Only-me posts are private. Allow site admins to view for support/moderation.
       if (post.visibility === 'onlyMe' && !viewer?.siteAdmin) throw new ForbiddenException('This post is private.');
-      if (!allowed.includes(post.visibility)) {
+      // Group wall: tier visibility is not the gate — active membership is (below).
+      const visibilityOk = allowed.includes(post.visibility) || Boolean(gid && knownActiveGroupMember);
+      if (!visibilityOk) {
         if (post.visibility === 'verifiedOnly') throw new ForbiddenException('Verify to view verified-only posts.');
         if (post.visibility === 'premiumOnly') throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
         throw new ForbiddenException('Not allowed to view this post.');
       }
     }
+
+    await this.assertReadableCommunityGroupPost(
+      {
+        userId: post.userId,
+        communityGroupId: gid,
+      },
+      viewerUserId,
+      viewer,
+      knownActiveGroupMember ? { knownActiveMember: true } : undefined,
+    );
 
     this.requestCache.set(cacheKey, post as FeedPost);
     return post;
@@ -2310,21 +2725,45 @@ export class PostsService {
         })
       : [];
 
+    const groupIdsForVis = [
+      ...new Set(
+        fetched
+          .map((p) => (p as { communityGroupId?: string | null }).communityGroupId)
+          .filter((x): x is string => Boolean(x)),
+      ),
+    ];
+    let memberGroupIdsForVis = new Set<string>();
+    if (viewerUserId && groupIdsForVis.length > 0) {
+      const memRows = await this.prisma.communityGroupMember.findMany({
+        where: { userId: viewerUserId, groupId: { in: groupIdsForVis }, status: 'active' },
+        select: { groupId: true },
+      });
+      memberGroupIdsForVis = new Set(memRows.map((r) => r.groupId));
+    }
+
     const visibleFetched = fetched.filter((post) => {
       const isSelf = Boolean(viewer && viewer.id === post.userId);
       if (isSelf) return true;
       if (post.visibility === 'onlyMe') return Boolean(viewer?.siteAdmin);
+      const pg = (post as { communityGroupId?: string | null }).communityGroupId ?? null;
+      if (pg && memberGroupIdsForVis.has(pg)) return true;
       return allowed.includes(post.visibility);
     });
 
-    for (const post of visibleFetched) {
+    const visibleFetchedGroupScoped = await this.filterPostsByCommunityGroupAccess({
+      viewerUserId,
+      viewer,
+      posts: visibleFetched,
+    });
+
+    for (const post of visibleFetchedGroupScoped) {
       const cacheKey = `posts.getById:${viewerUserId ?? 'anon'}:${post.id}`;
       this.requestCache.set(cacheKey, post as FeedPost);
     }
 
     const byId = new Map<string, FeedPost>([
       ...cached.map((p) => [p.id, p] as const),
-      ...visibleFetched.map((p) => [p.id, p as FeedPost] as const),
+      ...visibleFetchedGroupScoped.map((p) => [p.id, p as FeedPost] as const),
     ]);
     return ids.map((id) => byId.get(id)).filter((p): p is FeedPost => Boolean(p));
   }
@@ -3253,7 +3692,7 @@ export class PostsService {
           alt: (m.alt ?? '').trim() || null,
         }));
 
-    const created = await this.createPost({
+    const createdBundle = await this.createPost({
       userId: params.userId,
       body,
       visibility: params.visibility,
@@ -3262,10 +3701,11 @@ export class PostsService {
       media: media.length ? media : null,
       poll: null,
     });
+    const postId = createdBundle.post.id;
 
-    // Fetch with mentions for UI consistency.
+    // Fetch with mentions for UI consistency (createPost already bumped caches for non–onlyMe).
     const full = await this.prisma.post.findUnique({
-      where: { id: created.id },
+      where: { id: postId },
       include: {
         user: { select: USER_LIST_SELECT },
         media: { orderBy: { position: 'asc' } },
@@ -3279,12 +3719,7 @@ export class PostsService {
         },
       },
     });
-    const out = full ?? created;
-    if ((out as any)?.visibility && (out as any).visibility !== 'onlyMe') {
-      const topics = Array.isArray((out as any).topics) ? ((out as any).topics as string[]) : [];
-      await this.cacheInvalidation.bumpForPostWrite({ topics });
-    }
-    return out;
+    return full ?? createdBundle.post;
   }
 
   /** Resolve usernames to user ids (case-insensitive, usernameIsSet). Invalid usernames ignored. */
@@ -3389,14 +3824,20 @@ export class PostsService {
     kind?: 'regular' | 'checkin';
     checkinDayKey?: string | null;
     checkinPrompt?: string | null;
+    /** Top-level post only: creates a post inside this community group (membership required). */
+    communityGroupId?: string | null;
   }) {
     const { userId, body, visibility: requestedVisibility, parentId, mentions: clientMentions } = params;
+    const requestedCommunityGroupId = (params.communityGroupId ?? '').trim() || null;
     const kind = (params.kind ?? 'regular') as 'regular' | 'checkin';
     const now = new Date();
     const checkinDayKeyRaw = (params.checkinDayKey ?? null)?.trim() || null;
     const checkinPromptRaw = (params.checkinPrompt ?? null)?.trim() || null;
 
     if (kind === 'checkin') {
+      if (requestedCommunityGroupId) {
+        throw new BadRequestException('Check-ins cannot be posted inside a community group.');
+      }
       if (parentId) throw new BadRequestException('Check-ins must be top-level posts.');
       if (requestedVisibility !== 'verifiedOnly' && requestedVisibility !== 'premiumOnly') {
         throw new BadRequestException('Check-ins must be verified-only or premium-only.');
@@ -3424,18 +3865,22 @@ export class PostsService {
 
     // Product rule: unverified users cannot create new public feed posts.
     // (UI already hides this, but enforce on the API too.)
-    if (!viewerIsVerified && !parentId && requestedVisibility === 'public') {
+    if (!viewerIsVerified && !parentId && requestedVisibility === 'public' && !requestedCommunityGroupId) {
       throw new ForbiddenException('Verify your account to create public posts.');
     }
     // Creation is gated by current tier: downgraded users can only create within their tier.
     const allowedForCreation = this.allowedVisibilitiesForViewer(user);
+    const skipTierVisibilityForCommunityGroupRoot = Boolean(!parentId && requestedCommunityGroupId);
     if (requestedVisibility !== 'onlyMe' && !allowedForCreation.includes(requestedVisibility)) {
-      if (requestedVisibility === 'verifiedOnly') throw new ForbiddenException('Verify your account to create verified-only posts.');
-      if (requestedVisibility === 'premiumOnly') throw new ForbiddenException('Upgrade to premium to create premium-only posts.');
-      throw new ForbiddenException('You cannot create posts with that visibility.');
+      if (!skipTierVisibilityForCommunityGroupRoot) {
+        if (requestedVisibility === 'verifiedOnly') throw new ForbiddenException('Verify your account to create verified-only posts.');
+        if (requestedVisibility === 'premiumOnly') throw new ForbiddenException('Upgrade to premium to create premium-only posts.');
+        throw new ForbiddenException('You cannot create posts with that visibility.');
+      }
     }
 
     let visibility: PostVisibility = requestedVisibility;
+    let resolvedCommunityGroupId: string | null = null;
     let threadParticipantIds: string[] = [];
     let parentAuthorUserId: string | null = null;
     let threadRootId: string | null = null; // Root post ID for thread hierarchy
@@ -3445,26 +3890,13 @@ export class PostsService {
     if (parentId) {
       const parent = await this.prisma.post.findFirst({
         where: { id: parentId, ...this.notDeletedWhere() },
-        select: { id: true, userId: true, visibility: true, rootId: true, topics: true },
+        select: { id: true, userId: true, visibility: true, rootId: true, topics: true, communityGroupId: true },
       });
       if (!parent) throw new NotFoundException('Post not found.');
       parentAuthorUserId = parent.userId;
       parentTopics = Array.isArray(parent.topics) ? (parent.topics as string[]) : [];
       if (parent.visibility === 'onlyMe') {
         throw new ForbiddenException('Comments are not allowed on only-me posts.');
-      }
-      if (!viewerIsVerified && parent.visibility === 'public') {
-        throw new ForbiddenException('Verify your account to reply publicly.');
-      }
-      const viewer = await this.viewerContextService.getViewer(userId);
-      const allowed = this.allowedVisibilitiesForViewer(viewer);
-      const isSelf = parent.userId === userId;
-      if (!isSelf) {
-        if (!allowed.includes(parent.visibility)) {
-          if (parent.visibility === 'verifiedOnly') throw new ForbiddenException('Verify to view verified-only posts.');
-          if (parent.visibility === 'premiumOnly') throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
-          throw new ForbiddenException('Not allowed to reply to this post.');
-        }
       }
       // Block check: cannot reply across a block in either direction.
       if (parentAuthorUserId && parentAuthorUserId !== userId) {
@@ -3479,7 +3911,39 @@ export class PostsService {
         if (blockCount > 0) throw new ForbiddenException('You cannot reply to this post.');
       }
 
-      visibility = parent.visibility as PostVisibility;
+      const parentGid = parent.communityGroupId ?? null;
+      if (parentGid) {
+        if (requestedCommunityGroupId && requestedCommunityGroupId !== parentGid) {
+          throw new BadRequestException('Invalid community group for this thread.');
+        }
+        resolvedCommunityGroupId = parentGid;
+        const mem = await this.prisma.communityGroupMember.findUnique({
+          where: { groupId_userId: { groupId: parentGid, userId } },
+          select: { status: true },
+        });
+        if (!mem || mem.status !== 'active') {
+          throw new ForbiddenException('Join this group to reply in this thread.');
+        }
+        visibility = 'public';
+      } else {
+        if (requestedCommunityGroupId) {
+          throw new BadRequestException('This thread is not in a community group.');
+        }
+        if (!viewerIsVerified && parent.visibility === 'public') {
+          throw new ForbiddenException('Verify your account to reply publicly.');
+        }
+        const viewer = await this.viewerContextService.getViewer(userId);
+        const allowed = this.allowedVisibilitiesForViewer(viewer);
+        const isSelf = parent.userId === userId;
+        if (!isSelf) {
+          if (!allowed.includes(parent.visibility)) {
+            if (parent.visibility === 'verifiedOnly') throw new ForbiddenException('Verify to view verified-only posts.');
+            if (parent.visibility === 'premiumOnly') throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+            throw new ForbiddenException('Not allowed to reply to this post.');
+          }
+        }
+        visibility = parent.visibility as PostVisibility;
+      }
 
       // Use parent's rootId if it exists (parent is also a reply), otherwise parent.id is the root
       threadRootId = (parent as { rootId?: string | null }).rootId ?? parent.id;
@@ -3504,6 +3968,16 @@ export class PostsService {
         for (const m of p.mentions) participantIds.add(m.userId);
       }
       threadParticipantIds = Array.from(participantIds);
+    } else if (requestedCommunityGroupId) {
+      resolvedCommunityGroupId = requestedCommunityGroupId;
+      const mem = await this.prisma.communityGroupMember.findUnique({
+        where: { groupId_userId: { groupId: resolvedCommunityGroupId, userId } },
+        select: { status: true },
+      });
+      if (!mem || mem.status !== 'active') {
+        throw new ForbiddenException('Join this group to post here.');
+      }
+      visibility = 'public';
     }
 
     // Rate limits (tier-specific). Exclude onlyMe so private notes/drafts don't count.
@@ -3542,6 +4016,9 @@ export class PostsService {
     if (media.length > 4) throw new BadRequestException('You can attach up to 4 images, GIFs, or videos.');
 
     const poll = params.poll;
+    if (poll && resolvedCommunityGroupId) {
+      throw new BadRequestException('Polls are not supported in community groups.');
+    }
     if (poll && parentId) {
       throw new ForbiddenException('Polls are not allowed on replies.');
     }
@@ -3726,6 +4203,7 @@ export class PostsService {
             visibility,
             userId,
             kind,
+            ...(resolvedCommunityGroupId ? { communityGroupId: resolvedCommunityGroupId } : {}),
             ...(kind === 'checkin'
               ? { checkinDayKey: checkinDayKeyRaw ?? undefined, checkinPrompt: checkinPromptRaw ?? undefined }
               : {}),
@@ -4588,6 +5066,7 @@ export class PostsService {
       post: {
         userId: user.id,
         deletedAt: null,
+        communityGroupId: null,
         visibility: { in: visibilityFilter },
       },
     };

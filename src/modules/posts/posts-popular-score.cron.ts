@@ -187,7 +187,24 @@ export class PostsPopularScoreCron {
               ORDER BY (p."boostCount" + p."bookmarkCount") DESC, p."createdAt" DESC, p."id" DESC
               LIMIT 1200
             )
+            UNION
+            (
+              -- Community group roots: dedicated quota so they are scored even when they miss the
+              -- global top-N recency window (group trending reads Post.trendingScore like elsewhere).
+              SELECT p."id"
+              FROM "Post" p
+              WHERE
+                p."deletedAt" IS NULL
+                AND p."visibility" <> 'onlyMe'
+                AND p."parentId" IS NULL
+                AND p."communityGroupId" IS NOT NULL
+                AND p."createdAt" >= ${minCreatedAt}
+                AND p."kind"::text <> 'repost'
+              ORDER BY p."createdAt" DESC, p."id" DESC
+              LIMIT 4000
+            )
           ) u
+          JOIN "Post" _nog ON _nog."id" = u."id"
           GROUP BY u."id"
         ),
         latest_hashtag_snapshot AS (
@@ -382,6 +399,15 @@ export class PostsPopularScoreCron {
                     ELSE 0
                   END)
                 )
+              )
+              +
+              (
+                -- Group wall trending persists scores only when final score > 0; a tiny floor keeps
+                -- zero-engagement group roots rankable without affecting global feeds (they filter communityGroupId IS NULL).
+                CASE
+                  WHEN p."communityGroupId" IS NOT NULL AND p."parentId" IS NULL THEN 1e-10
+                  ELSE 0
+                END
               )
               AS DOUBLE PRECISION
             ) as "score"

@@ -266,6 +266,7 @@ export class TopicsService {
       where: {
         AND: [
           { deletedAt: null },
+          { communityGroupId: null },
           { parentId: null },
           visibilityWhere,
           { topics: { hasSome: topicValues } },
@@ -358,6 +359,7 @@ export class TopicsService {
       where: {
         AND: [
           { deletedAt: null },
+          { communityGroupId: null },
           { parentId: null },
           visibilityWhere,
           { topics: { has: q } },

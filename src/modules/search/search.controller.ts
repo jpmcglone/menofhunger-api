@@ -90,15 +90,18 @@ export class SearchController {
     }
 
     if (type === 'all') {
-      const userLimit = Math.min(10, limit);
-      const articleLimit = Math.min(10, Math.max(limit - userLimit, 10));
-      const postLimit = Math.min(20, Math.max(limit - userLimit - articleLimit, 10));
+      const userLimit = Math.min(10, Math.ceil(limit * 0.35));
+      const groupLimit = Math.min(8, Math.ceil(limit * 0.27));
+      const remainder = Math.max(0, limit - userLimit - groupLimit);
+      const articleLimit = Math.min(10, Math.max(Math.floor(remainder / 2), 1));
+      const postLimit = Math.min(20, Math.max(remainder - articleLimit, 1));
       const res = await this.search.searchMixed({
         viewerUserId,
         q,
         userLimit,
         postLimit,
         articleLimit,
+        groupLimit,
         userCursor,
         postCursor,
         articleCursor,
@@ -147,6 +150,7 @@ export class SearchController {
           viewerCanAccess: a.viewerCanAccess,
         }),
       );
+      const groups = res.groups ?? [];
       const taxonomyMatches = q.length >= 2
         ? await this.taxonomy.search({ q, limit: Math.min(8, limit) })
         : [];
@@ -154,12 +158,12 @@ export class SearchController {
         void this.search.recordUserSearch({ userId: viewerUserId, query: q }).catch(() => {});
         this.posthog.capture(viewerUserId, 'search_performed', {
           query: q.toLowerCase(),
-          result_count: users.length + posts.length + articles.length + taxonomyMatches.length,
+          result_count: users.length + posts.length + articles.length + groups.length + taxonomyMatches.length,
           type,
         });
       }
       return {
-        data: { users, posts, articles, taxonomyMatches },
+        data: { users, posts, articles, groups, taxonomyMatches },
         pagination: {
           nextUserCursor: res.nextUserCursor,
           nextPostCursor: res.nextPostCursor,
@@ -195,6 +199,21 @@ export class SearchController {
         ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
         : new Map<string, { collectionIds: string[] }>();
 
+      const groupIds = [
+        ...new Set(
+          (res.bookmarks ?? [])
+            .map((b) => String((b.post as { communityGroupId?: string | null }).communityGroupId ?? '').trim())
+            .filter(Boolean),
+        ),
+      ];
+      const groupPreviewById = new Map<string, Awaited<ReturnType<PostsService['communityGroupPreviewForGroup']>>>();
+      await Promise.all(
+        groupIds.map(async (gid) => {
+          const prev = await this.posts.communityGroupPreviewForGroup(gid, viewerUserId);
+          if (prev) groupPreviewById.set(gid, prev);
+        }),
+      );
+
       const viewer = await this.posts.viewerContext(viewerUserId);
       const viewerHasAdmin = Boolean(viewer?.siteAdmin);
       const internalByPostId = viewerHasAdmin && postIds.length > 0
@@ -207,6 +226,8 @@ export class SearchController {
       const bookmarks = (res.bookmarks ?? []).map((b) => {
         const base = internalByPostId?.get(b.post.id);
         const score = scoreByPostId?.get(b.post.id);
+        const gid = String((b.post as { communityGroupId?: string | null }).communityGroupId ?? '').trim();
+        const gp = gid ? groupPreviewById.get(gid) : undefined;
         return {
           bookmarkId: b.bookmarkId,
           createdAt: b.createdAt,
@@ -220,6 +241,7 @@ export class SearchController {
               base || (typeof score === 'number' ? { score } : undefined)
                 ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
                 : undefined,
+            ...(gp ? { groupPreview: gp } : {}),
           }),
         };
       });
@@ -259,9 +281,26 @@ export class SearchController {
           ? await this.posts.computeScoresForPostIds(postIds)
           : undefined;
 
+        const searchGroupIds = [
+          ...new Set(
+            (res.posts ?? [])
+              .map((p) => String((p as { communityGroupId?: string | null }).communityGroupId ?? '').trim())
+              .filter(Boolean),
+          ),
+        ];
+        const groupPreviewById = new Map<string, Awaited<ReturnType<PostsService['communityGroupPreviewForGroup']>>>();
+        await Promise.all(
+          searchGroupIds.map(async (gid) => {
+            const prev = await this.posts.communityGroupPreviewForGroup(gid, viewerUserId);
+            if (prev) groupPreviewById.set(gid, prev);
+          }),
+        );
+
         const posts = (res.posts ?? []).map((p) => {
           const base = internalByPostId?.get(p.id);
           const score = scoreByPostId?.get(p.id);
+          const gid = String((p as { communityGroupId?: string | null }).communityGroupId ?? '').trim();
+          const gp = gid ? groupPreviewById.get(gid) : undefined;
           return toPostDto(p as PostWithAuthorAndMedia, this.appConfig.r2()?.publicBaseUrl ?? null, {
             viewerHasBoosted: boosted.has(p.id),
             viewerHasBookmarked: bookmarksByPostId.has(p.id),
@@ -271,6 +310,7 @@ export class SearchController {
               base || (typeof score === 'number' ? { score } : undefined)
                 ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
                 : undefined,
+            ...(gp ? { groupPreview: gp } : {}),
           });
         });
         return { data: posts, pagination: { nextCursor: res.nextCursor ?? null } };

@@ -1432,6 +1432,21 @@ export class MessagesService {
       data: { deletedForAll: true, deletedForAllAt: now },
     });
 
+    if (conversation.lastMessageId === messageId) {
+      const prev = await this.prisma.message.findFirst({
+        where: { conversationId, deletedForAll: false },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, body: true, createdAt: true, senderId: true },
+      });
+      await this.prisma.messageConversation.update({
+        where: { id: conversationId },
+        data: {
+          lastMessageId: prev?.id ?? null,
+          lastMessageAt: prev?.createdAt ?? null,
+        },
+      });
+    }
+
     for (const p of conversation.participants) {
       this.presenceRealtime.emitMessageDeletedForAll(p.userId, { conversationId, messageId });
     }

@@ -9,6 +9,7 @@ import type {
   VerifiedStatus,
 } from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
+import type { CommunityGroupPreviewDto } from './community-group.dto';
 
 /** PostMedia from Prisma already has thumbnailR2Key, durationSeconds, width, height, deletedAt. */
 export type PostMediaWithOptional = PostMedia;
@@ -99,6 +100,12 @@ export type PostDto = {
   repostCount: number;
   viewerCount: number;
   parentId: string | null;
+  /** When set, post lives in a community group (not shown on global feeds). */
+  communityGroupId: string | null;
+  /** Set when this root post is pinned in its community group. */
+  pinnedInGroupAt?: string | null;
+  /** When viewer cannot read a group post, shell data to render a join CTA. */
+  groupPreview?: CommunityGroupPreviewDto | null;
   /** When present, this post is a reply and the parent is included for thread display. */
   parent?: PostDto;
   mentions: PostMentionDto[];
@@ -261,6 +268,8 @@ export function toPostDto(
     };
     /** When false, body/media/mentions/poll are stripped (viewer tier too low). */
     viewerCanAccess?: boolean;
+    /** Join CTA for gated group posts (permalink). */
+    groupPreview?: CommunityGroupPreviewDto | null;
   },
 ): PostDto {
   const internalBoostScore =
@@ -362,6 +371,7 @@ export function toPostDto(
       repostCount: (post as any).repostCount ?? 0,
       viewerCount: (post as any).viewerCount ?? 0,
       parentId: post.parentId ?? null,
+      communityGroupId: (post as any).communityGroupId ?? null,
       mentions: [],
       media: [],
       poll: null,
@@ -405,6 +415,8 @@ export function toPostDto(
       repostCount: (post as any).repostCount ?? 0,
       viewerCount: (post as any).viewerCount ?? 0,
       parentId: post.parentId ?? null,
+      communityGroupId: (post as any).communityGroupId ?? null,
+      ...(opts?.groupPreview ? { groupPreview: opts.groupPreview } : {}),
       mentions: [],
       media: [],
       poll: null,
@@ -457,6 +469,12 @@ export function toPostDto(
     repostCount: (post as any).repostCount ?? 0,
     viewerCount: (post as any).viewerCount ?? 0,
     parentId: post.parentId ?? null,
+    communityGroupId: (post as any).communityGroupId ?? null,
+    pinnedInGroupAt: (() => {
+      const p = (post as { pinnedInGroupAt?: Date | null }).pinnedInGroupAt;
+      if (!p) return null;
+      return p instanceof Date ? p.toISOString() : String(p);
+    })(),
     mentions: isPostDeleted ? [] : mentions,
     media: isPostDeleted ? [] : media,
     ...(typeof (post as any).poll !== 'undefined' ? { poll: isPostDeleted ? null : pollDto } : {}),
@@ -478,6 +496,7 @@ export function toPostDto(
           },
         }
       : {}),
+    ...(opts?.groupPreview !== undefined ? { groupPreview: opts.groupPreview } : {}),
     viewerCanAccess: true,
     author: {
       id: post.user.id,

@@ -340,7 +340,7 @@ export class UploadsService {
   async initPostMediaUpload(
     userId: string,
     contentType: string,
-    opts?: { contentHash?: string; purpose?: 'post' | 'thumbnail' },
+    opts?: { contentHash?: string; purpose?: 'post' | 'thumbnail' | 'group' },
   ) {
     const { s3, bucket } = this.requireR2();
     const ct = contentType.trim().toLowerCase();
@@ -349,6 +349,10 @@ export class UploadsService {
     if (purpose === 'thumbnail') {
       if (!ALLOWED_THUMBNAIL_CONTENT_TYPES.has(ct)) {
         throw new BadRequestException('Thumbnail must be JPG, PNG, or WebP.');
+      }
+    } else if (purpose === 'group') {
+      if (!ALLOWED_CONTENT_TYPES.has(ct)) {
+        throw new BadRequestException('Group images must be JPG, PNG, or WebP.');
       }
     } else {
       if (!ALLOWED_POST_MEDIA_CONTENT_TYPES.has(ct)) {
@@ -396,7 +400,13 @@ export class UploadsService {
 
     const prefix = this.objectKeyPrefix();
     const subdir =
-      purpose === 'thumbnail' ? 'thumbnails' : isVideoContentType(ct) ? 'videos' : 'images';
+      purpose === 'thumbnail'
+        ? 'thumbnails'
+        : purpose === 'group'
+          ? 'group-images'
+          : isVideoContentType(ct)
+            ? 'videos'
+            : 'images';
     const key = `${prefix}uploads/${userId}/${subdir}/${randomUUID()}.${ext}`;
 
     const uploadUrl = await getSignedUrl(

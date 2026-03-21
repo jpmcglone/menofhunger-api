@@ -1,4 +1,5 @@
 import type { Post } from '@prisma/client';
+import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import type { PostWithAuthorAndMedia } from './post.dto';
 
 type PostWithParentId = { id: string; parentId?: string | null } & Record<string, unknown>;
@@ -28,6 +29,8 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
   repostedPostMap?: Map<string, T>;
   /** When set, used to determine per-post viewerCanAccess. Posts not in the map default to true. */
   viewerCanAccessByPostId?: Map<string, boolean>;
+  /** Join previews for posts scoped to a community group (inline chip + hover card). */
+  groupPreviewByGroupId?: Map<string, CommunityGroupPreviewDto>;
 }) {
   const {
     parentMap,
@@ -45,6 +48,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     repostedByPostId,
     repostedPostMap,
     viewerCanAccessByPostId,
+    groupPreviewByGroupId,
   } = opts;
 
   function attachParentChain(post: T): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } {
@@ -71,6 +75,9 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
 
     const postViewerCanAccess = viewerCanAccessByPostId ? (viewerCanAccessByPostId.get(post.id) ?? true) : undefined;
 
+    const gid = String((post as { communityGroupId?: string | null }).communityGroupId ?? '').trim();
+    const groupPreview = gid ? groupPreviewByGroupId?.get(gid) : undefined;
+
     const dto = toPostDto(post as unknown as PostWithAuthorAndMedia, baseUrl, {
       viewerHasBoosted: boosted.has(post.id),
       viewerHasBookmarked: bookmarksByPostId.has(post.id),
@@ -86,6 +93,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
           ? { ...internalOverride, ...(typeof score === 'number' ? { score } : {}) }
           : undefined,
       viewerCanAccess: postViewerCanAccess,
+      ...(groupPreview ? { groupPreview } : {}),
     }) as ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> };
     const parent = post.parentId ? parentMap.get(post.parentId) : null;
     if (parent) {

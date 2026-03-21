@@ -16,6 +16,7 @@ import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
 import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
 import { collapseFeedByRoot } from '../../common/feed-collapse/collapse-by-root';
+import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 
 const readThrottle = {
   default: {
@@ -39,6 +40,10 @@ const listSchema = z.object({
   collapseMode: z.enum(['root', 'parent']).optional(),
   prefer: z.enum(['reply', 'root']).optional(),
   collapseMaxPerRoot: z.coerce.number().int().min(1).max(5).optional(),
+  /** All groups the viewer is in (members-only). Mutually exclusive with `communityGroupId` in practice. */
+  groupsHub: z.coerce.boolean().optional(),
+  /** Single community group feed (members-only). */
+  communityGroupId: z.string().trim().min(1).max(40).optional(),
 });
 
 const userListSchema = listSchema.extend({
@@ -143,6 +148,8 @@ const createSchema = z
     body: z.string().trim().max(1000).optional(),
     visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly', 'onlyMe']).optional(),
     parent_id: z.string().cuid().optional(),
+    /** Top-level posts only: post into this community group (must be an active member). */
+    community_group_id: z.string().cuid().optional(),
     mentions: z.array(z.string().min(1).max(120)).max(20).optional(),
     media: z.array(createMediaItemSchema).max(4).optional(),
     poll: createPollSchema.optional(),
@@ -275,30 +282,18 @@ export class PostsController {
   ) {}
 
   private async collectParentMap(viewerUserId: string | null, seedParentIds: Array<string | null | undefined>) {
-    const parentMap = new Map<string, Awaited<ReturnType<typeof this.posts.getById>>>();
-    let toFetch = new Set<string>((seedParentIds ?? []).filter((id): id is string => Boolean(id)));
-    while (toFetch.size > 0) {
-      const batch = [...toFetch].filter((id) => !parentMap.has(id));
-      if (batch.length === 0) break;
-      const rows = await this.posts.getByIds({ viewerUserId, ids: batch });
-      const byId = new Map(rows.map((p) => [p.id, p] as const));
-      const next = new Set<string>();
-      for (const id of batch) {
-        const post = byId.get(id);
-        if (!post) continue;
-        parentMap.set(id, post as Awaited<ReturnType<typeof this.posts.getById>>);
-        if (post.parentId) next.add(post.parentId);
-      }
-      toFetch = next;
-    }
-    return parentMap;
+    return this.posts.collectParentMapForFeed(viewerUserId, seedParentIds);
   }
 
   private async collectRepostedMap(viewerUserId: string | null, repostedPostIds: string[]) {
-    const ids = [...new Set((repostedPostIds ?? []).map((id) => (id ?? '').trim()).filter(Boolean))];
-    if (!ids.length) return new Map<string, Awaited<ReturnType<typeof this.posts.getById>>>();
-    const rows = await this.posts.getByIds({ viewerUserId, ids });
-    return new Map(rows.map((p) => [p.id, p as Awaited<ReturnType<typeof this.posts.getById>>] as const));
+    return this.posts.collectRepostedMapForFeed(viewerUserId, repostedPostIds);
+  }
+
+  private async communityGroupPreviewMapForIds(
+    viewerUserId: string | null,
+    groupIds: string[],
+  ): Promise<Map<string, CommunityGroupPreviewDto>> {
+    return this.posts.communityGroupPreviewMapForFeed(viewerUserId, groupIds);
   }
 
   @UseGuards(OptionalAuthGuard)
@@ -329,6 +324,42 @@ export class PostsController {
 
     const sort = parsed.sort ?? 'new';
     const sortKind = sort === 'trending' ? 'popular' : sort;
+
+    const groupScoped = Boolean(parsed.groupsHub || parsed.communityGroupId);
+    if (groupScoped) {
+      if (!viewerUserId) throw new ForbiddenException('Sign in to view this feed.');
+      const groupSort = sortKind === 'popular' || sort === 'trending' ? 'trending' : 'new';
+      let groupIds: string[];
+      let applyPinnedHead: boolean;
+      if (parsed.communityGroupId) {
+        const gid = parsed.communityGroupId.trim();
+        await this.posts.assertViewerActiveMemberOfGroup(viewerUserId, gid);
+        groupIds = [gid];
+        applyPinnedHead = groupSort === 'new';
+      } else {
+        groupIds = await this.posts.listActiveCommunityGroupIdsForUser(viewerUserId);
+        applyPinnedHead = false;
+      }
+      const scopedOut =
+        groupIds.length === 0
+          ? { data: [], pagination: { nextCursor: null } }
+          : await this.posts.listComposedGroupScopedFeed({
+              viewerUserId,
+              groupIds,
+              limit,
+              cursor,
+              sort: groupSort,
+              applyPinnedHead,
+              collapseByRoot: parsed.collapseByRoot ?? true,
+              collapseMode: parsed.collapseMode ?? 'root',
+              prefer: parsed.prefer ?? 'reply',
+              collapseMaxPerRoot: parsed.collapseMaxPerRoot ?? 2,
+            });
+      const totalMsGroup = Date.now() - reqStartMs;
+      httpRes.setHeader('x-feed-total-ms', String(totalMsGroup));
+      setReadCache(httpRes, { viewerUserId });
+      return scopedOut;
+    }
 
     const anonCache = viewerUserId == null;
     const authFirstPageCache = Boolean(viewerUserId) && !cursor;
@@ -412,81 +443,13 @@ export class PostsController {
           getParentId: (post) => post.parentId ?? null,
         });
         stageMs.dedupe = Date.now() - dedupeStartMs;
-        // Fetch repost data: which posts the viewer has reposted, and reposted post bodies for flat reposts.
-        const repostedPostIds = filteredPosts
-          .filter((p) => (p as any).kind === 'repost' && (p as any).repostedPostId)
-          .map((p) => (p as any).repostedPostId as string);
-        const contextStartMs = Date.now();
-        const [viewer, parentMap, repostedPostMap] = await Promise.all([
-          this.posts.viewerContext(viewerUserId),
-          this.collectParentMap(viewerUserId, filteredPosts.map((p) => p.parentId)),
-          this.collectRepostedMap(viewerUserId, repostedPostIds),
-        ]);
-        stageMs.context = Date.now() - contextStartMs;
-        const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-        const allPostIds = [...filteredPosts.map((p) => p.id), ...parentMap.keys()];
-
-        const enrichStartMs = Date.now();
-        const [
-          boosted,
-          bookmarksByPostId,
-          votedPollOptionIdByPostId,
-          blockSets,
-          repostedByPostId,
-          internalByPostId,
-          scoreByPostId,
-        ] = await Promise.all([
-          viewerUserId
-            ? this.posts.viewerBoostedPostIds({ viewerUserId, postIds: allPostIds })
-            : Promise.resolve(new Set<string>()),
-          viewerUserId
-            ? this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
-            : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
-          viewerUserId
-            ? this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
-            : Promise.resolve(new Map<string, string>()),
-          viewerUserId
-            ? this.posts.viewerBlockSets(viewerUserId)
-            : Promise.resolve({ blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() }),
-          viewerUserId
-            ? this.posts.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
-            : Promise.resolve(new Set<string>()),
-          viewerHasAdmin
-            ? this.posts.ensureBoostScoresFresh(filteredPosts.map((p) => p.id))
-            : Promise.resolve(null),
-          viewerHasAdmin
-            ? (result.scoreByPostId
-                ? Promise.resolve(result.scoreByPostId)
-                : this.posts.computeScoresForPostIds(allPostIds))
-            : Promise.resolve(undefined),
-        ]);
-        stageMs.enrich = Date.now() - enrichStartMs;
-        const { blockedByViewer, viewerBlockedBy } = blockSets;
-
-        const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
         const dtoStartMs = Date.now();
-        const attachParentChain = buildAttachParentChain({
-          parentMap,
-          baseUrl,
-          boosted,
-          bookmarksByPostId,
-          votedPollOptionIdByPostId,
+        const popResult = result as { scoreByPostId?: Map<string, number> };
+        const dtos = await this.posts.composeFeedPostDtos({
           viewerUserId,
-          viewerHasAdmin,
-          internalByPostId,
-          scoreByPostId,
-          toPostDto,
-          blockedByViewer,
-          viewerBlockedBy,
-          repostedByPostId,
-          repostedPostMap: repostedPostMap as any,
-        });
-
-        const dtos = filteredPosts.map((p) => {
-          const dto = attachParentChain(p);
-          const collapsed = collapsedCountByItemId.get(p.id);
-          if (collapsed && collapsed > 0) (dto as any).threadCollapsedCount = collapsed;
-          return dto;
+          filteredPosts,
+          collapsedCountByItemId,
+          scoreByPostId: popResult.scoreByPostId,
         });
         const payload = {
           data: dtos,
@@ -628,6 +591,19 @@ export class PostsController {
         ]);
         const { blockedByViewer: blockedByViewerUser, viewerBlockedBy: viewerBlockedByUser } = blockSetsUser;
 
+        const communityGroupIdsForUserPage = new Set<string>();
+        const accCommunityGroupIdUser = (row: { communityGroupId?: string | null } | null | undefined) => {
+          const g = String(row?.communityGroupId ?? '').trim();
+          if (g) communityGroupIdsForUserPage.add(g);
+        };
+        for (const p of filteredPostsUser) accCommunityGroupIdUser(p as { communityGroupId?: string | null });
+        for (const p of parentMap.values()) accCommunityGroupIdUser(p as { communityGroupId?: string | null });
+        for (const p of repostedPostMapUser.values()) accCommunityGroupIdUser(p as { communityGroupId?: string | null });
+        const groupPreviewByGroupIdUser = await this.communityGroupPreviewMapForIds(
+          viewerUserId,
+          [...communityGroupIdsForUserPage],
+        );
+
         const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
         const attachParentChain = buildAttachParentChain({
           parentMap,
@@ -645,6 +621,7 @@ export class PostsController {
           repostedByPostId: repostedByPostIdUser,
           repostedPostMap: repostedPostMapUser as any,
           viewerCanAccessByPostId,
+          groupPreviewByGroupId: groupPreviewByGroupIdUser,
         });
 
         return {
@@ -849,6 +826,14 @@ export class PostsController {
       }
     }
 
+    const gatedGroupId =
+      !viewerCanAccess && (post as { communityGroupId?: string | null }).communityGroupId
+        ? String((post as { communityGroupId?: string | null }).communityGroupId)
+        : null;
+    const groupPreview = gatedGroupId
+      ? await this.posts.communityGroupPreviewForGroup(gatedGroupId, viewerUserId)
+      : null;
+
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
 
@@ -886,7 +871,15 @@ export class PostsController {
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(postIds) : undefined;
 
     const r2 = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const toDto = (p: (typeof chain)[number], opts: { parent?: ReturnType<typeof toPostDto>; repostedPost?: ReturnType<typeof toPostDto>; isGatedRoot?: boolean }) => {
+    const toDto = (
+      p: (typeof chain)[number],
+      opts: {
+        parent?: ReturnType<typeof toPostDto>;
+        repostedPost?: ReturnType<typeof toPostDto>;
+        isGatedRoot?: boolean;
+        groupPreview?: Awaited<ReturnType<PostsService['communityGroupPreviewForGroup']>>;
+      },
+    ) => {
       const base = internalByPostId?.get(p.id);
       const score = scoreByPostIdGet?.get(p.id);
       const pWithPoll = p as { user?: { id?: string }; poll?: { creatorSkippedAt?: Date | null } };
@@ -909,6 +902,7 @@ export class PostsController {
         repostedPost: opts.repostedPost,
         // Only the root (requested) post is gated; ancestors are accessible.
         viewerCanAccess: opts.isGatedRoot ? false : undefined,
+        groupPreview: opts.isGatedRoot ? opts.groupPreview ?? null : undefined,
       });
       return opts.parent ? { ...dto, parent: opts.parent } : dto;
     };
@@ -920,12 +914,12 @@ export class PostsController {
     let dto = toDto(chain[chain.length - 1], { repostedPost: repostedPostDto });
     for (let i = chain.length - 2; i >= 0; i--) {
       // chain[0] is the leaf post (the one actually requested); mark it gated if access was denied.
-      dto = toDto(chain[i], { parent: dto, isGatedRoot: !viewerCanAccess && i === 0 });
+      dto = toDto(chain[i], { parent: dto, isGatedRoot: !viewerCanAccess && i === 0, groupPreview });
     }
     // Single-post case (no parent): the chain has only one entry, already built above.
     if (!viewerCanAccess && chain.length === 1) {
       // Rebuild with gated flag
-      dto = toDto(chain[0], { repostedPost: repostedPostDto, isGatedRoot: true });
+      dto = toDto(chain[0], { repostedPost: repostedPostDto, isGatedRoot: true, groupPreview });
     }
 
     setReadCache(httpRes, { viewerUserId });
@@ -969,6 +963,7 @@ export class PostsController {
       body: (parsed.body ?? '').trim(),
       visibility: parsed.visibility ?? 'public',
       parentId: parsed.parent_id ?? null,
+      communityGroupId: parsed.community_group_id ?? null,
       mentions: parsed.mentions ?? null,
       media,
       poll,

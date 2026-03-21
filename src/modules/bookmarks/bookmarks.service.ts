@@ -52,6 +52,55 @@ export class BookmarksService {
     return this.viewerContext.allowedPostVisibilities(viewer as any);
   }
 
+  private visibleBookmarkPostWhere(userId: string) {
+    return {
+      OR: [
+        { communityGroupId: null },
+        {
+          communityGroup: {
+            members: {
+              some: {
+                userId,
+                status: 'active',
+              },
+            },
+          },
+        },
+      ],
+    } satisfies import('@prisma/client').Prisma.PostWhereInput;
+  }
+
+  private async visibleBookmarkCountsByCollection(userId: string): Promise<Map<string, number>> {
+    const rows = await this.prisma.bookmarkCollectionItem.findMany({
+      where: {
+        collection: { userId },
+        bookmark: {
+          userId,
+          post: this.visibleBookmarkPostWhere(userId),
+        },
+      },
+      select: { collectionId: true },
+    });
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      counts.set(row.collectionId, (counts.get(row.collectionId) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  private async visibleBookmarkCountForCollection(userId: string, collectionId: string): Promise<number> {
+    return await this.prisma.bookmarkCollectionItem.count({
+      where: {
+        collectionId,
+        collection: { userId },
+        bookmark: {
+          userId,
+          post: this.visibleBookmarkPostWhere(userId),
+        },
+      },
+    });
+  }
+
   private async assertViewerCanBookmarkPost(params: { viewerUserId: string; postId: string }): Promise<{
     postUserId: string;
   }> {
@@ -61,9 +110,19 @@ export class BookmarksService {
 
     const post = await this.prisma.post.findFirst({
       where: { id: postId, deletedAt: null },
-      select: { id: true, userId: true, visibility: true },
+      select: { id: true, userId: true, visibility: true, communityGroupId: true },
     });
     if (!post) throw new NotFoundException('Post not found.');
+
+    if (post.communityGroupId) {
+      const membership = await this.prisma.communityGroupMember.findUnique({
+        where: { groupId_userId: { groupId: post.communityGroupId, userId: viewerUserId } },
+        select: { status: true },
+      });
+      if (!membership || membership.status !== 'active') {
+        throw new ForbiddenException('Join this group to bookmark its posts.');
+      }
+    }
 
     if (post.visibility === 'onlyMe') {
       if (post.userId !== viewerUserId) throw new ForbiddenException('Post not found.');
@@ -75,7 +134,8 @@ export class BookmarksService {
 
   async listCollections(params: { userId: string }) {
     const { userId } = params;
-    const [collections, totalCount, unorganizedCount] = await Promise.all([
+    const visiblePostWhere = this.visibleBookmarkPostWhere(userId);
+    const [collections, visibleCountsByCollection, totalCount, unorganizedCount] = await Promise.all([
       this.prisma.bookmarkCollection.findMany({
         where: { userId },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -85,18 +145,18 @@ export class BookmarksService {
           slug: true,
           createdAt: true,
           updatedAt: true,
-          _count: { select: { bookmarks: true } },
         },
       }),
-      this.prisma.bookmark.count({ where: { userId } }),
-      this.prisma.bookmark.count({ where: { userId, collections: { none: {} } } }),
+      this.visibleBookmarkCountsByCollection(userId),
+      this.prisma.bookmark.count({ where: { userId, post: visiblePostWhere } }),
+      this.prisma.bookmark.count({ where: { userId, post: visiblePostWhere, collections: { none: {} } } }),
     ]);
     return {
       collections: collections.map((c) => ({
         id: c.id,
         name: c.name,
         slug: c.slug,
-        bookmarkCount: c._count.bookmarks,
+        bookmarkCount: visibleCountsByCollection.get(c.id) ?? 0,
         createdAt: c.createdAt.toISOString(),
         updatedAt: c.updatedAt.toISOString(),
       })),
@@ -162,14 +222,15 @@ export class BookmarksService {
     const updated = await this.prisma.bookmarkCollection.update({
       where: { id },
       data: { name, slug },
-      select: { id: true, name: true, slug: true, createdAt: true, updatedAt: true, _count: { select: { bookmarks: true } } },
+      select: { id: true, name: true, slug: true, createdAt: true, updatedAt: true },
     });
+    const bookmarkCount = await this.visibleBookmarkCountForCollection(userId, updated.id);
     return {
       collection: {
         id: updated.id,
         name: updated.name,
         slug: updated.slug,
-        bookmarkCount: updated._count.bookmarks,
+        bookmarkCount,
         createdAt: updated.createdAt.toISOString(),
         updatedAt: updated.updatedAt.toISOString(),
       },

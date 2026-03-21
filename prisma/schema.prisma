@@ -167,6 +167,22 @@ enum TaxonomyEdgeRelation {
   synonym
 }
 
+enum CommunityGroupJoinPolicy {
+  open
+  approval
+}
+
+enum CommunityGroupMemberRole {
+  owner
+  moderator
+  member
+}
+
+enum CommunityGroupMemberStatus {
+  active
+  pending
+}
+
 // Start minimal. Add real domain models as you solidify your product.
 model Example {
   id        String   @id @default(cuid())
@@ -331,6 +347,9 @@ model User {
 
   coinTransfersSent     CoinTransfer[] @relation("CoinTransfer_sender")
   coinTransfersReceived CoinTransfer[] @relation("CoinTransfer_recipient")
+
+  communityGroupsCreated CommunityGroup[] @relation("CommunityGroup_createdBy")
+  communityGroupMemberships CommunityGroupMember[]
 
   @@index([phone])
   @@index([lastSeenAt])
@@ -509,6 +528,60 @@ model TopicFollow {
   @@index([topic, createdAt])
 }
 
+/**
+ * Public community group (distinct from MessageConversationType.group DMs).
+ * Shell metadata is visible to signed-in users; posts with communityGroupId are members-only.
+ */
+model CommunityGroup {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  slug        String  @unique @db.VarChar(80)
+  name        String  @db.VarChar(120)
+  description String  @db.Text
+  rules       String? @db.Text
+  coverImageUrl String? @db.VarChar(2000)
+  /** Square group avatar (URL), distinct from wide cover/banner. */
+  avatarImageUrl String? @db.VarChar(2000)
+
+  joinPolicy CommunityGroupJoinPolicy @default(open)
+
+  createdByUserId String
+  createdBy       User   @relation("CommunityGroup_createdBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  /** Curated discovery ordering; only meaningful when isFeatured is true. */
+  isFeatured     Boolean @default(false)
+  featuredOrder  Int     @default(0)
+  /** Denormalized count of active members (updated on join/leave/approve). */
+  memberCount    Int     @default(0)
+
+  members CommunityGroupMember[]
+  posts   Post[]
+
+  @@index([deletedAt, isFeatured, featuredOrder])
+  @@index([createdAt])
+}
+
+model CommunityGroupMember {
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  groupId String
+  group   CommunityGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  role   CommunityGroupMemberRole
+  status CommunityGroupMemberStatus
+
+  @@id([groupId, userId])
+  @@index([userId, status])
+  @@index([groupId, status])
+}
+
 model Post {
   id         String         @id @default(cuid())
   createdAt  DateTime       @default(now())
@@ -545,6 +618,12 @@ model Post {
 
   userId String
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /** When set, post belongs to a community group and must not appear on global feeds. */
+  communityGroupId String?
+  communityGroup   CommunityGroup? @relation(fields: [communityGroupId], references: [id], onDelete: Cascade)
+  /** Owner-pinned root post in this group (at most one per group). */
+  pinnedInGroupAt DateTime?
 
   parentId String?
   parent   Post?   @relation("Post_replies", fields: [parentId], references: [id], onDelete: Cascade)
@@ -611,6 +690,9 @@ model Post {
   @@index([userId, parentId, deletedAt, visibility, createdAt(sort: Desc), id(sort: Desc)])
   // Trending feed path with visibility gating.
   @@index([deletedAt, visibility, trendingScore(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
+  @@index([communityGroupId, deletedAt, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([communityGroupId, parentId, deletedAt, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([communityGroupId, pinnedInGroupAt])
 }
 
 model PostPoll {
