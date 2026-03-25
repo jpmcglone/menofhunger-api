@@ -46,12 +46,20 @@ export type SpaceChatSenderDto = {
   stewardBadgeEnabled: boolean;
 };
 
+export type SpaceChatMediaItemDto = {
+  url: string;
+  width: number | null;
+  height: number | null;
+  alt: string | null;
+};
+
 export type SpaceChatMessageDto =
   | {
       id: string;
       spaceId: string;
       kind: 'user';
       body: string;
+      media?: SpaceChatMediaItemDto[];
       createdAt: string; // ISO
       sender: SpaceChatSenderDto;
     }

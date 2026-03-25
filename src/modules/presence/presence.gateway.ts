@@ -675,7 +675,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   @SubscribeMessage('spaces:chatSend')
-  handleSpacesChatSend(client: Socket, payload: { spaceId?: string; body?: string }): void {
+  handleSpacesChatSend(client: Socket, payload: { spaceId?: string; body?: string; media?: unknown }): void {
     const spaceId = String(payload?.spaceId ?? '').trim();
     const body = String(payload?.body ?? '');
     if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
@@ -694,7 +694,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
     if (!sender?.id) return;
 
-    const msg = this.spacesChat.appendMessage({ spaceId, sender, body });
+    const msg = this.spacesChat.appendMessage({ spaceId, sender, body, media: payload?.media });
     if (!msg) return;
 
     const room = spacesChatRoom(spaceId);

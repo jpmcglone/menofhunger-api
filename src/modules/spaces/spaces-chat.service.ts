@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
-import type { SpaceChatMessageDto, SpaceChatSenderDto, SpaceChatSnapshotDto } from '../../common/dto';
+import type { SpaceChatMediaItemDto, SpaceChatMessageDto, SpaceChatSenderDto, SpaceChatSnapshotDto } from '../../common/dto';
 
 type SpaceState = {
   seq: number;
@@ -114,12 +114,32 @@ export class SpacesChatService {
     return { spaceId, messages: [] };
   }
 
-  appendMessage(params: { spaceId: string; sender: SpaceChatSenderDto; body: string }): SpaceChatMessageDto | null {
+  private readonly maxMediaPerMessage = 4;
+
+  private sanitizeMedia(raw: unknown): SpaceChatMediaItemDto[] | undefined {
+    if (!Array.isArray(raw) || raw.length === 0) return undefined;
+    const out: SpaceChatMediaItemDto[] = [];
+    for (const item of raw.slice(0, this.maxMediaPerMessage)) {
+      if (!item || typeof item !== 'object') continue;
+      const url = String((item as any).url ?? '').trim();
+      if (!url || url.length > 2048) continue;
+      out.push({
+        url,
+        width: typeof (item as any).width === 'number' ? Math.floor((item as any).width) : null,
+        height: typeof (item as any).height === 'number' ? Math.floor((item as any).height) : null,
+        alt: typeof (item as any).alt === 'string' ? (item as any).alt.slice(0, 300).trim() || null : null,
+      });
+    }
+    return out.length > 0 ? out : undefined;
+  }
+
+  appendMessage(params: { spaceId: string; sender: SpaceChatSenderDto; body: string; media?: unknown }): SpaceChatMessageDto | null {
     const spaceId = String(params.spaceId ?? '').trim();
     if (!spaceId) return null;
     this.maybePrune();
     const body = normalizeBody(params.body);
-    if (!body) return null;
+    const media = this.sanitizeMedia(params.media);
+    if (!body && !media) return null;
     const clipped = body.length > this.maxBodyChars ? body.slice(0, this.maxBodyChars) : body;
 
     const now = Date.now();
@@ -134,6 +154,7 @@ export class SpacesChatService {
       spaceId,
       kind: 'user',
       body: clipped,
+      ...(media ? { media } : {}),
       createdAt,
       sender: params.sender,
     };
