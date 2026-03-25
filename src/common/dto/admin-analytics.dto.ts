@@ -40,7 +40,7 @@ export type AdminAnalyticsEngagementDto = {
 
   /** Unique active users in the last 30 days (MAU) */
   creatorMauCount: number;
-  /** Of MAU, how many created at least 1 post or check-in */
+  /** Of MAU, how many posted, published an article, or hosted an active space */
   creatorCount: number;
   /** null when no MAU yet */
   creatorPct: number | null;
@@ -160,6 +160,31 @@ export type AdminAnalyticsGroupsDto = {
   topGroups: AdminAnalyticsGroupsTopRowDto[];
 };
 
+export type AdminAnalyticsSpacesTopRowDto = {
+  id: string;
+  ownerId: string;
+  ownerUsername: string;
+  title: string;
+  mode: string;
+  isActive: boolean;
+  createdAt: string;
+};
+
+export type AdminAnalyticsSpacesDto = {
+  /** All-time total spaces. */
+  totalSpaces: number;
+  /** Spaces currently marked isActive = true. */
+  activeSpaces: number;
+  /** Spaces created within the selected range. */
+  spacesCreatedInRange: number;
+  /** All-time spaces by current mode (NONE / WATCH_PARTY / RADIO). */
+  byMode: Record<string, number>;
+  /** Time series — spaces created per bucket in the selected range. */
+  created: TimeSeriesPoint[];
+  /** Currently active spaces, most recently updated first. */
+  topSpaces: AdminAnalyticsSpacesTopRowDto[];
+};
+
 export type AdminAnalyticsDto = {
   range: AnalyticsRange;
   granularity: AnalyticsGranularity;
@@ -178,5 +203,6 @@ export type AdminAnalyticsDto = {
   coins: AdminAnalyticsCoinsDto;
   articles: AdminAnalyticsArticlesDto;
   groups: AdminAnalyticsGroupsDto;
+  spaces: AdminAnalyticsSpacesDto;
   asOf: string;
 };

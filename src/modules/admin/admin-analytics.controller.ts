@@ -8,6 +8,7 @@ import type {
   AdminAnalyticsDto,
   AdminAnalyticsEngagementDto,
   AdminAnalyticsGroupsDto,
+  AdminAnalyticsSpacesDto,
   AnalyticsGranularity,
   AnalyticsRange,
 } from '../../common/dto/admin-analytics.dto';
@@ -121,13 +122,13 @@ export class AdminAnalyticsController {
           AND "endsAt" > ${now}::timestamptz
       `,
 
-      // DAU = average unique daily active users across the last 30 *complete* days
+      // DAU = average unique daily active users across the selected range
       // (today excluded — it's partial and would drag the average down).
-      // MAU = distinct users active at any point in the last 30 days (today included).
-      this.prisma.$queryRaw<Array<{ dau: number | null; mau: bigint }>>`
+      // MAU = distinct users active at any point in the last 30 days (always fixed — definitionally monthly).
+      this.prisma.$queryRaw<Array<{ dau: number | null; mau: bigint }>>(Prisma.sql`
         WITH day_series AS (
           SELECT generate_series(
-            ${thirtyDaysAgo}::timestamptz,
+            ${effectiveStart}::timestamptz,
             ${todayMidnight}::timestamptz - INTERVAL '1 day',
             '1 day'::interval
           ) AS day
@@ -135,7 +136,7 @@ export class AdminAnalyticsController {
         daily AS (
           SELECT DATE_TRUNC('day', "day") AS day, COUNT(DISTINCT "userId")::float AS cnt
           FROM "UserDailyActivity"
-          WHERE "day" >= ${thirtyDaysAgo}::timestamptz
+          WHERE "day" >= ${effectiveStart}::timestamptz
             AND "day" <  ${todayMidnight}::timestamptz
           GROUP BY 1
         )
@@ -146,7 +147,7 @@ export class AdminAnalyticsController {
            WHERE "day" >= ${thirtyDaysAgo}::timestamptz) AS mau
         FROM day_series
         LEFT JOIN daily ON daily.day = day_series.day
-      `,
+      `),
 
       // Signups — range-filtered, granularity-bucketed
       this.prisma.$queryRaw<Array<{ bucket: Date; count: bigint }>>(Prisma.sql`
@@ -287,7 +288,8 @@ export class AdminAnalyticsController {
         LEFT JOIN activated ON activated.id = eligible.id
       `,
 
-      // Creator %: of MAU, how many published at least 1 post or check-in in the last 30 days?
+      // Creator %: of MAU, how many created content in the last 30 days?
+      // Counts users who posted/checked-in, published an article, or hosted an active space.
       // Drafts excluded.
       this.prisma.$queryRaw<Array<{ mau_count: bigint; creator_count: bigint }>>`
         WITH mau_users AS (
@@ -300,6 +302,15 @@ export class AdminAnalyticsController {
             AND "deletedAt" IS NULL
             AND "isDraft" = false
             AND "userId" IN (SELECT "userId" FROM mau_users)
+          UNION
+          SELECT DISTINCT "authorId" AS "userId" FROM "Article"
+          WHERE "publishedAt" >= ${thirtyDaysAgo}::timestamptz
+            AND "deletedAt" IS NULL
+            AND "authorId" IN (SELECT "userId" FROM mau_users)
+          UNION
+          SELECT DISTINCT "ownerId" AS "userId" FROM "Space"
+          WHERE "isActive" = true
+            AND "ownerId" IN (SELECT "userId" FROM mau_users)
         )
         SELECT
           COUNT(DISTINCT mau_users."userId")::bigint AS mau_count,
@@ -732,6 +743,77 @@ export class AdminAnalyticsController {
       `),
     ]);
 
+    // ── Spaces queries ────────────────────────────────────────────────────────
+
+    const [
+      spaceSummaryRaw,
+      spaceByModeRaw,
+      spaceCreatedSeriesRaw,
+      spaceTopRaw,
+    ] = await Promise.all([
+      // Summary counts: total, active, created in range.
+      this.prisma.$queryRaw<Array<{ total_spaces: bigint; active_spaces: bigint; created_in_range: bigint }>>(Prisma.sql`
+        SELECT
+          COUNT(*)::bigint AS total_spaces,
+          COUNT(*) FILTER (WHERE "isActive" = true)::bigint AS active_spaces,
+          COUNT(*) FILTER (WHERE "createdAt" >= ${since ?? new Date(0)}::timestamptz)::bigint AS created_in_range
+        FROM "Space"
+      `),
+
+      // All-time mode breakdown (current state of all spaces).
+      this.prisma.$queryRaw<Array<{ mode: string; cnt: bigint }>>`
+        SELECT mode, COUNT(*)::bigint AS cnt
+        FROM "Space"
+        GROUP BY mode
+        ORDER BY cnt DESC
+      `,
+
+      // Time series: spaces created per bucket in the selected range.
+      this.prisma.$queryRaw<Array<{ bucket: Date; count: bigint }>>(Prisma.sql`
+        SELECT DATE_TRUNC(${granularity}, "createdAt") AS bucket, COUNT(*)::bigint AS count
+        FROM "Space"
+        WHERE 1=1
+        ${sinceAnd(Prisma.sql`"createdAt"`)}
+        GROUP BY 1
+        ORDER BY 1
+      `),
+
+      // Currently active spaces, most recently updated, with owner info.
+      this.prisma.$queryRaw<Array<{ id: string; owner_id: string; owner_username: string | null; title: string; mode: string; is_active: boolean; created_at: Date }>>`
+        SELECT
+          s.id,
+          s."ownerId" AS owner_id,
+          u.username AS owner_username,
+          s.title,
+          s.mode,
+          s."isActive" AS is_active,
+          s."createdAt" AS created_at
+        FROM "Space" s
+        JOIN "User" u ON u.id = s."ownerId"
+        WHERE s."isActive" = true
+        ORDER BY s."updatedAt" DESC
+        LIMIT 20
+      `,
+    ]);
+
+    const spaceSummary = spaceSummaryRaw[0];
+    const spacesBlock: AdminAnalyticsSpacesDto = {
+      totalSpaces: Number(spaceSummary?.total_spaces ?? 0),
+      activeSpaces: Number(spaceSummary?.active_spaces ?? 0),
+      spacesCreatedInRange: Number(spaceSummary?.created_in_range ?? 0),
+      byMode: Object.fromEntries(spaceByModeRaw.map((r) => [r.mode, Number(r.cnt)])),
+      created: toTimeSeries(spaceCreatedSeriesRaw),
+      topSpaces: spaceTopRaw.map((r) => ({
+        id: r.id,
+        ownerId: r.owner_id,
+        ownerUsername: r.owner_username ?? '',
+        title: r.title,
+        mode: r.mode,
+        isActive: r.is_active,
+        createdAt: r.created_at.toISOString(),
+      })),
+    };
+
     const usersInAnyGroup = Number(groupUsersInAnyRow[0]?.cnt ?? 0);
     const totalUsersForPct = Number(summaryRow[0]?.total_users ?? 0);
     const groupsBlock: AdminAnalyticsGroupsDto = {
@@ -933,6 +1015,7 @@ export class AdminAnalyticsController {
       coins,
       articles,
       groups: groupsBlock,
+      spaces: spacesBlock,
       asOf: now.toISOString(),
     };
 

@@ -377,6 +377,32 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         `[presence] disconnect spaces cleanup failed socket=${socketId}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+
+    // Space chat leave on disconnect (best-effort).
+    // Without this, abrupt disconnects (tab close, network drop) never emit a
+    // "left the chat" system message because spaces:chatUnsubscribe isn't sent.
+    try {
+      const chatSpaceId = String((client.data as any)?.spaceChatSpaceId ?? '').trim() || null;
+      const chatSender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
+      if (chatSpaceId && chatSender?.id) {
+        const leftMsg = this.spacesChat.appendSystemMessage({
+          spaceId: chatSpaceId,
+          event: 'leave',
+          userId: chatSender.id,
+          username: chatSender.username ?? null,
+        });
+        if (leftMsg) {
+          const chatRoom = spacesChatRoom(chatSpaceId);
+          const out = { spaceId: chatSpaceId, message: leftMsg };
+          this.server.to(chatRoom).emit('spaces:chatMessage', out);
+          void this.presenceRedis.publishEmitToRoom({ room: chatRoom, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[presence] disconnect chat cleanup failed socket=${socketId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private async emitRadioListeners(stationId: string): Promise<void> {
@@ -626,6 +652,24 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
     const prev = String((client.data as any)?.spaceChatSpaceId ?? '').trim() || null;
     if (prev && prev !== spaceId) {
+      // Emit a leave system message for the old space before switching rooms.
+      // Normally the client sends spaces:chatUnsubscribe first, but this guards
+      // against races where chatSubscribe for the new space arrives first.
+      const prevSender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
+      if (prevSender?.id) {
+        const leftMsg = this.spacesChat.appendSystemMessage({
+          spaceId: prev,
+          event: 'leave',
+          userId: prevSender.id,
+          username: prevSender.username ?? null,
+        });
+        if (leftMsg) {
+          const prevRoom = spacesChatRoom(prev);
+          const leftOut = { spaceId: prev, message: leftMsg };
+          this.server.to(prevRoom).emit('spaces:chatMessage', leftOut);
+          void this.presenceRedis.publishEmitToRoom({ room: prevRoom, event: 'spaces:chatMessage', payload: leftOut }).catch(() => undefined);
+        }
+      }
       client.leave(spacesChatRoom(prev));
     }
 
@@ -786,6 +830,10 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       this.watchPartyState.clearState(spaceId);
     }
 
+    // Clear stale pause flags when leaving RADIO mode so members don't appear
+    // paused after switching to watch party or none.
+    const pauseCleared = this.spacesPresence.clearAllPaused(spaceId);
+
     const out = {
       spaceId,
       mode: mode as 'NONE' | 'WATCH_PARTY' | 'RADIO',
@@ -796,6 +844,11 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const room = spaceRoom(spaceId);
     this.server.to(room).emit('spaces:modeChanged', out);
     void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:modeChanged', payload: out }).catch(() => undefined);
+
+    // Re-broadcast members with cleared pause flags if any were changed.
+    if (pauseCleared.length > 0) {
+      void this.emitSpaceMembers(spaceId);
+    }
   }
 
   // ─── Watch Party ────────────────────────────────────────────────────

@@ -235,6 +235,28 @@ export class SpacesPresenceService {
   }
 
   /**
+   * Clears all paused flags for every member of a space.
+   * Called when the space mode changes away from RADIO so stale pause state
+   * doesn't bleed into the new mode's members list.
+   * Returns the list of userIds whose paused flag was cleared.
+   */
+  clearAllPaused(spaceIdRaw: string): string[] {
+    const spaceId = (spaceIdRaw ?? '').trim();
+    if (!spaceId) return [];
+    const pausedSet = this.pausedBySpace.get(spaceId);
+    if (!pausedSet || pausedSet.size === 0) return [];
+    const cleared = Array.from(pausedSet);
+    for (const userId of cleared) {
+      const current = this.currentByUser.get(userId);
+      if (current && current.spaceId === spaceId) {
+        this.currentByUser.set(userId, { ...current, paused: false });
+      }
+    }
+    this.pausedBySpace.delete(spaceId);
+    return cleared;
+  }
+
+  /**
    * Counts of users currently in each space (includes paused).
    * Only returns spaces that have at least one member.
    */
