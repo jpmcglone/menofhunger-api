@@ -133,5 +133,10 @@ export const RedisKeys = {
   spacesLobbyCounts(): string {
     return 'spaces:lobbyCounts';
   },
+
+  // Watch Party — ephemeral playback state, survives server restarts via Redis
+  watchPartyState(spaceId: string): string {
+    return `wp:state:${clean(spaceId)}`;
+  },
 } as const;
 

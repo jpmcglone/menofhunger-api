@@ -1,23 +1,23 @@
-export type SpaceStationDto = {
+export type SpaceOwnerDto = {
   id: string;
-  name: string;
-  streamUrl: string;
-  attributionName: string | null;
-  attributionUrl: string | null;
+  username: string | null;
+  avatarUrl: string | null;
+  premium: boolean;
+  premiumPlus: boolean;
+  isOrganization: boolean;
+  verifiedStatus: 'none' | 'identity' | 'manual';
 };
 
 export type SpaceDto = {
   id: string;
-  name: string;
-  /**
-   * Optional attached music station. When null, the space still exists but has no music playback.
-   */
-  stationId: string | null;
-  station: SpaceStationDto | null;
-  /**
-   * Built-in = shipped by the app (seeded). Non-built-in is reserved for future user-created spaces.
-   */
-  isBuiltin: boolean;
+  title: string;
+  description: string | null;
+  isActive: boolean;
+  mode: 'NONE' | 'WATCH_PARTY' | 'RADIO';
+  watchPartyUrl: string | null;
+  radioStreamUrl: string | null;
+  owner: SpaceOwnerDto;
+  listenerCount: number;
 };
 
 export type SpaceListenerDto = {
@@ -88,3 +88,17 @@ export type SpaceReactionEventDto = {
   emoji: string;
 };
 
+export type WatchPartyStateDto = {
+  videoUrl: string;
+  isPlaying: boolean;
+  currentTime: number;
+  playbackRate: number;
+  updatedAt: number;
+};
+
+export type SpaceModeChangedDto = {
+  spaceId: string;
+  mode: 'NONE' | 'WATCH_PARTY' | 'RADIO';
+  watchPartyUrl: string | null;
+  radioStreamUrl: string | null;
+};

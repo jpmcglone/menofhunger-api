@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { SPACE_IDS } from './spaces.constants';
 
 /**
  * In-memory "who is in which space" state.
@@ -23,7 +22,7 @@ export class SpacesPresenceService {
   private readonly mutedBySpace = new Map<string, Set<string>>();
 
   isValidSpaceId(spaceId: string): boolean {
-    return SPACE_IDS.has((spaceId ?? '').trim());
+    return Boolean((spaceId ?? '').trim());
   }
 
   join(params: { socketId: string; userId: string; spaceId: string }): { prevSpaceId: string | null; prevRoomSpaceId: string | null } {
@@ -237,14 +236,15 @@ export class SpacesPresenceService {
 
   /**
    * Counts of users currently in each space (includes paused).
-   * Always includes all configured space IDs, even if the count is 0.
+   * Only returns spaces that have at least one member.
    */
   getLobbyCountsBySpaceId(): Record<string, number> {
     const out: Record<string, number> = {};
-    for (const spaceId of SPACE_IDS) {
-      out[spaceId] = this.usersBySpace.get(spaceId)?.size ?? 0;
+    for (const [spaceId, users] of this.usersBySpace) {
+      if (users.size > 0) {
+        out[spaceId] = users.size;
+      }
     }
     return out;
   }
 }
-

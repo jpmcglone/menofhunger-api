@@ -183,6 +183,12 @@ enum CommunityGroupMemberStatus {
   pending
 }
 
+enum SpaceMode {
+  NONE
+  WATCH_PARTY
+  RADIO
+}
+
 // Start minimal. Add real domain models as you solidify your product.
 model Example {
   id        String   @id @default(cuid())
@@ -350,6 +356,8 @@ model User {
 
   communityGroupsCreated CommunityGroup[] @relation("CommunityGroup_createdBy")
   communityGroupMemberships CommunityGroupMember[]
+
+  space Space?
 
   @@index([phone])
   @@index([lastSeenAt])
@@ -580,6 +588,26 @@ model CommunityGroupMember {
   @@id([groupId, userId])
   @@index([userId, status])
   @@index([groupId, status])
+}
+
+model Space {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  ownerId     String    @unique
+  owner       User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  title       String    @db.VarChar(100)
+  description String?   @db.VarChar(500)
+
+  isActive    Boolean   @default(false)
+
+  mode            SpaceMode @default(NONE)
+  watchPartyUrl   String?   @db.VarChar(2000)
+  radioStreamUrl  String?   @db.VarChar(2000)
+
+  @@index([isActive])
 }
 
 model Post {

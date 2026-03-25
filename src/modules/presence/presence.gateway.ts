@@ -21,6 +21,7 @@ import { RadioService } from '../radio/radio.service';
 import { SpacesChatService } from '../spaces/spaces-chat.service';
 import { SpacesPresenceService } from '../spaces/spaces-presence.service';
 import { SpacesService } from '../spaces/spaces.service';
+import { WatchPartyStateService } from '../spaces/watch-party-state.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
 import type {
@@ -72,7 +73,6 @@ function spacesChatRoom(spaceId: string): string {
 })
 export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
   private readonly logger = new Logger(PresenceGateway.name);
-  // Performance: presence events can be very high-frequency. Never spam logs in production.
   private readonly logPresenceVerbose: boolean;
   private presenceEventUnsubscribe: (() => void) | null = null;
   private readonly userTimers = new Map<string, UserTimers>();
@@ -85,6 +85,13 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   private readonly reactionThrottlePruneEveryMs = 30_000;
   private readonly reactionThrottleEntryTtlMs = 1000 * 60 * 2;
   private readonly userPresenceNonce = new Map<string, number>();
+
+  /** Short-lived cache: spaceId -> ownerId (avoids DB hits on every WS join) */
+  private readonly spaceOwnerCache = new Map<string, { ownerId: string; expiresAt: number }>();
+  private readonly SPACE_OWNER_CACHE_TTL_MS = 30_000;
+
+  /** Tracks the primary (most-recently joined) owner socket per space. Only this socket may send watchPartyControl. */
+  private readonly primaryOwnerSocketBySpaceId = new Map<string, string>();
 
   @WebSocketServer()
   server!: Server;
@@ -102,6 +109,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     private readonly spaces: SpacesService,
     private readonly spacesPresence: SpacesPresenceService,
     private readonly spacesChat: SpacesChatService,
+    private readonly watchPartyState: WatchPartyStateService,
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
   ) {
@@ -109,10 +117,8 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   afterInit(server: Server): void {
-    // Provide the Socket.IO server to other modules without them importing the gateway.
     this.realtime.setServer(server);
 
-    // Cross-instance fanout: emit events from other instances to this instance's subscribers.
     const myInstanceId = this.presenceRedis.getInstanceId();
     this.presenceEventUnsubscribe = this.presenceRedis.onEvent((evt) => {
       if (!evt?.userId) return;
@@ -125,17 +131,16 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         const e = String((evt as any).event ?? '').trim();
         if (!e) return;
         this.presence.emitToUser(this.server, evt.userId, e, (evt as any).payload);
-      }       else if (evt.type === 'emitToRoom') {
+      } else if (evt.type === 'emitToRoom') {
         const room = String((evt as any).room ?? '').trim();
         const e = String((evt as any).event ?? '').trim();
         if (!room || !e) return;
         this.server.to(room).emit(e, (evt as any).payload);
       } else if (evt.type === 'spacesLobbyCounts') {
-        // Another instance updated counts — broadcast to all sockets on this instance.
         const payload: SpaceLobbyCountsDto = { countsBySpaceId: (evt as any).countsBySpaceId ?? {} };
         this.server.emit('spaces:lobbyCounts', payload);
       } else if (evt.type === 'userSpaceChanged') {
-        if ((evt as any).instanceId === myInstanceId) return; // we already emitted locally
+        if ((evt as any).instanceId === myInstanceId) return;
         const uid = (evt as any).userId;
         if (!uid) return;
         const payload: UsersSpaceChangedPayloadDto = {
@@ -184,15 +189,40 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     }
   }
 
+  private async getCachedSpaceOwnerId(spaceId: string): Promise<string | null> {
+    const now = Date.now();
+    const cached = this.spaceOwnerCache.get(spaceId);
+    if (cached && cached.expiresAt > now) return cached.ownerId;
+
+    const ownerId = await this.spaces.getOwnerIdForSpace(spaceId);
+    if (ownerId) {
+      this.spaceOwnerCache.set(spaceId, { ownerId, expiresAt: now + this.SPACE_OWNER_CACHE_TTL_MS });
+    }
+    return ownerId;
+  }
+
   async handleConnection(client: Socket): Promise<void> {
+    // Expose a promise that resolves once this async handler finishes.
+    // Event handlers that need client.data.userId must await __ready first,
+    // because Socket.IO dispatches events before handleConnection resolves.
+    let resolveReady!: () => void;
+    (client.data as any).__ready = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+
+    try {
+      await this._handleConnectionInner(client);
+    } finally {
+      resolveReady();
+    }
+  }
+
+  private async _handleConnectionInner(client: Socket): Promise<void> {
     const cookieHeader = client.handshake.headers.cookie as string | undefined;
     const token = parseSessionCookieFromHeader(cookieHeader);
     let user: any = null;
     try {
       const result = await this.auth.meFromSessionToken(token);
-      // WebSocket connections have no HTTP Response to set cookies on, so we
-      // intentionally skip session renewal cookie writes here -- the next HTTP
-      // request will handle it via the guard.
       user = result?.user ?? null;
     } catch (err) {
       this.logger.warn(`[presence] Connection auth failed socket=${client.id}; continuing as anonymous: ${err}`);
@@ -209,21 +239,17 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       this.cancelUserTimers(userId);
       this.userPresenceNonce.set(userId, (this.userPresenceNonce.get(userId) ?? 0) + 1);
 
-      // Local (per-instance) socket tracking for targeted emits.
       this.presence.register(client.id, userId, String(clientType));
-      // Global (cross-instance) presence state in Redis.
       const registration = await this.presenceRedis.registerSocket({
         socketId: client.id,
         userId,
         client: String(clientType),
       });
       isNewlyOnline = Boolean(registration?.isNewlyOnline);
-      // Best-effort: mark reading/being in-app as active for metrics (DAU/MAU).
       this.presence.persistLastSeenAt(userId);
       this.presence.persistDailyActivity(userId);
     }
 
-    // Store for downstream event handlers (radio, etc).
     (client.data as { userId?: string; presenceClient?: string }).userId = userId ?? undefined;
     (client.data as { userId?: string; presenceClient?: string }).presenceClient = String(clientType);
     (client.data as any).viewer = {
@@ -244,7 +270,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       verifiedStatus: ((userId ? user?.verifiedStatus : 'none') ?? 'none') as 'none' | 'identity' | 'manual',
       stewardBadgeEnabled: Boolean(userId ? (user as any)?.stewardBadgeEnabled ?? true : true),
     } satisfies RadioChatSenderDto;
-    // Spaces chat sender is the same shape; keep both keys for a smooth transition.
     (client.data as any).spaceChatUser = (client.data as any).radioChatUser satisfies SpaceChatSenderDto;
     (client.data as any).postSubs = new Set<string>();
     (client.data as any).articleSubs = new Set<string>();
@@ -254,8 +279,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
     client.emit('presence:init', {});
 
-    // Push current space lobby counts to the newly connected client.
-    // Try Redis first (cross-instance accurate); fall back to in-memory snapshot.
     void (async () => {
       try {
         const cached = await this.redis.getJson<Record<string, number>>(RedisKeys.spacesLobbyCounts());
@@ -330,8 +353,22 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
     // Spaces cleanup (best-effort).
     try {
+      const ownerSpaceId = String((client.data as any)?.ownerSpaceId ?? '').trim() || null;
       const spaceLeft = this.spacesPresence.onDisconnect(socketId);
       if (spaceLeft?.wasActive) {
+        // If the owner's socket dropped, pause all viewers at the current position.
+        if (ownerSpaceId && ownerSpaceId === spaceLeft.spaceId) {
+          if (this.primaryOwnerSocketBySpaceId.get(ownerSpaceId) === socketId) {
+            this.primaryOwnerSocketBySpaceId.delete(ownerSpaceId);
+          }
+          const pausedState = this.watchPartyState.pauseAtCurrentPosition(ownerSpaceId);
+          if (pausedState) {
+            const room = spaceRoom(ownerSpaceId);
+            const out = { spaceId: ownerSpaceId, ...pausedState };
+            this.server.to(room).emit('spaces:watchPartyState', out);
+            void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:watchPartyState', payload: out }).catch(() => undefined);
+          }
+        }
         void this.emitSpaceMembers(spaceLeft.spaceId);
         this.emitSpacesLobbyCounts();
       }
@@ -376,7 +413,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       }
     }
 
-    // Emit to everyone in the station room (including the joiner).
     this.server.to(room).emit('radio:listeners', { stationId: sid, listeners });
   }
 
@@ -428,23 +464,26 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const countsBySpaceId = this.spacesPresence.getLobbyCountsBySpaceId();
     const payload: SpaceLobbyCountsDto = { countsBySpaceId };
 
-    // Broadcast to every connected socket on this instance immediately.
     this.server.emit('spaces:lobbyCounts', payload);
 
-    // Persist to Redis so HTTP reads and new connections always get fresh counts.
-    // TTL is generous; counts self-correct on every join/leave/disconnect.
     void this.redis
       .setJson(RedisKeys.spacesLobbyCounts(), countsBySpaceId, { ttlSeconds: 120 })
       .catch(() => undefined);
 
-    // Fanout to other instances via pub/sub — they will broadcast to their own sockets.
     void this.presenceRedis.publishSpacesLobbyCounts(countsBySpaceId).catch(() => undefined);
   }
+
+  // ─── Spaces ─────────────────────────────────────────────────────────
 
   @SubscribeMessage('spaces:join')
   async handleSpacesJoin(client: Socket, payload: { spaceId?: string }): Promise<void> {
     const spaceId = String(payload?.spaceId ?? '').trim();
     if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
+
+    // Wait for handleConnection's async auth to finish before reading userId.
+    // Socket.IO dispatches events immediately on connect, before handleConnection resolves,
+    // so without this await the userId would be undefined on hard-reload joins.
+    await ((client.data as any).__ready as Promise<void> | undefined)?.catch?.(() => undefined);
 
     const userId =
       (client.data as { userId?: string })?.userId ??
@@ -452,22 +491,35 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       null;
     if (!userId) return;
 
+    // Validate space existence: owner can join even if inactive, others require active
+    const ownerId = await this.getCachedSpaceOwnerId(spaceId);
+    if (!ownerId) return; // space doesn't exist
+    const isOwner = ownerId === userId;
+    if (!isOwner) {
+      const isActive = await this.spaces.isSpaceActive(spaceId);
+      if (!isActive) return;
+    }
+
+    // Auto-activate on owner join, and elect this socket as the primary control socket.
+    if (isOwner) {
+      (client.data as any).ownerSpaceId = spaceId;
+      void this.spaces.activateSpaceByOwnerId(userId).catch(() => undefined);
+
+      const prevPrimarySocketId = this.primaryOwnerSocketBySpaceId.get(spaceId);
+      this.primaryOwnerSocketBySpaceId.set(spaceId, client.id);
+
+      // Tell the previous primary tab it's been replaced (should stop sending control events).
+      if (prevPrimarySocketId && prevPrimarySocketId !== client.id) {
+        const prevSocket = this.server.sockets.sockets.get(prevPrimarySocketId);
+        prevSocket?.emit('spaces:watchPartyOwnerReplaced', { spaceId });
+      }
+    }
+
     const { prevSpaceId, prevRoomSpaceId } = this.spacesPresence.join({ socketId: client.id, userId, spaceId });
     if (prevRoomSpaceId && prevRoomSpaceId !== spaceId) {
       client.leave(spaceRoom(prevRoomSpaceId));
     }
     client.join(spaceRoom(spaceId));
-
-    // Keep legacy radio presence in sync while we transition (space may have no station).
-    const stationId = this.spaces.getStationIdBySpaceId(spaceId);
-    if (stationId && this.radio.isValidStationId(stationId)) {
-      const { prevStationId, prevRoomStationId } = this.radio.join({ socketId: client.id, userId, stationId });
-      if (prevRoomStationId && prevRoomStationId !== stationId) client.leave(`radio:${prevRoomStationId}`);
-      client.join(`radio:${stationId}`);
-      if (prevStationId && prevStationId !== stationId) await this.emitRadioListeners(prevStationId);
-      await this.emitRadioListeners(stationId);
-      this.emitRadioLobbyCounts();
-    }
 
     if (prevSpaceId && prevSpaceId !== spaceId) {
       await this.emitSpaceMembers(prevSpaceId);
@@ -475,7 +527,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     await this.emitSpaceMembers(spaceId);
     this.emitSpacesLobbyCounts();
 
-    // Notify subscribers of this user (e.g. profile viewers, post rows) that their space changed.
+    // Notify subscribers of this user that their space changed
     const spaceChangedDto: UsersSpaceChangedPayloadDto = {
       userId,
       spaceId,
@@ -484,15 +536,35 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const targets = this.getTargetsForUser(userId);
     this.emitToSockets(targets, WsEventNames.usersSpaceChanged, spaceChangedDto);
     void this.presenceRedis.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
+
+    // Send current watch party state to the joining client (falls back to Redis on server restart).
+    const wpState = await this.watchPartyState.getStateAsync(spaceId);
+    if (wpState) {
+      client.emit('spaces:watchPartyState', { spaceId, ...wpState });
+    }
   }
 
   @SubscribeMessage('spaces:leave')
   async handleSpacesLeave(client: Socket): Promise<void> {
+    const ownerSpaceId = String((client.data as any)?.ownerSpaceId ?? '').trim() || null;
     const roomSpaceId = this.spacesPresence.getRoomSpaceForSocket(client.id);
     const left = this.spacesPresence.leave(client.id);
     this.spacesPresence.clearRoomForSocket(client.id);
     if (roomSpaceId) client.leave(spaceRoom(roomSpaceId));
     if (left?.wasActive) {
+      // If the owner deliberately leaves, pause all viewers at the current position.
+      if (ownerSpaceId && ownerSpaceId === left.spaceId) {
+        if (this.primaryOwnerSocketBySpaceId.get(ownerSpaceId) === client.id) {
+          this.primaryOwnerSocketBySpaceId.delete(ownerSpaceId);
+        }
+        const pausedState = this.watchPartyState.pauseAtCurrentPosition(ownerSpaceId);
+        if (pausedState) {
+          const room = spaceRoom(ownerSpaceId);
+          const out = { spaceId: ownerSpaceId, ...pausedState };
+          this.server.to(room).emit('spaces:watchPartyState', out);
+          void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:watchPartyState', payload: out }).catch(() => undefined);
+        }
+      }
       await this.emitSpaceMembers(left.spaceId);
       this.emitSpacesLobbyCounts();
 
@@ -510,16 +582,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         this.emitToSockets(targets, WsEventNames.usersSpaceChanged, spaceChangedDto);
         void this.presenceRedis.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
       }
-    }
-
-    // Best-effort legacy cleanup.
-    const radioRoomStationId = this.radio.getRoomStationForSocket(client.id);
-    const radioLeft = this.radio.leave(client.id);
-    this.radio.clearRoomForSocket(client.id);
-    if (radioRoomStationId) client.leave(`radio:${radioRoomStationId}`);
-    if (radioLeft?.wasActive) {
-      await this.emitRadioListeners(radioLeft.stationId);
-      this.emitRadioLobbyCounts();
     }
   }
 
@@ -571,7 +633,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     client.join(spacesChatRoom(spaceId));
     client.emit('spaces:chatSnapshot', this.spacesChat.snapshot(spaceId));
 
-    // System message (live-only): joining chat.
     const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
     const joinMsg = sender?.id
       ? this.spacesChat.appendSystemMessage({
@@ -587,21 +648,12 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       this.server.to(room).emit('spaces:chatMessage', out);
       void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
     }
-
-    // Legacy: if this space has a station, keep old room subscription too.
-    const stationId = this.spaces.getStationIdBySpaceId(spaceId);
-    if (stationId && this.radio.isValidStationId(stationId)) {
-      (client.data as any).radioChatStationId = stationId;
-      client.join(radioChatRoom(stationId));
-      // Snapshot for legacy clients (sent only if they subscribed via radio:*).
-    }
   }
 
   @SubscribeMessage('spaces:chatUnsubscribe')
   handleSpacesChatUnsubscribe(client: Socket): void {
     const prev = String((client.data as any)?.spaceChatSpaceId ?? '').trim() || null;
     if (prev) {
-      // System message (live-only): leaving chat. Emit before removing socket so the leaver sees it.
       const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
       const leftMsg = sender?.id
         ? this.spacesChat.appendSystemMessage({
@@ -649,24 +701,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const out = { spaceId, message: msg };
     this.server.to(room).emit('spaces:chatMessage', out);
     void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
-
-    // Back-compat emit to radio room when the space has a station attached.
-    const stationId = this.spaces.getStationIdBySpaceId(spaceId);
-    if (stationId && this.radio.isValidStationId(stationId)) {
-      const radioRoom = radioChatRoom(stationId);
-      const radioOut = {
-        stationId,
-        message: {
-          id: msg.id,
-          stationId,
-          body: msg.body,
-          createdAt: msg.createdAt,
-          sender: msg.sender,
-        },
-      };
-      this.server.to(radioRoom).emit('radio:chatMessage', radioOut);
-      void this.presenceRedis.publishEmitToRoom({ room: radioRoom, event: 'radio:chatMessage', payload: radioOut }).catch(() => undefined);
-    }
   }
 
   @SubscribeMessage('spaces:reaction')
@@ -684,7 +718,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const reaction = this.spaces.getReactionById(reactionId);
     if (!reaction) return;
 
-    // Throttle: at most ~1 per 400ms per user.
     const key = `spaces:reaction:${userId}`;
     const now = Date.now();
     this.maybePruneReactionThrottle(now);
@@ -698,10 +731,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:reaction', payload: out }).catch(() => undefined);
   }
 
-  /**
-   * Realtime typing indicator for Spaces live chat.
-   * Client emits while typing; we fan-out to other sockets in the space chat room.
-   */
   @SubscribeMessage('spaces:typing')
   handleSpacesTyping(client: Socket, payload: { spaceId?: string; typing?: boolean }): void {
     const spaceId = String(payload?.spaceId ?? '').trim();
@@ -715,7 +744,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
     const typing = payload?.typing !== false;
 
-    // Throttle fanout: at most ~1 per 250ms per (user, space, typing-state).
     const key = `spaces:${sender.id}:${spaceId}:${typing ? '1' : '0'}`;
     const now = Date.now();
     this.maybePruneTypingThrottle(now);
@@ -729,11 +757,107 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:typing', payload: out }).catch(() => undefined);
   }
 
-  @SubscribeMessage('radio:join')
-  async handleRadioJoin(
+  // ─── Mode changes ───────────────────────────────────────────────────
+
+  /**
+   * Owner calls this after a successful REST setMode so all viewers learn about the change in real time.
+   * The REST endpoint handles DB persistence; this handler handles the broadcast + state cleanup.
+   */
+  @SubscribeMessage('spaces:announceMode')
+  async handleSpacesAnnounceMode(
     client: Socket,
-    payload: { stationId?: string },
+    payload: { spaceId?: string; mode?: string; watchPartyUrl?: string | null; radioStreamUrl?: string | null },
   ): Promise<void> {
+    const spaceId = String(payload?.spaceId ?? '').trim();
+    const mode = String(payload?.mode ?? '').trim();
+    if (!spaceId || !['NONE', 'WATCH_PARTY', 'RADIO'].includes(mode)) return;
+
+    const userId =
+      (client.data as { userId?: string })?.userId ??
+      this.presence.getUserIdForSocket(client.id) ??
+      null;
+    if (!userId) return;
+
+    const ownerId = await this.getCachedSpaceOwnerId(spaceId);
+    if (!ownerId || ownerId !== userId) return;
+
+    // Clear stale watch party state when no longer in WATCH_PARTY mode.
+    if (mode !== 'WATCH_PARTY') {
+      this.watchPartyState.clearState(spaceId);
+    }
+
+    const out = {
+      spaceId,
+      mode: mode as 'NONE' | 'WATCH_PARTY' | 'RADIO',
+      watchPartyUrl: mode === 'WATCH_PARTY' ? (String(payload?.watchPartyUrl ?? '').trim() || null) : null,
+      radioStreamUrl: mode === 'RADIO' ? (String(payload?.radioStreamUrl ?? '').trim() || null) : null,
+    };
+
+    const room = spaceRoom(spaceId);
+    this.server.to(room).emit('spaces:modeChanged', out);
+    void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:modeChanged', payload: out }).catch(() => undefined);
+  }
+
+  // ─── Watch Party ────────────────────────────────────────────────────
+
+  /** Any client in a space can request the current watch-party state (e.g. on initial mount or reconnect). */
+  @SubscribeMessage('spaces:requestWatchPartyState')
+  async handleRequestWatchPartyState(client: Socket, payload: { spaceId?: string }): Promise<void> {
+    const spaceId = String(payload?.spaceId ?? '').trim();
+    if (!spaceId) return;
+    // Never serve watch-party state when the space is currently in another mode.
+    const mode = await this.spaces.getSpaceMode(spaceId);
+    if (mode !== 'WATCH_PARTY') return;
+    const state = await this.watchPartyState.getStateAsync(spaceId);
+    if (!state) return;
+    client.emit('spaces:watchPartyState', { spaceId, ...state });
+  }
+
+  @SubscribeMessage('spaces:watchPartyControl')
+  async handleWatchPartyControl(
+    client: Socket,
+    payload: { spaceId?: string; videoUrl?: string; isPlaying?: boolean; currentTime?: number; playbackRate?: number },
+  ): Promise<void> {
+    const spaceId = String(payload?.spaceId ?? '').trim();
+    if (!spaceId) return;
+    // Hard invariant: ignore stale watch-party control when the space mode is no longer WATCH_PARTY.
+    const mode = await this.spaces.getSpaceMode(spaceId);
+    if (mode !== 'WATCH_PARTY') return;
+
+    const userId =
+      (client.data as { userId?: string })?.userId ??
+      this.presence.getUserIdForSocket(client.id) ??
+      null;
+    if (!userId) return;
+
+    // Only the primary owner socket may send control events (prevents tab fighting).
+    const ownerId = await this.getCachedSpaceOwnerId(spaceId);
+    if (!ownerId || ownerId !== userId) return;
+    if (this.primaryOwnerSocketBySpaceId.get(spaceId) !== client.id) return;
+
+    const videoUrl = String(payload?.videoUrl ?? '').trim();
+    if (!videoUrl) return;
+
+    this.watchPartyState.setState(spaceId, {
+      videoUrl,
+      isPlaying: payload?.isPlaying !== false,
+      currentTime: Number(payload?.currentTime ?? 0),
+      playbackRate: Number(payload?.playbackRate ?? 1),
+    });
+
+    const state = this.watchPartyState.getState(spaceId);
+    if (!state) return;
+
+    const room = spaceRoom(spaceId);
+    const out = { spaceId, ...state };
+    this.server.to(room).emit('spaces:watchPartyState', out);
+    void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:watchPartyState', payload: out }).catch(() => undefined);
+  }
+
+  // ─── Radio (legacy, standalone) ─────────────────────────────────────
+
+  @SubscribeMessage('radio:join')
+  async handleRadioJoin(client: Socket, payload: { stationId?: string }): Promise<void> {
     const stationId = (payload?.stationId ?? '').trim();
     if (!this.radio.isValidStationId(stationId)) return;
 
@@ -743,44 +867,24 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       null;
     if (!userId) return;
 
-    // Update in-memory state (deduped per user) and track room subscription for this socket.
     const { prevStationId, prevRoomStationId } = this.radio.join({ socketId: client.id, userId, stationId });
-
-    // Ensure this socket only receives updates for one station.
     if (prevRoomStationId && prevRoomStationId !== stationId) {
       client.leave(`radio:${prevRoomStationId}`);
     }
     client.join(`radio:${stationId}`);
 
-    // If the user was previously listening to a different station, update that station's listeners.
     if (prevStationId && prevStationId !== stationId) {
       await this.emitRadioListeners(prevStationId);
     }
     await this.emitRadioListeners(stationId);
     this.emitRadioLobbyCounts();
 
-    // Also join/update the corresponding Space (back-compat).
-    const spaceId = this.spaces.getSpaceIdByStationId(stationId);
-    if (spaceId && this.spacesPresence.isValidSpaceId(spaceId)) {
-      const { prevSpaceId, prevRoomSpaceId } = this.spacesPresence.join({ socketId: client.id, userId, spaceId });
-      if (prevRoomSpaceId && prevRoomSpaceId !== spaceId) client.leave(spaceRoom(prevRoomSpaceId));
-      client.join(spaceRoom(spaceId));
-      if (prevSpaceId && prevSpaceId !== spaceId) await this.emitSpaceMembers(prevSpaceId);
-      await this.emitSpaceMembers(spaceId);
-      this.emitSpacesLobbyCounts();
-    }
-
-    // Notify other tabs/windows for this user so they stop their radio (one play per user).
     const otherSocketIds = this.presence.getSocketIdsForUser(userId).filter((id) => id !== client.id);
     for (const sid of otherSocketIds) {
       this.server.sockets.sockets.get(sid)?.emit('radio:replaced', {});
     }
   }
 
-  /**
-   * Pause: stop counting as a listener, but remain subscribed to the room so the client can
-   * still see live listener updates while paused.
-   */
   @SubscribeMessage('radio:pause')
   async handleRadioPause(client: Socket): Promise<void> {
     const paused = this.radio.pause(client.id);
@@ -788,25 +892,10 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       await this.emitRadioListeners(paused.stationId);
       this.emitRadioLobbyCounts();
     }
-
-    const spaceId = paused?.stationId ? this.spaces.getSpaceIdByStationId(paused.stationId) : null;
-    if (spaceId) {
-      const sPaused = this.spacesPresence.pause(client.id);
-      if (sPaused?.wasActive && sPaused.changed) {
-        await this.emitSpaceMembers(spaceId);
-        this.emitSpacesLobbyCounts();
-      }
-    }
   }
 
-  /**
-   * Watch: subscribe to station updates without counting as a listener.
-   */
   @SubscribeMessage('radio:watch')
-  async handleRadioWatch(
-    client: Socket,
-    payload: { stationId?: string },
-  ): Promise<void> {
+  async handleRadioWatch(client: Socket, payload: { stationId?: string }): Promise<void> {
     const stationId = (payload?.stationId ?? '').trim();
     if (!this.radio.isValidStationId(stationId)) return;
 
@@ -822,27 +911,12 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     }
     client.join(`radio:${stationId}`);
 
-    // Ensure the watcher is not counted as a listener.
     const left = this.radio.leave(client.id);
     if (left?.wasActive) {
       await this.emitRadioListeners(left.stationId);
     }
     await this.emitRadioListeners(stationId);
     this.emitRadioLobbyCounts();
-
-    const spaceId = this.spaces.getSpaceIdByStationId(stationId);
-    if (spaceId && this.spacesPresence.isValidSpaceId(spaceId)) {
-      const { prevRoomSpaceId } = this.spacesPresence.watch({ socketId: client.id, spaceId });
-      if (prevRoomSpaceId && prevRoomSpaceId !== spaceId) client.leave(spaceRoom(prevRoomSpaceId));
-      client.join(spaceRoom(spaceId));
-
-      const leftSpace = this.spacesPresence.leave(client.id);
-      if (leftSpace?.wasActive) {
-        await this.emitSpaceMembers(leftSpace.spaceId);
-      }
-      await this.emitSpaceMembers(spaceId);
-      this.emitSpacesLobbyCounts();
-    }
   }
 
   @SubscribeMessage('radio:leave')
@@ -855,15 +929,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       await this.emitRadioListeners(left.stationId);
       this.emitRadioLobbyCounts();
     }
-
-    const spaceRoomId = this.spacesPresence.getRoomSpaceForSocket(client.id);
-    const leftSpace = this.spacesPresence.leave(client.id);
-    this.spacesPresence.clearRoomForSocket(client.id);
-    if (spaceRoomId) client.leave(spaceRoom(spaceRoomId));
-    if (leftSpace?.wasActive) {
-      await this.emitSpaceMembers(leftSpace.spaceId);
-      this.emitSpacesLobbyCounts();
-    }
   }
 
   @SubscribeMessage('radio:mute')
@@ -874,15 +939,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     if (res?.wasActive && res.changed) {
       await this.emitRadioListeners(res.stationId);
       this.emitRadioLobbyCounts();
-    }
-
-    const spaceId = res?.stationId ? this.spaces.getSpaceIdByStationId(res.stationId) : null;
-    if (spaceId) {
-      const sRes = this.spacesPresence.setMuted(client.id, Boolean(payload?.muted));
-      if (sRes?.wasActive && sRes.changed) {
-        await this.emitSpaceMembers(spaceId);
-        this.emitSpacesLobbyCounts();
-      }
     }
   }
 
@@ -912,24 +968,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
     (client.data as any).radioChatStationId = stationId;
     client.join(radioChatRoom(stationId));
-
-    // Canonical storage is space-scoped. Convert snapshot for legacy radio clients.
-    const spaceId = this.spaces.getSpaceIdByStationId(stationId);
-    if (!spaceId) {
-      client.emit('radio:chatSnapshot', this.radioChat.snapshot(stationId));
-      return;
-    }
-    const snap = this.spacesChat.snapshot(spaceId);
-    client.emit('radio:chatSnapshot', {
-      stationId,
-      messages: snap.messages.map((m) => ({
-        id: m.id,
-        stationId,
-        body: m.body,
-        createdAt: m.createdAt,
-        sender: m.sender,
-      })),
-    });
+    client.emit('radio:chatSnapshot', this.radioChat.snapshot(stationId));
   }
 
   @SubscribeMessage('radio:chatUnsubscribe')
@@ -955,41 +994,21 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       null;
     if (!userId) return;
 
-    const spaceId = this.spaces.getSpaceIdByStationId(stationId);
-    if (!spaceId) return;
+    if (!this.radioChat.canSend(userId)) return;
 
-    // Rate limit for safety (avoid broadcast spam).
-    if (!this.spacesChat.canSend(userId)) return;
-
-    const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
+    const sender = ((client.data as any)?.radioChatUser ?? null) as RadioChatSenderDto | null;
     if (!sender?.id) return;
 
-    const msg = this.spacesChat.appendMessage({ spaceId, sender, body });
+    const msg = this.radioChat.appendMessage({ stationId, sender, body });
     if (!msg) return;
 
-    // Canonical emit (spaces).
-    const spacesRoom = spacesChatRoom(spaceId);
-    const spacesOut = { spaceId, message: msg };
-    this.server.to(spacesRoom).emit('spaces:chatMessage', spacesOut);
-    void this.presenceRedis
-      .publishEmitToRoom({ room: spacesRoom, event: 'spaces:chatMessage', payload: spacesOut })
-      .catch(() => undefined);
-
-    // Legacy emit (radio).
     const room = radioChatRoom(stationId);
-    const out = {
-      stationId,
-      message: {
-        id: msg.id,
-        stationId,
-        body: msg.body,
-        createdAt: msg.createdAt,
-        sender: msg.sender,
-      },
-    };
+    const out = { stationId, message: msg };
     this.server.to(room).emit('radio:chatMessage', out);
     void this.presenceRedis.publishEmitToRoom({ room, event: 'radio:chatMessage', payload: out }).catch(() => undefined);
   }
+
+  // ─── Presence ───────────────────────────────────────────────────────
 
   private cancelUserTimers(userId: string): void {
     const timers = this.userTimers.get(userId);
@@ -1066,10 +1085,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   @SubscribeMessage('presence:subscribe')
-  async handleSubscribe(
-    client: Socket,
-    payload: { userIds?: string[] },
-  ): Promise<void> {
+  async handleSubscribe(client: Socket, payload: { userIds?: string[] }): Promise<void> {
     const userIds = Array.isArray(payload?.userIds) ? payload.userIds : [];
     if (this.logPresenceVerbose) {
       this.logger.debug(`[presence] SUBSCRIBE_IN socket=${client.id} userIds=[${userIds.join(', ')}]`);
@@ -1111,7 +1127,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const remainingCap = Math.max(0, MAX_POST_SUBSCRIPTIONS_PER_SOCKET - subs.size);
     if (remainingCap <= 0) return;
 
-    // Dedupe and enforce cap incrementally.
     const toConsider = Array.from(new Set(requested)).filter((id) => !subs.has(id)).slice(0, remainingCap);
     if (toConsider.length === 0) return;
 
@@ -1120,7 +1135,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const viewerIsVerified = Boolean(viewer?.siteAdmin) || Boolean(viewer?.verified);
     const viewerIsPremium = Boolean(viewer?.siteAdmin) || Boolean(viewer?.premium) || Boolean(viewer?.premiumPlus);
 
-    // Fetch minimal visibility fields for gating.
     const rows = await this.prisma.post.findMany({
       where: { id: { in: toConsider }, deletedAt: null },
       select: { id: true, userId: true, visibility: true },
@@ -1227,7 +1241,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       );
     }
 
-    // Send snapshot of currently online users to avoid race: User B connected before User A subscribed.
     const userIds = await this.presenceRedis.onlineUserIds();
     if (userIds.length === 0) return;
     try {
@@ -1260,10 +1273,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   @SubscribeMessage('messages:screen')
-  handleMessagesScreen(
-    client: Socket,
-    payload: { active?: boolean },
-  ): void {
+  handleMessagesScreen(client: Socket, payload: { active?: boolean }): void {
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
     const active = payload?.active !== false;
@@ -1272,7 +1282,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
   @SubscribeMessage('presence:logout')
   async handleLogout(client: Socket): Promise<void> {
-    // Revoke the session server-side (best-effort), so socket-only logout can’t leave a valid session behind.
     try {
       const cookieHeader = client.handshake.headers.cookie as string | undefined;
       const token = parseSessionCookieFromHeader(cookieHeader);
@@ -1294,7 +1303,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         this.emitOffline(userId);
       }
     }
-    // Ensure the client reconnects cleanly after logout.
     try {
       client.disconnect(true);
     } catch {
@@ -1310,10 +1318,8 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     void this.presenceRedis.setIdle(userId).catch(() => undefined);
     this.logger.log(`[presence] IDLE userId=${userId}`);
     this.emitIdle(userId);
-    // Do not disconnect on idle; users stay connected.
   }
 
-  /** Activity ping (fire-and-forget). Updates lastActivityAt and resets idle-mark timer. Clears idle if set. */
   @SubscribeMessage('presence:active')
   handleActive(client: Socket): void {
     const userId = this.presence.getUserIdForSocket(client.id);
@@ -1321,7 +1327,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     this.presence.setLastActivity(userId);
     const presenceClient = (client.data as { presenceClient?: string } | undefined)?.presenceClient ?? 'web';
     void this.presenceRedis.touchSocket({ socketId: client.id, userId, client: presenceClient }).catch(() => undefined);
-    // Best-effort: update metrics activity (server-throttled).
     this.presence.persistLastSeenAt(userId);
     this.presence.persistDailyActivity(userId);
     const wasIdle = this.presence.isUserIdle(userId);
@@ -1335,10 +1340,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     }
   }
 
-  /**
-   * Realtime typing indicator for messages.
-   * Client emits while typing; we fan-out to conversation participants (excluding sender).
-   */
   @SubscribeMessage('messages:typing')
   async handleMessagesTyping(
     client: Socket,
@@ -1350,7 +1351,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     if (!conversationId) return;
     const typing = payload?.typing !== false;
 
-    // Throttle DB fanout: at most ~1 per 700ms per (user, conversation).
     const key = `${userId}:${conversationId}:${typing ? '1' : '0'}`;
     const now = Date.now();
     this.maybePruneTypingThrottle(now);
@@ -1362,7 +1362,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     try {
       participantIds = await this.messages.listConversationParticipantUserIds({ userId, conversationId });
     } catch {
-      // Not a participant or conversation missing; do not leak anything.
       return;
     }
 
@@ -1389,7 +1388,6 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       this.presence.setUserIdle(userId);
       this.logger.log(`[presence] IDLE (no activity) userId=${userId}`);
       this.emitIdle(userId);
-      // Do not disconnect on idle; users stay connected.
     }, idleAfterMs);
     const existing = this.userTimers.get(userId);
     this.userTimers.set(userId, { ...existing, idleMarkTimer });
