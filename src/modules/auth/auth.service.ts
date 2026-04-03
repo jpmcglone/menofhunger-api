@@ -121,7 +121,7 @@ export class AuthService {
     return Boolean(existing);
   }
 
-  async verifyPhoneCode(phone: string, code: string, res: Response) {
+  async verifyPhoneCode(phone: string, code: string, res: Response, referralCode?: string | null) {
     const now = new Date();
     const isProd = this.appConfig.isProd();
     const disableTwilioInDev = !isProd && this.appConfig.disableTwilioInDev();
@@ -177,6 +177,22 @@ export class AuthService {
       });
     }
 
+    // Resolve recruiter from referral code (only for new users; silently ignore invalid codes).
+    let recruitedById: string | null = null;
+    if (isNewUser && referralCode) {
+      try {
+        const recruiter = await this.prisma.user.findFirst({
+          where: { referralCode: referralCode.trim().toUpperCase() },
+          select: { id: true, premium: true },
+        });
+        if (recruiter && recruiter.premium) {
+          recruitedById = recruiter.id;
+        }
+      } catch {
+        // Best-effort — never block signup over a bad code.
+      }
+    }
+
     const user = existing
       ? existing
       : await this.prisma.user.create({
@@ -184,8 +200,20 @@ export class AuthService {
             phone,
             username: null,
             usernameIsSet: false,
+            ...(recruitedById ? { recruitedById } : {}),
           },
         });
+
+    // Auto-follow the recruiter on signup so the new user's feed is populated immediately.
+    if (isNewUser && recruitedById) {
+      try {
+        await this.prisma.follow.create({
+          data: { followerId: user.id, followingId: recruitedById },
+        });
+      } catch {
+        // Idempotent — ignore duplicates or any transient error; never block signup.
+      }
+    }
 
     const session = await this.createSessionAndSetCookie(user.id, res);
 

@@ -23,6 +23,7 @@ const verifySchema = z.object({
     .min(OTP_CODE_LENGTH)
     .max(OTP_CODE_LENGTH)
     .regex(/^\d+$/, 'Code must be numeric'),
+  referralCode: z.string().max(50).optional().nullable(),
 });
 
 const existsSchema = z.object({
@@ -83,7 +84,7 @@ export class AuthController {
     } catch {
       throw new BadRequestException('Invalid phone number format');
     }
-    const result = await this.auth.verifyPhoneCode(phone, parsed.code, res);
+    const result = await this.auth.verifyPhoneCode(phone, parsed.code, res, parsed.referralCode);
     return { data: result };
   }
 

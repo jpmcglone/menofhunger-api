@@ -25,6 +25,14 @@ export type BillingMeDto = {
   effectiveExpiresAt: string | null;
   /** Active (non-expired, non-revoked) subscription grants. */
   grants: ActiveSubscriptionGrantDto[];
+  /** Referral code set by this user (premium-only). */
+  referralCode: string | null;
+  /** Who recruited this user (null if no recruiter). */
+  recruiter: { username: string | null; name: string | null } | null;
+  /** How many users this user has recruited. */
+  recruitCount: number;
+  /** Whether the one-time referral bonus has been granted to this user. */
+  referralBonusGranted: boolean;
 };
 
 export type BillingCheckoutSessionDto = {

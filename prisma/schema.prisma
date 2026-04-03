@@ -359,8 +359,20 @@ model User {
 
   space Space?
 
+  // Referral / recruitment
+  /** Unique promo code set by this user (premium-only). Others use this to mark this user as their recruiter. */
+  referralCode        String?   @unique
+  /** The user who recruited this user (set once via a referral code; immutable after set). */
+  recruitedById       String?
+  recruitedBy         User?     @relation("Recruitment_recruiter", fields: [recruitedById], references: [id], onDelete: SetNull)
+  recruits            User[]    @relation("Recruitment_recruiter")
+  /** When the one-time referral bonus grant was issued (null = not yet triggered). */
+  referralBonusGrantedAt DateTime?
+
   @@index([phone])
   @@index([lastSeenAt])
+  @@index([referralCode])
+  @@index([recruitedById])
 }
 
 model UserOrgMembership {
@@ -452,6 +464,13 @@ model SubscriptionGrant {
 
   /** Set when an admin revokes the grant early (null = still active). */
   revokedAt DateTime?
+
+  /**
+   * When true, this grant only counts towards entitlement while the user has an active Stripe
+   * subscription. Used for referral grants so free months don't drain without a paid plan.
+   * Admin grants always apply regardless, so they default to false.
+   */
+  requiresActiveSubscription Boolean @default(false)
 
   @@index([userId, endsAt])
   @@index([userId, revokedAt, endsAt])

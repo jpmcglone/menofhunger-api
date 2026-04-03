@@ -1,18 +1,30 @@
-import { BadRequestException, Body, Controller, Get, Headers, Post, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Headers, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import type { Request } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUserId } from '../users/users.decorator';
-import type { BillingCheckoutSessionDto, BillingMeDto, BillingPortalSessionDto, BillingTier } from '../../common/dto';
+import type { BillingCheckoutSessionDto, BillingMeDto, BillingPortalSessionDto, BillingTier, ReferralMeDto, RecruitDto } from '../../common/dto';
 import { BillingService } from './billing.service';
+import { ReferralService } from './referral.service';
 
 const checkoutSchema = z.object({
   tier: z.enum(['premium', 'premiumPlus']),
 });
 
+const setReferralCodeSchema = z.object({
+  code: z.string().min(1),
+});
+
+const setRecruiterSchema = z.object({
+  code: z.string().min(1),
+});
+
 @Controller('billing')
 export class BillingController {
-  constructor(private readonly billing: BillingService) {}
+  constructor(
+    private readonly billing: BillingService,
+    private readonly referral: ReferralService,
+  ) {}
 
   @UseGuards(AuthGuard)
   @Get('me')
@@ -31,6 +43,40 @@ export class BillingController {
   @Post('portal-session')
   async portalSession(@CurrentUserId() userId: string): Promise<{ data: BillingPortalSessionDto }> {
     return { data: await this.billing.createPortalSession({ userId }) };
+  }
+
+  // ─── Referral endpoints ───────────────────────────────────────────────────
+
+  @UseGuards(AuthGuard)
+  @Get('referral')
+  async getReferral(@CurrentUserId() userId: string): Promise<{ data: ReferralMeDto }> {
+    return { data: await this.referral.getMyReferralInfo(userId) };
+  }
+
+  @UseGuards(AuthGuard)
+  @Put('referral/code')
+  async setReferralCode(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ): Promise<{ data: { referralCode: string } }> {
+    const parsed = setReferralCodeSchema.parse(body);
+    return { data: await this.referral.setReferralCode(userId, parsed.code) };
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('referral/recruits')
+  async getRecruits(@CurrentUserId() userId: string): Promise<{ data: RecruitDto[] }> {
+    return { data: await this.referral.getMyRecruits(userId) };
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('referral/set-recruiter')
+  async setRecruiter(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ): Promise<{ data: { recruiter: { username: string | null; name: string | null } } }> {
+    const parsed = setRecruiterSchema.parse(body);
+    return { data: await this.referral.setRecruiter(userId, parsed.code) };
   }
 
   /**

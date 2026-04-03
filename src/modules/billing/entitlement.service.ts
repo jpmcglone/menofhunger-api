@@ -16,6 +16,7 @@ export type ActiveGrantInfo = {
   reason: string | null;
   grantedByAdminId: string | null;
   createdAt: Date;
+  requiresActiveSubscription: boolean;
 };
 
 export type EntitlementResult = {
@@ -176,6 +177,9 @@ export class EntitlementService {
    * the resolved premium/premiumPlus booleans to User. Returns the result.
    *
    * Called after: webhook syncs, grant creation/revocation.
+   *
+   * Grants with `requiresActiveSubscription = true` (referral grants) only count when
+   * the user has an active Stripe subscription. Admin grants always apply.
    */
   async recomputeAndApply(userId: string): Promise<EntitlementResult> {
     const now = new Date();
@@ -210,17 +214,23 @@ export class EntitlementService {
     const stripeTier: EffectiveTier = stripeIsPlus ? 'premiumPlus' : stripeIsPremium ? 'premium' : 'none';
     const stripeExpiresAt = stripeEntitled ? (user.stripeCurrentPeriodEnd ?? null) : null;
 
-    const activeGrants = user.subscriptionGrants.map(this.toGrantInfo);
+    const allActiveGrants = user.subscriptionGrants.map(this.toGrantInfo);
+
+    // Referral grants only count towards entitlement while the user has an active Stripe
+    // subscription. Admin grants always apply regardless of subscription status.
+    const effectiveGrants = allActiveGrants.filter(
+      (g) => !g.requiresActiveSubscription || stripeEntitled,
+    );
 
     // Grants require verification — unverified users bank months but cannot use them.
     // Priority when verified: Premium+ grant > Premium grant > Stripe > none.
     const grantTier: EffectiveTier =
-      !verified || activeGrants.length === 0
+      !verified || effectiveGrants.length === 0
         ? 'none'
-        : activeGrants.some((g) => g.tier === 'premiumPlus')
+        : effectiveGrants.some((g) => g.tier === 'premiumPlus')
           ? 'premiumPlus'
           : 'premium';
-    const grantExpiresAt = verified && activeGrants.length > 0 ? activeGrants[0]!.endsAt : null;
+    const grantExpiresAt = verified && effectiveGrants.length > 0 ? effectiveGrants[0]!.endsAt : null;
 
     const effectiveTier = maxTier(grantTier, stripeTier);
     const isPremiumPlus = effectiveTier === 'premiumPlus';
@@ -241,7 +251,7 @@ export class EntitlementService {
       effectiveExpiresAt,
       stripeExpiresAt,
       grantExpiresAt,
-      activeGrants,
+      activeGrants: allActiveGrants,
     };
   }
 
@@ -255,5 +265,6 @@ export class EntitlementService {
     reason: g.reason,
     grantedByAdminId: g.grantedByAdminId,
     createdAt: g.createdAt,
+    requiresActiveSubscription: g.requiresActiveSubscription,
   });
 }

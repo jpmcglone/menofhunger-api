@@ -29,6 +29,7 @@ import { EmailModule } from '../email/email.module';
 import { AdminDailyDigestCron } from './admin-digest-email.cron';
 import { AdminAnalyticsController } from './admin-analytics.controller';
 import { AdminBillingController } from './admin-billing.controller';
+import { AdminReferralController } from './admin-referral.controller';
 import { BillingModule } from '../billing/billing.module';
 import { CoinsModule } from '../coins/coins.module';
 
@@ -64,6 +65,7 @@ import { CoinsModule } from '../coins/coins.module';
     AdminEmailSamplesController,
     AdminAnalyticsController,
     AdminBillingController,
+    AdminReferralController,
   ],
   providers: [AdminGuard, AdminImageReviewService, AdminHashtagsService, AdminDailyDigestCron],
   exports: [AdminDailyDigestCron],

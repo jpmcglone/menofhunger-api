@@ -11,6 +11,7 @@ import { UsersPublicRealtimeService } from '../users/users-public-realtime.servi
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
 import { EntitlementService, laterDate } from './entitlement.service';
+import { ReferralService } from './referral.service';
 
 type StripeCtx = { stripe: Stripe; cfg: NonNullable<ReturnType<AppConfigService['stripe']>> };
 
@@ -31,6 +32,7 @@ export class BillingService {
     private readonly posthog: PosthogService,
     private readonly slack: SlackService,
     private readonly entitlement: EntitlementService,
+    private readonly referral: ReferralService,
   ) {}
 
   private getStripe(): StripeCtx {
@@ -55,6 +57,10 @@ export class BillingService {
         stripeSubscriptionStatus: true,
         stripeCancelAtPeriodEnd: true,
         stripeCurrentPeriodEnd: true,
+        referralCode: true,
+        referralBonusGrantedAt: true,
+        recruitedBy: { select: { username: true, name: true } },
+        _count: { select: { recruits: true } },
       },
     });
     if (!user) throw new NotFoundException('User not found.');
@@ -81,6 +87,12 @@ export class BillingService {
         endsAt: g.endsAt.toISOString(),
         reason: g.reason,
       })),
+      referralCode: user.referralCode ?? null,
+      recruiter: user.recruitedBy
+        ? { username: user.recruitedBy.username ?? null, name: user.recruitedBy.name ?? null }
+        : null,
+      recruitCount: user._count.recruits,
+      referralBonusGranted: user.referralBonusGrantedAt !== null,
     };
   }
 
@@ -374,7 +386,16 @@ export class BillingService {
 
     const user = await this.prisma.user.findFirst({
       where: { stripeCustomerId: params.customerId },
-      select: { id: true, username: true, name: true, verifiedStatus: true, premium: true, premiumPlus: true },
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        verifiedStatus: true,
+        premium: true,
+        premiumPlus: true,
+        recruitedById: true,
+        referralBonusGrantedAt: true,
+      },
     });
     if (!user) return;
 
@@ -419,6 +440,23 @@ export class BillingService {
         tier: isPremiumPlus ? 'premiumPlus' : 'premium',
         source: 'stripe',
       });
+    }
+
+    // When the subscription first becomes active (paid), check if a referral bonus should be
+    // awarded to this user and their recruiter. The bonus only fires once (guarded by
+    // referralBonusGrantedAt) and only when both parties have an active Stripe subscription.
+    if (
+      status === 'active' &&
+      user.recruitedById &&
+      !user.referralBonusGrantedAt
+    ) {
+      try {
+        await this.referral.maybeGrantReferralBonus(user.id);
+        // Emit realtime update for recruiter too (their grant balance just changed).
+        void this.usersMeRealtime.emitMeUpdated(user.recruitedById, 'billing_tier_changed');
+      } catch (err) {
+        this.logger.warn(`[billing] Failed to grant referral bonus for user ${user.id}: ${err}`);
+      }
     }
 
     this.posthog.capture(user.id, 'tier_changed', {
