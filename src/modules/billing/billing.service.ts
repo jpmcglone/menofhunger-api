@@ -5,6 +5,7 @@ import { AppConfigService } from '../app/app-config.service';
 import type { BillingCheckoutSessionDto, BillingMeDto, BillingPortalSessionDto, BillingTier } from '../../common/dto';
 import type { VerifiedStatus } from '@prisma/client';
 import { Prisma } from '@prisma/client';
+import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
@@ -59,7 +60,18 @@ export class BillingService {
         stripeCurrentPeriodEnd: true,
         referralCode: true,
         referralBonusGrantedAt: true,
-        recruitedBy: { select: { username: true, name: true } },
+        recruitedBy: {
+          select: {
+            id: true,
+            username: true,
+            name: true,
+            avatarKey: true,
+            avatarUpdatedAt: true,
+            premium: true,
+            premiumPlus: true,
+            verifiedStatus: true,
+          },
+        },
         _count: { select: { recruits: true } },
       },
     });
@@ -89,7 +101,19 @@ export class BillingService {
       })),
       referralCode: user.referralCode ?? null,
       recruiter: user.recruitedBy
-        ? { username: user.recruitedBy.username ?? null, name: user.recruitedBy.name ?? null }
+        ? {
+            id: user.recruitedBy.id,
+            username: user.recruitedBy.username ?? null,
+            name: user.recruitedBy.name ?? null,
+            avatarUrl: publicAssetUrl({
+              publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
+              key: user.recruitedBy.avatarKey ?? null,
+              updatedAt: user.recruitedBy.avatarUpdatedAt ?? null,
+            }),
+            premium: Boolean(user.recruitedBy.premium),
+            premiumPlus: Boolean(user.recruitedBy.premiumPlus),
+            verifiedStatus: (user.recruitedBy.verifiedStatus ?? 'none') as 'none' | 'identity' | 'manual',
+          }
         : null,
       recruitCount: user._count.recruits,
       referralBonusGranted: user.referralBonusGrantedAt !== null,

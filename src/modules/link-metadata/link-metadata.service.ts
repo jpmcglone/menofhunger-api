@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AppConfigService } from '../app/app-config.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
@@ -14,6 +15,62 @@ export type LinkMetadataDto = {
 
 const FETCH_TIMEOUT_MS = 2000;
 const STALE_DAYS = 7;
+
+// ─── MoH internal URL handling ───────────────────────────────────────────────
+// When someone shares a menofhunger.com link, we skip external scraping entirely
+// (which would hit a login-redirect and cache "Login | Men of Hunger") and instead
+// synthesize clean, accurate metadata from the URL path.
+
+const MOH_HOSTNAME = 'menofhunger.com';
+
+function getMohPageTitle(pathname: string): string {
+  const parts = pathname.split('/').filter(Boolean);
+  const s0 = parts[0] ?? '';
+  const s1 = parts[1] ?? '';
+
+  if (!s0 || s0 === 'login' || s0 === 'index') return 'Men of Hunger';
+  if (s0 === 'home') return 'Home';
+  if (s0 === 'u' && s1) return `@${s1}`;
+  if (s0 === 'p') return 'Post';
+  if (s0 === 'a') return 'Article';
+  if (s0 === 'spaces' || s0 === 's') return 'Space';
+  if (s0 === 'admin') return 'Admin';
+
+  if (s0 === 'settings') {
+    if (!s1) return 'Settings';
+    const settingsLabels: Record<string, string> = {
+      billing: 'Billing', account: 'Account', notifications: 'Notifications',
+      verification: 'Verification', profile: 'Profile', privacy: 'Privacy',
+    };
+    const label = settingsLabels[s1] ?? (s1.charAt(0).toUpperCase() + s1.slice(1));
+    return `${label} · Settings`;
+  }
+
+  const topLabels: Record<string, string> = {
+    notifications: 'Notifications', messages: 'Messages', discover: 'Discover',
+    groups: 'Groups', search: 'Search', coins: 'Coins', earn: 'Earn',
+    checkins: 'Check-ins', explore: 'Explore', leaderboard: 'Leaderboard',
+  };
+  if (topLabels[s0]) return topLabels[s0]!;
+
+  // Fallback: capitalize each path segment, join with ·
+  return parts.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(' · ');
+}
+
+function buildMohSyntheticMeta(url: string): LinkMetadataDto {
+  try {
+    const u = new URL(url);
+    return {
+      url,
+      title: getMohPageTitle(u.pathname),
+      description: null,
+      imageUrl: null,
+      siteName: 'Men of Hunger',
+    };
+  } catch {
+    return { url, title: 'Men of Hunger', description: null, imageUrl: null, siteName: 'Men of Hunger' };
+  }
+}
 
 type MicrolinkResponse = {
   status: 'success' | 'error';
@@ -51,11 +108,36 @@ export class LinkMetadataService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
+    private readonly appConfig: AppConfigService,
   ) {}
+
+  /** Returns true if the hostname is a MoH-owned domain (production or dev). */
+  private isMohHost(hostname: string): boolean {
+    const h = hostname.toLowerCase();
+    if (h === MOH_HOSTNAME || h === `www.${MOH_HOSTNAME}`) return true;
+    // Also match the configured frontend base URL (covers staging / custom domains).
+    const configuredBase = this.appConfig.frontendBaseUrl();
+    if (configuredBase) {
+      try {
+        const configured = new URL(configuredBase).hostname.toLowerCase();
+        if (configured && (h === configured || h === `www.${configured}`)) return true;
+      } catch { /* ignore */ }
+    }
+    return false;
+  }
 
   async getMetadata(url: string): Promise<LinkMetadataDto | null> {
     const normalized = normalizeUrl(url);
     if (!normalized) return null;
+
+    // MoH internal links: return synthetic metadata immediately without hitting external
+    // scrapers. Avoids caching "Login | Men of Hunger" for auth-gated pages.
+    try {
+      const u = new URL(normalized);
+      if (this.isMohHost(u.hostname)) {
+        return buildMohSyntheticMeta(normalized);
+      }
+    } catch { /* fall through */ }
 
     const cacheKey = RedisKeys.linkMeta(normalized);
     const cached = await this.cache.getJson<{ meta: LinkMetadataDto | null }>(cacheKey);

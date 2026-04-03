@@ -4,9 +4,10 @@ import { LinkMetadataService } from './link-metadata.service';
 import { LinkMetadataCron } from './link-metadata.cron';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
+import { AppConfigModule } from '../app/app-config.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule],
+  imports: [PrismaModule, AuthModule, AppConfigModule],
   controllers: [LinkMetadataController],
   providers: [LinkMetadataService, LinkMetadataCron],
   exports: [LinkMetadataService, LinkMetadataCron],

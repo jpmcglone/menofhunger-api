@@ -28,7 +28,15 @@ export type BillingMeDto = {
   /** Referral code set by this user (premium-only). */
   referralCode: string | null;
   /** Who recruited this user (null if no recruiter). */
-  recruiter: { username: string | null; name: string | null } | null;
+  recruiter: {
+    id: string;
+    username: string | null;
+    name: string | null;
+    avatarUrl: string | null;
+    premium: boolean;
+    premiumPlus: boolean;
+    verifiedStatus: 'none' | 'identity' | 'manual';
+  } | null;
   /** How many users this user has recruited. */
   recruitCount: number;
   /** Whether the one-time referral bonus has been granted to this user. */
