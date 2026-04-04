@@ -4,7 +4,7 @@ function makeService(overrides?: { prisma?: any }) {
   const prisma =
     overrides?.prisma ??
     ({
-      notification: { findUnique: jest.fn(), findMany: jest.fn(async () => []) },
+      notification: { findUnique: jest.fn(), findMany: jest.fn(async () => []), count: jest.fn(async () => 0) },
       post: { findMany: jest.fn(async () => []), findUnique: jest.fn() },
       user: { findMany: jest.fn(async () => []), findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 0 })) },
       follow: { findMany: jest.fn(async () => []) },
@@ -83,6 +83,7 @@ describe('NotificationsService.list batching', () => {
               },
             },
           ]),
+          count: jest.fn(async () => 2),
         },
         post: {
           findUnique: jest.fn(),

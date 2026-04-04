@@ -42,24 +42,24 @@ describe('WatchPartyStateService', () => {
       expect(state.videoUrl).toBe(VIDEO_URL);
     });
 
-    it('drift-adjusts currentTime when playing (rate = 1)', () => {
+    it('returns raw stored currentTime when playing (client applies drift)', () => {
       const { svc } = makeService();
       nowSpy.mockReturnValue(0);
       svc.setState('s', { videoUrl: VIDEO_URL, isPlaying: true, currentTime: 100, playbackRate: 1 });
 
-      nowSpy.mockReturnValue(5_000); // 5 s elapsed
+      nowSpy.mockReturnValue(5_000); // service now returns raw time regardless
       const state = svc.getState('s')!;
       expect(state.isPlaying).toBe(true);
-      expect(state.currentTime).toBeCloseTo(105);
+      expect(state.currentTime).toBeCloseTo(100);
     });
 
-    it('scales drift by playbackRate', () => {
+    it('returns raw currentTime regardless of playbackRate', () => {
       const { svc } = makeService();
       nowSpy.mockReturnValue(0);
       svc.setState('s', { videoUrl: VIDEO_URL, isPlaying: true, currentTime: 0, playbackRate: 2 });
 
-      nowSpy.mockReturnValue(3_000); // 3 s elapsed at 2× → 6 s of video
-      expect(svc.getState('s')!.currentTime).toBeCloseTo(6);
+      nowSpy.mockReturnValue(3_000); // client computes elapsed * rate
+      expect(svc.getState('s')!.currentTime).toBeCloseTo(0);
     });
 
     it('returns independent state per space', () => {
@@ -117,15 +117,15 @@ describe('WatchPartyStateService', () => {
       expect(redis.getJson).not.toHaveBeenCalled();
     });
 
-    it('falls back to Redis when memory is empty, returns drift-adjusted state', async () => {
+    it('falls back to Redis when memory is empty, returns raw stored state', async () => {
       const { svc, redis } = makeService();
       nowSpy.mockReturnValue(0);
       const stored = { videoUrl: VIDEO_URL, isPlaying: true, currentTime: 100, playbackRate: 1, updatedAt: 0 };
       redis.getJson.mockResolvedValue(stored);
 
-      nowSpy.mockReturnValue(4_000); // 4 s elapsed
+      nowSpy.mockReturnValue(4_000); // service returns raw time
       const state = await svc.getStateAsync('s');
-      expect(state!.currentTime).toBeCloseTo(104);
+      expect(state!.currentTime).toBeCloseTo(100);
     });
 
     it('warms the in-memory cache from Redis so subsequent sync getState works', async () => {
