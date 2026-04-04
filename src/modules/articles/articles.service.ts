@@ -281,10 +281,12 @@ export class ArticlesService {
 
     const effectiveVisibilities = opts.visibilityFilter ? [opts.visibilityFilter] : allowedVisibilities;
 
+    const normalizedAuthorUsername = (opts.authorUsername ?? '').trim();
+
     const authorFilter = opts.mine
       ? { authorId: opts.viewerUserId! }
-      : opts.authorUsername
-        ? { author: { username: opts.authorUsername } }
+      : normalizedAuthorUsername
+        ? { author: { username: { equals: normalizedAuthorUsername, mode: 'insensitive' as const } } }
         : opts.followingOnly && opts.viewerUserId
           ? { author: { followers: { some: { followerId: opts.viewerUserId } } } }
           : {};
