@@ -95,15 +95,16 @@ export class WatchPartyStateService {
   }
 
   private toDto(state: WatchPartyState): WatchPartyStateDto {
-    let currentTime = state.currentTime;
-    if (state.isPlaying) {
-      const elapsed = (Date.now() - state.updatedAt) / 1000;
-      currentTime += elapsed * state.playbackRate;
-    }
+    // Do NOT pre-adjust currentTime here. The client's driftAdjustedTime already
+    // computes the elapsed offset using updatedAt, so pre-adjusting server-side
+    // with the same updatedAt would double-count the elapsed time and send viewers
+    // far past the actual playback position.
+    // pauseAtCurrentPosition is the exception — it stores a new frozen snapshot
+    // with isPlaying=false, so no client adjustment is needed there.
     return {
       videoUrl: state.videoUrl,
       isPlaying: state.isPlaying,
-      currentTime,
+      currentTime: state.currentTime,
       playbackRate: state.playbackRate,
       updatedAt: state.updatedAt,
     };

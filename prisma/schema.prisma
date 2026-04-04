@@ -63,6 +63,7 @@ enum NotificationKind {
   poll_results_ready
   generic
   coin_transfer
+  group_join_request
 }
 
 enum CoinTransferKind {
@@ -584,8 +585,9 @@ model CommunityGroup {
   /** Denormalized count of active members (updated on join/leave/approve). */
   memberCount    Int     @default(0)
 
-  members CommunityGroupMember[]
-  posts   Post[]
+  members       CommunityGroupMember[]
+  posts         Post[]
+  notifications Notification[] @relation("Notification_subjectGroup")
 
   @@index([deletedAt, isFeatured, featuredOrder])
   @@index([createdAt])
@@ -1153,6 +1155,7 @@ model Notification {
   subjectPostId  String?
   subjectUserId  String?
   subjectArticleId String?
+  subjectGroupId   String?
   title     String?
   body      String?
 
@@ -1162,6 +1165,7 @@ model Notification {
   subjectPost Post? @relation("Notification_subjectPost", fields: [subjectPostId], references: [id], onDelete: SetNull)
   subjectUser User? @relation("Notification_subjectUser", fields: [subjectUserId], references: [id], onDelete: SetNull)
   subjectArticle Article? @relation("Notification_subjectArticle", fields: [subjectArticleId], references: [id], onDelete: SetNull)
+  subjectGroup CommunityGroup? @relation("Notification_subjectGroup", fields: [subjectGroupId], references: [id], onDelete: SetNull)
 
   @@index([recipientUserId, createdAt])
   @@index([recipientUserId, deliveredAt])

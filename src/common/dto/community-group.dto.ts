@@ -42,6 +42,8 @@ export type CommunityGroupShellDto = {
     role: CommunityGroupMemberRole;
   } | null;
   viewerPendingApproval: boolean;
+  /** Number of pending join requests. Only populated for owners and moderators. */
+  pendingMemberCount?: number;
 };
 
 export type CommunityGroupMemberUserDto = {

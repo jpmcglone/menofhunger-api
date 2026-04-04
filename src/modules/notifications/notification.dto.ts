@@ -43,6 +43,11 @@ export type NotificationDto = {
   subjectPostId: string | null;
   subjectUserId: string | null;
   subjectArticleId: string | null;
+  subjectGroupId: string | null;
+  /** Slug of the subject group (only populated for group_join_request notifications). */
+  subjectGroupSlug: string | null;
+  /** Display name of the subject group (only populated for group_join_request notifications). */
+  subjectGroupName: string | null;
   title: string | null;
   body: string | null;
   /** When set (e.g. boost), for quote + stacked images / video thumbnail in the UI. */

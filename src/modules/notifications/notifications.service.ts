@@ -31,6 +31,7 @@ export type CreateNotificationParams = {
   subjectPostId?: string | null;
   subjectUserId?: string | null;
   subjectArticleId?: string | null;
+  subjectGroupId?: string | null;
   title?: string | null;
   body?: string | null;
 };
@@ -172,6 +173,7 @@ export class NotificationsService {
       subjectPostId,
       subjectUserId,
       subjectArticleId,
+      subjectGroupId,
       title,
       body,
     } = params;
@@ -190,6 +192,7 @@ export class NotificationsService {
         comment: 'replied to you',
         poll_results_ready: 'Poll results are ready',
         coin_transfer: 'sent you coins',
+        group_join_request: 'requests to join your group',
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
@@ -203,16 +206,21 @@ export class NotificationsService {
           subjectPostId: subjectPostId ?? undefined,
           subjectUserId: subjectUserId ?? undefined,
           subjectArticleId: subjectArticleId ?? undefined,
+          subjectGroupId: subjectGroupId ?? undefined,
           title: fallbackTitle ?? undefined,
           body: body ?? undefined,
         },
       });
-      const user = await tx.user.update({
+      // Increment the denormalized counter for bookkeeping, but compute the real undelivered
+      // count from actual rows to emit an accurate realtime badge (counter can drift over time).
+      await tx.user.update({
         where: { id: recipientUserId },
         data: { undeliveredNotificationCount: { increment: 1 } },
-        select: { undeliveredNotificationCount: true },
       });
-      return { notification, undeliveredCount: user.undeliveredNotificationCount };
+      const undeliveredCount = await tx.notification.count({
+        where: { recipientUserId, deliveredAt: null },
+      });
+      return { notification, undeliveredCount };
     });
 
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
@@ -859,15 +867,17 @@ export class NotificationsService {
               },
               select: { id: true },
             });
-            const user = await tx.user.update({
+            await tx.user.update({
               where: { id: recipientUserId },
               data: { undeliveredNotificationCount: { increment: 1 } },
-              select: { undeliveredNotificationCount: true },
+            });
+            const undeliveredCount = await tx.notification.count({
+              where: { recipientUserId, deliveredAt: null },
             });
             return {
               kind: 'created' as const,
               notificationId: notification.id,
-              undeliveredCount: user.undeliveredNotificationCount,
+              undeliveredCount,
             };
           },
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -1028,12 +1038,14 @@ export class NotificationsService {
               },
               select: { id: true },
             });
-            const user = await tx.user.update({
+            await tx.user.update({
               where: { id: recipientUserId },
               data: { undeliveredNotificationCount: { increment: 1 } },
-              select: { undeliveredNotificationCount: true },
             });
-            return { kind: 'created' as const, notificationId: notification.id, undeliveredCount: user.undeliveredNotificationCount };
+            const undeliveredCount = await tx.notification.count({
+              where: { recipientUserId, deliveredAt: null },
+            });
+            return { kind: 'created' as const, notificationId: notification.id, undeliveredCount };
           },
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
         );
@@ -1312,6 +1324,23 @@ export class NotificationsService {
       });
     }
 
+    // Batch-lookup groups for group_join_request notifications (slug + name for routing/display).
+    const subjectGroupIds = [
+      ...new Set(
+        raw
+          .filter((n) => n.kind === 'group_join_request' && n.subjectGroupId)
+          .map((n) => n.subjectGroupId as string),
+      ),
+    ];
+    const subjectGroups =
+      subjectGroupIds.length > 0
+        ? await this.prisma.communityGroup.findMany({
+            where: { id: { in: subjectGroupIds } },
+            select: { id: true, slug: true, name: true },
+          })
+        : [];
+    const subjectGroupById = new Map(subjectGroups.map((g) => [g.id, g] as const));
+
     const dtos: NotificationDto[] = raw.map((n) => {
       const preview = n.subjectPostId ? subjectPreviewByPostId.get(n.subjectPostId) ?? null : null;
       const articlePreview = n.subjectArticleId ? subjectArticlePreviewById.get(n.subjectArticleId) ?? null : null;
@@ -1319,7 +1348,8 @@ export class NotificationsService {
       let subjectTier: SubjectTier = null;
       if (n.subjectPostId) subjectTier = subjectTierByPostId.get(n.subjectPostId) ?? null;
       else if (n.subjectUserId) subjectTier = subjectTierByUserId.get(n.subjectUserId) ?? null;
-      return this.toNotificationDto(n, publicBaseUrl, preview, subjectPostVisibility, subjectTier, articlePreview);
+      const subjectGroup = n.subjectGroupId ? subjectGroupById.get(n.subjectGroupId) ?? null : null;
+      return this.toNotificationDto(n, publicBaseUrl, preview, subjectPostVisibility, subjectTier, articlePreview, subjectGroup?.slug ?? null, subjectGroup?.name ?? null);
     });
 
     // Follow bell settings: which followed_post actors have “every post” enabled.
@@ -1733,7 +1763,12 @@ export class NotificationsService {
   }
 
   async getUndeliveredCount(recipientUserId: string): Promise<number> {
-    return await this.getUndeliveredCountInternal(recipientUserId);
+    // Count from actual rows rather than the denormalized counter so the HTTP
+    // endpoint and auth/me payload always return the accurate value, even when
+    // the cached counter has drifted (e.g. after orphan cleanup or race conditions).
+    return this.prisma.notification.count({
+      where: { recipientUserId, deliveredAt: null },
+    });
   }
 
   async markDelivered(recipientUserId: string): Promise<void> {
@@ -1743,19 +1778,15 @@ export class NotificationsService {
         data: { deliveredAt: new Date() },
       });
       if (res.count > 0) {
-        return (
-          await tx.user.update({
-            where: { id: recipientUserId },
-            data: { undeliveredNotificationCount: { decrement: res.count } },
-            select: { undeliveredNotificationCount: true },
-          })
-        ).undeliveredNotificationCount;
+        // Clamp to 0 — decrement can't go below 0 even if the counter drifted.
+        await tx.$executeRaw`
+          UPDATE "User"
+          SET "undeliveredNotificationCount" = GREATEST(0, "undeliveredNotificationCount" - ${res.count})
+          WHERE id = ${recipientUserId}
+        `;
       }
-      const row = await tx.user.findUnique({
-        where: { id: recipientUserId },
-        select: { undeliveredNotificationCount: true },
-      });
-      return row?.undeliveredNotificationCount ?? 0;
+      // Return accurate count from actual rows (handles drifted counters).
+      return tx.notification.count({ where: { recipientUserId, deliveredAt: null } });
     });
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
@@ -1809,19 +1840,15 @@ export class NotificationsService {
         data: { deliveredAt: now },
       });
       if (deliveredRes.count > 0) {
-        return (
-          await tx.user.update({
-            where: { id: recipientUserId },
-            data: { undeliveredNotificationCount: { decrement: deliveredRes.count } },
-            select: { undeliveredNotificationCount: true },
-          })
-        ).undeliveredNotificationCount;
+        // Clamp to 0 — decrement can't go below 0 even if the counter drifted.
+        await tx.$executeRaw`
+          UPDATE "User"
+          SET "undeliveredNotificationCount" = GREATEST(0, "undeliveredNotificationCount" - ${deliveredRes.count})
+          WHERE id = ${recipientUserId}
+        `;
       }
-      const row = await tx.user.findUnique({
-        where: { id: recipientUserId },
-        select: { undeliveredNotificationCount: true },
-      });
-      return row?.undeliveredNotificationCount ?? 0;
+      // Return accurate count from actual rows (handles drifted counters).
+      return tx.notification.count({ where: { recipientUserId, deliveredAt: null } });
     });
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
@@ -2134,6 +2161,7 @@ export class NotificationsService {
       subjectPostId: string | null;
       subjectUserId: string | null;
       subjectArticleId?: string | null;
+      subjectGroupId?: string | null;
       title: string | null;
       body: string | null;
       actor: {
@@ -2152,6 +2180,8 @@ export class NotificationsService {
     subjectPostVisibility: SubjectPostVisibility | null = null,
     subjectTier: SubjectTier = null,
     subjectArticlePreview?: SubjectArticlePreviewDto | null,
+    subjectGroupSlug: string | null = null,
+    subjectGroupName: string | null = null,
   ): NotificationDto {
     let actor: NotificationActorDto | null = null;
     if (n.actor && !(n.actor as { bannedAt?: Date | null }).bannedAt) {
@@ -2182,6 +2212,9 @@ export class NotificationsService {
       subjectPostId: n.subjectPostId,
       subjectUserId: n.subjectUserId,
       subjectArticleId: n.subjectArticleId ?? null,
+      subjectGroupId: n.subjectGroupId ?? null,
+      subjectGroupSlug,
+      subjectGroupName,
       title: n.title,
       body: n.body,
       subjectPostPreview: subjectPostPreview ?? null,
@@ -2271,6 +2304,17 @@ export class NotificationsService {
       }
     }
 
-    return this.toNotificationDto(n, publicBaseUrl, subjectPostPreview, subjectPostVisibility, subjectTier);
+    let subjectGroupSlug: string | null = null;
+    let subjectGroupName: string | null = null;
+    if (n.subjectGroupId) {
+      const g = await this.prisma.communityGroup.findUnique({
+        where: { id: n.subjectGroupId },
+        select: { slug: true, name: true },
+      });
+      subjectGroupSlug = g?.slug ?? null;
+      subjectGroupName = g?.name ?? null;
+    }
+
+    return this.toNotificationDto(n, publicBaseUrl, subjectPostPreview, subjectPostVisibility, subjectTier, undefined, subjectGroupSlug, subjectGroupName);
   }
 }

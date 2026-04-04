@@ -15,6 +15,7 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { PostsService } from '../posts/posts.service';
 import { AppConfigService } from '../app/app-config.service';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
+import { NotificationsService } from '../notifications/notifications.service';
 
 function slugifyBase(name: string): string {
   return (name ?? '')
@@ -31,6 +32,7 @@ export class GroupsService {
     private readonly prisma: PrismaService,
     private readonly posts: PostsService,
     private readonly appConfig: AppConfigService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private async ensureUniqueSlug(base: string): Promise<string> {
@@ -82,6 +84,16 @@ export class GroupsService {
     const dto = toCommunityGroupShellDto(g, viewerMembership as Parameters<typeof toCommunityGroupShellDto>[1]);
     // Don't expose rules to anonymous viewers
     if (!params.viewerUserId) dto.rules = null;
+
+    // Include pending count for owners and moderators.
+    const isAdmin = viewerMembership?.status === 'active' &&
+      (viewerMembership.role === 'owner' || viewerMembership.role === 'moderator');
+    if (isAdmin && g.joinPolicy === 'approval') {
+      dto.pendingMemberCount = await this.prisma.communityGroupMember.count({
+        where: { groupId: g.id, status: 'pending' },
+      });
+    }
+
     return { data: dto };
   }
 
@@ -300,6 +312,7 @@ export class GroupsService {
       return { data: { ok: true as const, status: 'active' as const } };
     }
 
+    const isNewRequest = !existing || existing.status !== 'pending';
     await this.prisma.communityGroupMember.upsert({
       where: { groupId_userId: { groupId: g.id, userId: params.viewerUserId } },
       create: {
@@ -310,7 +323,36 @@ export class GroupsService {
       },
       update: { status: 'pending', role: 'member' },
     });
+
+    // Notify owners and moderators of the new join request (best-effort).
+    if (isNewRequest) {
+      void this.notifyGroupAdminsOfJoinRequest({
+        groupId: g.id,
+        requestingUserId: params.viewerUserId,
+      }).catch(() => undefined);
+    }
+
     return { data: { ok: true as const, status: 'pending' as const } };
+  }
+
+  private async notifyGroupAdminsOfJoinRequest(params: {
+    groupId: string;
+    requestingUserId: string;
+  }): Promise<void> {
+    const { groupId, requestingUserId } = params;
+    const admins = await this.prisma.communityGroupMember.findMany({
+      where: { groupId, status: 'active', role: { in: ['owner', 'moderator'] } },
+      select: { userId: true },
+    });
+    for (const admin of admins) {
+      if (admin.userId === requestingUserId) continue;
+      await this.notifications.create({
+        recipientUserId: admin.userId,
+        kind: 'group_join_request',
+        actorUserId: requestingUserId,
+        subjectGroupId: groupId,
+      });
+    }
   }
 
   async leave(params: { viewerUserId: string; groupId: string }) {

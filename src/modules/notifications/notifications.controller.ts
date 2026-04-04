@@ -16,7 +16,7 @@ const listQuerySchema = z.object({
   kind: z.enum([
     'comment', 'boost', 'repost', 'follow', 'followed_post',
     'followed_article', 'mention', 'nudge', 'coin_transfer',
-    'poll_results_ready', 'generic',
+    'poll_results_ready', 'generic', 'group_join_request',
   ]).optional(),
 });
 
