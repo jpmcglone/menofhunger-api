@@ -42,7 +42,7 @@ export class BillingService {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const StripeCtor = require('stripe');
     const stripe = new StripeCtor(cfg.secretKey, {
-      apiVersion: '2024-06-20',
+      apiVersion: '2026-03-25.dahlia',
       typescript: true,
     }) as unknown as Stripe;
     return { stripe, cfg };
@@ -130,6 +130,9 @@ export class BillingService {
         premium: true,
         premiumPlus: true,
         stripeCustomerId: true,
+        stripeSubscriptionId: true,
+        stripeSubscriptionStatus: true,
+        stripeSubscriptionPriceId: true,
       },
     });
     if (!user) throw new NotFoundException('User not found.');
@@ -275,6 +278,39 @@ export class BillingService {
 
     const price =
       params.tier === 'premiumPlus' ? cfg.pricePremiumPlusMonthly : cfg.pricePremiumMonthly;
+    const ACTIVE_STATUSES = new Set(['active', 'trialing', 'past_due']);
+    const hasActiveSub = user.stripeSubscriptionId && ACTIVE_STATUSES.has(user.stripeSubscriptionStatus ?? '');
+
+    if (hasActiveSub) {
+      const currentPriceId = user.stripeSubscriptionPriceId;
+      const isCurrentPremiumPlus = currentPriceId === cfg.pricePremiumPlusMonthly;
+      const isCurrentPremium = currentPriceId === cfg.pricePremiumMonthly;
+
+      if (params.tier === 'premiumPlus' && isCurrentPremiumPlus) {
+        throw new BadRequestException('You already have a Premium+ subscription.');
+      }
+      if (params.tier === 'premium' && isCurrentPremium) {
+        throw new BadRequestException('You already have a Premium subscription.');
+      }
+      if (params.tier === 'premium' && isCurrentPremiumPlus) {
+        throw new BadRequestException('You already have Premium+ which includes everything in Premium. Manage your subscription to make changes.');
+      }
+
+      // Upgrading Premium → Premium+: swap the price on the existing subscription.
+      if (params.tier === 'premiumPlus' && isCurrentPremium) {
+        const sub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId!);
+        const itemId = sub.items?.data?.[0]?.id;
+        if (!itemId) throw new BadRequestException('Could not find subscription item to upgrade.');
+        await stripe.subscriptions.update(user.stripeSubscriptionId!, {
+          items: [{ id: itemId, price: cfg.pricePremiumPlusMonthly }],
+          proration_behavior: 'create_prorations',
+          metadata: { ...((sub as any).metadata ?? {}), tier: 'premiumPlus' },
+        });
+        this.logger.log(`[billing] Upgraded user ${params.userId} from Premium → Premium+`);
+        await this.syncSubscriptionToUser({ customerId: user.stripeCustomerId!, subscriptionId: user.stripeSubscriptionId! });
+        return { url: `${cfg.frontendBaseUrl}/settings/billing?checkout=success` };
+      }
+    }
 
     let stripeCustomerId = user.stripeCustomerId ?? null;
     if (!stripeCustomerId) {
@@ -494,5 +530,40 @@ export class BillingService {
     // Realtime: update both public tier badge + self auth state.
     void this.usersPublicRealtime.emitPublicProfileUpdated(user.id);
     void this.usersMeRealtime.emitMeUpdated(user.id, 'billing_tier_changed');
+  }
+
+  /**
+   * Dev-only: strip all Stripe subscription fields and premium flags from a user.
+   * Allows re-testing the checkout flow without creating a new account.
+   */
+  async devResetPremium(userId: string): Promise<void> {
+    if (this.appConfig.nodeEnv() !== 'development') {
+      throw new ForbiddenException('Only available in development.');
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        premium: false,
+        premiumPlus: false,
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+        stripeSubscriptionStatus: null,
+        stripeSubscriptionPriceId: null,
+        stripeCurrentPeriodStart: null,
+        stripeCurrentPeriodEnd: null,
+        stripeCancelAtPeriodEnd: false,
+      },
+    });
+
+    await this.prisma.subscriptionGrant.deleteMany({ where: { userId } });
+
+    await this.publicProfileCache.invalidateForUser(
+      await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { id: true, username: true } }),
+    );
+    void this.usersPublicRealtime.emitPublicProfileUpdated(userId);
+    void this.usersMeRealtime.emitMeUpdated(userId, 'billing_tier_changed');
+
+    this.logger.log(`[dev] Reset premium for user ${userId}`);
   }
 }

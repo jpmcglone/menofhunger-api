@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Headers, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Headers, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import type { Request } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
@@ -77,6 +77,13 @@ export class BillingController {
   ): Promise<{ data: { recruiter: { username: string | null; name: string | null } } }> {
     const parsed = setRecruiterSchema.parse(body);
     return { data: await this.referral.setRecruiter(userId, parsed.code) };
+  }
+
+  @UseGuards(AuthGuard)
+  @Delete('dev-reset')
+  async devReset(@CurrentUserId() userId: string): Promise<{ data: { reset: true } }> {
+    await this.billing.devResetPremium(userId);
+    return { data: { reset: true } };
   }
 
   /**
