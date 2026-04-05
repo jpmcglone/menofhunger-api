@@ -2,6 +2,7 @@ import type { MessageDto } from '../../modules/messages/message.dto';
 import type { NotificationDto } from '../../modules/notifications/notification.dto';
 import type { UserDto } from './user.dto';
 import type { ArticleCommentDto, ArticleReactionSummaryDto } from './article.dto';
+import type { PostDto } from './post.dto';
 
 /**
  * Websocket (Socket.IO) payload DTOs.
@@ -136,6 +137,8 @@ export const WsEventNames = {
   postsUnsubscribe: 'posts:unsubscribe',
   postsSubscribed: 'posts:subscribed',
   postsLiveUpdated: 'posts:liveUpdated',
+  postsCommentAdded: 'posts:commentAdded',
+  postsCommentDeleted: 'posts:commentDeleted',
   articlesSubscribe: 'articles:subscribe',
   articlesUnsubscribe: 'articles:unsubscribe',
   articlesSubscribed: 'articles:subscribed',
@@ -219,5 +222,17 @@ export type ArticlesCommentReactionChangedPayloadDto = {
   commentId: string;
   parentId: string | null;
   reactions: ArticleReactionSummaryDto[];
+};
+
+/** Full reply DTO pushed to `post:{parentPostId}` room subscribers when a new reply is created. */
+export type PostsCommentAddedPayloadDto = {
+  parentPostId: string;
+  comment: PostDto;
+};
+
+/** Minimal delete hint pushed to `post:{parentPostId}` room subscribers when a reply is soft-deleted. */
+export type PostsCommentDeletedPayloadDto = {
+  parentPostId: string;
+  commentId: string;
 };
 

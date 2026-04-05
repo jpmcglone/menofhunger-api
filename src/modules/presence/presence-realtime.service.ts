@@ -13,6 +13,8 @@ import type {
   FollowsChangedPayloadDto,
   MessagesReadPayloadDto,
   PostsLiveUpdatedPayloadDto,
+  PostsCommentAddedPayloadDto,
+  PostsCommentDeletedPayloadDto,
   UsersMeUpdatedPayloadDto,
   NotificationsDeletedPayloadDto,
   NotificationsNewPayloadDto,
@@ -150,6 +152,20 @@ export class PresenceRealtimeService {
     const pid = (postId ?? '').trim();
     if (!pid) return;
     this.emitToRoom(`post:${pid}`, WsEventNames.postsLiveUpdated, payload);
+  }
+
+  /** Full reply DTO pushed to post room subscribers when a new reply is created. */
+  emitPostsCommentAdded(parentPostId: string, payload: PostsCommentAddedPayloadDto): void {
+    const pid = (parentPostId ?? '').trim();
+    if (!pid) return;
+    this.emitToRoom(`post:${pid}`, WsEventNames.postsCommentAdded, payload);
+  }
+
+  /** Delete hint pushed to post room subscribers when a reply is soft-deleted. */
+  emitPostsCommentDeleted(parentPostId: string, payload: PostsCommentDeletedPayloadDto): void {
+    const pid = (parentPostId ?? '').trim();
+    if (!pid) return;
+    this.emitToRoom(`post:${pid}`, WsEventNames.postsCommentDeleted, payload);
   }
 
   /** Scoped article live updates (delivered only to sockets subscribed to this article). */

@@ -2918,7 +2918,7 @@ export class PostsService {
       // Best-effort
     }
 
-    // Realtime: decrement parent commentCount for live subscribers (best-effort).
+    // Realtime: decrement parent commentCount + notify thread subscribers of the delete (best-effort).
     const deletedParentId = (post as any).parentId as string | null | undefined;
     if (deletedParentId) {
       try {
@@ -2934,6 +2934,16 @@ export class PostsService {
             patch: { commentCount: updatedParent.commentCount },
           });
         }
+      } catch {
+        // Best-effort
+      }
+
+      // Push a typed delete event so thread subscribers can remove the reply from their list immediately.
+      try {
+        this.presenceRealtime.emitPostsCommentDeleted(deletedParentId, {
+          parentPostId: deletedParentId,
+          commentId: id,
+        });
       } catch {
         // Best-effort
       }
@@ -4389,6 +4399,22 @@ export class PostsService {
             patch: { commentCount: parentCommentCount },
           });
         }
+      } catch {
+        // Best-effort
+      }
+    }
+
+    // Realtime: push full reply DTO to thread subscribers so they see it without refetching (best-effort).
+    if (parentId) {
+      try {
+        const replyDto = toPostDto(post as any, this.appConfig.r2()?.publicBaseUrl ?? null, {
+          viewerHasBoosted: false,
+          includeInternal: false,
+        });
+        this.presenceRealtime.emitPostsCommentAdded(parentId, {
+          parentPostId: parentId,
+          comment: replyDto,
+        });
       } catch {
         // Best-effort
       }
