@@ -125,26 +125,28 @@ export class AdminAnalyticsController {
       // DAU = average unique daily active users across the selected range
       // (today excluded — it's partial and would drag the average down).
       // MAU = distinct users active at any point in the last 30 days (always fixed — definitionally monthly).
+      // Cast to ::timestamp (not ::timestamptz) because "day" is TIMESTAMP WITHOUT
+      // TIME ZONE.  Mixing types mis-aligns the JOIN when session tz ≠ UTC.
       this.prisma.$queryRaw<Array<{ dau: number | null; mau: bigint }>>(Prisma.sql`
         WITH day_series AS (
           SELECT generate_series(
-            ${effectiveStart}::timestamptz,
-            ${todayMidnight}::timestamptz - INTERVAL '1 day',
+            ${effectiveStart}::timestamp,
+            ${todayMidnight}::timestamp - INTERVAL '1 day',
             '1 day'::interval
           ) AS day
         ),
         daily AS (
           SELECT DATE_TRUNC('day', "day") AS day, COUNT(DISTINCT "userId")::float AS cnt
           FROM "UserDailyActivity"
-          WHERE "day" >= ${effectiveStart}::timestamptz
-            AND "day" <  ${todayMidnight}::timestamptz
+          WHERE "day" >= ${effectiveStart}::timestamp
+            AND "day" <  ${todayMidnight}::timestamp
           GROUP BY 1
         )
         SELECT
           AVG(COALESCE(daily.cnt, 0)) AS dau,
           (SELECT COUNT(DISTINCT "userId")::bigint
            FROM "UserDailyActivity"
-           WHERE "day" >= ${thirtyDaysAgo}::timestamptz) AS mau
+           WHERE "day" >= ${thirtyDaysAgo}::timestamp) AS mau
         FROM day_series
         LEFT JOIN daily ON daily.day = day_series.day
       `),
@@ -223,7 +225,7 @@ export class AdminAnalyticsController {
         activity AS (
           SELECT DISTINCT "userId", DATE_TRUNC('week', "day") AS active_week
           FROM "UserDailyActivity"
-          WHERE "day" >= ${tenWeeksAgo}::timestamptz
+          WHERE "day" >= ${tenWeeksAgo}::timestamp
         )
         SELECT
           c.cohort_week,
@@ -254,7 +256,7 @@ export class AdminAnalyticsController {
           SELECT DISTINCT "userId"
           FROM "UserDailyActivity"
           WHERE "userId" IN (SELECT id FROM cohort)
-            AND "day" >= ${new Date(todayMidnight.getTime() - 7 * 86400000)}::timestamptz
+            AND "day" >= ${new Date(todayMidnight.getTime() - 7 * 86400000)}::timestamp
         )
         SELECT
           COUNT(cohort.id)::bigint AS cohort_size,
@@ -294,7 +296,7 @@ export class AdminAnalyticsController {
       this.prisma.$queryRaw<Array<{ mau_count: bigint; creator_count: bigint }>>`
         WITH mau_users AS (
           SELECT DISTINCT "userId" FROM "UserDailyActivity"
-          WHERE "day" >= ${thirtyDaysAgo}::timestamptz
+          WHERE "day" >= ${thirtyDaysAgo}::timestamp
         ),
         creators AS (
           SELECT DISTINCT "userId" FROM "Post"

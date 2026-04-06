@@ -26,9 +26,9 @@ export class HealthController {
       nodeEnv: this.appConfig.nodeEnv(),
       r2Configured: Boolean(this.appConfig.r2()),
       giphyConfigured: Boolean(this.appConfig.giphyApiKey()),
-      // Twilio can be intentionally disabled in dev; show both flags so it's obvious.
       twilioConfigured: Boolean(this.appConfig.twilioVerify()),
-      twilioDisabledInDev: this.appConfig.disableTwilioInDev(),
+      // Only relevant in non-production environments (Twilio is never disabled in prod).
+      ...(this.appConfig.nodeEnv() !== 'production' ? { twilioDisabledInDev: this.appConfig.disableTwilioInDev() } : {}),
       /** Location search / geocode (Mapbox). Unset = profile location lookup will 400. */
       locationSearchConfigured: Boolean(this.appConfig.mapbox()),
       stripeConfigured: Boolean(this.appConfig.stripe()),

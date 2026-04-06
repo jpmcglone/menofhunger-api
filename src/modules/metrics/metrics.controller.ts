@@ -39,15 +39,18 @@ export class MetricsController {
 
     // Average DAU over the last N days, including zero-activity days.
     // We use generate_series to ensure zeros are included.
+    // Cast to ::timestamp (not ::timestamptz) because the "day" column is
+    // TIMESTAMP WITHOUT TIME ZONE.  Mixing types causes the LEFT JOIN to
+    // mis-align midnight boundaries when the session timezone is not UTC.
     const dauAvgRow = await this.prisma.$queryRaw<Array<{ dau_avg: number | null }>>`
       WITH days AS (
-        SELECT (DATE_TRUNC('day', ${todayUtc}::timestamptz) - (n * INTERVAL '1 day')) AS day
+        SELECT (${todayUtc}::timestamp - (n * INTERVAL '1 day')) AS day
         FROM generate_series(0, ${windowDays - 1}) AS n
       ),
       counts AS (
         SELECT "day", COUNT(DISTINCT "userId")::float AS c
         FROM "UserDailyActivity"
-        WHERE "day" >= ${startUtc}::timestamptz
+        WHERE "day" >= ${startUtc}::timestamp
         GROUP BY "day"
       )
       SELECT AVG(COALESCE(counts.c, 0)) AS dau_avg
@@ -61,7 +64,7 @@ export class MetricsController {
     const mauRow = await this.prisma.$queryRaw<Array<{ mau: number }>>`
       SELECT COUNT(DISTINCT "userId")::int AS mau
       FROM "UserDailyActivity"
-      WHERE "day" >= ${startUtc}::timestamptz
+      WHERE "day" >= ${startUtc}::timestamp
     `;
     const mau = Math.max(0, Number(mauRow?.[0]?.mau ?? 0) || 0);
 

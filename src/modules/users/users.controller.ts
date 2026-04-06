@@ -102,6 +102,14 @@ const newestUsersSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
+const byLocationSchema = z.object({
+  state: z.string().trim().min(1).max(100),
+  zip: z.string().trim().max(20).optional(),
+  city: z.string().trim().max(100).optional(),
+  county: z.string().trim().max(100).optional(),
+  limit: z.coerce.number().int().min(1).max(20).optional(),
+});
+
 const articleTagPreferencesSchema = z.object({
   tags: z.array(z.string().trim().min(1).max(50)).max(20),
 });
@@ -147,6 +155,7 @@ type PublicProfilePayload = {
   bio: string | null;
   website: string | null;
   locationDisplay: string | null;
+  locationZip: string | null;
   locationCity: string | null;
   locationCounty: string | null;
   locationState: string | null;
@@ -330,6 +339,7 @@ export class UsersController {
             bio: string | null;
             website: string | null;
             locationDisplay: string | null;
+            locationZip: string | null;
             locationCity: string | null;
             locationCounty: string | null;
             locationState: string | null;
@@ -352,7 +362,7 @@ export class UsersController {
             longestStreakDays: number;
           }>
         >`
-          SELECT "id", "createdAt", "username", "name", "bio", "website", "locationDisplay", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt", "bannedAt", "checkinStreakDays", "longestStreakDays"
+          SELECT "id", "createdAt", "username", "name", "bio", "website", "locationDisplay", "locationZip", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt", "bannedAt", "checkinStreakDays", "longestStreakDays"
           FROM "User"
           WHERE (
             (${isUuidOrCuid} = true AND "id" = ${raw})
@@ -393,6 +403,7 @@ export class UsersController {
       bio: user.bio,
       website: user.website ?? null,
       locationDisplay: user.locationDisplay ?? null,
+      locationZip: user.locationZip ?? null,
       locationCity: user.locationCity ?? null,
       locationCounty: user.locationCounty ?? null,
       locationState: user.locationState ?? null,
@@ -541,6 +552,77 @@ export class UsersController {
     );
 
     return { data: users };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 60),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get('by-location')
+  async byLocation(@CurrentUserId() viewerUserId: string, @Query() query: unknown) {
+    const { state, zip, city, county, limit = 10 } = byLocationSchema.parse(query);
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    const baseWhere = { usernameIsSet: true, bannedAt: null };
+
+    // Accumulate excluded IDs as we build each section (closest → furthest).
+    const excludedIds = new Set<string>([viewerUserId]);
+
+    const fetchSection = async (where: Record<string, unknown>) => {
+      const rows = await this.prisma.user.findMany({
+        where: { ...baseWhere, ...where, id: { notIn: Array.from(excludedIds) } },
+        select: USER_LIST_SELECT,
+        orderBy: [{ checkinStreakDays: 'desc' }, { createdAt: 'desc' }],
+        take: limit,
+      });
+      rows.forEach((r) => excludedIds.add(r.id));
+      return rows;
+    };
+
+    // Run sequentially: each section excludes IDs collected by earlier (closer) sections.
+    const zipRows = zip ? await fetchSection({ locationZip: zip }) : [];
+    const cityRows = city ? await fetchSection({ locationCity: city, locationState: state }) : [];
+    const countyRows = county ? await fetchSection({ locationCounty: county, locationState: state }) : [];
+    const stateRows = await fetchSection({ locationState: state });
+
+    const allRows = [...zipRows, ...cityRows, ...countyRows, ...stateRows];
+    const rel = await this.followsService.batchRelationshipForUserIds({
+      viewerUserId,
+      userIds: allRows.map((u) => u.id),
+    });
+
+    const mapUsers = (rows: typeof allRows) =>
+      rows.map((u) =>
+        toUserListDto(u, publicBaseUrl, {
+          relationship: {
+            viewerFollowsUser: rel.viewerFollows.has(u.id),
+            userFollowsViewer: rel.followsViewer.has(u.id),
+            viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(u.id),
+          },
+        }),
+      );
+
+    const sections = [
+      ...(zip ? [{ key: 'sameZip', label: 'Same ZIP code', users: mapUsers(zipRows) }] : []),
+      ...(city ? [{ key: 'sameCity', label: 'Same city', users: mapUsers(cityRows) }] : []),
+      ...(county ? [{ key: 'sameCounty', label: 'Same county', users: mapUsers(countyRows) }] : []),
+      { key: 'sameState', label: 'Same state', users: mapUsers(stateRows) },
+    ];
+
+    return {
+      data: {
+        location: {
+          ...(zip ? { zip } : {}),
+          ...(city ? { city } : {}),
+          ...(county ? { county } : {}),
+          state,
+        },
+        sections,
+      },
+    };
   }
 
   @UseGuards(AuthGuard)
