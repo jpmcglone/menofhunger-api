@@ -4,10 +4,16 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PostsService } from '../posts/posts.service';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
+import { RedisService } from '../redis/redis.service';
+import { RedisKeys } from '../redis/redis-keys';
 import { CHECKIN_PROMPTS } from './checkin-prompts';
 import { dayIndexEastern, easternDayKey } from '../../common/time/eastern-day-key';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
+
+const LEADERBOARD_CACHE_TTL_SECONDS = 60;
+const WEEKLY_LEADERBOARD_CACHE_TTL_SECONDS = 120;
+const TODAY_STATE_CACHE_TTL_SECONDS = 120;
 
 function pickCheckinPrompt(now: Date): { dayKey: string; prompt: string } {
   const list = CHECKIN_PROMPTS.filter(Boolean);
@@ -28,6 +34,7 @@ export class CheckinsService {
     private readonly posts: PostsService,
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly viewerContext: ViewerContextService,
+    private readonly redis: RedisService,
     private readonly posthog: PosthogService,
   ) {}
 
@@ -35,8 +42,22 @@ export class CheckinsService {
     const now = params.now ?? new Date();
     const { dayKey, prompt } = pickCheckinPrompt(now);
 
+    const cacheKey = RedisKeys.checkinTodayState(params.userId, dayKey);
+    try {
+      const cached = await this.redis.getJson<Awaited<ReturnType<typeof this._getTodayStateRaw>>>(cacheKey);
+      if (cached) return cached;
+    } catch {
+      // Redis unavailable — fall through to DB.
+    }
+
+    const result = await this._getTodayStateRaw(params.userId, now, dayKey, prompt);
+    void this.redis.setJson(cacheKey, result, { ttlSeconds: TODAY_STATE_CACHE_TTL_SECONDS }).catch(() => undefined);
+    return result;
+  }
+
+  private async _getTodayStateRaw(userId: string, now: Date, dayKey: string, prompt: string) {
     const user = await this.prisma.user.findUnique({
-      where: { id: params.userId },
+      where: { id: userId },
       select: {
         id: true,
         coins: true,
@@ -50,7 +71,7 @@ export class CheckinsService {
 
     const hasCheckedInToday = Boolean(
       await this.prisma.post.findFirst({
-        where: { userId: params.userId, kind: 'checkin', checkinDayKey: dayKey, deletedAt: null },
+        where: { userId, kind: 'checkin', checkinDayKey: dayKey, deletedAt: null },
         select: { id: true },
       }),
     );
@@ -60,7 +81,7 @@ export class CheckinsService {
 
     const allowedCheckinVisibilities = (['verifiedOnly', 'premiumOnly'] as const).filter((v) => allowedForCreation.includes(v));
 
-    this.posthog.capture(params.userId, 'checkin_prompt_viewed', { prompt_key: dayKey });
+    this.posthog.capture(userId, 'checkin_prompt_viewed', { prompt_key: dayKey });
 
     return {
       dayKey,
@@ -111,6 +132,10 @@ export class CheckinsService {
     // Keep self state in sync across tabs (coins/streak + completion).
     void this.usersMeRealtime.emitMeUpdated(params.userId, 'checkin_completed');
 
+    // Bust the today-state cache so the next GET /checkins/today reflects
+    // the completed check-in, updated coins, and new streak.
+    void this.redis.del(RedisKeys.checkinTodayState(params.userId, dayKey)).catch(() => undefined);
+
     return {
       post,
       checkin: { dayKey, prompt },
@@ -122,6 +147,20 @@ export class CheckinsService {
 
   async getLeaderboard(params: { publicBaseUrl: string | null; limit?: number; viewerUserId?: string | null }) {
     const take = Math.min(Math.max(1, params.limit ?? 25), 50);
+    const cacheKey = RedisKeys.checkinLeaderboard(take);
+
+    // Try to serve the top-N list from cache. Viewer rank is always computed fresh
+    // since it depends on the calling user and is only needed for out-of-top-N viewers.
+    type LeaderboardUser = {
+      id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
+      isOrganization: boolean; stewardBadgeEnabled: boolean; verifiedStatus: string; avatarUrl: string | null;
+      checkinStreakDays: number; longestStreakDays: number;
+    };
+    let cachedUsers: LeaderboardUser[] | null = null;
+    try {
+      cachedUsers = await this.redis.getJson<LeaderboardUser[]>(cacheKey);
+    } catch { /* Redis unavailable */ }
+
     const userSelect = {
       id: true,
       username: true,
@@ -138,20 +177,11 @@ export class CheckinsService {
       createdAt: true,
     } as const;
 
-    const topUsers = await this.prisma.user.findMany({
-      where: {
-        bannedAt: null,
-        // Include members with either an active streak OR historical streak record.
-        // This keeps the leaderboard useful even on days where few/no users are currently streaking.
-        OR: [{ checkinStreakDays: { gt: 0 } }, { longestStreakDays: { gt: 0 } }],
-      },
-      // Active streak ranks first, then best-ever streak for tie-break/fallback, then older account first.
-      orderBy: [{ checkinStreakDays: 'desc' }, { longestStreakDays: 'desc' }, { createdAt: 'asc' }],
-      take,
-      select: userSelect,
-    });
-
-    const toDto = (u: typeof topUsers[number]) => ({
+    const toDto = (u: {
+      id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
+      isOrganization: boolean; stewardBadgeEnabled: boolean; verifiedStatus: string;
+      avatarKey: string | null; avatarUpdatedAt: Date | null; checkinStreakDays: number | null; longestStreakDays: number | null;
+    }): LeaderboardUser => ({
       id: u.id,
       username: u.username,
       name: u.name,
@@ -169,10 +199,31 @@ export class CheckinsService {
       longestStreakDays: Math.max(u.longestStreakDays ?? 0, u.checkinStreakDays ?? 0),
     });
 
-    const users = topUsers.map(toDto);
+    let users: LeaderboardUser[];
+    if (cachedUsers) {
+      users = cachedUsers;
+    } else {
+      const topUsers = await this.prisma.user.findMany({
+        where: {
+          bannedAt: null,
+          // Include members with either an active streak OR historical streak record.
+          // This keeps the leaderboard useful even on days where few/no users are currently streaking.
+          OR: [{ checkinStreakDays: { gt: 0 } }, { longestStreakDays: { gt: 0 } }],
+        },
+        // Active streak ranks first, then best-ever streak for tie-break/fallback, then older account first.
+        orderBy: [{ checkinStreakDays: 'desc' }, { longestStreakDays: 'desc' }, { createdAt: 'asc' }],
+        take,
+        select: userSelect,
+      });
+
+      users = topUsers.map(toDto);
+      void this.redis
+        .setJson(cacheKey, users, { ttlSeconds: LEADERBOARD_CACHE_TTL_SECONDS })
+        .catch(() => undefined);
+    }
 
     // If a viewer is authenticated and not already in the top-N list, find their rank.
-    let viewerRank: { rank: number; user: ReturnType<typeof toDto> } | null = null;
+    let viewerRank: { rank: number; user: LeaderboardUser } | null = null;
     if (params.viewerUserId && !users.some((u) => u.id === params.viewerUserId)) {
       // Count how many users rank higher than the viewer.
       const viewerRow = await this.prisma.user.findUnique({
@@ -239,6 +290,24 @@ export class CheckinsService {
       mondayUtcNoon.getUTCDate(),
       0, 0, 0,
     ));
+
+    const weeklyCacheKey = RedisKeys.checkinWeeklyLeaderboard(take, weekStart.toISOString());
+
+    type WeeklyLeaderboardUser = {
+      id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
+      isOrganization: boolean; stewardBadgeEnabled: boolean; verifiedStatus: string; avatarUrl: string | null;
+      checkinStreakDays: number; longestStreakDays: number; daysThisWeek: number;
+    };
+
+    const cachedWeekly = await this.redis.getJson<{
+      users: WeeklyLeaderboardUser[];
+      viewerRankForId: Record<string, { rank: number; user: WeeklyLeaderboardUser } | null>;
+    }>(weeklyCacheKey).catch(() => null);
+
+    if (cachedWeekly) {
+      const viewerRank = params.viewerUserId ? (cachedWeekly.viewerRankForId[params.viewerUserId] ?? null) : null;
+      return { users: cachedWeekly.users, viewerRank, weekStart };
+    }
 
     // Count distinct ET posting days per user in the current ET week using a raw query.
     // AT TIME ZONE on the createdAt converts to ET; date_trunc extracts the ET calendar day.
@@ -315,7 +384,7 @@ export class CheckinsService {
     const users = rankedList.map(toWeeklyDto);
 
     // Viewer rank (if not in top-N).
-    let viewerRank: { rank: number; user: ReturnType<typeof toWeeklyDto> } | null = null;
+    let viewerRank: { rank: number; user: WeeklyLeaderboardUser } | null = null;
     if (params.viewerUserId && !users.some((u) => u.id === params.viewerUserId)) {
       const viewerRow = await this.prisma.user.findUnique({
         where: { id: params.viewerUserId },
@@ -345,6 +414,16 @@ export class CheckinsService {
         };
       }
     }
+
+    // Cache the result including the viewer rank so repeat calls for the same viewer are fast.
+    void this.redis.setJson(
+      weeklyCacheKey,
+      {
+        users,
+        viewerRankForId: params.viewerUserId ? { [params.viewerUserId]: viewerRank } : {},
+      },
+      { ttlSeconds: WEEKLY_LEADERBOARD_CACHE_TTL_SECONDS },
+    ).catch(() => undefined);
 
     return { users, viewerRank, weekStart };
   }

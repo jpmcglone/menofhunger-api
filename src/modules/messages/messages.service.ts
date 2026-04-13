@@ -26,11 +26,15 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { DomainEventsService } from '../events/domain-events.service';
+import { RedisService } from '../redis/redis.service';
+import { RedisKeys } from '../redis/redis-keys';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { toUserListDto } from '../../common/dto';
 import { findReactionById } from '../../common/constants/reactions';
 import { toMessageDto, toMessageParticipantDto, type MessageConversationDto, type MessageDto } from './message.dto';
 import { PosthogService } from '../../common/posthog/posthog.service';
+
+const MESSAGE_UNREAD_CACHE_TTL_MS = 30_000;
 
 const CONVERSATION_LIST_LIMIT = 30;
 const MESSAGE_LIST_LIMIT = 50;
@@ -81,6 +85,7 @@ export class MessagesService {
     private readonly appConfig: AppConfigService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly events: DomainEventsService,
+    private readonly redis: RedisService,
     private readonly posthog: PosthogService,
   ) {}
 
@@ -250,6 +255,9 @@ export class MessagesService {
   }
 
   private emitUnreadCounts(userId: string): void {
+    // Bust the HTTP cache so the next /unread-count poll gets fresh data.
+    this.invalidateUnreadSummaryCache(userId);
+
     void this.getUnreadCounts(userId)
       .then((counts) => {
         this.presenceRealtime.emitMessagesUpdated(userId, {
@@ -1200,6 +1208,8 @@ export class MessagesService {
       where: { followerId: userId, followingId: targetUserId },
     });
     this.emitUnreadCounts(userId);
+    // Bust cached block sets so feed filtering reflects the new block immediately.
+    void this.redis.del(RedisKeys.viewerBlockSets(userId), RedisKeys.viewerBlockSets(targetUserId)).catch(() => undefined);
   }
 
   /** Returns blocked user IDs visible to other services (bidirectional). */
@@ -1226,6 +1236,7 @@ export class MessagesService {
       where: { blockerId: userId, blockedId: targetUserId },
     });
     this.emitUnreadCounts(userId);
+    void this.redis.del(RedisKeys.viewerBlockSets(userId), RedisKeys.viewerBlockSets(targetUserId)).catch(() => undefined);
   }
 
   async listBlocks(params: { userId: string }) {
@@ -1256,8 +1267,26 @@ export class MessagesService {
     }));
   }
 
-  async getUnreadSummary(userId: string) {
-    return await this.getUnreadCounts(userId);
+  async getUnreadSummary(userId: string): Promise<{ primary: number; requests: number }> {
+    const cacheKey = RedisKeys.messageUnreadSummary(userId);
+    try {
+      const cached = await this.redis.getJson<{ primary: number; requests: number }>(cacheKey);
+      if (cached) return cached;
+    } catch {
+      // Redis unavailable — fall through to DB.
+    }
+
+    const counts = await this.getUnreadCounts(userId);
+
+    void this.redis
+      .setJson(cacheKey, counts, { ttlMs: MESSAGE_UNREAD_CACHE_TTL_MS })
+      .catch(() => undefined);
+
+    return counts;
+  }
+
+  private invalidateUnreadSummaryCache(userId: string): void {
+    void this.redis.del(RedisKeys.messageUnreadSummary(userId)).catch(() => undefined);
   }
 
   async addReaction(params: {

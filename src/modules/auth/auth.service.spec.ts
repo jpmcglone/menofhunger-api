@@ -98,13 +98,19 @@ function makeService(overrides?: { prisma?: any }) {
 
   const cacheInvalidation = {
     deleteSessionUser: jest.fn(async () => undefined),
+    deleteSessionFull: jest.fn(async () => undefined),
+  } as any;
+
+  const redis = {
+    getJson: jest.fn(async () => null),
+    setJson: jest.fn(async () => undefined),
   } as any;
 
   const otpProvider = { send: jest.fn(), verify: jest.fn() } as any;
   const posthog = { capture: jest.fn() } as any;
   const slack = { send: jest.fn() } as any;
 
-  const svc = new AuthService(prisma, appConfig, cacheInvalidation, otpProvider, posthog, slack);
+  const svc = new AuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack);
   return { svc, prisma, token, tokenHash };
 }
 

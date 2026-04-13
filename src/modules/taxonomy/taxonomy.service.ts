@@ -53,7 +53,7 @@ export class TaxonomyService {
       const oldestKey = this.searchCache.keys().next().value as string | undefined;
       if (oldestKey) this.searchCache.delete(oldestKey);
     }
-    this.searchCache.set(key, { expiresAt: now + 60_000, data });
+    this.searchCache.set(key, { expiresAt: now + 5 * 60_000, data });
   }
 
   async search(params: SearchTaxonomyParams): Promise<TaxonomySearchResult[]> {

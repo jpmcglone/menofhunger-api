@@ -365,7 +365,7 @@ export class PostsController {
     const authFirstPageCache = Boolean(viewerUserId) && !cursor;
     const authCursorCache = Boolean(viewerUserId)
       && Boolean(cursor)
-      && sortKind === 'new'
+      && (sortKind === 'new' || sortKind === 'popular' || sortKind === 'featured')
       && !authorUserIds.length
       && !(parsed.kind ?? null)
       && !(parsed.followingOnly ?? false)
@@ -384,6 +384,10 @@ export class PostsController {
           followingOnly: parsed.followingOnly ?? false,
           kind: parsed.kind ?? null,
           authorUserIds,
+          collapseByRoot: parsed.collapseByRoot ?? false,
+          collapseMode: parsed.collapseMode ?? 'root',
+          collapsePrefer: parsed.prefer ?? 'reply',
+          collapseMaxPerRoot: parsed.collapseMaxPerRoot ?? 1,
         })
       : null;
     const cacheKey =

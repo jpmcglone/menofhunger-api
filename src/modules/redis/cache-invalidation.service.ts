@@ -104,5 +104,15 @@ export class CacheInvalidationService {
       // Best-effort
     }
   }
+
+  async deleteSessionFull(tokenHash: string): Promise<void> {
+    const th = String(tokenHash ?? '').trim();
+    if (!th) return;
+    try {
+      await this.redis.del(RedisKeys.sessionFull(th));
+    } catch {
+      // Best-effort
+    }
+  }
 }
 

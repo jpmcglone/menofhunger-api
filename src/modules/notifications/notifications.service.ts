@@ -1763,12 +1763,9 @@ export class NotificationsService {
   }
 
   async getUndeliveredCount(recipientUserId: string): Promise<number> {
-    // Count from actual rows rather than the denormalized counter so the HTTP
-    // endpoint and auth/me payload always return the accurate value, even when
-    // the cached counter has drifted (e.g. after orphan cleanup or race conditions).
-    return this.prisma.notification.count({
-      where: { recipientUserId, deliveredAt: null },
-    });
+    // Use the denormalized counter for fast O(1) reads. The counter is maintained
+    // atomically on every notification write (increment) and delivery/read/ignore (decrement).
+    return this.getUndeliveredCountInternal(recipientUserId);
   }
 
   async markDelivered(recipientUserId: string): Promise<void> {

@@ -14,7 +14,6 @@ export const JOBS = {
   // Notifications + email
   notificationsCleanup: 'notifications.cleanup',
   notificationsOrphanCleanup: 'notifications.orphanCleanup',
-  notificationsCountReconcile: 'notifications.countReconcile',
   notificationsEmailNudges: 'notifications.emailNudges',
   notificationsDailyDigest: 'notifications.dailyDigest',
   notificationsWeeklyDigest: 'notifications.weeklyDigest',

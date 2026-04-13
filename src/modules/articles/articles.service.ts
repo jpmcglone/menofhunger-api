@@ -11,6 +11,9 @@ import { ViewerContextService } from '../viewer/viewer-context.service';
 import { AppConfigService } from '../app/app-config.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { CacheService } from '../redis/cache.service';
+import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { stableJsonHash } from '../redis/redis-keys';
 import {
   toArticleDto,
   toArticleCommentDto,
@@ -75,6 +78,8 @@ export class ArticlesService {
     private readonly appConfig: AppConfigService,
     private readonly notifications: NotificationsService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly cache: CacheService,
+    private readonly cacheInvalidation: CacheInvalidationService,
   ) {}
 
   private get r2BaseUrl(): string | null {
@@ -108,7 +113,8 @@ export class ArticlesService {
     return {
       author: this.articleAuthorSelect(),
       tags: { select: { tag: true, label: true }, orderBy: { createdAt: 'asc' as const } },
-      ...(includeReactions ? { reactions: true } : {}),
+      // Select only the fields needed by buildReactionSummaries (avoids loading all columns for every row).
+      ...(includeReactions ? { reactions: { select: { reactionId: true, emoji: true, userId: true } } } : {}),
       ...(includeBoosts ? {
         boosts: viewerUserId
           ? { where: { userId: viewerUserId }, select: { userId: true }, take: 1 }
@@ -262,6 +268,55 @@ export class ArticlesService {
   }) {
     const limit = Math.min(opts.limit ?? 20, 50);
     const sort = opts.sort ?? 'new';
+
+    // Cache simple list requests (no mine/followingOnly/includeRestricted/authorUsername filters).
+    const isCacheable =
+      !opts.mine &&
+      !opts.followingOnly &&
+      !opts.includeRestricted &&
+      !opts.authorUsername;
+
+    if (isCacheable) {
+      const feedVer = await this.cacheInvalidation.feedGlobalVersion();
+      const paramsHash = stableJsonHash({
+        endpoint: 'articles:list',
+        sort,
+        limit,
+        cursor: opts.cursor ?? null,
+        visibilityFilter: opts.visibilityFilter ?? null,
+        tag: opts.tag ?? null,
+        viewerUserId: opts.viewerUserId ?? null,
+      });
+      const cacheKey = `cache:articles:list:v${feedVer}:${paramsHash}`;
+
+      const cached = await this.cache.getOrSetJson<{ articles: unknown[]; nextCursor: string | null }>({
+        enabled: true,
+        key: cacheKey,
+        ttlSeconds: 60,
+        compute: () => this._listPublishedRaw(opts, limit, sort),
+      });
+      return cached;
+    }
+
+    return this._listPublishedRaw(opts, limit, sort);
+  }
+
+  private async _listPublishedRaw(
+    opts: {
+      viewerUserId?: string | null;
+      limit?: number;
+      cursor?: string | null;
+      authorUsername?: string | null;
+      sort?: 'new' | 'trending' | null;
+      visibilityFilter?: PostVisibility | null;
+      mine?: boolean | null;
+      followingOnly?: boolean | null;
+      tag?: string | null;
+      includeRestricted?: boolean | null;
+    },
+    limit: number,
+    sort: string,
+  ) {
     const viewerCtx = opts.viewerUserId ? await this.viewer.getViewer(opts.viewerUserId) : null;
     const allowedVisibilities = this.viewer.allowedPostVisibilities(viewerCtx);
 
@@ -592,6 +647,8 @@ export class ArticlesService {
       });
     }
 
+    void this.cacheInvalidation.bumpFeedGlobal().catch(() => undefined);
+
     return toArticleDto(updated, this.r2BaseUrl, { viewerUserId: userId });
   }
 
@@ -608,6 +665,8 @@ export class ArticlesService {
       include: this.articleIncludes(false, false),
     }) as ArticleWithAuthor;
 
+    void this.cacheInvalidation.bumpFeedGlobal().catch(() => undefined);
+
     return toArticleDto(updated, this.r2BaseUrl);
   }
 
@@ -618,6 +677,7 @@ export class ArticlesService {
     if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
     if (article.authorId !== userId) throw new ForbiddenException('Not your article.');
     await this.prisma.article.update({ where: { id: articleId }, data: { deletedAt: new Date() } });
+    void this.cacheInvalidation.bumpFeedGlobal().catch(() => undefined);
     return { success: true };
   }
 

@@ -9,7 +9,6 @@ import { HashtagsTrendingScoreCron } from '../hashtags/hashtags-trending-score.c
 import { HashtagsCleanupCron } from '../hashtags/hashtags-cleanup.cron';
 import { NotificationsCleanupCron } from '../notifications/notifications-cleanup.cron';
 import { NotificationsOrphanCleanupCron } from '../notifications/notifications-orphan-cleanup.cron';
-import { NotificationsCountReconcileCron } from '../notifications/notifications-count-reconcile.cron';
 import { NotificationsEmailCron } from '../notifications/notifications-email.cron';
 import { AuthCleanupCron } from '../auth/auth-cleanup.cron';
 import { SearchCleanupCron } from '../search/search-cleanup.cron';
@@ -32,7 +31,6 @@ export class JobsProcessor extends WorkerHost {
     private readonly hashtagsCleanup: HashtagsCleanupCron,
     private readonly notificationsCleanup: NotificationsCleanupCron,
     private readonly notificationsOrphanCleanup: NotificationsOrphanCleanupCron,
-    private readonly notificationsCountReconcile: NotificationsCountReconcileCron,
     private readonly notificationsEmail: NotificationsEmailCron,
     private readonly dailyContent: DailyContentCron,
     private readonly authCleanup: AuthCleanupCron,
@@ -71,9 +69,6 @@ export class JobsProcessor extends WorkerHost {
           return { ok: true };
         case JOBS.notificationsOrphanCleanup:
           await this.notificationsOrphanCleanup.runCleanupDeletedPostNotifications();
-          return { ok: true };
-        case JOBS.notificationsCountReconcile:
-          await this.notificationsCountReconcile.runReconcile();
           return { ok: true };
         case JOBS.notificationsEmailNudges:
           await this.notificationsEmail.runSendNewNotificationsNudges();

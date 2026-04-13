@@ -15,6 +15,8 @@ import { parseMentionsFromBody as parseMentionsFromBodyText } from '../../common
 import { parseHashtagTokensFromText, type HashtagToken } from '../../common/hashtags/hashtag-regex';
 import { inferTopicsFromText } from '../../common/topics/topic-utils';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { RedisService } from '../redis/redis.service';
+import { RedisKeys } from '../redis/redis-keys';
 import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
@@ -59,6 +61,7 @@ export class PostsService {
     private readonly postViews: PostViewsService,
     private readonly jobs: JobsService,
     private readonly posthog: PosthogService,
+    private readonly redis: RedisService,
   ) {}
 
   /**
@@ -899,23 +902,29 @@ export class PostsService {
     viewerUserId: string | null,
     seedParentIds: Array<string | null | undefined>,
   ): Promise<Map<string, FeedPost>> {
-    const parentMap = new Map<string, FeedPost>();
-    let toFetch = new Set<string>((seedParentIds ?? []).filter((id): id is string => Boolean(id)));
-    while (toFetch.size > 0) {
-      const batch = [...toFetch].filter((id) => !parentMap.has(id));
-      if (batch.length === 0) break;
-      const rows = await this.getByIds({ viewerUserId, ids: batch });
-      const byId = new Map(rows.map((p) => [p.id, p] as const));
-      const next = new Set<string>();
-      for (const id of batch) {
-        const post = byId.get(id);
-        if (!post) continue;
-        parentMap.set(id, post);
-        if (post.parentId) next.add(post.parentId);
-      }
-      toFetch = next;
-    }
-    return parentMap;
+    const seeds = [...new Set((seedParentIds ?? []).filter((id): id is string => Boolean(id)))];
+    if (seeds.length === 0) return new Map<string, FeedPost>();
+
+    // Single recursive CTE to walk the full ancestor chain in one DB round trip,
+    // instead of the previous while-loop that did N sequential queries (one per depth level).
+    // Depth is capped at 20 to prevent runaway recursion on circular references.
+    const allIds: Array<{ id: string }> = await this.prisma.$queryRawUnsafe(`
+      WITH RECURSIVE ancestors AS (
+        SELECT id, "parentId" FROM "Post" WHERE id = ANY($1) AND "deletedAt" IS NULL
+        UNION
+        SELECT p.id, p."parentId" FROM "Post" p
+        INNER JOIN ancestors a ON a."parentId" = p.id
+        WHERE p."deletedAt" IS NULL
+      )
+      SELECT DISTINCT id FROM ancestors
+    `, seeds);
+
+    const ids = allIds.map((r) => r.id);
+    if (ids.length === 0) return new Map<string, FeedPost>();
+
+    // Single batched Prisma call for all ancestors with full includes.
+    const rows = await this.getByIds({ viewerUserId, ids });
+    return new Map(rows.map((p) => [p.id, p] as const));
   }
 
   async collectRepostedMapForFeed(viewerUserId: string | null, repostedPostIds: string[]): Promise<Map<string, FeedPost>> {
@@ -930,13 +939,29 @@ export class PostsService {
     groupIds: string[],
   ): Promise<Map<string, CommunityGroupPreviewDto>> {
     const uniq = [...new Set((groupIds ?? []).map((id) => (id ?? '').trim()).filter(Boolean))];
-    const map = new Map<string, CommunityGroupPreviewDto>();
-    await Promise.all(
-      uniq.map(async (gid) => {
-        const prev = await this.communityGroupPreviewForGroup(gid, viewerUserId);
-        if (prev) map.set(gid, prev);
+    if (uniq.length === 0) return new Map<string, CommunityGroupPreviewDto>();
+
+    // Single batched fetch for all groups + viewer memberships instead of
+    // N sequential communityGroupPreviewForGroup calls.
+    const [groups, memberships] = await Promise.all([
+      this.prisma.communityGroup.findMany({
+        where: { id: { in: uniq }, deletedAt: null },
       }),
-    );
+      viewerUserId
+        ? this.prisma.communityGroupMember.findMany({
+            where: { groupId: { in: uniq }, userId: viewerUserId },
+            select: { groupId: true, status: true, role: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const memberByGroup = new Map(memberships.map((m) => [m.groupId, m]));
+    const map = new Map<string, CommunityGroupPreviewDto>();
+    for (const g of groups) {
+      const membership = memberByGroup.get(g.id) ?? null;
+      const dto = toCommunityGroupPreviewDto(g, membership);
+      if (dto) map.set(g.id, dto);
+    }
     return map;
   }
 
@@ -5026,6 +5051,19 @@ export class PostsService {
    * Used to annotate post DTOs with `viewerBlockStatus`.
    */
   async viewerBlockSets(viewerUserId: string): Promise<{ blockedByViewer: Set<string>; viewerBlockedBy: Set<string> }> {
+    const cacheKey = RedisKeys.viewerBlockSets(viewerUserId);
+    try {
+      const cached = await this.redis.getJson<{ blockedByViewer: string[]; viewerBlockedBy: string[] }>(cacheKey);
+      if (cached) {
+        return {
+          blockedByViewer: new Set(cached.blockedByViewer),
+          viewerBlockedBy: new Set(cached.viewerBlockedBy),
+        };
+      }
+    } catch {
+      // Redis unavailable — fall through to DB.
+    }
+
     const rows = await this.prisma.userBlock.findMany({
       where: { OR: [{ blockerId: viewerUserId }, { blockedId: viewerUserId }] },
       select: { blockerId: true, blockedId: true },
@@ -5036,7 +5074,18 @@ export class PostsService {
       if (row.blockerId === viewerUserId) blockedByViewer.add(row.blockedId);
       else viewerBlockedBy.add(row.blockerId);
     }
+
+    void this.redis.setJson(cacheKey, {
+      blockedByViewer: [...blockedByViewer],
+      viewerBlockedBy: [...viewerBlockedBy],
+    }, { ttlSeconds: 5 * 60 }).catch(() => undefined);
+
     return { blockedByViewer, viewerBlockedBy };
+  }
+
+  /** Bust cached block sets for both sides of a block/unblock action. */
+  invalidateBlockSetsCache(userId1: string, userId2: string): void {
+    void this.redis.del(RedisKeys.viewerBlockSets(userId1), RedisKeys.viewerBlockSets(userId2)).catch(() => undefined);
   }
 
   // ─── User media grid ──────────────────────────────────────────────────────

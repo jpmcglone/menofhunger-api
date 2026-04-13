@@ -24,12 +24,17 @@ function makeService(opts?: { allowedVisibilities?: Array<'public' | 'verifiedOn
     r2: jest.fn().mockReturnValue({ publicBaseUrl: 'https://cdn.example.com' }),
   } as any;
 
+  const cache = { getOrSetJson: jest.fn(async (_params: any) => _params.compute()) } as any;
+  const cacheInvalidation = { feedGlobalVersion: jest.fn(async () => 1) } as any;
+
   const service = new ArticlesService(
     prisma,
     viewer,
     appConfig,
     {} as any,
     {} as any,
+    cache,
+    cacheInvalidation,
   );
 
   return { service, prisma, viewer };

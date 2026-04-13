@@ -374,6 +374,8 @@ model User {
   @@index([lastSeenAt])
   @@index([referralCode])
   @@index([recruitedById])
+  // Leaderboard queries: sort by active streak then longest streak, filter by bannedAt IS NULL.
+  @@index([bannedAt, checkinStreakDays(sort: Desc), longestStreakDays(sort: Desc), createdAt(sort: Asc)])
 }
 
 model UserOrgMembership {

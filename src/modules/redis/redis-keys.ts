@@ -49,6 +49,24 @@ export const RedisKeys = {
     return `sess:user:${clean(tokenHash)}`;
   },
 
+  // Full session cache (tokenHash -> { user DTO, sessionId, expiresAt })
+  sessionFull(tokenHash: string): string {
+    return `sess:full:${clean(tokenHash)}`;
+  },
+
+  // Message unread summary cache (userId -> { primary, requests })
+  messageUnreadSummary(userId: string): string {
+    return `msg:unread:${clean(userId)}`;
+  },
+
+  // Checkin leaderboard caches
+  checkinLeaderboard(limit: number): string {
+    return `checkin:leaderboard:${Math.max(1, Math.min(50, Math.floor(limit || 25)))}`;
+  },
+  checkinWeeklyLeaderboard(limit: number, weekStartIso: string): string {
+    return `checkin:leaderboard:weekly:${Math.max(1, Math.min(50, Math.floor(limit || 25)))}:${clean(weekStartIso)}`;
+  },
+
   // Public profile cache (payload is versioned internally)
   publicProfileDataByUserId(userId: string, profileVer: number): string {
     const uid = clean(userId);
@@ -81,6 +99,32 @@ export const RedisKeys = {
   },
   anonCategoryPosts(category: string, paramsHash: string, feedVer: number): string {
     return `cache:topics:category:${encodeURIComponent(cleanLower(category))}:v${Math.max(1, Math.floor(feedVer || 1))}:${clean(paramsHash)}`;
+  },
+
+  // Throttle key for runMeChecks — set after checks run, TTL 2 min.
+  // While this key is present the expensive pinned-post/streak DB checks are skipped on /auth/me.
+  meChecksThrottle(userId: string): string {
+    return `me:checks:throttle:${clean(userId)}`;
+  },
+
+  // /presence/online response cache — short TTL since online set changes frequently
+  presenceOnlineList(viewerUserId: string | null): string {
+    return `presence:online:list:${clean(viewerUserId ?? 'anon')}`;
+  },
+
+  // /bookmarks/collections response cache per user
+  bookmarksCollections(userId: string): string {
+    return `bookmarks:collections:${clean(userId)}`;
+  },
+
+  // /checkins/today state cache per user per day
+  checkinTodayState(userId: string, dayKey: string): string {
+    return `checkin:today:${clean(userId)}:${clean(dayKey)}`;
+  },
+
+  // Viewer block sets cache (rarely changes; invalidated on block/unblock)
+  viewerBlockSets(userId: string): string {
+    return `viewer:blocks:${clean(userId)}`;
   },
 
   // Presence

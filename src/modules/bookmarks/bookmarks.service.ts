@@ -6,6 +6,10 @@ import { ViewerContextService } from '../viewer/viewer-context.service';
 import { PostViewsService } from '../post-views/post-views.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
+import { RedisService } from '../redis/redis.service';
+import { RedisKeys } from '../redis/redis-keys';
+
+const COLLECTIONS_CACHE_TTL_SECONDS = 60;
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean };
 
@@ -29,7 +33,12 @@ export class BookmarksService {
     private readonly viewerContext: ViewerContextService,
     private readonly postViews: PostViewsService,
     private readonly jobs: JobsService,
+    private readonly redis: RedisService,
   ) {}
+
+  private invalidateCollectionsCache(userId: string): void {
+    void this.redis.del(RedisKeys.bookmarksCollections(userId)).catch(() => undefined);
+  }
 
   private enqueueScoreRefresh(postId: string): void {
     if (!postId) return;
@@ -71,7 +80,8 @@ export class BookmarksService {
   }
 
   private async visibleBookmarkCountsByCollection(userId: string): Promise<Map<string, number>> {
-    const rows = await this.prisma.bookmarkCollectionItem.findMany({
+    const grouped = await this.prisma.bookmarkCollectionItem.groupBy({
+      by: ['collectionId'],
       where: {
         collection: { userId },
         bookmark: {
@@ -79,13 +89,9 @@ export class BookmarksService {
           post: this.visibleBookmarkPostWhere(userId),
         },
       },
-      select: { collectionId: true },
+      _count: { collectionId: true },
     });
-    const counts = new Map<string, number>();
-    for (const row of rows) {
-      counts.set(row.collectionId, (counts.get(row.collectionId) ?? 0) + 1);
-    }
-    return counts;
+    return new Map(grouped.map((row) => [row.collectionId, row._count.collectionId]));
   }
 
   private async visibleBookmarkCountForCollection(userId: string, collectionId: string): Promise<number> {
@@ -134,6 +140,21 @@ export class BookmarksService {
 
   async listCollections(params: { userId: string }) {
     const { userId } = params;
+
+    const cacheKey = RedisKeys.bookmarksCollections(userId);
+    try {
+      const cached = await this.redis.getJson<ReturnType<typeof this._listCollectionsRaw> extends Promise<infer T> ? T : never>(cacheKey);
+      if (cached) return cached;
+    } catch {
+      // Redis unavailable — fall through to DB.
+    }
+
+    const result = await this._listCollectionsRaw(userId);
+    void this.redis.setJson(cacheKey, result, { ttlSeconds: COLLECTIONS_CACHE_TTL_SECONDS }).catch(() => undefined);
+    return result;
+  }
+
+  private async _listCollectionsRaw(userId: string) {
     const visiblePostWhere = this.visibleBookmarkPostWhere(userId);
     const [collections, visibleCountsByCollection, totalCount, unorganizedCount] = await Promise.all([
       this.prisma.bookmarkCollection.findMany({
@@ -184,6 +205,7 @@ export class BookmarksService {
       data: { userId, name, slug },
       select: { id: true, name: true, slug: true, createdAt: true, updatedAt: true },
     });
+    this.invalidateCollectionsCache(userId);
     return {
       collection: {
         id: created.id,
@@ -225,6 +247,7 @@ export class BookmarksService {
       select: { id: true, name: true, slug: true, createdAt: true, updatedAt: true },
     });
     const bookmarkCount = await this.visibleBookmarkCountForCollection(userId, updated.id);
+    this.invalidateCollectionsCache(userId);
     return {
       collection: {
         id: updated.id,
@@ -242,6 +265,7 @@ export class BookmarksService {
     const existing = await this.prisma.bookmarkCollection.findFirst({ where: { id, userId }, select: { id: true } });
     if (!existing) throw new NotFoundException('Collection not found.');
     await this.prisma.bookmarkCollection.delete({ where: { id } });
+    this.invalidateCollectionsCache(userId);
     return { success: true };
   }
 
@@ -336,6 +360,7 @@ export class BookmarksService {
     // Bookmarking implies the user saw the post.
     void this.postViews.markViewed(userId, postId);
     this.enqueueScoreRefresh(postId);
+    this.invalidateCollectionsCache(userId);
 
     // When collectionIds was not provided (null), fetch the current folder state from the DB so
     // the response always reflects the true state of the bookmark.
@@ -395,6 +420,7 @@ export class BookmarksService {
     }
 
     this.enqueueScoreRefresh(postId);
+    this.invalidateCollectionsCache(userId);
     return { success: true, bookmarked: false };
   }
 }

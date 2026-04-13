@@ -13,10 +13,15 @@ import { OTP_PROVIDER } from './otp/otp-provider.token';
 import type { OtpProvider } from './otp/otp-provider';
 import { toUserDto } from '../users/user.dto';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { RedisService } from '../redis/redis.service';
+import { RedisKeys } from '../redis/redis-keys';
 import { USER_DTO_SELECT } from '../../common/prisma-selects/user.select';
 import { dayIndexEastern, easternDayKey, easternDayKeyFromDayIndex } from '../../common/time/eastern-day-key';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
+
+/** TTL for the full session cache (auth guards). Short enough to pick up bans/revocations quickly. */
+const SESSION_FULL_CACHE_TTL_MS = 30_000;
 
 export interface SessionResult {
   user: ReturnType<typeof toUserDto>;
@@ -33,6 +38,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly cacheInvalidation: CacheInvalidationService,
+    private readonly redis: RedisService,
     @Inject(OTP_PROVIDER) private readonly otpProvider: OtpProvider,
     private readonly posthog: PosthogService,
     private readonly slack: SlackService,
@@ -232,10 +238,22 @@ export class AuthService {
     };
   }
 
-  async meFromSessionToken(token: string | undefined) {
+  async meFromSessionToken(token: string | undefined): Promise<SessionResult | null> {
     if (!token) return null;
     const now = new Date();
     const tokenHash = hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
+
+    // Fast path: check Redis cache before hitting the DB.
+    try {
+      const cached = await this.redis.getJson<{ user: ReturnType<typeof toUserDto>; sessionId: string; expiresAt: string }>(
+        RedisKeys.sessionFull(tokenHash),
+      );
+      if (cached) {
+        return { user: cached.user, sessionId: cached.sessionId, expiresAt: new Date(cached.expiresAt), renewed: false };
+      }
+    } catch {
+      // Redis unavailable — fall through to DB.
+    }
 
     const session = await this.prisma.session.findFirst({
       where: {
@@ -255,67 +273,6 @@ export class AuthService {
         message: 'This account was banned. Contact an admin if you think it’s a mistake.',
         error: 'account_banned',
       });
-    }
-
-    // Safety: only-me posts should never be pinnable/show on profiles.
-    // If a user already pinned an only-me post (legacy bug), auto-unpin on read.
-    if (session.user.pinnedPostId) {
-      const pinned = await this.prisma.post.findFirst({
-        where: { id: session.user.pinnedPostId, userId: session.user.id, deletedAt: null },
-        select: { visibility: true },
-      });
-      if (!pinned || pinned.visibility === 'onlyMe') {
-        await this.prisma.user.update({ where: { id: session.user.id }, data: { pinnedPostId: null } });
-        session.user.pinnedPostId = null;
-      }
-    }
-
-    // Self-heal: streak day key bugs can leave `checkinStreakDays` undercounted even though today's award happened.
-    // We only ever adjust upward, and never touch coins here.
-    try {
-      const todayKey = easternDayKey(now);
-      const currentStreak = Math.max(0, Math.floor((session.user as any).checkinStreakDays ?? 0));
-      const lastKey = String((session.user as any).lastCheckinDayKey ?? '').trim() || null;
-      // Only run on a suspicious "awarded today but streak=1" state.
-      if (lastKey === todayKey && currentStreak === 1) {
-        const since = new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000);
-        const rows = await this.prisma.post.findMany({
-          where: {
-            userId: session.user.id,
-            deletedAt: null,
-            visibility: { not: 'onlyMe' },
-            createdAt: { gte: since },
-          },
-          select: { createdAt: true },
-          orderBy: { createdAt: 'desc' },
-          take: 400,
-        });
-        const daySet = new Set<string>();
-        for (const r of rows) {
-          if (r?.createdAt) daySet.add(easternDayKey(r.createdAt));
-        }
-        const todayIndex = dayIndexEastern(now);
-        let streak = 0;
-        for (let i = 0; i < 120; i += 1) {
-          const key = easternDayKeyFromDayIndex(todayIndex - i);
-          if (!daySet.has(key)) break;
-          streak += 1;
-        }
-        if (streak > currentStreak) {
-          const nextLongest = Math.max(
-            Math.max(0, Math.floor((session.user as any).longestStreakDays ?? 0)),
-            streak,
-          );
-          await this.prisma.user.update({
-            where: { id: session.user.id },
-            data: { checkinStreakDays: streak, longestStreakDays: nextLongest },
-          });
-          (session.user as any).checkinStreakDays = streak;
-          (session.user as any).longestStreakDays = nextLongest;
-        }
-      }
-    } catch {
-      // Best-effort only; never block auth/me.
     }
 
     // Sliding-window renewal: push expiresAt out by SESSION_TTL_DAYS whenever
@@ -339,12 +296,116 @@ export class AuthService {
       }
     }
 
-    return {
-      user: toUserDto(session.user, this.appConfig.r2()?.publicBaseUrl ?? null),
-      sessionId: session.id,
-      expiresAt: effectiveExpiresAt,
-      renewed,
-    };
+    const user = toUserDto(session.user, this.appConfig.r2()?.publicBaseUrl ?? null);
+
+    // Cache the result so subsequent guard calls within the TTL window skip the DB.
+    // On cache hit we always return renewed: false (renewal already happened above).
+    const ttlMs = Math.max(1, Math.min(SESSION_FULL_CACHE_TTL_MS, effectiveExpiresAt.getTime() - now.getTime()));
+    void this.redis
+      .setJson(RedisKeys.sessionFull(tokenHash), { user, sessionId: session.id, expiresAt: effectiveExpiresAt.toISOString() }, { ttlMs })
+      .catch(() => undefined);
+
+    return { user, sessionId: session.id, expiresAt: effectiveExpiresAt, renewed };
+  }
+
+  /**
+   * Run expensive per-request checks that are only needed for GET /auth/me.
+   * Kept out of meFromSessionToken so the auth guards do not pay this cost.
+   * Mutates and returns an updated user object when corrections are made.
+   *
+   * Throttled to at most once per ME_CHECKS_THROTTLE_MS via a Redis key so
+   * repeated /auth/me polls (badge refresh, tab focus) skip the DB round-trips.
+   */
+  async runMeChecks(
+    token: string,
+    userId: string,
+    pinnedPostId: string | null,
+    userObj: ReturnType<typeof toUserDto>,
+  ): Promise<ReturnType<typeof toUserDto>> {
+    const throttleKey = RedisKeys.meChecksThrottle(userId);
+    try {
+      const throttled = await this.redis.getString(throttleKey);
+      if (throttled) return userObj;
+    } catch {
+      // Redis unavailable — fall through and run checks.
+    }
+
+    const now = new Date();
+    const tokenHash = hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
+    let changed = false;
+
+    // Safety: only-me posts should never be pinnable/show on profiles.
+    // If a user already pinned an only-me post (legacy bug), auto-unpin on read.
+    if (pinnedPostId) {
+      const pinned = await this.prisma.post.findFirst({
+        where: { id: pinnedPostId, userId, deletedAt: null },
+        select: { visibility: true },
+      });
+      if (!pinned || pinned.visibility === 'onlyMe') {
+        await this.prisma.user.update({ where: { id: userId }, data: { pinnedPostId: null } });
+        (userObj as any).pinnedPostId = null;
+        changed = true;
+      }
+    }
+
+    // Self-heal: streak day key bugs can leave `checkinStreakDays` undercounted even though today's award happened.
+    // We only ever adjust upward, and never touch coins here.
+    try {
+      const todayKey = easternDayKey(now);
+      const currentStreak = Math.max(0, Math.floor((userObj as any).checkinStreakDays ?? 0));
+      const lastKey = String((userObj as any).lastCheckinDayKey ?? '').trim() || null;
+      // Only run on a suspicious "awarded today but streak=1" state.
+      if (lastKey === todayKey && currentStreak === 1) {
+        const since = new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000);
+        const rows = await this.prisma.post.findMany({
+          where: {
+            userId,
+            deletedAt: null,
+            visibility: { not: 'onlyMe' },
+            createdAt: { gte: since },
+          },
+          select: { createdAt: true },
+          orderBy: { createdAt: 'desc' },
+          take: 400,
+        });
+        const daySet = new Set<string>();
+        for (const r of rows) {
+          if (r?.createdAt) daySet.add(easternDayKey(r.createdAt));
+        }
+        const todayIndex = dayIndexEastern(now);
+        let streak = 0;
+        for (let i = 0; i < 120; i += 1) {
+          const key = easternDayKeyFromDayIndex(todayIndex - i);
+          if (!daySet.has(key)) break;
+          streak += 1;
+        }
+        if (streak > currentStreak) {
+          const nextLongest = Math.max(
+            Math.max(0, Math.floor((userObj as any).longestStreakDays ?? 0)),
+            streak,
+          );
+          await this.prisma.user.update({
+            where: { id: userId },
+            data: { checkinStreakDays: streak, longestStreakDays: nextLongest },
+          });
+          (userObj as any).checkinStreakDays = streak;
+          (userObj as any).longestStreakDays = nextLongest;
+          changed = true;
+        }
+      }
+    } catch {
+      // Best-effort only; never block auth/me.
+    }
+
+    // If user data changed, bust the session cache so guards see fresh data on next request.
+    if (changed) {
+      void this.cacheInvalidation.deleteSessionFull(tokenHash).catch(() => undefined);
+    }
+
+    // Mark checks as done for this user; skip for the next 2 minutes.
+    void this.redis.setString(throttleKey, '1', { ttlMs: 2 * 60_000 }).catch(() => undefined);
+
+    return userObj;
   }
 
   async revokeAllSessionsForUser(userId: string): Promise<void> {
@@ -358,7 +419,10 @@ export class AuthService {
     for (const s of sessions) {
       const th = String(s.tokenHash ?? '').trim();
       if (!th) continue;
-      await this.cacheInvalidation.deleteSessionUser(th);
+      await Promise.allSettled([
+        this.cacheInvalidation.deleteSessionUser(th),
+        this.cacheInvalidation.deleteSessionFull(th),
+      ]);
     }
     await this.prisma.session.deleteMany({ where: { userId: id } });
   }
@@ -377,8 +441,11 @@ export class AuthService {
   async revokeSessionToken(token: string | undefined): Promise<void> {
     if (!token) return;
     const tokenHash = hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
-    // Remove Redis-backed session->user cache immediately to avoid a short stale-valid window.
-    await this.cacheInvalidation.deleteSessionUser(tokenHash);
+    // Remove Redis-backed session caches immediately to avoid a short stale-valid window.
+    await Promise.allSettled([
+      this.cacheInvalidation.deleteSessionUser(tokenHash),
+      this.cacheInvalidation.deleteSessionFull(tokenHash),
+    ]);
     await this.prisma.session.deleteMany({
       where: { tokenHash },
     });

@@ -8,6 +8,10 @@ import { PresenceRedisStateService } from './presence-redis-state.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import type { PresenceOnlinePageDto, RecentlyOnlineUserDto } from '../../common/dto';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
+import { RedisKeys } from '../redis/redis-keys';
+
+const ONLINE_LIST_CACHE_TTL_MS = 10_000;
 
 const recentSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -61,6 +65,7 @@ export class PresenceController {
     private readonly presenceRedis: PresenceRedisStateService,
     private readonly follows: FollowsService,
     private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
   ) {}
 
   @UseGuards(OptionalAuthGuard)
@@ -80,6 +85,18 @@ export class PresenceController {
     // Keep the query param for backwards compatibility (includeSelf=0/false will exclude).
     const includeSelf =
       includeSelfRaw == null ? true : (includeSelfRaw === '1' || includeSelfRaw === 'true');
+
+    // Short-lived cache so rapid tab switches / reconnect polls don't hammer
+    // getFollowListUsersByIds (User + relationship batch DB queries) on every call.
+    // 10s is acceptable staleness for a "who's online" list.
+    const cacheKey = RedisKeys.presenceOnlineList(viewerUserId);
+    try {
+      const cached = await this.redis.getJson<{ data: unknown[]; pagination: { totalOnline: number } }>(cacheKey);
+      if (cached) return cached;
+    } catch {
+      // Redis unavailable — fall through to live fetch.
+    }
+
     let userIds = await this.presenceRedis.onlineUserIds();
     if (viewerUserId) {
       if (!includeSelf) {
@@ -118,7 +135,9 @@ export class PresenceController {
       lastConnectAt: lastConnectAtById.get(u.id),
       idle: idleById.get(u.id) ?? false,
     }));
-    return { data, pagination: { totalOnline: userIds.length } };
+    const result = { data, pagination: { totalOnline: userIds.length } };
+    void this.redis.setJson(cacheKey, result, { ttlMs: ONLINE_LIST_CACHE_TTL_MS }).catch(() => undefined);
+    return result;
   }
 
   @UseGuards(OptionalAuthGuard)

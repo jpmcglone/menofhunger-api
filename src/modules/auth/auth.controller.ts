@@ -98,7 +98,12 @@ export class AuthController {
       this.auth.setSessionCookie(token, sessionResult.expiresAt, res);
     }
 
-    const { user } = sessionResult;
+    // Run expensive per-request checks (pinned-post validity, streak self-heal) only here,
+    // not in every auth guard invocation.
+    let { user } = sessionResult;
+    if (token) {
+      user = await this.auth.runMeChecks(token, user.id, (user as any).pinnedPostId ?? null, user);
+    }
 
     const notifications = this.moduleRef.get(NotificationsService, { strict: false });
     const messages = this.moduleRef.get(MessagesService, { strict: false });

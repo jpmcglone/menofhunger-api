@@ -1,9 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { FollowVisibility } from '@prisma/client';
 import { Prisma } from '@prisma/client';
+import * as crypto from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RedisService } from '../redis/redis.service';
 import { toUserListDto, type NudgeStateDto, type OrgAffiliationDto } from '../../common/dto';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
@@ -11,6 +13,8 @@ import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cu
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
+
+const RECOMMENDATIONS_CACHE_TTL_SECONDS = 5 * 60;
 
 export type FollowRelationship = {
   viewerFollowsUser: boolean;
@@ -45,10 +49,18 @@ export class FollowsService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly notifications: NotificationsService,
+    private readonly redis: RedisService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly viewerContext: ViewerContextService,
     private readonly posthog: PosthogService,
   ) {}
+
+  private recommendationsCacheKey(viewerUserId: string, limit: number, interestKeys: string[] | null): string {
+    const interestsPart = interestKeys && interestKeys.length > 0
+      ? crypto.createHash('sha1').update([...interestKeys].sort().join(',').toLowerCase()).digest('hex').slice(0, 12)
+      : 'none';
+    return `follows:recs:${viewerUserId}:${limit}:${interestsPart}`;
+  }
 
   async setPostNotificationsEnabled(params: { viewerUserId: string; username: string; enabled: boolean }) {
     const { viewerUserId, username, enabled } = params;
@@ -75,6 +87,12 @@ export class FollowsService {
   async recommendUsersToFollow(params: { viewerUserId: string; limit: number }): Promise<{ users: FollowListUser[] }> {
     const { viewerUserId } = params;
     const limit = Math.max(1, Math.min(50, Math.floor(params.limit)));
+
+    const cacheKey = this.recommendationsCacheKey(viewerUserId, limit, null);
+    try {
+      const cached = await this.redis.getJson<FollowListUser[]>(cacheKey);
+      if (cached) return { users: cached };
+    } catch { /* Redis unavailable */ }
 
     type RecRow = {
       id: string;
@@ -202,6 +220,10 @@ export class FollowsService {
       }) as FollowListUser,
     );
 
+    void this.redis
+      .setJson(cacheKey, users, { ttlSeconds: RECOMMENDATIONS_CACHE_TTL_SECONDS })
+      .catch(() => undefined);
+
     return { users };
   }
 
@@ -221,6 +243,12 @@ export class FollowsService {
     if (interestKeys.length === 0) {
       return this.recommendUsersToFollow({ viewerUserId, limit });
     }
+
+    const cacheKey = this.recommendationsCacheKey(viewerUserId, limit, interestKeys);
+    try {
+      const cached = await this.redis.getJson<FollowListUser[]>(cacheKey);
+      if (cached) return { users: cached };
+    } catch { /* Redis unavailable */ }
 
     type RecRow = {
       id: string;
@@ -299,17 +327,24 @@ export class FollowsService {
       );
     };
 
+    let users: FollowListUser[];
+
     if (arenaRows.length >= limit) {
-      return { users: await buildUsers(arenaRows) };
+      users = await buildUsers(arenaRows);
+    } else {
+      // Fall back to padding with regular recommendations.
+      const arenaIds = new Set(arenaRows.map((r) => r.id));
+      const remaining = limit - arenaRows.length;
+      const fallback = await this.recommendUsersToFollow({ viewerUserId, limit: remaining + arenaRows.length });
+      const fallbackFiltered = fallback.users.filter((u) => !arenaIds.has(u.id)).slice(0, remaining);
+      users = [...(await buildUsers(arenaRows)), ...fallbackFiltered];
     }
 
-    // Fall back to padding with regular recommendations.
-    const arenaIds = new Set(arenaRows.map((r) => r.id));
-    const remaining = limit - arenaRows.length;
-    const fallback = await this.recommendUsersToFollow({ viewerUserId, limit: remaining + arenaRows.length });
-    const fallbackFiltered = fallback.users.filter((u) => !arenaIds.has(u.id)).slice(0, remaining);
+    void this.redis
+      .setJson(cacheKey, users, { ttlSeconds: RECOMMENDATIONS_CACHE_TTL_SECONDS })
+      .catch(() => undefined);
 
-    return { users: [...(await buildUsers(arenaRows)), ...fallbackFiltered] };
+    return { users };
   }
 
 
