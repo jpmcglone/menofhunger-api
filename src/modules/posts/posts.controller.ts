@@ -437,8 +437,24 @@ export class PostsController {
                 });
         stageMs.list = Date.now() - listStartMs;
 
+        // For the chronological feed, suppress the original post when the viewer's own
+        // repost of it also appears in the same page — keeping only the repost (which
+        // is newer and already carries the original content inside repostedPost).
+        // Popular/featured feeds already exclude kind='repost' rows, so this is a no-op there.
+        const dedupedPosts = (() => {
+          const repostedOriginalIds = new Set(
+            result.posts
+              .filter((p) => (p as { kind?: string }).kind === 'repost' && (p as { repostedPostId?: string | null }).repostedPostId)
+              .map((p) => (p as { repostedPostId: string }).repostedPostId),
+          );
+          if (repostedOriginalIds.size === 0) return result.posts;
+          return result.posts.filter(
+            (p) => (p as { kind?: string }).kind === 'repost' || !repostedOriginalIds.has(p.id),
+          );
+        })();
+
         const dedupeStartMs = Date.now();
-        const { items: filteredPosts, collapsedCountByItemId } = collapseFeedByRoot(result.posts, {
+        const { items: filteredPosts, collapsedCountByItemId } = collapseFeedByRoot(dedupedPosts, {
           collapseByRoot: parsed.collapseByRoot ?? false,
           collapseMode: parsed.collapseMode ?? 'root',
           prefer: parsed.prefer ?? 'reply',

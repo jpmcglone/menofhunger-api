@@ -485,6 +485,39 @@ export function toPostDto(
     ...(typeof opts?.viewerBlockStatus !== 'undefined' ? { viewerBlockStatus: opts.viewerBlockStatus ?? null } : {}),
     ...(opts?.repostedPost ? { repostedPost: opts.repostedPost } : {}),
     ...(opts?.quotedPost ? { quotedPost: opts.quotedPost } : {}),
+    ...(() => {
+      const a = (post as any).article as {
+        id: string; title: string; excerpt: string | null; thumbnailR2Key: string | null;
+        visibility: PostVisibility; publishedAt: Date | null;
+        author: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarUpdatedAt: Date | null; verifiedStatus: VerifiedStatus; premium: boolean; premiumPlus: boolean };
+      } | null | undefined;
+      if (!a) return {};
+      return {
+        article: {
+          id: a.id,
+          title: a.title,
+          excerpt: a.excerpt ?? null,
+          thumbnailUrl: a.thumbnailR2Key
+            ? publicAssetUrl({ publicBaseUrl: publicAssetBaseUrl, key: a.thumbnailR2Key })
+            : null,
+          visibility: a.visibility,
+          publishedAt: a.publishedAt ? a.publishedAt.toISOString() : null,
+          author: {
+            id: a.author.id,
+            username: a.author.username,
+            name: a.author.name,
+            avatarUrl: publicAssetUrl({
+              publicBaseUrl: publicAssetBaseUrl,
+              key: a.author.avatarKey ?? null,
+              updatedAt: a.author.avatarUpdatedAt ?? null,
+            }),
+            verifiedStatus: a.author.verifiedStatus,
+            premium: a.author.premium,
+            premiumPlus: a.author.premiumPlus,
+          },
+        },
+      };
+    })(),
     ...(opts?.includeInternal
       ? {
           internal: {

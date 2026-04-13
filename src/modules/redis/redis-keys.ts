@@ -122,6 +122,21 @@ export const RedisKeys = {
     return `checkin:today:${clean(userId)}:${clean(dayKey)}`;
   },
 
+  // /groups/featured response cache (per viewer; invalidated on feature/unfeature changes)
+  groupsFeatured(viewerUserId: string): string {
+    return `groups:featured:${clean(viewerUserId)}`;
+  },
+
+  // /hashtags/trending response cache (per visibility set)
+  hashtagsTrending(paramsHash: string): string {
+    return `hashtags:trending:${clean(paramsHash)}`;
+  },
+
+  // Checkin leaderboard viewer rank cache (per viewer per limit)
+  checkinLeaderboardViewerRank(userId: string, limit: number): string {
+    return `checkin:leaderboard:rank:${clean(userId)}:${Math.max(1, Math.min(50, Math.floor(limit || 25)))}`;
+  },
+
   // Viewer block sets cache (rarely changes; invalidated on block/unblock)
   viewerBlockSets(userId: string): string {
     return `viewer:blocks:${clean(userId)}`;

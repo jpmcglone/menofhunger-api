@@ -223,9 +223,19 @@ export class CheckinsService {
     }
 
     // If a viewer is authenticated and not already in the top-N list, find their rank.
+    // The count query for ranking can be expensive, so cache it per viewer for the same
+    // TTL as the top list.
     let viewerRank: { rank: number; user: LeaderboardUser } | null = null;
     if (params.viewerUserId && !users.some((u) => u.id === params.viewerUserId)) {
-      // Count how many users rank higher than the viewer.
+      const rankCacheKey = RedisKeys.checkinLeaderboardViewerRank(params.viewerUserId, take);
+      try {
+        const cached = await this.redis.getJson<{ v: { rank: number; user: LeaderboardUser } | null }>(rankCacheKey);
+        if (cached) {
+          viewerRank = cached.v;
+          return { users, viewerRank };
+        }
+      } catch { /* Redis unavailable */ }
+
       const viewerRow = await this.prisma.user.findUnique({
         where: { id: params.viewerUserId },
         select: userSelect,
@@ -255,6 +265,9 @@ export class CheckinsService {
         });
         viewerRank = { rank: aheadCount + 1, user: toDto(viewerRow) };
       }
+      void this.redis
+        .setJson(rankCacheKey, { v: viewerRank }, { ttlSeconds: LEADERBOARD_CACHE_TTL_SECONDS })
+        .catch(() => undefined);
     }
 
     return { users, viewerRank };

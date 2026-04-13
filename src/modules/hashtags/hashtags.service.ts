@@ -3,6 +3,10 @@ import { Prisma } from '@prisma/client';
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
+import { RedisService } from '../redis/redis.service';
+import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
+
+const TRENDING_CACHE_TTL_SECONDS = 30;
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
 
@@ -38,6 +42,7 @@ export class HashtagsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly viewerContext: ViewerContextService,
+    private readonly redis: RedisService,
   ) {}
 
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
@@ -53,6 +58,18 @@ export class HashtagsService {
     const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
+    const paramsHash = stableJsonHash({
+      endpoint: 'hashtags:trending',
+      limit,
+      cursor: params.cursor ?? null,
+      allowed: [...allowed].sort(),
+    });
+    const cacheKey = RedisKeys.hashtagsTrending(paramsHash);
+    try {
+      const cached = await this.redis.getJson<{ hashtags: Array<{ value: string; label: string; usageCount: number }>; nextCursor: string | null }>(cacheKey);
+      if (cached) return cached;
+    } catch { /* Redis unavailable */ }
+
     const cursor = parseTrendingCursor(params.cursor ?? null);
 
     const latest = await this.prisma.hashtagTrendingScoreSnapshot.findFirst({
@@ -62,7 +79,6 @@ export class HashtagsService {
     const asOf = latest?.asOf ?? null;
     if (!asOf) return { hashtags: [], nextCursor: null };
 
-    // Keep pagination stable across refreshes: only accept cursor if it matches the current asOf.
     const cursorOk = cursor && cursor.asOfMs === asOf.getTime();
 
     const allowedSql = allowed.map((v) => Prisma.sql`${v}::"PostVisibility"`);
@@ -101,7 +117,7 @@ export class HashtagsService {
 
     const slice = rows.slice(0, limit);
     const nextRow = rows.length > limit ? slice[slice.length - 1] : null;
-    const nextCursor =
+    const nextCursor2 =
       rows.length > limit && nextRow?.tag
         ? makeTrendingCursor({ asOf, tag: nextRow.tag, score: nextRow.score, usageCount: nextRow.usageCount })
         : null;
@@ -124,14 +140,17 @@ export class HashtagsService {
       }
     }
 
-    return {
+    const result = {
       hashtags: slice.map((r) => ({
         value: r.tag,
         label: labelByTag.get(r.tag) ?? r.tag,
         usageCount: r.usageCount ?? 0,
       })),
-      nextCursor,
+      nextCursor: nextCursor2,
     };
+
+    void this.redis.setJson(cacheKey, result, { ttlSeconds: TRENDING_CACHE_TTL_SECONDS }).catch(() => undefined);
+    return result;
   }
 }
 

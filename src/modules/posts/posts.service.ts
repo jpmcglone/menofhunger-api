@@ -17,7 +17,7 @@ import { inferTopicsFromText } from '../../common/topics/topic-utils';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
-import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
+import { ARTICLE_SHARE_INCLUDE, POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
@@ -2746,6 +2746,7 @@ export class PostsService {
             media: { orderBy: { position: 'asc' } },
             poll: { include: { options: { orderBy: { position: 'asc' } } } },
             mentions: { include: { user: { select: MENTION_USER_SELECT } } },
+            article: ARTICLE_SHARE_INCLUDE,
           },
         })
       : [];

@@ -16,6 +16,10 @@ import { PostsService } from '../posts/posts.service';
 import { AppConfigService } from '../app/app-config.service';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RedisService } from '../redis/redis.service';
+import { RedisKeys } from '../redis/redis-keys';
+
+const FEATURED_CACHE_TTL_SECONDS = 120;
 
 function slugifyBase(name: string): string {
   return (name ?? '')
@@ -33,6 +37,7 @@ export class GroupsService {
     private readonly posts: PostsService,
     private readonly appConfig: AppConfigService,
     private readonly notifications: NotificationsService,
+    private readonly redis: RedisService,
   ) {}
 
   private async ensureUniqueSlug(base: string): Promise<string> {
@@ -98,6 +103,12 @@ export class GroupsService {
   }
 
   async listFeatured(params: { viewerUserId: string }) {
+    const cacheKey = RedisKeys.groupsFeatured(params.viewerUserId);
+    try {
+      const cached = await this.redis.getJson<{ data: unknown[] }>(cacheKey);
+      if (cached) return cached;
+    } catch { /* Redis unavailable */ }
+
     const rows = await this.prisma.communityGroup.findMany({
       where: { deletedAt: null, isFeatured: true },
       orderBy: [{ featuredOrder: 'asc' }, { createdAt: 'asc' }],
@@ -108,13 +119,16 @@ export class GroupsService {
       select: { groupId: true, status: true, role: true },
     });
     const byGroup = new Map(memberships.map((m) => [m.groupId, m] as const));
-    return {
+    const result = {
       data: rows.map((g) => {
         const m = byGroup.get(g.id);
         const viewerMembership = m ? { status: m.status, role: m.role } : null;
         return toCommunityGroupShellDto(g, viewerMembership);
       }),
     };
+
+    void this.redis.setJson(cacheKey, result, { ttlSeconds: FEATURED_CACHE_TTL_SECONDS }).catch(() => undefined);
+    return result;
   }
 
   async listMine(params: { viewerUserId: string }) {
