@@ -1157,6 +1157,7 @@ model Notification {
   subjectPostId  String?
   subjectUserId  String?
   subjectArticleId String?
+  subjectArticleCommentId String?
   subjectGroupId   String?
   title     String?
   body      String?
@@ -1167,6 +1168,7 @@ model Notification {
   subjectPost Post? @relation("Notification_subjectPost", fields: [subjectPostId], references: [id], onDelete: SetNull)
   subjectUser User? @relation("Notification_subjectUser", fields: [subjectUserId], references: [id], onDelete: SetNull)
   subjectArticle Article? @relation("Notification_subjectArticle", fields: [subjectArticleId], references: [id], onDelete: SetNull)
+  subjectArticleComment ArticleComment? @relation("Notification_subjectArticleComment", fields: [subjectArticleCommentId], references: [id], onDelete: SetNull)
   subjectGroup CommunityGroup? @relation("Notification_subjectGroup", fields: [subjectGroupId], references: [id], onDelete: SetNull)
 
   @@index([recipientUserId, createdAt])
@@ -1713,6 +1715,7 @@ model ArticleComment {
   parent   ArticleComment?  @relation("ArticleComment_replies", fields: [parentId], references: [id], onDelete: Cascade)
   replies  ArticleComment[] @relation("ArticleComment_replies")
   reactions ArticleCommentReaction[]
+  notifications Notification[] @relation("Notification_subjectArticleComment")
 
   @@index([articleId, createdAt])
   @@index([parentId, createdAt])

@@ -29,6 +29,19 @@ import { parseMentionsFromBody } from '../../common/mentions/mention-regex';
 import type { PostVisibility } from '@prisma/client';
 import { LOGGED_IN_VIEW_WEIGHT } from '../views/view-tracking.utils';
 
+/**
+ * Strip leading/trailing whitespace from every line, trim the whole string,
+ * and collapse runs of 2+ blank lines into a single blank line.
+ */
+function normalizeCommentBody(raw: string): string {
+  return raw
+    .split('\n')
+    .map((line) => line.trim())
+    .join('\n')
+    .trim()
+    .replace(/\n{3,}/g, '\n\n');
+}
+
 function slugify(text: string): string {
   return text
     .toLowerCase()
@@ -925,8 +938,9 @@ export class ArticlesService {
       throw new ForbiddenException('Verified membership required to comment.');
     }
 
+    const normalizedBody = normalizeCommentBody(data.body);
     const maxCommentLength = this.viewer.isPremium(viewerCtx) ? 2000 : 500;
-    if (data.body.trim().length > maxCommentLength) {
+    if (normalizedBody.length > maxCommentLength) {
       throw new BadRequestException(`Comment must be ${maxCommentLength} characters or fewer.`);
     }
 
@@ -945,7 +959,7 @@ export class ArticlesService {
         data: {
           articleId,
           authorId: userId,
-          body: data.body.trim(),
+          body: normalizedBody,
           parentId: data.parentId ?? null,
         },
         include: this.commentIncludes(),
@@ -1005,6 +1019,7 @@ export class ArticlesService {
             kind: 'comment',
             actorUserId: userId,
             subjectArticleId: articleId,
+            subjectArticleCommentId: comment.id,
             title: data.parentId ? 'replied to your comment' : 'commented on your article',
             body: bodySnippet,
           });
@@ -1020,6 +1035,7 @@ export class ArticlesService {
             kind: 'mention',
             actorUserId: userId,
             subjectArticleId: articleId,
+            subjectArticleCommentId: comment.id,
             title: mentionTitle,
             body: bodySnippet,
           });
@@ -1038,14 +1054,15 @@ export class ArticlesService {
     if (comment.authorId !== userId) throw new ForbiddenException('Not your comment.');
 
     const viewerCtx = await this.viewer.getViewerOrThrow(userId);
+    const normalizedBody = normalizeCommentBody(body);
     const maxCommentLength = this.viewer.isPremium(viewerCtx) ? 2000 : 500;
-    if (body.trim().length > maxCommentLength) {
+    if (normalizedBody.length > maxCommentLength) {
       throw new BadRequestException(`Comment must be ${maxCommentLength} characters or fewer.`);
     }
 
     const updated = await this.prisma.articleComment.update({
       where: { id: commentId },
-      data: { body: body.trim(), editedAt: new Date() },
+      data: { body: normalizedBody, editedAt: new Date() },
       include: this.commentIncludes(),
     }) as ArticleCommentWithAuthorAndReactions;
 

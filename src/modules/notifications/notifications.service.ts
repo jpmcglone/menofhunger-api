@@ -31,6 +31,7 @@ export type CreateNotificationParams = {
   subjectPostId?: string | null;
   subjectUserId?: string | null;
   subjectArticleId?: string | null;
+  subjectArticleCommentId?: string | null;
   subjectGroupId?: string | null;
   title?: string | null;
   body?: string | null;
@@ -173,6 +174,7 @@ export class NotificationsService {
       subjectPostId,
       subjectUserId,
       subjectArticleId,
+      subjectArticleCommentId,
       subjectGroupId,
       title,
       body,
@@ -206,6 +208,7 @@ export class NotificationsService {
           subjectPostId: subjectPostId ?? undefined,
           subjectUserId: subjectUserId ?? undefined,
           subjectArticleId: subjectArticleId ?? undefined,
+          subjectArticleCommentId: subjectArticleCommentId ?? undefined,
           subjectGroupId: subjectGroupId ?? undefined,
           title: fallbackTitle ?? undefined,
           body: body ?? undefined,
@@ -264,11 +267,12 @@ export class NotificationsService {
           body,
           subjectArticleId,
         });
+        const commentHash = subjectArticleCommentId ? `#comment-${subjectArticleCommentId}` : '';
         // Route to the article page for all article-related notification kinds.
         const pushUrl = subjectArticleId && (
           kind === 'comment' || kind === 'mention' || kind === 'followed_article' || kind === 'boost'
         )
-          ? `/a/${subjectArticleId}`
+          ? `/a/${subjectArticleId}${commentHash}`
           : kind === 'comment' && actorPostId
             ? `/p/${actorPostId}`
             : kind === 'mention' && actorPostId
@@ -2209,6 +2213,7 @@ export class NotificationsService {
       subjectPostId: n.subjectPostId,
       subjectUserId: n.subjectUserId,
       subjectArticleId: n.subjectArticleId ?? null,
+      subjectArticleCommentId: n.subjectArticleCommentId ?? null,
       subjectGroupId: n.subjectGroupId ?? null,
       subjectGroupSlug,
       subjectGroupName,
