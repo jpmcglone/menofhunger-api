@@ -2162,6 +2162,7 @@ export class NotificationsService {
       subjectPostId: string | null;
       subjectUserId: string | null;
       subjectArticleId?: string | null;
+      subjectArticleCommentId?: string | null;
       subjectGroupId?: string | null;
       title: string | null;
       body: string | null;
