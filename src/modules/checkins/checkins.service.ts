@@ -274,6 +274,131 @@ export class CheckinsService {
   }
 
   /**
+   * Best-streak leaderboard: ranks by highest longestStreakDays ever achieved.
+   * Returns up to `take` users, plus the viewer's own rank if they are not in the top-N.
+   */
+  async getBestStreakLeaderboard(params: { publicBaseUrl: string | null; limit?: number; viewerUserId?: string | null }) {
+    const take = Math.min(Math.max(1, params.limit ?? 25), 50);
+    const cacheKey = RedisKeys.checkinBestStreakLeaderboard(take);
+
+    type LeaderboardUser = {
+      id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
+      isOrganization: boolean; stewardBadgeEnabled: boolean; verifiedStatus: string; avatarUrl: string | null;
+      checkinStreakDays: number; longestStreakDays: number;
+    };
+    let cachedUsers: LeaderboardUser[] | null = null;
+    try {
+      cachedUsers = await this.redis.getJson<LeaderboardUser[]>(cacheKey);
+    } catch { /* Redis unavailable */ }
+
+    const userSelect = {
+      id: true,
+      username: true,
+      name: true,
+      premium: true,
+      premiumPlus: true,
+      isOrganization: true,
+      stewardBadgeEnabled: true,
+      verifiedStatus: true,
+      avatarKey: true,
+      avatarUpdatedAt: true,
+      checkinStreakDays: true,
+      longestStreakDays: true,
+      createdAt: true,
+    } as const;
+
+    const toDto = (u: {
+      id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
+      isOrganization: boolean; stewardBadgeEnabled: boolean; verifiedStatus: string;
+      avatarKey: string | null; avatarUpdatedAt: Date | null; checkinStreakDays: number | null; longestStreakDays: number | null;
+    }): LeaderboardUser => ({
+      id: u.id,
+      username: u.username,
+      name: u.name,
+      premium: u.premium,
+      premiumPlus: u.premiumPlus,
+      isOrganization: Boolean(u.isOrganization),
+      stewardBadgeEnabled: Boolean(u.stewardBadgeEnabled),
+      verifiedStatus: u.verifiedStatus as string,
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl: params.publicBaseUrl,
+        key: u.avatarKey ?? null,
+        updatedAt: u.avatarUpdatedAt ?? null,
+      }),
+      checkinStreakDays: u.checkinStreakDays ?? 0,
+      longestStreakDays: Math.max(u.longestStreakDays ?? 0, u.checkinStreakDays ?? 0),
+    });
+
+    let users: LeaderboardUser[];
+    if (cachedUsers) {
+      users = cachedUsers;
+    } else {
+      const topUsers = await this.prisma.user.findMany({
+        where: {
+          bannedAt: null,
+          OR: [{ checkinStreakDays: { gt: 0 } }, { longestStreakDays: { gt: 0 } }],
+        },
+        orderBy: [{ longestStreakDays: 'desc' }, { checkinStreakDays: 'desc' }, { createdAt: 'asc' }],
+        take,
+        select: userSelect,
+      });
+
+      users = topUsers.map(toDto);
+      void this.redis
+        .setJson(cacheKey, users, { ttlSeconds: LEADERBOARD_CACHE_TTL_SECONDS })
+        .catch(() => undefined);
+    }
+
+    let viewerRank: { rank: number; user: LeaderboardUser } | null = null;
+    if (params.viewerUserId && !users.some((u) => u.id === params.viewerUserId)) {
+      const rankCacheKey = RedisKeys.checkinLeaderboardViewerRank(params.viewerUserId, take, 'best');
+      try {
+        const cached = await this.redis.getJson<{ v: { rank: number; user: LeaderboardUser } | null }>(rankCacheKey);
+        if (cached) {
+          viewerRank = cached.v;
+          return { users, viewerRank };
+        }
+      } catch { /* Redis unavailable */ }
+
+      const viewerRow = await this.prisma.user.findUnique({
+        where: { id: params.viewerUserId },
+        select: userSelect,
+      });
+      if (viewerRow) {
+        const effectiveLongest = Math.max(viewerRow.longestStreakDays ?? 0, viewerRow.checkinStreakDays ?? 0);
+        const aheadCount = await this.prisma.user.count({
+          where: {
+            bannedAt: null,
+            OR: [{ checkinStreakDays: { gt: 0 } }, { longestStreakDays: { gt: 0 } }],
+            AND: [
+              {
+                OR: [
+                  { longestStreakDays: { gt: effectiveLongest } },
+                  {
+                    longestStreakDays: effectiveLongest,
+                    checkinStreakDays: { gt: viewerRow.checkinStreakDays ?? 0 },
+                  },
+                  {
+                    longestStreakDays: effectiveLongest,
+                    checkinStreakDays: viewerRow.checkinStreakDays ?? 0,
+                    createdAt: { lt: viewerRow.createdAt ?? new Date() },
+                  },
+                ],
+              },
+            ],
+          },
+        });
+        viewerRank = { rank: aheadCount + 1, user: toDto(viewerRow) };
+      }
+      void this.redis
+        .setJson(rankCacheKey, { v: viewerRank }, { ttlSeconds: LEADERBOARD_CACHE_TTL_SECONDS })
+        .catch(() => undefined);
+    }
+
+    return { users, viewerRank };
+  }
+
+  /**
    * Weekly leaderboard: ranks by distinct posting days in the current Mon-Sun ET week.
    * Returns up to `take` users, plus the viewer's own rank if they are not in the top-N.
    */

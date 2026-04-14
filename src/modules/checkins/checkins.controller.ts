@@ -28,15 +28,23 @@ export class CheckinsController {
   ) {
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const parsedLimit = limit ? parseInt(limit, 10) : undefined;
-    const isWeekly = scope === 'weekly';
 
-    if (isWeekly) {
+    if (scope === 'weekly') {
       const { users, viewerRank, weekStart } = await this.checkins.getWeeklyLeaderboard({
         publicBaseUrl,
         limit: parsedLimit,
         viewerUserId: viewerUserId ?? null,
       });
       return { data: { users, viewerRank: viewerRank ?? null, weekStart: weekStart.toISOString(), generatedAt: new Date().toISOString() } };
+    }
+
+    if (scope === 'best') {
+      const { users, viewerRank } = await this.checkins.getBestStreakLeaderboard({
+        publicBaseUrl,
+        limit: parsedLimit,
+        viewerUserId: viewerUserId ?? null,
+      });
+      return { data: { users, viewerRank: viewerRank ?? null, generatedAt: new Date().toISOString() } };
     }
 
     const { users, viewerRank } = await this.checkins.getLeaderboard({

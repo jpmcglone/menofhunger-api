@@ -63,6 +63,9 @@ export const RedisKeys = {
   checkinLeaderboard(limit: number): string {
     return `checkin:leaderboard:${Math.max(1, Math.min(50, Math.floor(limit || 25)))}`;
   },
+  checkinBestStreakLeaderboard(limit: number): string {
+    return `checkin:leaderboard:best:${Math.max(1, Math.min(50, Math.floor(limit || 25)))}`;
+  },
   checkinWeeklyLeaderboard(limit: number, weekStartIso: string): string {
     return `checkin:leaderboard:weekly:${Math.max(1, Math.min(50, Math.floor(limit || 25)))}:${clean(weekStartIso)}`;
   },
@@ -132,9 +135,10 @@ export const RedisKeys = {
     return `hashtags:trending:${clean(paramsHash)}`;
   },
 
-  // Checkin leaderboard viewer rank cache (per viewer per limit)
-  checkinLeaderboardViewerRank(userId: string, limit: number): string {
-    return `checkin:leaderboard:rank:${clean(userId)}:${Math.max(1, Math.min(50, Math.floor(limit || 25)))}`;
+  // Checkin leaderboard viewer rank cache (per viewer per limit per scope)
+  checkinLeaderboardViewerRank(userId: string, limit: number, scope?: string): string {
+    const scopeSuffix = scope && scope !== 'active' ? `:${clean(scope)}` : '';
+    return `checkin:leaderboard:rank:${clean(userId)}:${Math.max(1, Math.min(50, Math.floor(limit || 25)))}${scopeSuffix}`;
   },
 
   // Viewer block sets cache (rarely changes; invalidated on block/unblock)
