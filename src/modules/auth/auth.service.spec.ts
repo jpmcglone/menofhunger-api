@@ -109,8 +109,9 @@ function makeService(overrides?: { prisma?: any }) {
   const otpProvider = { send: jest.fn(), verify: jest.fn() } as any;
   const posthog = { capture: jest.fn() } as any;
   const slack = { send: jest.fn() } as any;
+  const requestCache = { get: jest.fn(() => undefined), set: jest.fn() } as any;
 
-  const svc = new AuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack);
+  const svc = new AuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack, requestCache);
   return { svc, prisma, token, tokenHash };
 }
 
