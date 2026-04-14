@@ -35,6 +35,7 @@ function makeService(opts?: { allowedVisibilities?: Array<'public' | 'verifiedOn
     {} as any,
     cache,
     cacheInvalidation,
+    { enqueue: jest.fn().mockResolvedValue({}) } as any,
   );
 
   return { service, prisma, viewer };
