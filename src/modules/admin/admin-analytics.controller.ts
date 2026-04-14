@@ -59,7 +59,10 @@ export class AdminAnalyticsController {
       SELECT MIN("createdAt") AS data_start FROM "User" WHERE "bannedAt" IS NULL
     `;
     const dataStart = dataStartRow[0]?.data_start ?? now;
-    const effectiveStart = since && since > dataStart ? since : dataStart;
+    const chosen = since && since > dataStart ? since : dataStart;
+    // Truncate to UTC midnight so generate_series produces exact midnight timestamps
+    // that match the UserDailyActivity.day column (always stored as UTC midnight).
+    const effectiveStart = new Date(Date.UTC(chosen.getUTCFullYear(), chosen.getUTCMonth(), chosen.getUTCDate()));
     const actualSpanDays = Math.ceil((now.getTime() - effectiveStart.getTime()) / 86400000);
     const granularity = granularityForSpan(actualSpanDays);
 

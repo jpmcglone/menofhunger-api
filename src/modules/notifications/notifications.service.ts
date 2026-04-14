@@ -497,8 +497,8 @@ export class NotificationsService {
       emailDigestDaily: Boolean(prefs.emailDigestDaily),
       emailDigestWeekly: Boolean(prefs.emailDigestWeekly),
       emailNewNotifications: Boolean(prefs.emailNewNotifications),
-      emailInstantHighSignal: Boolean((prefs as any).emailInstantHighSignal),
-      emailFollowedArticle: Boolean((prefs as any).emailFollowedArticle),
+      emailInstantHighSignal: Boolean(prefs.emailInstantHighSignal),
+      emailFollowedArticle: Boolean(prefs.emailFollowedArticle),
     };
   }
 
@@ -509,8 +509,8 @@ export class NotificationsService {
       patch.emailDigestDaily !== undefined ||
       patch.emailDigestWeekly !== undefined ||
       patch.emailNewNotifications !== undefined ||
-      (patch as any).emailInstantHighSignal !== undefined ||
-      (patch as any).emailFollowedArticle !== undefined;
+      patch.emailInstantHighSignal !== undefined ||
+      patch.emailFollowedArticle !== undefined;
 
     let effectivePatch = patch;
     if (wantsEmailPatch) {
@@ -521,11 +521,11 @@ export class NotificationsService {
       const canUseEmail = Boolean((u?.email ?? '').trim()) && Boolean(u?.emailVerifiedAt);
       if (!canUseEmail) {
         effectivePatch = { ...patch };
-        delete (effectivePatch as any).emailDigestDaily;
-        delete (effectivePatch as any).emailDigestWeekly;
-        delete (effectivePatch as any).emailNewNotifications;
-        delete (effectivePatch as any).emailInstantHighSignal;
-        delete (effectivePatch as any).emailFollowedArticle;
+        delete effectivePatch.emailDigestDaily;
+        delete effectivePatch.emailDigestWeekly;
+        delete effectivePatch.emailNewNotifications;
+        delete effectivePatch.emailInstantHighSignal;
+        delete effectivePatch.emailFollowedArticle;
       }
     }
 
@@ -546,8 +546,8 @@ export class NotificationsService {
       emailDigestDaily: Boolean(updated.emailDigestDaily),
       emailDigestWeekly: Boolean(updated.emailDigestWeekly),
       emailNewNotifications: Boolean(updated.emailNewNotifications),
-      emailInstantHighSignal: Boolean((updated as any).emailInstantHighSignal),
-      emailFollowedArticle: Boolean((updated as any).emailFollowedArticle),
+      emailInstantHighSignal: Boolean(updated.emailInstantHighSignal),
+      emailFollowedArticle: Boolean(updated.emailFollowedArticle),
     };
   }
 

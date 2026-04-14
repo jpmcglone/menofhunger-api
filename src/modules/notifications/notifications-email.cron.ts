@@ -6,7 +6,7 @@ import { EmailService } from '../email/email.service';
 import { AppConfigService } from '../app/app-config.service';
 import { NotificationsService } from './notifications.service';
 import { buildProfileReminderEmail, getMissingProfileFields } from '../email/email-content';
-import { buildFollowedArticleEmail } from '../email/email-content-article';
+import { buildFollowedArticleEmail, renderTiptapPreviewHtml } from '../email/email-content-article';
 import { buildGreeting, getRecipientEmail, getVerifiedRecipientEmail } from '../email/email-send.helpers';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
@@ -2211,6 +2211,7 @@ ${chatPreviewRows
         select: {
           id: true,
           title: true,
+          body: true,
           excerpt: true,
           thumbnailR2Key: true,
           visibility: true,
@@ -2253,6 +2254,11 @@ ${chatPreviewRows
       const articleUrl = `${baseUrl}/a/${article.id}`;
       const articleThumbnailUrl = article.thumbnailR2Key
         ? publicAssetUrl({ publicBaseUrl: r2PublicBaseUrl, key: article.thumbnailR2Key })
+        : null;
+
+      // Pre-render the body preview once (avoids re-parsing the same JSON per follower).
+      const bodyPreviewHtml = article.body
+        ? renderTiptapPreviewHtml(article.body, 3)
         : null;
 
       // Query all followers who have a verified email address.
@@ -2316,6 +2322,8 @@ ${chatPreviewRows
           authorPremium,
           articleUrl,
           articleTitle: article.title,
+          articleBodyJson: null,
+          articleBodyPreviewHtml: bodyPreviewHtml,
           articleExcerpt: article.excerpt ?? null,
           articleThumbnailUrl,
           articleVisibility: article.visibility as 'public' | 'verifiedOnly' | 'premiumOnly',

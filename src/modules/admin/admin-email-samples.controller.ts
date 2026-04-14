@@ -426,6 +426,32 @@ export class AdminEmailSamplesController {
     const sampleArticleExcerpt =
       'Most men think discipline is about willpower. It isn\'t. It\'s about building systems that make failure hard and success automatic. Here\'s what that actually looks like in practice…';
 
+    // Sample Tiptap JSON body for preview rendering
+    const sampleBodyJson = JSON.stringify({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'Most men think discipline is about willpower. It isn\'t. It\'s about building systems that make failure hard and success ' },
+            { type: 'text', marks: [{ type: 'bold' }], text: 'automatic' },
+            { type: 'text', text: '. Here\'s what that actually looks like in practice.' },
+          ],
+        },
+        {
+          type: 'heading',
+          attrs: { level: 2 },
+          content: [{ type: 'text', text: 'The problem with willpower' }],
+        },
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'Willpower is a finite resource. Every decision you make in a day depletes it. By the time evening rolls around, most men are running on empty — which is exactly when temptation hits hardest.' },
+          ],
+        },
+      ],
+    });
+
     return buildFollowedArticleEmail({
       greeting: ctx.greeting,
       authorName: sampleAuthorName,
@@ -436,6 +462,7 @@ export class AdminEmailSamplesController {
       authorPremium: false,
       articleUrl: `${ctx.baseUrl}/a/${sampleArticleId}`,
       articleTitle: sampleArticleTitle,
+      articleBodyJson: sampleBodyJson,
       articleExcerpt: sampleArticleExcerpt,
       articleThumbnailUrl: null,
       articleVisibility: 'public',
