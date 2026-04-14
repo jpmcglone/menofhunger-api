@@ -19,6 +19,7 @@ import { USER_DTO_SELECT } from '../../common/prisma-selects/user.select';
 import { dayIndexEastern, easternDayKey, easternDayKeyFromDayIndex } from '../../common/time/eastern-day-key';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
+import { RequestCacheService } from '../../common/cache/request-cache.service';
 
 /** TTL for the full session cache (auth guards). Short enough to pick up bans/revocations quickly. */
 const SESSION_FULL_CACHE_TTL_MS = 30_000;
@@ -42,6 +43,7 @@ export class AuthService {
     @Inject(OTP_PROVIDER) private readonly otpProvider: OtpProvider,
     private readonly posthog: PosthogService,
     private readonly slack: SlackService,
+    private readonly requestCache: RequestCacheService,
   ) {}
 
   private maskPhone(phone: string) {
@@ -240,6 +242,19 @@ export class AuthService {
 
   async meFromSessionToken(token: string | undefined): Promise<SessionResult | null> {
     if (!token) return null;
+
+    // Per-request memoization: the throttler guard and auth guard both resolve
+    // the session cookie. Cache the result so the DB/Redis lookup happens at most once.
+    const cacheKey = `auth:session:${token}`;
+    const cached = this.requestCache.get<SessionResult | null>(cacheKey);
+    if (cached !== undefined) return cached;
+
+    const result = await this._resolveSession(token);
+    this.requestCache.set(cacheKey, result);
+    return result;
+  }
+
+  private async _resolveSession(token: string): Promise<SessionResult | null> {
     const now = new Date();
     const tokenHash = hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
 

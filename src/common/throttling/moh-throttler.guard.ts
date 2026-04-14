@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
-import * as crypto from 'node:crypto';
 import { Reflector } from '@nestjs/core';
 import {
   InjectThrottlerOptions,
@@ -9,18 +8,17 @@ import {
 import type { ThrottlerModuleOptions } from '@nestjs/throttler/dist/throttler-module-options.interface';
 import type { ThrottlerStorage } from '@nestjs/throttler/dist/throttler-storage.interface';
 import { getSessionCookie } from '../session-cookie';
-import { PrismaService } from '../../modules/prisma/prisma.service';
-import { AppConfigService } from '../../modules/app/app-config.service';
-import { RedisService } from '../../modules/redis/redis.service';
-import { RedisKeys } from '../../modules/redis/redis-keys';
+import { AuthService } from '../../modules/auth/auth.service';
 
 /**
  * Throttling key strategy:
  * - If the request has a valid session cookie, throttle by user id (shared across sessions).
- * - Otherwise throttle by IP (keeps auth/start abuse controls effective).
+ * - Otherwise throttle by IP.
  *
- * Note: We do not rely on `req.user` being set, because this guard runs globally and before
- * route-specific guards. Instead we resolve the session to a user id via the DB with a small cache.
+ * Delegates session resolution to AuthService.meFromSessionToken which memoizes
+ * the result per-request via RequestCacheService. This means when the route-level
+ * AuthGuard / OptionalAuthGuard calls the same method later, it's a free cache hit
+ * instead of a second Redis+DB round-trip.
  */
 @Injectable()
 export class MohThrottlerGuard extends ThrottlerGuard {
@@ -28,67 +26,22 @@ export class MohThrottlerGuard extends ThrottlerGuard {
     @InjectThrottlerOptions() options: ThrottlerModuleOptions,
     @InjectThrottlerStorage() storageService: ThrottlerStorage,
     reflector: Reflector,
-    private readonly prisma: PrismaService,
-    private readonly appConfig: AppConfigService,
-    private readonly redis: RedisService,
+    private readonly auth: AuthService,
   ) {
     super(options, storageService, reflector);
-  }
-
-  private hmacSha256Hex(secret: string, value: string) {
-    return crypto.createHmac('sha256', secret).update(value).digest('hex');
-  }
-
-  private async userIdFromSessionToken(token: string): Promise<string | null> {
-    const now = new Date();
-    const nowMs = now.getTime();
-    const tokenHash = this.hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
-
-    const cacheKey = RedisKeys.sessionUser(tokenHash);
-    try {
-      const cached = await this.redis.getString(cacheKey);
-      if (cached !== null) {
-        return cached === '-' ? null : cached;
-      }
-    } catch {
-      // If Redis is down, fall back to DB.
-    }
-
-    const session = await this.prisma.session.findFirst({
-      where: {
-        tokenHash,
-        revokedAt: null,
-        expiresAt: { gt: now },
-      },
-      select: {
-        userId: true,
-        expiresAt: true,
-      },
-    });
-
-    // Cache briefly to reduce DB pressure during bursts.
-    // - Positive: up to 30s, but never past session expiry.
-    // - Negative: 5s.
-    const maxPositiveMs = 30_000;
-    const negativeMs = 5_000;
-    const ttlMs = session
-      ? Math.max(1, Math.min(maxPositiveMs, session.expiresAt.getTime() - nowMs))
-      : negativeMs;
-    const value = session ? session.userId : '-';
-    // Best-effort. If Redis is down, throttling still works (just with more DB reads).
-    void this.redis.setString(cacheKey, value, { ttlMs }).catch(() => undefined);
-    return session ? session.userId : null;
   }
 
   protected async getTracker(req: Record<string, unknown>): Promise<string> {
     const token = getSessionCookie(req as { cookies?: Record<string, string | undefined> });
     if (token) {
-      const userId = await this.userIdFromSessionToken(token.trim());
-      if (userId) return `user:${userId}`;
-      // If token is invalid/expired, treat as unauthenticated and fall back to IP.
+      try {
+        const session = await this.auth.meFromSessionToken(token.trim());
+        if (session) return `user:${session.user.id}`;
+      } catch {
+        // Banned / revoked — fall through to IP-based throttling.
+      }
     }
 
-    // Fall back to default behavior (typically uses req.ip)
     return super.getTracker(req);
   }
 }
