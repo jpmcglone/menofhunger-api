@@ -62,12 +62,12 @@ const commentListSchema = z.object({
 });
 
 const commentCreateSchema = z.object({
-  body: z.string().trim().min(1).max(5000),
+  body: z.string().trim().min(1).max(2000),
   parentId: z.string().optional(),
 });
 
 const commentUpdateSchema = z.object({
-  body: z.string().trim().min(1).max(5000),
+  body: z.string().trim().min(1).max(2000),
 });
 
 const reactionSchema = z.object({

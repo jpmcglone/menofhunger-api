@@ -924,6 +924,12 @@ export class ArticlesService {
     if (!this.viewer.isVerified(viewerCtx) && !this.viewer.isPremium(viewerCtx)) {
       throw new ForbiddenException('Verified membership required to comment.');
     }
+
+    const maxCommentLength = this.viewer.isPremium(viewerCtx) ? 2000 : 500;
+    if (data.body.trim().length > maxCommentLength) {
+      throw new BadRequestException(`Comment must be ${maxCommentLength} characters or fewer.`);
+    }
+
     await this.assertArticleAccessible(articleId, userId);
 
     if (data.parentId) {
@@ -1030,6 +1036,12 @@ export class ArticlesService {
     const comment = await this.prisma.articleComment.findUnique({ where: { id: commentId } });
     if (!comment || comment.deletedAt) throw new NotFoundException('Comment not found.');
     if (comment.authorId !== userId) throw new ForbiddenException('Not your comment.');
+
+    const viewerCtx = await this.viewer.getViewerOrThrow(userId);
+    const maxCommentLength = this.viewer.isPremium(viewerCtx) ? 2000 : 500;
+    if (body.trim().length > maxCommentLength) {
+      throw new BadRequestException(`Comment must be ${maxCommentLength} characters or fewer.`);
+    }
 
     const updated = await this.prisma.articleComment.update({
       where: { id: commentId },
