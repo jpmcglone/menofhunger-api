@@ -6,6 +6,7 @@ import { EmailService } from '../email/email.service';
 import { AppConfigService } from '../app/app-config.service';
 import { NotificationsService } from './notifications.service';
 import { buildProfileReminderEmail, getMissingProfileFields } from '../email/email-content';
+import { buildFollowedArticleEmail } from '../email/email-content-article';
 import { buildGreeting, getRecipientEmail, getVerifiedRecipientEmail } from '../email/email-send.helpers';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
@@ -372,7 +373,7 @@ export class NotificationsEmailCron {
               `${baseUrl}/settings/notifications`,
             )}" style="color:#111827;text-decoration:underline;">Settings → Notifications</a></div>`,
           ].join(''),
-          footerHtml: `Men of Hunger`,
+          footerHtml: `Manage notifications in <a href="${escapeHtml(`${baseUrl}/settings/notifications`)}" style="color:#9ca3af;text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
         });
 
         await this.sendEmailAndHandle({
@@ -1982,7 +1983,7 @@ ${chatPreviewRows
       ]
         .filter(Boolean)
         .join(''),
-      footerHtml: `Men of Hunger`,
+      footerHtml: `Manage notifications in <a href="${escapeHtml(settingsUrl)}" style="color:#9ca3af;text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
     });
 
     await this.sendEmailAndHandle({
@@ -2186,6 +2187,160 @@ ${chatPreviewRows
     } catch (err) {
       this.logger.error(
         `[profile-reminder] run failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+    }
+  }
+
+  // ─── Followed-author article email ────────────────────────────────────────────
+
+  async runSendFollowedArticleEmail(data: { articleId?: string; authorUserId?: string }): Promise<void> {
+    const { articleId, authorUserId } = data ?? {};
+    if (!articleId || !authorUserId) {
+      this.logger.warn(`[followed-article-email] missing articleId or authorUserId in job data`);
+      return;
+    }
+
+    try {
+      const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
+      const r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+      const settingsUrl = `${baseUrl}/settings/notifications`;
+
+      const article = await this.prisma.article.findUnique({
+        where: { id: articleId },
+        select: {
+          id: true,
+          title: true,
+          excerpt: true,
+          thumbnailR2Key: true,
+          visibility: true,
+          isDraft: true,
+          deletedAt: true,
+          author: {
+            select: {
+              id: true,
+              username: true,
+              name: true,
+              bio: true,
+              articleBio: true,
+              avatarKey: true,
+              avatarUpdatedAt: true,
+              verifiedStatus: true,
+              premium: true,
+              premiumPlus: true,
+            },
+          },
+        },
+      });
+
+      if (!article || article.isDraft || article.deletedAt) {
+        this.logger.debug(`[followed-article-email] article ${articleId} not found or not published, skipping`);
+        return;
+      }
+
+      const author = article.author;
+      const authorName =
+        String(author.name ?? '').trim() || String(author.username ?? '').trim() || 'Someone you follow';
+      const authorAvatarUrl = publicAssetUrl({
+        publicBaseUrl: r2PublicBaseUrl,
+        key: author.avatarKey,
+        updatedAt: author.avatarUpdatedAt,
+      });
+      const authorBio = (author.articleBio ?? author.bio ?? '').trim() || null;
+      const authorVerified = author.verifiedStatus !== 'none';
+      const authorPremium = Boolean(author.premium || author.premiumPlus);
+      const authorProfileUrl = author.username ? `${baseUrl}/u/${author.username}` : baseUrl;
+      const articleUrl = `${baseUrl}/a/${article.id}`;
+      const articleThumbnailUrl = article.thumbnailR2Key
+        ? publicAssetUrl({ publicBaseUrl: r2PublicBaseUrl, key: article.thumbnailR2Key })
+        : null;
+
+      // Query all followers who have a verified email address.
+      const followers = await this.prisma.follow.findMany({
+        where: { followingId: authorUserId },
+        select: {
+          follower: {
+            select: {
+              id: true,
+              name: true,
+              username: true,
+              email: true,
+              emailVerifiedAt: true,
+              verifiedStatus: true,
+              premium: true,
+              premiumPlus: true,
+              notificationPreferences: {
+                select: { emailFollowedArticle: true },
+              },
+            },
+          },
+        },
+      });
+
+      let sent = 0;
+      let skipped = 0;
+
+      for (const { follower } of followers) {
+        if (!follower) continue;
+
+        // Skip self-follows (shouldn't exist, but guard anyway).
+        if (follower.id === authorUserId) continue;
+
+        // Require a verified email.
+        const to = getVerifiedRecipientEmail(follower);
+        if (!to) { skipped++; continue; }
+
+        // Respect the emailFollowedArticle preference (default true when no row exists).
+        const prefEnabled = follower.notificationPreferences?.emailFollowedArticle ?? true;
+        if (!prefEnabled) { skipped++; continue; }
+
+        // Tier gate: match the same logic as allowedPostVisibilities.
+        if (article.visibility === 'verifiedOnly') {
+          if (!follower.verifiedStatus || follower.verifiedStatus === 'none') { skipped++; continue; }
+        }
+        if (article.visibility === 'premiumOnly') {
+          if (!follower.premium && !follower.premiumPlus) { skipped++; continue; }
+        }
+
+        const recipientName =
+          String(follower.name ?? '').trim() || String(follower.username ?? '').trim() || null;
+        const greeting = recipientName ? `Hey ${recipientName},` : `Hey,`;
+
+        const { subject, text, html } = buildFollowedArticleEmail({
+          greeting,
+          authorName,
+          authorUsername: author.username,
+          authorAvatarUrl,
+          authorBio,
+          authorVerified,
+          authorPremium,
+          articleUrl,
+          articleTitle: article.title,
+          articleExcerpt: article.excerpt ?? null,
+          articleThumbnailUrl,
+          articleVisibility: article.visibility as 'public' | 'verifiedOnly' | 'premiumOnly',
+          authorProfileUrl,
+          settingsUrl,
+        });
+
+        await this.sendEmailAndHandle({
+          to,
+          subject,
+          text,
+          html,
+          userId: follower.id,
+          logTag: `followed-article:${articleId}`,
+        });
+
+        sent++;
+      }
+
+      this.logger.log(
+        `[followed-article-email] article=${articleId} sent=${sent} skipped=${skipped}`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `[followed-article-email] run failed: ${err instanceof Error ? err.message : String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
     }

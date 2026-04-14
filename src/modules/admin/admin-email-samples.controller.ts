@@ -7,6 +7,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { EmailService } from '../email/email.service';
 import { escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
 import { DailyContentService } from '../daily-content/daily-content.service';
+import { buildFollowedArticleEmail } from '../email/email-content-article';
 
 function safeBaseUrl(raw: string | null): string {
   const base = (raw ?? '').trim() || 'https://menofhunger.com';
@@ -14,7 +15,7 @@ function safeBaseUrl(raw: string | null): string {
 }
 
 const schema = z.object({
-  type: z.enum(['daily_digest', 'weekly_digest', 'new_notifications', 'instant_high_signal', 'streak_reminder']),
+  type: z.enum(['daily_digest', 'weekly_digest', 'new_notifications', 'instant_high_signal', 'streak_reminder', 'followed_article']),
 });
 
 type SampleType = z.infer<typeof schema>['type'];
@@ -74,6 +75,7 @@ export class AdminEmailSamplesController {
     if (type === 'weekly_digest') return this.renderWeeklyDigestSample(ctx);
     if (type === 'new_notifications') return this.renderNewNotificationsSample(ctx);
     if (type === 'instant_high_signal') return this.renderInstantHighSignalSample(ctx);
+    if (type === 'followed_article') return this.renderFollowedArticleSample(ctx);
     return this.renderStreakReminderSample(ctx);
   }
 
@@ -413,6 +415,33 @@ export class AdminEmailSamplesController {
     });
 
     return { subject, text, html };
+  }
+
+  private renderFollowedArticleSample(ctx: { baseUrl: string; greeting: string }) {
+    const settingsUrl = `${ctx.baseUrl}/settings/notifications`;
+    const sampleArticleId = 'sample-article-id';
+    const sampleAuthorUsername = 'john_doe';
+    const sampleAuthorName = 'John Doe';
+    const sampleArticleTitle = 'The quiet discipline that changes everything';
+    const sampleArticleExcerpt =
+      'Most men think discipline is about willpower. It isn\'t. It\'s about building systems that make failure hard and success automatic. Here\'s what that actually looks like in practice…';
+
+    return buildFollowedArticleEmail({
+      greeting: ctx.greeting,
+      authorName: sampleAuthorName,
+      authorUsername: sampleAuthorUsername,
+      authorAvatarUrl: null,
+      authorBio: 'Husband, father, and builder. Writing about faith, discipline, and what it means to lead well.',
+      authorVerified: true,
+      authorPremium: false,
+      articleUrl: `${ctx.baseUrl}/a/${sampleArticleId}`,
+      articleTitle: sampleArticleTitle,
+      articleExcerpt: sampleArticleExcerpt,
+      articleThumbnailUrl: null,
+      articleVisibility: 'public',
+      authorProfileUrl: `${ctx.baseUrl}/u/${sampleAuthorUsername}`,
+      settingsUrl,
+    });
   }
 
   private renderStreakReminderSample(ctx: { baseUrl: string; greeting: string }) {

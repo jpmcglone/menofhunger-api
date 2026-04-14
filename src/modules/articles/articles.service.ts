@@ -13,6 +13,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { CacheService } from '../redis/cache.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { JobsService } from '../jobs/jobs.service';
+import { JOBS } from '../jobs/jobs.constants';
 import { stableJsonHash } from '../redis/redis-keys';
 import {
   toArticleDto,
@@ -93,6 +95,7 @@ export class ArticlesService {
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly cache: CacheService,
     private readonly cacheInvalidation: CacheInvalidationService,
+    private readonly jobs: JobsService,
   ) {}
 
   private get r2BaseUrl(): string | null {
@@ -661,6 +664,17 @@ export class ArticlesService {
     }
 
     void this.cacheInvalidation.bumpFeedGlobal().catch(() => undefined);
+
+    // Enqueue follower article emails on first publish.
+    if (isFirstPublish) {
+      this.jobs
+        .enqueue(JOBS.articlesFollowedArticleEmail, { articleId, authorUserId: userId })
+        .catch((err) => {
+          this.logger.warn(
+            `[email] Failed to enqueue followed-article email job: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+    }
 
     return toArticleDto(updated, this.r2BaseUrl, { viewerUserId: userId });
   }

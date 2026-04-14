@@ -498,6 +498,7 @@ export class NotificationsService {
       emailDigestWeekly: Boolean(prefs.emailDigestWeekly),
       emailNewNotifications: Boolean(prefs.emailNewNotifications),
       emailInstantHighSignal: Boolean((prefs as any).emailInstantHighSignal),
+      emailFollowedArticle: Boolean((prefs as any).emailFollowedArticle),
     };
   }
 
@@ -508,7 +509,8 @@ export class NotificationsService {
       patch.emailDigestDaily !== undefined ||
       patch.emailDigestWeekly !== undefined ||
       patch.emailNewNotifications !== undefined ||
-      (patch as any).emailInstantHighSignal !== undefined;
+      (patch as any).emailInstantHighSignal !== undefined ||
+      (patch as any).emailFollowedArticle !== undefined;
 
     let effectivePatch = patch;
     if (wantsEmailPatch) {
@@ -523,6 +525,7 @@ export class NotificationsService {
         delete (effectivePatch as any).emailDigestWeekly;
         delete (effectivePatch as any).emailNewNotifications;
         delete (effectivePatch as any).emailInstantHighSignal;
+        delete (effectivePatch as any).emailFollowedArticle;
       }
     }
 
@@ -544,6 +547,7 @@ export class NotificationsService {
       emailDigestWeekly: Boolean(updated.emailDigestWeekly),
       emailNewNotifications: Boolean(updated.emailNewNotifications),
       emailInstantHighSignal: Boolean((updated as any).emailInstantHighSignal),
+      emailFollowedArticle: Boolean((updated as any).emailFollowedArticle),
     };
   }
 

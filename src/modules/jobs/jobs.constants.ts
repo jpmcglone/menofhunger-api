@@ -37,6 +37,7 @@ export const JOBS = {
 
   // Articles
   articlesViewMilestoneSweep: 'articles.viewMilestoneSweep',
+  articlesFollowedArticleEmail: 'articles.followedArticleEmail',
 
   // Admin
   adminDailyDigest: 'admin.dailyDigest',

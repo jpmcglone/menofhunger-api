@@ -112,6 +112,9 @@ export class JobsProcessor extends WorkerHost {
         case JOBS.articlesViewMilestoneSweep:
           await this.articlesTrendingScore.runViewMilestoneSweep();
           return { ok: true };
+        case JOBS.articlesFollowedArticleEmail:
+          await this.notificationsEmail.runSendFollowedArticleEmail(job.data ?? undefined);
+          return { ok: true };
         case JOBS.postsRefreshSinglePostScore:
           await this.postsService.refreshAndStoreTrendingScore(job.data?.postId);
           return { ok: true };

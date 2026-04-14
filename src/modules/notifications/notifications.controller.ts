@@ -53,6 +53,7 @@ const preferencesPatchSchema = z
     emailDigestWeekly: z.boolean().optional(),
     emailNewNotifications: z.boolean().optional(),
     emailInstantHighSignal: z.boolean().optional(),
+    emailFollowedArticle: z.boolean().optional(),
   })
   .refine((d) => Object.keys(d).length > 0, { message: 'At least one preference is required.' });
 

@@ -1206,6 +1206,8 @@ model NotificationPreferences {
   emailInstantHighSignal Boolean @default(true)
   /** Send a reminder email if you're at risk of losing your streak today. */
   emailStreakReminder Boolean @default(true)
+  /** Send an email when someone you follow publishes a new article. */
+  emailFollowedArticle Boolean @default(true)
 
   // Email send timestamps (rate limiting / dedupe).
   lastEmailDigestDailySentAt DateTime?

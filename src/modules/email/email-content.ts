@@ -131,7 +131,7 @@ export function buildProfileReminderEmail(p: ProfileReminderEmailParams): { subj
       ),
       `<div style="margin-top:14px;font-size:13px;line-height:1.7;color:#6b7280;">You can update your profile any time in Settings → Account.</div>`,
     ].join(''),
-    footerHtml: `Men of Hunger`,
+    footerHtml: `Manage notifications in <a href="${escapeHtml(settingsUrl)}" style="color:#9ca3af;text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
   });
 
   return { subject, text, html };
