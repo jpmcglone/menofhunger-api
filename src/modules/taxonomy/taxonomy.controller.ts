@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AuthGuard } from '../auth/auth.guard';
@@ -54,7 +54,7 @@ export class TaxonomyController {
       where: { id: userId },
       select: { siteAdmin: true },
     });
-    if (!user?.siteAdmin) return { data: { ok: false, reason: 'Admin only.' } };
+    if (!user?.siteAdmin) throw new NotFoundException();
     const data = await this.taxonomy.backfillAndSync();
     return { data };
   }

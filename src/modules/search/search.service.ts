@@ -332,7 +332,8 @@ export class SearchService {
           })
         : Promise.resolve([]),
     ]);
-    const orgsByUserId = new Map<string, typeof orgMembershipRows>();
+    type OrgMembershipRow = (typeof orgMembershipRows)[number];
+    const orgsByUserId = new Map<string, OrgMembershipRow[]>();
     for (const row of orgMembershipRows) {
       if (!orgsByUserId.has(row.userId)) orgsByUserId.set(row.userId, []);
       orgsByUserId.get(row.userId)!.push(row);

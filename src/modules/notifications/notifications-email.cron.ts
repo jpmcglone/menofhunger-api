@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
+import type { PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -662,21 +663,22 @@ export class NotificationsEmailCron {
 
     try {
       for (;;) {
-        const recipients = await this.prisma.user.findMany({
-          where: {
-            checkinStreakDays: { gt: 0 },
-            lastCheckinDayKey: yesterdayKey, // at risk: last activity was yesterday (ET)
-            ...(cursorId ? { id: { gt: cursorId } } : {}),
-            pushSubscriptions: { some: {} }, // only users with a registered push subscription
-          },
-          orderBy: [{ id: 'asc' }],
-          take: pageSize,
-          select: {
-            id: true,
-            checkinStreakDays: true,
-            lastCheckinDayKey: true,
-          },
-        });
+        const recipients: Array<{ id: string; checkinStreakDays: number; lastCheckinDayKey: string | null }> =
+          await this.prisma.user.findMany({
+            where: {
+              checkinStreakDays: { gt: 0 },
+              lastCheckinDayKey: yesterdayKey, // at risk: last activity was yesterday (ET)
+              ...(cursorId ? { id: { gt: cursorId } } : {}),
+              pushSubscriptions: { some: {} }, // only users with a registered push subscription
+            },
+            orderBy: [{ id: 'asc' }],
+            take: pageSize,
+            select: {
+              id: true,
+              checkinStreakDays: true,
+              lastCheckinDayKey: true,
+            },
+          });
         if (recipients.length === 0) break;
         cursorId = recipients[recipients.length - 1]?.id ?? null;
 
@@ -1271,24 +1273,24 @@ export class NotificationsEmailCron {
       const r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
       // Best post of the week (per-tier): order by trendingScore DESC (NULLS LAST, so unscored posts fall to bottom).
-      const weeklyFeaturedSelect = { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } } as const;
+      const weeklyFeaturedSelect = { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } } satisfies Prisma.PostSelect;
       const weeklyCreatedAtWindow = { gte: weekWindowStart, lt: weekWindowEnd };
 
-      const weeklyFeaturedPostPublic = await (this.prisma.post as any).findFirst({
+      const weeklyFeaturedPostPublic = await this.prisma.post.findFirst({
         where: { deletedAt: null, parentId: null, visibility: { in: ['public'] }, createdAt: weeklyCreatedAtWindow },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         select: weeklyFeaturedSelect,
-      }) as Awaited<ReturnType<typeof this.prisma.post.findFirst>> | null;
-      const weeklyFeaturedPostVerified = await (this.prisma.post as any).findFirst({
+      });
+      const weeklyFeaturedPostVerified = await this.prisma.post.findFirst({
         where: { deletedAt: null, parentId: null, visibility: { in: ['public', 'verifiedOnly'] }, createdAt: weeklyCreatedAtWindow },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         select: weeklyFeaturedSelect,
-      }) as Awaited<ReturnType<typeof this.prisma.post.findFirst>> | null;
-      const weeklyFeaturedPostPremium = await (this.prisma.post as any).findFirst({
+      });
+      const weeklyFeaturedPostPremium = await this.prisma.post.findFirst({
         where: { deletedAt: null, parentId: null, visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] }, createdAt: weeklyCreatedAtWindow },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         select: weeklyFeaturedSelect,
-      }) as Awaited<ReturnType<typeof this.prisma.post.findFirst>> | null;
+      });
 
       const weeklyNewArticleCount = await this.prisma.article.count({
         where: {
@@ -1352,12 +1354,12 @@ export class NotificationsEmailCron {
         if (isVerified) return weeklyTopArticlesVerified;
         return weeklyTopArticlesPublic;
       }
-      function allowedWeeklyVisibilities(u: { verifiedStatus?: string | null; premium?: boolean | null; premiumPlus?: boolean | null }) {
+      function allowedWeeklyVisibilities(u: { verifiedStatus?: string | null; premium?: boolean | null; premiumPlus?: boolean | null }): PostVisibility[] {
         const isPremium = Boolean(u.premium || u.premiumPlus);
         const isVerified = (u.verifiedStatus ?? 'none') !== 'none';
-        if (isPremium) return ['public', 'verifiedOnly', 'premiumOnly'] as const;
-        if (isVerified) return ['public', 'verifiedOnly'] as const;
-        return ['public'] as const;
+        if (isPremium) return ['public', 'verifiedOnly', 'premiumOnly'];
+        if (isVerified) return ['public', 'verifiedOnly'];
+        return ['public'];
       }
 
       // New members this week — up to 15 shown, with overflow count.

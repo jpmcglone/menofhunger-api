@@ -31,7 +31,7 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { SlackService } from '../../common/slack/slack.service';
 import { EntitlementService } from '../billing/entitlement.service';
 import { BillingService } from '../billing/billing.service';
-import { APP_FEATURE_TOGGLES, sanitizeFeatureToggles } from '../../common/feature-toggles';
+import { sanitizeFeatureToggles } from '../../common/feature-toggles';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { CoinsService } from '../coins/coins.service';
 
@@ -56,7 +56,7 @@ const updateUserSchema = z.object({
   bio: z.string().trim().max(160).nullable().optional(),
   isOrganization: z.boolean().optional(),
   verifiedStatus: z.enum(['none', 'identity', 'manual']).optional(),
-  featureToggles: z.array(z.enum(APP_FEATURE_TOGGLES)).max(50).optional(),
+  featureToggles: z.array(z.string()).max(50).optional(),
 });
 
 const adjustCoinsSchema = z.object({

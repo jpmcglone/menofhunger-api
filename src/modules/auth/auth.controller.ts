@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Post, Req, Res, Get } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { ModuleRef } from '@nestjs/core';
@@ -26,10 +26,6 @@ const verifySchema = z.object({
   referralCode: z.string().max(50).optional().nullable(),
 });
 
-const existsSchema = z.object({
-  phone: z.string().min(1),
-});
-
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -54,19 +50,6 @@ export class AuthController {
     }
     const res = await this.auth.startPhoneAuth(phone);
     return { data: res };
-  }
-
-  @Get('phone/exists')
-  async exists(@Req() req: Request) {
-    const parsed = existsSchema.parse(req.query);
-    let phone: string;
-    try {
-      phone = normalizePhone(parsed.phone);
-    } catch {
-      throw new BadRequestException('Invalid phone number format');
-    }
-    const exists = await this.auth.phoneExists(phone);
-    return { data: exists };
   }
 
   @Throttle({

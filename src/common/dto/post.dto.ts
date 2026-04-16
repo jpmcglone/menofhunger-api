@@ -188,12 +188,14 @@ export function toPostPollDto(
   opts?: { viewerVotedOptionId?: string | null; viewerSkipped?: boolean },
 ): PostPollDto | null {
   if (!poll) return null;
-  const endsAtIso = poll.endsAt instanceof Date ? poll.endsAt.toISOString() : new Date(poll.endsAt as any).toISOString();
+  const endsAtIso =
+    poll.endsAt instanceof Date
+      ? poll.endsAt.toISOString()
+      : new Date(poll.endsAt as unknown as string | number).toISOString();
   const ended = new Date(endsAtIso).getTime() <= Date.now();
-  const totalVoteCount =
-    typeof (poll as any).totalVoteCount === 'number' && Number.isFinite((poll as any).totalVoteCount)
-      ? Math.max(0, Math.floor((poll as any).totalVoteCount))
-      : 0;
+  const totalVoteCount = Number.isFinite(poll.totalVoteCount)
+    ? Math.max(0, Math.floor(poll.totalVoteCount))
+    : 0;
   const viewerSkipped = Boolean(opts?.viewerSkipped);
   const viewerVotedOptionId = viewerSkipped ? null : ((opts?.viewerVotedOptionId ?? null) || null);
   const viewerHasVoted = viewerSkipped || Boolean(viewerVotedOptionId);
@@ -202,10 +204,7 @@ export function toPostPollDto(
     .slice()
     .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
     .map((o): PostPollOptionDto => {
-      const voteCount =
-        typeof (o as any).voteCount === 'number' && Number.isFinite((o as any).voteCount)
-          ? Math.max(0, Math.floor((o as any).voteCount))
-          : 0;
+      const voteCount = Number.isFinite(o.voteCount) ? Math.max(0, Math.floor(o.voteCount)) : 0;
       const percent =
         totalVoteCount > 0
           ? Math.round((voteCount / totalVoteCount) * 100)
@@ -217,8 +216,8 @@ export function toPostPollDto(
         id: o.id,
         text: (o.text ?? '').trim(),
         imageUrl: imageUrl || null,
-        width: typeof (o as any).imageWidth === 'number' ? ((o as any).imageWidth as number) : (o as any).imageWidth ?? null,
-        height: typeof (o as any).imageHeight === 'number' ? ((o as any).imageHeight as number) : (o as any).imageHeight ?? null,
+        width: o.imageWidth ?? null,
+        height: o.imageHeight ?? null,
         alt: (o.imageAlt ?? '').trim() || null,
         voteCount,
         percent,
@@ -358,20 +357,20 @@ export function toPostDto(
       editCount: 0,
       body: '[Content from banned user]',
       deletedAt: postDeletedAt,
-      kind: ((post as any).kind ?? 'regular') as any,
-      checkinDayKey: (post as any).checkinDayKey ? String((post as any).checkinDayKey) : null,
-      checkinPrompt: (post as any).checkinPrompt ? String((post as any).checkinPrompt) : null,
+      kind: post.kind ?? 'regular',
+      checkinDayKey: post.checkinDayKey ? String(post.checkinDayKey) : null,
+      checkinPrompt: post.checkinPrompt ? String(post.checkinPrompt) : null,
       visibility: post.visibility,
-      isDraft: Boolean((post as any).isDraft),
+      isDraft: Boolean(post.isDraft),
       topics: [],
       hashtags: [],
       boostCount: post.boostCount,
       bookmarkCount: post.bookmarkCount ?? 0,
       commentCount: post.commentCount ?? 0,
-      repostCount: (post as any).repostCount ?? 0,
-      viewerCount: (post as any).viewerCount ?? 0,
+      repostCount: post.repostCount ?? 0,
+      viewerCount: post.viewerCount ?? 0,
       parentId: post.parentId ?? null,
-      communityGroupId: (post as any).communityGroupId ?? null,
+      communityGroupId: post.communityGroupId ?? null,
       mentions: [],
       media: [],
       poll: null,
@@ -402,20 +401,20 @@ export function toPostDto(
       editCount: 0,
       body: gatedPostBody(post.body),
       deletedAt: postDeletedAt,
-      kind: ((post as any).kind ?? 'regular') as any,
+      kind: post.kind ?? 'regular',
       checkinDayKey: null,
       checkinPrompt: null,
       visibility: post.visibility,
-      isDraft: Boolean((post as any).isDraft),
+      isDraft: Boolean(post.isDraft),
       topics: [],
       hashtags: [],
       boostCount: post.boostCount,
       bookmarkCount: post.bookmarkCount ?? 0,
       commentCount: post.commentCount ?? 0,
-      repostCount: (post as any).repostCount ?? 0,
-      viewerCount: (post as any).viewerCount ?? 0,
+      repostCount: post.repostCount ?? 0,
+      viewerCount: post.viewerCount ?? 0,
       parentId: post.parentId ?? null,
-      communityGroupId: (post as any).communityGroupId ?? null,
+      communityGroupId: post.communityGroupId ?? null,
       ...(opts?.groupPreview ? { groupPreview: opts.groupPreview } : {}),
       mentions: [],
       media: [],
@@ -426,7 +425,7 @@ export function toPostDto(
         name: post.user.name,
         premium: post.user.premium,
         premiumPlus: post.user.premiumPlus,
-        isOrganization: Boolean((post.user as any).isOrganization),
+        isOrganization: Boolean(post.user.isOrganization),
         stewardBadgeEnabled: Boolean(post.user.stewardBadgeEnabled),
         verifiedStatus: post.user.verifiedStatus,
         avatarUrl: publicAssetUrl({
@@ -453,31 +452,31 @@ export function toPostDto(
     id: post.id,
     createdAt: post.createdAt.toISOString(),
     editedAt: post.editedAt ? post.editedAt.toISOString() : null,
-    editCount: typeof (post as any).editCount === 'number' ? ((post as any).editCount as number) : 0,
+    editCount: typeof post.editCount === 'number' ? post.editCount : 0,
     body: isPostDeleted ? '' : post.body,
     deletedAt: postDeletedAt,
-    kind: ((post as any).kind ?? 'regular') as any,
-    checkinDayKey: (post as any).checkinDayKey ? String((post as any).checkinDayKey) : null,
-    checkinPrompt: (post as any).checkinPrompt ? String((post as any).checkinPrompt) : null,
+    kind: post.kind ?? 'regular',
+    checkinDayKey: post.checkinDayKey ? String(post.checkinDayKey) : null,
+    checkinPrompt: post.checkinPrompt ? String(post.checkinPrompt) : null,
     visibility: post.visibility,
-    isDraft: Boolean((post as any).isDraft),
-    topics: Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [],
-    hashtags: isPostDeleted ? [] : (Array.isArray((post as any).hashtags) ? ((post as any).hashtags as string[]) : []),
+    isDraft: Boolean(post.isDraft),
+    topics: Array.isArray(post.topics) ? post.topics : [],
+    hashtags: isPostDeleted ? [] : (Array.isArray(post.hashtags) ? post.hashtags : []),
     boostCount: post.boostCount,
     bookmarkCount: post.bookmarkCount ?? 0,
     commentCount: post.commentCount ?? 0,
-    repostCount: (post as any).repostCount ?? 0,
-    viewerCount: (post as any).viewerCount ?? 0,
+    repostCount: post.repostCount ?? 0,
+    viewerCount: post.viewerCount ?? 0,
     parentId: post.parentId ?? null,
-    communityGroupId: (post as any).communityGroupId ?? null,
-    pinnedInGroupAt: (() => {
-      const p = (post as { pinnedInGroupAt?: Date | null }).pinnedInGroupAt;
-      if (!p) return null;
-      return p instanceof Date ? p.toISOString() : String(p);
-    })(),
+    communityGroupId: post.communityGroupId ?? null,
+    pinnedInGroupAt: post.pinnedInGroupAt
+      ? (post.pinnedInGroupAt instanceof Date
+          ? post.pinnedInGroupAt.toISOString()
+          : String(post.pinnedInGroupAt))
+      : null,
     mentions: isPostDeleted ? [] : mentions,
     media: isPostDeleted ? [] : media,
-    ...(typeof (post as any).poll !== 'undefined' ? { poll: isPostDeleted ? null : pollDto } : {}),
+    ...(typeof (post as { poll?: unknown }).poll !== 'undefined' ? { poll: isPostDeleted ? null : pollDto } : {}),
     ...(typeof opts?.viewerHasBoosted === 'boolean' ? { viewerHasBoosted: opts.viewerHasBoosted } : {}),
     ...(typeof opts?.viewerHasBookmarked === 'boolean' ? { viewerHasBookmarked: opts.viewerHasBookmarked } : {}),
     ...(Array.isArray(opts?.viewerBookmarkCollectionIds) ? { viewerBookmarkCollectionIds: opts.viewerBookmarkCollectionIds } : {}),
@@ -486,11 +485,11 @@ export function toPostDto(
     ...(opts?.repostedPost ? { repostedPost: opts.repostedPost } : {}),
     ...(opts?.quotedPost ? { quotedPost: opts.quotedPost } : {}),
     ...(() => {
-      const a = (post as any).article as {
+      const a = (post as { article?: {
         id: string; title: string; excerpt: string | null; thumbnailR2Key: string | null;
         visibility: PostVisibility; publishedAt: Date | null;
         author: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarUpdatedAt: Date | null; verifiedStatus: VerifiedStatus; premium: boolean; premiumPlus: boolean };
-      } | null | undefined;
+      } | null }).article;
       if (!a) return {};
       return {
         article: {
@@ -537,7 +536,7 @@ export function toPostDto(
       name: post.user.name,
       premium: post.user.premium,
       premiumPlus: post.user.premiumPlus,
-      isOrganization: Boolean((post.user as any).isOrganization),
+      isOrganization: Boolean(post.user.isOrganization),
       stewardBadgeEnabled: Boolean(post.user.stewardBadgeEnabled),
       verifiedStatus: post.user.verifiedStatus,
       avatarUrl: publicAssetUrl({

@@ -13,6 +13,9 @@ export class ApiResponseInterceptor implements NestInterceptor {
   intercept(_context: ExecutionContext, next: CallHandler): Observable<unknown> {
     return next.handle().pipe(
       map((body: unknown) => {
+        // Pass through null/undefined (e.g. 204 No Content handlers) so we don't produce
+        // a body on no-content responses, which violates HTTP semantics.
+        if (body === undefined || body === null) return body;
         // If the handler already returned an envelope (e.g. { data, pagination }), leave it alone.
         if (isObject(body) && 'data' in body) return body;
         return { data: body };

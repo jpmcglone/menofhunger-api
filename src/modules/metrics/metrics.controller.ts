@@ -1,7 +1,9 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, UseGuards } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AdminGuard } from '../admin/admin.guard';
 import type { ActiveUsersMetricsDto } from '../../common/dto/metrics.dto';
 
+@UseGuards(AdminGuard)
 @Controller('metrics')
 export class MetricsController {
   constructor(private readonly prisma: PrismaService) {}

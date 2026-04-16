@@ -32,8 +32,10 @@ export class LinkMetadataCron {
   async runHandleBackfill() {
     try {
       const result = await this.linkMetadata.runBackfill();
-      if (result.cached > 0) {
-        this.logger.log(`Link metadata backfill: ${result.urlsFound} URLs, ${result.cached} newly cached`);
+      if (result.cached > 0 || result.truncated) {
+        this.logger.log(
+          `Link metadata backfill: ${result.urlsFound} URLs, ${result.cached} newly cached${result.truncated ? ' (truncated by cap)' : ''}`,
+        );
       }
     } catch (err) {
       this.logger.warn(`Link metadata backfill failed: ${(err as Error).message}`);

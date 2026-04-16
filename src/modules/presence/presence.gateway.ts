@@ -66,10 +66,8 @@ function spacesChatRoom(spaceId: string): string {
 
 @WebSocketGateway({
   path: '/socket.io',
-  cors: {
-    origin: true,
-    credentials: true,
-  },
+  // CORS is controlled by PresenceIoAdapter (uses AppConfigService allowedOrigins).
+  // Do not set cors here; it would be ignored by the adapter and mislead reviewers.
 })
 export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
   private readonly logger = new Logger(PresenceGateway.name);
@@ -121,34 +119,32 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
     const myInstanceId = this.presenceRedis.getInstanceId();
     this.presenceEventUnsubscribe = this.presenceRedis.onEvent((evt) => {
-      if (!evt?.userId) return;
-      if ((evt as any).instanceId === myInstanceId) return;
+      if (!evt) return;
+      if (evt.instanceId === myInstanceId) return;
       if (evt.type === 'online') this.emitOnline(evt.userId);
       else if (evt.type === 'offline') this.emitOffline(evt.userId);
       else if (evt.type === 'idle') this.emitIdle(evt.userId);
       else if (evt.type === 'active') this.emitActive(evt.userId);
       else if (evt.type === 'emitToUser') {
-        const e = String((evt as any).event ?? '').trim();
+        const e = evt.event.trim();
         if (!e) return;
-        this.presence.emitToUser(this.server, evt.userId, e, (evt as any).payload);
+        this.presence.emitToUser(this.server, evt.userId, e, evt.payload);
       } else if (evt.type === 'emitToRoom') {
-        const room = String((evt as any).room ?? '').trim();
-        const e = String((evt as any).event ?? '').trim();
+        const room = evt.room.trim();
+        const e = evt.event.trim();
         if (!room || !e) return;
-        this.server.to(room).emit(e, (evt as any).payload);
+        this.server.to(room).emit(e, evt.payload);
       } else if (evt.type === 'spacesLobbyCounts') {
-        const payload: SpaceLobbyCountsDto = { countsBySpaceId: (evt as any).countsBySpaceId ?? {} };
+        const payload: SpaceLobbyCountsDto = { countsBySpaceId: evt.countsBySpaceId ?? {} };
         this.server.emit('spaces:lobbyCounts', payload);
       } else if (evt.type === 'userSpaceChanged') {
-        if ((evt as any).instanceId === myInstanceId) return;
-        const uid = (evt as any).userId;
-        if (!uid) return;
+        if (!evt.userId) return;
         const payload: UsersSpaceChangedPayloadDto = {
-          userId: uid,
-          spaceId: (evt as any).spaceId ?? null,
-          previousSpaceId: (evt as any).previousSpaceId,
+          userId: evt.userId,
+          spaceId: evt.spaceId ?? null,
+          previousSpaceId: evt.previousSpaceId,
         };
-        const targets = this.getTargetsForUser(uid);
+        const targets = this.getTargetsForUser(evt.userId);
         this.emitToSockets(targets, WsEventNames.usersSpaceChanged, payload);
       }
     });
@@ -1139,6 +1135,9 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
   @SubscribeMessage('presence:subscribe')
   async handleSubscribe(client: Socket, payload: { userIds?: string[] }): Promise<void> {
+    // Presence subscriptions require an authenticated session.
+    if (!(client.data as any).userId) return;
+
     const userIds = Array.isArray(payload?.userIds) ? payload.userIds : [];
     if (this.logPresenceVerbose) {
       this.logger.debug(`[presence] SUBSCRIBE_IN socket=${client.id} userIds=[${userIds.join(', ')}]`);

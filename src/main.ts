@@ -53,12 +53,12 @@ async function bootstrap() {
 
   // Fail fast if required env is missing (avoids obscure runtime failures on first DB/auth use).
   const missing: string[] = [];
-  if (!process.env.DATABASE_URL?.trim()) missing.push('DATABASE_URL');
+  if (!appConfig.databaseUrlIsSet()) missing.push('DATABASE_URL');
   if (appConfig.isProd()) {
-    const sessionSecret = process.env.SESSION_HMAC_SECRET?.trim();
-    const otpSecret = process.env.OTP_HMAC_SECRET?.trim();
     const devSession = 'dev-session-secret-change-me';
     const devOtp = 'dev-otp-secret-change-me';
+    const sessionSecret = appConfig.sessionHmacSecret();
+    const otpSecret = appConfig.otpHmacSecret();
     if (!sessionSecret || sessionSecret === devSession) missing.push('SESSION_HMAC_SECRET (must be set and not dev default in production)');
     if (!otpSecret || otpSecret === devOtp) missing.push('OTP_HMAC_SECRET (must be set and not dev default in production)');
   }
@@ -255,13 +255,15 @@ async function bootstrap() {
     },
   });
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('Men of Hunger API')
-    .setDescription('NestJS API intended for consumption by a Next.js app.')
-    .setVersion('0.1.0')
-    .build();
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup('docs', app, document);
+  if (!appConfig.isProd()) {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('Men of Hunger API')
+      .setDescription('NestJS API intended for consumption by a Next.js app.')
+      .setVersion('0.1.0')
+      .build();
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup('docs', app, document);
+  }
 
   try {
     await app.listen(port);

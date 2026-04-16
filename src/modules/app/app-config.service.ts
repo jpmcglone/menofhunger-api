@@ -81,6 +81,10 @@ export class AppConfigService {
     return (this.config.get<string>('REDIS_URL') ?? 'redis://localhost:6379').trim() || 'redis://localhost:6379';
   }
 
+  databaseUrlIsSet(): boolean {
+    return Boolean(this.config.get<string>('DATABASE_URL')?.trim());
+  }
+
   runHttp(): boolean {
     return this.readBool('RUN_HTTP', true);
   }

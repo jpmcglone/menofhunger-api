@@ -12,6 +12,11 @@ const createSchema = z.object({
   visibility: z.enum(['verifiedOnly', 'premiumOnly']),
 });
 
+const leaderboardQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  scope: z.enum(['weekly', 'best']).optional(),
+});
+
 @Controller('checkins')
 export class CheckinsController {
   constructor(
@@ -23,16 +28,15 @@ export class CheckinsController {
   @Get('leaderboard')
   async getLeaderboard(
     @OptionalCurrentUserId() viewerUserId: string | undefined,
-    @Query('limit') limit?: string,
-    @Query('scope') scope?: string,
+    @Query() query: unknown,
   ) {
+    const { limit, scope } = leaderboardQuerySchema.parse(query);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const parsedLimit = limit ? parseInt(limit, 10) : undefined;
 
     if (scope === 'weekly') {
       const { users, viewerRank, weekStart } = await this.checkins.getWeeklyLeaderboard({
         publicBaseUrl,
-        limit: parsedLimit,
+        limit,
         viewerUserId: viewerUserId ?? null,
       });
       return { data: { users, viewerRank: viewerRank ?? null, weekStart: weekStart.toISOString(), generatedAt: new Date().toISOString() } };
@@ -41,7 +45,7 @@ export class CheckinsController {
     if (scope === 'best') {
       const { users, viewerRank } = await this.checkins.getBestStreakLeaderboard({
         publicBaseUrl,
-        limit: parsedLimit,
+        limit,
         viewerUserId: viewerUserId ?? null,
       });
       return { data: { users, viewerRank: viewerRank ?? null, generatedAt: new Date().toISOString() } };
@@ -49,7 +53,7 @@ export class CheckinsController {
 
     const { users, viewerRank } = await this.checkins.getLeaderboard({
       publicBaseUrl,
-      limit: parsedLimit,
+      limit,
       viewerUserId: viewerUserId ?? null,
     });
     return { data: { users, viewerRank: viewerRank ?? null, generatedAt: new Date().toISOString() } };

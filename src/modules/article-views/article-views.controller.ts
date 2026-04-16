@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Param, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
@@ -14,6 +14,8 @@ const markViewedBatchSchema = z.object({
 
 @Controller()
 export class ArticleViewsController {
+  private readonly logger = new Logger(ArticleViewsController.name);
+
   constructor(private readonly articleViews: ArticleViewsService) {}
 
   /**
@@ -39,7 +41,9 @@ export class ArticleViewsController {
         parsed.anon_id ?? null,
         parsed.source ?? null,
       )
-      .catch(() => undefined);
+      .catch((err: unknown) => {
+        this.logger.warn(`markViewedBatch failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
   }
 
   /**

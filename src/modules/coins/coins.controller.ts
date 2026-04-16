@@ -1,7 +1,13 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { CoinsService, transferCoinsSchema } from './coins.service';
+
+const listTransfersQuerySchema = z.object({
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+});
 
 @Controller('coins')
 @UseGuards(AuthGuard)
@@ -23,13 +29,13 @@ export class CoinsController {
   @Get('transfers')
   async listTransfers(
     @CurrentUserId() userId: string,
-    @Query('cursor') cursor?: string,
-    @Query('limit') limit?: string,
+    @Query() query: unknown,
   ) {
+    const { cursor, limit } = listTransfersQuerySchema.parse(query);
     const { items, nextCursor } = await this.coins.listTransfers({
       userId,
       cursor: cursor ?? null,
-      limit: limit ? parseInt(limit, 10) : undefined,
+      limit,
     });
     return { data: items, pagination: { nextCursor } };
   }

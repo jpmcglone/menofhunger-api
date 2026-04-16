@@ -487,10 +487,11 @@ export class UsersController {
     }
   }
 
+  @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 120),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: 30,
+      ttl: 60_000,
     },
   })
   @Get('username/available')

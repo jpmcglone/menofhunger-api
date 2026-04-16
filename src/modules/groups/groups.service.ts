@@ -668,10 +668,16 @@ export class GroupsService {
       : null;
     // Sort: owner first, then moderator, then member; within each role, earliest join first.
     // Cursor WHERE mirrors orderBy [role desc, createdAt asc, userId asc].
+    // Prisma enum filters don't support lt/gt, so we enumerate the role values
+    // that appear after the cursor in the desc sort (i.e. lower declaration rank).
+    const ROLES_BY_RANK: CommunityGroupMemberRole[] = ['owner', 'moderator', 'member'];
+    const rolesAfterCursor = cursorMember
+      ? ROLES_BY_RANK.slice(ROLES_BY_RANK.indexOf(cursorMember.role) + 1)
+      : [];
     const cursorWhere: Prisma.CommunityGroupMemberWhereInput | null = cursorMember
       ? {
           OR: [
-            { role: { lt: cursorMember.role } },
+            ...(rolesAfterCursor.length ? [{ role: { in: rolesAfterCursor } }] : []),
             {
               AND: [
                 { role: cursorMember.role },

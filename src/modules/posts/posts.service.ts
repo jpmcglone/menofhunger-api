@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import type { PostVisibility } from '@prisma/client';
+import type { PostMediaKind, PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
@@ -556,7 +556,7 @@ export class PostsService {
 
     const missing = ids.filter((id) => !map.has(id));
     if (missing.length > 0) {
-      const reposts = await (this.prisma.post as any).findMany({
+      const reposts = await this.prisma.post.findMany({
         where: { userId: viewerUserId, kind: 'repost', repostedPostId: { in: missing }, deletedAt: null },
         select: { repostedPostId: true },
       });
@@ -1047,7 +1047,7 @@ export class PostsService {
       blockedByViewer,
       viewerBlockedBy,
       repostedByPostId,
-      repostedPostMap: repostedPostMap as any,
+      repostedPostMap,
       groupPreviewByGroupId,
     });
 
@@ -1176,7 +1176,7 @@ export class PostsService {
           }
         : {};
 
-    const posts = await (this.prisma.post as any).findMany({
+    const posts = await this.prisma.post.findMany({
       where: {
         deletedAt: null,
         communityGroupId: null,
@@ -1197,9 +1197,9 @@ export class PostsService {
     const nextPost = posts.length > limit ? slicePosts[slicePosts.length - 1] ?? null : null;
 
     const nextCursor =
-      nextPost && typeof (nextPost as any).trendingScore === 'number'
+      nextPost && typeof nextPost.trendingScore === 'number'
         ? this.encodePopularCursor({
-            score: (nextPost as any).trendingScore as number,
+            score: nextPost.trendingScore,
             createdAt: nextPost.createdAt.toISOString(),
             id: nextPost.id,
           })
@@ -1207,8 +1207,8 @@ export class PostsService {
 
     const scoreByPostId = new Map<string, number>(
       slicePosts
-        .filter((p) => typeof (p as any).trendingScore === 'number')
-        .map((p) => [p.id, (p as any).trendingScore as number]),
+        .filter((p): p is FeedPost & { trendingScore: number } => typeof p.trendingScore === 'number')
+        .map((p) => [p.id, p.trendingScore]),
     );
 
     return { posts: slicePosts, nextCursor, scoreByPostId };
@@ -1248,7 +1248,7 @@ export class PostsService {
     // Subsequent pages: trendingScore-ordered fetch with per-author diversity.
     if (decodedCursor && cursorScore != null && cursorCreatedAt && cursorId) {
       const scanTake = Math.min(PostsService.featuredScanTakeMax, Math.max(limit * 40, limit + 1));
-      const rows = await (this.prisma.post as any).findMany({
+      const rows = await this.prisma.post.findMany({
         where: {
           deletedAt: null,
           communityGroupId: null,
@@ -1314,7 +1314,7 @@ export class PostsService {
     const risingTake = Math.max(0, limit - topTake);
     const scanTake = Math.min(PostsService.featuredScanTakeMax, Math.max(topTake * 10, topTake + 1));
 
-    const topRows = await (this.prisma.post as any).findMany({
+    const topRows = await this.prisma.post.findMany({
       where: {
         deletedAt: null,
         communityGroupId: null,
@@ -2834,15 +2834,15 @@ export class PostsService {
         parentId: true,
         repostedPostId: true,
         quotedPostId: true,
-      } as any,
+      },
     });
     if (!post) throw new NotFoundException('Post not found.');
     if (post.userId !== userId) throw new ForbiddenException('Not allowed to delete this post.');
     if (post.deletedAt) return { success: true };
 
-    const postTopics = Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [];
-    const tags = Array.isArray((post as any).hashtags) ? ((post as any).hashtags as string[]) : [];
-    const variants = Array.isArray((post as any).hashtagCasings) ? ((post as any).hashtagCasings as string[]) : [];
+    const postTopics = post.topics ?? [];
+    const tags = post.hashtags ?? [];
+    const variants = post.hashtagCasings ?? [];
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
       await tx.post.update({
@@ -2852,7 +2852,7 @@ export class PostsService {
 
       // Decrement commentCount on the parent post when a comment is deleted.
       // Use raw SQL GREATEST(0, ...) to prevent the counter going negative under races.
-      const parentId = (post as any).parentId as string | null | undefined;
+      const parentId = post.parentId;
       if (parentId) {
         await tx.$executeRaw`
           UPDATE "Post"
@@ -2862,15 +2862,15 @@ export class PostsService {
       }
 
       // Decrement repostCount on the target post when a repost/quote repost is deleted.
-      const repostedPostId = (post as any).repostedPostId as string | null | undefined;
-      const quotedPostId = (post as any).quotedPostId as string | null | undefined;
-      if ((post as any).kind === 'repost' && repostedPostId) {
-        await (tx as any).post.update({
+      const repostedPostId = post.repostedPostId;
+      const quotedPostId = post.quotedPostId;
+      if (post.kind === 'repost' && repostedPostId) {
+        await tx.post.update({
           where: { id: repostedPostId },
           data: { repostCount: { decrement: 1 } },
         }).catch(() => { /* ignore if original is gone */ });
       } else if (quotedPostId) {
-        await (tx as any).post.update({
+        await tx.post.update({
           where: { id: quotedPostId },
           data: { repostCount: { decrement: 1 } },
         }).catch(() => { /* ignore if quoted is gone */ });
@@ -2929,7 +2929,7 @@ export class PostsService {
     await this.cacheInvalidation.bumpForPostWrite({ topics: postTopics });
 
     // Refresh trending score for the post that lost a comment/repost due to this deletion.
-    const affectedPostId = ((post as any).repostedPostId as string | null | undefined) ?? ((post as any).quotedPostId as string | null | undefined) ?? null;
+    const affectedPostId = post.repostedPostId ?? post.quotedPostId ?? null;
     if (affectedPostId) this.enqueueScoreRefresh(affectedPostId);
 
     // Realtime: mark post deleted for live subscribers (best-effort).
@@ -2945,7 +2945,7 @@ export class PostsService {
     }
 
     // Realtime: decrement parent commentCount + notify thread subscribers of the delete (best-effort).
-    const deletedParentId = (post as any).parentId as string | null | undefined;
+    const deletedParentId = post.parentId;
     if (deletedParentId) {
       try {
         const updatedParent = await this.prisma.post.findUnique({
@@ -3001,7 +3001,7 @@ export class PostsService {
     if (post.parentId) throw new ForbiddenException('Replies cannot be edited.');
 
     // Product rule: posts with polls cannot be edited once voting begins.
-    if ((post as any).poll && ((post as any).poll.totalVoteCount ?? 0) > 0) {
+    if (post.poll && (post.poll.totalVoteCount ?? 0) > 0) {
       throw new ForbiddenException('This post can no longer be edited.');
     }
 
@@ -3009,13 +3009,12 @@ export class PostsService {
     if (post.visibility !== 'onlyMe' && !params.isSiteAdmin) {
       // Enforce edit window + count: 3 edits in first 30 minutes after creation.
       const now = Date.now();
-      const createdAtMs = post.createdAt instanceof Date ? post.createdAt.getTime() : new Date(post.createdAt as any).getTime();
+      const createdAtMs = post.createdAt.getTime();
       const windowMs = 30 * 60 * 1000;
       if (Number.isFinite(createdAtMs) && now > createdAtMs + windowMs) {
         throw new ForbiddenException('This post can no longer be edited.');
       }
-      const editCount = typeof (post as any).editCount === 'number' ? ((post as any).editCount as number) : 0;
-      if (editCount >= 3) throw new ForbiddenException('This post has reached the edit limit.');
+      if (post.editCount >= 3) throw new ForbiddenException('This post has reached the edit limit.');
     }
 
     // Length rules align with createPost.
@@ -3038,19 +3037,19 @@ export class PostsService {
 
     const fromBodyMentions = this.parseMentionsFromBody(nextBody);
     const bodyMentionIds = await this.resolveMentionUsernames(fromBodyMentions);
-    const existingMentionIds = Array.isArray((post as any).mentions) ? ((post as any).mentions as Array<{ userId: string }>).map((m) => m.userId) : [];
+    const existingMentionIds = (post.mentions ?? []).map((m) => m.userId);
     const mentionUserIds = Array.from(new Set([...existingMentionIds, ...bodyMentionIds])).filter(Boolean);
 
-    const prevTopics = Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [];
+    const prevTopics = post.topics ?? [];
     const updated = await this.prisma.$transaction(async (tx) => {
       // Snapshot previous state (pre-edit).
       await tx.postVersion.create({
         data: {
           postId: post.id,
           body: post.body,
-          topics: Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [],
-          hashtags: Array.isArray((post as any).hashtags) ? ((post as any).hashtags as string[]) : [],
-          hashtagCasings: Array.isArray((post as any).hashtagCasings) ? ((post as any).hashtagCasings as string[]) : [],
+          topics: post.topics ?? [],
+          hashtags: post.hashtags ?? [],
+          hashtagCasings: post.hashtagCasings ?? [],
           visibility: post.visibility,
         },
       });
@@ -3091,8 +3090,8 @@ export class PostsService {
 
       // If hashtags changed, best-effort adjust counters by recomputing counts deltas.
       // We keep it simple for v1: decrement old and increment new based on tokens.
-      const prevTags = Array.isArray((post as any).hashtags) ? ((post as any).hashtags as string[]) : [];
-      const prevVariants = Array.isArray((post as any).hashtagCasings) ? ((post as any).hashtagCasings as string[]) : [];
+      const prevTags = post.hashtags ?? [];
+      const prevVariants = post.hashtagCasings ?? [];
       const prevPairs = prevTags.map((t, i) => ({ tag: (t ?? '').trim().toLowerCase(), variant: (prevVariants[i] ?? '').trim() })).filter((x) => x.tag);
       const nextPairs = hashtagTokens;
 
@@ -3142,19 +3141,19 @@ export class PostsService {
 
       return next;
     });
-    const nextTopics = Array.isArray((updated as any).topics) ? ((updated as any).topics as string[]) : [];
+    const nextTopics = updated.topics ?? [];
     await this.cacheInvalidation.bumpForPostWrite({ topics: [...prevTopics, ...nextTopics] });
 
     // Realtime: update body/edited markers for live subscribers (best-effort).
     try {
-      const editedAtIso = (updated as any)?.editedAt instanceof Date ? (updated as any).editedAt.toISOString() : new Date().toISOString();
-      const editCount = typeof (updated as any)?.editCount === 'number' ? (updated as any).editCount : undefined;
+      const editedAtIso = (updated.editedAt ?? new Date()).toISOString();
+      const editCount = typeof updated.editCount === 'number' ? updated.editCount : undefined;
       this.presenceRealtime.emitPostsLiveUpdated(id, {
         postId: id,
         version: editedAtIso,
         reason: 'post_edited',
         patch: {
-          body: String((updated as any)?.body ?? ''),
+          body: String(updated.body ?? ''),
           editedAt: editedAtIso,
           ...(typeof editCount === 'number' ? { editCount } : {}),
         },
@@ -3546,7 +3545,7 @@ export class PostsService {
 
     const fromBodyMentions = nextBody ? this.parseMentionsFromBody(nextBody) : [];
     const bodyMentionIds = await this.resolveMentionUsernames(fromBodyMentions);
-    const existingMentionIds = Array.isArray((post as any).mentions) ? ((post as any).mentions as Array<{ userId: string }>).map((m) => m.userId) : [];
+    const existingMentionIds = (post.mentions ?? []).map((m) => m.userId);
     const mentionUserIds = Array.from(new Set([...existingMentionIds, ...bodyMentionIds])).filter(Boolean);
 
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -3579,14 +3578,14 @@ export class PostsService {
               postId: post.id,
               source: m.source,
               kind: m.kind,
-              r2Key: (m as any).r2Key ?? null,
-              thumbnailR2Key: (m as any).thumbnailR2Key ?? null,
-              url: (m as any).url ?? null,
-              mp4Url: (m as any).mp4Url ?? null,
-              width: (m as any).width ?? null,
-              height: (m as any).height ?? null,
-              durationSeconds: (m as any).durationSeconds ?? null,
-              alt: (m as any).alt ?? null,
+              r2Key: m.r2Key ?? null,
+              thumbnailR2Key: m.thumbnailR2Key ?? null,
+              url: m.url ?? null,
+              mp4Url: m.mp4Url ?? null,
+              width: m.width ?? null,
+              height: m.height ?? null,
+              durationSeconds: m.durationSeconds ?? null,
+              alt: m.alt ?? null,
               position: m.position,
             })),
             skipDuplicates: false,
@@ -3688,7 +3687,7 @@ export class PostsService {
               mp4Url: found.mp4Url ?? undefined,
               width: found.width ?? undefined,
               height: found.height ?? undefined,
-              durationSeconds: (found as any).durationSeconds ?? undefined,
+              durationSeconds: found.durationSeconds ?? undefined,
               alt,
             };
           }
@@ -3711,7 +3710,7 @@ export class PostsService {
             thumbnailR2Key: m.thumbnailR2Key ?? undefined,
             width: m.width ?? undefined,
             height: m.height ?? undefined,
-            durationSeconds: (m as any).durationSeconds ?? undefined,
+            durationSeconds: m.durationSeconds ?? undefined,
             alt: (m.alt ?? '').trim() || null,
           };
         })
@@ -3724,7 +3723,7 @@ export class PostsService {
           mp4Url: m.mp4Url ?? undefined,
           width: m.width ?? undefined,
           height: m.height ?? undefined,
-          durationSeconds: (m as any).durationSeconds ?? undefined,
+          durationSeconds: m.durationSeconds ?? undefined,
           alt: (m.alt ?? '').trim() || null,
         }));
 
@@ -4066,7 +4065,10 @@ export class PostsService {
       throw new ForbiddenException('Upgrade to premium to create polls.');
     }
     if (poll) {
-      const endsAtMs = poll.endsAt instanceof Date ? poll.endsAt.getTime() : new Date(poll.endsAt as any).getTime();
+      const endsAtMs =
+        poll.endsAt instanceof Date
+          ? poll.endsAt.getTime()
+          : new Date(poll.endsAt as string | number).getTime();
       const now = Date.now();
       const maxMs = 7 * 24 * 60 * 60 * 1000;
       if (!Number.isFinite(endsAtMs) || endsAtMs <= now) throw new BadRequestException('Invalid poll duration.');
@@ -4225,7 +4227,7 @@ export class PostsService {
     let parentCommentCount: number | null = null;
     let didAwardStreak = false;
     let streakRewardOut: { coinsEarned: number; streakDays: number; multiplier: 1 | 2 | 3 | 4 } | null = null;
-    let quotedPostNotificationInfo: { quotedAuthorId: string; quotedPostId: string } | null = null;
+    const quotedPostInfoRef: { current: { quotedAuthorId: string; quotedPostId: string } | null } = { current: null };
     const post = await this.prisma
       .$transaction(async (tx) => {
         const relatedTopics = Array.from(new Set([...(parentTopics ?? []), ...(rootTopics ?? [])])).filter(Boolean);
@@ -4294,21 +4296,21 @@ export class PostsService {
         // Detect embedded post link in body and set quotedPostId + increment that post's repostCount.
         const detectedQuotedPostId = this.extractQuotedPostIdFromBody(body);
         if (detectedQuotedPostId && detectedQuotedPostId !== created.id) {
-          const quotedExists = await (tx as any).post.findFirst({
+          const quotedExists = await tx.post.findFirst({
             where: { id: detectedQuotedPostId, deletedAt: null },
             select: { id: true, userId: true },
           });
           if (quotedExists) {
-            await (tx as any).post.update({
+            await tx.post.update({
               where: { id: created.id },
               data: { quotedPostId: detectedQuotedPostId },
             });
-            await (tx as any).post.update({
+            await tx.post.update({
               where: { id: detectedQuotedPostId },
               data: { repostCount: { increment: 1 } },
             });
             // Store for post-transaction notification (avoid sending inside the transaction).
-            quotedPostNotificationInfo = { quotedAuthorId: quotedExists.userId as string, quotedPostId: detectedQuotedPostId };
+            quotedPostInfoRef.current = { quotedAuthorId: quotedExists.userId, quotedPostId: detectedQuotedPostId };
           }
         }
 
@@ -4392,8 +4394,8 @@ export class PostsService {
             },
             select: { viewerCount: true, weightedViewCount: true },
           });
-          (created as any).viewerCount = updatedCounts.viewerCount;
-          (created as any).weightedViewCount = updatedCounts.weightedViewCount;
+          created.viewerCount = updatedCounts.viewerCount;
+          created.weightedViewCount = updatedCounts.weightedViewCount;
         }
 
         return created;
@@ -4409,9 +4411,8 @@ export class PostsService {
       });
 
     // Versioned read caches: bump after successful create so public reads shift namespaces immediately.
-    if ((post as any)?.visibility && (post as any).visibility !== 'onlyMe') {
-      const topics = Array.isArray((post as any).topics) ? ((post as any).topics as string[]) : [];
-      await this.cacheInvalidation.bumpForPostWrite({ topics });
+    if (post.visibility && post.visibility !== 'onlyMe') {
+      await this.cacheInvalidation.bumpForPostWrite({ topics: post.topics ?? [] });
     }
 
     // Realtime: bump parent commentCount for live subscribers (best-effort).
@@ -4433,7 +4434,7 @@ export class PostsService {
     // Realtime: push full reply DTO to thread subscribers so they see it without refetching (best-effort).
     if (parentId) {
       try {
-        const replyDto = toPostDto(post as any, this.appConfig.r2()?.publicBaseUrl ?? null, {
+        const replyDto = toPostDto(post, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: false,
           includeInternal: false,
         });
@@ -4447,12 +4448,13 @@ export class PostsService {
     }
 
     // Quote repost notification: notify the quoted post's author (best-effort, skip self-quotes).
-    if (quotedPostNotificationInfo && quotedPostNotificationInfo.quotedAuthorId !== userId) {
+    const quotedInfo = quotedPostInfoRef.current;
+    if (quotedInfo && quotedInfo.quotedAuthorId !== userId) {
       this.notifications
         .upsertRepostNotification({
-          recipientUserId: quotedPostNotificationInfo.quotedAuthorId,
+          recipientUserId: quotedInfo.quotedAuthorId,
           actorUserId: userId,
-          subjectPostId: quotedPostNotificationInfo.quotedPostId,
+          subjectPostId: quotedInfo.quotedPostId,
           actorPostId: post.id,
           title: 'quoted your post',
         })
@@ -4618,7 +4620,7 @@ export class PostsService {
         const u = await this.prisma.user.findUnique({ where: { id: userId } });
         if (u) {
           this.presenceRealtime.emitUsersMeUpdated(userId, {
-            user: toUserDto(u as any, this.appConfig.r2()?.publicBaseUrl ?? null),
+            user: toUserDto(u, this.appConfig.r2()?.publicBaseUrl ?? null),
             reason: 'streak_awarded',
           });
         }
@@ -4635,8 +4637,8 @@ export class PostsService {
     // Refresh trending score: for comments → parent post; for quote reposts → quoted post; for all posts → the post itself.
     if (parentId) {
       this.enqueueScoreRefresh(parentId);
-    } else if (quotedPostNotificationInfo?.quotedPostId) {
-      this.enqueueScoreRefresh(quotedPostNotificationInfo.quotedPostId);
+    } else if (quotedPostInfoRef.current?.quotedPostId) {
+      this.enqueueScoreRefresh(quotedPostInfoRef.current.quotedPostId);
     }
     this.enqueueScoreRefresh(post.id);
 
@@ -4881,7 +4883,7 @@ export class PostsService {
     }
 
     // Resolve the canonical original post (flatten repost-of-repost).
-    const targetPost = await (this.prisma.post as any).findFirst({
+    const targetPost = await this.prisma.post.findFirst({
       where: { id, deletedAt: null },
       select: { id: true, userId: true, visibility: true, kind: true, repostedPostId: true },
     });
@@ -4891,7 +4893,7 @@ export class PostsService {
     // Flatten: if target is itself a flat repost, point to its original.
     let canonicalId: string = id;
     if (targetPost.kind === 'repost' && targetPost.repostedPostId) {
-      const canonical = await (this.prisma.post as any).findFirst({
+      const canonical = await this.prisma.post.findFirst({
         where: { id: targetPost.repostedPostId, deletedAt: null },
         select: { id: true, userId: true, visibility: true },
       });
@@ -4900,7 +4902,7 @@ export class PostsService {
     }
 
     // Block check.
-    const canonicalPost = canonicalId === id ? targetPost : await (this.prisma.post as any).findFirst({ where: { id: canonicalId }, select: { id: true, userId: true, visibility: true } });
+    const canonicalPost = canonicalId === id ? targetPost : await this.prisma.post.findFirst({ where: { id: canonicalId }, select: { id: true, userId: true, visibility: true } });
     if (!canonicalPost) throw new NotFoundException('Post not found.');
 
     if (canonicalPost.userId && canonicalPost.userId !== userId) {
@@ -4916,18 +4918,18 @@ export class PostsService {
     }
 
     // Check uniqueness: one flat repost per user per canonical post.
-    const existingRepost = await (this.prisma.post as any).findFirst({
+    const existingRepost = await this.prisma.post.findFirst({
       where: { userId, kind: 'repost', repostedPostId: canonicalId, deletedAt: null },
       select: { id: true },
     });
     if (existingRepost) {
-      const updated = await (this.prisma.post as any).findUnique({ where: { id: canonicalId }, select: { repostCount: true } });
+      const updated = await this.prisma.post.findUnique({ where: { id: canonicalId }, select: { repostCount: true } });
       return { reposted: true as const, repostId: existingRepost.id, repostCount: updated?.repostCount ?? 0 };
     }
 
     // Create flat repost and increment count.
     const { repostCount, repostId } = await this.prisma.$transaction(async (tx) => {
-      const repost = await (tx as any).post.create({
+      const repost = await tx.post.create({
         data: {
           body: '',
           userId,
@@ -4940,7 +4942,7 @@ export class PostsService {
         },
         select: { id: true },
       });
-      const updated = await (tx as any).post.update({
+      const updated = await tx.post.update({
         where: { id: canonicalId },
         data: { repostCount: { increment: 1 } },
         select: { repostCount: true },
@@ -4971,7 +4973,7 @@ export class PostsService {
     if (!id) throw new NotFoundException('Post not found.');
 
     // Resolve canonical post (works whether caller passes repostId or original postId).
-    const targetPost = await (this.prisma.post as any).findFirst({
+    const targetPost = await this.prisma.post.findFirst({
       where: { id, deletedAt: null },
       select: { id: true, userId: true, kind: true, repostedPostId: true },
     });
@@ -4983,18 +4985,18 @@ export class PostsService {
       : id;
 
     // Find the viewer's flat repost of the canonical post.
-    const existingRepost = await (this.prisma.post as any).findFirst({
+    const existingRepost = await this.prisma.post.findFirst({
       where: { userId, kind: 'repost', repostedPostId: canonicalId, deletedAt: null },
       select: { id: true },
     });
     if (!existingRepost) {
-      const updated = await (this.prisma.post as any).findUnique({ where: { id: canonicalId }, select: { repostCount: true } });
+      const updated = await this.prisma.post.findUnique({ where: { id: canonicalId }, select: { repostCount: true } });
       return { reposted: false as const, repostCount: updated?.repostCount ?? 0 };
     }
 
     const { repostCount } = await this.prisma.$transaction(async (tx) => {
-      await (tx as any).post.delete({ where: { id: existingRepost.id } });
-      const updated = await (tx as any).post.update({
+      await tx.post.delete({ where: { id: existingRepost.id } });
+      const updated = await tx.post.update({
         where: { id: canonicalId },
         data: { repostCount: { decrement: 1 } },
         select: { repostCount: true },
@@ -5003,7 +5005,7 @@ export class PostsService {
     });
 
     // Clean up repost notification.
-    const canonicalPost = await (this.prisma.post as any).findFirst({ where: { id: canonicalId }, select: { userId: true } });
+    const canonicalPost = await this.prisma.post.findFirst({ where: { id: canonicalId }, select: { userId: true } });
     if (canonicalPost?.userId && canonicalPost.userId !== userId) {
       this.notifications.deleteRepostNotification(canonicalPost.userId, userId, canonicalId).catch(() => {});
     }
@@ -5135,9 +5137,9 @@ export class PostsService {
       try { return parseInt(Buffer.from(cursor, 'base64').toString('utf8'), 10) || 0; } catch { return 0; }
     })() : 0;
 
-    const baseWhere = {
-      kind: { in: ['image', 'video'] as const },
-      source: 'upload' as const,
+    const baseWhere: Prisma.PostMediaWhereInput = {
+      kind: { in: ['image', 'video'] },
+      source: 'upload',
       deletedAt: null,
       post: {
         userId: user.id,
@@ -5147,11 +5149,18 @@ export class PostsService {
       },
     };
 
-    let mediaRows: Array<{
-      id: string; kind: string; r2Key: string | null; thumbnailR2Key: string | null;
-      width: number | null; height: number | null; durationSeconds: number | null; postId: string;
-      post: { visibility: string };
-    }>;
+    type MediaRow = {
+      id: string;
+      kind: PostMediaKind;
+      r2Key: string | null;
+      thumbnailR2Key: string | null;
+      width: number | null;
+      height: number | null;
+      durationSeconds: number | null;
+      postId: string;
+      post: { visibility: PostVisibility };
+    };
+    let mediaRows: MediaRow[];
 
     if (sort === 'trending') {
       // Include all media (including zero/unscored posts), but rank by parent post score.

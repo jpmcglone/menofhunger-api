@@ -1,8 +1,9 @@
-import { Controller, Get, Res } from '@nestjs/common';
+import { Controller, Get, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { RedisService } from '../redis/redis.service';
+import { AdminGuard } from '../admin/admin.guard';
 import { setReadCache } from '../../common/http-cache';
 
 @Controller('health')
@@ -21,21 +22,6 @@ export class HealthController {
     const nowIso = now.toISOString();
     const serverTime = Math.floor(now.getTime() / 1000);
     const uptimeSeconds = Math.max(0, Math.floor(process.uptime()));
-
-    const config = {
-      nodeEnv: this.appConfig.nodeEnv(),
-      r2Configured: Boolean(this.appConfig.r2()),
-      giphyConfigured: Boolean(this.appConfig.giphyApiKey()),
-      twilioConfigured: Boolean(this.appConfig.twilioVerify()),
-      // Only relevant in non-production environments (Twilio is never disabled in prod).
-      ...(this.appConfig.nodeEnv() !== 'production' ? { twilioDisabledInDev: this.appConfig.disableTwilioInDev() } : {}),
-      /** Location search / geocode (Mapbox). Unset = profile location lookup will 400. */
-      locationSearchConfigured: Boolean(this.appConfig.mapbox()),
-      stripeConfigured: Boolean(this.appConfig.stripe()),
-      emailConfigured: Boolean(this.appConfig.email()),
-      /** Browser (Web Push) via VAPID. Other push channels (e.g. mobile) are separate. */
-      browserPushConfigured: this.appConfig.vapidConfigured(),
-    };
 
     const [dbResult, redisResult] = await Promise.all([
       this.checkDb(),
@@ -56,9 +42,26 @@ export class HealthController {
         serverTime,
         uptimeSeconds,
         service: 'menofhunger-api',
-        config,
         db: dbResult,
         redis: redisResult,
+      },
+    };
+  }
+
+  @UseGuards(AdminGuard)
+  @Get('config')
+  async healthConfig() {
+    return {
+      data: {
+        nodeEnv: this.appConfig.nodeEnv(),
+        r2Configured: Boolean(this.appConfig.r2()),
+        giphyConfigured: Boolean(this.appConfig.giphyApiKey()),
+        twilioConfigured: Boolean(this.appConfig.twilioVerify()),
+        ...(this.appConfig.nodeEnv() !== 'production' ? { twilioDisabledInDev: this.appConfig.disableTwilioInDev() } : {}),
+        locationSearchConfigured: Boolean(this.appConfig.mapbox()),
+        stripeConfigured: Boolean(this.appConfig.stripe()),
+        emailConfigured: Boolean(this.appConfig.email()),
+        browserPushConfigured: this.appConfig.vapidConfigured(),
       },
     };
   }

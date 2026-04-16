@@ -15,6 +15,12 @@ export type LinkMetadataDto = {
 
 const FETCH_TIMEOUT_MS = 2000;
 const STALE_DAYS = 7;
+/** Keyset pagination page size when scanning recent posts during backfill. */
+const BACKFILL_POST_PAGE_SIZE = 500;
+/** Hard cap on posts scanned per backfill run to bound memory/DB pressure. */
+const BACKFILL_MAX_POSTS = 20_000;
+/** Hard cap on distinct URLs fetched per backfill run. */
+const BACKFILL_MAX_URLS = 2_000;
 
 // ─── MoH internal URL handling ───────────────────────────────────────────────
 // When someone shares a menofhunger.com link, we skip external scraping entirely
@@ -302,26 +308,75 @@ export class LinkMetadataService {
     return out;
   }
 
-  /** Run backfill for recent posts: extract links from last 7 days, fetch and cache. */
-  async runBackfill(): Promise<{ urlsFound: number; cached: number }> {
+  /**
+   * Run backfill for recent posts: extract links from last 7 days, fetch and cache.
+   *
+   * Uses keyset pagination (BACKFILL_POST_PAGE_SIZE at a time) and hard caps on
+   * total posts scanned and URLs collected, so a large recent-post volume cannot
+   * blow up memory or the DB.
+   */
+  async runBackfill(): Promise<{ urlsFound: number; cached: number; truncated: boolean }> {
     const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const posts = await this.prisma.post.findMany({
-      where: {
+    const seen = new Set<string>();
+
+    let cursorCreatedAt: Date | null = null;
+    let cursorId: string | null = null;
+    let postsScanned = 0;
+    let truncated = false;
+
+    while (postsScanned < BACKFILL_MAX_POSTS && seen.size < BACKFILL_MAX_URLS) {
+      const baseWhere = {
         deletedAt: null,
         body: { not: '' },
         createdAt: { gte: since },
-      },
-      select: { body: true },
-    });
-    const seen = new Set<string>();
-    for (const p of posts) {
-      for (const url of this.extractLinks(p.body ?? '')) {
-        seen.add(url);
+      } as const;
+
+      const pageWhere =
+        cursorCreatedAt && cursorId
+          ? {
+              ...baseWhere,
+              OR: [
+                { createdAt: { lt: cursorCreatedAt } },
+                { AND: [{ createdAt: cursorCreatedAt }, { id: { lt: cursorId } }] },
+              ],
+            }
+          : baseWhere;
+
+      const posts: Array<{ id: string; createdAt: Date; body: string }> =
+        await this.prisma.post.findMany({
+          where: pageWhere,
+          select: { id: true, createdAt: true, body: true },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: BACKFILL_POST_PAGE_SIZE,
+        });
+
+      if (posts.length === 0) break;
+
+      for (const p of posts) {
+        for (const url of this.extractLinks(p.body ?? '')) {
+          seen.add(url);
+          if (seen.size >= BACKFILL_MAX_URLS) {
+            truncated = true;
+            break;
+          }
+        }
+        if (seen.size >= BACKFILL_MAX_URLS) break;
       }
+
+      postsScanned += posts.length;
+      const last = posts[posts.length - 1];
+      if (!last) break;
+      cursorCreatedAt = last.createdAt;
+      cursorId = last.id;
+
+      if (posts.length < BACKFILL_POST_PAGE_SIZE) break;
     }
+
+    if (postsScanned >= BACKFILL_MAX_POSTS) truncated = true;
+
     const urls = Array.from(seen);
     const cached = await this.backfillForUrls(urls);
-    return { urlsFound: urls.length, cached };
+    return { urlsFound: urls.length, cached, truncated };
   }
 
   /** Backfill: fetch metadata for URLs not yet in DB. Returns count of newly cached URLs. */
