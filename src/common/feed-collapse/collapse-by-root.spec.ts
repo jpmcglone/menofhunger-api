@@ -179,7 +179,8 @@ describe('collapseFeedByRoot – realistic scenario: 40 comments, 4 in new feed'
     // John's post has 40 comments total. The new/trending feed includes 4 of
     // them as individual feed items. maxPerRoot=2 keeps the first 2 and
     // collapses the other 2.
-    const john = p('john');
+    // (john himself isn't asserted on; he just anchors the parent thread.)
+    const _john = p('john');
     const nick = p('nick', 'john');   // reply 1 (kept)
     const peter = p('peter', 'nick'); // reply 2 (kept) — deeper chain
     const bob = p('bob', 'john');     // reply 3 (collapsed)
@@ -209,7 +210,7 @@ describe('collapseFeedByRoot – realistic scenario: 40 comments, 4 in new feed'
 
   it('only 1 reply from a 40-comment thread → nothing collapsed, no threadCollapsedCount', () => {
     // Only 1 reply made the new feed. maxPerRoot=2 keeps it, collapses nothing.
-    const john = p('john');
+    const _john = p('john');
     const nick = p('nick', 'john');
 
     // Other independent post in the feed
@@ -227,7 +228,7 @@ describe('collapseFeedByRoot – realistic scenario: 40 comments, 4 in new feed'
   });
 
   it('exactly 2 replies from a thread → both kept, nothing collapsed', () => {
-    const john = p('john');
+    const _john = p('john');
     const nick = p('nick', 'john');
     const peter = p('peter', 'nick');
 
@@ -243,13 +244,13 @@ describe('collapseFeedByRoot – realistic scenario: 40 comments, 4 in new feed'
   it('mixed threads: one thread has 4 items, another has 1', () => {
     // Thread A (john): 4 replies in feed → keep 2, collapse 2
     // Thread B (mary): 1 reply in feed → keep 1, collapse 0
-    const john = p('john');
+    const _john = p('john');
     const r1 = p('r1', 'john');
     const r2 = p('r2', 'john');
     const r3 = p('r3', 'john');
     const r4 = p('r4', 'john');
 
-    const mary = p('mary');
+    const _mary = p('mary');
     const s1 = p('s1', 'mary');
 
     const { items: out, collapsedCountByKey, collapsedCountByItemId } = collapseFeedByRoot(

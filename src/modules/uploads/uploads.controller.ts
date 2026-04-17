@@ -25,7 +25,7 @@ const commitBannerSchema = z.object({
 const initPostMediaSchema = z.object({
   contentType: z.string().min(1),
   contentHash: z.string().min(1).optional(),
-  purpose: z.enum(['post', 'thumbnail', 'group']).optional(),
+  purpose: z.enum(['post', 'thumbnail', 'group', 'crew']).optional(),
 });
 
 const commitPostMediaSchema = z.object({

@@ -200,7 +200,6 @@ export class AdminEmailSamplesController {
   }
 
   private renderWeeklyDigestSample(ctx: { baseUrl: string; greeting: string }) {
-    const homeUrl = `${ctx.baseUrl}/home`;
     const settingsUrl = `${ctx.baseUrl}/settings/notifications`;
 
     const samplePost = {

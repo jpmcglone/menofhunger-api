@@ -32,6 +32,18 @@ export default [
       // Keep lint lightweight; TypeScript already provides most safety here.
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-require-imports': 'off',
+      // Allow leading-underscore as the conventional "intentionally unused" marker
+      // for function args, destructured vars, and caught errors. Applies to
+      // (e.g.) `function foo(_publicBaseUrl: string)` and `const { _x, y } = obj`.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+          destructuredArrayIgnorePattern: '^_',
+        },
+      ],
     },
   },
   {

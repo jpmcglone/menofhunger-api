@@ -340,7 +340,7 @@ export class UploadsService {
   async initPostMediaUpload(
     userId: string,
     contentType: string,
-    opts?: { contentHash?: string; purpose?: 'post' | 'thumbnail' | 'group' },
+    opts?: { contentHash?: string; purpose?: 'post' | 'thumbnail' | 'group' | 'crew' },
   ) {
     const { s3, bucket } = this.requireR2();
     const ct = contentType.trim().toLowerCase();
@@ -353,6 +353,10 @@ export class UploadsService {
     } else if (purpose === 'group') {
       if (!ALLOWED_CONTENT_TYPES.has(ct)) {
         throw new BadRequestException('Group images must be JPG, PNG, or WebP.');
+      }
+    } else if (purpose === 'crew') {
+      if (!ALLOWED_CONTENT_TYPES.has(ct)) {
+        throw new BadRequestException('Crew images must be JPG, PNG, or WebP.');
       }
     } else {
       if (!ALLOWED_POST_MEDIA_CONTENT_TYPES.has(ct)) {
@@ -404,9 +408,11 @@ export class UploadsService {
         ? 'thumbnails'
         : purpose === 'group'
           ? 'group-images'
-          : isVideoContentType(ct)
-            ? 'videos'
-            : 'images';
+          : purpose === 'crew'
+            ? 'crew-images'
+            : isVideoContentType(ct)
+              ? 'videos'
+              : 'images';
     const key = `${prefix}uploads/${userId}/${subdir}/${randomUUID()}.${ext}`;
 
     const uploadUrl = await getSignedUrl(
@@ -597,6 +603,7 @@ export class UploadsService {
     const videosPrefix = `${prefix}uploads/${userId}/videos/`;
     const thumbnailsPrefix = `${prefix}uploads/${userId}/thumbnails/`;
     const groupImagesPrefix = `${prefix}uploads/${userId}/group-images/`;
+    const crewImagesPrefix = `${prefix}uploads/${userId}/crew-images/`;
 
     // Reuse path: key was returned from init with skipUpload: true (existing in MediaContentHash).
     // Check this first so we accept keys under any user path when reusing by content hash.
@@ -672,7 +679,12 @@ export class UploadsService {
       };
     }
 
-    if (!cleaned.startsWith(imagesPrefix) && !cleaned.startsWith(videosPrefix) && !cleaned.startsWith(groupImagesPrefix)) {
+    if (
+      !cleaned.startsWith(imagesPrefix) &&
+      !cleaned.startsWith(videosPrefix) &&
+      !cleaned.startsWith(groupImagesPrefix) &&
+      !cleaned.startsWith(crewImagesPrefix)
+    ) {
       throw new BadRequestException('Invalid media key.');
     }
 

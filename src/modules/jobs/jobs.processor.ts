@@ -18,6 +18,7 @@ import { AdminDailyDigestCron } from '../admin/admin-digest-email.cron';
 import { CheckinsStreakResetCron } from '../checkins/checkins-streak-reset.cron';
 import { PostsService } from '../posts/posts.service';
 import { ArticlesTrendingScoreCron } from '../articles/articles-trending-score.cron';
+import { CrewJobsCron } from '../crew/crew-jobs.cron';
 
 @Processor(MOH_BACKGROUND_QUEUE)
 export class JobsProcessor extends WorkerHost {
@@ -40,6 +41,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly checkinsStreakReset: CheckinsStreakResetCron,
     private readonly postsService: PostsService,
     private readonly articlesTrendingScore: ArticlesTrendingScoreCron,
+    private readonly crewJobs: CrewJobsCron,
   ) {
     super();
   }
@@ -117,6 +119,15 @@ export class JobsProcessor extends WorkerHost {
           return { ok: true };
         case JOBS.postsRefreshSinglePostScore:
           await this.postsService.refreshAndStoreTrendingScore(job.data?.postId);
+          return { ok: true };
+        case JOBS.crewInvitesExpire:
+          await this.crewJobs.runExpireInvites();
+          return { ok: true };
+        case JOBS.crewTransferVotesExpire:
+          await this.crewJobs.runExpireTransferVotes();
+          return { ok: true };
+        case JOBS.crewInactiveOwnerAutoTransfer:
+          await this.crewJobs.runInactiveOwnerAutoTransfer();
           return { ok: true };
         default:
           this.logger.warn(`Unknown job name: ${name}`);

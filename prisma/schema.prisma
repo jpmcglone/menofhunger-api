@@ -64,6 +64,17 @@ enum NotificationKind {
   generic
   coin_transfer
   group_join_request
+  crew_invite_received
+  crew_invite_accepted
+  crew_invite_declined
+  crew_invite_cancelled
+  crew_member_joined
+  crew_member_left
+  crew_member_kicked
+  crew_owner_transferred
+  crew_owner_transfer_vote
+  crew_wall_mention
+  crew_disbanded
 }
 
 enum CoinTransferKind {
@@ -117,6 +128,7 @@ enum VerificationRequestStatus {
 enum MessageConversationType {
   direct
   group
+  crew_wall
 }
 
 enum MessageParticipantStatus {
@@ -182,6 +194,19 @@ enum CommunityGroupMemberRole {
 enum CommunityGroupMemberStatus {
   active
   pending
+}
+
+enum CrewMemberRole {
+  owner
+  member
+}
+
+enum CrewInviteStatus {
+  pending
+  accepted
+  declined
+  cancelled
+  expired
 }
 
 enum SpaceMode {
@@ -350,6 +375,15 @@ model User {
 
   communityGroupsCreated CommunityGroup[] @relation("CommunityGroup_createdBy")
   communityGroupMemberships CommunityGroupMember[]
+
+  crewsOwned              Crew[]                 @relation("Crew_owner")
+  crewsDesignatedSuccessorOf Crew[]              @relation("Crew_designatedSuccessor")
+  crewMembership          CrewMember?            @relation("CrewMember_user")
+  crewInvitesSent         CrewInvite[]           @relation("CrewInvite_invitedBy")
+  crewInvitesReceived     CrewInvite[]           @relation("CrewInvite_invitee")
+  crewTransferVotesProposed CrewOwnerTransferVote[] @relation("CrewOwnerTransferVote_proposer")
+  crewTransferVotesTargeting CrewOwnerTransferVote[] @relation("CrewOwnerTransferVote_target")
+  crewTransferBallots     CrewOwnerTransferBallot[] @relation("CrewOwnerTransferBallot_user")
 
   space Space?
 
@@ -604,6 +638,216 @@ model CommunityGroupMember {
   @@id([groupId, userId])
   @@index([userId, status])
   @@index([groupId, status])
+}
+
+/**
+ * A Crew is a hard-capped (5), invite-only squad. Each user may belong to at most one crew
+ * (enforced via a UNIQUE on CrewMember.userId). The owner manages invites, membership, and
+ * crew metadata. Every crew has an auto-created MessageConversation (type: crew_wall) which
+ * backs "The Wall" (persistent chat-like posting inside the crew).
+ *
+ * Public pages at /c/:slug are always available (display "Untitled Crew" if `name` is null).
+ * The wall + member list + settings are private to crew members.
+ */
+model Crew {
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  /** Soft delete (disbanded). Preserves history without orphaning references. */
+  deletedAt DateTime?
+
+  /** URL slug for the public crew page (/c/:slug). Auto-generated, regenerated on rename. */
+  slug String @unique @db.VarChar(80)
+
+  /** Optional crew name. When null, public pages render "Untitled Crew". */
+  name    String? @db.VarChar(120)
+  tagline String? @db.VarChar(160)
+  bio     String? @db.Text
+
+  /** Square avatar (R2 key or URL). Displayed on the public page and on member profiles. */
+  avatarImageUrl String? @db.VarChar(2000)
+  /** Wide banner on the public page. */
+  coverImageUrl  String? @db.VarChar(2000)
+
+  ownerUserId String
+  owner       User   @relation("Crew_owner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+
+  /**
+   * Designated successor (a non-owner member). Used by the 30-day-inactive auto-transfer job.
+   * Null means "fall back to the longest-tenured non-owner member".
+   */
+  designatedSuccessorUserId String?
+  designatedSuccessor       User?   @relation("Crew_designatedSuccessor", fields: [designatedSuccessorUserId], references: [id], onDelete: SetNull)
+
+  /**
+   * MessageConversation (type: crew_wall) backing The Wall. Created atomically with the crew.
+   * Participants mirror CrewMember (owner = conversation owner; members = conversation members).
+   */
+  wallConversationId String              @unique
+  wallConversation   MessageConversation @relation("Crew_wallConversation", fields: [wallConversationId], references: [id], onDelete: Restrict)
+
+  /** Denormalized count of CrewMember rows. Updated atomically on join/kick/leave. */
+  memberCount Int @default(1)
+
+  members CrewMember[]
+  invites CrewInvite[]
+  transferVotes CrewOwnerTransferVote[] @relation("CrewOwnerTransferVote_crew")
+  notifications Notification[] @relation("Notification_subjectCrew")
+
+  /**
+   * If an old slug exists, we redirect to the current slug.
+   * (see CrewSlugHistory below)
+   */
+  slugHistory CrewSlugHistory[]
+
+  @@index([deletedAt, createdAt])
+  @@index([ownerUserId])
+}
+
+/**
+ * Tracks historical slugs for a crew so renames can 301 from the old /c/:oldSlug.
+ * Each historic slug is globally unique (cannot collide with an active crew slug).
+ */
+model CrewSlugHistory {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  slug   String @unique @db.VarChar(80)
+  crewId String
+  crew   Crew   @relation(fields: [crewId], references: [id], onDelete: Cascade)
+
+  @@index([crewId, createdAt])
+}
+
+model CrewMember {
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  crewId String
+  crew   Crew   @relation(fields: [crewId], references: [id], onDelete: Cascade)
+
+  /**
+   * Enforces the "one crew per user" rule at the DB level. Attempting to join a second
+   * crew will surface a Prisma unique constraint error the service translates into a
+   * 409 Conflict with a friendly message.
+   */
+  userId String @unique
+  user   User   @relation("CrewMember_user", fields: [userId], references: [id], onDelete: Cascade)
+
+  role CrewMemberRole @default(member)
+
+  @@id([crewId, userId])
+  @@index([crewId, role])
+  @@index([crewId, createdAt])
+}
+
+/**
+ * Crew invite lifecycle:
+ *   - Founding invite: `crewId` is NULL (the inviter has no crew yet). The first accepted
+ *     founding invite creates the crew and auto-cancels the inviter's other pending
+ *     founding invites (they re-target the new crew as regular invites if the inviter chooses).
+ *   - Regular invite: `crewId` is set (the inviter is already the owner of that crew).
+ *
+ * Only the owner of an existing crew may send regular invites. Crewless users may send
+ * founding invites. Invites expire after 14 days (enforced by a periodic job that flips
+ * status from pending -> expired).
+ */
+model CrewInvite {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /**
+   * Null for a "founding invite" sent by a user who does not yet own a crew. Set for
+   * regular invites sent by an existing crew owner.
+   */
+  crewId String?
+  crew   Crew?  @relation(fields: [crewId], references: [id], onDelete: Cascade)
+
+  invitedByUserId String
+  invitedBy       User   @relation("CrewInvite_invitedBy", fields: [invitedByUserId], references: [id], onDelete: Cascade)
+
+  inviteeUserId String
+  invitee       User   @relation("CrewInvite_invitee", fields: [inviteeUserId], references: [id], onDelete: Cascade)
+
+  /** Optional short message from the inviter (shown to the invitee). */
+  message String? @db.VarChar(500)
+
+  /**
+   * Name to use when the crew is *created* on first acceptance of a founding
+   * invite. Ignored for invites that already have a non-null `crewId` (the crew
+   * is already named via `Crew.name`).
+   */
+  crewNameOnAccept String? @db.VarChar(80)
+
+  status CrewInviteStatus @default(pending)
+
+  /** 14 days after createdAt by default; enforced by expiry job. */
+  expiresAt DateTime
+
+  /** Timestamp of the terminal state transition (accepted/declined/cancelled/expired). */
+  respondedAt DateTime?
+
+  notifications Notification[] @relation("Notification_subjectCrewInvite")
+
+  @@index([inviteeUserId, status, createdAt])
+  @@index([invitedByUserId, status, createdAt])
+  @@index([crewId, status, createdAt])
+  @@index([status, expiresAt])
+}
+
+/**
+ * Owner transfer vote: non-owner crew members may unanimously vote to transfer ownership
+ * (to a specific target member, typically the proposer or a designated successor).
+ * A vote requires ALL non-owner members to cast a ballot of `inFavor = true` to pass.
+ * A single ballot of `inFavor = false` (or a withdrawn ballot) invalidates the vote.
+ */
+model CrewOwnerTransferVote {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  crewId String
+  crew   Crew   @relation("CrewOwnerTransferVote_crew", fields: [crewId], references: [id], onDelete: Cascade)
+
+  proposerUserId String
+  proposer       User   @relation("CrewOwnerTransferVote_proposer", fields: [proposerUserId], references: [id], onDelete: Cascade)
+
+  /** The member proposed to become the new owner. */
+  targetUserId String
+  target       User   @relation("CrewOwnerTransferVote_target", fields: [targetUserId], references: [id], onDelete: Cascade)
+
+  /**
+   * Lifecycle: open (collecting ballots) -> passed (all non-owner members voted yes) |
+   * rejected (any non-owner voted no) | cancelled (proposer withdrew) | expired (time limit).
+   */
+  status String @default("open") @db.VarChar(20)
+
+  /** Soft deadline for the vote (default 7 days). After this the job marks it expired. */
+  expiresAt DateTime
+
+  resolvedAt DateTime?
+
+  ballots CrewOwnerTransferBallot[]
+
+  @@index([crewId, status])
+  @@index([status, expiresAt])
+}
+
+model CrewOwnerTransferBallot {
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  voteId String
+  vote   CrewOwnerTransferVote @relation(fields: [voteId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation("CrewOwnerTransferBallot_user", fields: [userId], references: [id], onDelete: Cascade)
+
+  inFavor Boolean
+
+  @@id([voteId, userId])
+  @@index([userId, updatedAt])
 }
 
 model Space {
@@ -1152,6 +1396,13 @@ model Notification {
   subjectArticleId String?
   subjectArticleCommentId String?
   subjectGroupId   String?
+  subjectCrewId    String?
+  /**
+   * Specific crew invite this notification refers to. Lets the notification UI
+   * accept/decline the exact invite without resolving by (actor, recipient) pair.
+   * SetNull on delete so notifications survive invite cleanup.
+   */
+  subjectCrewInviteId String?
   title     String?
   body      String?
 
@@ -1163,6 +1414,8 @@ model Notification {
   subjectArticle Article? @relation("Notification_subjectArticle", fields: [subjectArticleId], references: [id], onDelete: SetNull)
   subjectArticleComment ArticleComment? @relation("Notification_subjectArticleComment", fields: [subjectArticleCommentId], references: [id], onDelete: SetNull)
   subjectGroup CommunityGroup? @relation("Notification_subjectGroup", fields: [subjectGroupId], references: [id], onDelete: SetNull)
+  subjectCrew  Crew?           @relation("Notification_subjectCrew", fields: [subjectCrewId], references: [id], onDelete: SetNull)
+  subjectCrewInvite CrewInvite? @relation("Notification_subjectCrewInvite", fields: [subjectCrewInviteId], references: [id], onDelete: SetNull)
 
   @@index([recipientUserId, createdAt])
   @@index([recipientUserId, deliveredAt])
@@ -1347,6 +1600,9 @@ model MessageConversation {
   participants MessageParticipant[]
   messages Message[] @relation("MessageConversation_messages")
   lastMessage Message? @relation("MessageConversation_lastMessage", fields: [lastMessageId], references: [id], onDelete: SetNull)
+
+  /** When this conversation is a crew wall (type: crew_wall), links back to the owning crew. */
+  crewWall Crew? @relation("Crew_wallConversation")
 
   @@index([type, updatedAt])
   @@index([lastMessageAt, id])

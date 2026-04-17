@@ -198,7 +198,6 @@ export class SpacesChatService {
       existingLast.system?.userId === userId
     ) {
       const prevFirst = (existingLast.system as any)?.firstEvent ?? (existingLast.system as any)?.event ?? 'join'
-      const prevLast = (existingLast.system as any)?.lastEvent ?? (existingLast.system as any)?.event ?? prevFirst
       const firstEvent = (prevFirst === 'join' || prevFirst === 'leave') ? prevFirst : 'join'
       const lastEvent = params.event
       const collapsedBodyRaw = systemBodyFor(firstEvent, lastEvent, label)

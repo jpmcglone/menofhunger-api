@@ -33,6 +33,8 @@ export type CreateNotificationParams = {
   subjectArticleId?: string | null;
   subjectArticleCommentId?: string | null;
   subjectGroupId?: string | null;
+  subjectCrewId?: string | null;
+  subjectCrewInviteId?: string | null;
   title?: string | null;
   body?: string | null;
 };
@@ -176,6 +178,8 @@ export class NotificationsService {
       subjectArticleId,
       subjectArticleCommentId,
       subjectGroupId,
+      subjectCrewId,
+      subjectCrewInviteId,
       title,
       body,
     } = params;
@@ -195,6 +199,17 @@ export class NotificationsService {
         poll_results_ready: 'Poll results are ready',
         coin_transfer: 'sent you coins',
         group_join_request: 'requests to join your group',
+        crew_invite_received: 'invited you to their crew',
+        crew_invite_accepted: 'accepted your crew invite',
+        crew_invite_declined: 'declined your crew invite',
+        crew_invite_cancelled: 'cancelled their crew invite',
+        crew_member_joined: 'joined your crew',
+        crew_member_left: 'left your crew',
+        crew_member_kicked: 'was removed from your crew',
+        crew_owner_transferred: 'Crew ownership transferred',
+        crew_owner_transfer_vote: 'started a vote to transfer ownership',
+        crew_wall_mention: 'mentioned you on the crew wall',
+        crew_disbanded: 'Your crew was disbanded',
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
@@ -210,6 +225,8 @@ export class NotificationsService {
           subjectArticleId: subjectArticleId ?? undefined,
           subjectArticleCommentId: subjectArticleCommentId ?? undefined,
           subjectGroupId: subjectGroupId ?? undefined,
+          subjectCrewId: subjectCrewId ?? undefined,
+          subjectCrewInviteId: subjectCrewInviteId ?? undefined,
           title: fallbackTitle ?? undefined,
           body: body ?? undefined,
         },
@@ -475,6 +492,72 @@ export class NotificationsService {
       return {
         title: `${actorName} sent you coins`,
         body: snippet ?? 'Open to view your coin activity.',
+      };
+    }
+    if (kind === 'crew_invite_received') {
+      return {
+        title: `${actorName} invited you to their crew`,
+        body: snippet ?? 'Open to see the invite.',
+      };
+    }
+    if (kind === 'crew_invite_accepted') {
+      return {
+        title: `${actorName} accepted your crew invite`,
+        body: snippet ?? 'Welcome them to the crew.',
+      };
+    }
+    if (kind === 'crew_invite_declined') {
+      return {
+        title: `${actorName} declined your crew invite`,
+        body: snippet ?? 'No worries — invite someone else.',
+      };
+    }
+    if (kind === 'crew_member_joined') {
+      return {
+        title: `${actorName} joined your crew`,
+        body: snippet ?? 'Say hello on the wall.',
+      };
+    }
+    if (kind === 'crew_member_left') {
+      return {
+        title: `${actorName} left your crew`,
+        body: snippet ?? 'Your crew roster changed.',
+      };
+    }
+    if (kind === 'crew_member_kicked') {
+      return {
+        title: 'Crew roster changed',
+        body: snippet ?? 'A member was removed from your crew.',
+      };
+    }
+    if (kind === 'crew_owner_transferred') {
+      return {
+        title: 'Crew ownership transferred',
+        body: snippet ?? 'Your crew has a new owner.',
+      };
+    }
+    if (kind === 'crew_owner_transfer_vote') {
+      return {
+        title: `${actorName} started a vote in your crew`,
+        body: snippet ?? 'Open to cast your vote.',
+      };
+    }
+    if (kind === 'crew_wall_mention') {
+      return {
+        title: `${actorName} mentioned you on the wall`,
+        body: snippet ?? 'Open the crew wall to reply.',
+      };
+    }
+    if (kind === 'crew_disbanded') {
+      return {
+        title: 'Your crew was disbanded',
+        body: snippet ?? 'Start a new crew when you\u2019re ready.',
+      };
+    }
+    if (kind === 'crew_invite_cancelled') {
+      return {
+        title: 'Crew invite cancelled',
+        body: snippet ?? 'The invite is no longer active.',
       };
     }
     return {
@@ -1178,6 +1261,30 @@ export class NotificationsService {
     return await this.deleteNotificationRowsAndEmit(rows);
   }
 
+  /**
+   * Tidy up stale "X joined your crew" / "X accepted your crew invite" notifications
+   * when X leaves (or is kicked from) the crew. The fact that X joined is no longer
+   * meaningful — recipients will get a fresh `crew_member_left` / `crew_member_kicked`
+   * notification instead. Idempotent.
+   */
+  async deleteCrewJoinedNotificationsForActor(params: {
+    crewId: string;
+    actorUserId: string;
+  }): Promise<number> {
+    const crewId = (params.crewId ?? '').trim();
+    const actorUserId = (params.actorUserId ?? '').trim();
+    if (!crewId || !actorUserId) return 0;
+    const rows = await this.prisma.notification.findMany({
+      where: {
+        subjectCrewId: crewId,
+        actorUserId,
+        kind: { in: ['crew_member_joined', 'crew_invite_accepted'] },
+      },
+      select: { id: true, recipientUserId: true, deliveredAt: true },
+    });
+    return await this.deleteNotificationRowsAndEmit(rows);
+  }
+
   /** Delete follow notifications for a relationship (used on unfollow). */
   async deleteFollowNotification(recipientUserId: string, actorUserId: string): Promise<number> {
     const recipient = (recipientUserId ?? '').trim();
@@ -1349,6 +1456,55 @@ export class NotificationsService {
         : [];
     const subjectGroupById = new Map(subjectGroups.map((g) => [g.id, g] as const));
 
+    // Batch-lookup invite statuses for crew_invite_* notifications so the row can
+    // render the correct terminal state on first load (no extra FE round-trip).
+    // We grab the linked crew name (or the founding `crewNameOnAccept`) at the
+    // same time so the row can say "invited you to The Iron Brotherhood".
+    const subjectCrewInviteIds = [
+      ...new Set(raw.map((n) => n.subjectCrewInviteId).filter(Boolean) as string[]),
+    ];
+    const subjectCrewInvites =
+      subjectCrewInviteIds.length > 0
+        ? await this.prisma.crewInvite.findMany({
+            where: { id: { in: subjectCrewInviteIds } },
+            select: {
+              id: true,
+              status: true,
+              crewNameOnAccept: true,
+              crew: { select: { name: true } },
+            },
+          })
+        : [];
+    const subjectCrewInviteStatusById = new Map(
+      subjectCrewInvites.map((inv) => [inv.id, inv.status] as const),
+    );
+    const subjectCrewNameByInviteId = new Map(
+      subjectCrewInvites.map(
+        (inv) =>
+          [inv.id, ((inv.crew?.name ?? inv.crewNameOnAccept ?? '') as string).trim() || null] as const,
+      ),
+    );
+
+    // For non-invite crew notifications (member joined/left, owner transferred,
+    // wall mention, etc.) the crew name lives on the Crew row directly.
+    const subjectCrewIds = [
+      ...new Set(
+        raw
+          .filter((n) => n.subjectCrewId && !n.subjectCrewInviteId)
+          .map((n) => n.subjectCrewId as string),
+      ),
+    ];
+    const subjectCrews =
+      subjectCrewIds.length > 0
+        ? await this.prisma.crew.findMany({
+            where: { id: { in: subjectCrewIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+    const subjectCrewNameByCrewId = new Map(
+      subjectCrews.map((c) => [c.id, (c.name ?? '').trim() || null] as const),
+    );
+
     const dtos: NotificationDto[] = raw.map((n) => {
       const preview = n.subjectPostId ? subjectPreviewByPostId.get(n.subjectPostId) ?? null : null;
       const articlePreview = n.subjectArticleId ? subjectArticlePreviewById.get(n.subjectArticleId) ?? null : null;
@@ -1357,7 +1513,28 @@ export class NotificationsService {
       if (n.subjectPostId) subjectTier = subjectTierByPostId.get(n.subjectPostId) ?? null;
       else if (n.subjectUserId) subjectTier = subjectTierByUserId.get(n.subjectUserId) ?? null;
       const subjectGroup = n.subjectGroupId ? subjectGroupById.get(n.subjectGroupId) ?? null : null;
-      return this.toNotificationDto(n, publicBaseUrl, preview, subjectPostVisibility, subjectTier, articlePreview, subjectGroup?.slug ?? null, subjectGroup?.name ?? null);
+      const subjectCrewInviteStatus = n.subjectCrewInviteId
+        ? subjectCrewInviteStatusById.get(n.subjectCrewInviteId) ?? null
+        : null;
+      // Prefer the live crew name; fall back to the founding invite's
+      // `crewNameOnAccept` so even pre-accept invites show the chosen name.
+      const subjectCrewName = n.subjectCrewId
+        ? subjectCrewNameByCrewId.get(n.subjectCrewId) ?? null
+        : n.subjectCrewInviteId
+          ? subjectCrewNameByInviteId.get(n.subjectCrewInviteId) ?? null
+          : null;
+      return this.toNotificationDto(
+        n,
+        publicBaseUrl,
+        preview,
+        subjectPostVisibility,
+        subjectTier,
+        articlePreview,
+        subjectGroup?.slug ?? null,
+        subjectGroup?.name ?? null,
+        subjectCrewInviteStatus,
+        subjectCrewName,
+      );
     });
 
     // Follow bell settings: which followed_post actors have “every post” enabled.
@@ -2168,6 +2345,8 @@ export class NotificationsService {
       subjectArticleId?: string | null;
       subjectArticleCommentId?: string | null;
       subjectGroupId?: string | null;
+      subjectCrewId?: string | null;
+      subjectCrewInviteId?: string | null;
       title: string | null;
       body: string | null;
       actor: {
@@ -2188,6 +2367,8 @@ export class NotificationsService {
     subjectArticlePreview?: SubjectArticlePreviewDto | null,
     subjectGroupSlug: string | null = null,
     subjectGroupName: string | null = null,
+    subjectCrewInviteStatus: NotificationDto['subjectCrewInviteStatus'] = null,
+    subjectCrewName: string | null = null,
   ): NotificationDto {
     let actor: NotificationActorDto | null = null;
     if (n.actor && !(n.actor as { bannedAt?: Date | null }).bannedAt) {
@@ -2222,6 +2403,10 @@ export class NotificationsService {
       subjectGroupId: n.subjectGroupId ?? null,
       subjectGroupSlug,
       subjectGroupName,
+      subjectCrewId: n.subjectCrewId ?? null,
+      subjectCrewInviteId: n.subjectCrewInviteId ?? null,
+      subjectCrewInviteStatus: subjectCrewInviteStatus ?? null,
+      subjectCrewName: subjectCrewName ?? null,
       title: n.title,
       body: n.body,
       subjectPostPreview: subjectPostPreview ?? null,
@@ -2322,6 +2507,43 @@ export class NotificationsService {
       subjectGroupName = g?.name ?? null;
     }
 
-    return this.toNotificationDto(n, publicBaseUrl, subjectPostPreview, subjectPostVisibility, subjectTier, undefined, subjectGroupSlug, subjectGroupName);
+    let subjectCrewInviteStatus: NotificationDto['subjectCrewInviteStatus'] = null;
+    let subjectCrewName: string | null = null;
+    if (n.subjectCrewInviteId) {
+      const inv = await this.prisma.crewInvite.findUnique({
+        where: { id: n.subjectCrewInviteId },
+        select: {
+          status: true,
+          crewNameOnAccept: true,
+          crew: { select: { name: true } },
+        },
+      });
+      subjectCrewInviteStatus = inv?.status ?? null;
+      // Fall back to the founding `crewNameOnAccept` so even pre-accept invites
+      // have a display name when the recipient's `subjectCrewId` isn't set yet.
+      const candidate = (inv?.crew?.name ?? inv?.crewNameOnAccept ?? '').trim();
+      if (candidate) subjectCrewName = candidate;
+    }
+    if (!subjectCrewName && n.subjectCrewId) {
+      const c = await this.prisma.crew.findUnique({
+        where: { id: n.subjectCrewId },
+        select: { name: true },
+      });
+      const candidate = (c?.name ?? '').trim();
+      if (candidate) subjectCrewName = candidate;
+    }
+
+    return this.toNotificationDto(
+      n,
+      publicBaseUrl,
+      subjectPostPreview,
+      subjectPostVisibility,
+      subjectTier,
+      undefined,
+      subjectGroupSlug,
+      subjectGroupName,
+      subjectCrewInviteStatus,
+      subjectCrewName,
+    );
   }
 }

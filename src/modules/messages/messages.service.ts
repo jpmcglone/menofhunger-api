@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import type { MessageConversation, PostMediaKind, PostMediaSource } from '@prisma/client';
+import type { MessageConversation, PostMediaKind } from '@prisma/client';
 
 export type MessageMediaInput =
   | {
@@ -31,7 +31,13 @@ import { RedisKeys } from '../redis/redis-keys';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { toUserListDto } from '../../common/dto';
 import { findReactionById } from '../../common/constants/reactions';
-import { toMessageDto, toMessageParticipantDto, type MessageConversationDto, type MessageDto } from './message.dto';
+import {
+  toMessageDto,
+  toMessageParticipantDto,
+  toMessageConversationCrewSummaryDto,
+  type MessageConversationDto,
+  type MessageDto,
+} from './message.dto';
 import { PosthogService } from '../../common/posthog/posthog.service';
 
 const MESSAGE_UNREAD_CACHE_TTL_MS = 30_000;
@@ -167,6 +173,9 @@ export class MessagesService {
         },
         lastMessage: {
           select: { id: true, body: true, createdAt: true, senderId: true },
+        },
+        crewWall: {
+          select: { id: true, slug: true, name: true, avatarImageUrl: true },
         },
       },
     });
@@ -335,6 +344,9 @@ export class MessagesService {
         lastMessage: {
           select: { id: true, body: true, createdAt: true, senderId: true },
         },
+        crewWall: {
+          select: { id: true, slug: true, name: true, avatarImageUrl: true },
+        },
       } as const,
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
@@ -404,6 +416,10 @@ export class MessagesService {
         viewerStatus: viewerParticipant.status,
         unreadCount,
         isMuted: Boolean(viewerParticipant.mutedAt),
+        crew: toMessageConversationCrewSummaryDto({
+          crewWall: conversation.crewWall ?? null,
+          publicBaseUrl,
+        }),
       };
     })
     .filter((v): v is MessageConversationDto => Boolean(v));
@@ -440,6 +456,9 @@ export class MessagesService {
       },
     };
     const lastMessageSelect = { select: { id: true, body: true, createdAt: true, senderId: true } };
+    const crewWallSelect = {
+      select: { id: true, slug: true, name: true, avatarImageUrl: true },
+    };
     const participantFilter = {
       some: { userId, status: 'accepted' as const },
       ...(blockedList.length > 0 ? { none: { userId: { in: blockedList } } } : {}),
@@ -466,7 +485,7 @@ export class MessagesService {
           },
         ],
       },
-      include: { participants: participantInclude, lastMessage: lastMessageSelect },
+      include: { participants: participantInclude, lastMessage: lastMessageSelect, crewWall: crewWallSelect },
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
       take: limit,
     });
@@ -513,7 +532,7 @@ export class MessagesService {
     const byMessageConversations = newMessageHitIds.length > 0
       ? await this.prisma.messageConversation.findMany({
           where: { id: { in: newMessageHitIds } },
-          include: { participants: participantInclude, lastMessage: lastMessageSelect },
+          include: { participants: participantInclude, lastMessage: lastMessageSelect, crewWall: crewWallSelect },
         })
       : [];
 
@@ -575,6 +594,10 @@ export class MessagesService {
           unreadCount,
           isMuted: Boolean(viewerParticipant.mutedAt),
           matchedMessage: hit ? { id: hit.id, body: hit.body, createdAt: hit.createdAt.toISOString() } : null,
+          crew: toMessageConversationCrewSummaryDto({
+            crewWall: conversation.crewWall ?? null,
+            publicBaseUrl,
+          }),
         };
       })
       .filter((v): v is MessageConversationDto => Boolean(v));
@@ -677,6 +700,10 @@ export class MessagesService {
       unreadCount,
       isMuted: Boolean(viewerParticipant.mutedAt),
       isBlockedWith,
+      crew: toMessageConversationCrewSummaryDto({
+        crewWall: conversation.crewWall ?? null,
+        publicBaseUrl,
+      }),
     };
 
     const messages = await this.listMessages({ userId, conversationId, limit: MESSAGE_LIST_LIMIT });

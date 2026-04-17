@@ -627,12 +627,6 @@ export class AdminDailyDigestCron {
       const authorHandle = topPost.username ? `@${topPost.username}` : '';
       const snippet = truncate(topPost.body, 220);
 
-      const visibilityLabel =
-        topPost.visibility === 'verifiedOnly' ? 'Verified only'
-        : topPost.visibility === 'premiumOnly' ? 'Premium only'
-        : topPost.visibility === 'onlyMe' ? 'Only me'
-        : 'Public';
-
       const visibilityPill =
         topPost.visibility === 'verifiedOnly' ? renderPill('Verified only', 'info')
         : topPost.visibility === 'premiumOnly' ? renderPill('Premium only', 'warning')

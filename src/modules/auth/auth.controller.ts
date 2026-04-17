@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Post, Req, Res, Get } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { ModuleRef } from '@nestjs/core';
@@ -13,6 +13,10 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { MessagesService } from '../messages/messages.service';
 
 const startSchema = z.object({
+  phone: z.string().min(1),
+});
+
+const existsQuerySchema = z.object({
   phone: z.string().min(1),
 });
 
@@ -50,6 +54,30 @@ export class AuthController {
     }
     const res = await this.auth.startPhoneAuth(phone);
     return { data: res };
+  }
+
+  /**
+   * Lightweight check used by the login screen to decide whether to show the
+   * first-time signup intro before sending an OTP. Intentionally returns only a
+   * boolean — no PII, no enumeration risk beyond the existing /phone/start flow.
+   */
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('authStart', 8),
+      ttl: rateLimitTtl('authStart', 60),
+    },
+  })
+  @Get('phone/exists')
+  async exists(@Query() query: unknown) {
+    const parsed = existsQuerySchema.parse(query);
+    let phone: string;
+    try {
+      phone = normalizePhone(parsed.phone);
+    } catch {
+      throw new BadRequestException('Invalid phone number format');
+    }
+    const exists = await this.auth.phoneExists(phone);
+    return { data: { exists } };
   }
 
   @Throttle({

@@ -198,5 +198,55 @@ export class PresenceRealtimeService {
     if (!aid) return;
     this.emitToRoom(`article:${aid}`, WsEventNames.articlesCommentReactionChanged, payload);
   }
+
+  /**
+   * Crew realtime: we fan out events to each crew member's sockets directly (no rooms),
+   * mirroring the approach used for direct-message conversations. Rooms would require an
+   * explicit subscribe handshake; per-user emits match existing notification behavior and
+   * survive reconnects.
+   */
+  emitCrewUpdated(userIds: Iterable<string>, payload: { crew: unknown }): void {
+    this.emitToUsers(userIds, 'crew:updated', payload);
+  }
+
+  emitCrewMembersChanged(userIds: Iterable<string>, payload: { crewId: string; kind: 'joined' | 'left' | 'kicked'; userId: string }): void {
+    this.emitToUsers(userIds, 'crew:members-changed', payload);
+  }
+
+  emitCrewOwnerChanged(userIds: Iterable<string>, payload: { crewId: string; newOwnerUserId: string; previousOwnerUserId: string; reason: 'direct' | 'vote' | 'inactivity' }): void {
+    this.emitToUsers(userIds, 'crew:owner-changed', payload);
+  }
+
+  emitCrewDisbanded(userIds: Iterable<string>, payload: { crewId: string }): void {
+    this.emitToUsers(userIds, 'crew:disbanded', payload);
+  }
+
+  emitCrewInviteReceived(userId: string, payload: { invite: unknown }): void {
+    this.emitToUser(userId, 'crew:invite-received', payload);
+  }
+
+  emitCrewInviteUpdated(userIds: Iterable<string>, payload: { invite: unknown }): void {
+    this.emitToUsers(userIds, 'crew:invite-updated', payload);
+  }
+
+  emitCrewWallMessage(userIds: Iterable<string>, payload: { crewId: string; conversationId: string; message: unknown }): void {
+    this.emitToUsers(userIds, 'crew:wall:new', payload);
+  }
+
+  emitCrewWallMessageEdited(userIds: Iterable<string>, payload: { crewId: string; conversationId: string; message: unknown }): void {
+    this.emitToUsers(userIds, 'crew:wall:edited', payload);
+  }
+
+  emitCrewWallMessageDeleted(userIds: Iterable<string>, payload: { crewId: string; conversationId: string; messageId: string }): void {
+    this.emitToUsers(userIds, 'crew:wall:deleted', payload);
+  }
+
+  emitCrewWallReaction(userIds: Iterable<string>, payload: { crewId: string; conversationId: string; message: unknown }): void {
+    this.emitToUsers(userIds, 'crew:wall:reaction', payload);
+  }
+
+  emitCrewTransferVote(userIds: Iterable<string>, payload: { crewId: string; vote: unknown }): void {
+    this.emitToUsers(userIds, 'crew:transfer-vote', payload);
+  }
 }
 

@@ -41,6 +41,11 @@ export const JOBS = {
 
   // Admin
   adminDailyDigest: 'admin.dailyDigest',
+
+  // Crew
+  crewInvitesExpire: 'crew.invitesExpire',
+  crewTransferVotesExpire: 'crew.transferVotesExpire',
+  crewInactiveOwnerAutoTransfer: 'crew.inactiveOwnerAutoTransfer',
 } as const;
 
 export type JobName = (typeof JOBS)[keyof typeof JOBS];

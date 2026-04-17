@@ -56,6 +56,19 @@ export type MessageDto = {
   media: MessageMediaDto[];
 };
 
+/**
+ * Lightweight crew summary attached to `crew_wall` conversations so the chat list
+ * can render the crew avatar, label the row as a Crew chat, and link to /c/:slug
+ * without an extra round-trip per row.
+ */
+export type MessageConversationCrewSummaryDto = {
+  id: string;
+  slug: string;
+  /** Display name; null when the crew hasn't been named yet. */
+  name: string | null;
+  avatarUrl: string | null;
+};
+
 export type MessageConversationDto = {
   id: string;
   type: MessageConversation['type'];
@@ -73,6 +86,11 @@ export type MessageConversationDto = {
   isBlockedWith?: boolean;
   /** Present on search results when a message body matched (not a name/title match). */
   matchedMessage?: { id: string; body: string; createdAt: string } | null;
+  /**
+   * Populated only for `crew_wall` conversations. Lets the chat row render the
+   * crew avatar/name and link to the crew's public page.
+   */
+  crew?: MessageConversationCrewSummaryDto | null;
 };
 
 type MessageReactionRow = {
@@ -93,6 +111,43 @@ type MessageWithRelations = Message & {
   deletedForAll?: boolean;
   deletedForAllAt?: Date | null;
 };
+
+/**
+ * Build the small crew summary attached to `crew_wall` conversations for the
+ * chat list / header. Returns null if `crewWall` isn't loaded (e.g. direct/group
+ * conversation) so callers can spread `crew: toMessageConversationCrewSummaryDto(...)`
+ * unconditionally.
+ */
+export function toMessageConversationCrewSummaryDto(params: {
+  crewWall:
+    | {
+        id: string;
+        slug: string;
+        name: string | null;
+        /**
+         * Crews store their avatar as a full URL string in `avatarImageUrl`
+         * (NOT as `avatarKey` + `avatarUpdatedAt` like Users / CommunityGroups).
+         * Keep this DTO mapper aligned with the schema or Prisma will throw at
+         * query time.
+         */
+        avatarImageUrl: string | null;
+      }
+    | null
+    | undefined;
+  publicBaseUrl: string | null;
+}): MessageConversationCrewSummaryDto | null {
+  const { crewWall } = params;
+  if (!crewWall) return null;
+  const name = (crewWall.name ?? '').trim();
+  // Mirror crewAvatarUrl(): the column is already a full URL — just trim it.
+  const avatar = (crewWall.avatarImageUrl ?? '').trim();
+  return {
+    id: crewWall.id,
+    slug: crewWall.slug,
+    name: name.length > 0 ? name : null,
+    avatarUrl: avatar.length > 0 ? avatar : null,
+  };
+}
 
 function buildReactionSummaries(
   reactions: MessageReactionRow[],

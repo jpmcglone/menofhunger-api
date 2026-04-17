@@ -32,6 +32,8 @@ import { AdminBillingController } from './admin-billing.controller';
 import { AdminReferralController } from './admin-referral.controller';
 import { BillingModule } from '../billing/billing.module';
 import { CoinsModule } from '../coins/coins.module';
+import { CrewModule } from '../crew/crew.module';
+import { AdminCrewsController } from './admin-crews.controller';
 
 @Module({
   imports: [
@@ -51,6 +53,7 @@ import { CoinsModule } from '../coins/coins.module';
     EmailModule,
     BillingModule,
     CoinsModule,
+    CrewModule,
   ],
   controllers: [
     AdminUsersController,
@@ -66,6 +69,7 @@ import { CoinsModule } from '../coins/coins.module';
     AdminAnalyticsController,
     AdminBillingController,
     AdminReferralController,
+    AdminCrewsController,
   ],
   providers: [AdminGuard, AdminImageReviewService, AdminHashtagsService, AdminDailyDigestCron],
   exports: [AdminDailyDigestCron],

@@ -11,6 +11,7 @@ import { DailyContentModule } from '../daily-content/daily-content.module';
 import { AdminModule } from '../admin/admin.module';
 import { CheckinsModule } from '../checkins/checkins.module';
 import { ArticlesModule } from '../articles/articles.module';
+import { CrewModule } from '../crew/crew.module';
 
 /**
  * Worker-only module: all BullMQ processors live here so we can disable job consumption
@@ -31,6 +32,7 @@ import { ArticlesModule } from '../articles/articles.module';
     AdminModule,
     CheckinsModule,
     ArticlesModule,
+    CrewModule,
   ],
   providers: [JobsProcessor],
 })
