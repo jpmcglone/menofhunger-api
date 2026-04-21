@@ -353,6 +353,16 @@ export class BookmarksService {
         active: true,
         bookmarkCount: post?.bookmarkCount ?? undefined,
       });
+      // Fan out to the post room so every viewer of this post sees the new
+      // bookmark count update live (not only the author + actor).
+      if (typeof post?.bookmarkCount === 'number') {
+        this.presenceRealtime.emitPostsLiveUpdated(postId, {
+          postId,
+          version: new Date().toISOString(),
+          reason: 'bookmark_changed',
+          patch: { bookmarkCount: post.bookmarkCount },
+        });
+      }
     } catch {
       // Best-effort
     }
@@ -415,6 +425,16 @@ export class BookmarksService {
         active: false,
         bookmarkCount: post?.bookmarkCount ?? undefined,
       });
+      // Fan out to the post room so every viewer of this post sees the new
+      // bookmark count update live (not only the author + actor).
+      if (typeof post?.bookmarkCount === 'number') {
+        this.presenceRealtime.emitPostsLiveUpdated(postId, {
+          postId,
+          version: new Date().toISOString(),
+          reason: 'bookmark_changed',
+          patch: { bookmarkCount: post.bookmarkCount },
+        });
+      }
     } catch {
       // Best-effort
     }

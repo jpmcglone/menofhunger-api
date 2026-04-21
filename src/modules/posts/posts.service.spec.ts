@@ -53,6 +53,7 @@ function makeService(
   const presenceRealtime: any = {
     emitPostsLiveUpdated: jest.fn(),
     emitPostsCommentDeleted: jest.fn(),
+    emitPostsInteraction: jest.fn(),
   };
   const polls: any = {};
   const viewerContext: any = {};
@@ -504,5 +505,235 @@ describe('PostsService.updatePost', () => {
     await expect(
       service.updatePost({ userId: 'u1', postId: 'p1', body: 'updated', isSiteAdmin: true }),
     ).rejects.toThrow('__reached_transaction__');
+  });
+});
+
+// ─── boost / unboost / repost — realtime fan-out ─────────────────────────────
+//
+// Regression coverage for: passive viewers of a post (not the author, not the
+// actor) were not seeing live count updates after a boost / unboost / repost.
+// The targeted `posts:interaction` event only reaches actor + author. We must
+// ALSO emit `posts:liveUpdated` to the post room so every subscriber updates.
+
+describe('PostsService — boost/unboost/repost room fan-out', () => {
+  function setupBoostMocks(deps: any, opts: { boostCount: number }) {
+    // ensureUserCanBoost
+    deps.prisma.user.findUnique = jest.fn(async () => ({
+      id: 'u1',
+      usernameIsSet: true,
+      verifiedStatus: 'verified',
+    }));
+    // userBlock count for the cross-block guard.
+    deps.prisma.userBlock = { count: jest.fn(async () => 0) };
+    // boost createMany / deleteMany live on tx; the tx wrapper also reads the
+    // updated boost count via tx.post.findUnique.
+    deps.prisma.$transaction = jest.fn(async (fn: any) => {
+      if (typeof fn === 'function') {
+        const tx: any = {
+          boost: {
+            createMany: jest.fn(async () => ({ count: 1 })),
+            deleteMany: jest.fn(async () => ({ count: 1 })),
+          },
+          post: {
+            update: jest.fn(async () => ({})),
+            findUnique: jest.fn(async () => ({ boostCount: opts.boostCount })),
+          },
+        };
+        return fn(tx);
+      }
+      return Promise.all(fn);
+    });
+    // bumpFeedGlobal lives on cacheInvalidation — extend the existing mock.
+    deps.cacheInvalidation.bumpFeedGlobal = jest.fn(async () => undefined);
+    // Notifications used during boost.
+    deps.notifications.upsertBoostNotification = jest.fn(async () => undefined);
+    deps.notifications.deleteBoostNotification = jest.fn(async () => undefined);
+    // postViews.markViewed is invoked.
+    deps.postViews.markViewed = jest.fn(async () => undefined);
+  }
+
+  it('boostPost emits posts:liveUpdated to the post room with the new boostCount', async () => {
+    const { service, deps } = makeService();
+    setupBoostMocks(deps, { boostCount: 7 });
+    // getById is heavy; stub it to skip visibility/group resolution.
+    jest.spyOn(service as any, 'getById').mockResolvedValue({
+      id: 'p1',
+      userId: 'author',
+      deletedAt: null,
+      visibility: 'public',
+      user: { id: 'author' },
+      body: 'hi',
+    });
+
+    await service.boostPost({ userId: 'u1', postId: 'p1' });
+
+    expect(deps.presenceRealtime.emitPostsLiveUpdated).toHaveBeenCalledWith(
+      'p1',
+      expect.objectContaining({
+        postId: 'p1',
+        reason: 'boost_changed',
+        patch: { boostCount: 7 },
+        version: expect.any(String),
+      }),
+    );
+  });
+
+  it('unboostPost emits posts:liveUpdated to the post room with the new boostCount', async () => {
+    const { service, deps } = makeService();
+    setupBoostMocks(deps, { boostCount: 6 });
+    jest.spyOn(service as any, 'getById').mockResolvedValue({
+      id: 'p1',
+      userId: 'author',
+      deletedAt: null,
+      visibility: 'public',
+      user: { id: 'author' },
+    });
+
+    await service.unboostPost({ userId: 'u1', postId: 'p1' });
+
+    expect(deps.presenceRealtime.emitPostsLiveUpdated).toHaveBeenCalledWith(
+      'p1',
+      expect.objectContaining({
+        reason: 'boost_changed',
+        patch: { boostCount: 6 },
+      }),
+    );
+  });
+
+  it('boostPost still emits posts:interaction to actor + author for viewerHasBoosted UX', async () => {
+    const { service, deps } = makeService();
+    setupBoostMocks(deps, { boostCount: 7 });
+    deps.presenceRealtime.emitPostsInteraction = jest.fn();
+    jest.spyOn(service as any, 'getById').mockResolvedValue({
+      id: 'p1',
+      userId: 'author',
+      deletedAt: null,
+      visibility: 'public',
+      user: { id: 'author' },
+    });
+
+    await service.boostPost({ userId: 'u1', postId: 'p1' });
+
+    expect(deps.presenceRealtime.emitPostsInteraction).toHaveBeenCalledTimes(1);
+    const [recipients, payload] = deps.presenceRealtime.emitPostsInteraction.mock.calls[0];
+    expect(Array.from(recipients as Set<string>).sort()).toEqual(['author', 'u1']);
+    expect(payload).toEqual(
+      expect.objectContaining({
+        kind: 'boost',
+        active: true,
+        boostCount: 7,
+      }),
+    );
+  });
+
+  it('repostPost emits posts:liveUpdated to the canonical post room with the new repostCount', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique = jest.fn(async () => ({
+      id: 'u1',
+      usernameIsSet: true,
+      verifiedStatus: 'verified',
+    }));
+    // Resolves the canonical (non-repost) target.
+    deps.prisma.post.findFirst = jest.fn(async () => ({
+      id: 'canonical-1',
+      userId: 'author',
+      visibility: 'public',
+      kind: 'regular',
+      repostedPostId: null,
+    }));
+    deps.prisma.userBlock = { count: jest.fn(async () => 0) };
+    // No existing repost yet.
+    deps.prisma.post.findFirst = jest
+      .fn()
+      // Initial canonical lookup
+      .mockResolvedValueOnce({
+        id: 'canonical-1',
+        userId: 'author',
+        visibility: 'public',
+        kind: 'regular',
+        repostedPostId: null,
+      })
+      // existingRepost lookup
+      .mockResolvedValueOnce(null);
+    deps.prisma.$transaction = jest.fn(async (fn: any) => {
+      const tx: any = {
+        post: {
+          create: jest.fn(async () => ({ id: 'repost-1' })),
+          update: jest.fn(async () => ({ repostCount: 9 })),
+        },
+      };
+      return fn(tx);
+    });
+    deps.cacheInvalidation.bumpFeedGlobal = jest.fn(async () => undefined);
+    deps.notifications.upsertRepostNotification = jest.fn(async () => undefined);
+    deps.postViews.markViewed = jest.fn(async () => undefined);
+
+    await service.repostPost({ userId: 'u1', postId: 'canonical-1' });
+
+    expect(deps.presenceRealtime.emitPostsLiveUpdated).toHaveBeenCalledWith(
+      'canonical-1',
+      expect.objectContaining({
+        postId: 'canonical-1',
+        reason: 'repost_changed',
+        patch: { repostCount: 9 },
+      }),
+    );
+  });
+
+  it('unrepostPost emits posts:liveUpdated to the canonical post room with the new repostCount', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.post.findFirst = jest
+      .fn()
+      // Initial target lookup
+      .mockResolvedValueOnce({
+        id: 'canonical-1',
+        userId: 'author',
+        kind: 'regular',
+        repostedPostId: null,
+      })
+      // existingRepost lookup
+      .mockResolvedValueOnce({ id: 'repost-1' })
+      // canonical author lookup at the end
+      .mockResolvedValueOnce({ userId: 'author' });
+    deps.prisma.$transaction = jest.fn(async (fn: any) => {
+      const tx: any = {
+        post: {
+          delete: jest.fn(async () => ({})),
+          update: jest.fn(async () => ({ repostCount: 8 })),
+        },
+      };
+      return fn(tx);
+    });
+    deps.cacheInvalidation.bumpFeedGlobal = jest.fn(async () => undefined);
+    deps.notifications.deleteRepostNotification = jest.fn(async () => undefined);
+
+    await service.unrepostPost({ userId: 'u1', postId: 'canonical-1' });
+
+    expect(deps.presenceRealtime.emitPostsLiveUpdated).toHaveBeenCalledWith(
+      'canonical-1',
+      expect.objectContaining({
+        reason: 'repost_changed',
+        patch: { repostCount: 8 },
+      }),
+    );
+  });
+
+  it('boost room fan-out is best-effort: an emit failure does not break the boost', async () => {
+    const { service, deps } = makeService();
+    setupBoostMocks(deps, { boostCount: 1 });
+    deps.presenceRealtime.emitPostsLiveUpdated = jest.fn(() => {
+      throw new Error('redis down');
+    });
+    jest.spyOn(service as any, 'getById').mockResolvedValue({
+      id: 'p1',
+      userId: 'author',
+      deletedAt: null,
+      visibility: 'public',
+      user: { id: 'author' },
+    });
+
+    await expect(service.boostPost({ userId: 'u1', postId: 'p1' })).resolves.toEqual(
+      expect.objectContaining({ success: true, viewerHasBoosted: true, boostCount: 1 }),
+    );
   });
 });

@@ -4922,7 +4922,8 @@ export class PostsService {
     // Boosting implies the user saw the post.
     void this.postViews.markViewed(userId, id);
 
-    // Realtime post interaction update (post author + actor).
+    // Realtime post interaction update (post author + actor) — used by the
+    // actor to flip viewerHasBoosted, and by the author for engagement UX.
     const recipients = new Set<string>([userId, post.userId].filter(Boolean));
     this.presenceRealtime.emitPostsInteraction(recipients, {
       postId: id,
@@ -4931,6 +4932,19 @@ export class PostsService {
       active: true,
       boostCount: res.boostCount,
     });
+
+    // Realtime fan-out to the post room so every viewer of this post (not just
+    // the author) sees the new boost count update live.
+    try {
+      this.presenceRealtime.emitPostsLiveUpdated(id, {
+        postId: id,
+        version: new Date().toISOString(),
+        reason: 'boost_changed',
+        patch: { boostCount: res.boostCount },
+      });
+    } catch {
+      // Best-effort
+    }
 
     // Popular/trending/featured feeds are boost-sensitive. Bump so anon caches shift instantly.
     await this.cacheInvalidation.bumpFeedGlobal();
@@ -4984,7 +4998,8 @@ export class PostsService {
       this.notifications.deleteBoostNotification(post.userId, userId, id).catch(() => {});
     }
 
-    // Realtime post interaction update (post author + actor).
+    // Realtime post interaction update (post author + actor) — used by the
+    // actor to flip viewerHasBoosted, and by the author for engagement UX.
     const recipients = new Set<string>([userId, post.userId].filter(Boolean));
     this.presenceRealtime.emitPostsInteraction(recipients, {
       postId: id,
@@ -4993,6 +5008,19 @@ export class PostsService {
       active: false,
       boostCount: res.boostCount,
     });
+
+    // Realtime fan-out to the post room so every viewer of this post (not just
+    // the author) sees the new boost count update live.
+    try {
+      this.presenceRealtime.emitPostsLiveUpdated(id, {
+        postId: id,
+        version: new Date().toISOString(),
+        reason: 'boost_changed',
+        patch: { boostCount: res.boostCount },
+      });
+    } catch {
+      // Best-effort
+    }
 
     // Popular/trending/featured feeds are boost-sensitive. Bump so anon caches shift instantly.
     await this.cacheInvalidation.bumpFeedGlobal();
@@ -5094,6 +5122,19 @@ export class PostsService {
       }).catch(() => {});
     }
 
+    // Realtime fan-out: every viewer subscribed to the canonical post's room
+    // gets the updated repostCount in real time (best-effort).
+    try {
+      this.presenceRealtime.emitPostsLiveUpdated(canonicalId, {
+        postId: canonicalId,
+        version: new Date().toISOString(),
+        reason: 'repost_changed',
+        patch: { repostCount },
+      });
+    } catch {
+      // Best-effort
+    }
+
     void this.postViews.markViewed(userId, canonicalId);
     await this.cacheInvalidation.bumpFeedGlobal();
     this.enqueueScoreRefresh(canonicalId);
@@ -5142,6 +5183,19 @@ export class PostsService {
     const canonicalPost = await this.prisma.post.findFirst({ where: { id: canonicalId }, select: { userId: true } });
     if (canonicalPost?.userId && canonicalPost.userId !== userId) {
       this.notifications.deleteRepostNotification(canonicalPost.userId, userId, canonicalId).catch(() => {});
+    }
+
+    // Realtime fan-out: every viewer subscribed to the canonical post's room
+    // gets the updated repostCount in real time (best-effort).
+    try {
+      this.presenceRealtime.emitPostsLiveUpdated(canonicalId, {
+        postId: canonicalId,
+        version: new Date().toISOString(),
+        reason: 'repost_changed',
+        patch: { repostCount },
+      });
+    } catch {
+      // Best-effort
     }
 
     await this.cacheInvalidation.bumpFeedGlobal();

@@ -162,6 +162,12 @@ export type PostsSubscribedPayloadDto = {
 /**
  * Minimal post patch for live updates.
  * NOTE: Keep this intentionally small; clients should treat unknown fields as best-effort.
+ *
+ * `posts:liveUpdated` is emitted to the `post:{id}` room, so every viewer
+ * subscribed to the post sees count/body/delete updates in real time. This is
+ * the correct channel for any change a third-party viewer needs to see; the
+ * narrower `posts:interaction` event is reserved for actor + post author
+ * (so they can reconcile their own viewerHas* flags).
  */
 export type PostsLiveUpdatedPayloadDto = {
   postId: string;
@@ -175,6 +181,9 @@ export type PostsLiveUpdatedPayloadDto = {
     deletedAt: string | null;
     commentCount: number;
     viewerCount: number;
+    boostCount: number;
+    bookmarkCount: number;
+    repostCount: number;
   }>;
 };
 
