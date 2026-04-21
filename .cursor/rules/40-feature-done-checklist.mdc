@@ -1,0 +1,46 @@
+---
+description: Definition of done for substantive api features (lint, types, tests, build, prisma, contracts)
+alwaysApply: true
+---
+
+# Feature "Done" Checklist (menofhunger-api)
+
+After **substantive** work in this repo (new endpoint, new module, schema change, DTO change, controller refactor, auth/middleware changes, queue/worker changes), run this gate **before declaring the task complete**.
+
+A change is "substantive" if it touches: `src/**`, `prisma/**`, `test/**`, or any project config (`nest-cli.json`, `tsconfig.json`, `package.json`).
+
+## Run, in order, from `menofhunger-api/`
+
+1. **Lint** — `npm run lint`
+   - Fix every error. Warnings: fix new ones you introduced; ignore pre-existing.
+2. **Types** — `npm run build:typecheck`
+   - Zero errors.
+3. **Build** — `npm run build`
+   - Must succeed. Catches Nest module wiring issues that the typechecker misses.
+4. **Tests** — `npm test`
+   - All green. If you added a controller, service, or DTO, add at least one targeted unit test. If you changed an endpoint contract, prefer an e2e/integration test.
+5. **Prisma (only if `prisma/schema.prisma` changed)**
+   - `npm run prisma:migrate:create -- <descriptive_name>` — generates the migration SQL.
+   - Review the generated SQL.
+   - `npm run prisma:migrate:deploy` — applies it locally.
+   - `npx prisma generate` — refresh client types.
+   - Re-run typecheck + build + tests.
+
+## API contract obligations
+
+When you add or change a response shape:
+
+1. Update the DTO under `src/common/dto/**`.
+2. Mirror the change in `menofhunger-www/types/api.ts`.
+3. From `menofhunger-www/`: `npx nuxi typecheck` and `node scripts/validate-api-types.mjs` must both pass.
+4. Honor the envelope: success is `{ data: T }` (or `{ data: T[], pagination }`); errors are handled by the global exception filter.
+
+## When something fails
+
+- Don't loosen the check. Fix the code.
+- Don't delete a failing test to make CI green. If the test is wrong, update it to encode the new correct invariant.
+- If a step is genuinely irrelevant to your change (e.g., docs-only edit), say so explicitly when reporting back.
+
+## Telling the user it's done
+
+Report which steps you ran and the outcome of each. Call out any DTO changes that require web-side follow-up.

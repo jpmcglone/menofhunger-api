@@ -1,0 +1,58 @@
+---
+description: Spaces / Watch Party gateway architecture for PresenceGateway. Read when working on watch party sync, owner socket tracking, presence.gateway.ts, or WatchPartyStateService.
+globs: src/modules/presence/presence.gateway.ts,src/modules/spaces/watch-party-state.service.ts,src/modules/spaces/spaces-presence.service.ts
+alwaysApply: false
+---
+
+# Spaces / Watch Party Gateway Model
+
+## Owner socket tracking (two maps, different purposes)
+
+```typescript
+// Single primary — only socket that may send watchPartyControl.
+private readonly primaryOwnerSocketBySpaceId = new Map<string, string>()
+
+// ALL owner sockets per space (across browser tabs).
+// Used for re-election when the primary disconnects.
+private readonly ownerSocketsBySpaceId = new Map<string, Set<string>>()
+```
+
+Both maps must be kept in sync on `spaces:join`, `spaces:leave`, and `handleDisconnect`.
+
+## Primary re-election on disconnect
+
+When the primary socket disconnects:
+1. Remove it from `ownerSocketsBySpaceId`.
+2. Pick any remaining socket from the set → set as new primary in `primaryOwnerSocketBySpaceId`.
+3. Emit `spaces:watchPartyOwnerPromoted` to the new primary so the client clears `isReplacedOwner`.
+4. Still call `pauseAtCurrentPosition` as a safety net for viewers.
+
+If no other owner sockets remain, just delete the primary entry (room is leaderless).
+
+## URL change → reset state
+
+In `handleSpacesAnnounceMode`, when mode stays `WATCH_PARTY` but the URL changes:
+
+```typescript
+const existingState = this.watchPartyState.getState(spaceId)
+if (!existingState || existingState.videoUrl !== newWatchPartyUrl) {
+  this.watchPartyState.resetForVideo(spaceId, newWatchPartyUrl)
+  // then broadcast spaces:watchPartyState to room
+}
+```
+
+`resetForVideo` writes `{ videoUrl, isPlaying: false, currentTime: 0, playbackRate: 1 }` so late joiners get the correct video without waiting for the owner's player to emit.
+
+## `isPlaying` parsing
+
+Always use `Boolean(payload?.isPlaying)` — NOT `payload?.isPlaying !== false`.  
+Missing / undefined field defaults to **paused**, not playing.
+
+## WatchPartyStateService
+
+- `setState` — updates live state (owner is actively controlling).
+- `pauseAtCurrentPosition` — drift-adjusts then freezes as paused (owner disconnect/leave).
+- `resetForVideo` — new video selected; reset to paused-at-0.
+- `clearState` — mode changed away from WATCH_PARTY.
+
+The service does **not** pre-adjust `currentTime` on reads. The client computes drift via `updatedAt`.

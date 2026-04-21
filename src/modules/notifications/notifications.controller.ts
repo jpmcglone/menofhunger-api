@@ -24,7 +24,12 @@ const markReadBodySchema = z.object({
   post_id: z.string().trim().min(1).optional(),
   user_id: z.string().trim().min(1).optional(),
   article_id: z.string().trim().min(1).optional(),
-}).refine((d) => d.post_id ?? d.user_id ?? d.article_id, { message: 'At least one of post_id, user_id, or article_id is required' });
+  crew_id: z.string().trim().min(1).optional(),
+  group_id: z.string().trim().min(1).optional(),
+}).refine(
+  (d) => d.post_id ?? d.user_id ?? d.article_id ?? d.crew_id ?? d.group_id,
+  { message: 'At least one of post_id, user_id, article_id, crew_id, or group_id is required' },
+);
 
 const pushSubscribeBodySchema = z.object({
   endpoint: z.string().trim().min(1),
@@ -244,6 +249,8 @@ export class NotificationsController {
       postId: parsed.post_id ?? null,
       userId: parsed.user_id ?? null,
       articleId: parsed.article_id ?? null,
+      crewId: parsed.crew_id ?? null,
+      groupId: parsed.group_id ?? null,
     });
     return { data: {} };
   }

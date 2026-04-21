@@ -91,6 +91,9 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   /** Tracks the primary (most-recently joined) owner socket per space. Only this socket may send watchPartyControl. */
   private readonly primaryOwnerSocketBySpaceId = new Map<string, string>();
 
+  /** Tracks ALL owner sockets per space (across tabs) so we can re-elect on primary disconnect. */
+  private readonly ownerSocketsBySpaceId = new Map<string, Set<string>>();
+
   @WebSocketServer()
   server!: Server;
 
@@ -354,9 +357,32 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       if (spaceLeft?.wasActive) {
         // If the owner's socket dropped, pause all viewers at the current position.
         if (ownerSpaceId && ownerSpaceId === spaceLeft.spaceId) {
-          if (this.primaryOwnerSocketBySpaceId.get(ownerSpaceId) === socketId) {
-            this.primaryOwnerSocketBySpaceId.delete(ownerSpaceId);
+          // Remove from the owner-socket set.
+          const ownerSockets = this.ownerSocketsBySpaceId.get(ownerSpaceId);
+          if (ownerSockets) {
+            ownerSockets.delete(socketId);
           }
+
+          const wasPrimary = this.primaryOwnerSocketBySpaceId.get(ownerSpaceId) === socketId;
+          if (wasPrimary) {
+            this.primaryOwnerSocketBySpaceId.delete(ownerSpaceId);
+
+            // Re-elect another owner socket if one is still connected. That tab
+            // gets `spaces:watchPartyOwnerPromoted` so it clears `isReplacedOwner`
+            // and can start driving playback again.
+            const remaining = ownerSockets ? [...ownerSockets].filter((id) => id !== socketId) : [];
+            if (remaining.length > 0) {
+              const newPrimaryId = remaining[remaining.length - 1]!;
+              this.primaryOwnerSocketBySpaceId.set(ownerSpaceId, newPrimaryId);
+              const newPrimarySocket = this.server.sockets.sockets.get(newPrimaryId);
+              newPrimarySocket?.emit('spaces:watchPartyOwnerPromoted', { spaceId: ownerSpaceId });
+            }
+          }
+
+          if (ownerSockets && ownerSockets.size === 0) {
+            this.ownerSocketsBySpaceId.delete(ownerSpaceId);
+          }
+
           const pausedState = this.watchPartyState.pauseAtCurrentPosition(ownerSpaceId);
           if (pausedState) {
             const room = spaceRoom(ownerSpaceId);
@@ -527,6 +553,12 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       (client.data as any).ownerSpaceId = spaceId;
       void this.spaces.activateSpaceByOwnerId(userId).catch(() => undefined);
 
+      // Track in the full owner-socket set for this space (all tabs).
+      if (!this.ownerSocketsBySpaceId.has(spaceId)) {
+        this.ownerSocketsBySpaceId.set(spaceId, new Set());
+      }
+      this.ownerSocketsBySpaceId.get(spaceId)!.add(client.id);
+
       const prevPrimarySocketId = this.primaryOwnerSocketBySpaceId.get(spaceId);
       this.primaryOwnerSocketBySpaceId.set(spaceId, client.id);
 
@@ -576,6 +608,12 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     if (left?.wasActive) {
       // If the owner deliberately leaves, pause all viewers at the current position.
       if (ownerSpaceId && ownerSpaceId === left.spaceId) {
+        // Remove from the owner-socket set; clear primary if it was this socket.
+        const ownerSockets = this.ownerSocketsBySpaceId.get(ownerSpaceId);
+        if (ownerSockets) {
+          ownerSockets.delete(client.id);
+          if (ownerSockets.size === 0) this.ownerSocketsBySpaceId.delete(ownerSpaceId);
+        }
         if (this.primaryOwnerSocketBySpaceId.get(ownerSpaceId) === client.id) {
           this.primaryOwnerSocketBySpaceId.delete(ownerSpaceId);
         }
@@ -821,9 +859,27 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const ownerId = await this.getCachedSpaceOwnerId(spaceId);
     if (!ownerId || ownerId !== userId) return;
 
+    const newWatchPartyUrl = mode === 'WATCH_PARTY' ? (String(payload?.watchPartyUrl ?? '').trim() || null) : null;
+
     // Clear stale watch party state when no longer in WATCH_PARTY mode.
     if (mode !== 'WATCH_PARTY') {
       this.watchPartyState.clearState(spaceId);
+    } else if (newWatchPartyUrl !== null) {
+      // When staying in WATCH_PARTY mode but the video URL changes (or is set for
+      // the first time), reset the state to paused-at-0 for the new video so late
+      // joiners see the correct video + position even before the owner's player emits.
+      const existingState = this.watchPartyState.getState(spaceId);
+      if (!existingState || existingState.videoUrl !== newWatchPartyUrl) {
+        this.watchPartyState.resetForVideo(spaceId, newWatchPartyUrl);
+        // Broadcast the reset state to the room immediately.
+        const resetState = this.watchPartyState.getState(spaceId);
+        if (resetState) {
+          const room = spaceRoom(spaceId);
+          const resetOut = { spaceId, ...resetState };
+          this.server.to(room).emit('spaces:watchPartyState', resetOut);
+          void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:watchPartyState', payload: resetOut }).catch(() => undefined);
+        }
+      }
     }
 
     // Clear stale pause flags when leaving RADIO mode so members don't appear
@@ -833,7 +889,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     const out = {
       spaceId,
       mode: mode as 'NONE' | 'WATCH_PARTY' | 'RADIO',
-      watchPartyUrl: mode === 'WATCH_PARTY' ? (String(payload?.watchPartyUrl ?? '').trim() || null) : null,
+      watchPartyUrl: newWatchPartyUrl,
       radioStreamUrl: mode === 'RADIO' ? (String(payload?.radioStreamUrl ?? '').trim() || null) : null,
     };
 
@@ -889,7 +945,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
     this.watchPartyState.setState(spaceId, {
       videoUrl,
-      isPlaying: payload?.isPlaying !== false,
+      isPlaying: Boolean(payload?.isPlaying),
       currentTime: Number(payload?.currentTime ?? 0),
       playbackRate: Number(payload?.playbackRate ?? 1),
     });

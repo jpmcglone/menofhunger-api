@@ -1977,10 +1977,16 @@ export class NotificationsService {
 
   async markReadBySubject(
     recipientUserId: string,
-    params: { postId?: string | null; userId?: string | null; articleId?: string | null },
+    params: {
+      postId?: string | null;
+      userId?: string | null;
+      articleId?: string | null;
+      crewId?: string | null;
+      groupId?: string | null;
+    },
   ): Promise<void> {
-    const { postId, userId, articleId } = params;
-    if (!postId && !userId && !articleId) return;
+    const { postId, userId, articleId, crewId, groupId } = params;
+    if (!postId && !userId && !articleId && !crewId && !groupId) return;
 
     // Back-compat: followed_post notifications were historically keyed only by actorUserId.
     // When visiting a user's profile we want to clear "new posts" notifications for that actor,
@@ -2001,6 +2007,17 @@ export class NotificationsService {
     }
     if (articleId) {
       or.push({ subjectArticleId: articleId });
+    }
+    if (crewId) {
+      // All crew_* notifications carry subjectCrewId once the crew exists. Visiting the
+      // crew page surfaces all of them (wall mentions, members joined/left, owner changes,
+      // disband notices, invite acceptances/declines), so clear them all in one shot.
+      or.push({ subjectCrewId: crewId });
+    }
+    if (groupId) {
+      // Visiting a group page (or the pending-members page) surfaces join requests and
+      // any other group-scoped notifications. Clear them all by group id.
+      or.push({ subjectGroupId: groupId });
     }
     const where = {
       recipientUserId,

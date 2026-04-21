@@ -89,6 +89,29 @@ export class WatchPartyStateService {
     return this.toDto(paused);
   }
 
+  /**
+   * Reset the watch-party state for a space when a new video is selected.
+   * Writes a fresh paused-at-0 snapshot so late joiners get the correct video
+   * (and position) even before the owner's player emits its first control event.
+   * If `videoUrl` is empty the state is cleared entirely (equivalent to clearState).
+   */
+  resetForVideo(spaceId: string, videoUrl: string): void {
+    const url = (videoUrl ?? '').trim();
+    if (!url) {
+      this.clearState(spaceId);
+      return;
+    }
+    const state: WatchPartyState = {
+      videoUrl: url,
+      isPlaying: false,
+      currentTime: 0,
+      playbackRate: 1,
+      updatedAt: Date.now(),
+    };
+    this.stateBySpaceId.set(spaceId, state);
+    void this.redis.setJson(RedisKeys.watchPartyState(spaceId), state, { ttlSeconds: WP_STATE_TTL_SECONDS }).catch(() => undefined);
+  }
+
   clearState(spaceId: string): void {
     this.stateBySpaceId.delete(spaceId);
     void this.redis.del(RedisKeys.watchPartyState(spaceId)).catch(() => undefined);

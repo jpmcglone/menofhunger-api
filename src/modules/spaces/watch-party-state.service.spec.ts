@@ -213,6 +213,73 @@ describe('WatchPartyStateService', () => {
     });
   });
 
+  // ─── resetForVideo ─────────────────────────────────────────────────────────
+
+  describe('resetForVideo', () => {
+    it('writes a paused-at-0 snapshot for the given videoUrl', () => {
+      const { svc } = makeService();
+      nowSpy.mockReturnValue(1000);
+      svc.resetForVideo('s', VIDEO_URL);
+
+      const state = svc.getState('s')!;
+      expect(state.videoUrl).toBe(VIDEO_URL);
+      expect(state.isPlaying).toBe(false);
+      expect(state.currentTime).toBe(0);
+      expect(state.playbackRate).toBe(1);
+      expect(state.updatedAt).toBe(1000);
+    });
+
+    it('overwrites any previously playing state', () => {
+      const { svc } = makeService();
+      nowSpy.mockReturnValue(0);
+      svc.setState('s', { videoUrl: VIDEO_URL, isPlaying: true, currentTime: 120, playbackRate: 1.5 });
+      nowSpy.mockReturnValue(5000);
+      svc.resetForVideo('s', 'https://www.youtube.com/watch?v=newVideoId');
+
+      const state = svc.getState('s')!;
+      expect(state.videoUrl).toBe('https://www.youtube.com/watch?v=newVideoId');
+      expect(state.isPlaying).toBe(false);
+      expect(state.currentTime).toBe(0);
+      expect(state.playbackRate).toBe(1);
+    });
+
+    it('persists the reset state to Redis', () => {
+      const { svc, redis } = makeService();
+      nowSpy.mockReturnValue(0);
+      svc.resetForVideo('s', VIDEO_URL);
+
+      expect(redis.setJson).toHaveBeenCalledWith(
+        expect.stringContaining('s'),
+        expect.objectContaining({ videoUrl: VIDEO_URL, isPlaying: false, currentTime: 0 }),
+        expect.objectContaining({ ttlSeconds: expect.any(Number) }),
+      );
+    });
+
+    it('clears state when videoUrl is empty', () => {
+      const { svc, redis } = makeService();
+      nowSpy.mockReturnValue(0);
+      svc.setState('s', { videoUrl: VIDEO_URL, isPlaying: true, currentTime: 60, playbackRate: 1 });
+      redis.setJson.mockClear();
+      svc.resetForVideo('s', '');
+
+      expect(svc.getState('s')).toBeNull();
+      expect(redis.del).toHaveBeenCalled();
+    });
+
+    it('clears state when videoUrl is whitespace-only', () => {
+      const { svc } = makeService();
+      svc.setState('s', { videoUrl: VIDEO_URL, isPlaying: false, currentTime: 0, playbackRate: 1 });
+      svc.resetForVideo('s', '   ');
+      expect(svc.getState('s')).toBeNull();
+    });
+
+    it('works on a space that had no prior state', () => {
+      const { svc } = makeService();
+      expect(() => svc.resetForVideo('brand-new-space', VIDEO_URL)).not.toThrow();
+      expect(svc.getState('brand-new-space')!.videoUrl).toBe(VIDEO_URL);
+    });
+  });
+
   // ─── clearState ────────────────────────────────────────────────────────────
 
   describe('clearState', () => {
