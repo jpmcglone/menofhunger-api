@@ -173,6 +173,7 @@ type PublicProfilePayload = {
   lastOnlineAt: string | null;
   checkinStreakDays: number;
   longestStreakDays: number;
+  inCrew?: boolean;
 };
 
 type UserPreviewPayload = {
@@ -988,7 +989,15 @@ export class UsersController {
     if (viewerUserId) res.setHeader('Vary', 'Cookie');
 
     const profileId = (payload as any).id as string | undefined;
-    const orgMap = profileId ? await this.batchOrgAffiliations([profileId]) : new Map();
+    const [orgMap, crewMember] = await Promise.all([
+      profileId ? this.batchOrgAffiliations([profileId]) : Promise.resolve(new Map()),
+      profileId
+        ? this.prisma.crewMember.findFirst({
+            where: { userId: profileId, crew: { deletedAt: null } },
+            select: { crewId: true },
+          })
+        : Promise.resolve(null),
+    ]);
 
     if (viewerUserId && profileId) {
       this.posthog.capture(viewerUserId, 'profile_viewed', {
@@ -1002,6 +1011,7 @@ export class UsersController {
         ...(payload as any),
         lastOnlineAt: canSeeLastOnline ? (payload as any).lastOnlineAt : null,
         orgAffiliations: orgMap.get(profileId ?? '') ?? [],
+        inCrew: Boolean(crewMember),
       },
     };
   }

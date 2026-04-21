@@ -139,6 +139,8 @@ export const WsEventNames = {
   postsLiveUpdated: 'posts:liveUpdated',
   postsCommentAdded: 'posts:commentAdded',
   postsCommentDeleted: 'posts:commentDeleted',
+  /** New top-level post from someone the viewer follows; pushed to follower user rooms. */
+  feedNewPost: 'feed:newPost',
   articlesSubscribe: 'articles:subscribe',
   articlesUnsubscribe: 'articles:unsubscribe',
   articlesSubscribed: 'articles:subscribed',
@@ -228,6 +230,15 @@ export type ArticlesCommentReactionChangedPayloadDto = {
 export type PostsCommentAddedPayloadDto = {
   parentPostId: string;
   comment: PostDto;
+};
+
+/**
+ * New top-level post from someone the viewer follows.
+ * Emitted to each eligible follower's `user:{followerId}` room so their home feed can
+ * prepend the post in real time without polling.
+ */
+export type FeedNewPostPayloadDto = {
+  post: PostDto;
 };
 
 /** Minimal delete hint pushed to `post:{parentPostId}` room subscribers when a reply is soft-deleted. */

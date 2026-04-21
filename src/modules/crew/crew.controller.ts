@@ -20,6 +20,7 @@ import { CrewService } from './crew.service';
 import { CrewInvitesService } from './crew-invites.service';
 import { CrewWallService } from './crew-wall.service';
 import { CrewTransferService } from './crew-transfer.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 const updateCrewSchema = z.object({
   name: z.string().trim().max(80).nullish(),
@@ -88,6 +89,10 @@ const ballotSchema = z.object({
   inFavor: z.boolean(),
 });
 
+const reorderMembersSchema = z.object({
+  order: z.array(z.string().trim().min(1)).min(1).max(5),
+});
+
 @Controller('crew')
 export class CrewController {
   constructor(
@@ -95,6 +100,7 @@ export class CrewController {
     private readonly invites: CrewInvitesService,
     private readonly wall: CrewWallService,
     private readonly transfer: CrewTransferService,
+    private readonly prisma: PrismaService,
   ) {}
 
   // ---------- my crew ----------
@@ -158,6 +164,35 @@ export class CrewController {
     const mine = await this.crew.getMyCrewOrNull(viewerUserId);
     if (!mine) return { data: {} };
     await this.crew.kickMember({ viewerUserId, crewId: mine.id, userId });
+    return { data: {} };
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch('me/members/order')
+  async reorderMembers(
+    @CurrentUserId() viewerUserId: string,
+    @Body() body: unknown,
+  ) {
+    const { order } = reorderMembersSchema.parse(body);
+    const mine = await this.crew.getMyCrewOrNull(viewerUserId);
+    if (!mine) return { data: {} };
+
+    // Only the owner may reorder members
+    const viewerMember = await this.prisma.crewMember.findFirst({
+      where: { crewId: mine.id, userId: viewerUserId },
+      select: { role: true },
+    });
+    if (viewerMember?.role !== 'owner') return { data: {} };
+
+    await this.prisma.$transaction(
+      order.map((userId, index) =>
+        this.prisma.crewMember.updateMany({
+          where: { crewId: mine.id, userId },
+          data: { sortOrder: index },
+        }),
+      ),
+    );
+
     return { data: {} };
   }
 

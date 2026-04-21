@@ -102,13 +102,16 @@ export function toCrewPublicDto(params: {
     createdAt: crew.createdAt.toISOString(),
     owner: toUserListDto(ownerRow, publicBaseUrl),
     members: memberRows
-      .map((m) => toCrewMemberListItemDto(m, { publicBaseUrl, designatedSuccessorUserId: crew.designatedSuccessorUserId }))
+      .slice()
       .sort((a, b) => {
-        // Owner always first, then by join order (earliest first).
+        // Owner always first, then by sortOrder ascending, ties broken by createdAt ascending.
         if (a.role === 'owner' && b.role !== 'owner') return -1;
         if (b.role === 'owner' && a.role !== 'owner') return 1;
-        return a.joinedAt.localeCompare(b.joinedAt);
-      }),
+        const orderDiff = (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+        if (orderDiff !== 0) return orderDiff;
+        return a.createdAt.getTime() - b.createdAt.getTime();
+      })
+      .map((m) => toCrewMemberListItemDto(m, { publicBaseUrl, designatedSuccessorUserId: crew.designatedSuccessorUserId })),
   };
 }
 

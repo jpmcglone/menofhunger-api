@@ -10,6 +10,7 @@ import type {
   ArticlesCommentDeletedPayloadDto,
   ArticlesCommentUpdatedPayloadDto,
   ArticlesCommentReactionChangedPayloadDto,
+  FeedNewPostPayloadDto,
   FollowsChangedPayloadDto,
   MessagesReadPayloadDto,
   PostsLiveUpdatedPayloadDto,
@@ -159,6 +160,15 @@ export class PresenceRealtimeService {
     const pid = (parentPostId ?? '').trim();
     if (!pid) return;
     this.emitToRoom(`post:${pid}`, WsEventNames.postsCommentAdded, payload);
+  }
+
+  /**
+   * New top-level post from someone the viewer follows.
+   * Pushed directly to each eligible follower's `user:{followerId}` room.
+   * Callers should already have filtered for visibility and self-exclusion.
+   */
+  emitFeedNewPost(followerIds: Iterable<string>, payload: FeedNewPostPayloadDto): void {
+    this.emitToUsers(followerIds, WsEventNames.feedNewPost, payload);
   }
 
   /** Delete hint pushed to post room subscribers when a reply is soft-deleted. */

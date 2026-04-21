@@ -3760,8 +3760,29 @@ export class PostsService {
   /** Resolve usernames to user ids (case-insensitive, usernameIsSet). Invalid usernames ignored. */
   private async resolveMentionUsernames(usernames: string[]): Promise<string[]> {
     if (usernames.length === 0) return [];
+    const byLower = await this.resolveMentionUsernamesMap(usernames);
+    if (byLower.size === 0) return [];
     const normalized = [...new Set(usernames.map((u) => u.trim().slice(0, 120)).filter(Boolean))];
-    if (normalized.length === 0) return [];
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const name of normalized) {
+      const id = byLower.get(name.toLowerCase());
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * Resolve a list of @usernames to a lowercased-username → userId map in a single query.
+   * Used by createPost to avoid running the same query twice (for body mentions vs. all mentions).
+   */
+  private async resolveMentionUsernamesMap(usernames: string[]): Promise<Map<string, string>> {
+    if (usernames.length === 0) return new Map();
+    const normalized = [...new Set(usernames.map((u) => u.trim().slice(0, 120)).filter(Boolean))];
+    if (normalized.length === 0) return new Map();
     const users = await this.prisma.user.findMany({
       where: {
         usernameIsSet: true,
@@ -3774,16 +3795,7 @@ export class PostsService {
     for (const u of users) {
       if (u.username) byLower.set(u.username.toLowerCase(), u.id);
     }
-    const ids: string[] = [];
-    const seen = new Set<string>();
-    for (const name of normalized) {
-      const id = byLower.get(name.toLowerCase());
-      if (id && !seen.has(id)) {
-        seen.add(id);
-        ids.push(id);
-      }
-    }
-    return ids;
+    return byLower;
   }
 
   /** Parse @username tokens from body: letter then 0–14 [A-Za-z0-9_] (1–15 chars), not mid-email. */
@@ -3805,24 +3817,26 @@ export class PostsService {
   } as const;
 
   /**
-   * Walk parent chain from parentId up to root; return map of userId -> role for thread participants.
-   * Used to notify everyone in the thread with the correct label (and to dedupe with @mentions).
+   * Compute thread participant roles by walking the parent chain in memory.
+   *
+   * `threadPosts` is the full thread tree (root + descendants) already fetched
+   * once during `createPost`. Walking in memory avoids one DB round trip per
+   * ancestor, which dominated reply latency on deep threads.
    */
-  private async getThreadParticipantRoles(parentId: string): Promise<Map<string, keyof typeof PostsService.REPLY_TITLE>> {
+  private computeThreadRolesFromPosts(
+    threadPosts: Array<{ id: string; parentId: string | null; userId: string; mentions: { userId: string }[] }>,
+    parentId: string,
+  ): Map<string, keyof typeof PostsService.REPLY_TITLE> {
     const map = new Map<string, keyof typeof PostsService.REPLY_TITLE>();
+    const byId = new Map(threadPosts.map((p) => [p.id, p]));
     let currentId: string | null = parentId;
-    const select = { id: true, parentId: true, userId: true, mentions: { select: { userId: true } } } as const;
-    type ThreadPost = Prisma.PostGetPayload<{ select: typeof select }>;
     while (currentId) {
-      const post: ThreadPost | null = await this.prisma.post.findFirst({
-        where: { id: currentId, ...this.notDeletedWhere() },
-        select,
-      });
+      const post = byId.get(currentId);
       if (!post) break;
       const isRoot = !post.parentId;
       const authorRole = isRoot ? 'root_author' : 'reply_author';
       const mentionRole = isRoot ? 'mentioned_in_root' : 'mentioned_in_reply';
-      map.set(post.userId, authorRole);
+      if (!map.has(post.userId)) map.set(post.userId, authorRole);
       for (const m of post.mentions) {
         if (!map.has(m.userId)) map.set(m.userId, mentionRole);
       }
@@ -3884,19 +3898,22 @@ export class PostsService {
       if (!checkinPromptRaw) throw new BadRequestException('Check-in prompt is required.');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        verifiedStatus: true,
-        premium: true,
-        premiumPlus: true,
-        coins: true,
-        checkinStreakDays: true,
-        lastCheckinDayKey: true,
-      },
-    });
-    if (!user) throw new NotFoundException('User not found.');
-    const viewerIsVerified = Boolean(user.verifiedStatus && user.verifiedStatus !== 'none');
+    // Fetch viewer context (request-cached) and parent post in parallel.
+    // Using viewerContextService populates the per-request cache so subsequent
+    // `getViewer(userId)` calls (incl. the controller's `viewerContext()`) are free.
+    const [viewer, parentPost] = await Promise.all([
+      this.viewerContextService.getViewer(userId),
+      parentId
+        ? this.prisma.post.findFirst({
+            where: { id: parentId, ...this.notDeletedWhere() },
+            select: { id: true, userId: true, visibility: true, rootId: true, topics: true, communityGroupId: true },
+          })
+        : Promise.resolve(null),
+    ]);
+    if (!viewer) throw new NotFoundException('User not found.');
+    if (parentId && !parentPost) throw new NotFoundException('Post not found.');
+    const user = { verifiedStatus: viewer.verifiedStatus, premium: viewer.premium, premiumPlus: viewer.premiumPlus };
+    const viewerIsVerified = Boolean(viewer.verifiedStatus && viewer.verifiedStatus !== 'none');
 
     // Product rule: unverified users cannot create new public feed posts.
     // (UI already hides this, but enforce on the API too.)
@@ -3904,7 +3921,7 @@ export class PostsService {
       throw new ForbiddenException('Verify your account to create public posts.');
     }
     // Creation is gated by current tier: downgraded users can only create within their tier.
-    const allowedForCreation = this.allowedVisibilitiesForViewer(user);
+    const allowedForCreation = this.allowedVisibilitiesForViewer(viewer);
     const skipTierVisibilityForCommunityGroupRoot = Boolean(!parentId && requestedCommunityGroupId);
     if (requestedVisibility !== 'onlyMe' && !allowedForCreation.includes(requestedVisibility)) {
       if (!skipTierVisibilityForCommunityGroupRoot) {
@@ -3921,42 +3938,60 @@ export class PostsService {
     let threadRootId: string | null = null; // Root post ID for thread hierarchy
     let parentTopics: string[] = [];
     let rootTopics: string[] = [];
+    type ThreadPostForRoles = { id: string; parentId: string | null; userId: string; mentions: { userId: string }[] };
+    let threadPostsForRoles: ThreadPostForRoles[] = [];
 
-    if (parentId) {
-      const parent = await this.prisma.post.findFirst({
-        where: { id: parentId, ...this.notDeletedWhere() },
-        select: { id: true, userId: true, visibility: true, rootId: true, topics: true, communityGroupId: true },
-      });
-      if (!parent) throw new NotFoundException('Post not found.');
-      parentAuthorUserId = parent.userId;
-      parentTopics = Array.isArray(parent.topics) ? (parent.topics as string[]) : [];
-      if (parent.visibility === 'onlyMe') {
+    if (parentId && parentPost) {
+      parentAuthorUserId = parentPost.userId;
+      parentTopics = Array.isArray(parentPost.topics) ? (parentPost.topics as string[]) : [];
+      if (parentPost.visibility === 'onlyMe') {
         throw new ForbiddenException('Comments are not allowed on only-me posts.');
       }
-      // Block check: cannot reply across a block in either direction.
-      if (parentAuthorUserId && parentAuthorUserId !== userId) {
-        const blockCount = await this.prisma.userBlock.count({
-          where: {
-            OR: [
-              { blockerId: userId, blockedId: parentAuthorUserId },
-              { blockerId: parentAuthorUserId, blockedId: userId },
-            ],
-          },
-        });
-        if (blockCount > 0) throw new ForbiddenException('You cannot reply to this post.');
-      }
+      const parentGid = parentPost.communityGroupId ?? null;
+      const isCrossUser = Boolean(parentAuthorUserId && parentAuthorUserId !== userId);
+      // Use parent's rootId if it exists (parent is also a reply), otherwise parent.id is the root
+      threadRootId = (parentPost as { rootId?: string | null }).rootId ?? parentPost.id;
+      const needsRootTopics = Boolean(threadRootId && threadRootId !== parentPost.id);
 
-      const parentGid = parent.communityGroupId ?? null;
+      // Fan out parent-dependent reads in one round trip:
+      //   block check, group membership, root-for-topics, thread tree.
+      const [blockCount, groupMember, rootForTopics, threadPosts] = await Promise.all([
+        isCrossUser
+          ? this.prisma.userBlock.count({
+              where: {
+                OR: [
+                  { blockerId: userId, blockedId: parentAuthorUserId! },
+                  { blockerId: parentAuthorUserId!, blockedId: userId },
+                ],
+              },
+            })
+          : Promise.resolve(0),
+        parentGid
+          ? this.prisma.communityGroupMember.findUnique({
+              where: { groupId_userId: { groupId: parentGid, userId } },
+              select: { status: true },
+            })
+          : Promise.resolve(null),
+        needsRootTopics
+          ? this.prisma.post.findFirst({
+              where: { id: threadRootId, ...this.notDeletedWhere() },
+              select: { topics: true },
+            })
+          : Promise.resolve(null),
+        this.prisma.post.findMany({
+          where: { OR: [{ id: threadRootId }, { rootId: threadRootId }], ...this.notDeletedWhere() },
+          select: { id: true, parentId: true, userId: true, mentions: { select: { userId: true } } },
+        }),
+      ]);
+
+      if (blockCount > 0) throw new ForbiddenException('You cannot reply to this post.');
+
       if (parentGid) {
         if (requestedCommunityGroupId && requestedCommunityGroupId !== parentGid) {
           throw new BadRequestException('Invalid community group for this thread.');
         }
         resolvedCommunityGroupId = parentGid;
-        const mem = await this.prisma.communityGroupMember.findUnique({
-          where: { groupId_userId: { groupId: parentGid, userId } },
-          select: { status: true },
-        });
-        if (!mem || mem.status !== 'active') {
+        if (!groupMember || groupMember.status !== 'active') {
           throw new ForbiddenException('Join this group to reply in this thread.');
         }
         visibility = 'public';
@@ -3964,39 +3999,26 @@ export class PostsService {
         if (requestedCommunityGroupId) {
           throw new BadRequestException('This thread is not in a community group.');
         }
-        if (!viewerIsVerified && parent.visibility === 'public') {
+        if (!viewerIsVerified && parentPost.visibility === 'public') {
           throw new ForbiddenException('Verify your account to reply publicly.');
         }
-        const viewer = await this.viewerContextService.getViewer(userId);
         const allowed = this.allowedVisibilitiesForViewer(viewer);
-        const isSelf = parent.userId === userId;
+        const isSelf = parentPost.userId === userId;
         if (!isSelf) {
-          if (!allowed.includes(parent.visibility)) {
-            if (parent.visibility === 'verifiedOnly') throw new ForbiddenException('Verify to view verified-only posts.');
-            if (parent.visibility === 'premiumOnly') throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+          if (!allowed.includes(parentPost.visibility)) {
+            if (parentPost.visibility === 'verifiedOnly') throw new ForbiddenException('Verify to view verified-only posts.');
+            if (parentPost.visibility === 'premiumOnly') throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
             throw new ForbiddenException('Not allowed to reply to this post.');
           }
         }
-        visibility = parent.visibility as PostVisibility;
+        visibility = parentPost.visibility as PostVisibility;
       }
 
-      // Use parent's rootId if it exists (parent is also a reply), otherwise parent.id is the root
-      threadRootId = (parent as { rootId?: string | null }).rootId ?? parent.id;
-      if (threadRootId && threadRootId !== parent.id) {
-        const root = await this.prisma.post.findFirst({
-          where: { id: threadRootId, ...this.notDeletedWhere() },
-          select: { topics: true },
-        });
-        rootTopics = Array.isArray(root?.topics) ? ((root?.topics ?? []) as string[]) : [];
-      } else {
-        rootTopics = parentTopics;
-      }
+      rootTopics = needsRootTopics
+        ? (Array.isArray(rootForTopics?.topics) ? ((rootForTopics?.topics ?? []) as string[]) : [])
+        : parentTopics;
 
-      // Collect thread participants using rootId for efficient query (works for any thread depth)
-      const threadPosts = await this.prisma.post.findMany({
-        where: { OR: [{ id: threadRootId }, { rootId: threadRootId }], ...this.notDeletedWhere() },
-        select: { userId: true, mentions: { select: { userId: true } } },
-      });
+      threadPostsForRoles = threadPosts;
       const participantIds = new Set<string>();
       for (const p of threadPosts) {
         participantIds.add(p.userId);
@@ -4015,27 +4037,16 @@ export class PostsService {
       visibility = 'public';
     }
 
-    // Rate limits (tier-specific). Exclude onlyMe so private notes/drafts don't count.
-    // Unverified users can only create onlyMe posts; skip rate limit entirely for them.
+    // Compute rate-limit window parameters synchronously; the actual count query is
+    // batched in parallel with media-hash + mention resolution below.
+    let rateLimitParams: { postsPerWindow: number; windowSeconds: number; windowStart: Date } | null = null;
     if (viewerIsVerified) {
-      const cfg = await this.getSiteConfig();
+      const cfg = await this.getSiteConfig(); // in-memory cached; near-free
       const isPremium = Boolean(user.premium);
-
       const postsPerWindow = isPremium ? cfg.premiumPostsPerWindow : cfg.verifiedPostsPerWindow;
       const windowSeconds = isPremium ? cfg.premiumWindowSeconds : cfg.verifiedWindowSeconds;
-
       const windowStart = new Date(Date.now() - windowSeconds * 1000);
-      const recentCount = await this.prisma.post.count({
-        where: { userId, createdAt: { gte: windowStart }, visibility: { not: 'onlyMe' } },
-      });
-      if (recentCount >= postsPerWindow) {
-        const minutes = Math.max(1, Math.round(windowSeconds / 60));
-        const minuteLabel = minutes === 1 ? 'minute' : 'minutes';
-        throw new HttpException(
-          `You are posting too often. You can make up to ${postsPerWindow} posts every ${minutes} ${minuteLabel}.`,
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
-      }
+      rateLimitParams = { postsPerWindow, windowSeconds, windowStart };
     }
 
     const maxLen = user.premium ? 1000 : 200;
@@ -4101,11 +4112,36 @@ export class PostsService {
         .map((m) => (m.r2Key ?? '').trim()),
       ...pollImageKeys,
     ];
-    const reusedKeySet = new Set(
+
+    // Pre-compute mention username sets so we can do the rate-limit count, media-hash
+    // lookup and (single) mention resolution in one round trip.
+    const fromBody = this.parseMentionsFromBody(body);
+    const clientUsernames = Array.isArray(clientMentions) ? clientMentions.filter((x) => typeof x === 'string' && x.length <= 120) : [];
+    const allUsernames = [...new Set([...clientUsernames, ...fromBody])];
+
+    const [recentPostCount, reusedKeyRows, mentionUsernameToId] = await Promise.all([
+      rateLimitParams
+        ? this.prisma.post.count({
+            where: { userId, createdAt: { gte: rateLimitParams.windowStart }, visibility: { not: 'onlyMe' } },
+          })
+        : Promise.resolve(0),
       uploadKeys.length
-        ? (await this.prisma.mediaContentHash.findMany({ where: { r2Key: { in: uploadKeys } }, select: { r2Key: true } })).map((r) => r.r2Key)
-        : [],
-    );
+        ? this.prisma.mediaContentHash.findMany({ where: { r2Key: { in: uploadKeys } }, select: { r2Key: true } })
+        : Promise.resolve([] as Array<{ r2Key: string }>),
+      // Single resolution covers both body mentions and thread-participant client mentions.
+      this.resolveMentionUsernamesMap(allUsernames),
+    ]);
+
+    if (rateLimitParams && recentPostCount >= rateLimitParams.postsPerWindow) {
+      const minutes = Math.max(1, Math.round(rateLimitParams.windowSeconds / 60));
+      const minuteLabel = minutes === 1 ? 'minute' : 'minutes';
+      throw new HttpException(
+        `You are posting too often. You can make up to ${rateLimitParams.postsPerWindow} posts every ${minutes} ${minuteLabel}.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const reusedKeySet = new Set(reusedKeyRows.map((r) => r.r2Key));
 
     const cleanedMedia = media
       .map((m, idx) => {
@@ -4203,15 +4239,34 @@ export class PostsService {
         })
       : null;
 
-    // Parse explicit @mentions from body text only (for notification priority)
-    const fromBody = this.parseMentionsFromBody(body);
-    const bodyMentionIds = await this.resolveMentionUsernames(fromBody);
+    // Derive bodyMentionIds (notification priority) and full resolved id set from the
+    // single resolution above. fromBody and allUsernames were prepared earlier for parallel batching.
+    const bodyMentionIds: string[] = [];
+    {
+      const seen = new Set<string>();
+      const normBody = [...new Set(fromBody.map((u) => u.trim().slice(0, 120)).filter(Boolean))];
+      for (const name of normBody) {
+        const id = mentionUsernameToId.get(name.toLowerCase());
+        if (id && !seen.has(id)) {
+          seen.add(id);
+          bodyMentionIds.push(id);
+        }
+      }
+    }
     const bodyMentionSet = new Set(bodyMentionIds); // Only body mentions determine notification priority
 
-    // Client-provided mentions (thread participants from frontend) - used for PostMention records only
-    const clientUsernames = Array.isArray(clientMentions) ? clientMentions.filter((x) => typeof x === 'string' && x.length <= 120) : [];
-    const allUsernames = [...new Set([...clientUsernames, ...fromBody])];
-    const resolvedFromUsernames = await this.resolveMentionUsernames(allUsernames);
+    const resolvedFromUsernames: string[] = [];
+    {
+      const seen = new Set<string>();
+      const normAll = [...new Set(allUsernames.map((u) => u.trim().slice(0, 120)).filter(Boolean))];
+      for (const name of normAll) {
+        const id = mentionUsernameToId.get(name.toLowerCase());
+        if (id && !seen.has(id)) {
+          seen.add(id);
+          resolvedFromUsernames.push(id);
+        }
+      }
+    }
 
     // All mention IDs for PostMention records (include self so @yourname renders as a link)
     const mentionUserIds = [...new Set([...threadParticipantIds, ...resolvedFromUsernames])];
@@ -4232,6 +4287,18 @@ export class PostsService {
       .$transaction(async (tx) => {
         const relatedTopics = Array.from(new Set([...(parentTopics ?? []), ...(rootTopics ?? [])])).filter(Boolean);
         const topics = inferTopicsFromText(body, { hashtags, relatedTopics });
+
+        // Detect embedded post link in body up front so we can include `quotedPostId` in the
+        // initial create (saves one extra `tx.post.update` round trip when present).
+        const detectedQuotedPostId = this.extractQuotedPostIdFromBody(body);
+        const quotedExists = detectedQuotedPostId
+          ? await tx.post.findFirst({
+              where: { id: detectedQuotedPostId, deletedAt: null },
+              select: { id: true, userId: true },
+            })
+          : null;
+        const quotedPostIdToSet = quotedExists ? quotedExists.id : null;
+
         const created = await tx.post.create({
           data: {
             body,
@@ -4247,10 +4314,20 @@ export class PostsService {
               : {}),
             parentId: parentId ?? undefined,
             rootId: threadRootId ?? undefined, // Set root post ID for thread hierarchy
+            ...(quotedPostIdToSet ? { quotedPostId: quotedPostIdToSet } : {}),
             ...(cleanedMedia.length
               ? {
                   media: {
                     create: cleanedMedia,
+                  },
+                }
+              : {}),
+            ...(mentionUserIds.length
+              ? {
+                  // Nested-create mentions in the same query so the response includes them
+                  // and we don't need a post-transaction findUnique to fetch them.
+                  mentions: {
+                    create: mentionUserIds.map((uid) => ({ userId: uid })),
                   },
                 }
               : {}),
@@ -4281,122 +4358,120 @@ export class PostsService {
           include: {
             user: { select: USER_LIST_SELECT },
             media: { orderBy: { position: 'asc' } },
+            mentions: { include: { user: { select: MENTION_USER_SELECT } } },
             poll: { include: { options: { orderBy: { position: 'asc' } } } },
           },
         });
-        if (parentId) {
-          const parentAfter = await tx.post.update({
-            where: { id: parentId },
-            data: { commentCount: { increment: 1 } },
-            select: { commentCount: true },
-          });
-          parentCommentCount = typeof parentAfter.commentCount === 'number' ? parentAfter.commentCount : null;
+
+        if (quotedExists) {
+          // Store for post-transaction notification (avoid sending inside the transaction).
+          quotedPostInfoRef.current = { quotedAuthorId: quotedExists.userId, quotedPostId: quotedExists.id };
         }
 
-        // Detect embedded post link in body and set quotedPostId + increment that post's repostCount.
-        const detectedQuotedPostId = this.extractQuotedPostIdFromBody(body);
-        if (detectedQuotedPostId && detectedQuotedPostId !== created.id) {
-          const quotedExists = await tx.post.findFirst({
-            where: { id: detectedQuotedPostId, deletedAt: null },
-            select: { id: true, userId: true },
-          });
-          if (quotedExists) {
-            await tx.post.update({
-              where: { id: created.id },
-              data: { quotedPostId: detectedQuotedPostId },
-            });
-            await tx.post.update({
-              where: { id: detectedQuotedPostId },
-              data: { repostCount: { increment: 1 } },
-            });
-            // Store for post-transaction notification (avoid sending inside the transaction).
-            quotedPostInfoRef.current = { quotedAuthorId: quotedExists.userId, quotedPostId: detectedQuotedPostId };
-          }
-        }
+        // Streak rewards: daily check + coins (transactional with post creation).
+        // Product rule: any non-onlyMe post counts (incl. replies & check-ins). Award once per ET day.
+        const streakOp = visibility !== 'onlyMe'
+          ? (async () => {
+              const todayKey = easternDayKey(now);
+              const yesterdayKey = yesterdayEasternDayKey(now);
+              const u = await tx.user.findUnique({
+                where: { id: userId },
+                select: { coins: true, checkinStreakDays: true, lastCheckinDayKey: true, longestStreakDays: true },
+              });
+              if (!u) throw new NotFoundException('User not found.');
+              if ((u.lastCheckinDayKey ?? null) === todayKey) return; // already awarded today
+              const out = computeCheckinRewards({
+                todayKey,
+                yesterdayKey,
+                lastCheckinDayKey: u.lastCheckinDayKey ?? null,
+                currentStreakDays: u.checkinStreakDays ?? 0,
+              });
+              const nextLongest = Math.max(u.longestStreakDays ?? 0, out.nextStreakDays);
+              // user.update + coinTransfer.create are independent → run in parallel.
+              await Promise.all([
+                tx.user.update({
+                  where: { id: userId },
+                  data: {
+                    lastCheckinDayKey: todayKey,
+                    checkinStreakDays: out.nextStreakDays,
+                    longestStreakDays: nextLongest,
+                    coins: { increment: out.coinsAdd },
+                  },
+                }),
+                tx.coinTransfer.create({
+                  data: {
+                    senderId: userId,
+                    recipientId: userId,
+                    kind: 'streak_reward',
+                    amount: out.coinsAdd,
+                    note: `Day ${out.nextStreakDays} streak (${out.multiplier}x)`,
+                  },
+                }),
+              ]);
+              didAwardStreak = true;
+              streakRewardOut = { coinsEarned: out.coinsAdd, streakDays: out.nextStreakDays, multiplier: out.multiplier };
+            })()
+          : Promise.resolve();
 
-        if (mentionUserIds.length > 0) {
-          await tx.postMention.createMany({
-            data: mentionUserIds.map((uid) => ({ postId: created.id, userId: uid })),
+        // Self-view seed: create the row then increment view counters (sequential by data dep).
+        const selfViewOp = (async () => {
+          const seededView = await tx.postView.createMany({
+            data: [{ postId: created.id, userId }],
             skipDuplicates: true,
           });
-        }
-
-        if (hashtagTokens.length > 0) {
-          for (const tok of hashtagTokens) {
-            const t = tok.tag;
-            const variant = tok.variant;
-            await tx.hashtag.upsert({
-              where: { tag: t },
-              create: { tag: t, usageCount: 1 },
-              update: { usageCount: { increment: 1 } },
-            });
-            await tx.hashtagVariant.upsert({
-              where: { tag_variant: { tag: t, variant } },
-              create: { tag: t, variant, count: 1 },
-              update: { count: { increment: 1 } },
-            });
-          }
-        }
-
-        // Rewards: daily streak + coins (transactional with post creation).
-        // Product rule: any non-onlyMe post counts (including replies and check-ins). Award once per ET day.
-        if (visibility !== 'onlyMe') {
-          const todayKey = easternDayKey(now);
-          const yesterdayKey = yesterdayEasternDayKey(now);
-          const u = await tx.user.findUnique({
-            where: { id: userId },
-            select: { coins: true, checkinStreakDays: true, lastCheckinDayKey: true, longestStreakDays: true },
-          });
-          if (!u) throw new NotFoundException('User not found.');
-          // If already awarded today, do nothing (multiple posts per day are allowed).
-          if ((u.lastCheckinDayKey ?? null) !== todayKey) {
-            const out = computeCheckinRewards({
-              todayKey,
-              yesterdayKey,
-              lastCheckinDayKey: u.lastCheckinDayKey ?? null,
-              currentStreakDays: u.checkinStreakDays ?? 0,
-            });
-            const nextLongest = Math.max(u.longestStreakDays ?? 0, out.nextStreakDays);
-            await tx.user.update({
-              where: { id: userId },
+          if (seededView.count > 0) {
+            const updatedCounts = await tx.post.update({
+              where: { id: created.id },
               data: {
-                lastCheckinDayKey: todayKey,
-                checkinStreakDays: out.nextStreakDays,
-                longestStreakDays: nextLongest,
-                coins: { increment: out.coinsAdd },
+                viewerCount: { increment: 1 },
+                weightedViewCount: { increment: LOGGED_IN_VIEW_WEIGHT },
               },
+              select: { viewerCount: true, weightedViewCount: true },
             });
-            await tx.coinTransfer.create({
-              data: {
-                senderId: userId,
-                recipientId: userId,
-                kind: 'streak_reward',
-                amount: out.coinsAdd,
-                note: `Day ${out.nextStreakDays} streak (${out.multiplier}x)`,
-              },
-            });
-            didAwardStreak = true;
-            streakRewardOut = { coinsEarned: out.coinsAdd, streakDays: out.nextStreakDays, multiplier: out.multiplier };
+            created.viewerCount = updatedCounts.viewerCount;
+            created.weightedViewCount = updatedCounts.weightedViewCount;
           }
-        }
+        })();
 
-        // Seed creator self-view synchronously so create response always reflects at least 1 view.
-        const seededView = await tx.postView.createMany({
-          data: [{ postId: created.id, userId }],
-          skipDuplicates: true,
-        });
-        if (seededView.count > 0) {
-          const updatedCounts = await tx.post.update({
-            where: { id: created.id },
-            data: {
-              viewerCount: { increment: 1 },
-              weightedViewCount: { increment: LOGGED_IN_VIEW_WEIGHT },
-            },
-            select: { viewerCount: true, weightedViewCount: true },
-          });
-          created.viewerCount = updatedCounts.viewerCount;
-          created.weightedViewCount = updatedCounts.weightedViewCount;
-        }
+        // Parent commentCount increment (only when this is a reply).
+        const parentBumpOp = parentId
+          ? tx.post.update({
+              where: { id: parentId },
+              data: { commentCount: { increment: 1 } },
+              select: { commentCount: true },
+            }).then((parentAfter) => {
+              parentCommentCount = typeof parentAfter.commentCount === 'number' ? parentAfter.commentCount : null;
+            })
+          : Promise.resolve();
+
+        // Quoted-post repost counter bump (only when a local quote was detected).
+        const quotedBumpOp = quotedExists
+          ? tx.post.update({
+              where: { id: quotedExists.id },
+              data: { repostCount: { increment: 1 } },
+            }).then(() => undefined)
+          : Promise.resolve();
+
+        // Hashtag upserts: each tag/variant pair is independent → fire all in parallel.
+        const hashtagOps = hashtagTokens.length > 0
+          ? Promise.all(
+              hashtagTokens.flatMap((tok) => [
+                tx.hashtag.upsert({
+                  where: { tag: tok.tag },
+                  create: { tag: tok.tag, usageCount: 1 },
+                  update: { usageCount: { increment: 1 } },
+                }),
+                tx.hashtagVariant.upsert({
+                  where: { tag_variant: { tag: tok.tag, variant: tok.variant } },
+                  create: { tag: tok.tag, variant: tok.variant, count: 1 },
+                  update: { count: { increment: 1 } },
+                }),
+              ]),
+            )
+          : Promise.resolve();
+
+        // All post-create side effects fan out in parallel within the same transaction.
+        await Promise.all([parentBumpOp, quotedBumpOp, hashtagOps, streakOp, selfViewOp]);
 
         return created;
       })
@@ -4411,27 +4486,28 @@ export class PostsService {
       });
 
     // Versioned read caches: bump after successful create so public reads shift namespaces immediately.
+    // Kept on the response path so the very next read in the same client tick sees the new namespace.
     if (post.visibility && post.visibility !== 'onlyMe') {
       await this.cacheInvalidation.bumpForPostWrite({ topics: post.topics ?? [] });
     }
 
-    // Realtime: bump parent commentCount for live subscribers (best-effort).
-    if (parentId) {
+    // Realtime: bump parent commentCount for live subscribers (best-effort, sync emit).
+    if (parentId && typeof parentCommentCount === 'number') {
       try {
-        if (typeof parentCommentCount === 'number') {
-          this.presenceRealtime.emitPostsLiveUpdated(parentId, {
-            postId: parentId,
-            version: new Date().toISOString(),
-            reason: 'comment_created',
-            patch: { commentCount: parentCommentCount },
-          });
-        }
+        this.presenceRealtime.emitPostsLiveUpdated(parentId, {
+          postId: parentId,
+          version: new Date().toISOString(),
+          reason: 'comment_created',
+          patch: { commentCount: parentCommentCount },
+        });
       } catch {
         // Best-effort
       }
     }
 
-    // Realtime: push full reply DTO to thread subscribers so they see it without refetching (best-effort).
+    // Realtime: push full reply DTO to thread subscribers (best-effort, sync emit).
+    // `post` already includes user/media/mentions/poll thanks to the create's nested include,
+    // so no extra fetch is required.
     if (parentId) {
       try {
         const replyDto = toPostDto(post, this.appConfig.r2()?.publicBaseUrl ?? null, {
@@ -4447,187 +4523,28 @@ export class PostsService {
       }
     }
 
-    // Quote repost notification: notify the quoted post's author (best-effort, skip self-quotes).
+    // ─── Defer all notification + follower-fanout work off the response path ─────
+    // None of the work below is observed by the caller; running it inline only adds
+    // latency for users with deep threads or many followers. We re-throw nothing.
     const quotedInfo = quotedPostInfoRef.current;
-    if (quotedInfo && quotedInfo.quotedAuthorId !== userId) {
-      this.notifications
-        .upsertRepostNotification({
-          recipientUserId: quotedInfo.quotedAuthorId,
-          actorUserId: userId,
-          subjectPostId: quotedInfo.quotedPostId,
-          actorPostId: post.id,
-          title: 'quoted your post',
-        })
-        .catch((err) => {
-          this.logger.warn(`[notifications] Failed to create quote repost notification: ${err instanceof Error ? err.message : String(err)}`);
-        });
-    }
-
-    // Notifications: parent author + thread participants get "comment" notifications.
-    // Only explicit @mentions in body get "mention" notifications (and override "comment" for that user).
     const bodySnippet = body.trim().slice(0, 150);
-
-    // Hoisted so the follower notification block can exclude thread participants who already
-    // received a higher-priority "comment" notification.
-    let threadRoles: Map<string, keyof typeof PostsService.REPLY_TITLE> | null = null;
-
-    if (parentId && parentAuthorUserId !== userId) {
-      threadRoles = await this.getThreadParticipantRoles(parentId);
-      const parentRole = threadRoles.get(parentAuthorUserId ?? '');
-      const parentTitle =
-        parentRole === 'reply_author'
-          ? PostsService.REPLY_TITLE.reply_author
-          : parentRole === 'root_author'
-            ? PostsService.REPLY_TITLE.root_author
-            : PostsService.REPLY_TITLE.reply_author;
-
-      // Parent author: one notification. If they're explicitly @mentioned in body, they get only the mention (below).
-      // Use parentId as subject so preview shows the post that was replied to (including its media).
-      if (parentAuthorUserId && !bodyMentionSet.has(parentAuthorUserId)) {
-        this.notifications
-          .create({
-            recipientUserId: parentAuthorUserId,
-            kind: 'comment',
-            actorUserId: userId,
-            actorPostId: post.id,
-            subjectPostId: parentId,
-            title: parentTitle,
-            body: bodySnippet || undefined,
-          })
-          .catch((err) => {
-            this.logger.warn(`[notifications] Failed to create comment notification: ${err instanceof Error ? err.message : String(err)}`);
-          });
-      }
-
-      // Other thread participants (excluding parent author and self): one each, unless they're explicitly @mentioned in body.
-      for (const [uid, role] of threadRoles) {
-        if (uid === userId || uid === parentAuthorUserId || bodyMentionSet.has(uid)) continue;
-        const title = PostsService.REPLY_TITLE[role];
-        this.notifications
-          .create({
-            recipientUserId: uid,
-            kind: 'comment',
-            actorUserId: userId,
-            actorPostId: post.id,
-            subjectPostId: parentId,
-            title,
-            body: bodySnippet || undefined,
-          })
-          .catch((err) => {
-            this.logger.warn(`[notifications] Failed to create thread reply notification: ${err instanceof Error ? err.message : String(err)}`);
-          });
-      }
-    }
-
-    // Explicit @mentions in body: one notification each. These take priority over comment notifications.
-    // Title is context-aware: whether the mention is in a reply to the recipient's own post or someone else's.
-    for (const uid of bodyMentionIds) {
-      if (uid === userId) continue;
-      let mentionTitle: string;
-      if (!parentId) {
-        mentionTitle = 'mentioned you in a post';
-      } else if (uid === parentAuthorUserId) {
-        mentionTitle = 'mentioned you in a reply to your post';
-      } else {
-        mentionTitle = 'mentioned you in a reply to a post';
-      }
-      this.notifications
-        .create({
-          recipientUserId: uid,
-          kind: 'mention',
-          actorUserId: userId,
-          actorPostId: post.id,
-          subjectPostId: post.id,
-          title: mentionTitle,
-          body: bodySnippet || undefined,
-        })
-        .catch((err) => {
-          this.logger.warn(`[notifications] Failed to create mention notification: ${err instanceof Error ? err.message : String(err)}`);
-        });
-    }
-
-    // Follower notifications: when someone you follow publishes a post or reply.
-    // Replies also generate followed_post notifications so they appear in followers' feeds,
-    // grouped in the rollup (or standalone when bell is enabled for that person).
-    // Skip followers who already received a higher-priority notification for this same action:
-    //   - @mention → they got a "mention" notification
-    //   - thread participant → they got a "comment" notification
-    // Filter recipients by post visibility so we don't notify followers who can't view it.
-    if (visibility !== 'onlyMe') {
-      try {
-        const follows = await this.prisma.follow.findMany({
-          where: { followingId: userId },
-          select: {
-            followerId: true,
-            follower: { select: { verifiedStatus: true, premium: true, premiumPlus: true } },
-          },
-        });
-
-        for (const f of follows) {
-          const recipientUserId = f.followerId;
-          if (!recipientUserId || recipientUserId === userId) continue;
-          // Already getting a mention notification — that's the highest-priority one.
-          if (bodyMentionSet.has(recipientUserId)) continue;
-          // Already getting a comment notification as a thread participant.
-          if (parentId && (recipientUserId === parentAuthorUserId || threadRoles?.has(recipientUserId))) continue;
-
-          if (visibility === 'verifiedOnly') {
-            const vs = f.follower?.verifiedStatus ?? 'none';
-            if (!vs || vs === 'none') continue;
-          }
-          if (visibility === 'premiumOnly') {
-            const isPremium = Boolean(f.follower?.premium || f.follower?.premiumPlus);
-            if (!isPremium) continue;
-          }
-
-          this.notifications
-            .create({
-              recipientUserId,
-              kind: 'followed_post',
-              actorUserId: userId,
-              actorPostId: post.id,
-              subjectPostId: post.id,
-              // Visiting the actor's profile should clear these.
-              subjectUserId: userId,
-              body: bodySnippet || undefined,
-            })
-            .catch((err) => {
-              this.logger.warn(
-                `[notifications] Failed to create followed-post notification: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            });
-        }
-      } catch (err) {
-        this.logger.warn(
-          `[notifications] Failed to query followers for followed-post notifications: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-
-    const withMentions = await this.prisma.post.findUnique({
-      where: { id: post.id },
-      include: {
-        user: { select: USER_LIST_SELECT },
-        media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
-        poll: { include: { options: { orderBy: { position: 'asc' } } } },
-      },
+    const threadPostsForRolesSnapshot = threadPostsForRoles;
+    const didAwardStreakSnapshot = didAwardStreak;
+    setImmediate(() => {
+      void this.runPostCreateSideEffects({
+        actorUserId: userId,
+        post,
+        parentId: parentId ?? null,
+        parentAuthorUserId,
+        threadPostsForRoles: threadPostsForRolesSnapshot,
+        bodyMentionIds,
+        bodyMentionSet,
+        bodySnippet,
+        visibility,
+        quotedInfo,
+        didAwardStreak: didAwardStreakSnapshot,
+      });
     });
-
-    // Realtime: if we awarded streak/coins today, sync self snapshot across tabs/devices (best-effort).
-    if (didAwardStreak) {
-      try {
-        const u = await this.prisma.user.findUnique({ where: { id: userId } });
-        if (u) {
-          this.presenceRealtime.emitUsersMeUpdated(userId, {
-            user: toUserDto(u, this.appConfig.r2()?.publicBaseUrl ?? null),
-            reason: 'streak_awarded',
-          });
-        }
-      } catch {
-        // Best-effort
-      }
-    }
 
     // Commenting on a post implies the commenter saw the parent post.
     if (parentId) {
@@ -4651,7 +4568,224 @@ export class PostsService {
       is_reply: Boolean(parentId),
     });
 
-    return { post: withMentions!, streakReward: streakRewardOut };
+    return { post, streakReward: streakRewardOut };
+  }
+
+  /**
+   * Run notification fan-out, follower scan, feed:newPost realtime emit, and the
+   * streak-awarded self-sync emit OFF the request path (invoked via `setImmediate`
+   * from `createPost`). Each step is wrapped to never reject — best-effort always.
+   */
+  private async runPostCreateSideEffects(args: {
+    actorUserId: string;
+    post: Prisma.PostGetPayload<{
+      include: {
+        user: { select: typeof USER_LIST_SELECT };
+        media: true;
+        mentions: { include: { user: { select: typeof MENTION_USER_SELECT } } };
+        poll: { include: { options: true } };
+      };
+    }>;
+    parentId: string | null;
+    parentAuthorUserId: string | null;
+    threadPostsForRoles: Array<{ id: string; parentId: string | null; userId: string; mentions: { userId: string }[] }>;
+    bodyMentionIds: string[];
+    bodyMentionSet: Set<string>;
+    bodySnippet: string;
+    visibility: PostVisibility;
+    quotedInfo: { quotedAuthorId: string; quotedPostId: string } | null;
+    didAwardStreak: boolean;
+  }): Promise<void> {
+    const {
+      actorUserId,
+      post,
+      parentId,
+      parentAuthorUserId,
+      threadPostsForRoles,
+      bodyMentionIds,
+      bodyMentionSet,
+      bodySnippet,
+      visibility,
+      quotedInfo,
+      didAwardStreak,
+    } = args;
+    const userId = actorUserId;
+
+    try {
+      // Quote repost notification: notify the quoted post's author (skip self-quotes).
+      if (quotedInfo && quotedInfo.quotedAuthorId !== userId) {
+        this.notifications
+          .upsertRepostNotification({
+            recipientUserId: quotedInfo.quotedAuthorId,
+            actorUserId: userId,
+            subjectPostId: quotedInfo.quotedPostId,
+            actorPostId: post.id,
+            title: 'quoted your post',
+          })
+          .catch((err) => {
+            this.logger.warn(`[notifications] Failed to create quote repost notification: ${err instanceof Error ? err.message : String(err)}`);
+          });
+      }
+
+      // Notifications: parent author + thread participants get "comment" notifications.
+      // Only explicit @mentions in body get "mention" notifications (and override "comment" for that user).
+      let threadRoles: Map<string, keyof typeof PostsService.REPLY_TITLE> | null = null;
+      if (parentId && parentAuthorUserId !== userId) {
+        // In-memory walk over the thread tree we already fetched in createPost.
+        threadRoles = this.computeThreadRolesFromPosts(threadPostsForRoles, parentId);
+        const parentRole = threadRoles.get(parentAuthorUserId ?? '');
+        const parentTitle =
+          parentRole === 'reply_author'
+            ? PostsService.REPLY_TITLE.reply_author
+            : parentRole === 'root_author'
+              ? PostsService.REPLY_TITLE.root_author
+              : PostsService.REPLY_TITLE.reply_author;
+
+        if (parentAuthorUserId && !bodyMentionSet.has(parentAuthorUserId)) {
+          this.notifications
+            .create({
+              recipientUserId: parentAuthorUserId,
+              kind: 'comment',
+              actorUserId: userId,
+              actorPostId: post.id,
+              subjectPostId: parentId,
+              title: parentTitle,
+              body: bodySnippet || undefined,
+            })
+            .catch((err) => {
+              this.logger.warn(`[notifications] Failed to create comment notification: ${err instanceof Error ? err.message : String(err)}`);
+            });
+        }
+
+        for (const [uid, role] of threadRoles) {
+          if (uid === userId || uid === parentAuthorUserId || bodyMentionSet.has(uid)) continue;
+          const title = PostsService.REPLY_TITLE[role];
+          this.notifications
+            .create({
+              recipientUserId: uid,
+              kind: 'comment',
+              actorUserId: userId,
+              actorPostId: post.id,
+              subjectPostId: parentId,
+              title,
+              body: bodySnippet || undefined,
+            })
+            .catch((err) => {
+              this.logger.warn(`[notifications] Failed to create thread reply notification: ${err instanceof Error ? err.message : String(err)}`);
+            });
+        }
+      }
+
+      // Explicit @mentions in body: one notification each (priority over comment notifications).
+      for (const uid of bodyMentionIds) {
+        if (uid === userId) continue;
+        let mentionTitle: string;
+        if (!parentId) {
+          mentionTitle = 'mentioned you in a post';
+        } else if (uid === parentAuthorUserId) {
+          mentionTitle = 'mentioned you in a reply to your post';
+        } else {
+          mentionTitle = 'mentioned you in a reply to a post';
+        }
+        this.notifications
+          .create({
+            recipientUserId: uid,
+            kind: 'mention',
+            actorUserId: userId,
+            actorPostId: post.id,
+            subjectPostId: post.id,
+            title: mentionTitle,
+            body: bodySnippet || undefined,
+          })
+          .catch((err) => {
+            this.logger.warn(`[notifications] Failed to create mention notification: ${err instanceof Error ? err.message : String(err)}`);
+          });
+      }
+
+      // Follower notifications + feed:newPost realtime emit (top-level only).
+      const feedFollowerIds: string[] = [];
+      if (visibility !== 'onlyMe') {
+        try {
+          const follows = await this.prisma.follow.findMany({
+            where: { followingId: userId },
+            select: {
+              followerId: true,
+              follower: { select: { verifiedStatus: true, premium: true, premiumPlus: true } },
+            },
+          });
+
+          for (const f of follows) {
+            const recipientUserId = f.followerId;
+            if (!recipientUserId || recipientUserId === userId) continue;
+            if (bodyMentionSet.has(recipientUserId)) continue;
+            if (parentId && (recipientUserId === parentAuthorUserId || threadRoles?.has(recipientUserId))) continue;
+
+            if (visibility === 'verifiedOnly') {
+              const vs = f.follower?.verifiedStatus ?? 'none';
+              if (!vs || vs === 'none') continue;
+            }
+            if (visibility === 'premiumOnly') {
+              const isPremium = Boolean(f.follower?.premium || f.follower?.premiumPlus);
+              if (!isPremium) continue;
+            }
+
+            this.notifications
+              .create({
+                recipientUserId,
+                kind: 'followed_post',
+                actorUserId: userId,
+                actorPostId: post.id,
+                subjectPostId: post.id,
+                subjectUserId: userId,
+                body: bodySnippet || undefined,
+              })
+              .catch((err) => {
+                this.logger.warn(
+                  `[notifications] Failed to create followed-post notification: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              });
+
+            if (!parentId) feedFollowerIds.push(recipientUserId);
+          }
+        } catch (err) {
+          this.logger.warn(
+            `[notifications] Failed to query followers for followed-post notifications: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
+      // Realtime: push new top-level post to home feeds of eligible followers (best-effort).
+      if (!parentId && feedFollowerIds.length > 0) {
+        try {
+          const feedPostDto = toPostDto(post, this.appConfig.r2()?.publicBaseUrl ?? null, {
+            viewerHasBoosted: false,
+            includeInternal: false,
+          });
+          this.presenceRealtime.emitFeedNewPost(feedFollowerIds, { post: feedPostDto });
+        } catch {
+          // Best-effort
+        }
+      }
+
+      // If we awarded streak/coins today, sync self snapshot across tabs/devices (best-effort).
+      if (didAwardStreak) {
+        try {
+          const u = await this.prisma.user.findUnique({ where: { id: userId } });
+          if (u) {
+            this.presenceRealtime.emitUsersMeUpdated(userId, {
+              user: toUserDto(u, this.appConfig.r2()?.publicBaseUrl ?? null),
+              reason: 'streak_awarded',
+            });
+          }
+        } catch {
+          // Best-effort
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[posts] Deferred post-create side effects failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   async voteOnPoll(params: { userId: string; postId: string; optionId: string }) {

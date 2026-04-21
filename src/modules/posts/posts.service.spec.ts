@@ -206,6 +206,167 @@ describe('PostsService.deletePost', () => {
   });
 });
 
+// ─── deletePost: comment-count integrity ─────────────────────────────────────
+//
+// Regression coverage for the bug where the UI showed a doubled commentCount
+// after a reply was created (the frontend optimistic bump landed on top of the
+// server count). The contract this section locks in:
+//
+//   • A reply's commentCount belongs to ONE parent only — its direct parent.
+//   • Deleting a reply decrements that direct parent's commentCount by exactly 1.
+//   • The commentCount on `rootId` (when different from the direct parent) MUST
+//     NOT be touched. It represents direct children only, never descendants.
+//   • The realtime `comment_deleted` event targets the direct parent.
+
+describe('PostsService.deletePost — comment-count integrity', () => {
+  function makeServiceWithExecuteRawSpy() {
+    const executeRawSpy = jest.fn(async () => 0);
+    const txUpdateSpy = jest.fn(async () => ({}));
+    const transactionImpl = jest.fn(async (fn: any) => {
+      if (typeof fn === 'function') {
+        const tx: any = {
+          post: {
+            findMany: jest.fn(async () => []),
+            update: txUpdateSpy,
+          },
+          postPoll: { updateMany: jest.fn(async () => ({ count: 0 })) },
+          bookmark: { deleteMany: jest.fn(async () => ({ count: 0 })) },
+          hashtag: { update: jest.fn(), deleteMany: jest.fn(async () => ({ count: 0 })) },
+          hashtagVariant: { update: jest.fn(), deleteMany: jest.fn(async () => ({ count: 0 })) },
+          user: { update: jest.fn(async () => ({})) },
+          $executeRaw: executeRawSpy,
+        };
+        return fn(tx);
+      }
+      return Promise.all(fn);
+    });
+    const { service, deps } = makeService({ $transaction: transactionImpl });
+    return { service, deps, executeRawSpy, txUpdateSpy };
+  }
+
+  it('decrements the direct parent commentCount when deleting a reply', async () => {
+    const { service, deps, executeRawSpy } = makeServiceWithExecuteRawSpy();
+    deps.prisma.post.findUnique.mockResolvedValueOnce({
+      id: 'reply-1',
+      userId: 'u1',
+      deletedAt: null,
+      hashtags: [],
+      hashtagCasings: [],
+      topics: [],
+      kind: 'regular',
+      parentId: 'parent-1',
+      repostedPostId: null,
+      quotedPostId: null,
+    });
+    // Second findUnique fetches the parent's updated commentCount for the realtime emit.
+    deps.prisma.post.findUnique.mockResolvedValueOnce({ commentCount: 3 });
+
+    await service.deletePost({ userId: 'u1', postId: 'reply-1' });
+
+    // The decrement is issued via raw SQL with GREATEST(0, ...) — confirm the
+    // parent id is interpolated into the executed query.
+    expect(executeRawSpy).toHaveBeenCalledTimes(1);
+    const call = executeRawSpy.mock.calls[0] as unknown as unknown[];
+    const strings = call[0] as TemplateStringsArray | string[];
+    const values = call.slice(1);
+    expect(Array.isArray(strings)).toBe(true);
+    expect(values).toContain('parent-1');
+    const joined = (strings as string[]).join(' ');
+    expect(joined).toMatch(/UPDATE\s+"Post"/i);
+    expect(joined).toMatch(/commentCount/);
+  });
+
+  it('does NOT issue a parent commentCount decrement when deleting a top-level post', async () => {
+    const { service, deps, executeRawSpy } = makeServiceWithExecuteRawSpy();
+    deps.prisma.post.findUnique.mockResolvedValueOnce({
+      id: 'top-1',
+      userId: 'u1',
+      deletedAt: null,
+      hashtags: [],
+      hashtagCasings: [],
+      topics: [],
+      kind: 'regular',
+      parentId: null,
+      repostedPostId: null,
+      quotedPostId: null,
+    });
+
+    await service.deletePost({ userId: 'u1', postId: 'top-1' });
+
+    expect(executeRawSpy).not.toHaveBeenCalled();
+  });
+
+  it('emits realtime comment_deleted only to the direct parent (not the thread root)', async () => {
+    // Setup: A is root, B is a reply to A, C is a reply to B. Deleting C must
+    // emit comment_deleted for B and post_deleted for C — A must not receive any
+    // commentCount-decrementing event from this delete.
+    const { service, deps } = makeServiceWithExecuteRawSpy();
+    deps.prisma.post.findUnique.mockResolvedValueOnce({
+      id: 'C',
+      userId: 'u1',
+      deletedAt: null,
+      hashtags: [],
+      hashtagCasings: [],
+      topics: [],
+      kind: 'regular',
+      parentId: 'B',
+      repostedPostId: null,
+      quotedPostId: null,
+    });
+    deps.prisma.post.findUnique.mockResolvedValueOnce({ commentCount: 0 });
+
+    await service.deletePost({ userId: 'u1', postId: 'C' });
+
+    const liveCalls = deps.presenceRealtime.emitPostsLiveUpdated.mock.calls;
+    const targets = liveCalls.map((c: any[]) => c[0]);
+
+    // post_deleted for the comment itself targets C.
+    expect(targets).toContain('C');
+    // comment_deleted for the parent targets B.
+    expect(targets).toContain('B');
+    // The thread root A must never appear — no descendant-aware bookkeeping.
+    expect(targets).not.toContain('A');
+
+    // The reason on the parent emit must be 'comment_deleted' (so the post-cache
+    // plugin clears the optimistic bump for B and patches the count).
+    const parentEmit = liveCalls.find((c: any[]) => c[0] === 'B');
+    expect(parentEmit?.[1]?.reason).toBe('comment_deleted');
+    expect(typeof parentEmit?.[1]?.patch?.commentCount).toBe('number');
+
+    // The typed delete event also fires on B (so thread subscribers can drop the row).
+    expect(deps.presenceRealtime.emitPostsCommentDeleted).toHaveBeenCalledWith(
+      'B',
+      expect.objectContaining({ parentPostId: 'B', commentId: 'C' }),
+    );
+  });
+
+  it('emits the parent commentCount via the realtime patch for cache reconciliation', async () => {
+    const { service, deps } = makeServiceWithExecuteRawSpy();
+    deps.prisma.post.findUnique.mockResolvedValueOnce({
+      id: 'reply-1',
+      userId: 'u1',
+      deletedAt: null,
+      hashtags: [],
+      hashtagCasings: [],
+      topics: [],
+      kind: 'regular',
+      parentId: 'parent-1',
+      repostedPostId: null,
+      quotedPostId: null,
+    });
+    // Authoritative parent count after the in-tx decrement.
+    deps.prisma.post.findUnique.mockResolvedValueOnce({ commentCount: 7 });
+
+    await service.deletePost({ userId: 'u1', postId: 'reply-1' });
+
+    const parentEmit = deps.presenceRealtime.emitPostsLiveUpdated.mock.calls.find(
+      (c: any[]) => c[0] === 'parent-1',
+    );
+    expect(parentEmit).toBeDefined();
+    expect(parentEmit?.[1]?.patch?.commentCount).toBe(7);
+  });
+});
+
 // ─── updatePost ──────────────────────────────────────────────────────────────
 
 describe('PostsService.updatePost', () => {

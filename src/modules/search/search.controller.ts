@@ -1,4 +1,5 @@
 import { Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
 import { OptionalCurrentUserId } from '../users/users.decorator';
 import { z } from 'zod';
 import type { Response } from 'express';
@@ -45,6 +46,7 @@ export class SearchController {
     private readonly cacheInvalidation: CacheInvalidationService,
     private readonly posthog: PosthogService,
     private readonly taxonomy: TaxonomyService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Throttle({
@@ -174,8 +176,16 @@ export class SearchController {
 
     if (type === 'users') {
       const result = await this.search.searchUsers({ q, limit, cursor, viewerUserId });
-      const users = result.users.map((u) =>
-        toUserListDto(u, publicBaseUrl, {
+      const userIds = result.users.map((u) => u.id);
+      const crewMembers = userIds.length
+        ? await this.prisma.crewMember.findMany({
+            where: { userId: { in: userIds }, crew: { deletedAt: null } },
+            select: { userId: true },
+          })
+        : [];
+      const inCrewIds = new Set(crewMembers.map((m) => m.userId));
+      const users = result.users.map((u) => ({
+        ...toUserListDto(u, publicBaseUrl, {
           relationship: {
             viewerFollowsUser: u.relationship.viewerFollowsUser,
             userFollowsViewer: u.relationship.userFollowsViewer,
@@ -183,7 +193,8 @@ export class SearchController {
           },
           createdAt: u.createdAt,
         }),
-      );
+        inCrew: inCrewIds.has(u.id),
+      }));
       return { data: users, pagination: { nextCursor: result.nextCursor } };
     }
     if (type === 'bookmarks') {

@@ -734,11 +734,14 @@ model CrewMember {
   userId String @unique
   user   User   @relation("CrewMember_user", fields: [userId], references: [id], onDelete: Cascade)
 
-  role CrewMemberRole @default(member)
+  role      CrewMemberRole @default(member)
+  /** Owner-controlled display order (0 = first). Ties are broken by joinedAt (createdAt) ascending. */
+  sortOrder Int            @default(0)
 
   @@id([crewId, userId])
   @@index([crewId, role])
   @@index([crewId, createdAt])
+  @@index([crewId, sortOrder, createdAt])
 }
 
 /**
