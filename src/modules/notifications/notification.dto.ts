@@ -71,6 +71,23 @@ export type NotificationDto = {
    * "their crew" in that case.
    */
   subjectCrewName: string | null;
+  /**
+   * Specific community-group invite this notification refers to (set for
+   * `community_group_invite_*` kinds). Lets the row accept/decline directly.
+   */
+  subjectCommunityGroupInviteId: string | null;
+  /**
+   * Current lifecycle status of `subjectCommunityGroupInviteId`, when present.
+   * Mirrors `subjectCrewInviteStatus` so the UI can render the correct terminal
+   * state ("Joined", "Declined", "No longer available") on a fresh load.
+   */
+  subjectCommunityGroupInviteStatus:
+    | 'pending'
+    | 'accepted'
+    | 'declined'
+    | 'cancelled'
+    | 'expired'
+    | null;
   title: string | null;
   body: string | null;
   /** When set (e.g. boost), for quote + stacked images / video thumbnail in the UI. */

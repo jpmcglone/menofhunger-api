@@ -239,6 +239,14 @@ export class PresenceRealtimeService {
     this.emitToUsers(userIds, 'crew:invite-updated', payload);
   }
 
+  emitGroupInviteReceived(userId: string, payload: { invite: unknown }): void {
+    this.emitToUser(userId, 'groups:invite-received', payload);
+  }
+
+  emitGroupInviteUpdated(userIds: Iterable<string>, payload: { invite: unknown }): void {
+    this.emitToUsers(userIds, 'groups:invite-updated', payload);
+  }
+
   emitCrewWallMessage(userIds: Iterable<string>, payload: { crewId: string; conversationId: string; message: unknown }): void {
     this.emitToUsers(userIds, 'crew:wall:new', payload);
   }

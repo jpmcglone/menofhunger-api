@@ -5,6 +5,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { GroupsService } from './groups.service';
+import { GroupInvitesService } from './group-invites.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 
@@ -44,10 +45,21 @@ const updateGroupSchema = z.object({
   featuredOrder: z.coerce.number().int().min(0).max(9999).optional(),
 });
 
+const sendInviteSchema = z.object({
+  inviteeUserId: z.string().trim().min(1),
+  message: z.string().trim().max(500).nullish(),
+});
+
+const invitableUsersSchema = z.object({
+  q: z.string().trim().max(80).optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+});
+
 @Controller('groups')
 export class GroupsController {
   constructor(
     private readonly groups: GroupsService,
+    private readonly invites: GroupInvitesService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -259,4 +271,106 @@ export class GroupsController {
   async demote(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
     return await this.groups.demoteModerator({ viewerUserId, groupId, userId });
   }
+
+  // ---------- invites ----------
+  // NOTE: Routes that begin with the literal `invites/` segment must be declared
+  // BEFORE any `:groupId/...` route, otherwise Express/Nest will match e.g.
+  // `GET /groups/invites/inbox` against `GET :groupId/invites` (treating
+  // "invites" as the `groupId` param).
+
+  /** Pending group invites for the signed-in user. */
+  @UseGuards(AuthGuard)
+  @Get('invites/inbox')
+  async myInbox(@CurrentUserId() viewerUserId: string) {
+    const data = await this.invites.listMyInbox({ viewerUserId });
+    return { data };
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('invites/:inviteId/accept')
+  async acceptInvite(
+    @CurrentUserId() viewerUserId: string,
+    @Param('inviteId') inviteId: string,
+  ) {
+    const data = await this.invites.acceptInvite({ viewerUserId, inviteId });
+    return { data };
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('invites/:inviteId/decline')
+  async declineInvite(
+    @CurrentUserId() viewerUserId: string,
+    @Param('inviteId') inviteId: string,
+  ) {
+    await this.invites.declineInvite({ viewerUserId, inviteId });
+    return { data: {} };
+  }
+
+  /** Pending group invites the viewer (mod/owner) can act on. */
+  @UseGuards(AuthGuard)
+  @Get(':groupId/invites')
+  async listGroupInvites(
+    @CurrentUserId() viewerUserId: string,
+    @Param('groupId') groupId: string,
+  ) {
+    const data = await this.invites.listGroupInvites({ viewerUserId, groupId });
+    return { data };
+  }
+
+  /**
+   * Picker UI: search users with annotations about their relationship to the group
+   * (member / pending join / pending invite / declined+cooldown / invitable).
+   */
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: { limit: rateLimitLimit('publicRead', 60), ttl: rateLimitTtl('publicRead', 60) },
+  })
+  @Get(':groupId/invitable-users')
+  async invitableUsers(
+    @CurrentUserId() viewerUserId: string,
+    @Param('groupId') groupId: string,
+    @Query() query: unknown,
+  ) {
+    const parsed = invitableUsersSchema.parse(query);
+    return await this.invites.listInvitableUsers({
+      viewerUserId,
+      groupId,
+      q: parsed.q ?? null,
+      limit: parsed.limit ?? 20,
+    });
+  }
+
+  /** Issue or refresh an invite for `inviteeUserId`. Owner/mod only. */
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: { limit: rateLimitLimit('interact', 30), ttl: rateLimitTtl('interact', 60) },
+  })
+  @Post(':groupId/invites')
+  async sendInvite(
+    @CurrentUserId() viewerUserId: string,
+    @Param('groupId') groupId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = sendInviteSchema.parse(body);
+    const result = await this.invites.sendInvite({
+      viewerUserId,
+      groupId,
+      inviteeUserId: parsed.inviteeUserId,
+      message: parsed.message ?? null,
+    });
+    return { data: result };
+  }
+
+  /** Cancel a pending invite (owner/mod). Idempotent. */
+  @UseGuards(AuthGuard)
+  @Delete(':groupId/invites/:inviteId')
+  async cancelInvite(
+    @CurrentUserId() viewerUserId: string,
+    @Param('groupId') groupId: string,
+    @Param('inviteId') inviteId: string,
+  ) {
+    await this.invites.cancelInvite({ viewerUserId, groupId, inviteId });
+    return { data: {} };
+  }
+
 }

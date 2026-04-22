@@ -872,6 +872,24 @@ export class PostsController {
       ? await this.posts.getById({ viewerUserId, id: repostedPostId }).catch(() => null)
       : null;
 
+    // Build groupPreview map for any group post in the chain (including reposted) so the
+    // permalink page can show the group context (back-strip, inline pill, nav highlight)
+    // even when the viewer can access the post. Mirrors feed-list behavior.
+    const allChainPostsForGroups: Awaited<ReturnType<typeof this.posts.getById>>[] = [
+      ...chain,
+      ...(repostedPostRaw ? [repostedPostRaw] : []),
+    ];
+    const groupIdsForPreview = Array.from(
+      new Set(
+        allChainPostsForGroups
+          .map((p) => String((p as { communityGroupId?: string | null }).communityGroupId ?? '').trim())
+          .filter((gid): gid is string => Boolean(gid)),
+      ),
+    );
+    const groupPreviewById = groupIdsForPreview.length
+      ? await this.communityGroupPreviewMapForIds(viewerUserId, groupIdsForPreview)
+      : new Map<string, CommunityGroupPreviewDto>();
+
     const allPosts = [...chain, ...(repostedPostRaw ? [repostedPostRaw] : [])];
     const postIds = allPosts.map((p) => p.id);
     const boosted = viewerUserId
@@ -907,6 +925,13 @@ export class PostsController {
         Boolean(viewerUserId) &&
         pWithPoll.user?.id === viewerUserId &&
         Boolean(pWithPoll.poll?.creatorSkippedAt);
+      // Prefer the gated-root preview (existing behavior) but fall back to per-post
+      // group preview so accessible group posts also surface their group context.
+      const ownGroupId = String((p as { communityGroupId?: string | null }).communityGroupId ?? '').trim();
+      const ownGroupPreview = ownGroupId ? groupPreviewById.get(ownGroupId) ?? null : null;
+      const resolvedGroupPreview = opts.isGatedRoot
+        ? opts.groupPreview ?? null
+        : ownGroupPreview ?? undefined;
       const dto = toPostDto(p, r2, {
         viewerHasBoosted: boosted.has(p.id),
         viewerHasBookmarked: bookmarksByPostId.has(p.id),
@@ -922,7 +947,7 @@ export class PostsController {
         repostedPost: opts.repostedPost,
         // Only the root (requested) post is gated; ancestors are accessible.
         viewerCanAccess: opts.isGatedRoot ? false : undefined,
-        groupPreview: opts.isGatedRoot ? opts.groupPreview ?? null : undefined,
+        groupPreview: resolvedGroupPreview,
       });
       return opts.parent ? { ...dto, parent: opts.parent } : dto;
     };

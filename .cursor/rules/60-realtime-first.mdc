@@ -1,0 +1,59 @@
+---
+description: Real-time first — every state change worth showing across pages/users must emit a websocket event in addition to the HTTP response.
+alwaysApply: true
+---
+
+# Real-time First (API)
+
+The default for any new feature is **real-time over websockets, with the HTTP response as the on-load sync**. The HTTP layer is how a client gets caught up when a page mounts; sockets are how it stays caught up while it's open. Don't ship a feature that only works after a manual refresh.
+
+## When you MUST emit a realtime event
+
+If a mutation in a controller/service changes any state that:
+
+- another **user** can observe (their inbox, their feed, their badge counts, their group, their conversation), OR
+- the **same user** can observe in **another tab/device** (notification badges, presence, posts they wrote, items they invited)
+
+then the service that performs the mutation MUST emit a websocket event in addition to returning the HTTP envelope.
+
+Don't rely on the requester refreshing — they may be on a different tab, a different device, or someone else entirely.
+
+## Where the emit lives
+
+All websocket emits go through `PresenceRealtimeService` (`src/modules/presence/presence-realtime.service.ts`). Don't reach into Socket.IO directly from a feature service; add a typed `emit*` method to `PresenceRealtimeService` and call it.
+
+```typescript
+// PresenceRealtimeService
+emitGroupInviteReceived(userId: string, payload: { invite: CommunityGroupInviteDto }): void {
+  this.emitToUser(userId, 'groups:invite-received', payload);
+}
+
+// Feature service
+await this.realtime.emitGroupInviteReceived(invitee.id, { invite });
+```
+
+Rationale: `PresenceRealtimeService` already handles cross-instance fan-out (via Redis pub/sub), null-server safety during startup, and per-user vs per-room targeting. Feature services should never have to know about any of that.
+
+## Naming + payload conventions
+
+- **Event names**: `<domain>:<verb-or-noun>` in kebab-case. Examples: `notifications:new`, `groups:invite-received`, `posts:live-updated`, `users:me-updated`.
+- **Pair every "received" with an "updated"** when the entity has a lifecycle (pending → accepted/declined/cancelled/expired). The receiver listens for `received`; the sender listens for `updated` so their UI reflects the response.
+- **Payload shape mirrors the HTTP response shape.** If `GET /groups/invites/inbox` returns `{ data: CommunityGroupInvite[] }`, then `groups:invite-received` carries `{ invite: CommunityGroupInvite }` — same DTO, no ad-hoc fields. This lets the web client patch its in-memory list with the socket payload as if it were a fresh fetch.
+- **Don't include private/auth-scoped data in room broadcasts.** Per-user emits use `emitToUser`; broadcasts use `emitToRoom`. If you need to send different payloads to different audiences, send two events — never overload one payload with viewer-specific fields.
+
+## Update notifications, don't spawn duplicates
+
+When the same logical event happens repeatedly (re-invite, repeated boost, edited comment), prefer **upsert** semantics in `NotificationsService` (`upsertCommunityGroupInviteReceivedNotification`, `upsertBoostNotification`, etc.). Reset `deliveredAt`/`readAt` and bump `createdAt` so the row re-surfaces unread, instead of creating a parallel row.
+
+## What does NOT need a realtime emit
+
+- Pure read operations.
+- Cron-driven cleanup that no UI watches (e.g. expiring old invites — covered by the next page load).
+- Internal metrics / audit logs.
+- Migrations / seed scripts.
+
+If you skip an emit because the change is "internal only", say so in the commit/PR — that's the contract that keeps the realtime surface honest.
+
+## Tests
+
+When you add an `emit*` method on `PresenceRealtimeService` or a service that calls it, add at least one unit test that asserts the emit happens. The `gateway-unit-tests` skill (`.cursor/skills/gateway-unit-tests/SKILL.md`) shows the FakeServer pattern for this.

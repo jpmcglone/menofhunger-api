@@ -75,6 +75,10 @@ enum NotificationKind {
   crew_owner_transfer_vote
   crew_wall_mention
   crew_disbanded
+  community_group_invite_received
+  community_group_invite_accepted
+  community_group_invite_declined
+  community_group_invite_cancelled
 }
 
 enum CoinTransferKind {
@@ -194,6 +198,19 @@ enum CommunityGroupMemberRole {
 enum CommunityGroupMemberStatus {
   active
   pending
+}
+
+/**
+ * Lifecycle of a CommunityGroupInvite. The same row is reused across the
+ * `pending -> declined -> pending` re-invite path so we keep historical
+ * timestamps (`lastDeclinedAt`, `lastNotifiedAt`) for the cooldowns.
+ */
+enum CommunityGroupInviteStatus {
+  pending
+  accepted
+  declined
+  cancelled
+  expired
 }
 
 enum CrewMemberRole {
@@ -375,6 +392,8 @@ model User {
 
   communityGroupsCreated CommunityGroup[] @relation("CommunityGroup_createdBy")
   communityGroupMemberships CommunityGroupMember[]
+  communityGroupInvitesSent     CommunityGroupInvite[] @relation("CommunityGroupInvite_invitedBy")
+  communityGroupInvitesReceived CommunityGroupInvite[] @relation("CommunityGroupInvite_invitee")
 
   crewsOwned              Crew[]                 @relation("Crew_owner")
   crewsDesignatedSuccessorOf Crew[]              @relation("Crew_designatedSuccessor")
@@ -615,6 +634,7 @@ model CommunityGroup {
   memberCount    Int     @default(0)
 
   members       CommunityGroupMember[]
+  invites       CommunityGroupInvite[]
   posts         Post[]
   notifications Notification[] @relation("Notification_subjectGroup")
 
@@ -638,6 +658,65 @@ model CommunityGroupMember {
   @@id([groupId, userId])
   @@index([userId, status])
   @@index([groupId, status])
+}
+
+/**
+ * Owner/moderator-issued invitation for a user to join a CommunityGroup.
+ *
+ * Lifecycle:
+ *   - `pending`   — issued, awaiting invitee response. Re-invites of the same
+ *     (groupId, inviteeUserId) reuse this row; we only re-notify the invitee
+ *     after `GROUP_INVITE_RENOTIFY_AFTER_HOURS` of silence.
+ *   - `accepted`  — invitee joined. If they later leave, a fresh invite can be
+ *     created (the prior row remains for history).
+ *   - `declined`  — invitee rejected. Re-inviting before
+ *     `GROUP_INVITE_REINVITE_AFTER_DECLINE_DAYS` is forbidden; afterward the
+ *     row is reset back to `pending` and `lastDeclinedAt` is preserved so the
+ *     inviter's UI can still show "previously declined".
+ *   - `cancelled` — pulled by the inviter (or any owner/mod).
+ *   - `expired`   — flipped by an expiry job after `expiresAt`.
+ *
+ * Uniqueness on `[groupId, inviteeUserId]` means there's at most one invite
+ * row per (group, invitee) — re-invites mutate this row in place.
+ */
+model CommunityGroupInvite {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  groupId String
+  group   CommunityGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  invitedByUserId String
+  invitedBy       User   @relation("CommunityGroupInvite_invitedBy", fields: [invitedByUserId], references: [id], onDelete: Cascade)
+
+  inviteeUserId String
+  invitee       User   @relation("CommunityGroupInvite_invitee", fields: [inviteeUserId], references: [id], onDelete: Cascade)
+
+  /** Optional short note from the inviter (shown to the invitee on the row + push body). */
+  message String? @db.VarChar(500)
+
+  status CommunityGroupInviteStatus @default(pending)
+
+  /** Default expiry is 30 days after most-recent (re)issue; refreshed on re-invite. */
+  expiresAt DateTime
+
+  /** When the most recent push/in-app notification was sent for this invite. Used for re-notify cooldown. */
+  lastNotifiedAt DateTime?
+
+  /** When the invitee last declined. Preserved across re-invites for the picker UI hint. */
+  lastDeclinedAt DateTime?
+
+  /** Timestamp of the most recent terminal transition (accepted/declined/cancelled/expired). */
+  respondedAt DateTime?
+
+  notifications Notification[] @relation("Notification_subjectCommunityGroupInvite")
+
+  @@unique([groupId, inviteeUserId])
+  @@index([inviteeUserId, status, createdAt])
+  @@index([invitedByUserId, status, createdAt])
+  @@index([groupId, status, createdAt])
+  @@index([status, expiresAt])
 }
 
 /**
@@ -1406,6 +1485,12 @@ model Notification {
    * SetNull on delete so notifications survive invite cleanup.
    */
   subjectCrewInviteId String?
+  /**
+   * Specific community group invite this notification refers to. Mirrors the
+   * crew invite pattern so the notification UI can accept/decline the exact
+   * invite without an extra round-trip.
+   */
+  subjectCommunityGroupInviteId String?
   title     String?
   body      String?
 
@@ -1419,6 +1504,7 @@ model Notification {
   subjectGroup CommunityGroup? @relation("Notification_subjectGroup", fields: [subjectGroupId], references: [id], onDelete: SetNull)
   subjectCrew  Crew?           @relation("Notification_subjectCrew", fields: [subjectCrewId], references: [id], onDelete: SetNull)
   subjectCrewInvite CrewInvite? @relation("Notification_subjectCrewInvite", fields: [subjectCrewInviteId], references: [id], onDelete: SetNull)
+  subjectCommunityGroupInvite CommunityGroupInvite? @relation("Notification_subjectCommunityGroupInvite", fields: [subjectCommunityGroupInviteId], references: [id], onDelete: SetNull)
 
   @@index([recipientUserId, createdAt])
   @@index([recipientUserId, deliveredAt])

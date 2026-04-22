@@ -27,6 +27,9 @@ alwaysApply: true
 - Apply: `npm run prisma:migrate:deploy`
 - Generate: `npx prisma generate`
 
+## Real-time first
+- Mutations that change state another user/tab can observe MUST emit a websocket event via `PresenceRealtimeService` in addition to returning the HTTP envelope. See rule `60-realtime-first.mdc`.
+
 ## After substantive changes
-- `npm run build`
+- See `40-feature-done-checklist.mdc` (lint, typecheck, build, tests, prisma).
 

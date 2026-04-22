@@ -35,6 +35,7 @@ export type CreateNotificationParams = {
   subjectGroupId?: string | null;
   subjectCrewId?: string | null;
   subjectCrewInviteId?: string | null;
+  subjectCommunityGroupInviteId?: string | null;
   title?: string | null;
   body?: string | null;
 };
@@ -180,6 +181,7 @@ export class NotificationsService {
       subjectGroupId,
       subjectCrewId,
       subjectCrewInviteId,
+      subjectCommunityGroupInviteId,
       title,
       body,
     } = params;
@@ -210,6 +212,10 @@ export class NotificationsService {
         crew_owner_transfer_vote: 'started a vote to transfer ownership',
         crew_wall_mention: 'mentioned you on the crew wall',
         crew_disbanded: 'Your crew was disbanded',
+        community_group_invite_received: 'invited you to their group',
+        community_group_invite_accepted: 'accepted your group invite',
+        community_group_invite_declined: 'declined your group invite',
+        community_group_invite_cancelled: 'cancelled their group invite',
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
@@ -227,6 +233,7 @@ export class NotificationsService {
           subjectGroupId: subjectGroupId ?? undefined,
           subjectCrewId: subjectCrewId ?? undefined,
           subjectCrewInviteId: subjectCrewInviteId ?? undefined,
+          subjectCommunityGroupInviteId: subjectCommunityGroupInviteId ?? undefined,
           title: fallbackTitle ?? undefined,
           body: body ?? undefined,
         },
@@ -557,6 +564,30 @@ export class NotificationsService {
     if (kind === 'crew_invite_cancelled') {
       return {
         title: 'Crew invite cancelled',
+        body: snippet ?? 'The invite is no longer active.',
+      };
+    }
+    if (kind === 'community_group_invite_received') {
+      return {
+        title: `${actorName} invited you to a group`,
+        body: snippet ?? 'Open to see the invite.',
+      };
+    }
+    if (kind === 'community_group_invite_accepted') {
+      return {
+        title: `${actorName} accepted your group invite`,
+        body: snippet ?? 'Welcome them to the group.',
+      };
+    }
+    if (kind === 'community_group_invite_declined') {
+      return {
+        title: `${actorName} declined your group invite`,
+        body: snippet ?? 'No worries — invite someone else.',
+      };
+    }
+    if (kind === 'community_group_invite_cancelled') {
+      return {
+        title: 'Group invite cancelled',
         body: snippet ?? 'The invite is no longer active.',
       };
     }
@@ -1439,11 +1470,12 @@ export class NotificationsService {
       });
     }
 
-    // Batch-lookup groups for group_join_request notifications (slug + name for routing/display).
+    // Batch-lookup groups for any notification that carries a subjectGroupId
+    // (group_join_request and community_group_invite_* both use it for routing).
     const subjectGroupIds = [
       ...new Set(
         raw
-          .filter((n) => n.kind === 'group_join_request' && n.subjectGroupId)
+          .filter((n) => Boolean(n.subjectGroupId))
           .map((n) => n.subjectGroupId as string),
       ),
     ];
@@ -1505,6 +1537,22 @@ export class NotificationsService {
       subjectCrews.map((c) => [c.id, (c.name ?? '').trim() || null] as const),
     );
 
+    // Same idea for community group invites: hydrate status so the row can
+    // render Joined / Declined / No longer available without a refetch.
+    const subjectCommunityGroupInviteIds = [
+      ...new Set(raw.map((n) => n.subjectCommunityGroupInviteId).filter(Boolean) as string[]),
+    ];
+    const subjectCommunityGroupInvites =
+      subjectCommunityGroupInviteIds.length > 0
+        ? await this.prisma.communityGroupInvite.findMany({
+            where: { id: { in: subjectCommunityGroupInviteIds } },
+            select: { id: true, status: true },
+          })
+        : [];
+    const subjectCommunityGroupInviteStatusById = new Map(
+      subjectCommunityGroupInvites.map((inv) => [inv.id, inv.status] as const),
+    );
+
     const dtos: NotificationDto[] = raw.map((n) => {
       const preview = n.subjectPostId ? subjectPreviewByPostId.get(n.subjectPostId) ?? null : null;
       const articlePreview = n.subjectArticleId ? subjectArticlePreviewById.get(n.subjectArticleId) ?? null : null;
@@ -1523,6 +1571,9 @@ export class NotificationsService {
         : n.subjectCrewInviteId
           ? subjectCrewNameByInviteId.get(n.subjectCrewInviteId) ?? null
           : null;
+      const subjectCommunityGroupInviteStatus = n.subjectCommunityGroupInviteId
+        ? subjectCommunityGroupInviteStatusById.get(n.subjectCommunityGroupInviteId) ?? null
+        : null;
       return this.toNotificationDto(
         n,
         publicBaseUrl,
@@ -1534,6 +1585,7 @@ export class NotificationsService {
         subjectGroup?.name ?? null,
         subjectCrewInviteStatus,
         subjectCrewName,
+        subjectCommunityGroupInviteStatus,
       );
     });
 
@@ -2364,6 +2416,7 @@ export class NotificationsService {
       subjectGroupId?: string | null;
       subjectCrewId?: string | null;
       subjectCrewInviteId?: string | null;
+      subjectCommunityGroupInviteId?: string | null;
       title: string | null;
       body: string | null;
       actor: {
@@ -2386,6 +2439,7 @@ export class NotificationsService {
     subjectGroupName: string | null = null,
     subjectCrewInviteStatus: NotificationDto['subjectCrewInviteStatus'] = null,
     subjectCrewName: string | null = null,
+    subjectCommunityGroupInviteStatus: NotificationDto['subjectCommunityGroupInviteStatus'] = null,
   ): NotificationDto {
     let actor: NotificationActorDto | null = null;
     if (n.actor && !(n.actor as { bannedAt?: Date | null }).bannedAt) {
@@ -2424,6 +2478,8 @@ export class NotificationsService {
       subjectCrewInviteId: n.subjectCrewInviteId ?? null,
       subjectCrewInviteStatus: subjectCrewInviteStatus ?? null,
       subjectCrewName: subjectCrewName ?? null,
+      subjectCommunityGroupInviteId: n.subjectCommunityGroupInviteId ?? null,
+      subjectCommunityGroupInviteStatus: subjectCommunityGroupInviteStatus ?? null,
       title: n.title,
       body: n.body,
       subjectPostPreview: subjectPostPreview ?? null,
@@ -2550,6 +2606,16 @@ export class NotificationsService {
       if (candidate) subjectCrewName = candidate;
     }
 
+    let subjectCommunityGroupInviteStatus:
+      NotificationDto['subjectCommunityGroupInviteStatus'] = null;
+    if (n.subjectCommunityGroupInviteId) {
+      const inv = await this.prisma.communityGroupInvite.findUnique({
+        where: { id: n.subjectCommunityGroupInviteId },
+        select: { status: true },
+      });
+      subjectCommunityGroupInviteStatus = inv?.status ?? null;
+    }
+
     return this.toNotificationDto(
       n,
       publicBaseUrl,
@@ -2561,6 +2627,270 @@ export class NotificationsService {
       subjectGroupName,
       subjectCrewInviteStatus,
       subjectCrewName,
+      subjectCommunityGroupInviteStatus,
     );
+  }
+
+  /**
+   * Create or refresh a community-group invite notification on the invitee. On
+   * re-invite (existing pending invite), bumps `createdAt`, **re-marks unread**
+   * (clears delivered/readAt) and bumps the undelivered counter so the bell
+   * badge reflects the new ping. Otherwise creates a fresh row.
+   *
+   * Returns true when the invitee was actively (re)notified — caller should
+   * stamp `lastNotifiedAt` on the invite when this returns true.
+   */
+  async upsertCommunityGroupInviteReceivedNotification(params: {
+    inviteeUserId: string;
+    inviterUserId: string;
+    groupId: string;
+    inviteId: string;
+    bodySnippet?: string | null;
+  }): Promise<{ notified: boolean }> {
+    const { inviteeUserId, inviterUserId, groupId, inviteId, bodySnippet } = params;
+    if (inviteeUserId === inviterUserId) return { notified: false };
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.notification.findFirst({
+        where: {
+          recipientUserId: inviteeUserId,
+          kind: 'community_group_invite_received',
+          subjectCommunityGroupInviteId: inviteId,
+        },
+        select: { id: true, deliveredAt: true, readAt: true },
+      });
+
+      if (existing) {
+        const now = new Date();
+        const wasDelivered = existing.deliveredAt != null;
+        await tx.notification.update({
+          where: { id: existing.id },
+          data: {
+            createdAt: now,
+            deliveredAt: null,
+            readAt: null,
+            ignoredAt: null,
+            actorUserId: inviterUserId,
+            body: bodySnippet ?? undefined,
+          },
+        });
+        if (wasDelivered) {
+          await tx.user.update({
+            where: { id: inviteeUserId },
+            data: { undeliveredNotificationCount: { increment: 1 } },
+          });
+        }
+        const undeliveredCount = await tx.notification.count({
+          where: { recipientUserId: inviteeUserId, deliveredAt: null },
+        });
+        return { kind: 'updated' as const, notificationId: existing.id, undeliveredCount };
+      }
+
+      const created = await tx.notification.create({
+        data: {
+          recipientUserId: inviteeUserId,
+          kind: 'community_group_invite_received',
+          actorUserId: inviterUserId,
+          subjectGroupId: groupId,
+          subjectCommunityGroupInviteId: inviteId,
+          title: 'invited you to their group',
+          body: bodySnippet ?? undefined,
+        },
+        select: { id: true },
+      });
+      await tx.user.update({
+        where: { id: inviteeUserId },
+        data: { undeliveredNotificationCount: { increment: 1 } },
+      });
+      const undeliveredCount = await tx.notification.count({
+        where: { recipientUserId: inviteeUserId, deliveredAt: null },
+      });
+      return { kind: 'created' as const, notificationId: created.id, undeliveredCount };
+    });
+
+    this.presenceRealtime.emitNotificationsUpdated(inviteeUserId, {
+      undeliveredCount: result.undeliveredCount,
+    });
+    try {
+      const dto = await this.buildNotificationDtoForRecipient({
+        recipientUserId: inviteeUserId,
+        notificationId: result.notificationId,
+      });
+      if (dto) {
+        this.presenceRealtime.emitNotificationNew(inviteeUserId, { notification: dto });
+      }
+    } catch (err) {
+      this.logger.debug(`[notifications] Failed to emit group invite notification: ${err}`);
+    }
+
+    // Web push (best-effort, gated on user prefs).
+    try {
+      const prefs = await this.getPreferencesInternal(inviteeUserId);
+      if (this.shouldSendPushForKind(prefs, 'community_group_invite_received')) {
+        const actor = await this.prisma.user.findUnique({
+          where: { id: inviterUserId },
+          select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true },
+        });
+        const pushCopy = this.buildPushCopy({
+          kind: 'community_group_invite_received',
+          actor,
+          fallbackTitle: 'invited you to their group',
+          body: bodySnippet ?? null,
+        });
+        const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+        const icon = actor
+          ? publicAssetUrl({ publicBaseUrl, key: actor.avatarKey, updatedAt: actor.avatarUpdatedAt })
+          : null;
+        this.sendWebPushToRecipient(inviteeUserId, {
+          title: pushCopy.title,
+          body: pushCopy.body,
+          subjectPostId: null,
+          subjectUserId: null,
+          tag: this.buildPushTag({
+            recipientUserId: inviteeUserId,
+            kind: 'community_group_invite_received',
+            actorUserId: inviterUserId,
+            subjectPostId: null,
+            subjectUserId: null,
+          }),
+          icon,
+          badge: '/android-chrome-192x192.png',
+          renotify: true,
+          kind: 'community_group_invite_received',
+          sourceLabel: 'From notifications',
+        }).catch((err) => {
+          this.logger.warn(`[push] Failed to send group invite push: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+    } catch (err) {
+      this.logger.debug(`[push] Failed to evaluate push prefs for group invite: ${err}`);
+    }
+
+    return { notified: true };
+  }
+
+  /**
+   * Create or refresh a community-group invite *response* notification on the
+   * inviter (accepted/declined). On a repeat from the same actor + invite,
+   * bumps `createdAt` and re-marks unread instead of stacking duplicate rows.
+   */
+  async upsertCommunityGroupInviteResponseNotification(params: {
+    inviterUserId: string;
+    inviteeUserId: string;
+    groupId: string;
+    inviteId: string;
+    response: 'accepted' | 'declined';
+  }): Promise<void> {
+    const { inviterUserId, inviteeUserId, groupId, inviteId, response } = params;
+    if (inviterUserId === inviteeUserId) return;
+    const kind: NotificationKind =
+      response === 'accepted'
+        ? 'community_group_invite_accepted'
+        : 'community_group_invite_declined';
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.notification.findFirst({
+        where: {
+          recipientUserId: inviterUserId,
+          kind,
+          subjectCommunityGroupInviteId: inviteId,
+          actorUserId: inviteeUserId,
+        },
+        select: { id: true, deliveredAt: true },
+      });
+      if (existing) {
+        const now = new Date();
+        const wasDelivered = existing.deliveredAt != null;
+        await tx.notification.update({
+          where: { id: existing.id },
+          data: { createdAt: now, deliveredAt: null, readAt: null, ignoredAt: null },
+        });
+        if (wasDelivered) {
+          await tx.user.update({
+            where: { id: inviterUserId },
+            data: { undeliveredNotificationCount: { increment: 1 } },
+          });
+        }
+        const undeliveredCount = await tx.notification.count({
+          where: { recipientUserId: inviterUserId, deliveredAt: null },
+        });
+        return { kind: 'updated' as const, notificationId: existing.id, undeliveredCount };
+      }
+      const created = await tx.notification.create({
+        data: {
+          recipientUserId: inviterUserId,
+          kind,
+          actorUserId: inviteeUserId,
+          subjectGroupId: groupId,
+          subjectCommunityGroupInviteId: inviteId,
+          title:
+            response === 'accepted'
+              ? 'accepted your group invite'
+              : 'declined your group invite',
+        },
+        select: { id: true },
+      });
+      await tx.user.update({
+        where: { id: inviterUserId },
+        data: { undeliveredNotificationCount: { increment: 1 } },
+      });
+      const undeliveredCount = await tx.notification.count({
+        where: { recipientUserId: inviterUserId, deliveredAt: null },
+      });
+      return { kind: 'created' as const, notificationId: created.id, undeliveredCount };
+    });
+
+    this.presenceRealtime.emitNotificationsUpdated(inviterUserId, {
+      undeliveredCount: result.undeliveredCount,
+    });
+    try {
+      const dto = await this.buildNotificationDtoForRecipient({
+        recipientUserId: inviterUserId,
+        notificationId: result.notificationId,
+      });
+      if (dto) {
+        this.presenceRealtime.emitNotificationNew(inviterUserId, { notification: dto });
+      }
+    } catch (err) {
+      this.logger.debug(`[notifications] Failed to emit invite response notification: ${err}`);
+    }
+
+    // Push for accepted/declined is best-effort; reuse generic flow.
+    try {
+      const prefs = await this.getPreferencesInternal(inviterUserId);
+      if (this.shouldSendPushForKind(prefs, kind)) {
+        const actor = await this.prisma.user.findUnique({
+          where: { id: inviteeUserId },
+          select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true },
+        });
+        const pushCopy = this.buildPushCopy({ kind, actor, fallbackTitle: null, body: null });
+        const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+        const icon = actor
+          ? publicAssetUrl({ publicBaseUrl, key: actor.avatarKey, updatedAt: actor.avatarUpdatedAt })
+          : null;
+        this.sendWebPushToRecipient(inviterUserId, {
+          title: pushCopy.title,
+          body: pushCopy.body,
+          subjectPostId: null,
+          subjectUserId: null,
+          tag: this.buildPushTag({
+            recipientUserId: inviterUserId,
+            kind,
+            actorUserId: inviteeUserId,
+            subjectPostId: null,
+            subjectUserId: null,
+          }),
+          icon,
+          badge: '/android-chrome-192x192.png',
+          renotify: true,
+          kind,
+          sourceLabel: 'From notifications',
+        }).catch((err) => {
+          this.logger.warn(`[push] Failed to send invite response push: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+    } catch (err) {
+      this.logger.debug(`[push] Failed to evaluate push prefs for invite response: ${err}`);
+    }
   }
 }

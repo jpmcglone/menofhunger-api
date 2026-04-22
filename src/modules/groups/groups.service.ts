@@ -90,12 +90,19 @@ export class GroupsService {
     // Don't expose rules to anonymous viewers
     if (!params.viewerUserId) dto.rules = null;
 
-    // Include pending count for owners and moderators.
+    // Owners + mods get badge counts: pending join requests (approval-policy
+    // groups) and pending outbound invites. Both feed badges in the header so
+    // owners can land on the right management page without hunting.
     const isAdmin = viewerMembership?.status === 'active' &&
       (viewerMembership.role === 'owner' || viewerMembership.role === 'moderator');
-    if (isAdmin && g.joinPolicy === 'approval') {
-      dto.pendingMemberCount = await this.prisma.communityGroupMember.count({
-        where: { groupId: g.id, status: 'pending' },
+    if (isAdmin) {
+      if (g.joinPolicy === 'approval') {
+        dto.pendingMemberCount = await this.prisma.communityGroupMember.count({
+          where: { groupId: g.id, status: 'pending' },
+        });
+      }
+      dto.pendingInviteCount = await this.prisma.communityGroupInvite.count({
+        where: { groupId: g.id, status: 'pending', expiresAt: { gt: new Date() } },
       });
     }
 
