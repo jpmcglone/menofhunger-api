@@ -244,6 +244,12 @@ export class GroupsService {
     if (params.avatarImageUrl !== undefined) data.avatarImageUrl = params.avatarImageUrl?.trim() || null;
     if (params.joinPolicy !== undefined) {
       if (!isOwner && !params.isSiteAdmin) throw new ForbiddenException('Only the owner can change join policy.');
+      // Privacy is one-way: open -> private is allowed (with UI warning), but
+      // private -> open is permanently blocked. Members joined under a privacy
+      // promise; lifting it would silently expose their participation.
+      if (g.joinPolicy === 'approval' && params.joinPolicy === 'open') {
+        throw new BadRequestException('A private group cannot be made open. This is permanent.');
+      }
       data.joinPolicy = params.joinPolicy;
     }
     if (params.isFeatured !== undefined || params.featuredOrder !== undefined) {
@@ -578,7 +584,9 @@ export class GroupsService {
     });
     if (!g) throw new NotFoundException('Group not found.');
 
-    await this.assertActiveMember(g.id, params.viewerUserId);
+    // Read access: open groups are visible to any verified user; private groups
+    // remain members-only. Composer membership is enforced separately on write.
+    await this.posts.assertCanReadCommunityGroup(params.viewerUserId, g.id);
 
     const collapseOpts = {
       collapseByRoot: true,

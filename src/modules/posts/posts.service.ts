@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import type { PostMediaKind, PostVisibility } from '@prisma/client';
+import type { CommunityGroupJoinPolicy, PostMediaKind, PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
@@ -77,11 +77,18 @@ export class PostsService {
     return { communityGroupId: null };
   }
 
+  /**
+   * Group post read access:
+   *   • OPEN groups: any signed-in, verified user can read posts.
+   *   • PRIVATE (approval) groups: members-only.
+   * Posting still requires active membership regardless of joinPolicy — that
+   * gate lives on the create path, not here.
+   */
   private async assertReadableCommunityGroupPost(
     post: { userId: string; communityGroupId: string | null },
     viewerUserId: string | null,
     viewer: ViewerContext | null,
-    opts?: { knownActiveMember?: boolean },
+    opts?: { knownActiveMember?: boolean; knownGroupJoinPolicy?: CommunityGroupJoinPolicy },
   ): Promise<void> {
     const gid = post.communityGroupId;
     if (!gid) return;
@@ -89,6 +96,21 @@ export class PostsService {
     if (viewerUserId && post.userId === viewerUserId) return;
     if (!viewerUserId) throw new ForbiddenException('Sign in to view this post.');
     if (opts?.knownActiveMember) return;
+
+    let joinPolicy: CommunityGroupJoinPolicy | null = opts?.knownGroupJoinPolicy ?? null;
+    if (!joinPolicy) {
+      const g = await this.prisma.communityGroup.findUnique({
+        where: { id: gid },
+        select: { joinPolicy: true },
+      });
+      joinPolicy = g?.joinPolicy ?? 'approval';
+    }
+
+    if (joinPolicy === 'open') {
+      if (this.viewerContextService.isVerified(viewer)) return;
+      throw new ForbiddenException('Verify your account to view group posts.');
+    }
+
     const m = await this.prisma.communityGroupMember.findUnique({
       where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
       select: { status: true },
@@ -111,20 +133,36 @@ export class PostsService {
           .filter((x): x is string => Boolean(x)),
       ),
     ];
+    if (groupIds.length === 0) return posts;
+
+    // Fetch joinPolicy for each referenced group so OPEN groups can pass through
+    // for verified non-members (posts in OPEN groups are readable by any
+    // verified user; PRIVATE/approval groups remain members-only).
+    const groups = await this.prisma.communityGroup.findMany({
+      where: { id: { in: groupIds } },
+      select: { id: true, joinPolicy: true },
+    });
+    const policyByGroup = new Map(groups.map((g) => [g.id, g.joinPolicy] as const));
+
     let memberGroupIds = new Set<string>();
-    if (viewerUserId && groupIds.length > 0) {
+    if (viewerUserId) {
       const rows = await this.prisma.communityGroupMember.findMany({
         where: { userId: viewerUserId, groupId: { in: groupIds }, status: 'active' },
         select: { groupId: true },
       });
       memberGroupIds = new Set(rows.map((r) => r.groupId));
     }
+
+    const viewerVerified = this.viewerContextService.isVerified(viewer);
+
     return posts.filter((p) => {
       const gid = (p as { communityGroupId?: string | null }).communityGroupId ?? null;
       if (!gid) return true;
       if (viewer?.siteAdmin) return true;
       if (viewerUserId && p.userId === viewerUserId) return true;
-      return memberGroupIds.has(gid);
+      if (memberGroupIds.has(gid)) return true;
+      if (viewerVerified && policyByGroup.get(gid) === 'open') return true;
+      return false;
     });
   }
 
@@ -792,9 +830,35 @@ export class PostsService {
     return rows.map((r) => r.groupId);
   }
 
-  async assertViewerActiveMemberOfGroup(viewerUserId: string, groupId: string): Promise<void> {
+  /**
+   * Read-access gate for a community group's post feed.
+   *   • OPEN groups: any signed-in, verified viewer may read.
+   *   • PRIVATE (approval) groups: active members only (site admins always allowed).
+   * Composer / write paths use their own membership check — do not call this
+   * from those paths.
+   */
+  async assertCanReadCommunityGroup(viewerUserId: string | null, groupId: string): Promise<void> {
     const gid = (groupId ?? '').trim();
     if (!gid) throw new ForbiddenException('Group not found.');
+
+    const group = await this.prisma.communityGroup.findFirst({
+      where: { id: gid, deletedAt: null },
+      select: { joinPolicy: true },
+    });
+    if (!group) throw new NotFoundException('Group not found.');
+
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
+    if (viewer?.siteAdmin) return;
+
+    if (group.joinPolicy === 'open') {
+      if (!viewerUserId) throw new ForbiddenException('Sign in to view this group.');
+      if (!this.viewerContextService.isVerified(viewer)) {
+        throw new ForbiddenException('Verify your account to view groups.');
+      }
+      return;
+    }
+
+    if (!viewerUserId) throw new ForbiddenException('This group is private.');
     const m = await this.prisma.communityGroupMember.findUnique({
       where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
       select: { status: true },
@@ -4677,8 +4741,41 @@ export class PostsService {
       }
 
       // Explicit @mentions in body: one notification each (priority over comment notifications).
+      // Suppress mentions when the post lives in a private (approval) group and the
+      // recipient is not an active member — they cannot read the post anyway, so
+      // the notification would be a dead end and could leak existence of private content.
+      const postCommunityGroupId = (post as { communityGroupId?: string | null }).communityGroupId ?? null;
+      let privateGroupMemberSet: Set<string> | null = null;
+      if (postCommunityGroupId && bodyMentionIds.length > 0) {
+        try {
+          const group = await this.prisma.communityGroup.findUnique({
+            where: { id: postCommunityGroupId },
+            select: { joinPolicy: true },
+          });
+          if (group?.joinPolicy === 'approval') {
+            const members = await this.prisma.communityGroupMember.findMany({
+              where: {
+                groupId: postCommunityGroupId,
+                userId: { in: bodyMentionIds },
+                status: 'active',
+              },
+              select: { userId: true },
+            });
+            privateGroupMemberSet = new Set(members.map((m) => m.userId));
+          }
+        } catch (err) {
+          this.logger.warn(
+            `[notifications] Failed to evaluate private-group membership for mentions: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          // On error, fall back to the safer behavior of suppressing all mentions for
+          // a group post we couldn't verify access for.
+          privateGroupMemberSet = new Set();
+        }
+      }
+
       for (const uid of bodyMentionIds) {
         if (uid === userId) continue;
+        if (privateGroupMemberSet && !privateGroupMemberSet.has(uid)) continue;
         let mentionTitle: string;
         if (!parentId) {
           mentionTitle = 'mentioned you in a post';

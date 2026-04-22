@@ -737,3 +737,211 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
     );
   });
 });
+
+// ─── runPostCreateSideEffects: mention notifications gated by group privacy ──
+//
+// The mention loop inside `runPostCreateSideEffects` must:
+//   • notify all explicitly @mentioned users for non-group posts
+//   • notify all mentioned users for posts in OPEN community groups
+//   • notify only ACTIVE members for posts in PRIVATE (approval) community
+//     groups — mentioning someone who can't read the post is a dead end and
+//     leaks existence of private content.
+
+describe('PostsService.runPostCreateSideEffects — mention privacy gating', () => {
+  function setup() {
+    const { service, deps } = makeService();
+    deps.prisma.communityGroup = { findUnique: jest.fn() };
+    deps.prisma.communityGroupMember = { findMany: jest.fn(async () => []) };
+    deps.prisma.follow = { findMany: jest.fn(async () => []) };
+    return { service, deps };
+  }
+
+  function basePost(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      id: 'post-1',
+      userId: 'author',
+      communityGroupId: null,
+      ...overrides,
+    } as any;
+  }
+
+  async function callSideEffects(service: PostsService, args: any): Promise<void> {
+    await (service as any).runPostCreateSideEffects({
+      actorUserId: 'author',
+      post: basePost(args.postOverrides),
+      parentId: null,
+      parentAuthorUserId: null,
+      threadPostsForRoles: [],
+      bodyMentionIds: args.bodyMentionIds ?? [],
+      bodyMentionSet: new Set(args.bodyMentionIds ?? []),
+      bodySnippet: '',
+      visibility: 'public',
+      quotedInfo: null,
+      didAwardStreak: false,
+    });
+  }
+
+  it('notifies every mentioned user when the post is not in a community group', async () => {
+    const { service, deps } = setup();
+    await callSideEffects(service, {
+      bodyMentionIds: ['u1', 'u2'],
+      postOverrides: { communityGroupId: null },
+    });
+    expect(deps.prisma.communityGroup.findUnique).not.toHaveBeenCalled();
+    const mentionCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
+      (c) => c[0]?.kind === 'mention',
+    );
+    expect(mentionCalls.map((c) => c[0].recipientUserId).sort()).toEqual(['u1', 'u2']);
+  });
+
+  it('notifies every mentioned user when the post is in an OPEN community group', async () => {
+    const { service, deps } = setup();
+    deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy: 'open' });
+
+    await callSideEffects(service, {
+      bodyMentionIds: ['u1', 'u2'],
+      postOverrides: { communityGroupId: 'g1' },
+    });
+
+    expect(deps.prisma.communityGroup.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'g1' } }),
+    );
+    expect(deps.prisma.communityGroupMember.findMany).not.toHaveBeenCalled();
+    const mentionCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
+      (c) => c[0]?.kind === 'mention',
+    );
+    expect(mentionCalls.map((c) => c[0].recipientUserId).sort()).toEqual(['u1', 'u2']);
+  });
+
+  it('only notifies active members when the post is in a PRIVATE (approval) community group', async () => {
+    const { service, deps } = setup();
+    deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy: 'approval' });
+    deps.prisma.communityGroupMember.findMany.mockResolvedValue([{ userId: 'u1' }]);
+
+    await callSideEffects(service, {
+      bodyMentionIds: ['u1', 'u2'],
+      postOverrides: { communityGroupId: 'g1' },
+    });
+
+    expect(deps.prisma.communityGroupMember.findMany).toHaveBeenCalledWith({
+      where: {
+        groupId: 'g1',
+        userId: { in: ['u1', 'u2'] },
+        status: 'active',
+      },
+      select: { userId: true },
+    });
+    const mentionCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
+      (c) => c[0]?.kind === 'mention',
+    );
+    expect(mentionCalls.map((c) => c[0].recipientUserId)).toEqual(['u1']);
+  });
+
+  it('suppresses all mentions for a private group when the membership lookup fails (fail closed)', async () => {
+    const { service, deps } = setup();
+    deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy: 'approval' });
+    deps.prisma.communityGroupMember.findMany.mockRejectedValue(new Error('db down'));
+
+    await callSideEffects(service, {
+      bodyMentionIds: ['u1', 'u2'],
+      postOverrides: { communityGroupId: 'g1' },
+    });
+
+    const mentionCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
+      (c) => c[0]?.kind === 'mention',
+    );
+    expect(mentionCalls).toHaveLength(0);
+  });
+
+  it('skips group lookup when there are no mentions', async () => {
+    const { service, deps } = setup();
+    await callSideEffects(service, {
+      bodyMentionIds: [],
+      postOverrides: { communityGroupId: 'g1' },
+    });
+    expect(deps.prisma.communityGroup.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+// ─── assertCanReadCommunityGroup: open vs private gating ─────────────────────
+//
+// The read-access gate that group feeds use to decide whether a viewer may load
+// posts. OPEN groups admit any signed-in, verified viewer. PRIVATE (approval)
+// groups admit only active members. Site admins always pass.
+
+describe('PostsService.assertCanReadCommunityGroup', () => {
+  function setup() {
+    const { service, deps } = makeService();
+    deps.prisma.communityGroup = { findFirst: jest.fn() };
+    deps.prisma.communityGroupMember = { findUnique: jest.fn() };
+    deps.viewerContext.getViewer = jest.fn();
+    deps.viewerContext.isVerified = (v: any) => Boolean(v?.verifiedStatus && v.verifiedStatus !== 'none');
+    return { service, deps };
+  }
+
+  it('throws ForbiddenException when groupId is empty', async () => {
+    const { service } = setup();
+    await expect(service.assertCanReadCommunityGroup('u1', '   ')).rejects.toThrow(ForbiddenException);
+  });
+
+  it('throws NotFoundException when the group does not exist', async () => {
+    const { service, deps } = setup();
+    deps.prisma.communityGroup.findFirst.mockResolvedValue(null);
+    deps.viewerContext.getViewer.mockResolvedValue({ id: 'u1', verifiedStatus: 'verified', siteAdmin: false });
+    await expect(service.assertCanReadCommunityGroup('u1', 'gone')).rejects.toThrow(NotFoundException);
+  });
+
+  it('OPEN group: allows any verified signed-in viewer (non-member)', async () => {
+    const { service, deps } = setup();
+    deps.prisma.communityGroup.findFirst.mockResolvedValue({ joinPolicy: 'open' });
+    deps.viewerContext.getViewer.mockResolvedValue({ id: 'u1', verifiedStatus: 'verified', siteAdmin: false });
+    await expect(service.assertCanReadCommunityGroup('u1', 'g1')).resolves.toBeUndefined();
+    expect(deps.prisma.communityGroupMember.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('OPEN group: rejects unverified signed-in viewer', async () => {
+    const { service, deps } = setup();
+    deps.prisma.communityGroup.findFirst.mockResolvedValue({ joinPolicy: 'open' });
+    deps.viewerContext.getViewer.mockResolvedValue({ id: 'u1', verifiedStatus: 'none', siteAdmin: false });
+    await expect(service.assertCanReadCommunityGroup('u1', 'g1')).rejects.toThrow(ForbiddenException);
+  });
+
+  it('OPEN group: rejects anonymous viewer', async () => {
+    const { service, deps } = setup();
+    deps.prisma.communityGroup.findFirst.mockResolvedValue({ joinPolicy: 'open' });
+    deps.viewerContext.getViewer.mockResolvedValue(null);
+    await expect(service.assertCanReadCommunityGroup(null, 'g1')).rejects.toThrow(ForbiddenException);
+  });
+
+  it('PRIVATE group: allows active member', async () => {
+    const { service, deps } = setup();
+    deps.prisma.communityGroup.findFirst.mockResolvedValue({ joinPolicy: 'approval' });
+    deps.viewerContext.getViewer.mockResolvedValue({ id: 'u1', verifiedStatus: 'verified', siteAdmin: false });
+    deps.prisma.communityGroupMember.findUnique.mockResolvedValue({ status: 'active' });
+    await expect(service.assertCanReadCommunityGroup('u1', 'g1')).resolves.toBeUndefined();
+  });
+
+  it('PRIVATE group: rejects verified non-member', async () => {
+    const { service, deps } = setup();
+    deps.prisma.communityGroup.findFirst.mockResolvedValue({ joinPolicy: 'approval' });
+    deps.viewerContext.getViewer.mockResolvedValue({ id: 'u1', verifiedStatus: 'verified', siteAdmin: false });
+    deps.prisma.communityGroupMember.findUnique.mockResolvedValue(null);
+    await expect(service.assertCanReadCommunityGroup('u1', 'g1')).rejects.toThrow(ForbiddenException);
+  });
+
+  it('PRIVATE group: rejects pending member', async () => {
+    const { service, deps } = setup();
+    deps.prisma.communityGroup.findFirst.mockResolvedValue({ joinPolicy: 'approval' });
+    deps.viewerContext.getViewer.mockResolvedValue({ id: 'u1', verifiedStatus: 'verified', siteAdmin: false });
+    deps.prisma.communityGroupMember.findUnique.mockResolvedValue({ status: 'pending' });
+    await expect(service.assertCanReadCommunityGroup('u1', 'g1')).rejects.toThrow(ForbiddenException);
+  });
+
+  it('site admin always passes regardless of joinPolicy or membership', async () => {
+    const { service, deps } = setup();
+    deps.prisma.communityGroup.findFirst.mockResolvedValue({ joinPolicy: 'approval' });
+    deps.viewerContext.getViewer.mockResolvedValue({ id: 'admin', verifiedStatus: 'none', siteAdmin: true });
+    await expect(service.assertCanReadCommunityGroup('admin', 'g1')).resolves.toBeUndefined();
+    expect(deps.prisma.communityGroupMember.findUnique).not.toHaveBeenCalled();
+  });
+});

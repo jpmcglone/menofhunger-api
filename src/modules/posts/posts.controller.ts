@@ -333,7 +333,7 @@ export class PostsController {
       let applyPinnedHead: boolean;
       if (parsed.communityGroupId) {
         const gid = parsed.communityGroupId.trim();
-        await this.posts.assertViewerActiveMemberOfGroup(viewerUserId, gid);
+        await this.posts.assertCanReadCommunityGroup(viewerUserId, gid);
         groupIds = [gid];
         applyPinnedHead = groupSort === 'new';
       } else {
