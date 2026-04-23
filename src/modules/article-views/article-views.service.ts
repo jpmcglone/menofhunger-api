@@ -35,6 +35,7 @@ export type ArticleViewBreakdown = {
   premium: number;
   verified: number;
   unverified: number;
+  guest: number;
   total: number;
 };
 
@@ -235,7 +236,7 @@ export class ArticleViewsService {
 
     const article = await this.prisma.article.findFirst({
       where: { id: aid, deletedAt: null },
-      select: { visibility: true, authorId: true },
+      select: { visibility: true, authorId: true, viewCount: true },
     });
     if (!article) throw new NotFoundException('Article not found.');
 
@@ -276,7 +277,13 @@ export class ArticleViewsService {
         const verified = Number(row.verified ?? 0);
         const unverified = Number(row.unverified ?? 0);
 
-        return { premium, verified, unverified, total: premium + verified + unverified };
+        // Canonical total is the denormalized Article.viewCount shown on the page
+        // (includes anonymous/guest views). Derive guest as the remainder so the
+        // breakdown always sums to the displayed total — same pattern as posts.
+        const total = Math.max(0, Math.floor(Number(article.viewCount ?? 0)));
+        const guest = Math.max(0, total - (premium + verified + unverified));
+
+        return { premium, verified, unverified, guest, total };
       },
     });
   }
