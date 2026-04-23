@@ -771,6 +771,8 @@ export class CheckinsService {
       FROM "Post" p
       WHERE
         p."deletedAt" IS NULL
+        AND p."isDraft" = false
+        AND p."visibility" != 'onlyMe'
         AND p."createdAt" >= ${weekStart}
       GROUP BY p."userId"
       ORDER BY "daysPosted" DESC, MIN(p."createdAt") ASC
