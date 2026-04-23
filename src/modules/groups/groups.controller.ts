@@ -55,6 +55,24 @@ const invitableUsersSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
+const boolFlag = z
+  .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
+  .optional()
+  .transform((v) => v === true || v === 'true' || v === '1');
+
+const groupSearchSchema = z.object({
+  q: z.string().trim().min(1).max(80),
+  limit: z.coerce.number().int().min(1).max(30).optional(),
+  cursor: z.string().trim().min(1).max(200).optional(),
+  excludeMine: boolFlag,
+});
+
+const exploreQuerySchema = z.object({
+  excludeMine: boolFlag,
+  limit: z.coerce.number().int().min(1).max(60).optional(),
+  cursor: z.string().trim().min(1).max(200).optional(),
+});
+
 @Controller('groups')
 export class GroupsController {
   constructor(
@@ -102,8 +120,35 @@ export class GroupsController {
     default: { limit: rateLimitLimit('publicRead', 120), ttl: rateLimitTtl('publicRead', 60) },
   })
   @Get('explore')
-  async explore(@OptionalCurrentUserId() userId: string | undefined) {
-    return await this.groups.listExploreSpotlight(userId ?? null);
+  async explore(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Query() query: unknown,
+  ) {
+    const parsed = exploreQuerySchema.parse(query);
+    return await this.groups.listExploreSpotlight(userId ?? null, {
+      excludeMine: parsed.excludeMine,
+      take: parsed.limit,
+      cursor: parsed.cursor ?? null,
+    });
+  }
+
+  @UseGuards(OptionalAuthGuard)
+  @Throttle({
+    default: { limit: rateLimitLimit('publicRead', 120), ttl: rateLimitTtl('publicRead', 60) },
+  })
+  @Get('search')
+  async search(
+    @OptionalCurrentUserId() viewerUserId: string | undefined,
+    @Query() query: unknown,
+  ) {
+    const parsed = groupSearchSchema.parse(query);
+    return await this.groups.searchGroups({
+      viewerUserId: viewerUserId ?? null,
+      q: parsed.q,
+      limit: parsed.limit ?? 20,
+      cursor: parsed.cursor ?? null,
+      excludeMine: parsed.excludeMine ?? false,
+    });
   }
 
   @UseGuards(OptionalAuthGuard)

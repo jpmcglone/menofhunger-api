@@ -911,7 +911,7 @@ export class PostsService {
     if (pinnedId) baseAnd.push({ id: { not: pinnedId } });
 
     if (sort === 'trending') {
-      baseAnd.push({ trendingScore: { gt: 0 } });
+      const trendingAnd: Prisma.PostWhereInput[] = [...baseAnd, { trendingScore: { gt: 0 } }];
       const tCursor = await groupTrendingCursorWhere({
         cursor,
         lookup: async (id) => {
@@ -926,14 +926,33 @@ export class PostsService {
           return row;
         },
       });
-      if (tCursor) baseAnd.push(tCursor);
+      if (tCursor) trendingAnd.push(tCursor);
 
       const posts = await this.prisma.post.findMany({
-        where: { AND: baseAnd },
+        where: { AND: trendingAnd },
         include: feedPostInclude,
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         take: takeMain + 1,
       });
+
+      // Trending should never come back empty when the group has posts. If the
+      // popular-score cron hasn't populated scores yet (fresh deploy, scheduler
+      // disabled, all posts outside the 30-day lookback, etc.), fall back to
+      // chronological order on the first page so the surface always has content.
+      // Pagination is intentionally capped here: the fallback rows have
+      // trendingScore=null, so the trending cursor cannot describe them. Once
+      // the cron runs (every 10 min) real trending takes over.
+      if (posts.length === 0 && !cursor) {
+        const fallback = await this.prisma.post.findMany({
+          where: { AND: baseAnd },
+          include: feedPostInclude,
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: takeMain,
+        });
+        const fOut: FeedPost[] = pinned ? [pinned, ...fallback] : fallback;
+        return { posts: fOut, nextCursor: null };
+      }
+
       const slice = posts.slice(0, takeMain);
       const nextCursor = posts.length > takeMain ? slice[slice.length - 1]?.id ?? null : null;
       const out: FeedPost[] = pinned && !cursor ? [pinned, ...slice] : slice;

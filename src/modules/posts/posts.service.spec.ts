@@ -945,3 +945,104 @@ describe('PostsService.assertCanReadCommunityGroup', () => {
     expect(deps.prisma.communityGroupMember.findUnique).not.toHaveBeenCalled();
   });
 });
+
+// ─── listCommunityGroupsTimelinePosts: trending fallback ─────────────────────
+// Trending should never be empty for a group that has posts. When the popular
+// score cron has not (yet) populated trendingScore (fresh deploy, scheduler
+// off, posts older than 30d), the trending feed must gracefully fall back to
+// chronological order on the first page.
+
+describe('PostsService.listCommunityGroupsTimelinePosts trending fallback', () => {
+  function setup() {
+    return makeService({
+      post: {
+        findUnique: jest.fn(),
+        findMany: jest.fn(async () => []),
+        update: jest.fn(async () => ({})),
+        updateMany: jest.fn(async () => ({ count: 0 })),
+        create: jest.fn(),
+        findFirst: jest.fn(async () => null),
+      },
+    });
+  }
+
+  function isTrendingFindMany(args: any): boolean {
+    const first = Array.isArray(args?.orderBy) ? args.orderBy[0] : null;
+    return Boolean(first && Object.prototype.hasOwnProperty.call(first, 'trendingScore'));
+  }
+
+  it('falls back to chronological order when trending returns nothing on the first page', async () => {
+    const { service, deps } = setup();
+    const recencyRows = [
+      { id: 'p2', parentId: null, rootId: null, createdAt: new Date('2025-01-02') },
+      { id: 'p1', parentId: null, rootId: null, createdAt: new Date('2025-01-01') },
+    ];
+    (deps.prisma.post.findMany as jest.Mock).mockImplementation(async (args: any) => {
+      if (isTrendingFindMany(args)) return [];
+      return recencyRows;
+    });
+
+    const out = await service.listCommunityGroupsTimelinePosts({
+      groupIds: ['g1'],
+      limit: 10,
+      cursor: null,
+      sort: 'trending',
+      applyPinnedHead: false,
+    });
+
+    expect(deps.prisma.post.findMany).toHaveBeenCalledTimes(2);
+    const fallbackCall = (deps.prisma.post.findMany as jest.Mock).mock.calls.find(
+      (c) => !isTrendingFindMany(c[0]),
+    );
+    expect(fallbackCall?.[0]?.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p2', 'p1']);
+    expect(out.nextCursor).toBeNull();
+  });
+
+  it('does NOT fall back when trending returns rows', async () => {
+    const { service, deps } = setup();
+    (deps.prisma.post.findMany as jest.Mock).mockImplementation(async (args: any) => {
+      if (isTrendingFindMany(args)) {
+        return [{ id: 'p9', parentId: null, rootId: null, createdAt: new Date('2025-01-03') }];
+      }
+      throw new Error('chronological fallback should not run when trending has results');
+    });
+
+    const out = await service.listCommunityGroupsTimelinePosts({
+      groupIds: ['g1'],
+      limit: 10,
+      cursor: null,
+      sort: 'trending',
+      applyPinnedHead: false,
+    });
+
+    expect(deps.prisma.post.findMany).toHaveBeenCalledTimes(1);
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p9']);
+  });
+
+  it('does NOT fall back on subsequent pages (cursor present, even if trending is empty)', async () => {
+    const { service, deps } = setup();
+    (deps.prisma.post.findMany as jest.Mock).mockImplementation(async (args: any) => {
+      if (isTrendingFindMany(args)) return [];
+      throw new Error('chronological fallback should not run when paginating');
+    });
+    // Cursor lookup returns a row with a real trendingScore so the cursor where is built.
+    (deps.prisma.post.findFirst as jest.Mock).mockResolvedValue({
+      id: 'cur',
+      createdAt: new Date('2025-01-01'),
+      trendingScore: 1.5,
+    });
+
+    const out = await service.listCommunityGroupsTimelinePosts({
+      groupIds: ['g1'],
+      limit: 10,
+      cursor: 'cur',
+      sort: 'trending',
+      applyPinnedHead: false,
+    });
+
+    expect(deps.prisma.post.findMany).toHaveBeenCalledTimes(1);
+    expect(out.posts).toEqual([]);
+    expect(out.nextCursor).toBeNull();
+  });
+});

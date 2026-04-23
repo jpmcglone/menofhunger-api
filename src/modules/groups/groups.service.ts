@@ -21,6 +21,84 @@ import { RedisKeys } from '../redis/redis-keys';
 
 const FEATURED_CACHE_TTL_SECONDS = 120;
 
+/**
+ * Keyset cursor for /groups/search pagination. Encodes the (memberCount, id)
+ * tuple of the LAST row in the previous page so the next request can
+ * `WHERE memberCount < c OR (memberCount = c AND id < lastId)`.
+ */
+function encodeGroupCursor(c: { memberCount: number; id: string }): string {
+  return Buffer.from(JSON.stringify(c), 'utf8').toString('base64url');
+}
+
+function decodeGroupCursor(
+  raw: string | null | undefined,
+): { memberCount: number; id: string } | null {
+  if (!raw) return null;
+  try {
+    const json = Buffer.from(raw, 'base64url').toString('utf8');
+    const parsed = JSON.parse(json) as { memberCount?: unknown; id?: unknown };
+    if (typeof parsed.memberCount !== 'number' || typeof parsed.id !== 'string') return null;
+    return { memberCount: parsed.memberCount, id: parsed.id };
+  } catch {
+    return null;
+  }
+}
+
+/** Unique, non-empty, lowercased words from a search query. */
+function queryToWords(q: string): string[] {
+  const trimmed = (q ?? '').trim().toLowerCase();
+  if (!trimmed) return [];
+  return [...new Set(trimmed.split(/\s+/).filter((w) => w.length > 0))];
+}
+
+/**
+ * Relevance score for a group against a search query. Higher is better; ties
+ * are broken by `memberCount` then `id`. The bands are intentionally chunky so
+ * a strong signal in one field always beats a weak signal in many — that's
+ * what makes "yoga" surface a group named "Yoga" before one whose rules
+ * happen to mention yoga in passing.
+ *
+ * - 100  exact name or slug match
+ * -  90  name starts with the query
+ * -  85  slug starts with the query
+ * -  80  name contains the query (phrase)
+ * -  75  slug contains the query (phrase)
+ * -  70  every query word appears in the name
+ * -  60  description contains the query (phrase)
+ * -  50  every query word appears in the description
+ * -  45  any query word appears in the name
+ * -  40  any query word appears in the slug
+ * -  30  any query word appears in the description
+ * -  20  any query word appears in the rules
+ * -  10  fuzzy/FTS-only match (typo tolerance) — barely surfaces but isn't lost
+ */
+function scoreGroupAgainstQuery(
+  g: { name?: string | null; slug?: string | null; description?: string | null; rules?: string | null },
+  qLower: string,
+  words: string[],
+): number {
+  const name = (g.name ?? '').toLowerCase();
+  const slug = (g.slug ?? '').toLowerCase();
+  const desc = (g.description ?? '').toLowerCase();
+  const rules = (g.rules ?? '').toLowerCase();
+
+  let s = 0;
+  if (name === qLower || slug === qLower) s = Math.max(s, 100);
+  if (qLower && name.startsWith(qLower)) s = Math.max(s, 90);
+  if (qLower && slug.startsWith(qLower)) s = Math.max(s, 85);
+  if (qLower && name.includes(qLower)) s = Math.max(s, 80);
+  if (qLower && slug.includes(qLower)) s = Math.max(s, 75);
+  if (words.length > 0 && words.every((w) => name.includes(w))) s = Math.max(s, 70);
+  if (qLower && desc.includes(qLower)) s = Math.max(s, 60);
+  if (words.length > 0 && words.every((w) => desc.includes(w))) s = Math.max(s, 50);
+  if (words.some((w) => name.includes(w))) s = Math.max(s, 45);
+  if (words.some((w) => slug.includes(w))) s = Math.max(s, 40);
+  if (words.some((w) => desc.includes(w))) s = Math.max(s, 30);
+  if (words.some((w) => rules.includes(w))) s = Math.max(s, 20);
+  if (s === 0) s = 10;
+  return s;
+}
+
 function slugifyBase(name: string): string {
   return (name ?? '')
     .trim()
@@ -805,41 +883,407 @@ export class GroupsService {
     return g?.id ?? null;
   }
 
-  /** Featured groups first, then top communities by member count (Explore discovery). */
-  async listExploreSpotlight(viewerUserId: string | null) {
-    const featured = await this.prisma.communityGroup.findMany({
-      where: { deletedAt: null, isFeatured: true },
-      orderBy: [{ featuredOrder: 'asc' }, { createdAt: 'asc' }],
-      take: 8,
-    });
-    const featuredIds = featured.map((g) => g.id);
-    const takeMore = Math.max(0, 12 - featured.length);
-    const more =
-      takeMore > 0
-        ? await this.prisma.communityGroup.findMany({
-            where: {
-              deletedAt: null,
-              ...(featuredIds.length ? { id: { notIn: featuredIds } } : {}),
+  /**
+   * Server-side fuzzy group search.
+   *
+   * The pipeline gathers candidates from up to three sources and unions them:
+   *
+   *   1. **Substring + per-word ILIKE** on `name`, `slug`, `description`,
+   *      `rules`. Catches the common "I typed a few characters of the
+   *      thing" case and is the only source guaranteed to run.
+   *   2. **Trigram fuzzy** (`pg_trgm`) on `name` and `slug`. Catches typos
+   *      ("stocism" → "stoicism") and partial-word matches that ILIKE
+   *      would miss. Only runs when the query is ≥3 chars; trigram on
+   *      shorter needles is mostly noise.
+   *   3. **Full-text search** (`websearch_to_tsquery` over name + slug +
+   *      description + rules). Catches multi-word natural-language queries
+   *      with stemming ("running clubs" → "run club"). Only runs when the
+   *      query has ≥2 words.
+   *
+   * Candidates are then **scored in memory** so the most relevant match
+   * (exact name > prefix > contains > all-words-in-name > description, …)
+   * always sits at the top, with `memberCount` as the tiebreaker. The
+   * cursor is a numeric offset into the ranked list — same trade-off as
+   * `searchPosts`: dead-simple to reason about and fine at the catalog
+   * sizes we expect.
+   *
+   * Private (approval-policy) groups are only returned to viewers who are
+   * already active members.
+   */
+  async searchGroups(params: {
+    viewerUserId: string | null;
+    q: string;
+    limit: number;
+    cursor: string | null;
+    excludeMine?: boolean;
+  }): Promise<{
+    data: ReturnType<typeof toCommunityGroupShellDto>[];
+    pagination: { nextCursor: string | null };
+  }> {
+    const q = (params.q ?? '').trim();
+    if (q.length < 2) return { data: [], pagination: { nextCursor: null } };
+    const lim = Math.min(30, Math.max(1, params.limit));
+    const needle = q.slice(0, 200);
+    const qLower = needle.toLowerCase();
+    const words = queryToWords(needle);
+
+    const cursorRaw = (params.cursor ?? '').trim();
+    const offset =
+      cursorRaw && /^\d+$/.test(cursorRaw) ? Math.max(0, parseInt(cursorRaw, 10)) : 0;
+
+    // Private groups are only visible to active members. We model this as:
+    //  joinPolicy = 'open'  OR  viewer is an active member
+    const visibilityWhere: Prisma.CommunityGroupWhereInput = params.viewerUserId
+      ? {
+          OR: [
+            { joinPolicy: 'open' },
+            {
+              members: {
+                some: { userId: params.viewerUserId, status: 'active' },
+              },
             },
-            orderBy: [{ memberCount: 'desc' }, { createdAt: 'desc' }],
-            take: takeMore,
-          })
-        : [];
-    const rows = [...featured, ...more];
-    if (!viewerUserId) {
-      return { data: rows.map((g) => toCommunityGroupShellDto(g, null)) };
+          ],
+        }
+      : { joinPolicy: 'open' };
+
+    const excludeMineWhere: Prisma.CommunityGroupWhereInput | undefined =
+      params.excludeMine && params.viewerUserId
+        ? {
+            NOT: {
+              members: {
+                some: { userId: params.viewerUserId, status: 'active' },
+              },
+            },
+          }
+        : undefined;
+
+    const baseAnd: Prisma.CommunityGroupWhereInput[] = [
+      { deletedAt: null },
+      visibilityWhere,
+      ...(excludeMineWhere ? [excludeMineWhere] : []),
+    ];
+
+    // ─── Source 1: substring + per-word ILIKE ────────────────────────────
+    // The OR set is built from a phrase clause for each searchable field
+    // plus a per-word clause for every distinct token in the query. This
+    // is what makes "running yoga" match a group whose name is "Yoga" and
+    // whose description mentions "running buddies".
+    const orConditions: Prisma.CommunityGroupWhereInput[] = [
+      { name: { contains: needle, mode: 'insensitive' } },
+      { slug: { contains: needle, mode: 'insensitive' } },
+      { description: { contains: needle, mode: 'insensitive' } },
+      { rules: { contains: needle, mode: 'insensitive' } },
+    ];
+    for (const w of words) {
+      if (w === qLower) continue;
+      orConditions.push({ name: { contains: w, mode: 'insensitive' } });
+      orConditions.push({ slug: { contains: w, mode: 'insensitive' } });
+      orConditions.push({ description: { contains: w, mode: 'insensitive' } });
+      orConditions.push({ rules: { contains: w, mode: 'insensitive' } });
+    }
+
+    // Over-fetch generously so the in-memory ranking has a real candidate
+    // pool to choose from. Bounded so a runaway query can't OOM the box.
+    const fetchSize = Math.min(150, Math.max(lim * 6, 60));
+
+    const primary = await this.prisma.communityGroup.findMany({
+      where: { AND: [...baseAnd, { OR: orConditions }] },
+      orderBy: [{ memberCount: 'desc' }, { id: 'desc' }],
+      take: fetchSize,
+    });
+
+    // ─── Sources 2 + 3: trigram fuzzy + FTS ──────────────────────────────
+    // Wrapped in try/catch so environments without `pg_trgm` /
+    // `websearch_to_tsquery` (fresh test databases that haven't run the
+    // search-index migration, for example) silently degrade to substring
+    // results instead of erroring out.
+    const useTrigram = needle.length >= 3;
+    const useFts = needle.length >= 3 && words.length >= 2;
+    let augmentIds: string[] = [];
+
+    if (useTrigram || useFts) {
+      const trigramSql = useTrigram
+        ? Prisma.sql`(g."name" % ${needle} OR g."slug" % ${needle})`
+        : Prisma.sql`FALSE`;
+      const ftsSql = useFts
+        ? Prisma.sql`to_tsvector(
+            'english',
+            COALESCE(g."name", '') || ' ' ||
+            COALESCE(g."slug", '') || ' ' ||
+            COALESCE(g."description", '') || ' ' ||
+            COALESCE(g."rules", '')
+          ) @@ websearch_to_tsquery('english', ${needle})`
+        : Prisma.sql`FALSE`;
+
+      try {
+        const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+          SELECT g."id" AS "id"
+          FROM "CommunityGroup" g
+          WHERE g."deletedAt" IS NULL
+            AND (${trigramSql} OR ${ftsSql})
+          LIMIT ${fetchSize}
+        `);
+        const primaryIds = new Set(primary.map((r) => r.id));
+        augmentIds = rows.map((r) => r.id).filter((id) => !primaryIds.has(id));
+      } catch {
+        augmentIds = [];
+      }
+    }
+
+    // Hydrate fuzzy/FTS candidates with the same visibility + excludeMine
+    // gate as the primary path, so private groups the viewer can't see
+    // never leak into the result set even if they matched on text.
+    let augment: typeof primary = [];
+    if (augmentIds.length > 0) {
+      augment = await this.prisma.communityGroup.findMany({
+        where: { AND: [...baseAnd, { id: { in: augmentIds } }] },
+      });
+    }
+
+    const candidates = [...primary, ...augment];
+
+    // ─── Viewer membership (used for owner-first sort + DTO annotation) ──
+    // Fetched here, before ranking, so groups the viewer owns can be
+    // bumped to the top of the list — even when their text relevance is
+    // weaker than another group's. This matters across pagination too:
+    // sorting client-side per page would scatter owned groups across pages
+    // depending on which slice they happened to land in.
+    type ViewerMembershipRow = Prisma.CommunityGroupMemberGetPayload<{
+      select: { groupId: true; status: true; role: true };
+    }>;
+    let allMemberships: ViewerMembershipRow[] = [];
+    if (params.viewerUserId && candidates.length > 0) {
+      allMemberships = await this.prisma.communityGroupMember.findMany({
+        where: { userId: params.viewerUserId, groupId: { in: candidates.map((c) => c.id) } },
+        select: { groupId: true, status: true, role: true },
+      });
+    }
+    const ownedIds = new Set(
+      allMemberships
+        .filter((m) => m.role === 'owner' && m.status === 'active')
+        .map((m) => m.groupId),
+    );
+    const membershipByGroup = new Map(allMemberships.map((m) => [m.groupId, m] as const));
+
+    // ─── Score & rank ────────────────────────────────────────────────────
+    const ranked = candidates
+      .map((g) => ({ g, score: scoreGroupAgainstQuery(g, qLower, words) }))
+      .sort((a, b) => {
+        const aOwned = ownedIds.has(a.g.id);
+        const bOwned = ownedIds.has(b.g.id);
+        if (aOwned !== bOwned) return aOwned ? -1 : 1;
+        if (b.score !== a.score) return b.score - a.score;
+        const am = a.g.memberCount ?? 0;
+        const bm = b.g.memberCount ?? 0;
+        if (bm !== am) return bm - am;
+        return b.g.id.localeCompare(a.g.id);
+      });
+
+    const slice = ranked.slice(offset, offset + lim).map((r) => r.g);
+    const nextCursor = offset + lim < ranked.length ? String(offset + lim) : null;
+
+    if (!params.viewerUserId) {
+      return {
+        data: slice.map((g) => toCommunityGroupShellDto(g, null)),
+        pagination: { nextCursor },
+      };
+    }
+    return {
+      data: slice.map((g) => {
+        const m = membershipByGroup.get(g.id);
+        const viewerMembership = m ? { status: m.status, role: m.role } : null;
+        return toCommunityGroupShellDto(g, viewerMembership);
+      }),
+      pagination: { nextCursor },
+    };
+  }
+
+  /**
+   * Explore discovery: a richly-stacked spotlight that should never come back
+   * empty when the system has groups the viewer can plausibly join.
+   *
+   * **Page 1 (no cursor)** is a tiered waterfall:
+   *   1. Featured (admin-curated, ordered by featuredOrder)
+   *   2. Trending — most posts in the last 14 days (community heat signal)
+   *   3. Popular — top by memberCount (steady-state size signal)
+   *   4. Recent — newest groups (long-tail discovery, prevents emptiness)
+   *
+   * **Page 2+ (with cursor)** drops the curated overlays and degrades to a
+   * simple `(memberCount desc, id desc)` keyset scan. Once the user has
+   * already seen the spotlight, "more" is just a sorted catalog — we don't
+   * re-curate on every fetch.
+   *
+   * `excludeMine` filters out groups the viewer is already an active member
+   * of. The cap (`take`, default 24) is the upper bound after dedup; the
+   * actual count is whatever's available — never artificially padded.
+   * `nextCursor` is set whenever we hit `take` rows; the client paginates
+   * until it's null.
+   */
+  async listExploreSpotlight(
+    viewerUserId: string | null,
+    opts: { excludeMine?: boolean; take?: number; cursor?: string | null } = {},
+  ) {
+    const take = Math.min(Math.max(opts.take ?? 24, 1), 60);
+    const excludeMine = Boolean(opts.excludeMine && viewerUserId);
+    const decodedCursor = decodeGroupCursor(opts.cursor ?? null);
+
+    // Pre-compute the viewer's active group IDs once so each tier / cursor
+    // page can exclude them server-side. Empty when not authed or excludeMine
+    // is false.
+    let mineIds: string[] = [];
+    if (excludeMine && viewerUserId) {
+      const mine = await this.prisma.communityGroupMember.findMany({
+        where: { userId: viewerUserId, status: 'active' },
+        select: { groupId: true },
+      });
+      mineIds = mine.map((m) => m.groupId);
+    }
+    const baseExclude: Prisma.CommunityGroupWhereInput = { deletedAt: null };
+
+    // Helper: build a where clause that excludes BOTH the viewer's groups
+    // and any IDs already chosen in earlier tiers. We merge into a single
+    // `notIn` list because Prisma's plain `where` is an AND of properties,
+    // and using `{ ...baseExclude, id: {...} }` would *overwrite* an
+    // existing `id` filter rather than intersect with it — which previously
+    // caused `mineIds` to be silently dropped from Tier 3/4 the moment any
+    // featured/trending row landed in `seenIds`. Using one combined `notIn`
+    // makes the intent explicit and impossible to clobber.
+    const buildExcludeWhere = (
+      extra: ReadonlySet<string>,
+    ): Prisma.CommunityGroupWhereInput => {
+      const exclude = new Set<string>(mineIds);
+      for (const id of extra) exclude.add(id);
+      return exclude.size > 0
+        ? { ...baseExclude, id: { notIn: [...exclude] } }
+        : { ...baseExclude };
+    };
+
+    // ─── Subsequent pages: simple memberCount-desc keyset ────────────────
+    // The waterfall is intentionally a one-shot first-page treatment. Once
+    // the user is paginating, give them a homogeneous catalog ordered by
+    // popularity so the cursor is meaningful.
+    if (decodedCursor) {
+      const cursorWhere: Prisma.CommunityGroupWhereInput = {
+        OR: [
+          { memberCount: { lt: decodedCursor.memberCount } },
+          { memberCount: decodedCursor.memberCount, id: { lt: decodedCursor.id } },
+        ],
+      };
+      const rows = await this.prisma.communityGroup.findMany({
+        where: { AND: [buildExcludeWhere(new Set()), cursorWhere] },
+        orderBy: [{ memberCount: 'desc' }, { id: 'desc' }],
+        take: take + 1,
+      });
+      const hasMore = rows.length > take;
+      const slice = hasMore ? rows.slice(0, take) : rows;
+      const last = slice[slice.length - 1];
+      const nextCursor = hasMore && last
+        ? encodeGroupCursor({ memberCount: last.memberCount, id: last.id })
+        : null;
+      return {
+        data: await this.attachExploreMembership(slice, viewerUserId),
+        pagination: { nextCursor },
+      };
+    }
+
+    // ─── First page: tiered waterfall ────────────────────────────────────
+    // Tier 1: Featured (curated)
+    const featured = await this.prisma.communityGroup.findMany({
+      where: { ...buildExcludeWhere(new Set()), isFeatured: true },
+      orderBy: [{ featuredOrder: 'asc' }, { createdAt: 'asc' }],
+      take: Math.min(take, 8),
+    });
+    const seenIds = new Set(featured.map((g) => g.id));
+
+    // Tier 2: Trending — most posts in the last 14d. Single GROUP BY query.
+    let trending: Array<typeof featured[number]> = [];
+    if (seenIds.size < take) {
+      const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+      const heat = await this.prisma.post.groupBy({
+        by: ['communityGroupId'],
+        where: {
+          deletedAt: null,
+          createdAt: { gte: since },
+          communityGroupId: { not: null, ...(mineIds.length ? { notIn: mineIds } : {}) },
+        },
+        _count: { _all: true },
+        orderBy: { _count: { communityGroupId: 'desc' } },
+        take: Math.max(take, 24),
+      });
+      const heatIds = heat
+        .map((h) => h.communityGroupId)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0 && !seenIds.has(id));
+      if (heatIds.length) {
+        // AND-merge so the `in: heatIds` filter doesn't clobber the
+        // `notIn: mineIds` baseline (heatIds is already pre-filtered above,
+        // but we keep the gate explicit so this stays correct under refactor).
+        const rows = await this.prisma.communityGroup.findMany({
+          where: { AND: [buildExcludeWhere(new Set()), { id: { in: heatIds } }] },
+        });
+        // Re-order by heat (Prisma findMany doesn't preserve `in` order)
+        const order = new Map(heatIds.map((id, i) => [id, i] as const));
+        trending = rows
+          .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+          .slice(0, take - seenIds.size);
+        for (const g of trending) seenIds.add(g.id);
+      }
+    }
+
+    // Tier 3: Popular by memberCount
+    let popular: Array<typeof featured[number]> = [];
+    if (seenIds.size < take) {
+      popular = await this.prisma.communityGroup.findMany({
+        where: buildExcludeWhere(seenIds),
+        orderBy: [{ memberCount: 'desc' }, { createdAt: 'desc' }],
+        take: take - seenIds.size,
+      });
+      for (const g of popular) seenIds.add(g.id);
+    }
+
+    // Tier 4: Recent (long tail; ensures we never come back empty if anything exists)
+    let recent: Array<typeof featured[number]> = [];
+    if (seenIds.size < take) {
+      recent = await this.prisma.communityGroup.findMany({
+        where: buildExcludeWhere(seenIds),
+        orderBy: [{ createdAt: 'desc' }],
+        take: take - seenIds.size,
+      });
+    }
+
+    const rows = [...featured, ...trending, ...popular, ...recent];
+    // Only emit a cursor when we hit the cap — if all four tiers combined
+    // produced fewer than `take` rows, the catalog is genuinely exhausted.
+    const last = rows[rows.length - 1];
+    const nextCursor = rows.length >= take && last
+      ? encodeGroupCursor({ memberCount: last.memberCount, id: last.id })
+      : null;
+    return {
+      data: await this.attachExploreMembership(rows, viewerUserId),
+      pagination: { nextCursor },
+    };
+  }
+
+  /**
+   * Annotate a set of rows with the viewer's membership (status + role) for
+   * the explore surface. Pulled out of `listExploreSpotlight` so both the
+   * waterfall and cursor branches can share it.
+   */
+  private async attachExploreMembership(
+    rows: Array<{ id: string }>,
+    viewerUserId: string | null,
+  ): Promise<ReturnType<typeof toCommunityGroupShellDto>[]> {
+    if (!viewerUserId || rows.length === 0) {
+      return rows.map((g) => toCommunityGroupShellDto(g as never, null));
     }
     const memberships = await this.prisma.communityGroupMember.findMany({
       where: { userId: viewerUserId, groupId: { in: rows.map((r) => r.id) } },
       select: { groupId: true, status: true, role: true },
     });
     const byGroup = new Map(memberships.map((m) => [m.groupId, m] as const));
-    return {
-      data: rows.map((g) => {
-        const m = byGroup.get(g.id);
-        const viewerMembership = m ? { status: m.status, role: m.role } : null;
-        return toCommunityGroupShellDto(g, viewerMembership);
-      }),
-    };
+    return rows.map((g) => {
+      const m = byGroup.get(g.id);
+      const viewerMembership = m ? { status: m.status, role: m.role } : null;
+      return toCommunityGroupShellDto(g as never, viewerMembership);
+    });
   }
 }
