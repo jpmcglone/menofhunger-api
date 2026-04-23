@@ -21,6 +21,7 @@ import { PosthogService } from '../../common/posthog/posthog.service';
 import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
 import { buildAttachParentChain } from '../posts/posts.utils';
 import { toPostDto } from '../../common/dto/post.dto';
+import { toCommunityGroupPreviewDto, type CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import { collapseFeedByRoot, type FeedCollapseMode, type FeedCollapsePrefer } from '../../common/feed-collapse/collapse-by-root';
 
 export type CreateNotificationParams = {
@@ -56,6 +57,16 @@ const PUSH_COALESCE_MS: Partial<Record<string, number>> = {
   message: 30 * 1000,
 };
 const DEFAULT_COALESCE_MS = 60 * 1000;
+
+/** Render a small list of names as natural English: "A", "A and B", "A, B, and C". */
+function formatNameList(names: string[]): string {
+  const list = names.filter((n) => n && n.trim().length > 0);
+  if (list.length === 0) return '';
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]} and ${list[1]}`;
+  const head = list.slice(0, -1).join(', ');
+  return `${head}, and ${list[list.length - 1]}`;
+}
 
 @Injectable()
 export class NotificationsService {
@@ -147,6 +158,29 @@ export class NotificationsService {
       select: { undeliveredNotificationCount: true },
     });
     return row?.undeliveredNotificationCount ?? 0;
+  }
+
+  /**
+   * Count of unread `comment` notifications for a user — drives the "waiting on you" dot
+   * on the Home tab. Cheap to compute (kind+readAt are part of the notifications recipient index).
+   */
+  async getUnreadCommentCount(recipientUserId: string): Promise<number> {
+    return this.prisma.notification.count({
+      where: { recipientUserId, kind: 'comment', readAt: null },
+    });
+  }
+
+  /**
+   * Recompute the unread-comment count and emit a `notifications:waitingCountChanged` event.
+   * Best-effort: never throws; safe to call after any mutation that could affect the count.
+   */
+  private async emitWaitingCountForUser(recipientUserId: string): Promise<void> {
+    try {
+      const unreadCommentCount = await this.getUnreadCommentCount(recipientUserId);
+      this.presenceRealtime.emitNotificationsWaitingChanged(recipientUserId, { unreadCommentCount });
+    } catch (err) {
+      this.logger.debug(`[notifications] Failed to emit waiting count: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /** True if recipient already has a follow notification from actor within the last withinMs. Use to avoid spam when someone unfollows then follows again. */
@@ -254,6 +288,11 @@ export class NotificationsService {
       undeliveredCount,
     });
 
+    // "Waiting on you" dot: a new reply just landed for this user — recompute the count.
+    if (kind === 'comment') {
+      void this.emitWaitingCountForUser(recipientUserId);
+    }
+
     // Also emit the full notification payload so clients can update in-place without refetch.
     try {
       const dto = await this.buildNotificationDtoForRecipient({
@@ -332,7 +371,9 @@ export class NotificationsService {
           badge: '/android-chrome-192x192.png',
           renotify: true,
           kind,
-          sourceLabel: 'From notifications',
+          // Intentionally omit sourceLabel for actor-driven pushes: the actor's words
+          // (snippet) are the most valuable byte budget. sourceLabel is reserved for
+          // system-originated pushes (streak reminders, daily prompt, message channel).
         }).catch((err) => {
           this.logger.warn(`[push] Failed to send web push: ${err instanceof Error ? err.message : String(err)}`);
         });
@@ -429,7 +470,17 @@ export class NotificationsService {
     const { kind, actor, fallbackTitle, body, subjectArticleId } = params;
     const actorName = this.actorDisplayName(actor);
     const snippet = this.trimPushBody(body);
+    // Prefer the role-specific DB title (already encodes "post" vs "comment" / article variants)
+    // when it's set, just prefixed with the actor name. This keeps push wording in lockstep
+    // with what the in-app row shows.
+    const titleFromFallback = (fallbackTitle ?? '').trim();
     if (kind === 'comment') {
+      if (titleFromFallback) {
+        return {
+          title: `${actorName} ${titleFromFallback}`,
+          body: snippet ?? (subjectArticleId ? 'Open to view the comment.' : 'Open to view the reply.'),
+        };
+      }
       if (subjectArticleId) {
         return {
           title: `${actorName} commented on your article`,
@@ -442,6 +493,12 @@ export class NotificationsService {
       };
     }
     if (kind === 'mention') {
+      if (titleFromFallback) {
+        return {
+          title: `${actorName} ${titleFromFallback}`,
+          body: snippet ?? 'Open to view the mention.',
+        };
+      }
       if (subjectArticleId) {
         return {
           title: `${actorName} mentioned you in an article comment`,
@@ -460,6 +517,12 @@ export class NotificationsService {
       };
     }
     if (kind === 'boost') {
+      if (subjectArticleId) {
+        return {
+          title: `${actorName} boosted your article`,
+          body: snippet ?? 'Your article is getting traction.',
+        };
+      }
       return {
         title: `${actorName} boosted your post`,
         body: snippet ?? 'Your post is getting traction.',
@@ -591,8 +654,17 @@ export class NotificationsService {
         body: snippet ?? 'The invite is no longer active.',
       };
     }
+    // Generic kind is used for one-off actor-driven events that don't have their own kind
+    // (e.g. article emoji reactions). Prefix the DB title with the actor name when both
+    // are present so the push reads like "Jane reacted to your article" with body=emoji.
+    if (kind === 'generic' && titleFromFallback && actor) {
+      return {
+        title: `${actorName} ${titleFromFallback}`,
+        ...(snippet ? { body: snippet } : { body: 'Open to view it.' }),
+      };
+    }
     return {
-      title: (fallbackTitle ?? '').trim() || 'New notification',
+      title: titleFromFallback || 'New notification',
       ...(snippet ? { body: snippet } : { body: 'You have a new notification.' }),
     };
   }
@@ -608,6 +680,8 @@ export class NotificationsService {
       pushRepost: Boolean(prefs.pushRepost),
       pushNudge: Boolean(prefs.pushNudge),
       pushFollowedPost: Boolean(prefs.pushFollowedPost),
+      pushReplyNudge: Boolean(prefs.pushReplyNudge),
+      pushCrewStreak: Boolean(prefs.pushCrewStreak),
       emailDigestDaily: Boolean(prefs.emailDigestDaily),
       emailDigestWeekly: Boolean(prefs.emailDigestWeekly),
       emailNewNotifications: Boolean(prefs.emailNewNotifications),
@@ -657,6 +731,8 @@ export class NotificationsService {
       pushRepost: Boolean(updated.pushRepost),
       pushNudge: Boolean(updated.pushNudge),
       pushFollowedPost: Boolean(updated.pushFollowedPost),
+      pushReplyNudge: Boolean(updated.pushReplyNudge),
+      pushCrewStreak: Boolean(updated.pushCrewStreak),
       emailDigestDaily: Boolean(updated.emailDigestDaily),
       emailDigestWeekly: Boolean(updated.emailDigestWeekly),
       emailNewNotifications: Boolean(updated.emailNewNotifications),
@@ -805,7 +881,9 @@ export class NotificationsService {
 
     const defaultTag = params.test ? `notification-test-${Date.now()}` : `notification-${recipientUserId}`;
     const tag = params.tag?.trim() || defaultTag;
-    let body = params.body ?? 'You have a new notification.';
+    // Distinguish "explicit empty body" (e.g. reply-nudge that's title-only) from "no body provided"
+    // (legacy callers that want the friendly fallback).
+    let body = params.body === undefined ? 'You have a new notification.' : params.body;
     if (params.sourceLabel) {
       body = body ? `${body} · ${params.sourceLabel}` : params.sourceLabel;
     }
@@ -858,6 +936,61 @@ export class NotificationsService {
   }
 
   /**
+   * Send a single "still waiting on you" push for an unread reply notification.
+   * The cron is responsible for selecting eligible notifications and stamping `nudgedBackAt`
+   * so this method never re-fires for the same notification.
+   *
+   * Spare on purpose: title carries the actor's name, no body. The whole point is "John still cares."
+   */
+  async sendReplyNudgePush(params: {
+    recipientUserId: string;
+    actorUserId: string;
+    notificationId: string;
+    actorPostId: string | null;
+    /** Optional snippet of the original reply, stored on Notification.body. */
+    bodySnippet?: string | null;
+  }): Promise<void> {
+    if (!this.appConfig.vapidConfigured()) return;
+    try {
+      const prefs = await this.getPreferencesInternal(params.recipientUserId);
+      if (!prefs.pushReplyNudge) return;
+    } catch {
+      // Best-effort: if prefs read fails, default to sending.
+    }
+    const actor = await this.prisma.user.findUnique({
+      where: { id: params.actorUserId },
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        avatarKey: true,
+        avatarUpdatedAt: true,
+      },
+    });
+    if (!actor) return;
+    const actorName = this.actorDisplayName(actor);
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const icon = publicAssetUrl({
+      publicBaseUrl,
+      key: actor.avatarKey,
+      updatedAt: actor.avatarUpdatedAt,
+    });
+    const url = params.actorPostId ? `/p/${params.actorPostId}` : '/notifications';
+    const snippet = this.trimPushBody(params.bodySnippet, 120);
+    await this.sendWebPushToRecipient(params.recipientUserId, {
+      title: `${actorName} is still waiting to hear back`,
+      // Replay the original reply text if we have it; otherwise the title carries the whole signal.
+      body: snippet ?? '',
+      url,
+      tag: `reply-nudge-${params.notificationId}`,
+      icon,
+      badge: '/android-chrome-192x192.png',
+      renotify: false,
+      kind: 'reply_nudge',
+    });
+  }
+
+  /**
    * Send a streak-at-risk push notification to a single user.
    * Called by the nightly streak-reminder push cron (9 PM ET).
    * Only fires if the user has push subscriptions; silently skips if not.
@@ -878,6 +1011,121 @@ export class NotificationsService {
       tag: `streak-reminder-${params.recipientUserId}`,
       kind: 'streak_reminder',
     });
+  }
+
+  /**
+   * Push every member of a crew when the strict crew streak advances. This is the
+   * positive-feedback half of the crew-streak push pair. Per the design simplicity
+   * skill we do not also send a "you posted today" confirmation — only the streak
+   * milestone itself is a withdrawal worth making.
+   */
+  async sendCrewStreakAdvancedPush(params: {
+    recipientUserIds: string[];
+    crewId: string;
+    crewSlug: string | null;
+    crewName: string | null;
+    currentStreakDays: number;
+    memberCount: number;
+  }): Promise<void> {
+    if (!this.appConfig.vapidConfigured()) return;
+    const { currentStreakDays, memberCount } = params;
+    if (currentStreakDays <= 0 || params.recipientUserIds.length === 0) return;
+
+    const url = params.crewSlug ? `/c/${encodeURIComponent(params.crewSlug)}` : '/crew';
+    const crewLabel = (params.crewName ?? '').trim() || 'Your crew';
+    const allClause = memberCount > 0 ? ` All ${memberCount} of you locked it in.` : '';
+    const title = `${crewLabel}: ${currentStreakDays}-day streak`;
+    const body = `${currentStreakDays === 1 ? 'Day 1 on the board.' : `Day ${currentStreakDays} in a row.`}${allClause}`;
+    const tag = `crew-streak-advanced-${params.crewId}-${currentStreakDays}`;
+
+    for (const recipientUserId of params.recipientUserIds) {
+      try {
+        const prefs = await this.getPreferencesInternal(recipientUserId);
+        if (!prefs.pushCrewStreak) continue;
+      } catch {
+        // Best effort: if prefs read fails, default to sending.
+      }
+      try {
+        await this.sendWebPushToRecipient(recipientUserId, {
+          title,
+          body,
+          url,
+          tag,
+          renotify: false,
+          kind: 'crew_streak_advanced',
+          // System event — sourceLabel is allowed (and helpful) here.
+          sourceLabel: 'Crew streak',
+        });
+      } catch (err) {
+        this.logger.warn(`[push] Failed to send crew-streak-advanced push: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  /**
+   * Push every member of a crew the morning after a streak breaks. This is the
+   * single most behaviorally potent push in the product — it names who didn't
+   * check in, which converts to "I won't be the one who broke it next time."
+   */
+  async sendCrewStreakBrokenPush(params: {
+    recipientUserIds: string[];
+    crewId: string;
+    crewSlug: string | null;
+    crewName: string | null;
+    missedMembers: Array<{ id: string; displayName: string | null; username: string | null }>;
+  }): Promise<void> {
+    if (!this.appConfig.vapidConfigured()) return;
+    if (params.recipientUserIds.length === 0) return;
+
+    const url = params.crewSlug ? `/c/${encodeURIComponent(params.crewSlug)}` : '/crew';
+    const crewLabel = (params.crewName ?? '').trim() || 'Your crew';
+    const title = 'You lost the streak.';
+    const tag = `crew-streak-broken-${params.crewId}`;
+
+    const missedNames = params.missedMembers
+      .map((m) => (m.displayName ?? m.username ?? '').trim())
+      .filter((n) => n.length > 0);
+
+    for (const recipientUserId of params.recipientUserIds) {
+      try {
+        const prefs = await this.getPreferencesInternal(recipientUserId);
+        if (!prefs.pushCrewStreak) continue;
+      } catch {
+        // Best effort: default to sending if prefs read fails.
+      }
+
+      // Personalize body so the recipient knows whether *they* missed.
+      const recipientMissed = params.missedMembers.some((m) => m.id === recipientUserId);
+      const others = missedNames
+        .filter((_, idx) => params.missedMembers[idx]?.id !== recipientUserId);
+
+      let body: string;
+      if (recipientMissed && others.length === 0) {
+        body = `${crewLabel} broke the streak yesterday. You didn't check in.`;
+      } else if (recipientMissed && others.length > 0) {
+        body = `${crewLabel} broke the streak yesterday. You and ${formatNameList(others)} didn't check in.`;
+      } else if (others.length === 0) {
+        body = `${crewLabel} broke the streak yesterday.`;
+      } else if (others.length === 1) {
+        body = `${others[0]} didn't check in yesterday. ${crewLabel} lost the streak.`;
+      } else {
+        body = `${formatNameList(others)} didn't check in yesterday. ${crewLabel} lost the streak.`;
+      }
+
+      try {
+        await this.sendWebPushToRecipient(recipientUserId, {
+          title,
+          body,
+          url,
+          tag,
+          renotify: false,
+          kind: 'crew_streak_broken',
+          sourceLabel: 'Crew streak',
+        });
+      } catch (err) {
+        this.logger.warn(`[push] Failed to send crew-streak-broken push: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   async sendMessagePush(params: {
@@ -1067,7 +1315,6 @@ export class NotificationsService {
                 badge: '/android-chrome-192x192.png',
                 renotify: true,
                 kind: 'boost',
-                sourceLabel: 'From notifications',
               }).catch((err) => {
                 this.logger.warn(`[push] Failed to send web push: ${err instanceof Error ? err.message : String(err)}`);
               });
@@ -1181,6 +1428,62 @@ export class NotificationsService {
           if (dto) this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
         } catch { /* best-effort */ }
 
+        // Web push for newly-created reposts (gated by pushRepost pref).
+        // Updates (re-reposts of the same post) skip push to avoid re-notifying.
+        if (res.kind === 'created') {
+          try {
+            const prefs = await this.getPreferencesInternal(recipientUserId);
+            if (this.shouldSendPushForKind(prefs, 'repost')) {
+              const actor = await this.prisma.user.findUnique({
+                where: { id: actorUserId },
+                select: {
+                  id: true,
+                  username: true,
+                  name: true,
+                  avatarKey: true,
+                  avatarUpdatedAt: true,
+                },
+              });
+              const pushCopy = this.buildPushCopy({
+                kind: 'repost',
+                actor,
+                fallbackTitle: title,
+                body: null,
+              });
+              const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+              const icon = actor
+                ? publicAssetUrl({
+                    publicBaseUrl,
+                    key: actor.avatarKey,
+                    updatedAt: actor.avatarUpdatedAt,
+                  })
+                : null;
+              this.sendWebPushToRecipient(recipientUserId, {
+                title: pushCopy.title,
+                body: pushCopy.body,
+                subjectPostId: subjectPostId ?? null,
+                subjectUserId: null,
+                url: actorPostId ? `/p/${actorPostId}` : `/p/${subjectPostId}`,
+                tag: this.buildPushTag({
+                  recipientUserId,
+                  kind: 'repost',
+                  actorUserId,
+                  subjectPostId,
+                  subjectUserId: null,
+                }),
+                icon,
+                badge: '/android-chrome-192x192.png',
+                renotify: true,
+                kind: 'repost',
+              }).catch((err) => {
+                this.logger.warn(`[push] Failed to send repost web push: ${err instanceof Error ? err.message : String(err)}`);
+              });
+            }
+          } catch (err) {
+            this.logger.debug(`[push] Failed to evaluate repost push prefs: ${err}`);
+          }
+        }
+
         return;
       } catch (err: unknown) {
         const code = (err as any)?.code as string | undefined;
@@ -1265,6 +1568,12 @@ export class NotificationsService {
 
     for (const [uid, undeliveredCount] of updatedCountByRecipient) {
       this.presenceRealtime.emitNotificationsUpdated(uid, { undeliveredCount });
+    }
+
+    // Bulk deletes can drop comment notifications (e.g. when the parent post is removed).
+    // Recompute the waiting-on-you dot for each affected recipient.
+    for (const uid of idsByRecipient.keys()) {
+      void this.emitWaitingCountForUser(uid);
     }
 
     return ids.length;
@@ -1976,6 +2285,38 @@ export class NotificationsService {
     }
 
     const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    // Inline join-preview build (mirrors PostsService.communityGroupPreviewMapForFeed)
+    // so /new-posts can render a clickable group tag on rows that belong to a group,
+    // matching the home/explore feeds. We avoid depending on PostsService to keep
+    // module wiring acyclic.
+    const groupIds = new Set<string>();
+    const collectGroupId = (row: { communityGroupId?: string | null } | null | undefined) => {
+      const g = String(row?.communityGroupId ?? '').trim();
+      if (g) groupIds.add(g);
+    };
+    for (const p of pagePosts) collectGroupId(p as { communityGroupId?: string | null });
+    for (const p of parentMap.values()) collectGroupId(p as { communityGroupId?: string | null });
+    for (const p of repostedPostMap.values()) collectGroupId(p as { communityGroupId?: string | null });
+    const groupPreviewByGroupId = new Map<string, CommunityGroupPreviewDto>();
+    if (groupIds.size > 0) {
+      const ids = [...groupIds];
+      const [groups, memberships] = await Promise.all([
+        this.prisma.communityGroup.findMany({
+          where: { id: { in: ids }, deletedAt: null },
+        }),
+        this.prisma.communityGroupMember.findMany({
+          where: { groupId: { in: ids }, userId: recipientUserId },
+          select: { groupId: true, status: true, role: true },
+        }),
+      ]);
+      const memberByGroup = new Map(memberships.map((m) => [m.groupId, m] as const));
+      for (const g of groups) {
+        const dto = toCommunityGroupPreviewDto(g, memberByGroup.get(g.id) ?? null);
+        if (dto) groupPreviewByGroupId.set(g.id, dto);
+      }
+    }
+
     const attachParentChain = buildAttachParentChain({
       parentMap,
       baseUrl,
@@ -1991,6 +2332,7 @@ export class NotificationsService {
       viewerBlockedBy,
       repostedByPostId,
       repostedPostMap: repostedPostMap as any,
+      groupPreviewByGroupId,
     });
 
     return {
@@ -2104,6 +2446,56 @@ export class NotificationsService {
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
     });
+    // markReadBySubject can clear comment notifications (e.g. opening the post via tap).
+    void this.emitWaitingCountForUser(recipientUserId);
+  }
+
+  /**
+   * Mark the recipient's `crew_invite_received` notification for a specific
+   * invite as read + delivered. Idempotent and safe to call from any code path
+   * that resolves the invite (accept / decline / cancel / expire) so the bell
+   * badge clears regardless of which UI surface acted on it.
+   */
+  async markCrewInviteResolved(
+    recipientUserId: string,
+    inviteId: string,
+  ): Promise<void> {
+    const baseWhere = {
+      recipientUserId,
+      kind: 'crew_invite_received' as const,
+      subjectCrewInviteId: inviteId,
+    };
+    const res = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const readRes = await tx.notification.updateMany({
+        where: { ...baseWhere, readAt: null },
+        data: { readAt: now },
+      });
+      const deliveredRes = await tx.notification.updateMany({
+        where: { ...baseWhere, deliveredAt: null },
+        data: { deliveredAt: now },
+      });
+      if (deliveredRes.count > 0) {
+        // Clamp to 0 so a drifted counter can't go negative.
+        await tx.$executeRaw`
+          UPDATE "User"
+          SET "undeliveredNotificationCount" = GREATEST(0, "undeliveredNotificationCount" - ${deliveredRes.count})
+          WHERE id = ${recipientUserId}
+        `;
+      }
+      if (readRes.count === 0 && deliveredRes.count === 0) {
+        return { changed: false as const, undeliveredCount: null as number | null };
+      }
+      const undeliveredCount = await tx.notification.count({
+        where: { recipientUserId, deliveredAt: null },
+      });
+      return { changed: true as const, undeliveredCount };
+    });
+    if (res.changed) {
+      this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
+        undeliveredCount: res.undeliveredCount ?? 0,
+      });
+    }
   }
 
   async markReadById(
@@ -2144,6 +2536,9 @@ export class NotificationsService {
       this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
         undeliveredCount: res.undeliveredCount ?? 0,
       });
+      if (notification?.kind === 'comment') {
+        void this.emitWaitingCountForUser(recipientUserId);
+      }
       this.posthog.capture(recipientUserId, 'notification_tapped', {
         notification_id: notificationId,
         kind: notification?.kind ?? null,
@@ -2397,6 +2792,8 @@ export class NotificationsService {
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
     });
+    // markAllRead clears every comment notification too.
+    void this.emitWaitingCountForUser(recipientUserId);
   }
 
   private toNotificationDto(

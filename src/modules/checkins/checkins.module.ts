@@ -4,15 +4,17 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { PostsModule } from '../posts/posts.module';
 import { UsersModule } from '../users/users.module';
 import { ViewerContextModule } from '../viewer/viewer-context.module';
+import { RealtimeModule } from '../realtime/realtime.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { CheckinsController } from './checkins.controller';
 import { CheckinsService } from './checkins.service';
 import { CheckinsStreakResetCron } from './checkins-streak-reset.cron';
 
 @Module({
-  imports: [AuthModule, PrismaModule, PostsModule, UsersModule, ViewerContextModule],
+  imports: [AuthModule, PrismaModule, PostsModule, UsersModule, ViewerContextModule, RealtimeModule, NotificationsModule],
   controllers: [CheckinsController],
   providers: [CheckinsService, CheckinsStreakResetCron],
-  exports: [CheckinsStreakResetCron],
+  exports: [CheckinsStreakResetCron, CheckinsService],
 })
 export class CheckinsModule {}
 

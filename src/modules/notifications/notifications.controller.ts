@@ -54,6 +54,7 @@ const preferencesPatchSchema = z
     pushRepost: z.boolean().optional(),
     pushNudge: z.boolean().optional(),
     pushFollowedPost: z.boolean().optional(),
+    pushReplyNudge: z.boolean().optional(),
     emailDigestDaily: z.boolean().optional(),
     emailDigestWeekly: z.boolean().optional(),
     emailNewNotifications: z.boolean().optional(),
@@ -106,8 +107,11 @@ export class NotificationsController {
   })
   @Get('unread-count')
   async unreadCount(@CurrentUserId() userId: string) {
-    const count = await this.notifications.getUndeliveredCount(userId);
-    return { data: { count } };
+    const [count, unreadCommentCount] = await Promise.all([
+      this.notifications.getUndeliveredCount(userId),
+      this.notifications.getUnreadCommentCount(userId),
+    ]);
+    return { data: { count, unreadCommentCount } };
   }
 
   @UseGuards(AuthGuard)

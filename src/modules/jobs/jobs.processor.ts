@@ -10,6 +10,7 @@ import { HashtagsCleanupCron } from '../hashtags/hashtags-cleanup.cron';
 import { NotificationsCleanupCron } from '../notifications/notifications-cleanup.cron';
 import { NotificationsOrphanCleanupCron } from '../notifications/notifications-orphan-cleanup.cron';
 import { NotificationsEmailCron } from '../notifications/notifications-email.cron';
+import { NotificationsReplyNudgeCron } from '../notifications/notifications-reply-nudge.cron';
 import { AuthCleanupCron } from '../auth/auth-cleanup.cron';
 import { SearchCleanupCron } from '../search/search-cleanup.cron';
 import { LinkMetadataCron } from '../link-metadata/link-metadata.cron';
@@ -33,6 +34,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly notificationsCleanup: NotificationsCleanupCron,
     private readonly notificationsOrphanCleanup: NotificationsOrphanCleanupCron,
     private readonly notificationsEmail: NotificationsEmailCron,
+    private readonly notificationsReplyNudge: NotificationsReplyNudgeCron,
     private readonly dailyContent: DailyContentCron,
     private readonly authCleanup: AuthCleanupCron,
     private readonly searchCleanup: SearchCleanupCron,
@@ -89,6 +91,9 @@ export class JobsProcessor extends WorkerHost {
           return { ok: true };
         case JOBS.notificationsProfileReminderEmail:
           await this.notificationsEmail.runSendProfileReminderEmail();
+          return { ok: true };
+        case JOBS.notificationsReplyNudgePush:
+          await this.notificationsReplyNudge.runReplyNudgeSweep();
           return { ok: true };
         case JOBS.dailyContentRefresh:
           await this.dailyContent.runRefreshDailyContent();

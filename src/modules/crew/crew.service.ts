@@ -402,6 +402,25 @@ export class CrewService {
     );
   }
 
+  /**
+   * Tx-safe disband primitive: marks the crew deleted, removes all `CrewMember`
+   * rows, and cancels any pending invites for the crew. Caller is responsible
+   * for the surrounding transaction and for emitting realtime events after
+   * commit (so events don't fire on rollback).
+   *
+   * Shared by `disbandCrew`, `adminForceDisband`, and the auto-disband path
+   * in `CrewInvitesService.acceptInvite` when a solo crew member accepts an
+   * invite to another crew.
+   */
+  async disbandCrewTx(tx: Prisma.TransactionClient, crewId: string): Promise<void> {
+    await tx.crew.update({ where: { id: crewId }, data: { deletedAt: new Date() } });
+    await tx.crewMember.deleteMany({ where: { crewId } });
+    await tx.crewInvite.updateMany({
+      where: { crewId, status: 'pending' },
+      data: { status: 'cancelled', respondedAt: new Date() },
+    });
+  }
+
   /** Admin-force disband; bypasses owner consent and verification checks. */
   async adminForceDisband(crewId: string): Promise<void> {
     const crew = await this.prisma.crew.findUnique({
@@ -413,14 +432,7 @@ export class CrewService {
       where: { crewId },
       select: { userId: true },
     });
-    await this.prisma.$transaction(async (tx) => {
-      await tx.crew.update({ where: { id: crewId }, data: { deletedAt: new Date() } });
-      await tx.crewMember.deleteMany({ where: { crewId } });
-      await tx.crewInvite.updateMany({
-        where: { crewId, status: 'pending' },
-        data: { status: 'cancelled', respondedAt: new Date() },
-      });
-    });
+    await this.prisma.$transaction((tx) => this.disbandCrewTx(tx, crewId));
     this.presenceRealtime.emitCrewDisbanded(
       allMembers.map((m) => m.userId),
       { crewId },
@@ -441,14 +453,7 @@ export class CrewService {
       where: { crewId },
       select: { userId: true },
     });
-    await this.prisma.$transaction(async (tx) => {
-      await tx.crew.update({ where: { id: crewId }, data: { deletedAt: new Date() } });
-      await tx.crewMember.deleteMany({ where: { crewId } });
-      await tx.crewInvite.updateMany({
-        where: { crewId, status: 'pending' },
-        data: { status: 'cancelled', respondedAt: new Date() },
-      });
-    });
+    await this.prisma.$transaction((tx) => this.disbandCrewTx(tx, crewId));
     this.presenceRealtime.emitCrewDisbanded(
       allMembers.map((m) => m.userId),
       { crewId },

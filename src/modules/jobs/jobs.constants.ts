@@ -20,6 +20,7 @@ export const JOBS = {
   notificationsInstantHighSignalEmail: 'notifications.instantHighSignalEmail',
   notificationsStreakReminderEmail: 'notifications.streakReminderEmail',
   notificationsProfileReminderEmail: 'notifications.profileReminderEmail',
+  notificationsReplyNudgePush: 'notifications.replyNudgePush',
 
   // Daily content (quote/definition snapshots)
   dailyContentRefresh: 'dailyContent.refresh',

@@ -7,6 +7,10 @@ export type NotificationPreferencesDto = {
   pushRepost: boolean;
   pushNudge: boolean;
   pushFollowedPost: boolean;
+  /** Send a single push 24h after a reply if the recipient hasn't opened it yet. Once-per-notification, never spammed. */
+  pushReplyNudge: boolean;
+  /** Crew streak: push when the strict crew streak advances or breaks. Highest-signal push in the product. */
+  pushCrewStreak: boolean;
   emailDigestDaily: boolean;
   emailDigestWeekly: boolean;
   emailNewNotifications: boolean;

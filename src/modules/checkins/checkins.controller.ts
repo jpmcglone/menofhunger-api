@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards, Query } from '@nestjs/common';
+import { Body, Controller, Get, Header, Post, UseGuards, Query } from '@nestjs/common';
 import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
@@ -62,7 +62,21 @@ export class CheckinsController {
   @UseGuards(AuthGuard)
   @Get('today')
   async getToday(@CurrentUserId() userId: string) {
-    const data = await this.checkins.getTodayState({ userId });
+    const data = await this.checkins.getTodayState({
+      userId,
+      publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
+    });
+    return { data };
+  }
+
+  @UseGuards(OptionalAuthGuard)
+  @Get('today/answered')
+  @Header('Cache-Control', 'private, max-age=30')
+  async getTodayAnswered(@OptionalCurrentUserId() viewerUserId: string | undefined) {
+    const data = await this.checkins.getTodayAnswered({
+      viewerUserId: viewerUserId ?? null,
+      publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
+    });
     return { data };
   }
 

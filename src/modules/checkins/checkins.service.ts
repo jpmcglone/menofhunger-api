@@ -7,9 +7,11 @@ import { ViewerContextService } from '../viewer/viewer-context.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { CHECKIN_PROMPTS } from './checkin-prompts';
-import { dayIndexEastern, easternDayKey } from '../../common/time/eastern-day-key';
+import { dayIndexEastern, easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const LEADERBOARD_CACHE_TTL_SECONDS = 60;
 const WEEKLY_LEADERBOARD_CACHE_TTL_SECONDS = 120;
@@ -36,11 +38,14 @@ export class CheckinsService {
     private readonly viewerContext: ViewerContextService,
     private readonly redis: RedisService,
     private readonly posthog: PosthogService,
+    private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly notifications: NotificationsService,
   ) {}
 
-  async getTodayState(params: { userId: string; now?: Date }) {
+  async getTodayState(params: { userId: string; publicBaseUrl?: string | null; now?: Date }) {
     const now = params.now ?? new Date();
     const { dayKey, prompt } = pickCheckinPrompt(now);
+    const publicBaseUrl = params.publicBaseUrl ?? null;
 
     const cacheKey = RedisKeys.checkinTodayState(params.userId, dayKey);
     try {
@@ -50,12 +55,18 @@ export class CheckinsService {
       // Redis unavailable — fall through to DB.
     }
 
-    const result = await this._getTodayStateRaw(params.userId, now, dayKey, prompt);
+    const result = await this._getTodayStateRaw(params.userId, now, dayKey, prompt, publicBaseUrl);
     void this.redis.setJson(cacheKey, result, { ttlSeconds: TODAY_STATE_CACHE_TTL_SECONDS }).catch(() => undefined);
     return result;
   }
 
-  private async _getTodayStateRaw(userId: string, now: Date, dayKey: string, prompt: string) {
+  private async _getTodayStateRaw(
+    userId: string,
+    now: Date,
+    dayKey: string,
+    prompt: string,
+    publicBaseUrl: string | null,
+  ) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -83,6 +94,8 @@ export class CheckinsService {
 
     this.posthog.capture(userId, 'checkin_prompt_viewed', { prompt_key: dayKey });
 
+    const crew = await this.buildCrewBlock({ userId, dayKey, publicBaseUrl });
+
     return {
       dayKey,
       prompt,
@@ -90,6 +103,85 @@ export class CheckinsService {
       coins: user.coins ?? 0,
       checkinStreakDays: user.checkinStreakDays ?? 0,
       allowedVisibilities: allowedCheckinVisibilities,
+      crew,
+    };
+  }
+
+  /**
+   * Crew block returned alongside `GET /checkins/today` when the viewer is in a
+   * crew. Tells the UI to reframe the hero ("Your crew's question today") and
+   * renders the 5-member status row that powers the "your brothers are waiting
+   * on you" feeling.
+   */
+  private async buildCrewBlock(params: { userId: string; dayKey: string; publicBaseUrl: string | null }) {
+    const membership = await this.prisma.crewMember.findUnique({
+      where: { userId: params.userId },
+      select: { crewId: true },
+    });
+    if (!membership) return null;
+
+    const crew = await this.prisma.crew.findUnique({
+      where: { id: membership.crewId },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        deletedAt: true,
+        currentStreakDays: true,
+        longestStreakDays: true,
+        lastCompletedDayKey: true,
+        members: {
+          orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
+          select: {
+            user: {
+              select: {
+                id: true,
+                username: true,
+                name: true,
+                avatarKey: true,
+                avatarUpdatedAt: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!crew || crew.deletedAt) return null;
+
+    const memberIds = crew.members.map((m) => m.user.id);
+    const checkedIn = await this.prisma.post.findMany({
+      where: {
+        kind: 'checkin',
+        checkinDayKey: params.dayKey,
+        deletedAt: null,
+        userId: { in: memberIds },
+      },
+      select: { userId: true },
+    });
+    const checkedInSet = new Set(checkedIn.map((p) => p.userId));
+
+    const memberStatus = crew.members.map((m) => ({
+      userId: m.user.id,
+      username: m.user.username,
+      displayName: (m.user.name ?? m.user.username ?? '').trim() || null,
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl: params.publicBaseUrl,
+        key: m.user.avatarKey,
+        updatedAt: m.user.avatarUpdatedAt,
+      }),
+      answeredToday: checkedInSet.has(m.user.id),
+      isViewer: m.user.id === params.userId,
+    }));
+
+    return {
+      id: crew.id,
+      slug: crew.slug,
+      name: crew.name,
+      promptFraming: 'crew' as const,
+      currentStreakDays: crew.currentStreakDays ?? 0,
+      longestStreakDays: crew.longestStreakDays ?? 0,
+      lastCompletedDayKey: crew.lastCompletedDayKey,
+      memberStatus,
     };
   }
 
@@ -136,12 +228,235 @@ export class CheckinsService {
     // the completed check-in, updated coins, and new streak.
     void this.redis.del(RedisKeys.checkinTodayState(params.userId, dayKey)).catch(() => undefined);
 
+    // Strict crew streak: if this check-in completes the crew's day, bump the
+    // streak and bust other members' cached today-state so their member-status
+    // row reflects the new check. Failures here are non-fatal — the user's own
+    // check-in already succeeded; we just won't have moved the crew counter.
+    void this.handleCrewSideEffectsOnCheckin({ userId: params.userId, dayKey, now }).catch(() => undefined);
+
     return {
       post,
       checkin: { dayKey, prompt },
       coinsAwarded,
       bonusCoinsAwarded,
       checkinStreakDays: after.checkinStreakDays ?? 0,
+    };
+  }
+
+  /**
+   * Side effects on a single check-in for a user in a crew:
+   *  1) Bust the cached `today` state for all other crew members so their
+   *     member-status row reflects the new check by next request.
+   *  2) Try to advance the strict crew streak (no-op unless this check-in
+   *     completes the day).
+   */
+  private async handleCrewSideEffectsOnCheckin(params: { userId: string; dayKey: string; now: Date }): Promise<void> {
+    const membership = await this.prisma.crewMember.findUnique({
+      where: { userId: params.userId },
+      select: { crewId: true },
+    });
+    if (!membership) return;
+
+    const crew = await this.prisma.crew.findUnique({
+      where: { id: membership.crewId },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        deletedAt: true,
+        memberCount: true,
+        currentStreakDays: true,
+        longestStreakDays: true,
+        lastCompletedDayKey: true,
+        members: { select: { userId: true } },
+      },
+    });
+    if (!crew || crew.deletedAt) return;
+
+    const memberIds = crew.members.map((m) => m.userId);
+    // Bust today-state cache for every other crew member so the next /checkins/today
+    // reflects this check-in in the member-status row.
+    for (const otherId of memberIds) {
+      if (otherId === params.userId) continue;
+      void this.redis.del(RedisKeys.checkinTodayState(otherId, params.dayKey)).catch(() => undefined);
+    }
+
+    await this.tryAdvanceCrewStreakInternal({ crew, memberIds, dayKey: params.dayKey, now: params.now });
+  }
+
+  private async tryAdvanceCrewStreakInternal(params: {
+    crew: {
+      id: string;
+      slug: string;
+      name: string | null;
+      currentStreakDays: number | null;
+      longestStreakDays: number | null;
+      lastCompletedDayKey: string | null;
+    };
+    memberIds: string[];
+    dayKey: string;
+    now: Date;
+  }): Promise<void> {
+    const { crew, memberIds, dayKey, now } = params;
+
+    if (memberIds.length === 0) return;
+    // Already advanced for today — nothing to do (e.g. last member of a 3-person crew
+    // and someone else triggered the advance via a race).
+    if (crew.lastCompletedDayKey === dayKey) return;
+
+    // Count distinct members who have a non-deleted check-in for this dayKey.
+    // We rely on the one-checkin-per-user-per-day invariant enforced by PostsService.
+    const checkedInCount = await this.prisma.post.count({
+      where: {
+        kind: 'checkin',
+        checkinDayKey: dayKey,
+        deletedAt: null,
+        userId: { in: memberIds },
+      },
+    });
+
+    if (checkedInCount < memberIds.length) return;
+
+    const yesterdayKey = yesterdayEasternDayKey(now);
+    const continuedStreak = crew.lastCompletedDayKey === yesterdayKey;
+    const nextCurrent = continuedStreak ? (crew.currentStreakDays ?? 0) + 1 : 1;
+    const nextLongest = Math.max(crew.longestStreakDays ?? 0, nextCurrent);
+
+    // Conditional update guards against a concurrent advance for the same day.
+    const updated = await this.prisma.crew.updateMany({
+      where: {
+        id: crew.id,
+        // Only flip if no one else has already completed this day.
+        OR: [{ lastCompletedDayKey: null }, { lastCompletedDayKey: { not: dayKey } }],
+      },
+      data: {
+        currentStreakDays: nextCurrent,
+        longestStreakDays: nextLongest,
+        lastCompletedDayKey: dayKey,
+      },
+    });
+    if (updated.count === 0) return;
+
+    this.presenceRealtime.emitCrewStreakAdvanced(memberIds, {
+      crewId: crew.id,
+      dayKey,
+      currentStreakDays: nextCurrent,
+      longestStreakDays: nextLongest,
+    });
+
+    // Highest-signal push in the product. Gated by per-user pushCrewStreak pref
+    // inside NotificationsService. Fire-and-forget — the streak is already advanced.
+    void this.notifications
+      .sendCrewStreakAdvancedPush({
+        recipientUserIds: memberIds,
+        crewId: crew.id,
+        crewSlug: crew.slug,
+        crewName: crew.name,
+        currentStreakDays: nextCurrent,
+        memberCount: memberIds.length,
+      })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Social proof for "today's question": how many people have already answered today,
+   * with up to 5 recent answerers biased toward people the viewer follows.
+   *
+   * Returns a stable shape regardless of viewer auth state — anon viewers get the same
+   * total + a generic "recent answerers" list with no follow weighting.
+   */
+  async getTodayAnswered(params: {
+    viewerUserId: string | null;
+    publicBaseUrl: string | null;
+    now?: Date;
+  }) {
+    const now = params.now ?? new Date();
+    const dayKey = easternDayKey(now);
+
+    // Total: cheap count over today's check-ins (one row per user per day).
+    // We deliberately exclude `onlyMe` posts since they aren't part of the social signal.
+    const totalToday = await this.prisma.post.count({
+      where: {
+        kind: 'checkin',
+        checkinDayKey: dayKey,
+        deletedAt: null,
+        visibility: { not: 'onlyMe' },
+      },
+    });
+
+    // Pre-load followed userIds for follow-biased ordering. Followers go to the front;
+    // remaining slots fill from the most-recent answerers globally.
+    let followedSet: Set<string> = new Set();
+    if (params.viewerUserId) {
+      const follows = await this.prisma.follow.findMany({
+        where: { followerId: params.viewerUserId },
+        select: { followingId: true },
+        take: 5000,
+      });
+      followedSet = new Set(follows.map((f) => f.followingId));
+    }
+
+    // Pull a small recent window — enough to reorder by follow bias without needing
+    // a complex SQL window function.
+    const recentLimit = 5;
+    const candidatePool = await this.prisma.post.findMany({
+      where: {
+        kind: 'checkin',
+        checkinDayKey: dayKey,
+        deletedAt: null,
+        visibility: { not: 'onlyMe' },
+        // Exclude the viewer themselves so they don't see their own face in the proof row.
+        ...(params.viewerUserId ? { userId: { not: params.viewerUserId } } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      select: {
+        createdAt: true,
+        user: {
+          select: {
+            id: true,
+            username: true,
+            name: true,
+            avatarKey: true,
+            avatarUpdatedAt: true,
+            verifiedStatus: true,
+            premium: true,
+            premiumPlus: true,
+          },
+        },
+      },
+    });
+
+    // De-dupe by user id (one face per person), then partition into followed / others.
+    const seen = new Set<string>();
+    const followed: typeof candidatePool = [];
+    const others: typeof candidatePool = [];
+    for (const row of candidatePool) {
+      const uid = row.user?.id;
+      if (!uid || seen.has(uid)) continue;
+      seen.add(uid);
+      if (followedSet.has(uid)) followed.push(row);
+      else others.push(row);
+    }
+    const ordered = [...followed, ...others].slice(0, recentLimit);
+
+    const recentAnswerers = ordered.map((row) => ({
+      id: row.user.id,
+      username: row.user.username,
+      displayName: (row.user.name ?? row.user.username ?? '').trim() || null,
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl: params.publicBaseUrl,
+        key: row.user.avatarKey,
+        updatedAt: row.user.avatarUpdatedAt,
+      }),
+      answeredAt: row.createdAt.toISOString(),
+      isFollowed: followedSet.has(row.user.id),
+    }));
+
+    return {
+      dayKey,
+      totalToday,
+      recentAnswerers,
     };
   }
 

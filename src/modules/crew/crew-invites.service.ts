@@ -57,6 +57,44 @@ export class CrewInvitesService {
     return toCrewInviteDto({ invite, publicBaseUrl });
   }
 
+  // ---------- eligibility ----------
+
+  /**
+   * Solo crew members (their crew has exactly one member — themselves) are
+   * treated as inviteable for the purposes of `sendInvite` and `acceptInvite`.
+   * When such a user accepts an invite, their old 1-person crew is auto-disbanded
+   * inside the accept transaction.
+   *
+   * Returns the user's *blocking* membership (i.e. their crew has > 1 member),
+   * or `null` when the user has no membership OR is the sole member of a crew.
+   */
+  private async findBlockingMembership(
+    userId: string,
+  ): Promise<{ crewId: string; role: 'owner' | 'member' } | null> {
+    const m = await this.prisma.crewMember.findUnique({
+      where: { userId },
+      select: { crewId: true, role: true, crew: { select: { memberCount: true } } },
+    });
+    if (!m) return null;
+    if (m.crew.memberCount <= 1) return null;
+    return { crewId: m.crewId, role: m.role };
+  }
+
+  /**
+   * Returns the crew id when the user is the sole member of a non-deleted crew.
+   * Used by `acceptInvite` to know which old crew to disband as part of joining
+   * a new crew.
+   */
+  private async findSoloCrewIdToDisband(userId: string): Promise<string | null> {
+    const m = await this.prisma.crewMember.findUnique({
+      where: { userId },
+      select: { crewId: true, crew: { select: { memberCount: true, deletedAt: true } } },
+    });
+    if (!m || !m.crew || m.crew.deletedAt) return null;
+    if (m.crew.memberCount !== 1) return null;
+    return m.crewId;
+  }
+
   // ---------- read ----------
 
   async listInbox(params: { viewerUserId: string }): Promise<CrewInviteDto[]> {
@@ -105,12 +143,11 @@ export class CrewInvitesService {
       throw new BadRequestException('You can only invite verified members to your crew.');
     }
 
-    // Already in a crew? They cannot accept an invite.
-    const alreadyIn = await this.prisma.crewMember.findUnique({
-      where: { userId: inviteeId },
-      select: { crewId: true },
-    });
-    if (alreadyIn) {
+    // Already in a crew with other people? They can't accept an invite. Solo
+    // crew members (the only person in their crew) are still inviteable — when
+    // they accept, their old crew is auto-disbanded as part of the join.
+    const blocking = await this.findBlockingMembership(inviteeId);
+    if (blocking) {
       throw new ConflictException('That member is already in a crew.');
     }
 
@@ -214,6 +251,9 @@ export class CrewInvitesService {
       subjectCrewId: invite.crewId,
       subjectCrewInviteId: invite.id,
     });
+    // Resolve the invitee's original "you've been invited" notification so the
+    // bell badge clears for them — the invite is no longer actionable.
+    await this.notifications.markCrewInviteResolved(invite.inviteeUserId, invite.id);
     this.presenceRealtime.emitCrewInviteUpdated(
       [invite.invitedByUserId, invite.inviteeUserId],
       { invite: dto },
@@ -243,6 +283,8 @@ export class CrewInvitesService {
       subjectCrewId: invite.crewId,
       subjectCrewInviteId: invite.id,
     });
+    // Clear the invitee's original "you've been invited" notification.
+    await this.notifications.markCrewInviteResolved(invite.inviteeUserId, invite.id);
     this.presenceRealtime.emitCrewInviteUpdated(
       [invite.invitedByUserId, invite.inviteeUserId],
       { invite: dto },
@@ -270,29 +312,44 @@ export class CrewInvitesService {
       throw new BadRequestException('This invite has expired.');
     }
 
-    // Invitee must not already be in a crew.
-    const existingMembership = await this.prisma.crewMember.findUnique({
-      where: { userId: params.viewerUserId },
-      select: { crewId: true },
-    });
-    if (existingMembership) {
+    // Invitee must not already be in a crew with other people. A solo crew
+    // member (only one in their crew) is allowed to accept; their old crew
+    // gets auto-disbanded inside the same transaction below.
+    const blocking = await this.findBlockingMembership(params.viewerUserId);
+    if (blocking) {
       throw new ConflictException('You are already in a crew.');
     }
+    const soloCrewIdToDisband = await this.findSoloCrewIdToDisband(params.viewerUserId);
 
     // Founding invite: crew does not exist yet.
     // Branch 1: inviter already has a crew; joining that crew.
     // Branch 2: inviter is crewless; this is the FIRST acceptance, so the crew is created here.
     if (invite.crewId) {
-      return this.acceptExistingCrewInvite({ invite, viewerUserId: params.viewerUserId });
+      return this.acceptExistingCrewInvite({
+        invite,
+        viewerUserId: params.viewerUserId,
+        soloCrewIdToDisband,
+      });
     }
-    return this.acceptFoundingInvite({ invite, viewerUserId: params.viewerUserId });
+    return this.acceptFoundingInvite({
+      invite,
+      viewerUserId: params.viewerUserId,
+      soloCrewIdToDisband,
+    });
   }
 
   private async acceptExistingCrewInvite(params: {
     invite: Prisma.CrewInviteGetPayload<Record<string, never>>;
     viewerUserId: string;
+    /**
+     * If set, the viewer is the sole member of this crew today. We disband it
+     * (set `deletedAt`, drop the `CrewMember` row, cancel pending invites)
+     * inside the same accept transaction, with a race-safe guarded update so
+     * the whole accept rolls back if a second member sneaks in concurrently.
+     */
+    soloCrewIdToDisband?: string | null;
   }): Promise<{ crewId: string }> {
-    const { invite, viewerUserId } = params;
+    const { invite, viewerUserId, soloCrewIdToDisband } = params;
     const crewId = invite.crewId!;
     const crew = await this.prisma.crew.findUnique({
       where: { id: crewId },
@@ -318,6 +375,16 @@ export class CrewInvitesService {
     const now = new Date();
     try {
       await this.prisma.$transaction(async (tx) => {
+        if (soloCrewIdToDisband) {
+          // Race-safe: only disband if the crew really still has exactly one
+          // member. If a second member joined since we checked above, this
+          // update throws P2025 and the whole accept transaction rolls back.
+          await tx.crew.update({
+            where: { id: soloCrewIdToDisband, memberCount: 1 },
+            data: { deletedAt: new Date() },
+          });
+          await this.crew.disbandCrewTx(tx, soloCrewIdToDisband);
+        }
         await tx.crewMember.create({
           data: { crewId, userId: viewerUserId, role: 'member' },
         });
@@ -341,10 +408,24 @@ export class CrewInvitesService {
         });
       });
     } catch (e) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        throw new ConflictException('You are already in a crew.');
+      if (e instanceof Prisma.PrismaClientKnownRequestError) {
+        // P2002: unique violation (CrewMember.userId race).
+        // P2025: guarded update missed (e.g. solo crew gained a second member
+        // between our pre-check and the tx).
+        if (e.code === 'P2002' || e.code === 'P2025') {
+          throw new ConflictException('You are already in a crew.');
+        }
       }
       throw e;
+    }
+
+    if (soloCrewIdToDisband) {
+      // The viewer was the only member of the disbanded crew, so emit only to
+      // them. This nudges `useViewerCrew` to clear and any open `/c/oldslug`
+      // page to redirect away.
+      this.presenceRealtime.emitCrewDisbanded([viewerUserId], {
+        crewId: soloCrewIdToDisband,
+      });
     }
 
     const updatedInvite = await this.prisma.crewInvite.findUniqueOrThrow({
@@ -376,6 +457,10 @@ export class CrewInvitesService {
       });
     }
 
+    // Clear the invitee's original "you've been invited" notification — they
+    // just acted on it, so the bell badge should reflect that immediately.
+    await this.notifications.markCrewInviteResolved(viewerUserId, invite.id);
+
     this.presenceRealtime.emitCrewInviteUpdated(
       [invite.invitedByUserId, invite.inviteeUserId],
       { invite: inviteDto },
@@ -391,8 +476,10 @@ export class CrewInvitesService {
   private async acceptFoundingInvite(params: {
     invite: Prisma.CrewInviteGetPayload<Record<string, never>>;
     viewerUserId: string;
+    /** See `acceptExistingCrewInvite.soloCrewIdToDisband`. */
+    soloCrewIdToDisband?: string | null;
   }): Promise<{ crewId: string }> {
-    const { invite, viewerUserId } = params;
+    const { invite, viewerUserId, soloCrewIdToDisband } = params;
     const inviterUserId = invite.invitedByUserId;
 
     // Ensure the inviter is still crewless — if they created/joined a crew in the meantime,
@@ -405,7 +492,11 @@ export class CrewInvitesService {
         where: { id: invite.id },
         data: { crewId: inviterMembership.crewId },
       });
-      return this.acceptExistingCrewInvite({ invite: newInvite, viewerUserId });
+      return this.acceptExistingCrewInvite({
+        invite: newInvite,
+        viewerUserId,
+        soloCrewIdToDisband,
+      });
     }
 
     // Create crew + owner membership + member membership + wall conversation atomically.
@@ -418,6 +509,15 @@ export class CrewInvitesService {
     let createdCrewId = '';
     try {
       createdCrewId = await this.prisma.$transaction(async (tx) => {
+        if (soloCrewIdToDisband) {
+          // Race-safe: only disband if still solo. P2025 here rolls back the
+          // whole accept and surfaces "You are already in a crew."
+          await tx.crew.update({
+            where: { id: soloCrewIdToDisband, memberCount: 1 },
+            data: { deletedAt: new Date() },
+          });
+          await this.crew.disbandCrewTx(tx, soloCrewIdToDisband);
+        }
         // Wall conversation first (the Crew has a required non-null FK to it).
         const wall = await tx.messageConversation.create({
           data: {
@@ -482,11 +582,24 @@ export class CrewInvitesService {
         return crew.id;
       });
     } catch (e) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        // One of the unique constraints (CrewMember.userId or slug) collided — bubble as conflict.
-        throw new ConflictException('Could not create crew; please retry.');
+      if (e instanceof Prisma.PrismaClientKnownRequestError) {
+        if (e.code === 'P2002') {
+          // CrewMember.userId or Crew.slug unique violation — bubble as conflict.
+          throw new ConflictException('Could not create crew; please retry.');
+        }
+        if (e.code === 'P2025') {
+          // The guarded solo-disband update missed (someone joined the solo
+          // crew concurrently). Treat as the existing-crew conflict.
+          throw new ConflictException('You are already in a crew.');
+        }
       }
       throw e;
+    }
+
+    if (soloCrewIdToDisband) {
+      this.presenceRealtime.emitCrewDisbanded([viewerUserId], {
+        crewId: soloCrewIdToDisband,
+      });
     }
 
     // Notify + realtime.
@@ -503,6 +616,8 @@ export class CrewInvitesService {
       include: INVITE_INCLUDE,
     });
     const inviteDto = this.toDto(updatedInvite);
+    // Clear the invitee's original "you've been invited" notification.
+    await this.notifications.markCrewInviteResolved(viewerUserId, invite.id);
     this.presenceRealtime.emitCrewInviteUpdated(
       [inviterUserId, viewerUserId],
       { invite: inviteDto },
@@ -536,6 +651,9 @@ export class CrewInvitesService {
       data: { status: 'expired', respondedAt: now },
     });
     for (const row of expiring) {
+      // Clear the original received notification — the invite is no longer
+      // actionable, so it shouldn't keep the bell badge bumped.
+      await this.notifications.markCrewInviteResolved(row.inviteeUserId, row.id);
       this.presenceRealtime.emitCrewInviteUpdated(
         [row.invitedByUserId, row.inviteeUserId],
         { invite: { id: row.id, status: 'expired' } },

@@ -180,10 +180,16 @@ export class SearchController {
       const crewMembers = userIds.length
         ? await this.prisma.crewMember.findMany({
             where: { userId: { in: userIds }, crew: { deletedAt: null } },
-            select: { userId: true },
+            select: { userId: true, crew: { select: { memberCount: true } } },
           })
         : [];
-      const inCrewIds = new Set(crewMembers.map((m) => m.userId));
+      // `inCrew` here means "in a crew that blocks new invites." A solo crew
+      // member (memberCount === 1, just themselves) is treated as inviteable —
+      // accepting an invite to another crew auto-disbands their old crew. So
+      // the picker should NOT grey them out.
+      const inCrewIds = new Set(
+        crewMembers.filter((m) => m.crew.memberCount > 1).map((m) => m.userId),
+      );
       const users = result.users.map((u) => ({
         ...toUserListDto(u, publicBaseUrl, {
           relationship: {

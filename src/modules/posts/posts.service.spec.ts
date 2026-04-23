@@ -946,13 +946,16 @@ describe('PostsService.assertCanReadCommunityGroup', () => {
   });
 });
 
-// ─── listCommunityGroupsTimelinePosts: trending fallback ─────────────────────
-// Trending should never be empty for a group that has posts. When the popular
-// score cron has not (yet) populated trendingScore (fresh deploy, scheduler
-// off, posts older than 30d), the trending feed must gracefully fall back to
-// chronological order on the first page.
+// ─── listCommunityGroupsTimelinePosts: trending blended head + chrono tail ───
+// The group trending sort serves a two-phase result so the page never feels
+// empty just because no posts have engagement yet:
+//   1. Trending head: posts with trendingScore > 0, ordered by score then recency.
+//   2. Chronological tail: when trending doesn't fill the page (fresh group,
+//      sparse engagement, popular-score cron behind), supplement with the most
+//      recent unscored posts. Pagination continues chronologically once the
+//      cursor lands on a chrono-tail row (its trendingScore is null/0).
 
-describe('PostsService.listCommunityGroupsTimelinePosts trending fallback', () => {
+describe('PostsService.listCommunityGroupsTimelinePosts trending blended pagination', () => {
   function setup() {
     return makeService({
       post: {
@@ -969,6 +972,10 @@ describe('PostsService.listCommunityGroupsTimelinePosts trending fallback', () =
   function isTrendingFindMany(args: any): boolean {
     const first = Array.isArray(args?.orderBy) ? args.orderBy[0] : null;
     return Boolean(first && Object.prototype.hasOwnProperty.call(first, 'trendingScore'));
+  }
+
+  function isChronoFindMany(args: any): boolean {
+    return !isTrendingFindMany(args);
   }
 
   it('falls back to chronological order when trending returns nothing on the first page', async () => {
@@ -992,45 +999,56 @@ describe('PostsService.listCommunityGroupsTimelinePosts trending fallback', () =
 
     expect(deps.prisma.post.findMany).toHaveBeenCalledTimes(2);
     const fallbackCall = (deps.prisma.post.findMany as jest.Mock).mock.calls.find(
-      (c) => !isTrendingFindMany(c[0]),
+      (c) => isChronoFindMany(c[0]),
     );
     expect(fallbackCall?.[0]?.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
     expect(out.posts.map((p: any) => p.id)).toEqual(['p2', 'p1']);
+    // Both chrono rows fit in the page → no more chrono → no cursor.
     expect(out.nextCursor).toBeNull();
   });
 
-  it('does NOT fall back when trending returns rows', async () => {
+  it('emits a chronological cursor when the trending fallback has more rows than fit', async () => {
     const { service, deps } = setup();
+    // takeMain + 1 = 4 chrono rows for limit=3; the extra row signals "there is more."
+    const recencyRows = [
+      { id: 'p4', parentId: null, rootId: null, createdAt: new Date('2025-01-04'), trendingScore: null },
+      { id: 'p3', parentId: null, rootId: null, createdAt: new Date('2025-01-03'), trendingScore: null },
+      { id: 'p2', parentId: null, rootId: null, createdAt: new Date('2025-01-02'), trendingScore: null },
+      { id: 'p1', parentId: null, rootId: null, createdAt: new Date('2025-01-01'), trendingScore: null },
+    ];
     (deps.prisma.post.findMany as jest.Mock).mockImplementation(async (args: any) => {
-      if (isTrendingFindMany(args)) {
-        return [{ id: 'p9', parentId: null, rootId: null, createdAt: new Date('2025-01-03') }];
-      }
-      throw new Error('chronological fallback should not run when trending has results');
+      if (isTrendingFindMany(args)) return [];
+      return recencyRows;
     });
 
     const out = await service.listCommunityGroupsTimelinePosts({
       groupIds: ['g1'],
-      limit: 10,
+      limit: 3,
       cursor: null,
       sort: 'trending',
       applyPinnedHead: false,
     });
 
-    expect(deps.prisma.post.findMany).toHaveBeenCalledTimes(1);
-    expect(out.posts.map((p: any) => p.id)).toEqual(['p9']);
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p4', 'p3', 'p2']);
+    expect(out.nextCursor).toBe('p2');
   });
 
-  it('does NOT fall back on subsequent pages (cursor present, even if trending is empty)', async () => {
+  it('paginates the chronological tail when the cursor row has no trendingScore', async () => {
     const { service, deps } = setup();
-    (deps.prisma.post.findMany as jest.Mock).mockImplementation(async (args: any) => {
-      if (isTrendingFindMany(args)) return [];
-      throw new Error('chronological fallback should not run when paginating');
-    });
-    // Cursor lookup returns a row with a real trendingScore so the cursor where is built.
     (deps.prisma.post.findFirst as jest.Mock).mockResolvedValue({
       id: 'cur',
-      createdAt: new Date('2025-01-01'),
-      trendingScore: 1.5,
+      createdAt: new Date('2025-01-05'),
+      trendingScore: null,
+    });
+    const olderChrono = [
+      { id: 'p2', parentId: null, rootId: null, createdAt: new Date('2025-01-02'), trendingScore: null },
+      { id: 'p1', parentId: null, rootId: null, createdAt: new Date('2025-01-01'), trendingScore: null },
+    ];
+    (deps.prisma.post.findMany as jest.Mock).mockImplementation(async (args: any) => {
+      if (isTrendingFindMany(args)) {
+        throw new Error('fallback-mode pagination must not query the trending head again');
+      }
+      return olderChrono;
     });
 
     const out = await service.listCommunityGroupsTimelinePosts({
@@ -1042,7 +1060,494 @@ describe('PostsService.listCommunityGroupsTimelinePosts trending fallback', () =
     });
 
     expect(deps.prisma.post.findMany).toHaveBeenCalledTimes(1);
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p2', 'p1']);
+    expect(out.nextCursor).toBeNull();
+  });
+
+  it('supplements a sparse trending head with chronological fill on the first page', async () => {
+    const { service, deps } = setup();
+    (deps.prisma.post.findMany as jest.Mock).mockImplementation(async (args: any) => {
+      if (isTrendingFindMany(args)) {
+        // One trending row, less than the page size of 3.
+        return [{ id: 't1', parentId: null, rootId: null, createdAt: new Date('2025-01-10'), trendingScore: 5 }];
+      }
+      // Chrono fill (fillCount = 2 → take 3 to detect overflow).
+      return [
+        { id: 'c2', parentId: null, rootId: null, createdAt: new Date('2025-01-09'), trendingScore: null },
+        { id: 'c1', parentId: null, rootId: null, createdAt: new Date('2025-01-08'), trendingScore: null },
+        { id: 'c0', parentId: null, rootId: null, createdAt: new Date('2025-01-07'), trendingScore: null },
+      ];
+    });
+
+    const out = await service.listCommunityGroupsTimelinePosts({
+      groupIds: ['g1'],
+      limit: 3,
+      cursor: null,
+      sort: 'trending',
+      applyPinnedHead: false,
+    });
+
+    expect(out.posts.map((p: any) => p.id)).toEqual(['t1', 'c2', 'c1']);
+    // Chrono had more rows than fit → cursor on the last included chrono row.
+    expect(out.nextCursor).toBe('c1');
+
+    // Verify the chrono fill query excludes posts with positive trendingScore so the
+    // mode switch at the cursor boundary cannot re-show rows from the trending head.
+    const chronoCall = (deps.prisma.post.findMany as jest.Mock).mock.calls.find(
+      (c) => isChronoFindMany(c[0]),
+    );
+    const chronoAnd = chronoCall?.[0]?.where?.AND ?? [];
+    const hasTrendingExclusion = chronoAnd.some(
+      (clause: any) =>
+        Array.isArray(clause?.OR) &&
+        clause.OR.some((o: any) => o?.trendingScore === 0) &&
+        clause.OR.some((o: any) => o?.trendingScore === null),
+    );
+    expect(hasTrendingExclusion).toBe(true);
+  });
+
+  it('paginates pure trending when the head is full', async () => {
+    const { service, deps } = setup();
+    (deps.prisma.post.findMany as jest.Mock).mockImplementation(async (args: any) => {
+      if (!isTrendingFindMany(args)) {
+        throw new Error('chronological fill must not run when trending fills the page');
+      }
+      // takeMain + 1 = 3 rows so the service knows there's more trending available.
+      return [
+        { id: 't3', parentId: null, rootId: null, createdAt: new Date('2025-01-12'), trendingScore: 9 },
+        { id: 't2', parentId: null, rootId: null, createdAt: new Date('2025-01-11'), trendingScore: 7 },
+        { id: 't1', parentId: null, rootId: null, createdAt: new Date('2025-01-10'), trendingScore: 5 },
+      ];
+    });
+
+    const out = await service.listCommunityGroupsTimelinePosts({
+      groupIds: ['g1'],
+      limit: 2,
+      cursor: null,
+      sort: 'trending',
+      applyPinnedHead: false,
+    });
+
+    expect(deps.prisma.post.findMany).toHaveBeenCalledTimes(1);
+    expect(out.posts.map((p: any) => p.id)).toEqual(['t3', 't2']);
+    expect(out.nextCursor).toBe('t2');
+  });
+});
+
+// ─── listForYouFeed ──────────────────────────────────────────────────────────
+
+describe('PostsService.listForYouFeed', () => {
+  type ForYouCandidate = {
+    id: string;
+    userId: string;
+    createdAt: Date;
+    trendingScore: number | null;
+  };
+
+  function isTrendingScan(args: any): boolean {
+    const ands: any[] = args?.where?.AND ?? [];
+    return ands.some((c) => c?.trendingScore?.gt === 0);
+  }
+
+  function isChronoScan(args: any): boolean {
+    const ands: any[] = args?.where?.AND ?? [];
+    return ands.some(
+      (c) =>
+        Array.isArray(c?.OR) &&
+        c.OR.some((o: any) => o?.trendingScore === 0) &&
+        c.OR.some((o: any) => o?.trendingScore === null),
+    );
+  }
+
+  function setupForYou(opts: {
+    candidates: ForYouCandidate[];
+    youFollowAuthorIds?: string[];
+    followsYouAuthorIds?: string[];
+    seenAtByPostId?: Record<string, Date>;
+    friendReplyParentIds?: string[];
+    friendBoostPostIds?: string[];
+  }) {
+    const candidates = opts.candidates;
+    const youFollowAuthorIds = opts.youFollowAuthorIds ?? [];
+    const followsYouAuthorIds = opts.followsYouAuthorIds ?? [];
+    const seenAtByPostId = opts.seenAtByPostId ?? {};
+    const friendReplyParentIds = opts.friendReplyParentIds ?? [];
+    const friendBoostPostIds = opts.friendBoostPostIds ?? [];
+
+    function sortTrending(a: ForYouCandidate, b: ForYouCandidate) {
+      const sa = a.trendingScore ?? 0;
+      const sb = b.trendingScore ?? 0;
+      if (sb !== sa) return sb - sa;
+      const at = a.createdAt.getTime();
+      const bt = b.createdAt.getTime();
+      if (bt !== at) return bt - at;
+      return a.id < b.id ? 1 : -1;
+    }
+
+    function sortChrono(a: ForYouCandidate, b: ForYouCandidate) {
+      const at = a.createdAt.getTime();
+      const bt = b.createdAt.getTime();
+      if (bt !== at) return bt - at;
+      return a.id < b.id ? 1 : -1;
+    }
+
+    const post = {
+      findUnique: jest.fn(),
+      findFirst: jest.fn(async () => null),
+      findMany: jest.fn(async (args: any) => {
+        if (args?.select) {
+          let pool = candidates.slice();
+          if (isTrendingScan(args)) {
+            pool = pool.filter((c) => c.trendingScore != null && c.trendingScore > 0);
+            pool.sort(sortTrending);
+          } else if (isChronoScan(args)) {
+            pool = pool.filter((c) => c.trendingScore == null || c.trendingScore === 0);
+            pool.sort(sortChrono);
+          } else {
+            pool.sort(sortTrending);
+          }
+          if (typeof args.take === 'number') pool = pool.slice(0, args.take);
+          return pool;
+        }
+        if (args?.include) {
+          const ids: string[] = args.where?.id?.in ?? [];
+          return ids.map((id) => {
+            const c = candidates.find((x) => x.id === id);
+            return {
+              id,
+              userId: c?.userId ?? 'u-unknown',
+              createdAt: c?.createdAt ?? new Date(),
+              trendingScore: c?.trendingScore ?? 0,
+              parentId: null,
+              communityGroupId: null,
+              kind: 'regular',
+              visibility: 'public',
+              deletedAt: null,
+            } as any;
+          });
+        }
+        return [];
+      }),
+      update: jest.fn(async () => ({})),
+      updateMany: jest.fn(async () => ({ count: 0 })),
+      create: jest.fn(),
+    };
+
+    const follow = {
+      findMany: jest.fn(async (args: any) => {
+        const followerId: string | undefined = args?.where?.followerId;
+        const followingId: string | undefined = args?.where?.followingId;
+        // Case A: viewer's outbound follows scoped to candidate authors → "you follow them"
+        if (followerId && args?.where?.followingId?.in) {
+          const inSet: string[] = args.where.followingId.in;
+          return youFollowAuthorIds
+            .filter((id) => inSet.includes(id))
+            .map((id) => ({ followingId: id }));
+        }
+        // Case B: inbound follows scoped to candidate authors → "they follow you"
+        if (followingId && args?.where?.followerId?.in) {
+          const inSet: string[] = args.where.followerId.in;
+          return followsYouAuthorIds
+            .filter((id) => inSet.includes(id))
+            .map((id) => ({ followerId: id }));
+        }
+        // Case C: full outbound follow list (used to compute friend-engagement set)
+        if (followerId && !args?.where?.followingId) {
+          return youFollowAuthorIds.map((id) => ({ followingId: id }));
+        }
+        return [];
+      }),
+    };
+
+    const postView = {
+      findMany: jest.fn(async () => {
+        return Object.entries(seenAtByPostId).map(([postId, createdAt]) => ({ postId, createdAt }));
+      }),
+    };
+
+    const boost = {
+      findMany: jest.fn(async (args: any) => {
+        const inSet: string[] = args?.where?.postId?.in ?? [];
+        return friendBoostPostIds
+          .filter((id) => inSet.includes(id))
+          .map((id) => ({ postId: id }));
+      }),
+    };
+
+    // The friend-replies query reuses post.findMany with `parentId.in` and `userId.in`.
+    // Re-route that one specific shape to our friendReplyParentIds set.
+    const baseFindMany = post.findMany;
+    post.findMany = jest.fn(async (args: any) => {
+      if (args?.where?.parentId?.in && args?.where?.userId?.in) {
+        const inSet: string[] = args.where.parentId.in;
+        return friendReplyParentIds
+          .filter((id) => inSet.includes(id))
+          .map((id) => ({ parentId: id }));
+      }
+      return baseFindMany(args);
+    }) as any;
+
+    const { service } = makeService(
+      { post, follow, postView, boost },
+      {
+        viewerContext: {
+          getViewer: jest.fn(async () => ({
+            id: 'viewer',
+            verifiedStatus: 'identity',
+            premium: false,
+            premiumPlus: false,
+            siteAdmin: false,
+            allowedPostVisibilities: ['public', 'verifiedOnly'],
+          })),
+          allowedPostVisibilities: jest.fn(() => ['public', 'verifiedOnly']),
+          isPremium: jest.fn(() => false),
+          isVerified: jest.fn(() => true),
+        },
+      },
+    );
+
+    return { service, post, follow, postView, boost };
+  }
+
+  function cand(id: string, userId: string, score: number | null, ageHours = 1): ForYouCandidate {
+    return { id, userId, trendingScore: score, createdAt: new Date(Date.now() - ageHours * 60 * 60 * 1000) };
+  }
+
+  it('excludes the viewer from candidate authors via the prisma where filter', async () => {
+    const { service, post } = setupForYou({
+      candidates: [cand('p1', 'a', 10), cand('p2', 'b', 9)],
+    });
+
+    await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+
+    const selectCall = (post.findMany as jest.Mock).mock.calls.find((c) => c[0]?.select);
+    // baseWhere lives inside the AND array now so the trending/chrono cursor where can be
+    // appended without spread-clobbering the exclude-self filter.
+    const baseAnd = selectCall?.[0]?.where?.AND?.[0] ?? {};
+    expect(baseAnd?.userId).toEqual({ not: 'viewer' });
+    // We deliberately do NOT filter by parentId — engaged replies are first-class trending
+    // candidates and get rolled up to their root by the controller's collapseFeedByRoot.
+    expect(baseAnd?.parentId).toBeUndefined();
+  });
+
+  it('intersects requestedAuthorUserIds with the exclude-self filter', async () => {
+    const { service, post } = setupForYou({
+      candidates: [cand('p1', 'a', 10)],
+    });
+
+    await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 10,
+      cursor: null,
+      visibility: 'all',
+      authorUserIds: ['viewer', 'a', 'b'],
+    });
+
+    const selectCall = (post.findMany as jest.Mock).mock.calls.find((c) => c[0]?.select);
+    const baseAnd = selectCall?.[0]?.where?.AND?.[0] ?? {};
+    expect(baseAnd?.userId).toEqual({ in: ['a', 'b'] });
+  });
+
+  it('ranks mutual > you-follow > they-follow > stranger when raw trending is equal', async () => {
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-stranger', 'u-stranger', 10, 1),
+        cand('p-mutual',   'u-mutual',   10, 1),
+        cand('p-follower', 'u-follower', 10, 1),
+        cand('p-follow',   'u-follow',   10, 1),
+      ],
+      youFollowAuthorIds: ['u-mutual', 'u-follow'],
+      followsYouAuthorIds: ['u-mutual', 'u-follower'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-mutual', 'p-follow', 'p-follower', 'p-stranger']);
+  });
+
+  it('penalizes posts seen recently and recovers as the seen age grows', async () => {
+    const justNow = new Date();
+    const aWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-fresh',    'u1', 10, 1),
+        cand('p-seen-old', 'u2', 10, 1),
+        cand('p-seen-new', 'u3', 10, 1),
+      ],
+      seenAtByPostId: { 'p-seen-new': justNow, 'p-seen-old': aWeekAgo },
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-fresh', 'p-seen-old', 'p-seen-new']);
+  });
+
+  it('boosts posts where someone the viewer follows has replied or boosted', async () => {
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-quiet',  'u1', 10, 1),
+        cand('p-reply',  'u2', 10, 1),
+        cand('p-boost',  'u3', 10, 1),
+      ],
+      youFollowAuthorIds: ['friend-1'],
+      friendReplyParentIds: ['p-reply'],
+      friendBoostPostIds: ['p-boost'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    const ids = out.posts.map((p: any) => p.id);
+    expect(ids[0] === 'p-reply' || ids[0] === 'p-boost').toBe(true);
+    expect(ids[1] === 'p-reply' || ids[1] === 'p-boost').toBe(true);
+    expect(ids[2]).toBe('p-quiet');
+  });
+
+  it('prefers per-author diversity in the first pass when alternates exist', async () => {
+    // Populated universe: alternates exist for every cap-blocked slot, so the soft second-pass
+    // never has to fire — diversity wins outright.
+    const { service } = setupForYou({
+      candidates: [
+        cand('p1', 'hot-author', 100, 1),
+        cand('p2', 'hot-author', 99, 1),
+        cand('p3', 'other-a', 50, 1),
+        cand('p4', 'hot-author', 40, 1),
+        cand('p5', 'other-b', 30, 1),
+        cand('p6', 'hot-author', 20, 1),
+      ],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 4, cursor: null, visibility: 'all' });
+    const ids = out.posts.map((p: any) => p.id);
+    // p2 blocked (immediately after hot-author at p1).
+    // p3 picked (other-a).
+    // p4 blocked (hot-author still inside the 3-row window: positions 0,2,3).
+    // p5 picked (other-b — first appearance).
+    // p6 picked (hot-author re-eligible: 3 picks since p1).
+    expect(ids).toEqual(['p1', 'p3', 'p5', 'p6']);
+  });
+
+  it('softly relaxes the diversity cap when a sparse universe would otherwise return near-empty pages', async () => {
+    // 5 candidates all by the same author and a small page size — strict diversity would return
+    // a single row and shuffle which one as seen-decay reorders the survivors. Soft fallback
+    // should fill the remaining slots in rank order so the page contains every available post,
+    // making the response stable across consecutive requests.
+    const { service } = setupForYou({
+      candidates: [
+        cand('p1', 'lone-author', 100, 1),
+        cand('p2', 'lone-author', 90, 2),
+        cand('p3', 'lone-author', 80, 3),
+        cand('p4', 'lone-author', 70, 4),
+        cand('p5', 'lone-author', 60, 5),
+      ],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 30, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5']);
+  });
+
+  it('emits a trending cursor when the trending head saturates the scan', async () => {
+    // scanTake clamps to >= limit + 10; supply 12 trending rows so trending overflows scanTake.
+    const candidates: ForYouCandidate[] = Array.from({ length: 12 }, (_, i) =>
+      cand(`p${i + 1}`, `u${i + 1}`, 100 - i, 1),
+    );
+    const { service } = setupForYou({ candidates });
+    const out = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 1,
+      cursor: null,
+      visibility: 'all',
+    });
+    expect(out.nextCursor).not.toBeNull();
+  });
+
+  it('emits no cursor when nothing in the candidate universe overflows the scan', async () => {
+    const { service } = setupForYou({ candidates: [cand('p1', 'a', 10, 1)] });
+    const out = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 10,
+      cursor: null,
+      visibility: 'all',
+    });
+    expect(out.nextCursor).toBeNull();
+  });
+
+  it('blends the trending head with the chronological tail when trending is sparse', async () => {
+    // Two engaged posts and three unscored posts. With limit=5 (and scanTake clamps wide enough
+    // to capture all five), the page should include both trending and the chrono tail.
+    const { service, post } = setupForYou({
+      candidates: [
+        cand('t1', 'ut1', 50, 1),
+        cand('t2', 'ut2', 40, 1),
+        cand('c1', 'uc1', null, 2),
+        cand('c2', 'uc2', null, 3),
+        cand('c3', 'uc3', null, 4),
+      ],
+    });
+
+    const out = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 5,
+      cursor: null,
+      visibility: 'all',
+    });
+    const ids = out.posts.map((p: any) => p.id);
+    expect(ids).toEqual(expect.arrayContaining(['t1', 't2', 'c1', 'c2', 'c3']));
+    expect(ids.length).toBe(5);
+    // Verify both prisma scans actually ran (trending head + chrono tail supplement).
+    const calls = (post.findMany as jest.Mock).mock.calls.filter((c) => c[0]?.select);
+    expect(calls.some((c) => isTrendingScan(c[0]))).toBe(true);
+    expect(calls.some((c) => isChronoScan(c[0]))).toBe(true);
+  });
+
+  it('returns chronological-only candidates when nothing is engaged yet', async () => {
+    const { service } = setupForYou({
+      candidates: [
+        cand('c1', 'a', null, 1),
+        cand('c2', 'b', null, 2),
+        cand('c3', 'c', null, 3),
+      ],
+    });
+    const out = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 10,
+      cursor: null,
+      visibility: 'all',
+    });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['c1', 'c2', 'c3']);
+  });
+
+  it('lets personal signals lift a chrono-tail post above an unrelated trending row', async () => {
+    // Strong friend-engagement boost on a chrono row (base 1.0 * mutualFollow * friendBoost)
+    // should still rank below a trending row whose base score is large — but the chrono row
+    // must appear in the page (proving chrono candidates are first-class).
+    const { service } = setupForYou({
+      candidates: [
+        cand('t-strong', 'u-stranger', 50, 1),
+        cand('c-mutual-friend-boost', 'u-mutual', null, 2),
+      ],
+      youFollowAuthorIds: ['u-mutual'],
+      followsYouAuthorIds: ['u-mutual'],
+      friendBoostPostIds: ['c-mutual-friend-boost'],
+    });
+    const out = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 10,
+      cursor: null,
+      visibility: 'all',
+    });
+    const ids = out.posts.map((p: any) => p.id);
+    expect(ids).toContain('c-mutual-friend-boost');
+    expect(ids).toContain('t-strong');
+  });
+
+  it('returns empty when authorUserIds filter is provided but empty', async () => {
+    const { service, post } = setupForYou({ candidates: [cand('p1', 'a', 10, 1)] });
+    const out = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 10,
+      cursor: null,
+      visibility: 'all',
+      authorUserIds: [],
+    });
     expect(out.posts).toEqual([]);
     expect(out.nextCursor).toBeNull();
+    expect(post.findMany).not.toHaveBeenCalled();
   });
 });

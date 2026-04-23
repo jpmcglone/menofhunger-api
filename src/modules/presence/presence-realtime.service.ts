@@ -10,6 +10,9 @@ import type {
   ArticlesCommentDeletedPayloadDto,
   ArticlesCommentUpdatedPayloadDto,
   ArticlesCommentReactionChangedPayloadDto,
+  CheckinAnsweredTodayPayloadDto,
+  CrewStreakAdvancedPayloadDto,
+  CrewStreakBrokenPayloadDto,
   FeedNewPostPayloadDto,
   FollowsChangedPayloadDto,
   MessagesReadPayloadDto,
@@ -93,6 +96,15 @@ export class PresenceRealtimeService {
 
   emitNotificationsUpdated(userId: string, payload: { undeliveredCount: number }): void {
     this.emitToUser(userId, 'notifications:updated', payload);
+  }
+
+  /**
+   * "Waiting on you" dot signal — emitted whenever the count of unread reply (kind: 'comment')
+   * notifications for this user changes. Carries only that count, so the home tab can render
+   * a dot without consulting any other state.
+   */
+  emitNotificationsWaitingChanged(userId: string, payload: { unreadCommentCount: number }): void {
+    this.emitToUser(userId, 'notifications:waitingCountChanged', payload);
   }
 
   emitNotificationNew(userId: string, payload: NotificationsNewPayloadDto): void {
@@ -261,6 +273,23 @@ export class PresenceRealtimeService {
 
   emitCrewWallReaction(userIds: Iterable<string>, payload: { crewId: string; conversationId: string; message: unknown }): void {
     this.emitToUsers(userIds, 'crew:wall:reaction', payload);
+  }
+
+  /**
+   * "Someone in your circle just answered today's check-in question."
+   * Fanned out to followers + crew members of the actor so each receiver can update
+   * the home hero's social-proof facepile and total without a refetch.
+   */
+  emitCheckinAnsweredToday(userIds: Iterable<string>, payload: CheckinAnsweredTodayPayloadDto): void {
+    this.emitToUsers(userIds, 'checkin:answeredToday', payload);
+  }
+
+  emitCrewStreakAdvanced(userIds: Iterable<string>, payload: CrewStreakAdvancedPayloadDto): void {
+    this.emitToUsers(userIds, 'crew:streak:advanced', payload);
+  }
+
+  emitCrewStreakBroken(userIds: Iterable<string>, payload: CrewStreakBrokenPayloadDto): void {
+    this.emitToUsers(userIds, 'crew:streak:broken', payload);
   }
 
   emitCrewTransferVote(userIds: Iterable<string>, payload: { crewId: string; vote: unknown }): void {

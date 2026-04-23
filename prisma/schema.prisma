@@ -768,6 +768,19 @@ model Crew {
   /** Denormalized count of CrewMember rows. Updated atomically on join/kick/leave. */
   memberCount Int @default(1)
 
+  /**
+   * Strict crew streak: a day only counts when EVERY member checks in by ET midnight.
+   * One absentee breaks the streak. Stored denormalized so we never have to scan history.
+   *
+   * - currentStreakDays: the active run length (resets to 0 on a missed day).
+   * - longestStreakDays: best run ever achieved by this crew.
+   * - lastCompletedDayKey: ET YYYY-MM-DD for the most recent day all members checked in.
+   *   Used both to advance (todayKey) and to detect breaks (yesterdayKey) in the cron.
+   */
+  currentStreakDays   Int     @default(0)
+  longestStreakDays   Int     @default(0)
+  lastCompletedDayKey String?
+
   members CrewMember[]
   invites CrewInvite[]
   transferVotes CrewOwnerTransferVote[] @relation("CrewOwnerTransferVote_crew")
@@ -1532,6 +1545,10 @@ model NotificationPreferences {
   pushRepost Boolean @default(true)
   pushNudge Boolean @default(true)
   pushFollowedPost Boolean @default(true)
+  /** Send a single push 24h after a reply if the recipient hasn't opened it yet. Once-per-notification, never spammed. */
+  pushReplyNudge Boolean @default(true)
+  /** Crew streak: push when the strict crew streak advances or breaks. Highest-signal push in the product. */
+  pushCrewStreak Boolean @default(true)
 
   // Email preferences (requires user.email).
   emailDigestDaily Boolean @default(true)

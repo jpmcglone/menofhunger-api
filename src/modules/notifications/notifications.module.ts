@@ -9,6 +9,7 @@ import { NotificationsController } from './notifications.controller';
 import { NotificationsCleanupCron } from './notifications-cleanup.cron';
 import { NotificationsOrphanCleanupCron } from './notifications-orphan-cleanup.cron';
 import { NotificationsEmailCron } from './notifications-email.cron';
+import { NotificationsReplyNudgeCron } from './notifications-reply-nudge.cron';
 import { NotificationsService } from './notifications.service';
 import { MessagePushEventsHandler } from './message-push-events.handler';
 import { MessageInstantEmailEventsHandler } from './message-instant-email-events.handler';
@@ -23,7 +24,14 @@ import { MessageInstantEmailEventsHandler } from './message-instant-email-events
     NotificationsCleanupCron,
     NotificationsOrphanCleanupCron,
     NotificationsEmailCron,
+    NotificationsReplyNudgeCron,
   ],
-  exports: [NotificationsService, NotificationsCleanupCron, NotificationsOrphanCleanupCron, NotificationsEmailCron],
+  exports: [
+    NotificationsService,
+    NotificationsCleanupCron,
+    NotificationsOrphanCleanupCron,
+    NotificationsEmailCron,
+    NotificationsReplyNudgeCron,
+  ],
 })
 export class NotificationsModule {}

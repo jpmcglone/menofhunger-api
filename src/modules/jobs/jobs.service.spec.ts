@@ -82,6 +82,7 @@ describe('Cron job ID registry — no invalid colons', () => {
     'cron-notificationsOrphanCleanup',
     'cron-notificationsCleanup',
     'cron-notificationsEmailNudges',
+    'cron-notificationsReplyNudgePush',
   ];
 
   it.each(staticCronIds)('"%s" is a valid BullMQ v5 job ID', (id) => {

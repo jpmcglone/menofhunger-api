@@ -256,3 +256,48 @@ export type PostsCommentDeletedPayloadDto = {
   commentId: string;
 };
 
+/**
+ * Crew streak realtime payloads (Phase 3 — DAU loop).
+ *
+ * Both events are fanned out to every member of the crew. Receivers use them to
+ * celebrate the advance in-place or learn who broke the streak (the latter is
+ * intentionally specific — generic "streak broke" without names is cheap to
+ * ignore; named accountability is the behavioral nudge).
+ */
+export type CrewStreakAdvancedPayloadDto = {
+  crewId: string;
+  /** ET YYYY-MM-DD on which all members locked in. */
+  dayKey: string;
+  currentStreakDays: number;
+  longestStreakDays: number;
+};
+
+export type CrewStreakBrokenPayloadDto = {
+  crewId: string;
+  /** ET YYYY-MM-DD that was missed (i.e. yesterday at the moment the cron ran). */
+  missedDayKey: string;
+  /** Member identities who failed to check in on missedDayKey. */
+  missedMembers: Array<{
+    id: string;
+    username: string | null;
+    displayName: string | null;
+  }>;
+};
+
+/**
+ * Live "someone in your circle just answered today's question" event.
+ * Emitted to the actor's followers + crew members when a `kind: 'checkin'` post is created.
+ * Carries the actor identity (so receivers can prepend a face) and the new global total.
+ */
+export type CheckinAnsweredTodayPayloadDto = {
+  dayKey: string;
+  totalToday: number;
+  answerer: {
+    id: string;
+    username: string | null;
+    displayName: string | null;
+    avatarUrl: string | null;
+    isFollowed?: boolean;
+  };
+};
+

@@ -35,7 +35,8 @@ const listSchema = z.object({
   authorIds: z.string().optional(),
   // "trending" is the UI-friendly name for our half-life boost scoring feed.
   // Keep "popular" for backwards compatibility / internal naming.
-  sort: z.enum(['new', 'popular', 'trending', 'featured']).optional(),
+  // "forYou" is a personalized re-rank of trending using the viewer's follow graph + view history.
+  sort: z.enum(['new', 'popular', 'trending', 'featured', 'forYou']).optional(),
   collapseByRoot: z.coerce.boolean().optional(),
   collapseMode: z.enum(['root', 'parent']).optional(),
   prefer: z.enum(['reply', 'root']).optional(),
@@ -324,6 +325,10 @@ export class PostsController {
 
     const sort = parsed.sort ?? 'new';
     const sortKind = sort === 'trending' ? 'popular' : sort;
+    const isForYou = sortKind === 'forYou';
+    if (isForYou && !viewerUserId) {
+      throw new ForbiddenException('Sign in to view your For You feed.');
+    }
 
     const groupScoped = Boolean(parsed.groupsHub || parsed.communityGroupId);
     if (groupScoped) {
@@ -361,9 +366,11 @@ export class PostsController {
       return scopedOut;
     }
 
-    const anonCache = viewerUserId == null;
-    const authFirstPageCache = Boolean(viewerUserId) && !cursor;
-    const authCursorCache = Boolean(viewerUserId)
+    // For You is per-user and depends on view history that changes constantly — no caching.
+    const anonCache = !isForYou && viewerUserId == null;
+    const authFirstPageCache = !isForYou && Boolean(viewerUserId) && !cursor;
+    const authCursorCache = !isForYou
+      && Boolean(viewerUserId)
       && Boolean(cursor)
       && (sortKind === 'new' || sortKind === 'popular' || sortKind === 'featured')
       && !authorUserIds.length
@@ -406,18 +413,17 @@ export class PostsController {
       compute: async () => {
         const listStartMs = Date.now();
         const result =
-          sortKind === 'featured'
-            ? await this.posts.listFeaturedFeed({
-                viewerUserId,
+          sortKind === 'forYou'
+            ? await this.posts.listForYouFeed({
+                viewerUserId: viewerUserId!,
                 limit,
                 cursor,
                 visibility: parsed.visibility ?? 'all',
-                followingOnly: parsed.followingOnly ?? false,
                 kind: parsed.kind ?? null,
                 authorUserIds: authorUserIds.length ? authorUserIds : null,
               })
-            : sortKind === 'popular'
-              ? await this.posts.listPopularFeed({
+            : sortKind === 'featured'
+              ? await this.posts.listFeaturedFeed({
                   viewerUserId,
                   limit,
                   cursor,
@@ -426,15 +432,25 @@ export class PostsController {
                   kind: parsed.kind ?? null,
                   authorUserIds: authorUserIds.length ? authorUserIds : null,
                 })
-              : await this.posts.listFeed({
-                  viewerUserId,
-                  limit,
-                  cursor,
-                  visibility: parsed.visibility ?? 'all',
-                  followingOnly: parsed.followingOnly ?? false,
-                  kind: parsed.kind ?? null,
-                  authorUserIds: authorUserIds.length ? authorUserIds : null,
-                });
+              : sortKind === 'popular'
+                ? await this.posts.listPopularFeed({
+                    viewerUserId,
+                    limit,
+                    cursor,
+                    visibility: parsed.visibility ?? 'all',
+                    followingOnly: parsed.followingOnly ?? false,
+                    kind: parsed.kind ?? null,
+                    authorUserIds: authorUserIds.length ? authorUserIds : null,
+                  })
+                : await this.posts.listFeed({
+                    viewerUserId,
+                    limit,
+                    cursor,
+                    visibility: parsed.visibility ?? 'all',
+                    followingOnly: parsed.followingOnly ?? false,
+                    kind: parsed.kind ?? null,
+                    authorUserIds: authorUserIds.length ? authorUserIds : null,
+                  });
         stageMs.list = Date.now() - listStartMs;
 
         // For the chronological feed, suppress the original post when the viewer's own

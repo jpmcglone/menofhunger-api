@@ -543,7 +543,7 @@ export class AdminAnalyticsController {
           (SELECT COUNT(*)::bigint FROM "ArticleReaction" ar
            WHERE ar."articleId" = a.id
            ${since ? Prisma.sql`AND ar."createdAt" >= ${since}::timestamptz` : Prisma.sql``}) AS reaction_count,
-          a."publishedAt"
+          a."publishedAt" AS published_at
         FROM "Article" a
         JOIN "User" u ON u.id = a."authorId"
         LEFT JOIN "ArticleView" av ON av."articleId" = a.id
