@@ -446,9 +446,12 @@ export class CrewInvitesService {
       where: { crewId },
       select: { userId: true },
     });
-    // Notify every existing member that someone joined.
+    // Notify every existing member that someone joined. Skip the inviter — they
+    // already received `crew_invite_accepted` above; sending both for the same
+    // event is redundant and trains people to ignore the row.
     for (const m of allMembers) {
       if (m.userId === viewerUserId) continue;
+      if (m.userId === invite.invitedByUserId) continue;
       await this.notifications.create({
         recipientUserId: m.userId,
         kind: 'crew_member_joined',
