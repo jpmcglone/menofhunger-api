@@ -45,6 +45,8 @@ const listSchema = z.object({
   groupsHub: z.coerce.boolean().optional(),
   /** Single community group feed (members-only). */
   communityGroupId: z.string().trim().min(1).max(40).optional(),
+  /** When true and a group-scoped request, return only top-level (non-reply) posts. */
+  topLevelOnly: z.coerce.boolean().optional(),
 });
 
 const userListSchema = listSchema.extend({
@@ -359,6 +361,7 @@ export class PostsController {
               collapseMode: parsed.collapseMode ?? 'root',
               prefer: parsed.prefer ?? 'reply',
               collapseMaxPerRoot: parsed.collapseMaxPerRoot ?? 2,
+              topLevelOnly: parsed.topLevelOnly,
             });
       const totalMsGroup = Date.now() - reqStartMs;
       httpRes.setHeader('x-feed-total-ms', String(totalMsGroup));

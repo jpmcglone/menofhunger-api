@@ -13,6 +13,13 @@ const feedQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
   sort: z.enum(['new', 'trending']).optional(),
+  topLevelOnly: z.coerce.boolean().optional(),
+});
+
+const mediaQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  cursor: z.string().optional(),
+  sort: z.enum(['new', 'trending']).optional(),
 });
 
 const myHubFeedQuerySchema = feedQuerySchema.extend({
@@ -172,6 +179,27 @@ export class GroupsController {
   ) {
     const parsed = feedQuerySchema.parse(query);
     return await this.groups.groupFeed({
+      viewerUserId,
+      slug,
+      limit: parsed.limit ?? 30,
+      cursor: parsed.cursor ?? null,
+      sort: parsed.sort === 'trending' ? 'trending' : 'new',
+      topLevelOnly: parsed.topLevelOnly,
+    });
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: { limit: rateLimitLimit('publicRead', 120), ttl: rateLimitTtl('publicRead', 60) },
+  })
+  @Get('by-slug/:slug/media')
+  async media(
+    @CurrentUserId() viewerUserId: string,
+    @Param('slug') slug: string,
+    @Query() query: unknown,
+  ) {
+    const parsed = mediaQuerySchema.parse(query);
+    return await this.groups.groupMedia({
       viewerUserId,
       slug,
       limit: parsed.limit ?? 30,

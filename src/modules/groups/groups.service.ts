@@ -707,6 +707,7 @@ export class GroupsService {
     limit: number;
     cursor: string | null;
     sort: 'new' | 'trending';
+    topLevelOnly?: boolean;
   }) {
     const slug = (params.slug ?? '').trim();
     if (!slug) throw new NotFoundException('Group not found.');
@@ -732,8 +733,33 @@ export class GroupsService {
       cursor: params.cursor,
       sort: params.sort,
       applyPinnedHead: params.sort === 'new',
+      topLevelOnly: params.topLevelOnly,
       ...collapseOpts,
     });
+  }
+
+  async groupMedia(params: {
+    viewerUserId: string;
+    slug: string;
+    limit: number;
+    cursor: string | null;
+    sort: 'new' | 'trending';
+  }) {
+    const slug = (params.slug ?? '').trim();
+    if (!slug) throw new NotFoundException('Group not found.');
+    const g = await this.prisma.communityGroup.findFirst({
+      where: { slug, deletedAt: null },
+    });
+    if (!g) throw new NotFoundException('Group not found.');
+
+    const result = await this.posts.listMediaForCommunityGroup({
+      viewerUserId: params.viewerUserId,
+      groupId: g.id,
+      limit: params.limit,
+      cursor: params.cursor,
+      sort: params.sort,
+    });
+    return { data: result.items, pagination: { nextCursor: result.nextCursor } };
   }
 
   async myGroupsHubFeed(params: {

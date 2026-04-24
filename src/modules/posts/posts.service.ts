@@ -885,7 +885,8 @@ export class PostsService {
   }
 
   /**
-   * Timeline posts inside one or more community groups (roots + replies), for the same collapse pipeline as GET /posts.
+   * Timeline posts inside one or more community groups (roots + replies by default).
+   * When `topLevelOnly` is true, only root posts (`parentId IS NULL`) are returned.
    * When `applyPinnedHead` and a single group, the owner-pinned root post is prepended on the first chronological page only.
    */
   async listCommunityGroupsTimelinePosts(params: {
@@ -894,12 +895,15 @@ export class PostsService {
     cursor: string | null;
     sort: 'new' | 'trending';
     applyPinnedHead: boolean;
+    topLevelOnly?: boolean;
   }): Promise<FeedResult> {
     const { groupIds, limit, cursor, sort } = params;
     if (groupIds.length === 0) return { posts: [], nextCursor: null };
 
     const groupWhere: Prisma.PostWhereInput =
       groupIds.length === 1 ? { communityGroupId: groupIds[0]! } : { communityGroupId: { in: groupIds } };
+
+    const topLevelFilter: Prisma.PostWhereInput = params.topLevelOnly ? { parentId: null } : {};
 
     const applyPin =
       Boolean(params.applyPinnedHead && sort === 'new' && !cursor && groupIds.length === 1) && groupIds[0];
@@ -925,6 +929,7 @@ export class PostsService {
 
     const baseAnd: Prisma.PostWhereInput[] = [groupWhere, this.notDeletedWhere(), this.userNotBannedWhere()];
     if (pinnedId) baseAnd.push({ id: { not: pinnedId } });
+    if (params.topLevelOnly) baseAnd.push(topLevelFilter);
 
     if (sort === 'trending') {
       // Two-phase trending feed:
@@ -1215,6 +1220,7 @@ export class PostsService {
     collapseMode: 'root' | 'parent';
     prefer: 'reply' | 'root';
     collapseMaxPerRoot: number;
+    topLevelOnly?: boolean;
   }): Promise<{ data: PostDto[]; pagination: { nextCursor: string | null } }> {
     const raw = await this.listCommunityGroupsTimelinePosts({
       groupIds: params.groupIds,
@@ -1222,6 +1228,7 @@ export class PostsService {
       cursor: params.cursor,
       sort: params.sort,
       applyPinnedHead: params.applyPinnedHead,
+      topLevelOnly: params.topLevelOnly,
     });
     const { items: filteredPosts, collapsedCountByItemId } = collapseFeedByRoot(raw.posts, {
       collapseByRoot: params.collapseByRoot,
@@ -6014,6 +6021,124 @@ export class PostsService {
           viewerCanAccess,
         };
       }),
+      nextCursor,
+    };
+  }
+
+  // ─── Community group media grid ───────────────────────────────────────────
+
+  async listMediaForCommunityGroup(params: {
+    viewerUserId: string;
+    groupId: string;
+    limit: number;
+    cursor: string | null;
+    sort: 'new' | 'trending';
+  }) {
+    const { viewerUserId, groupId, limit, cursor, sort } = params;
+    await this.assertCanReadCommunityGroup(viewerUserId, groupId);
+
+    const r2BaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    const baseWhere: Prisma.PostMediaWhereInput = {
+      kind: { in: ['image', 'video'] },
+      source: 'upload',
+      deletedAt: null,
+      post: {
+        communityGroupId: groupId,
+        deletedAt: null,
+      },
+    };
+
+    type MediaRow = {
+      id: string;
+      kind: PostMediaKind;
+      r2Key: string | null;
+      thumbnailR2Key: string | null;
+      width: number | null;
+      height: number | null;
+      durationSeconds: number | null;
+      postId: string;
+    };
+
+    let mediaRows: MediaRow[];
+
+    const offset =
+      sort === 'trending' && cursor
+        ? (() => {
+            try {
+              return parseInt(Buffer.from(cursor, 'base64').toString('utf8'), 10) || 0;
+            } catch {
+              return 0;
+            }
+          })()
+        : 0;
+
+    if (sort === 'trending') {
+      mediaRows = await this.prisma.postMedia.findMany({
+        where: baseWhere,
+        orderBy: [
+          { post: { trendingScore: { sort: 'desc', nulls: 'last' } } },
+          { post: { boostCount: 'desc' } },
+          { post: { bookmarkCount: 'desc' } },
+          { post: { repostCount: 'desc' } },
+          { post: { commentCount: 'desc' } },
+          { post: { createdAt: 'desc' } },
+          { id: 'desc' },
+        ],
+        skip: offset,
+        take: limit + 1,
+        select: {
+          id: true,
+          kind: true,
+          r2Key: true,
+          thumbnailR2Key: true,
+          width: true,
+          height: true,
+          durationSeconds: true,
+          postId: true,
+        },
+      });
+    } else {
+      mediaRows = await this.prisma.postMedia.findMany({
+        where: { ...baseWhere, ...(cursor ? { id: { lt: cursor } } : {}) },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        select: {
+          id: true,
+          kind: true,
+          r2Key: true,
+          thumbnailR2Key: true,
+          width: true,
+          height: true,
+          durationSeconds: true,
+          postId: true,
+        },
+      });
+    }
+
+    const hasMore = mediaRows.length > limit;
+    const items = hasMore ? mediaRows.slice(0, limit) : mediaRows;
+
+    let nextCursor: string | null = null;
+    if (hasMore) {
+      if (sort === 'trending') {
+        nextCursor = Buffer.from(String(offset + limit)).toString('base64');
+      } else {
+        nextCursor = items[items.length - 1]?.id ?? null;
+      }
+    }
+
+    return {
+      items: items.map((m) => ({
+        id: m.id,
+        postId: m.postId,
+        kind: m.kind as 'image' | 'video',
+        url: r2BaseUrl && m.r2Key ? `${r2BaseUrl}/${m.r2Key}` : null,
+        thumbnailUrl: r2BaseUrl && m.thumbnailR2Key ? `${r2BaseUrl}/${m.thumbnailR2Key}` : null,
+        width: m.width,
+        height: m.height,
+        durationSeconds: m.durationSeconds ?? null,
+      })),
       nextCursor,
     };
   }
