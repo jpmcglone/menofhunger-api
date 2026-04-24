@@ -8,7 +8,6 @@
 
 import { PresenceGateway } from './presence.gateway';
 import { WatchPartyStateService } from '../spaces/watch-party-state.service';
-import { SpacesPresenceService } from '../spaces/spaces-presence.service';
 
 // ─── Lightweight fake socket.io infrastructure ──────────────────────────────
 
@@ -60,12 +59,11 @@ class FakeServer {
 
   to(room: string) {
     const memberIds = this.rooms.get(room) ?? new Set<string>();
-    const self = this;
     return {
-      emit(event: string, payload?: unknown) {
-        self.emitted.push({ event, payload: payload ?? null });
+      emit: (event: string, payload?: unknown) => {
+        this.emitted.push({ event, payload: payload ?? null });
         for (const id of memberIds) {
-          self.sockets.get(id)?.emit(event, payload);
+          this.sockets.get(id)?.emit(event, payload);
         }
       },
     };

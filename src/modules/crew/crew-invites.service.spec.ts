@@ -177,7 +177,7 @@ describe('CrewInvitesService.acceptInvite — solo auto-disband', () => {
     // Two reads of CrewMember for the viewer:
     //   1) findBlockingMembership -> solo (memberCount 1) returns null (not blocking).
     //   2) findSoloCrewIdToDisband -> returns the solo crew id.
-    (prisma.crewMember.findUnique as jest.Mock).mockImplementation(({ where, select }) => {
+    (prisma.crewMember.findUnique as jest.Mock).mockImplementation(({ where }) => {
       if (where.userId !== 'viewer') return Promise.resolve(null);
       // Both reads share the same shape; both branches return the same data.
       return Promise.resolve({

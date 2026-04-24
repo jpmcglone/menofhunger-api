@@ -317,7 +317,6 @@ describe('NotificationsService.upsertMessageNotification', () => {
   });
 
   it('marks notification read + decrements counter when conversation is opened', async () => {
-    const now = new Date();
     const notif = { id: 'msg-notif', deliveredAt: null, readAt: null };
     const notification = {
       findFirst: jest.fn(async () => notif),

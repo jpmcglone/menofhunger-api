@@ -68,7 +68,7 @@ const ARTICLE_SCORE = {
   authorNameAnyWord: 30,
 } as const;
 
-type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
+type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean; premiumPlus?: boolean; siteAdmin?: boolean } | null;
 
 const SEARCH_POST_INCLUDE = POST_BASE_INCLUDE;
 const SEARCH_ARTICLE_INCLUDE = {
@@ -142,6 +142,80 @@ export class SearchService {
 
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
     return this.viewerContext.allowedPostVisibilities(viewer as any);
+  }
+
+  private readableGroupPostWhere(viewer: Viewer): Prisma.PostWhereInput {
+    const viewerUserId = (viewer?.id ?? '').trim();
+    if (!viewerUserId) return { communityGroupId: null };
+
+    const groupAccess: Prisma.PostWhereInput[] = [];
+    if (viewer?.siteAdmin) {
+      groupAccess.push({ communityGroup: { deletedAt: null } });
+    } else {
+      if (this.viewerContext.isVerified(viewer)) {
+        groupAccess.push({ communityGroup: { deletedAt: null, joinPolicy: 'open' } });
+      }
+      groupAccess.push({
+        communityGroup: {
+          deletedAt: null,
+          members: {
+            some: {
+              userId: viewerUserId,
+              status: 'active',
+            },
+          },
+        },
+      });
+    }
+
+    return { OR: [{ communityGroupId: null }, ...groupAccess] };
+  }
+
+  private readableGroupPostSql(viewer: Viewer): Prisma.Sql {
+    const viewerUserId = (viewer?.id ?? '').trim();
+    if (!viewerUserId) return Prisma.sql`AND p."communityGroupId" IS NULL`;
+
+    if (viewer?.siteAdmin) {
+      return Prisma.sql`
+        AND (
+          p."communityGroupId" IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM "CommunityGroup" cg
+            WHERE cg."id" = p."communityGroupId"
+              AND cg."deletedAt" IS NULL
+          )
+        )
+      `;
+    }
+
+    const openGroupSql = this.viewerContext.isVerified(viewer)
+      ? Prisma.sql`
+          OR EXISTS (
+            SELECT 1
+            FROM "CommunityGroup" cg
+            WHERE cg."id" = p."communityGroupId"
+              AND cg."deletedAt" IS NULL
+              AND cg."joinPolicy" = 'open'
+          )
+        `
+      : Prisma.sql``;
+
+    return Prisma.sql`
+      AND (
+        p."communityGroupId" IS NULL
+        ${openGroupSql}
+        OR EXISTS (
+          SELECT 1
+          FROM "CommunityGroup" cg
+          JOIN "CommunityGroupMember" cgm ON cgm."groupId" = cg."id"
+          WHERE cg."id" = p."communityGroupId"
+            AND cg."deletedAt" IS NULL
+            AND cgm."userId" = ${viewerUserId}
+            AND cgm."status" = 'active'
+        )
+      )
+    `;
   }
 
   async searchUsers(params: {
@@ -711,8 +785,9 @@ export class SearchService {
       const allowed = params.allowed ?? ['public'];
       const allowedSql = allowed.map((v) => Prisma.sql`${v}::"PostVisibility"`);
       const visibilitySql = viewer?.id
-        ? Prisma.sql`AND (p."visibility" IN (${Prisma.join(allowedSql)}) OR (p."userId" = ${viewer.id} AND p."visibility" = 'onlyMe'))`
+        ? Prisma.sql`AND p."visibility" IN (${Prisma.join(allowedSql)})`
         : Prisma.sql`AND p."visibility" = 'public'`;
+      const readableGroupPostSql = this.readableGroupPostSql(viewer);
 
       const excludeHashtagsSql =
         hashtags.length > 0
@@ -737,7 +812,7 @@ export class SearchService {
         CROSS JOIN q
         WHERE
           p."deletedAt" IS NULL
-          AND p."communityGroupId" IS NULL
+          ${readableGroupPostSql}
           ${visibilitySql}
           ${excludeHashtagsSql}
           ${cursorSql}
@@ -770,6 +845,7 @@ export class SearchService {
 
     const words = queryToWords(queryMatch);
     const matchWhere = this.postSearchMatchWhere(queryMatch, words) as Prisma.PostWhereInput;
+    const readableGroupPostWhere = this.readableGroupPostWhere(params.viewer);
     const cursorWhere = await createdAtIdCursorWhere({
       cursor: cursorPostId,
       lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
@@ -779,7 +855,7 @@ export class SearchService {
       where: {
         AND: [
           { deletedAt: null },
-          { communityGroupId: null },
+          readableGroupPostWhere,
           params.visibilityWhere,
           ...(hashtags.length > 0 ? [({ NOT: hashtagWhere } as Prisma.PostWhereInput)] : []),
           ...(cursorWhere ? [cursorWhere] : []),
@@ -815,6 +891,7 @@ export class SearchService {
 
     const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
     const allowed = this.allowedVisibilitiesForViewer(viewer);
+    const readableGroupPostWhere = this.readableGroupPostWhere(viewer);
 
     // Never include onlyMe posts in search results (even for the viewer).
     const visibilityWhere: Prisma.PostWhereInput = viewer?.id
@@ -842,7 +919,7 @@ export class SearchService {
       if (cursorIsOffset) {
         const rows = await this.prisma.post.findMany({
           where: {
-            AND: [{ deletedAt: null }, { communityGroupId: null }, visibilityWhere, kindWhere, hashtagWhere],
+            AND: [{ deletedAt: null }, readableGroupPostWhere, visibilityWhere, kindWhere, hashtagWhere],
           },
           include: {
             user: POST_BASE_INCLUDE.user,
@@ -880,7 +957,7 @@ export class SearchService {
           where: {
             AND: [
               { deletedAt: null },
-              { communityGroupId: null },
+              readableGroupPostWhere,
               visibilityWhere,
               kindWhere,
               hashtagWhere,
@@ -955,8 +1032,9 @@ export class SearchService {
     if (useFts) {
       const allowedSql = allowed.map((v) => Prisma.sql`${v}::"PostVisibility"`);
       const visibilitySql = viewer?.id
-        ? Prisma.sql`AND (p."visibility" IN (${Prisma.join(allowedSql)}) OR (p."userId" = ${viewer.id} AND p."visibility" = 'onlyMe'))`
+        ? Prisma.sql`AND p."visibility" IN (${Prisma.join(allowedSql)})`
         : Prisma.sql`AND p."visibility" = 'public'`;
+      const readableGroupPostSql = this.readableGroupPostSql(viewer);
 
       const topicsSql =
         topicValues.length > 0
@@ -976,7 +1054,7 @@ export class SearchService {
         CROSS JOIN q
         WHERE
           p."deletedAt" IS NULL
-          AND p."communityGroupId" IS NULL
+          ${readableGroupPostSql}
           ${visibilitySql}
           AND (
             to_tsvector('english', p."body") @@ q.tsq
@@ -1010,7 +1088,7 @@ export class SearchService {
           ? {
               AND: [
                 { deletedAt: null },
-                { communityGroupId: null },
+                readableGroupPostWhere,
                 visibilityWhere,
                 kindWhere,
                 {
@@ -1025,7 +1103,7 @@ export class SearchService {
           : {
               AND: [
                 { deletedAt: null },
-                { communityGroupId: null },
+                readableGroupPostWhere,
                 visibilityWhere,
                 kindWhere,
                 topicValues.length > 0 ? ({ OR: [matchWhere, topicWhere] } as Prisma.PostWhereInput) : matchWhere,

@@ -132,9 +132,19 @@ export class SearchController {
       const scoreByPostId = viewerHasAdmin && postIds.length > 0
         ? await this.posts.computeScoresForPostIds(postIds)
         : undefined;
+      const groupIds = [
+        ...new Set(
+          (res.posts ?? [])
+            .map((p) => String((p as { communityGroupId?: string | null }).communityGroupId ?? '').trim())
+            .filter(Boolean),
+        ),
+      ];
+      const groupPreviewById = await this.posts.communityGroupPreviewMapForFeed(viewerUserId, groupIds);
       const posts = (res.posts ?? []).map((p) => {
         const base = internalByPostId?.get(p.id);
         const score = scoreByPostId?.get(p.id);
+        const gid = String((p as { communityGroupId?: string | null }).communityGroupId ?? '').trim();
+        const gp = gid ? groupPreviewById.get(gid) : undefined;
         return toPostDto(p as PostWithAuthorAndMedia, publicBaseUrl, {
           viewerHasBoosted: boosted.has(p.id),
           viewerHasBookmarked: bookmarksByPostId.has(p.id),
@@ -144,6 +154,7 @@ export class SearchController {
             base || (typeof score === 'number' ? { score } : undefined)
               ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
               : undefined,
+          ...(gp ? { groupPreview: gp } : {}),
         });
       });
       const articles = (res.articles ?? []).map((a) =>
@@ -305,13 +316,7 @@ export class SearchController {
               .filter(Boolean),
           ),
         ];
-        const groupPreviewById = new Map<string, Awaited<ReturnType<PostsService['communityGroupPreviewForGroup']>>>();
-        await Promise.all(
-          searchGroupIds.map(async (gid) => {
-            const prev = await this.posts.communityGroupPreviewForGroup(gid, viewerUserId);
-            if (prev) groupPreviewById.set(gid, prev);
-          }),
-        );
+        const groupPreviewById = await this.posts.communityGroupPreviewMapForFeed(viewerUserId, searchGroupIds);
 
         const posts = (res.posts ?? []).map((p) => {
           const base = internalByPostId?.get(p.id);
