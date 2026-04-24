@@ -348,6 +348,18 @@ export class CrewService {
       [...remaining.map((m) => m.userId), params.viewerUserId],
       { crewId, kind: 'left', userId: params.viewerUserId },
     );
+
+    // Notify remaining members that someone left (best-effort, fire-and-forget).
+    const leaverUserId = params.viewerUserId;
+    void Promise.allSettled(
+      remaining.map((m) =>
+        this.notifications.upsertCrewMemberLeftNotification({
+          recipientUserId: m.userId,
+          leaverUserId,
+          crewId,
+        }),
+      ),
+    );
   }
 
   async kickMember(params: {
@@ -400,6 +412,15 @@ export class CrewService {
       [...remaining.map((m) => m.userId), params.userId],
       { crewId: params.crewId, kind: 'kicked', userId: params.userId },
     );
+
+    // Notify the kicked member (best-effort, fire-and-forget).
+    void this.notifications.upsertCrewMemberKickedNotification({
+      recipientUserId: params.userId,
+      actorUserId: params.viewerUserId,
+      crewId: params.crewId,
+    }).catch((err) => {
+      this.logger.warn(`[crew] Failed to send kick notification: ${err}`);
+    });
   }
 
   /**
@@ -425,7 +446,7 @@ export class CrewService {
   async adminForceDisband(crewId: string): Promise<void> {
     const crew = await this.prisma.crew.findUnique({
       where: { id: crewId },
-      select: { id: true, deletedAt: true },
+      select: { id: true, deletedAt: true, ownerUserId: true },
     });
     if (!crew || crew.deletedAt) return;
     const allMembers = await this.prisma.crewMember.findMany({
@@ -436,6 +457,18 @@ export class CrewService {
     this.presenceRealtime.emitCrewDisbanded(
       allMembers.map((m) => m.userId),
       { crewId },
+    );
+
+    // Notify every former member (best-effort, fire-and-forget).
+    const actorUserId = crew.ownerUserId;
+    void Promise.allSettled(
+      allMembers.map((m) =>
+        this.notifications.upsertCrewDisbandedNotification({
+          recipientUserId: m.userId,
+          actorUserId,
+          crewId,
+        }),
+      ),
     );
   }
 
@@ -457,6 +490,20 @@ export class CrewService {
     this.presenceRealtime.emitCrewDisbanded(
       allMembers.map((m) => m.userId),
       { crewId },
+    );
+
+    // Notify every former member (best-effort, fire-and-forget).
+    const actorUserId = params.viewerUserId;
+    void Promise.allSettled(
+      allMembers
+        .filter((m) => m.userId !== actorUserId)
+        .map((m) =>
+          this.notifications.upsertCrewDisbandedNotification({
+            recipientUserId: m.userId,
+            actorUserId,
+            crewId,
+          }),
+        ),
     );
   }
 

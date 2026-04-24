@@ -63,7 +63,13 @@ enum NotificationKind {
   poll_results_ready
   generic
   coin_transfer
+  message
   group_join_request
+  community_group_member_joined
+  community_group_join_approved
+  community_group_join_rejected
+  community_group_member_removed
+  community_group_disbanded
   crew_invite_received
   crew_invite_accepted
   crew_invite_declined
@@ -1504,6 +1510,11 @@ model Notification {
    * invite without an extra round-trip.
    */
   subjectCommunityGroupInviteId String?
+  /**
+   * Conversation this notification is about (used for `message` kind).
+   * SetNull on delete so the notification survives conversation cleanup.
+   */
+  subjectConversationId String?
   title     String?
   body      String?
 
@@ -1518,6 +1529,7 @@ model Notification {
   subjectCrew  Crew?           @relation("Notification_subjectCrew", fields: [subjectCrewId], references: [id], onDelete: SetNull)
   subjectCrewInvite CrewInvite? @relation("Notification_subjectCrewInvite", fields: [subjectCrewInviteId], references: [id], onDelete: SetNull)
   subjectCommunityGroupInvite CommunityGroupInvite? @relation("Notification_subjectCommunityGroupInvite", fields: [subjectCommunityGroupInviteId], references: [id], onDelete: SetNull)
+  subjectConversation MessageConversation? @relation("Notification_subjectConversation", fields: [subjectConversationId], references: [id], onDelete: SetNull)
 
   @@index([recipientUserId, createdAt])
   @@index([recipientUserId, deliveredAt])
@@ -1549,6 +1561,8 @@ model NotificationPreferences {
   pushReplyNudge Boolean @default(true)
   /** Crew streak: push when the strict crew streak advances or breaks. Highest-signal push in the product. */
   pushCrewStreak Boolean @default(true)
+  /** Group activity: push for join, approve/reject, remove, disband events. */
+  pushGroupActivity Boolean @default(true)
 
   // Email preferences (requires user.email).
   emailDigestDaily Boolean @default(true)
@@ -1709,6 +1723,8 @@ model MessageConversation {
 
   /** When this conversation is a crew wall (type: crew_wall), links back to the owning crew. */
   crewWall Crew? @relation("Crew_wallConversation")
+
+  notifications Notification[] @relation("Notification_subjectConversation")
 
   @@index([type, updatedAt])
   @@index([lastMessageAt, id])

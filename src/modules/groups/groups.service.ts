@@ -414,6 +414,10 @@ export class GroupsService {
           if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== 'P2002') throw e;
         }
       });
+
+      // Notify existing members (best-effort, fire-and-forget).
+      void this.notifyMembersOfJoin({ groupId: g.id, joinerUserId: params.viewerUserId });
+
       return { data: { ok: true as const, status: 'active' as const } };
     }
 
@@ -458,6 +462,28 @@ export class GroupsService {
         subjectGroupId: groupId,
       });
     }
+  }
+
+  /**
+   * Fan-out a `community_group_member_joined` notification to every current
+   * active member of the group (excluding the joiner themselves). Fire-and-
+   * forget: called after the membership row is committed.
+   */
+  private async notifyMembersOfJoin(params: { groupId: string; joinerUserId: string }): Promise<void> {
+    const { groupId, joinerUserId } = params;
+    const members = await this.prisma.communityGroupMember.findMany({
+      where: { groupId, status: 'active', userId: { not: joinerUserId } },
+      select: { userId: true },
+    });
+    await Promise.allSettled(
+      members.map((m) =>
+        this.notifications.upsertGroupMemberJoinedNotification({
+          recipientUserId: m.userId,
+          joinerUserId,
+          groupId,
+        }),
+      ),
+    );
   }
 
   async leave(params: { viewerUserId: string; groupId: string }) {
@@ -549,6 +575,16 @@ export class GroupsService {
         data: { memberCount: { increment: 1 } },
       });
     });
+
+    // Notify the approved user and fan-out member-joined to existing members (best-effort).
+    void this.notifications.upsertGroupJoinDecisionNotification({
+      recipientUserId: params.userId,
+      groupId: params.groupId,
+      actorUserId: params.viewerUserId,
+      decision: 'approved',
+    }).catch(() => undefined);
+    void this.notifyMembersOfJoin({ groupId: params.groupId, joinerUserId: params.userId });
+
     return { data: { ok: true as const } };
   }
 
@@ -562,6 +598,15 @@ export class GroupsService {
     await this.prisma.communityGroupMember.delete({
       where: { groupId_userId: { groupId: params.groupId, userId: params.userId } },
     });
+
+    // Notify the rejected user (best-effort).
+    void this.notifications.upsertGroupJoinDecisionNotification({
+      recipientUserId: params.userId,
+      groupId: params.groupId,
+      actorUserId: params.viewerUserId,
+      decision: 'rejected',
+    }).catch(() => undefined);
+
     return { data: { ok: true as const } };
   }
 
@@ -588,6 +633,14 @@ export class GroupsService {
         data: { memberCount: { decrement: 1 } },
       });
     });
+
+    // Notify the removed user (best-effort).
+    void this.notifications.upsertGroupMemberRemovedNotification({
+      recipientUserId: params.userId,
+      groupId: params.groupId,
+      actorUserId: params.viewerUserId,
+    }).catch(() => undefined);
+
     return { data: { ok: true as const } };
   }
 

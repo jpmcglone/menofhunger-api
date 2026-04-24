@@ -1188,6 +1188,10 @@ export class MessagesService {
       this.presenceRealtime.emitMessagesRead(p.userId, payload);
     }
     this.emitUnreadCounts(userId);
+
+    // Signal to the notifications module that this user has opened the conversation
+    // so the in-app message notification can be cleared.
+    this.events.emitConversationRead({ userId, conversationId });
   }
 
   async deleteConversation(params: { userId: string; conversationId: string }) {

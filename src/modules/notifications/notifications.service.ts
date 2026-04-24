@@ -37,6 +37,7 @@ export type CreateNotificationParams = {
   subjectCrewId?: string | null;
   subjectCrewInviteId?: string | null;
   subjectCommunityGroupInviteId?: string | null;
+  subjectConversationId?: string | null;
   title?: string | null;
   body?: string | null;
 };
@@ -216,6 +217,7 @@ export class NotificationsService {
       subjectCrewId,
       subjectCrewInviteId,
       subjectCommunityGroupInviteId,
+      subjectConversationId,
       title,
       body,
     } = params;
@@ -234,7 +236,13 @@ export class NotificationsService {
         comment: 'replied to you',
         poll_results_ready: 'Poll results are ready',
         coin_transfer: 'sent you coins',
+        message: 'sent you a message',
         group_join_request: 'requests to join your group',
+        community_group_member_joined: 'joined the group',
+        community_group_join_approved: 'Your join request was approved',
+        community_group_join_rejected: 'Your join request was not accepted',
+        community_group_member_removed: 'You were removed from a group',
+        community_group_disbanded: 'A group you were in was disbanded',
         crew_invite_received: 'invited you to their crew',
         crew_invite_accepted: 'accepted your crew invite',
         crew_invite_declined: 'declined your crew invite',
@@ -268,6 +276,7 @@ export class NotificationsService {
           subjectCrewId: subjectCrewId ?? undefined,
           subjectCrewInviteId: subjectCrewInviteId ?? undefined,
           subjectCommunityGroupInviteId: subjectCommunityGroupInviteId ?? undefined,
+          subjectConversationId: subjectConversationId ?? undefined,
           title: fallbackTitle ?? undefined,
           body: body ?? undefined,
         },
@@ -415,7 +424,15 @@ export class NotificationsService {
   private shouldSendPushForKind(
     prefs: Pick<
       NotificationPreferencesDto,
-      'pushComment' | 'pushBoost' | 'pushFollow' | 'pushMention' | 'pushRepost' | 'pushNudge' | 'pushFollowedPost'
+      | 'pushComment'
+      | 'pushBoost'
+      | 'pushFollow'
+      | 'pushMention'
+      | 'pushRepost'
+      | 'pushNudge'
+      | 'pushFollowedPost'
+      | 'pushMessage'
+      | 'pushGroupActivity'
     >,
     kind: NotificationKind,
   ): boolean {
@@ -427,6 +444,19 @@ export class NotificationsService {
     if (kind === 'nudge') return Boolean(prefs.pushNudge);
     if (kind === 'followed_post') return Boolean(prefs.pushFollowedPost);
     if (kind === 'followed_article') return Boolean(prefs.pushFollowedPost);
+    if (kind === 'message') return Boolean(prefs.pushMessage);
+    if (
+      kind === 'community_group_member_joined' ||
+      kind === 'community_group_join_approved' ||
+      kind === 'community_group_join_rejected' ||
+      kind === 'community_group_member_removed' ||
+      kind === 'community_group_disbanded' ||
+      kind === 'group_join_request' ||
+      kind === 'community_group_invite_received' ||
+      kind === 'community_group_invite_accepted' ||
+      kind === 'community_group_invite_declined' ||
+      kind === 'community_group_invite_cancelled'
+    ) return Boolean(prefs.pushGroupActivity);
     // Non-mapped kinds pass through default (allow).
     return true;
   }
@@ -654,6 +684,42 @@ export class NotificationsService {
         body: snippet ?? 'The invite is no longer active.',
       };
     }
+    if (kind === 'community_group_member_joined') {
+      return {
+        title: `${actorName} joined the group`,
+        body: snippet ?? 'Open to see the new member.',
+      };
+    }
+    if (kind === 'community_group_join_approved') {
+      return {
+        title: 'Your join request was approved',
+        body: snippet ?? 'You\u2019re now a member.',
+      };
+    }
+    if (kind === 'community_group_join_rejected') {
+      return {
+        title: 'Your join request was not accepted',
+        body: snippet ?? 'You can request to join another group.',
+      };
+    }
+    if (kind === 'community_group_member_removed') {
+      return {
+        title: 'You were removed from a group',
+        body: snippet ?? 'Open to see your groups.',
+      };
+    }
+    if (kind === 'community_group_disbanded') {
+      return {
+        title: 'A group you were in was disbanded',
+        body: snippet ?? 'Open to find another group.',
+      };
+    }
+    if (kind === 'message') {
+      return {
+        title: `${actorName} sent you a message`,
+        body: snippet ?? 'Open to read it.',
+      };
+    }
     // Generic kind is used for one-off actor-driven events that don't have their own kind
     // (e.g. article emoji reactions). Prefix the DB title with the actor name when both
     // are present so the push reads like "Jane reacted to your article" with body=emoji.
@@ -682,6 +748,7 @@ export class NotificationsService {
       pushFollowedPost: Boolean(prefs.pushFollowedPost),
       pushReplyNudge: Boolean(prefs.pushReplyNudge),
       pushCrewStreak: Boolean(prefs.pushCrewStreak),
+      pushGroupActivity: Boolean(prefs.pushGroupActivity),
       emailDigestDaily: Boolean(prefs.emailDigestDaily),
       emailDigestWeekly: Boolean(prefs.emailDigestWeekly),
       emailNewNotifications: Boolean(prefs.emailNewNotifications),
@@ -733,6 +800,7 @@ export class NotificationsService {
       pushFollowedPost: Boolean(updated.pushFollowedPost),
       pushReplyNudge: Boolean(updated.pushReplyNudge),
       pushCrewStreak: Boolean(updated.pushCrewStreak),
+      pushGroupActivity: Boolean(updated.pushGroupActivity),
       emailDigestDaily: Boolean(updated.emailDigestDaily),
       emailDigestWeekly: Boolean(updated.emailDigestWeekly),
       emailNewNotifications: Boolean(updated.emailNewNotifications),
@@ -1926,6 +1994,9 @@ export class NotificationsService {
       if (n.kind === 'boost' && n.subjectPostId) return `boost:post:${n.subjectPostId}`;
       if (n.kind === 'repost' && n.subjectPostId) return `repost:post:${n.subjectPostId}`;
       if (n.kind === 'comment' && n.subjectPostId) return `comment:post:${n.subjectPostId}`;
+      if (n.kind === 'community_group_member_joined' && n.subjectGroupId) return `community_group_member_joined:group:${n.subjectGroupId}`;
+      if (n.kind === 'crew_member_joined' && n.subjectCrewId) return `crew_member_joined:crew:${n.subjectCrewId}`;
+      if (n.kind === 'crew_member_left' && n.subjectCrewId) return `crew_member_left:crew:${n.subjectCrewId}`;
       if (n.kind === 'follow') return 'follow';
       if (n.kind === 'followed_post' && n.actor?.id) return `followed_post:actor:${n.actor.id}`;
       if (n.kind === 'nudge' && n.actor?.id) return `nudge:actor:${n.actor.id}`;
@@ -2814,6 +2885,7 @@ export class NotificationsService {
       subjectCrewId?: string | null;
       subjectCrewInviteId?: string | null;
       subjectCommunityGroupInviteId?: string | null;
+      subjectConversationId?: string | null;
       title: string | null;
       body: string | null;
       actor: {
@@ -2877,6 +2949,7 @@ export class NotificationsService {
       subjectCrewName: subjectCrewName ?? null,
       subjectCommunityGroupInviteId: n.subjectCommunityGroupInviteId ?? null,
       subjectCommunityGroupInviteStatus: subjectCommunityGroupInviteStatus ?? null,
+      subjectConversationId: n.subjectConversationId ?? null,
       title: n.title,
       body: n.body,
       subjectPostPreview: subjectPostPreview ?? null,
@@ -3289,5 +3362,436 @@ export class NotificationsService {
     } catch (err) {
       this.logger.debug(`[push] Failed to evaluate push prefs for invite response: ${err}`);
     }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Group lifecycle notification upserts
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Shared upsert core: find-or-create a notification row identified by
+   * (recipient, kind, actorUser, subjectGroup). On re-trigger with the
+   * same key, bumps `createdAt`, clears delivered/read timestamps, and
+   * increments the undelivered counter if the row was previously delivered.
+   */
+  private async upsertGroupNotification(params: {
+    recipientUserId: string;
+    kind: NotificationKind;
+    actorUserId: string | null;
+    subjectGroupId: string;
+    title: string;
+  }): Promise<{ notificationId: string; undeliveredCount: number; isNew: boolean }> {
+    const { recipientUserId, kind, actorUserId, subjectGroupId, title } = params;
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.notification.findFirst({
+        where: {
+          recipientUserId,
+          kind,
+          actorUserId: actorUserId ?? undefined,
+          subjectGroupId,
+        },
+        select: { id: true, deliveredAt: true },
+      });
+
+      if (existing) {
+        const wasDelivered = existing.deliveredAt != null;
+        await tx.notification.update({
+          where: { id: existing.id },
+          data: { createdAt: new Date(), deliveredAt: null, readAt: null, ignoredAt: null, title },
+        });
+        if (wasDelivered) {
+          await tx.user.update({
+            where: { id: recipientUserId },
+            data: { undeliveredNotificationCount: { increment: 1 } },
+          });
+        }
+        const undeliveredCount = await tx.notification.count({
+          where: { recipientUserId, deliveredAt: null },
+        });
+        return { notificationId: existing.id, undeliveredCount, isNew: false };
+      }
+
+      const created = await tx.notification.create({
+        data: { recipientUserId, kind, actorUserId: actorUserId ?? undefined, subjectGroupId, title },
+        select: { id: true },
+      });
+      await tx.user.update({
+        where: { id: recipientUserId },
+        data: { undeliveredNotificationCount: { increment: 1 } },
+      });
+      const undeliveredCount = await tx.notification.count({
+        where: { recipientUserId, deliveredAt: null },
+      });
+      return { notificationId: created.id, undeliveredCount, isNew: true };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  private async emitGroupNotification(recipientUserId: string, notificationId: string, undeliveredCount: number) {
+    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
+    try {
+      const dto = await this.buildNotificationDtoForRecipient({ recipientUserId, notificationId });
+      if (dto) this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
+    } catch { /* best-effort */ }
+  }
+
+  private async pushGroupNotification(params: {
+    recipientUserId: string;
+    actorUserId: string | null;
+    kind: NotificationKind;
+    subjectGroupId: string;
+  }): Promise<void> {
+    const { recipientUserId, actorUserId, kind, subjectGroupId } = params;
+    try {
+      const prefs = await this.getPreferencesInternal(recipientUserId);
+      if (!this.shouldSendPushForKind(prefs, kind)) return;
+      const actor = actorUserId
+        ? await this.prisma.user.findUnique({
+            where: { id: actorUserId },
+            select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true },
+          })
+        : null;
+      const pushCopy = this.buildPushCopy({ kind, actor, fallbackTitle: null, body: null });
+      const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+      const icon = actor
+        ? publicAssetUrl({ publicBaseUrl, key: actor.avatarKey, updatedAt: actor.avatarUpdatedAt })
+        : null;
+      this.sendWebPushToRecipient(recipientUserId, {
+        title: pushCopy.title,
+        body: pushCopy.body,
+        subjectPostId: null,
+        subjectUserId: null,
+        url: `/g/${subjectGroupId}`,
+        tag: this.buildPushTag({ recipientUserId, kind, actorUserId, subjectPostId: null, subjectUserId: null }),
+        icon,
+        badge: '/android-chrome-192x192.png',
+        renotify: true,
+        kind,
+        sourceLabel: 'From notifications',
+      }).catch((err) => {
+        this.logger.warn(`[push] Failed to send group notification push (${kind}): ${err instanceof Error ? err.message : String(err)}`);
+      });
+    } catch (err) {
+      this.logger.debug(`[push] Failed to evaluate push prefs for group notification (${kind}): ${err}`);
+    }
+  }
+
+  /**
+   * Notify a single existing member that a new user joined their group.
+   * Per-(recipient, actor, group) row so multi-join events roll up in the feed.
+   */
+  async upsertGroupMemberJoinedNotification(params: {
+    recipientUserId: string;
+    joinerUserId: string;
+    groupId: string;
+  }): Promise<void> {
+    const { recipientUserId, joinerUserId, groupId } = params;
+    if (recipientUserId === joinerUserId) return;
+    const result = await this.upsertGroupNotification({
+      recipientUserId,
+      kind: 'community_group_member_joined',
+      actorUserId: joinerUserId,
+      subjectGroupId: groupId,
+      title: 'joined the group',
+    });
+    await this.emitGroupNotification(recipientUserId, result.notificationId, result.undeliveredCount);
+    if (result.isNew) {
+      void this.pushGroupNotification({ recipientUserId, actorUserId: joinerUserId, kind: 'community_group_member_joined', subjectGroupId: groupId });
+    }
+  }
+
+  /**
+   * Notify the requester that their join request was approved or rejected.
+   */
+  async upsertGroupJoinDecisionNotification(params: {
+    recipientUserId: string;
+    groupId: string;
+    actorUserId: string;
+    decision: 'approved' | 'rejected';
+  }): Promise<void> {
+    const { recipientUserId, groupId, actorUserId, decision } = params;
+    if (recipientUserId === actorUserId) return;
+    const kind: NotificationKind = decision === 'approved' ? 'community_group_join_approved' : 'community_group_join_rejected';
+    const title = decision === 'approved' ? 'Your join request was approved' : 'Your join request was not accepted';
+    const result = await this.upsertGroupNotification({
+      recipientUserId,
+      kind,
+      actorUserId,
+      subjectGroupId: groupId,
+      title,
+    });
+    await this.emitGroupNotification(recipientUserId, result.notificationId, result.undeliveredCount);
+    if (result.isNew) {
+      void this.pushGroupNotification({ recipientUserId, actorUserId, kind, subjectGroupId: groupId });
+    }
+  }
+
+  /**
+   * Notify a user that they were removed from a group.
+   */
+  async upsertGroupMemberRemovedNotification(params: {
+    recipientUserId: string;
+    groupId: string;
+    actorUserId: string;
+  }): Promise<void> {
+    const { recipientUserId, groupId, actorUserId } = params;
+    if (recipientUserId === actorUserId) return;
+    const result = await this.upsertGroupNotification({
+      recipientUserId,
+      kind: 'community_group_member_removed',
+      actorUserId,
+      subjectGroupId: groupId,
+      title: 'You were removed from a group',
+    });
+    await this.emitGroupNotification(recipientUserId, result.notificationId, result.undeliveredCount);
+    if (result.isNew) {
+      void this.pushGroupNotification({ recipientUserId, actorUserId, kind: 'community_group_member_removed', subjectGroupId: groupId });
+    }
+  }
+
+  /**
+   * Notify a member that a group they were in was disbanded.
+   */
+  async upsertGroupDisbandedNotification(params: {
+    recipientUserId: string;
+    groupId: string;
+    actorUserId: string;
+  }): Promise<void> {
+    const { recipientUserId, groupId, actorUserId } = params;
+    if (recipientUserId === actorUserId) return;
+    const result = await this.upsertGroupNotification({
+      recipientUserId,
+      kind: 'community_group_disbanded',
+      actorUserId,
+      subjectGroupId: groupId,
+      title: 'A group you were in was disbanded',
+    });
+    await this.emitGroupNotification(recipientUserId, result.notificationId, result.undeliveredCount);
+    if (result.isNew) {
+      void this.pushGroupNotification({ recipientUserId, actorUserId, kind: 'community_group_disbanded', subjectGroupId: groupId });
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Crew lifecycle notification upserts (filling in unused enum values)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Shared upsert for crew-scoped notifications.
+   */
+  private async upsertCrewNotification(params: {
+    recipientUserId: string;
+    kind: NotificationKind;
+    actorUserId: string | null;
+    subjectCrewId: string;
+    title: string;
+  }): Promise<{ notificationId: string; undeliveredCount: number; isNew: boolean }> {
+    const { recipientUserId, kind, actorUserId, subjectCrewId, title } = params;
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.notification.findFirst({
+        where: { recipientUserId, kind, actorUserId: actorUserId ?? undefined, subjectCrewId },
+        select: { id: true, deliveredAt: true },
+      });
+
+      if (existing) {
+        const wasDelivered = existing.deliveredAt != null;
+        await tx.notification.update({
+          where: { id: existing.id },
+          data: { createdAt: new Date(), deliveredAt: null, readAt: null, ignoredAt: null, title },
+        });
+        if (wasDelivered) {
+          await tx.user.update({
+            where: { id: recipientUserId },
+            data: { undeliveredNotificationCount: { increment: 1 } },
+          });
+        }
+        const undeliveredCount = await tx.notification.count({ where: { recipientUserId, deliveredAt: null } });
+        return { notificationId: existing.id, undeliveredCount, isNew: false };
+      }
+
+      const created = await tx.notification.create({
+        data: { recipientUserId, kind, actorUserId: actorUserId ?? undefined, subjectCrewId, title },
+        select: { id: true },
+      });
+      await tx.user.update({
+        where: { id: recipientUserId },
+        data: { undeliveredNotificationCount: { increment: 1 } },
+      });
+      const undeliveredCount = await tx.notification.count({ where: { recipientUserId, deliveredAt: null } });
+      return { notificationId: created.id, undeliveredCount, isNew: true };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  private async emitCrewNotification(recipientUserId: string, notificationId: string, undeliveredCount: number) {
+    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
+    try {
+      const dto = await this.buildNotificationDtoForRecipient({ recipientUserId, notificationId });
+      if (dto) this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
+    } catch { /* best-effort */ }
+  }
+
+  /** Notify remaining crew members that someone left. */
+  async upsertCrewMemberLeftNotification(params: {
+    recipientUserId: string;
+    leaverUserId: string;
+    crewId: string;
+  }): Promise<void> {
+    const { recipientUserId, leaverUserId, crewId } = params;
+    if (recipientUserId === leaverUserId) return;
+    const result = await this.upsertCrewNotification({
+      recipientUserId,
+      kind: 'crew_member_left',
+      actorUserId: leaverUserId,
+      subjectCrewId: crewId,
+      title: 'left your crew',
+    });
+    await this.emitCrewNotification(recipientUserId, result.notificationId, result.undeliveredCount);
+  }
+
+  /** Notify the kicked member that they were removed. */
+  async upsertCrewMemberKickedNotification(params: {
+    recipientUserId: string;
+    actorUserId: string;
+    crewId: string;
+  }): Promise<void> {
+    const { recipientUserId, actorUserId, crewId } = params;
+    if (recipientUserId === actorUserId) return;
+    const result = await this.upsertCrewNotification({
+      recipientUserId,
+      kind: 'crew_member_kicked',
+      actorUserId,
+      subjectCrewId: crewId,
+      title: 'You were removed from your crew',
+    });
+    await this.emitCrewNotification(recipientUserId, result.notificationId, result.undeliveredCount);
+  }
+
+  /** Notify every former crew member that the crew was disbanded. */
+  async upsertCrewDisbandedNotification(params: {
+    recipientUserId: string;
+    actorUserId: string;
+    crewId: string;
+  }): Promise<void> {
+    const { recipientUserId, actorUserId, crewId } = params;
+    if (recipientUserId === actorUserId) return;
+    const result = await this.upsertCrewNotification({
+      recipientUserId,
+      kind: 'crew_disbanded',
+      actorUserId,
+      subjectCrewId: crewId,
+      title: 'Your crew was disbanded',
+    });
+    await this.emitCrewNotification(recipientUserId, result.notificationId, result.undeliveredCount);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // DM (message) notification upsert
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * One row per (recipient, conversation). Re-marks as unread on every new
+   * message so the bell keeps dotting until the conversation is opened.
+   */
+  async upsertMessageNotification(params: {
+    recipientUserId: string;
+    senderUserId: string;
+    conversationId: string;
+    snippet?: string | null;
+  }): Promise<void> {
+    const { recipientUserId, senderUserId, conversationId, snippet } = params;
+    if (recipientUserId === senderUserId) return;
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.notification.findFirst({
+        where: { recipientUserId, kind: 'message', subjectConversationId: conversationId },
+        select: { id: true, deliveredAt: true },
+      });
+
+      if (existing) {
+        const wasDelivered = existing.deliveredAt != null;
+        await tx.notification.update({
+          where: { id: existing.id },
+          data: {
+            createdAt: new Date(),
+            deliveredAt: null,
+            readAt: null,
+            ignoredAt: null,
+            actorUserId: senderUserId,
+            body: snippet ?? undefined,
+            title: 'sent you a message',
+          },
+        });
+        if (wasDelivered) {
+          await tx.user.update({
+            where: { id: recipientUserId },
+            data: { undeliveredNotificationCount: { increment: 1 } },
+          });
+        }
+        const undeliveredCount = await tx.notification.count({ where: { recipientUserId, deliveredAt: null } });
+        return { notificationId: existing.id, undeliveredCount, isNew: false };
+      }
+
+      const created = await tx.notification.create({
+        data: {
+          recipientUserId,
+          kind: 'message',
+          actorUserId: senderUserId,
+          subjectConversationId: conversationId,
+          title: 'sent you a message',
+          body: snippet ?? undefined,
+        },
+        select: { id: true },
+      });
+      await tx.user.update({
+        where: { id: recipientUserId },
+        data: { undeliveredNotificationCount: { increment: 1 } },
+      });
+      const undeliveredCount = await tx.notification.count({ where: { recipientUserId, deliveredAt: null } });
+      return { notificationId: created.id, undeliveredCount, isNew: true };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount: result.undeliveredCount });
+    try {
+      const dto = await this.buildNotificationDtoForRecipient({ recipientUserId, notificationId: result.notificationId });
+      if (dto) this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
+    } catch { /* best-effort */ }
+  }
+
+  /**
+   * Mark the message notification for a conversation as read when the user opens it.
+   * Also decrements the undelivered counter if the row was undelivered.
+   */
+  async markConversationMessageNotificationRead(params: {
+    userId: string;
+    conversationId: string;
+  }): Promise<void> {
+    const { userId, conversationId } = params;
+    const existing = await this.prisma.notification.findFirst({
+      where: { recipientUserId: userId, kind: 'message', subjectConversationId: conversationId, readAt: null },
+      select: { id: true, deliveredAt: true },
+    });
+    if (!existing) return;
+
+    const wasUndelivered = existing.deliveredAt == null;
+    await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      await tx.notification.update({
+        where: { id: existing.id },
+        data: { readAt: now, deliveredAt: existing.deliveredAt ?? now },
+      });
+      if (wasUndelivered) {
+        await tx.user.update({
+          where: { id: userId },
+          data: { undeliveredNotificationCount: { decrement: 1 } },
+        });
+      }
+    });
+
+    if (wasUndelivered) {
+      const undeliveredCount = await this.prisma.notification.count({
+        where: { recipientUserId: userId, deliveredAt: null },
+      });
+      this.presenceRealtime.emitNotificationsUpdated(userId, { undeliveredCount });
+    }
+    this.presenceRealtime.emitNotificationsDeleted(userId, { notificationIds: [existing.id] });
   }
 }

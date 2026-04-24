@@ -11,6 +11,8 @@ export type NotificationPreferencesDto = {
   pushReplyNudge: boolean;
   /** Crew streak: push when the strict crew streak advances or breaks. Highest-signal push in the product. */
   pushCrewStreak: boolean;
+  /** Group activity: push for join, approve/reject, remove, disband events. */
+  pushGroupActivity: boolean;
   emailDigestDaily: boolean;
   emailDigestWeekly: boolean;
   emailNewNotifications: boolean;

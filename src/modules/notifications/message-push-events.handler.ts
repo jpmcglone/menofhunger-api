@@ -7,6 +7,7 @@ import { NotificationsService } from './notifications.service';
 export class MessagePushEventsHandler implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MessagePushEventsHandler.name);
   private sub: Subscription | null = null;
+  private readSub: Subscription | null = null;
 
   constructor(
     private readonly events: DomainEventsService,
@@ -14,7 +15,31 @@ export class MessagePushEventsHandler implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
+    this.readSub = this.events.onConversationRead((event) => {
+      void this.notifications
+        .markConversationMessageNotificationRead({
+          userId: event.userId,
+          conversationId: event.conversationId,
+        })
+        .catch((err) => {
+          this.logger.debug(`[notifications] Failed to clear message notification on read: ${err}`);
+        });
+    });
+
     this.sub = this.events.onMessagePushRequested((event) => {
+      // Write (or refresh) an in-app notification row so the bell badge lights up.
+      void this.notifications
+        .upsertMessageNotification({
+          recipientUserId: event.recipientUserId,
+          senderUserId: event.senderUserId,
+          conversationId: event.conversationId,
+          snippet: event.body ?? null,
+        })
+        .catch((err) => {
+          this.logger.debug(`[notifications] Message in-app notification failed: ${err}`);
+        });
+
+      // Web push (existing behaviour).
       void this.notifications
         .sendMessagePush({
           recipientUserId: event.recipientUserId,
@@ -32,6 +57,8 @@ export class MessagePushEventsHandler implements OnModuleInit, OnModuleDestroy {
   onModuleDestroy(): void {
     this.sub?.unsubscribe();
     this.sub = null;
+    this.readSub?.unsubscribe();
+    this.readSub = null;
   }
 }
 

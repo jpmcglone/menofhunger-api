@@ -88,6 +88,8 @@ export type NotificationDto = {
     | 'cancelled'
     | 'expired'
     | null;
+  /** Conversation this notification is about (used for `message` kind). */
+  subjectConversationId: string | null;
   title: string | null;
   body: string | null;
   /** When set (e.g. boost), for quote + stacked images / video thumbnail in the UI. */

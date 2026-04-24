@@ -126,3 +126,243 @@ describe('NotificationsService.list batching', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// upsertGroupMemberJoinedNotification — create-then-update semantics
+// ---------------------------------------------------------------------------
+
+describe('NotificationsService.upsertGroupMemberJoinedNotification', () => {
+  function makeUpsertService(existingNotification: null | { id: string; deliveredAt: Date | null }) {
+    const created = { id: 'new-notif' };
+    const notification = {
+      findFirst: jest.fn(async () => existingNotification),
+      update: jest.fn(async () => ({})),
+      create: jest.fn(async () => created),
+      count: jest.fn(async () => 1),
+      findUnique: jest.fn(),
+      findMany: jest.fn(async () => []),
+    };
+    const user = {
+      update: jest.fn(async () => ({})),
+      findUnique: jest.fn(async () => null),
+      findMany: jest.fn(async () => []),
+    };
+    const prisma = {
+      notification,
+      user,
+      post: { findMany: jest.fn(async () => []), findUnique: jest.fn() },
+      follow: { findMany: jest.fn(async () => []) },
+      userBlock: { findMany: jest.fn(async () => []) },
+      $transaction: jest.fn(async (fn: (tx: any) => Promise<any>) =>
+        fn({ notification, user }),
+      ),
+      notificationPreferences: {
+        upsert: jest.fn(async () => ({
+          pushComment: true, pushBoost: true, pushFollow: true, pushMention: true,
+          pushMessage: true, pushRepost: true, pushNudge: true, pushFollowedPost: true,
+          pushReplyNudge: true, pushCrewStreak: true, pushGroupActivity: false,
+        })),
+      },
+    } as any;
+
+    const appConfig = { r2: jest.fn(() => null) } as any;
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitNotificationNew: jest.fn(),
+      emitNotificationsDeleted: jest.fn(),
+    } as any;
+    const jobs = { enqueueCron: jest.fn(async () => undefined) } as any;
+    const posthog = { capture: jest.fn() } as any;
+    const viewerContextService = { getViewer: jest.fn(async () => null) } as any;
+
+    const svc = new NotificationsService(prisma, appConfig, presenceRealtime, jobs, posthog, viewerContextService);
+    return { svc, prisma, presenceRealtime };
+  }
+
+  it('creates a new row when none exists', async () => {
+    const { svc, prisma, presenceRealtime } = makeUpsertService(null);
+
+    await svc.upsertGroupMemberJoinedNotification({
+      recipientUserId: 'r1',
+      joinerUserId: 'j1',
+      groupId: 'g1',
+    });
+
+    expect(prisma.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ kind: 'community_group_member_joined', subjectGroupId: 'g1' }),
+      }),
+    );
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { undeliveredNotificationCount: { increment: 1 } } }),
+    );
+    expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalledWith('r1', expect.any(Object));
+  });
+
+  it('bumps an existing undelivered row (does not increment counter)', async () => {
+    const { svc, prisma } = makeUpsertService({ id: 'existing', deliveredAt: null });
+
+    await svc.upsertGroupMemberJoinedNotification({
+      recipientUserId: 'r1',
+      joinerUserId: 'j1',
+      groupId: 'g1',
+    });
+
+    expect(prisma.notification.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'existing' },
+        data: expect.objectContaining({ createdAt: expect.any(Date), deliveredAt: null, readAt: null }),
+      }),
+    );
+    // wasDelivered = false → no counter increment
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('re-marks as unread and increments counter when previously delivered', async () => {
+    const { svc, prisma } = makeUpsertService({ id: 'existing', deliveredAt: new Date() });
+
+    await svc.upsertGroupMemberJoinedNotification({
+      recipientUserId: 'r1',
+      joinerUserId: 'j1',
+      groupId: 'g1',
+    });
+
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { undeliveredNotificationCount: { increment: 1 } } }),
+    );
+  });
+
+  it('skips self-notification (joiner === recipient)', async () => {
+    const { svc, prisma } = makeUpsertService(null);
+
+    await svc.upsertGroupMemberJoinedNotification({
+      recipientUserId: 'same',
+      joinerUserId: 'same',
+      groupId: 'g1',
+    });
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// upsertMessageNotification — DM dedupe and read-on-open
+// ---------------------------------------------------------------------------
+
+describe('NotificationsService.upsertMessageNotification', () => {
+  function makeMessageService(existingNotification: null | { id: string; deliveredAt: Date | null }) {
+    const notification = {
+      findFirst: jest.fn(async () => existingNotification),
+      update: jest.fn(async () => ({})),
+      create: jest.fn(async () => ({ id: 'new-msg-notif' })),
+      count: jest.fn(async () => 1),
+      findUnique: jest.fn(),
+      findMany: jest.fn(async () => []),
+    };
+    const user = {
+      update: jest.fn(async () => ({})),
+      findUnique: jest.fn(async () => null),
+      findMany: jest.fn(async () => []),
+    };
+    const prisma = {
+      notification,
+      user,
+      post: { findMany: jest.fn(async () => []), findUnique: jest.fn() },
+      follow: { findMany: jest.fn(async () => []) },
+      userBlock: { findMany: jest.fn(async () => []) },
+      $transaction: jest.fn(async (fn: (tx: any) => Promise<any>) =>
+        fn({ notification, user }),
+      ),
+      notificationPreferences: { upsert: jest.fn(async () => ({ pushGroupActivity: false, pushMessage: true })) },
+    } as any;
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitNotificationNew: jest.fn(),
+      emitNotificationsDeleted: jest.fn(),
+    } as any;
+    const svc = new NotificationsService(
+      prisma,
+      { r2: jest.fn(() => null) } as any,
+      presenceRealtime,
+      { enqueueCron: jest.fn() } as any,
+      { capture: jest.fn() } as any,
+      { getViewer: jest.fn(async () => null) } as any,
+    );
+    return { svc, prisma, presenceRealtime };
+  }
+
+  it('creates a new message notification row', async () => {
+    const { svc, prisma } = makeMessageService(null);
+
+    await svc.upsertMessageNotification({ recipientUserId: 'r1', senderUserId: 's1', conversationId: 'c1' });
+
+    expect(prisma.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ kind: 'message', subjectConversationId: 'c1' }),
+      }),
+    );
+  });
+
+  it('re-bumps existing row when another message arrives in the same conversation', async () => {
+    const { svc, prisma } = makeMessageService({ id: 'existing-msg', deliveredAt: null });
+
+    await svc.upsertMessageNotification({ recipientUserId: 'r1', senderUserId: 's1', conversationId: 'c1' });
+
+    expect(prisma.notification.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'existing-msg' },
+        data: expect.objectContaining({ deliveredAt: null, readAt: null }),
+      }),
+    );
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+  });
+
+  it('marks notification read + decrements counter when conversation is opened', async () => {
+    const now = new Date();
+    const notif = { id: 'msg-notif', deliveredAt: null, readAt: null };
+    const notification = {
+      findFirst: jest.fn(async () => notif),
+      update: jest.fn(async () => ({})),
+      count: jest.fn(async () => 0),
+      create: jest.fn(),
+      findUnique: jest.fn(),
+      findMany: jest.fn(async () => []),
+    };
+    const user = { update: jest.fn(async () => ({})), findUnique: jest.fn(), findMany: jest.fn(async () => []) };
+    const prisma = {
+      notification,
+      user,
+      post: { findMany: jest.fn(async () => []) },
+      follow: { findMany: jest.fn(async () => []) },
+      userBlock: { findMany: jest.fn(async () => []) },
+      $transaction: jest.fn(async (fn: (tx: any) => Promise<any>) => fn({ notification, user })),
+    } as any;
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitNotificationsDeleted: jest.fn(),
+      emitNotificationNew: jest.fn(),
+    } as any;
+    const svc = new NotificationsService(
+      prisma,
+      { r2: jest.fn(() => null) } as any,
+      presenceRealtime,
+      { enqueueCron: jest.fn() } as any,
+      { capture: jest.fn() } as any,
+      { getViewer: jest.fn(async () => null) } as any,
+    );
+
+    await svc.markConversationMessageNotificationRead({ userId: 'r1', conversationId: 'c1' });
+
+    expect(notification.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'msg-notif' },
+        data: expect.objectContaining({ readAt: expect.any(Date) }),
+      }),
+    );
+    // undelivered → decrement
+    expect(user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { undeliveredNotificationCount: { decrement: 1 } } }),
+    );
+    expect(presenceRealtime.emitNotificationsDeleted).toHaveBeenCalledWith('r1', { notificationIds: ['msg-notif'] });
+  });
+});
+
