@@ -762,6 +762,21 @@ export class GroupsService {
     return { data: result.items, pagination: { nextCursor: result.nextCursor } };
   }
 
+  async groupsHubMedia(params: {
+    viewerUserId: string;
+    limit: number;
+    cursor: string | null;
+    sort: 'new' | 'trending';
+  }) {
+    const result = await this.posts.listMediaForGroupsHub({
+      viewerUserId: params.viewerUserId,
+      limit: params.limit,
+      cursor: params.cursor,
+      sort: params.sort,
+    });
+    return { data: result.items, pagination: { nextCursor: result.nextCursor } };
+  }
+
   async myGroupsHubFeed(params: {
     viewerUserId: string;
     groupId: string | null;

@@ -122,6 +122,21 @@ export class GroupsController {
     });
   }
 
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: { limit: rateLimitLimit('publicRead', 120), ttl: rateLimitTtl('publicRead', 60) },
+  })
+  @Get('me/media')
+  async myHubMedia(@CurrentUserId() viewerUserId: string, @Query() query: unknown) {
+    const parsed = mediaQuerySchema.parse(query);
+    return await this.groups.groupsHubMedia({
+      viewerUserId,
+      limit: parsed.limit ?? 30,
+      cursor: parsed.cursor ?? null,
+      sort: parsed.sort === 'trending' ? 'trending' : 'new',
+    });
+  }
+
   @UseGuards(OptionalAuthGuard)
   @Throttle({
     default: { limit: rateLimitLimit('publicRead', 120), ttl: rateLimitTtl('publicRead', 60) },

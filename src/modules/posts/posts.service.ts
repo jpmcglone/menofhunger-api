@@ -6027,6 +6027,122 @@ export class PostsService {
 
   // ─── Community group media grid ───────────────────────────────────────────
 
+  async listMediaForGroupsHub(params: {
+    viewerUserId: string;
+    limit: number;
+    cursor: string | null;
+    sort: 'new' | 'trending';
+  }) {
+    const { viewerUserId, limit, cursor, sort } = params;
+    const groupIds = await this.listActiveCommunityGroupIdsForUser(viewerUserId);
+    if (!groupIds.length) return { items: [], nextCursor: null };
+
+    const r2BaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    const baseWhere: Prisma.PostMediaWhereInput = {
+      kind: { in: ['image', 'video'] },
+      source: 'upload',
+      deletedAt: null,
+      post: {
+        communityGroupId: { in: groupIds },
+        deletedAt: null,
+      },
+    };
+
+    type MediaRow = {
+      id: string;
+      kind: PostMediaKind;
+      r2Key: string | null;
+      thumbnailR2Key: string | null;
+      width: number | null;
+      height: number | null;
+      durationSeconds: number | null;
+      postId: string;
+    };
+
+    let mediaRows: MediaRow[];
+
+    const offset =
+      sort === 'trending' && cursor
+        ? (() => {
+            try {
+              return parseInt(Buffer.from(cursor, 'base64').toString('utf8'), 10) || 0;
+            } catch {
+              return 0;
+            }
+          })()
+        : 0;
+
+    if (sort === 'trending') {
+      mediaRows = await this.prisma.postMedia.findMany({
+        where: baseWhere,
+        orderBy: [
+          { post: { trendingScore: { sort: 'desc', nulls: 'last' } } },
+          { post: { boostCount: 'desc' } },
+          { post: { bookmarkCount: 'desc' } },
+          { post: { repostCount: 'desc' } },
+          { post: { commentCount: 'desc' } },
+          { post: { createdAt: 'desc' } },
+          { id: 'desc' },
+        ],
+        skip: offset,
+        take: limit + 1,
+        select: {
+          id: true,
+          kind: true,
+          r2Key: true,
+          thumbnailR2Key: true,
+          width: true,
+          height: true,
+          durationSeconds: true,
+          postId: true,
+        },
+      });
+    } else {
+      mediaRows = await this.prisma.postMedia.findMany({
+        where: { ...baseWhere, ...(cursor ? { id: { lt: cursor } } : {}) },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        select: {
+          id: true,
+          kind: true,
+          r2Key: true,
+          thumbnailR2Key: true,
+          width: true,
+          height: true,
+          durationSeconds: true,
+          postId: true,
+        },
+      });
+    }
+
+    const hasMore = mediaRows.length > limit;
+    const items = hasMore ? mediaRows.slice(0, limit) : mediaRows;
+
+    let nextCursor: string | null = null;
+    if (hasMore) {
+      if (sort === 'trending') {
+        nextCursor = Buffer.from(String(offset + limit)).toString('base64');
+      } else {
+        nextCursor = items[items.length - 1]?.id ?? null;
+      }
+    }
+
+    return {
+      items: items.map((m) => ({
+        id: m.id,
+        postId: m.postId,
+        kind: m.kind as 'image' | 'video',
+        url: r2BaseUrl && m.r2Key ? `${r2BaseUrl}/${m.r2Key}` : null,
+        thumbnailUrl: r2BaseUrl && m.thumbnailR2Key ? `${r2BaseUrl}/${m.thumbnailR2Key}` : null,
+        width: m.width,
+        height: m.height,
+        durationSeconds: m.durationSeconds ?? null,
+      })),
+      nextCursor,
+    };
+  }
+
   async listMediaForCommunityGroup(params: {
     viewerUserId: string;
     groupId: string;
