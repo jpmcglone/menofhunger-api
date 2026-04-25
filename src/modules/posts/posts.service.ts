@@ -1516,6 +1516,26 @@ export class PostsService {
     const servedWhere: Prisma.PostWhereInput[] =
       servedIds.length > 0 ? [{ id: { notIn: servedIds } }] : [];
 
+    const fetchChronologicalMediaFallback = async (
+      take: number,
+      excludeIds: string[],
+    ): Promise<{ posts: FeedPost[]; overflow: boolean }> => {
+      if (!params.mediaOnly || take <= 0) return { posts: [], overflow: false };
+      const rows = (await this.prisma.post.findMany({
+        where: {
+          AND: [
+            baseWhere,
+            ...servedWhere,
+            ...(excludeIds.length > 0 ? ([{ id: { notIn: excludeIds } }] as Prisma.PostWhereInput[]) : []),
+          ],
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: take + 1,
+        include: feedPostInclude,
+      })) as FeedPost[];
+      return { posts: rows.slice(0, take), overflow: rows.length > take };
+    };
+
     // Keep legacy popular cursor support for users who loaded page one before this deploy.
     const legacyCursor = decodedForYouCursor.legacyPopular;
     const cursorRow = legacyCursor
@@ -1811,6 +1831,15 @@ export class PostsService {
 
     const candidates = [...candidateById.values()];
     if (candidates.length === 0) {
+      const fallback = await fetchChronologicalMediaFallback(limit, []);
+      if (fallback.posts.length > 0) {
+        const fallbackIds = fallback.posts.map((p) => p.id);
+        return {
+          posts: fallback.posts,
+          nextCursor: fallback.overflow ? this.encodeForYouCursor([...servedIds, ...fallbackIds]) : null,
+          scoreByPostId: new Map(fallbackIds.map((id) => [id, 0])),
+        };
+      }
       return { posts: [], nextCursor: null, scoreByPostId: new Map() };
     }
 
@@ -1956,7 +1985,12 @@ export class PostsService {
         })) as FeedPost[])
       : [];
     const byId = new Map(posts.map((p) => [p.id, p] as const));
-    const ordered = pickedIds.map((id) => byId.get(id)).filter((p): p is FeedPost => Boolean(p));
+    let ordered = pickedIds.map((id) => byId.get(id)).filter((p): p is FeedPost => Boolean(p));
+    const fallback = await fetchChronologicalMediaFallback(limit - ordered.length, pickedIds);
+    if (fallback.posts.length > 0) {
+      ordered = [...ordered, ...fallback.posts];
+    }
+    const orderedIds = ordered.map((p) => p.id);
 
     const moreAvailable =
       ranked.some((r) => !pickedIdSet.has(r.candidate.id)) ||
@@ -1965,10 +1999,12 @@ export class PostsService {
       secondDegreeOverflow ||
       memberGroupOverflow ||
       openFollowGroupOverflow ||
-      discoveryOverflow;
-    const nextCursor = moreAvailable ? this.encodeForYouCursor([...servedIds, ...pickedIds]) : null;
+      discoveryOverflow ||
+      fallback.overflow;
+    const nextCursor = moreAvailable ? this.encodeForYouCursor([...servedIds, ...orderedIds]) : null;
 
     const scoreByPostId = new Map<string, number>(picked.map((p) => [p.candidate.id, p.adjusted]));
+    for (const post of fallback.posts) scoreByPostId.set(post.id, 0);
 
     return { posts: ordered, nextCursor, scoreByPostId };
   }

@@ -337,7 +337,7 @@ export class PostsController {
     // pools intentionally drop old or unscored posts, which is correct for the text feed
     // but wrong for "show me media".
     const mediaOnly = parsed.mediaOnly ?? false;
-    const mediaChronological = mediaOnly && !groupScoped;
+    const mediaChronological = mediaOnly && !groupScoped && sortKind !== 'forYou';
 
     if (groupScoped) {
       if (!viewerUserId) throw new ForbiddenException('Sign in to view this feed.');
