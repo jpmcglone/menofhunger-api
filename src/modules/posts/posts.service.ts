@@ -1392,7 +1392,7 @@ export class PostsService {
       where: {
         deletedAt: null,
         communityGroupId: null,
-        trendingScore: { gt: 0 },
+        trendingScore: params.mediaOnly ? { gte: 0 } : { gt: 0 },
         kind: { not: 'repost' },
         user: { bannedAt: null },
         ...(kind ? { kind } : {}),

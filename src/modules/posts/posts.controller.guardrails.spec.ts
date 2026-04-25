@@ -8,12 +8,17 @@ function readFromRepo(relativePath: string): string {
 describe('PostsController media feed guardrails', () => {
   it('routes For You media through For You instead of chronological media fallback', () => {
     const src = readFromRepo('src/modules/posts/posts.controller.ts');
-    expect(src).toContain("const mediaChronological = mediaOnly && !groupScoped && sortKind !== 'forYou';");
+    expect(src).toContain("const mediaChronological = mediaOnly && !groupScoped && sortKind !== 'forYou' && sortKind !== 'popular';");
   });
 
   it('fills sparse For You media pages with chronological media fallback rows', () => {
     const src = readFromRepo('src/modules/posts/posts.service.ts');
     expect(src).toContain('const fetchChronologicalMediaFallback = async');
     expect(src).toContain('if (!params.mediaOnly || take <= 0) return { posts: [], overflow: false };');
+  });
+
+  it('lets media trending include zero-score media instead of going empty', () => {
+    const src = readFromRepo('src/modules/posts/posts.service.ts');
+    expect(src).toContain('trendingScore: params.mediaOnly ? { gte: 0 } : { gt: 0 },');
   });
 });

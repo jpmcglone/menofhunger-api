@@ -333,11 +333,11 @@ export class PostsController {
     const sortKind = requestedSortKind === 'forYou' && !viewerUserId ? 'popular' : requestedSortKind;
     const isForYou = sortKind === 'forYou';
     const groupScoped = Boolean(parsed.groupsHub || parsed.communityGroupId);
-    // Media grids should be exhaustive and paginated by time. Trending/For You candidate
-    // pools intentionally drop old or unscored posts, which is correct for the text feed
-    // but wrong for "show me media".
+    // Media grids should be exhaustive for Newest, while Trending/For You still
+    // need distinct ordering. The media trending path includes zero-score media
+    // so it does not go empty just because older posts are no longer hot.
     const mediaOnly = parsed.mediaOnly ?? false;
-    const mediaChronological = mediaOnly && !groupScoped && sortKind !== 'forYou';
+    const mediaChronological = mediaOnly && !groupScoped && sortKind !== 'forYou' && sortKind !== 'popular';
 
     if (groupScoped) {
       if (!viewerUserId) throw new ForbiddenException('Sign in to view this feed.');
