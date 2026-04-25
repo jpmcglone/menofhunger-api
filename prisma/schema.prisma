@@ -1377,9 +1377,12 @@ model Boost {
 }
 
 model PostView {
-  postId    String
-  userId    String
-  createdAt DateTime @default(now())
+  postId     String
+  userId     String
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  seenCount  Int      @default(1)
+  lastSource String?
 
   post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1387,6 +1390,7 @@ model PostView {
   @@id([postId, userId])
   @@index([postId])
   @@index([userId, postId])
+  @@index([userId, lastSeenAt])
 }
 
 model PostAnonView {

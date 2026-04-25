@@ -32,6 +32,11 @@ function breakdownCacheKey(postId: string): string {
   return `cache:post-view-breakdown:${postId}`;
 }
 
+function normalizeViewSource(source: string | null | undefined): string | null {
+  const value = (source ?? '').toString().trim().slice(0, 80);
+  return value || null;
+}
+
 export type PostViewBreakdown = {
   premium: number;
   verified: number;
@@ -94,9 +99,10 @@ export class PostViewsService {
       let viewerIncrement = 0;
       if (uid) {
         const now = new Date();
+        const lastSource = normalizeViewSource(source);
         const result = await this.prisma.$transaction(async (tx) => {
           const created = await tx.postView.createMany({
-            data: [{ postId: pid, userId: uid }],
+            data: [{ postId: pid, userId: uid, lastSeenAt: now, seenCount: 1, lastSource }],
             skipDuplicates: true,
           });
           // Upgrade path: if the same browser had an anon record, consume it
@@ -114,6 +120,15 @@ export class PostViewsService {
           if (created.count > 0) {
             viewerIncrementLocal = consumedAnonCount > 0 ? 0 : 1;
             weightedIncrementLocal = consumedAnonCount > 0 ? 0.5 : LOGGED_IN_VIEW_WEIGHT;
+          } else {
+            await tx.postView.update({
+              where: { postId_userId: { postId: pid, userId: uid } },
+              data: {
+                lastSeenAt: now,
+                seenCount: { increment: 1 },
+                lastSource,
+              },
+            });
           }
 
           if (viewerIncrementLocal !== 0 || weightedIncrementLocal !== 0) {
@@ -140,7 +155,7 @@ export class PostViewsService {
         if (result.createdCount > 0) {
           this.posthog.capture(uid, 'post_viewed', {
             post_id: pid,
-            source: (source ?? 'unknown').toString().slice(0, 80),
+            source: lastSource ?? 'unknown',
             viewer_type: 'user',
           });
         }

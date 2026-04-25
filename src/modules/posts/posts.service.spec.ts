@@ -1140,9 +1140,12 @@ describe('PostsService.listForYouFeed', () => {
   type ForYouCandidate = {
     id: string;
     userId: string;
+    parentId: string | null;
     createdAt: Date;
     trendingScore: number | null;
   };
+
+  type SeenFixture = Date | { createdAt?: Date; lastSeenAt?: Date; seenCount?: number; lastSource?: string | null };
 
   function isTrendingScan(args: any): boolean {
     const ands: any[] = args?.where?.AND ?? [];
@@ -1175,19 +1178,38 @@ describe('PostsService.listForYouFeed', () => {
     );
   }
 
+  function isSecondDegreeScan(args: any): boolean {
+    const ands: any[] = args?.where?.AND ?? [];
+    return ands.some((c) => Array.isArray(c?.userId?.in)) &&
+      ands.some((c) => c?.createdAt?.gte instanceof Date) &&
+      !ands.some((c) => c?.views?.none?.userId === 'viewer') &&
+      !isFriendEngagedScan(args);
+  }
+
   function excludedIds(args: any): Set<string> {
     const ands: any[] = args?.where?.AND ?? [];
     const ids = ands.flatMap((c) => Array.isArray(c?.id?.notIn) ? c.id.notIn : []);
     return new Set(ids);
   }
 
+  function applyBaseAuthorFilter(args: any, pool: ForYouCandidate[]): ForYouCandidate[] {
+    const base = args?.where?.AND?.[0] ?? {};
+    const userId = base?.userId;
+    if (Array.isArray(userId?.in)) return pool.filter((c) => userId.in.includes(c.userId));
+    if (Array.isArray(userId?.notIn)) return pool.filter((c) => !userId.notIn.includes(c.userId));
+    if (typeof userId?.not === 'string') return pool.filter((c) => c.userId !== userId.not);
+    return pool;
+  }
+
   function setupForYou(opts: {
     candidates: ForYouCandidate[];
     youFollowAuthorIds?: string[];
     followsYouAuthorIds?: string[];
-    seenAtByPostId?: Record<string, Date>;
+    seenAtByPostId?: Record<string, SeenFixture>;
     friendReplyParentIds?: string[];
     friendBoostPostIds?: string[];
+    secondDegreeEdges?: Array<{ followerId: string; followingId: string }>;
+    blockedAuthorIds?: string[];
   }) {
     const candidates = opts.candidates;
     const youFollowAuthorIds = opts.youFollowAuthorIds ?? [];
@@ -1195,6 +1217,8 @@ describe('PostsService.listForYouFeed', () => {
     const seenAtByPostId = opts.seenAtByPostId ?? {};
     const friendReplyParentIds = opts.friendReplyParentIds ?? [];
     const friendBoostPostIds = opts.friendBoostPostIds ?? [];
+    const secondDegreeEdges = opts.secondDegreeEdges ?? [];
+    const blockedAuthorIds = opts.blockedAuthorIds ?? [];
 
     function sortTrending(a: ForYouCandidate, b: ForYouCandidate) {
       const sa = a.trendingScore ?? 0;
@@ -1219,6 +1243,7 @@ describe('PostsService.listForYouFeed', () => {
       findMany: jest.fn(async (args: any) => {
         if (args?.select) {
           let pool = candidates.slice();
+          pool = applyBaseAuthorFilter(args, pool);
           const notIn = excludedIds(args);
           if (notIn.size > 0) pool = pool.filter((c) => !notIn.has(c.id));
 
@@ -1230,6 +1255,10 @@ describe('PostsService.listForYouFeed', () => {
             const engaged = new Set([...friendReplyParentIds, ...friendBoostPostIds]);
             pool = pool.filter((c) => engaged.has(c.id));
             pool.sort(sortChrono);
+          } else if (isSecondDegreeScan(args)) {
+            const authorIds: string[] = (args?.where?.AND ?? []).find((c: any) => Array.isArray(c?.userId?.in))?.userId?.in ?? [];
+            pool = pool.filter((c) => authorIds.includes(c.userId));
+            pool.sort(sortTrending);
           } else if (isTrendingScan(args)) {
             pool = pool.filter((c) => c.trendingScore != null && c.trendingScore > 0);
             pool.sort(sortTrending);
@@ -1251,7 +1280,7 @@ describe('PostsService.listForYouFeed', () => {
               userId: c?.userId ?? 'u-unknown',
               createdAt: c?.createdAt ?? new Date(),
               trendingScore: c?.trendingScore ?? 0,
-              parentId: null,
+              parentId: c?.parentId ?? null,
               communityGroupId: null,
               kind: 'regular',
               visibility: 'public',
@@ -1268,6 +1297,16 @@ describe('PostsService.listForYouFeed', () => {
 
     const follow = {
       findMany: jest.fn(async (args: any) => {
+        if (Array.isArray(args?.where?.followerId?.in) && typeof args?.where?.followingId !== 'string') {
+          const followerIds: string[] = args.where.followerId.in;
+          const followingIn: string[] | undefined = args?.where?.followingId?.in;
+          const followingNotIn: string[] = args?.where?.followingId?.notIn ?? [];
+          return secondDegreeEdges
+            .filter((edge) => followerIds.includes(edge.followerId))
+            .filter((edge) => !followingIn || followingIn.includes(edge.followingId))
+            .filter((edge) => !followingNotIn.includes(edge.followingId))
+            .map((edge) => ({ followingId: edge.followingId }));
+        }
         const followerId: string | undefined = args?.where?.followerId;
         const followingId: string | undefined = args?.where?.followingId;
         // Case A: viewer's outbound follows scoped to candidate authors → "you follow them"
@@ -1294,7 +1333,17 @@ describe('PostsService.listForYouFeed', () => {
 
     const postView = {
       findMany: jest.fn(async () => {
-        return Object.entries(seenAtByPostId).map(([postId, createdAt]) => ({ postId, createdAt }));
+        return Object.entries(seenAtByPostId).map(([postId, value]) => {
+          const seen = value instanceof Date ? { createdAt: value, lastSeenAt: value } : value;
+          const createdAt = seen.createdAt ?? seen.lastSeenAt ?? new Date();
+          return {
+            postId,
+            createdAt,
+            lastSeenAt: seen.lastSeenAt ?? createdAt,
+            seenCount: seen.seenCount ?? 1,
+            lastSource: seen.lastSource ?? null,
+          };
+        });
       }),
     };
 
@@ -1321,7 +1370,15 @@ describe('PostsService.listForYouFeed', () => {
     }) as any;
 
     const { service } = makeService(
-      { post, follow, postView, boost },
+      {
+        post,
+        follow,
+        postView,
+        boost,
+        userBlock: {
+          findMany: jest.fn(async () => blockedAuthorIds.map((blockedId) => ({ blockerId: 'viewer', blockedId }))),
+        },
+      },
       {
         viewerContext: {
           getViewer: jest.fn(async () => ({
@@ -1336,6 +1393,11 @@ describe('PostsService.listForYouFeed', () => {
           isPremium: jest.fn(() => false),
           isVerified: jest.fn(() => true),
         },
+        redis: {
+          getJson: jest.fn(async () => null),
+          setJson: jest.fn(async () => undefined),
+          del: jest.fn(async () => undefined),
+        },
       },
     );
 
@@ -1343,7 +1405,7 @@ describe('PostsService.listForYouFeed', () => {
   }
 
   function cand(id: string, userId: string, score: number | null, ageHours = 1): ForYouCandidate {
-    return { id, userId, trendingScore: score, createdAt: new Date(Date.now() - ageHours * 60 * 60 * 1000) };
+    return { id, userId, parentId: null, trendingScore: score, createdAt: new Date(Date.now() - ageHours * 60 * 60 * 1000) };
   }
 
   it('excludes the viewer from candidate authors via the prisma where filter', async () => {
@@ -1457,6 +1519,56 @@ describe('PostsService.listForYouFeed', () => {
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-fresh', 'p-seen-old', 'p-seen-new']);
   });
 
+  it('uses lastSeenAt, not first createdAt, so refreshes suppress posts seen again moments ago', async () => {
+    const firstSeenAWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const justNow = new Date();
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-unseen', 'u1', 10, 1),
+        cand('p-repeat-seen', 'u2', 10, 1),
+      ],
+      seenAtByPostId: {
+        'p-repeat-seen': {
+          createdAt: firstSeenAWeekAgo,
+          lastSeenAt: justNow,
+          seenCount: 3,
+          lastSource: 'feed_scroll',
+        },
+      },
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-unseen', 'p-repeat-seen']);
+  });
+
+  it('surfaces second-degree authors below direct social content but above equal-score strangers', async () => {
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-direct-follow', 'u-direct', 20, 1),
+        cand('p-second-degree', 'u-second', 20, 1),
+        cand('p-stranger', 'u-stranger', 20, 1),
+      ],
+      youFollowAuthorIds: ['u-direct', 'friend-1'],
+      secondDegreeEdges: [{ followerId: 'friend-1', followingId: 'u-second' }],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-direct-follow', 'p-second-degree', 'p-stranger']);
+  });
+
+  it('excludes blocked authors before ranking so they do not consume For You slots', async () => {
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-blocked-hot', 'u-blocked', 100, 1),
+        cand('p-allowed', 'u-allowed', 10, 1),
+      ],
+      blockedAuthorIds: ['u-blocked'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-allowed']);
+  });
+
   it('boosts posts where someone the viewer follows has replied or boosted', async () => {
     const { service } = setupForYou({
       candidates: [
@@ -1498,6 +1610,23 @@ describe('PostsService.listForYouFeed', () => {
     // p5 picked (other-b — first appearance).
     // p6 picked (hot-author re-eligible: 3 picks since p1).
     expect(ids).toEqual(['p1', 'p3', 'p5', 'p6']);
+  });
+
+  it('prefers root diversity in the first pass when one conversation has multiple high-ranked replies', async () => {
+    const rootA1 = cand('p-root-a-1', 'u1', 100, 1);
+    rootA1.parentId = 'root-a';
+    const rootA2 = cand('p-root-a-2', 'u2', 90, 1);
+    rootA2.parentId = 'root-a';
+    const rootB = cand('p-root-b', 'u3', 50, 1);
+    rootB.parentId = 'root-b';
+    const rootC = cand('p-root-c', 'u4', 40, 1);
+    rootC.parentId = 'root-c';
+    const { service } = setupForYou({
+      candidates: [rootA1, rootA2, rootB, rootC],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 3, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-root-a-1', 'p-root-b', 'p-root-c']);
   });
 
   it('softly relaxes the diversity cap when a sparse universe would otherwise return near-empty pages', async () => {
