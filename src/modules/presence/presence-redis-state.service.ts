@@ -13,6 +13,7 @@ type PresenceEvent =
   | { type: 'active'; userId: string; instanceId: string }
   | { type: 'emitToUser'; userId: string; instanceId: string; event: string; payload: unknown }
   | { type: 'emitToRoom'; userId: string; instanceId: string; room: string; event: string; payload: unknown }
+  | { type: 'userStatusChanged'; userId: string; instanceId: string; event: string; payload: unknown }
   | { type: 'spacesLobbyCounts'; instanceId: string; countsBySpaceId: Record<string, number> }
   | {
       type: 'userSpaceChanged';
@@ -271,6 +272,23 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
       instanceId: this.instanceId,
       spaceId: params.spaceId ?? null,
       previousSpaceId: params.previousSpaceId,
+    });
+  }
+
+  /**
+   * Cross-instance: notify subscribers of a user that their plain-text status changed.
+   * Each instance emits to its local subscribers of that user.
+   */
+  async publishUserStatusChanged(params: { userId: string; event: string; payload: unknown }): Promise<void> {
+    const userId = String(params.userId ?? '').trim();
+    const event = String(params.event ?? '').trim();
+    if (!userId || !event) return;
+    await this.publish({
+      type: 'userStatusChanged',
+      userId,
+      instanceId: this.instanceId,
+      event,
+      payload: params.payload,
     });
   }
 

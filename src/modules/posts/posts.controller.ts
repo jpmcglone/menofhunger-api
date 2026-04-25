@@ -326,11 +326,11 @@ export class PostsController {
         .slice(0, 50) || [];
 
     const sort = parsed.sort ?? 'new';
-    const sortKind = sort === 'trending' ? 'popular' : sort;
+    const requestedSortKind = sort === 'trending' ? 'popular' : sort;
+    // Anonymous /home is framed as For You in the UI, but without a viewer we fall back
+    // to the public discovery ranking instead of rejecting the feed request.
+    const sortKind = requestedSortKind === 'forYou' && !viewerUserId ? 'popular' : requestedSortKind;
     const isForYou = sortKind === 'forYou';
-    if (isForYou && !viewerUserId) {
-      throw new ForbiddenException('Sign in to view your For You feed.');
-    }
 
     const groupScoped = Boolean(parsed.groupsHub || parsed.communityGroupId);
     if (groupScoped) {

@@ -154,11 +154,17 @@ export class NotificationsService {
   }
 
   private async getUndeliveredCountInternal(recipientUserId: string): Promise<number> {
-    const row = await this.prisma.user.findUnique({
-      where: { id: recipientUserId },
-      select: { undeliveredNotificationCount: true },
+    return this.prisma.notification.count({
+      where: this.undeliveredBellWhere(recipientUserId),
     });
-    return row?.undeliveredNotificationCount ?? 0;
+  }
+
+  private undeliveredBellWhere(recipientUserId: string): Prisma.NotificationWhereInput {
+    return {
+      recipientUserId,
+      deliveredAt: null,
+      kind: { not: 'message' },
+    };
   }
 
   /**
@@ -1715,6 +1721,13 @@ export class NotificationsService {
     const desiredItemLimit = Math.max(1, Math.min(limit, 50));
     const maxGroupNotifications = 50;
     const rawFetchLimit = Math.min(desiredItemLimit * 6, 250);
+    if (kind === 'message') {
+      return {
+        items: [] as NotificationFeedItemDto[],
+        nextCursor: null,
+        undeliveredCount: await this.getUndeliveredCount(recipientUserId),
+      };
+    }
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,
@@ -1739,7 +1752,7 @@ export class NotificationsService {
     const notifications = await this.prisma.notification.findMany({
       where: {
         recipientUserId,
-        ...(kind ? { kind } : {}),
+        ...(kind ? { kind } : { kind: { not: 'message' as const } }),
         ...(blockedActorIds.length > 0 ? { NOT: { actorUserId: { in: blockedActorIds } } } : {}),
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },
@@ -2413,15 +2426,15 @@ export class NotificationsService {
   }
 
   async getUndeliveredCount(recipientUserId: string): Promise<number> {
-    // Use the denormalized counter for fast O(1) reads. The counter is maintained
-    // atomically on every notification write (increment) and delivery/read/ignore (decrement).
+    // Chat unread state has its own messages badge; the bell count only includes
+    // notification feed rows, and deliberately excludes legacy `message` rows.
     return this.getUndeliveredCountInternal(recipientUserId);
   }
 
   async markDelivered(recipientUserId: string): Promise<void> {
     const undeliveredCount = await this.prisma.$transaction(async (tx) => {
       const res = await tx.notification.updateMany({
-        where: { recipientUserId, deliveredAt: null },
+        where: this.undeliveredBellWhere(recipientUserId),
         data: { deliveredAt: new Date() },
       });
       if (res.count > 0) {
@@ -2433,7 +2446,7 @@ export class NotificationsService {
         `;
       }
       // Return accurate count from actual rows (handles drifted counters).
-      return tx.notification.count({ where: { recipientUserId, deliveredAt: null } });
+      return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
     });
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
@@ -2870,27 +2883,22 @@ export class NotificationsService {
     const undeliveredCount = await this.prisma.$transaction(async (tx) => {
       const now = new Date();
       await tx.notification.updateMany({
-        where: { recipientUserId, readAt: null },
+        where: { recipientUserId, readAt: null, kind: { not: 'message' } },
         data: { readAt: now },
       });
       const deliveredRes = await tx.notification.updateMany({
-        where: { recipientUserId, deliveredAt: null },
+        where: this.undeliveredBellWhere(recipientUserId),
         data: { deliveredAt: now },
       });
       if (deliveredRes.count > 0) {
-        return (
-          await tx.user.update({
-            where: { id: recipientUserId },
-            data: { undeliveredNotificationCount: { decrement: deliveredRes.count } },
-            select: { undeliveredNotificationCount: true },
-          })
-        ).undeliveredNotificationCount;
+        await tx.user.update({
+          where: { id: recipientUserId },
+          data: { undeliveredNotificationCount: { decrement: deliveredRes.count } },
+          select: { undeliveredNotificationCount: true },
+        });
+        return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
       }
-      const row = await tx.user.findUnique({
-        where: { id: recipientUserId },
-        select: { undeliveredNotificationCount: true },
-      });
-      return row?.undeliveredNotificationCount ?? 0;
+      return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
     });
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,

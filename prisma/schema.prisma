@@ -317,6 +317,10 @@ model User {
   lastOnlineAt DateTime?
   // When the user last had in-app activity (presence connect/ping). Used for DAU/MAU.
   lastSeenAt DateTime?
+  // Plain-text presence status shown on avatars. Expires at statusExpiresAt.
+  statusText String?
+  statusSetAt DateTime?
+  statusExpiresAt DateTime?
   // Denormalized badge count for notifications where deliveredAt is still null.
   // Maintained atomically in NotificationsService.
   undeliveredNotificationCount Int @default(0)

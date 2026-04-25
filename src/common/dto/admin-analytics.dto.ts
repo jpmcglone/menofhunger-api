@@ -6,6 +6,8 @@ export type TimeSeriesPoint = { bucket: string; count: number };
 export type AdminAnalyticsSummaryDto = {
   totalUsers: number;
   verifiedUsers: number;
+  /** All-time public, regular, non-draft, non-deleted posts. */
+  totalPublicPosts: number;
   premiumUsers: number;
   premiumPlusUsers: number;
   /** Users with at least one active (non-revoked, non-expired) subscription grant */
@@ -14,6 +16,17 @@ export type AdminAnalyticsSummaryDto = {
   mau: number;
   /** Sum of all user coin balances — total coins in the economy */
   totalCoinsInEconomy: number;
+};
+
+export type AdminAnalyticsTopPostDto = {
+  id: string;
+  bodyPreview: string;
+  authorUsername: string;
+  viewCount: number;
+  boostCount: number;
+  commentCount: number;
+  reactionCount: number;
+  createdAt: string;
 };
 
 export type AdminAnalyticsRetentionRow = {
@@ -190,6 +203,8 @@ export type AdminAnalyticsDto = {
   granularity: AnalyticsGranularity;
   summary: AdminAnalyticsSummaryDto;
   signups: TimeSeriesPoint[];
+  /** Top public regular posts by all-time denormalized view count. */
+  topPostsAllTime: AdminAnalyticsTopPostDto[];
   /** Counts of regular (non-draft, non-deleted) posts per visibility for the selected range. */
   postsByVisibility: Record<string, number>;
   /** Time series of regular posts visible to others (excludes onlyMe). */

@@ -124,6 +124,55 @@ describe('NotificationsService.list batching', () => {
     // Ensure list() doesn't fall back to per-notification builder.
     expect(buildSpy).not.toHaveBeenCalled();
   });
+
+  it('does not expose chat message notifications in the notifications feed', async () => {
+    const { svc, prisma } = makeService({
+      prisma: {
+        notification: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => []),
+          count: jest.fn(async () => 0),
+        },
+        post: { findUnique: jest.fn(), findMany: jest.fn(async () => []) },
+        user: { findUnique: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+        follow: { findMany: jest.fn(async () => []) },
+        userBlock: { findMany: jest.fn(async () => []) },
+      } as any,
+    });
+
+    const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null, kind: 'message' as any });
+
+    expect(res).toEqual({ items: [], nextCursor: null, undeliveredCount: 0 });
+    expect(prisma.notification.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('NotificationsService.getUndeliveredCount', () => {
+  it('excludes chat message notifications from the bell badge count', async () => {
+    const { svc, prisma } = makeService({
+      prisma: {
+        notification: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => []),
+          count: jest.fn(async () => 4),
+        },
+        post: { findUnique: jest.fn(), findMany: jest.fn(async () => []) },
+        user: { findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 99 })), findMany: jest.fn(async () => []) },
+        follow: { findMany: jest.fn(async () => []) },
+        userBlock: { findMany: jest.fn(async () => []) },
+      } as any,
+    });
+
+    await expect(svc.getUndeliveredCount('u_recipient')).resolves.toBe(4);
+    expect(prisma.notification.count).toHaveBeenCalledWith({
+      where: {
+        recipientUserId: 'u_recipient',
+        deliveredAt: null,
+        kind: { not: 'message' },
+      },
+    });
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+  });
 });
 
 describe('NotificationsService.markNewPostsRead', () => {

@@ -23,6 +23,8 @@ import type {
   NotificationsDeletedPayloadDto,
   NotificationsNewPayloadDto,
   PostsInteractionPayloadDto,
+  PresenceStatusClearedPayloadDto,
+  PresenceStatusUpdatedPayloadDto,
   UsersSelfUpdatedPayloadDto,
 } from '../../common/dto';
 
@@ -68,6 +70,16 @@ export class PresenceRealtimeService {
     for (const userId of userIds) {
       if (!userId) continue;
       this.emitToUser(userId, event, payload);
+    }
+  }
+
+  private emitToSockets(socketIds: Iterable<string>, event: string, payload: unknown): void {
+    const server = this.getServerOrNull();
+    if (!server) return;
+    const ev = (event ?? '').trim();
+    if (!ev) return;
+    for (const socketId of socketIds) {
+      server.sockets.sockets.get(socketId)?.emit(ev, payload);
     }
   }
 
@@ -158,6 +170,34 @@ export class PresenceRealtimeService {
   /** Self-only auth/settings updates (never broadcast beyond the user's sockets). */
   emitUsersMeUpdated(userId: string, payload: UsersMeUpdatedPayloadDto): void {
     this.emitToUser(userId, WsEventNames.usersMeUpdated, payload);
+  }
+
+  emitPresenceStatusUpdated(userId: string, payload: PresenceStatusUpdatedPayloadDto): void {
+    const uid = (userId ?? '').trim();
+    if (!uid) return;
+    const targets = new Set([
+      ...this.presence.getSubscribers(uid),
+      ...this.presence.getOnlineFeedListeners(),
+      ...this.presence.getSocketIdsForUser(uid),
+    ]);
+    this.emitToSockets(targets, WsEventNames.presenceStatusUpdated, payload);
+    void this.presenceRedis
+      .publishUserStatusChanged({ userId: uid, event: WsEventNames.presenceStatusUpdated, payload })
+      .catch(() => undefined);
+  }
+
+  emitPresenceStatusCleared(userId: string, payload: PresenceStatusClearedPayloadDto): void {
+    const uid = (userId ?? '').trim();
+    if (!uid) return;
+    const targets = new Set([
+      ...this.presence.getSubscribers(uid),
+      ...this.presence.getOnlineFeedListeners(),
+      ...this.presence.getSocketIdsForUser(uid),
+    ]);
+    this.emitToSockets(targets, WsEventNames.presenceStatusCleared, payload);
+    void this.presenceRedis
+      .publishUserStatusChanged({ userId: uid, event: WsEventNames.presenceStatusCleared, payload })
+      .catch(() => undefined);
   }
 
   /** Scoped post live updates (delivered only to sockets subscribed to this post). */

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { Server } from 'socket.io';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
+import type { UserStatusDto } from '../../common/dto';
 
 export type SocketMeta = { userId: string; client: string };
 
@@ -10,6 +11,7 @@ const MAX_SUBSCRIPTIONS_PER_SOCKET = 100;
 const LAST_SEEN_PERSIST_THROTTLE_MS = 2 * 60 * 1000;
 // Daily activity should be written at most once per day per user per server.
 const DAILY_ACTIVITY_PERSIST_THROTTLE_MS = 5 * 60 * 1000;
+const STATUS_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * In-memory presence: userId -> Set of socketIds, socketId -> { userId, client }.
@@ -134,6 +136,100 @@ export class PresenceService {
       .catch((err) => {
         this.logger.warn(`[presence] Failed to persist daily activity userId=${uid}: ${err}`);
       });
+  }
+
+  toActiveStatusDto(user: {
+    id: string;
+    statusText: string | null;
+    statusSetAt: Date | null;
+    statusExpiresAt: Date | null;
+  }, now = new Date()): UserStatusDto | null {
+    const text = String(user.statusText ?? '').trim();
+    if (!text || !user.statusSetAt || !user.statusExpiresAt || user.statusExpiresAt <= now) {
+      return null;
+    }
+    return {
+      userId: user.id,
+      text,
+      setAt: user.statusSetAt.toISOString(),
+      expiresAt: user.statusExpiresAt.toISOString(),
+    };
+  }
+
+  async getActiveStatuses(userIds: string[]): Promise<UserStatusDto[]> {
+    const ids = Array.from(new Set((userIds ?? []).map((id) => String(id ?? '').trim()).filter(Boolean))).slice(0, 100);
+    if (ids.length === 0) return [];
+
+    const now = new Date();
+    const users = await this.prisma.user.findMany({
+      where: {
+        id: { in: ids },
+        bannedAt: null,
+        statusText: { not: null },
+        statusExpiresAt: { gt: now },
+      },
+      select: {
+        id: true,
+        statusText: true,
+        statusSetAt: true,
+        statusExpiresAt: true,
+      },
+    });
+
+    return users
+      .map((user) => this.toActiveStatusDto(user, now))
+      .filter((status): status is UserStatusDto => status != null);
+  }
+
+  async getActiveStatusByUserId(userId: string): Promise<UserStatusDto | null> {
+    const uid = String(userId ?? '').trim();
+    if (!uid) return null;
+    const user = await this.prisma.user.findUnique({
+      where: { id: uid },
+      select: {
+        id: true,
+        statusText: true,
+        statusSetAt: true,
+        statusExpiresAt: true,
+      },
+    });
+    return user ? this.toActiveStatusDto(user) : null;
+  }
+
+  async setStatus(userId: string, text: string): Promise<UserStatusDto> {
+    const uid = String(userId ?? '').trim();
+    const cleanText = String(text ?? '').trim();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + STATUS_TTL_MS);
+    const user = await this.prisma.user.update({
+      where: { id: uid },
+      data: {
+        statusText: cleanText,
+        statusSetAt: now,
+        statusExpiresAt: expiresAt,
+      },
+      select: {
+        id: true,
+        statusText: true,
+        statusSetAt: true,
+        statusExpiresAt: true,
+      },
+    });
+    return this.toActiveStatusDto(user, now)!;
+  }
+
+  async clearStatus(userId: string): Promise<void> {
+    const uid = String(userId ?? '').trim();
+    if (!uid) return;
+    await this.prisma.user.update({
+      where: { id: uid },
+      data: {
+        statusText: null,
+        statusSetAt: null,
+        statusExpiresAt: null,
+      },
+      select: { id: true },
+    });
   }
 
   getLastActivity(userId: string): number | undefined {

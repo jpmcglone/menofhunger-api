@@ -27,19 +27,8 @@ export class MessagePushEventsHandler implements OnModuleInit, OnModuleDestroy {
     });
 
     this.sub = this.events.onMessagePushRequested((event) => {
-      // Write (or refresh) an in-app notification row so the bell badge lights up.
-      void this.notifications
-        .upsertMessageNotification({
-          recipientUserId: event.recipientUserId,
-          senderUserId: event.senderUserId,
-          conversationId: event.conversationId,
-          snippet: event.body ?? null,
-        })
-        .catch((err) => {
-          this.logger.debug(`[notifications] Message in-app notification failed: ${err}`);
-        });
-
-      // Web push (existing behaviour).
+      // Chat unread state belongs to the messages badge; this handler only sends
+      // external push notifications so chat does not appear in the bell feed.
       void this.notifications
         .sendMessagePush({
           recipientUserId: event.recipientUserId,

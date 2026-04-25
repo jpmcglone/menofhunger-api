@@ -72,6 +72,7 @@ export class AdminAnalyticsController {
 
     const [
       summaryRow,
+      publicPostsSummaryRow,
       activeGrantsCountRow,
       dauMauRow,
       signupsRaw,
@@ -87,6 +88,7 @@ export class AdminAnalyticsController {
       monetizationTotalsRaw,
       monetizationByStatusRaw,
       postVisibilityRaw,
+      topPostsAllTimeRaw,
       articleSummaryRaw,
       articleVisibilityRaw,
       articlePublishedRaw,
@@ -114,6 +116,16 @@ export class AdminAnalyticsController {
           COUNT(*) FILTER (WHERE "premiumPlus" = true)::bigint AS premium_plus_users
         FROM "User"
         WHERE "bannedAt" IS NULL
+      `,
+
+      // All-time public regular posts used for public-facing proof and leaderboards.
+      this.prisma.$queryRaw<Array<{ cnt: bigint }>>`
+        SELECT COUNT(*)::bigint AS cnt
+        FROM "Post"
+        WHERE "deletedAt" IS NULL
+          AND "isDraft" = false
+          AND "kind" = 'regular'
+          AND "visibility" = 'public'
       `,
 
       // Users with at least one active grant (non-revoked, not yet expired).
@@ -435,6 +447,37 @@ export class AdminAnalyticsController {
         GROUP BY "visibility"
         ORDER BY cnt DESC
       `),
+
+      // Top public regular posts by all-time denormalized view count.
+      this.prisma.$queryRaw<Array<{
+        id: string;
+        body: string;
+        author_username: string;
+        view_count: number;
+        boost_count: number;
+        comment_count: number;
+        reaction_count: number;
+        created_at: Date;
+      }>>`
+        SELECT
+          p.id,
+          p.body,
+          u.username AS author_username,
+          p."viewerCount" AS view_count,
+          p."boostCount" AS boost_count,
+          p."commentCount" AS comment_count,
+          0 AS reaction_count,
+          p."createdAt" AS created_at
+        FROM "Post" p
+        JOIN "User" u ON u.id = p."userId"
+        WHERE p."deletedAt" IS NULL
+          AND p."isDraft" = false
+          AND p."kind" = 'regular'
+          AND p."visibility" = 'public'
+        GROUP BY p.id, u.username
+        ORDER BY p."viewerCount" DESC, p."createdAt" DESC
+        LIMIT 10
+      `,
 
       // ── Article queries ────────────────────────────────────────────────────
 
@@ -853,6 +896,7 @@ export class AdminAnalyticsController {
     // ── Summary ───────────────────────────────────────────────────────────────
 
     const summary = summaryRow[0];
+    const totalPublicPosts = Number(publicPostsSummaryRow[0]?.cnt ?? 0);
     const activeGrantsCount = Number(activeGrantsCountRow[0]?.cnt ?? 0);
     const dauMau = dauMauRow[0];
 
@@ -906,6 +950,17 @@ export class AdminAnalyticsController {
         ? Math.round((connectedCount / totalUsers) * 100)
         : null,
     };
+
+    const topPostsAllTime = topPostsAllTimeRaw.map((r) => ({
+      id: r.id,
+      bodyPreview: r.body.length > 180 ? `${r.body.slice(0, 180).trimEnd()}...` : r.body,
+      authorUsername: r.author_username,
+      viewCount: Number(r.view_count),
+      boostCount: Number(r.boost_count),
+      commentCount: Number(r.comment_count),
+      reactionCount: Number(r.reaction_count),
+      createdAt: r.created_at.toISOString(),
+    }));
 
     // ── Articles ──────────────────────────────────────────────────────────────
 
@@ -987,6 +1042,7 @@ export class AdminAnalyticsController {
       summary: {
         totalUsers:           Number(summary?.total_users       ?? 0),
         verifiedUsers:        Number(summary?.verified_users    ?? 0),
+        totalPublicPosts,
         // premiumUsers includes ALL paid tiers (premium-only + premiumPlus),
         // because billing sets premium=true for both. Don't add premiumPlusUsers to it.
         premiumUsers:         Number(summary?.premium_users     ?? 0),
@@ -997,6 +1053,7 @@ export class AdminAnalyticsController {
         totalCoinsInEconomy: coins.totalInEconomy,
       },
       signups:   toTimeSeries(signupsRaw),
+      topPostsAllTime,
       postsByVisibility,
       posts:     toTimeSeries(postsRaw),
       checkins:  toTimeSeries(checkinsRaw),

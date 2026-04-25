@@ -105,6 +105,8 @@ function makePresenceRedis() {
     onEvent: jest.fn().mockReturnValue(() => {}),
     publishEmitToRoom: jest.fn().mockResolvedValue(undefined),
     publishUserSpaceChanged: jest.fn().mockResolvedValue(undefined),
+    idleByUserIds: jest.fn().mockResolvedValue(new Map<string, boolean>()),
+    onlineByUserIds: jest.fn().mockResolvedValue(new Map<string, boolean>()),
     unregisterSocket: jest.fn().mockResolvedValue({ isNowOffline: false }),
     publishSpacesLobbyCounts: jest.fn().mockResolvedValue(undefined),
   } as any;
@@ -121,6 +123,8 @@ function makePresenceService(userId = OWNER_ID) {
     getSubscribers: jest.fn().mockReturnValue(new Set<string>()),
     getOnlineFeedListeners: jest.fn().mockReturnValue(new Set<string>()),
     emitToUser: jest.fn(),
+    subscribe: jest.fn((socketId: string, userIds: string[]) => ({ added: userIds })),
+    getActiveStatuses: jest.fn().mockResolvedValue([]),
   } as any;
 }
 
@@ -158,6 +162,7 @@ function makeSpacesPresenceService() {
     }),
     getMembersForSpace: jest.fn().mockReturnValue({ userIds: [], pausedUserIds: [], mutedUserIds: [] }),
     getRoomSpaceForSocket: jest.fn().mockReturnValue(null),
+    getSpaceForUser: jest.fn().mockReturnValue(null),
     clearRoomForSocket: jest.fn().mockReturnValue(null),
     clearAllPaused: jest.fn().mockReturnValue([]),
     getLobbyCountsBySpaceId: jest.fn().mockReturnValue({}),
@@ -265,6 +270,41 @@ describe('PresenceGateway — watch party sync', () => {
   });
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  describe('presence:subscribe', () => {
+    it('includes active status in the subscription snapshot', async () => {
+      const { gw, ownerSocket } = makeFixture();
+      (gw as any).presenceRedis.onlineByUserIds.mockResolvedValueOnce(new Map([[OWNER_ID, true]]));
+      (gw as any).presenceRedis.idleByUserIds.mockResolvedValueOnce(new Map([[OWNER_ID, false]]));
+      (gw as any).presence.getActiveStatuses.mockResolvedValueOnce([
+        {
+          userId: OWNER_ID,
+          text: 'Around tonight',
+          setAt: '2026-04-25T03:00:00.000Z',
+          expiresAt: '2026-04-26T03:00:00.000Z',
+        },
+      ]);
+
+      await (gw as any).handleSubscribe(ownerSocket, { userIds: [OWNER_ID] });
+
+      expect(ownerSocket.lastEmitted('presence:subscribed')).toEqual({
+        users: [
+          {
+            userId: OWNER_ID,
+            online: true,
+            idle: false,
+            spaceId: undefined,
+            status: {
+              userId: OWNER_ID,
+              text: 'Around tonight',
+              setAt: '2026-04-25T03:00:00.000Z',
+              expiresAt: '2026-04-26T03:00:00.000Z',
+            },
+          },
+        ],
+      });
+    });
   });
 
   // ── spaces:join broadcasts current state to the joining client ─────────────

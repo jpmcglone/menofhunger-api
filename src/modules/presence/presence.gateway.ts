@@ -149,6 +149,9 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         };
         const targets = this.getTargetsForUser(evt.userId);
         this.emitToSockets(targets, WsEventNames.usersSpaceChanged, payload);
+      } else if (evt.type === 'userStatusChanged') {
+        const targets = this.getStatusTargetsForUser(evt.userId);
+        this.emitToSockets(targets, evt.event, evt.payload);
       }
     });
   }
@@ -1131,6 +1134,14 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     ]);
   }
 
+  private getStatusTargetsForUser(userId: string): Set<string> {
+    return new Set([
+      ...this.presence.getSubscribers(userId),
+      ...this.presence.getOnlineFeedListeners(),
+      ...this.presence.getSocketIdsForUser(userId),
+    ]);
+  }
+
   private emitToSockets(socketIds: Iterable<string>, event: string, payload: unknown): void {
     const ids = [...socketIds];
     if (this.logPresenceVerbose) {
@@ -1203,11 +1214,13 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     if (added.length > 0) {
       const idleById = await this.presenceRedis.idleByUserIds(added);
       const onlineById = await this.presenceRedis.onlineByUserIds(added);
+      const statusesById = new Map((await this.presence.getActiveStatuses(added)).map((status) => [status.userId, status]));
       const users = added.map((uid) => {
         const online = onlineById.get(uid) ?? false;
         const idle = online ? (idleById.get(uid) ?? false) : false;
         const spaceId = this.spacesPresence.getSpaceForUser(uid) ?? undefined;
-        return { userId: uid, online, idle, spaceId };
+        const status = statusesById.get(uid) ?? null;
+        return { userId: uid, online, idle, spaceId, status };
       });
       client.emit('presence:subscribed', { users });
     }

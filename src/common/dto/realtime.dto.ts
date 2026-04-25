@@ -3,6 +3,7 @@ import type { NotificationDto } from '../../modules/notifications/notification.d
 import type { UserDto } from './user.dto';
 import type { ArticleCommentDto, ArticleReactionSummaryDto } from './article.dto';
 import type { PostDto } from './post.dto';
+import type { UserStatusDto } from './presence.dto';
 
 /**
  * Websocket (Socket.IO) payload DTOs.
@@ -129,10 +130,20 @@ export type UsersSpaceChangedPayloadDto = {
   previousSpaceId?: string;
 };
 
+export type PresenceStatusUpdatedPayloadDto = {
+  status: UserStatusDto;
+};
+
+export type PresenceStatusClearedPayloadDto = {
+  userId: string;
+};
+
 export const WsEventNames = {
   usersMeUpdated: 'users:meUpdated',
   usersSelfUpdated: 'users:selfUpdated',
   usersSpaceChanged: 'users:spaceChanged',
+  presenceStatusUpdated: 'presence:status-updated',
+  presenceStatusCleared: 'presence:status-cleared',
   postsSubscribe: 'posts:subscribe',
   postsUnsubscribe: 'posts:unsubscribe',
   postsSubscribed: 'posts:subscribed',

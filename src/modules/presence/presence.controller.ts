@@ -1,12 +1,15 @@
-import { BadRequestException, Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Put, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
-import { OptionalCurrentUserId } from '../users/users.decorator';
+import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { Throttle } from '@nestjs/throttler';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { AuthGuard } from '../auth/auth.guard';
 import { FollowsService } from '../follows/follows.service';
+import { PresenceService } from './presence.service';
+import { PresenceRealtimeService } from './presence-realtime.service';
 import { PresenceRedisStateService } from './presence-redis-state.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import type { PresenceOnlinePageDto, RecentlyOnlineUserDto } from '../../common/dto';
+import type { PresenceOnlinePageDto, RecentlyOnlineUserDto, UserStatusDto } from '../../common/dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
@@ -23,6 +26,20 @@ const onlinePageSchema = z.object({
   recentLimit: z.coerce.number().int().min(1).max(50).optional(),
   recentCursor: z.string().optional(),
 });
+
+const statusBodySchema = z.object({
+  text: z.string().trim().min(1).max(120),
+});
+
+function parseStatusUserIds(query: unknown): string[] {
+  const raw = (query as any)?.userIds;
+  const parts = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : [];
+  return Array.from(new Set(parts.map((id) => String(id ?? '').trim()).filter(Boolean))).slice(0, 100);
+}
+
+function statusMap(statuses: UserStatusDto[]): Map<string, UserStatusDto> {
+  return new Map(statuses.map((status) => [status.userId, status]));
+}
 
 function encodeCursor(params: { tMs: number; id: string }): string {
   return Buffer.from(JSON.stringify(params), 'utf8').toString('base64url');
@@ -63,10 +80,55 @@ function decodePageCursor(
 export class PresenceController {
   constructor(
     private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presence: PresenceService,
+    private readonly realtime: PresenceRealtimeService,
     private readonly follows: FollowsService,
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
   ) {}
+
+  @UseGuards(OptionalAuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 60),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Get('statuses')
+  async statuses(@Query() query: unknown): Promise<{ data: UserStatusDto[] }> {
+    const userIds = parseStatusUserIds(query);
+    const data = await this.presence.getActiveStatuses(userIds);
+    return { data };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 20),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Put('status')
+  async setStatus(@CurrentUserId() userId: string, @Body() body: unknown): Promise<{ data: UserStatusDto }> {
+    const parsed = statusBodySchema.parse(body);
+    const status = await this.presence.setStatus(userId, parsed.text);
+    this.realtime.emitPresenceStatusUpdated(userId, { status });
+    return { data: status };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 20),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Delete('status')
+  async clearStatus(@CurrentUserId() userId: string): Promise<{ data: { cleared: true } }> {
+    await this.presence.clearStatus(userId);
+    this.realtime.emitPresenceStatusCleared(userId, { userId });
+    return { data: { cleared: true } };
+  }
 
   @UseGuards(OptionalAuthGuard)
   @Throttle({
@@ -130,10 +192,12 @@ export class PresenceController {
     const orderMap = new Map(userIds.map((id, i) => [id, i]));
     users.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
     const idleById = await this.presenceRedis.idleByUserIds(userIds);
+    const statusesById = statusMap(await this.presence.getActiveStatuses(userIds));
     const data = users.map((u) => ({
       ...u,
       lastConnectAt: lastConnectAtById.get(u.id),
       idle: idleById.get(u.id) ?? false,
+      status: statusesById.get(u.id) ?? null,
     }));
     const result = { data, pagination: { totalOnline: userIds.length } };
     void this.redis.setJson(cacheKey, result, { ttlMs: ONLINE_LIST_CACHE_TTL_MS }).catch(() => undefined);
@@ -283,9 +347,11 @@ export class PresenceController {
     followListUsers.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
 
     const lastOnlineAtById = new Map<string, string | null>(pageItems.map((r) => [r.id, r.lastOnlineAt]));
+    const statusesById = statusMap(await this.presence.getActiveStatuses(userIds));
     const data: RecentlyOnlineUserDto[] = followListUsers.map((u) => ({
       ...(u as any),
       lastOnlineAt: lastOnlineAtById.get(u.id) ?? null,
+      status: statusesById.get(u.id) ?? null,
     }));
 
     return { data, pagination: { nextCursor } };
@@ -350,11 +416,13 @@ export class PresenceController {
     const orderMap = new Map(onlineUserIds.map((id, i) => [id, i]));
     onlineUsers.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
     const idleById = await this.presenceRedis.idleByUserIds(onlineUserIds);
+    const onlineStatusesById = statusMap(await this.presence.getActiveStatuses(onlineUserIds));
 
     const onlineData = onlineUsers.map((u) => ({
       ...(u as any),
       lastConnectAt: lastConnectAtById.get(u.id) ?? null,
       idle: idleById.get(u.id) ?? false,
+      status: onlineStatusesById.get(u.id) ?? null,
     }));
 
     // ——— Recently online (privacy-gated, cursor-paginated) ———
@@ -483,9 +551,11 @@ export class PresenceController {
         followListUsers.sort((a, b) => (recentOrderMap.get(a.id) ?? 999) - (recentOrderMap.get(b.id) ?? 999));
 
         const lastOnlineAtById = new Map<string, string | null>(pageItems.map((r) => [r.id, r.lastOnlineAt]));
+        const recentStatusesById = statusMap(await this.presence.getActiveStatuses(recentUserIds));
         recentData = followListUsers.map((u) => ({
           ...(u as any),
           lastOnlineAt: lastOnlineAtById.get(u.id) ?? null,
+          status: recentStatusesById.get(u.id) ?? null,
         }));
       }
     }
