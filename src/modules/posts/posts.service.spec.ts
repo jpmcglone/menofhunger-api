@@ -1159,6 +1159,28 @@ describe('PostsService.listForYouFeed', () => {
     );
   }
 
+  function isFollowedUnseenScan(args: any): boolean {
+    const ands: any[] = args?.where?.AND ?? [];
+    return ands.some((c) => Array.isArray(c?.userId?.in)) &&
+      ands.some((c) => c?.views?.none?.userId === 'viewer');
+  }
+
+  function isFriendEngagedScan(args: any): boolean {
+    const ands: any[] = args?.where?.AND ?? [];
+    return ands.some(
+      (c) =>
+        Array.isArray(c?.OR) &&
+        c.OR.some((o: any) => o?.boosts?.some?.userId?.in) &&
+        c.OR.some((o: any) => o?.replies?.some?.userId?.in),
+    );
+  }
+
+  function excludedIds(args: any): Set<string> {
+    const ands: any[] = args?.where?.AND ?? [];
+    const ids = ands.flatMap((c) => Array.isArray(c?.id?.notIn) ? c.id.notIn : []);
+    return new Set(ids);
+  }
+
   function setupForYou(opts: {
     candidates: ForYouCandidate[];
     youFollowAuthorIds?: string[];
@@ -1197,7 +1219,18 @@ describe('PostsService.listForYouFeed', () => {
       findMany: jest.fn(async (args: any) => {
         if (args?.select) {
           let pool = candidates.slice();
-          if (isTrendingScan(args)) {
+          const notIn = excludedIds(args);
+          if (notIn.size > 0) pool = pool.filter((c) => !notIn.has(c.id));
+
+          if (isFollowedUnseenScan(args)) {
+            const followedIds: string[] = (args?.where?.AND ?? []).find((c: any) => Array.isArray(c?.userId?.in))?.userId?.in ?? [];
+            pool = pool.filter((c) => followedIds.includes(c.userId) && !seenAtByPostId[c.id]);
+            pool.sort(sortChrono);
+          } else if (isFriendEngagedScan(args)) {
+            const engaged = new Set([...friendReplyParentIds, ...friendBoostPostIds]);
+            pool = pool.filter((c) => engaged.has(c.id));
+            pool.sort(sortChrono);
+          } else if (isTrendingScan(args)) {
             pool = pool.filter((c) => c.trendingScore != null && c.trendingScore > 0);
             pool.sort(sortTrending);
           } else if (isChronoScan(args)) {
@@ -1364,6 +1397,50 @@ describe('PostsService.listForYouFeed', () => {
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-mutual', 'p-follow', 'p-follower', 'p-stranger']);
   });
 
+  it('puts recent unseen followed posts ahead of unrelated trending on page one', async () => {
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-unrelated-hot', 'u-stranger', 100, 1),
+        cand('p-followed-new', 'u-follow', null, 1),
+        cand('p-other', 'u-other', 8, 1),
+      ],
+      youFollowAuthorIds: ['u-follow'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 3, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)[0]).toBe('p-followed-new');
+  });
+
+  it('keeps unseen followed posts above recently seen followed posts', async () => {
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-followed-seen', 'u-follow', 50, 1),
+        cand('p-followed-unseen', 'u-follow', null, 2),
+        cand('p-stranger', 'u-stranger', 20, 1),
+      ],
+      youFollowAuthorIds: ['u-follow'],
+      seenAtByPostId: { 'p-followed-seen': new Date() },
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 3, cursor: null, visibility: 'all' });
+    const ids = out.posts.map((p: any) => p.id);
+    expect(ids.indexOf('p-followed-unseen')).toBeLessThan(ids.indexOf('p-followed-seen'));
+  });
+
+  it('sources friend-engaged discovery even when the post is absent from the trending scan', async () => {
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-trending', 'u-stranger', 20, 1),
+        cand('p-friend-boosted-quiet', 'u-quiet', null, 2),
+      ],
+      youFollowAuthorIds: ['friend-1'],
+      friendBoostPostIds: ['p-friend-boosted-quiet'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 5, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toContain('p-friend-boosted-quiet');
+  });
+
   it('penalizes posts seen recently and recovers as the seen age grows', async () => {
     const justNow = new Date();
     const aWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -1455,6 +1532,39 @@ describe('PostsService.listForYouFeed', () => {
       visibility: 'all',
     });
     expect(out.nextCursor).not.toBeNull();
+  });
+
+  it('does not skip lower-ranked candidates from the first ranked universe across pages', async () => {
+    const { service } = setupForYou({
+      candidates: [
+        cand('p1', 'u1', 100, 1),
+        cand('p2', 'u2', 90, 1),
+        cand('p3', 'u3', 80, 1),
+      ],
+    });
+
+    const page1 = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 1,
+      cursor: null,
+      visibility: 'all',
+    });
+    const page2 = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 1,
+      cursor: page1.nextCursor,
+      visibility: 'all',
+    });
+    const page3 = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 1,
+      cursor: page2.nextCursor,
+      visibility: 'all',
+    });
+
+    expect(page1.posts.map((p: any) => p.id)).toEqual(['p1']);
+    expect(page2.posts.map((p: any) => p.id)).toEqual(['p2']);
+    expect(page3.posts.map((p: any) => p.id)).toEqual(['p3']);
   });
 
   it('emits no cursor when nothing in the candidate universe overflows the scan', async () => {

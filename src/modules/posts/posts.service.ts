@@ -255,19 +255,23 @@ export class PostsService {
   private static featuredRisingHalfLifeSeconds = 6 * 60 * 60;
   private static featuredRisingMixTopRatio = 0.7;
 
-  // For You: personalized re-rank of trending using the viewer's follow graph + view history.
-  // Pulls a wider trending slice and applies relationship + seen-decay + friend-engagement multipliers.
-  private static forYouScanTakeMax = 150;
-  private static forYouRelMultMutual = 1.2;
-  private static forYouRelMultFollowing = 1.0;
+  // For You: blends followed-unseen posts, friend-engaged discovery, and broader trending.
+  private static forYouScanTakeMax = 240;
+  private static forYouCursorServedIdMax = 300;
+  private static forYouRecentFollowedWindowHours = 72;
+  private static forYouFollowedUnseenQuotaRatio = 0.6;
+  private static forYouFollowedUnseenMult = 3.5;
+  private static forYouRelMultMutual = 1.25;
+  private static forYouRelMultFollowing = 1.1;
   private static forYouRelMultFollower = 0.55;
   private static forYouRelMultStranger = 0.3;
-  /** Floor multiplier for a post you saw moments ago (recovers toward ~0.95 after a week). */
-  private static forYouSeenFloor = 0.4;
+  /** Floor multiplier for a post you saw moments ago (recovers toward ~0.95 after about four days). */
+  private static forYouSeenFloor = 0.12;
   /** Time constant (hours) for the seen-decay recovery. */
-  private static forYouSeenHalfLifeHours = 72;
+  private static forYouSeenHalfLifeHours = 36;
   /** Bonus when someone the viewer follows has replied to or boosted the post. */
-  private static forYouFriendEngagementMult = 1.25;
+  private static forYouFriendEngagementMult = 1.6;
+  private static forYouFriendEngagementBaseFloor = 4;
   /** Per-author diversity walk: max 1 occurrence in any window of this many consecutive rows. */
   private static forYouMaxPerAuthorWindow = 3;
 
@@ -291,6 +295,34 @@ export class PostsService {
     } catch {
       return null;
     }
+  }
+
+  private encodeForYouCursor(servedIds: string[]) {
+    const ids = [...new Set((servedIds ?? []).map((id) => (id ?? '').trim()).filter(Boolean))]
+      .slice(-PostsService.forYouCursorServedIdMax);
+    if (ids.length === 0) return null;
+    return Buffer.from(JSON.stringify({ v: 2, s: ids }), 'utf8').toString('base64url');
+  }
+
+  private decodeForYouCursor(token: string | null): { servedIds: string[]; legacyPopular: { score: number; createdAt: string; id: string } | null } {
+    const t = (token ?? '').trim();
+    if (!t) return { servedIds: [], legacyPopular: null };
+    try {
+      const raw = Buffer.from(t, 'base64url').toString('utf8');
+      const parsed = JSON.parse(raw) as Partial<{ v: number; s: unknown }>;
+      if (parsed.v === 2 && Array.isArray(parsed.s)) {
+        return {
+          servedIds: parsed.s
+            .map((id) => (typeof id === 'string' ? id.trim() : ''))
+            .filter(Boolean)
+            .slice(-PostsService.forYouCursorServedIdMax),
+          legacyPopular: null,
+        };
+      }
+    } catch {
+      // Fall through to legacy cursor handling below.
+    }
+    return { servedIds: [], legacyPopular: this.decodePopularCursor(token) };
   }
 
   async ensureBoostScoresFresh(postIds: string[]) {
@@ -1367,24 +1399,16 @@ export class PostsService {
   }
 
   /**
-   * For You feed: personalized re-rank of the same blended universe as the (improved) trending feed.
+   * For You feed: a small lane blend, not just a personalized trending sort.
    *
-   * The candidate universe mirrors the groups timeline blended trending — a trending head
-   * (`trendingScore > 0`) followed by a chronological tail (unscored / not-yet-engaged posts) — so
-   * the surface is never starved by sparse engagement. Each scanned candidate is re-scored with
-   * personal signals:
+   * Lanes:
+   *  - recent unseen posts by authors the viewer follows,
+   *  - posts recently engaged by authors the viewer follows,
+   *  - broader trending + chronological discovery.
    *
-   *     adjusted = base * relationshipMult * seenMult * friendEngagementMult
-   *
-   * where `base = trendingScore` for engaged posts and `1.0` for chrono-tail posts (so personal
-   * multipliers can still float them up). Within the page the scored candidates are sorted, walked
-   * with a per-author diversity cap, and then hydrated in their picked order.
-   *
-   * Pagination is deterministic in *scan order*, not in personal-rank order, which avoids
-   * duplicates as the viewer's signals shift between pages:
-   *  - In trending mode the cursor is `(trendingScore, createdAt, id)` of the last scanned trending row.
-   *  - In chrono mode (cursor lookup returns null/0 trendingScore) the cursor is `(0, createdAt, id)`
-   *    of the last scanned chrono row, and subsequent pages stay in chrono mode.
+   * The cursor is opaque and records ids already served by this For You session. That lets the next
+   * page recompute fresh rankings while excluding prior rows, avoiding the old scan-boundary skip
+   * where lower-ranked candidates inside a scanned window could disappear forever.
    */
   async listForYouFeed(params: {
     viewerUserId: string;
@@ -1443,27 +1467,41 @@ export class PostsService {
       ...baseVisibilityWhere,
     };
 
-    // Cursor mode is encoded in the cursor row's trendingScore (looked up fresh): a null/0 score
-    // means we've crossed into the chrono tail and must stay there for subsequent pages, so we
-    // never re-show a row we already served from the trending head.
-    const decodedCursor = this.decodePopularCursor(cursor);
-    const cursorRow = decodedCursor
+    const decodedForYouCursor = this.decodeForYouCursor(cursor);
+    const servedIds = decodedForYouCursor.servedIds;
+    const servedWhere: Prisma.PostWhereInput[] =
+      servedIds.length > 0 ? [{ id: { notIn: servedIds } }] : [];
+
+    // Keep legacy popular cursor support for users who loaded page one before this deploy.
+    const legacyCursor = decodedForYouCursor.legacyPopular;
+    const cursorRow = legacyCursor
       ? await this.prisma.post.findFirst({
-          where: { id: decodedCursor.id, deletedAt: null },
+          where: { id: legacyCursor.id, deletedAt: null },
           select: { id: true, createdAt: true, trendingScore: true },
         })
       : null;
     const inTrendingHead =
       Boolean(cursorRow && cursorRow.trendingScore != null && cursorRow.trendingScore > 0);
-    const fallbackOnly = Boolean(decodedCursor) && !inTrendingHead;
+    const fallbackOnly = Boolean(legacyCursor) && !inTrendingHead;
 
     const scanTake = Math.min(PostsService.forYouScanTakeMax, Math.max(limit + 10, limit * 4));
 
     type ScannedRow = { id: string; userId: string; createdAt: Date; trendingScore: number | null };
+    type Candidate = ScannedRow & { followingUnseen: boolean; friendEngaged: boolean };
     let trendingScanned: ScannedRow[] = [];
     let chronoScanned: ScannedRow[] = [];
-    let trendingBoundary: { id: string; createdAt: Date; trendingScore: number } | null = null;
-    let chronoBoundary: { id: string; createdAt: Date } | null = null;
+    let discoveryOverflow = false;
+
+    const viewerFollowingRows = await this.prisma.follow.findMany({
+      where: { followerId: viewerUserId },
+      select: { followingId: true },
+    });
+    const viewerFollowingIds = [...new Set(viewerFollowingRows.map((r) => r.followingId).filter(Boolean))];
+    const followingCandidateIds = requestedAuthorUserIds
+      ? viewerFollowingIds.filter((id) => requestedAuthorUserIds.includes(id) && id !== viewerUserId)
+      : viewerFollowingIds.filter((id) => id !== viewerUserId);
+
+    const followedSince = new Date(Date.now() - PostsService.forYouRecentFollowedWindowHours * 60 * 60 * 1000);
 
     if (!fallbackOnly) {
       const trendingCursorWhere: Prisma.PostWhereInput[] =
@@ -1491,7 +1529,7 @@ export class PostsService {
           : [];
 
       const tRows = (await this.prisma.post.findMany({
-        where: { AND: [baseWhere, { trendingScore: { gt: 0 } }, ...trendingCursorWhere] },
+        where: { AND: [baseWhere, ...servedWhere, { trendingScore: { gt: 0 } }, ...trendingCursorWhere] },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         take: scanTake + 1,
         select: { id: true, userId: true, createdAt: true, trendingScore: true },
@@ -1499,19 +1537,15 @@ export class PostsService {
 
       const haveMoreTrending = tRows.length > scanTake;
       trendingScanned = tRows.slice(0, scanTake);
-
-      if (haveMoreTrending && trendingScanned.length > 0) {
-        const last = trendingScanned[trendingScanned.length - 1]!;
-        trendingBoundary = { id: last.id, createdAt: last.createdAt, trendingScore: last.trendingScore! };
-      }
+      discoveryOverflow = discoveryOverflow || haveMoreTrending;
 
       // Trending didn't fill the scan window → supplement with the chrono tail so the page never
-      // feels sparse. Only emit a chrono boundary when chrono actually overflows (more rows behind).
+      // feels sparse.
       if (!haveMoreTrending && trendingScanned.length < scanTake) {
         const remaining = scanTake - trendingScanned.length;
         const cRows = (await this.prisma.post.findMany({
           where: {
-            AND: [baseWhere, { OR: [{ trendingScore: 0 }, { trendingScore: null }] }],
+            AND: [baseWhere, ...servedWhere, { OR: [{ trendingScore: 0 }, { trendingScore: null }] }],
           },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           take: remaining + 1,
@@ -1520,10 +1554,7 @@ export class PostsService {
 
         const haveMoreChrono = cRows.length > remaining;
         chronoScanned = cRows.slice(0, remaining);
-        if (haveMoreChrono && chronoScanned.length > 0) {
-          const last = chronoScanned[chronoScanned.length - 1]!;
-          chronoBoundary = { id: last.id, createdAt: last.createdAt };
-        }
+        discoveryOverflow = discoveryOverflow || haveMoreChrono;
       }
     } else {
       const chronoCursorWhere: Prisma.PostWhereInput[] = cursorRow
@@ -1543,6 +1574,7 @@ export class PostsService {
         where: {
           AND: [
             baseWhere,
+            ...servedWhere,
             { OR: [{ trendingScore: 0 }, { trendingScore: null }] },
             ...chronoCursorWhere,
           ],
@@ -1554,13 +1586,75 @@ export class PostsService {
 
       const haveMoreChrono = cRows.length > scanTake;
       chronoScanned = cRows.slice(0, scanTake);
-      if (haveMoreChrono && chronoScanned.length > 0) {
-        const last = chronoScanned[chronoScanned.length - 1]!;
-        chronoBoundary = { id: last.id, createdAt: last.createdAt };
-      }
+      discoveryOverflow = discoveryOverflow || haveMoreChrono;
     }
 
-    const candidates: ScannedRow[] = [...trendingScanned, ...chronoScanned];
+    const [followedRowsRaw, friendRowsRaw] = await Promise.all([
+      followingCandidateIds.length > 0
+        ? this.prisma.post.findMany({
+            where: {
+              AND: [
+                baseWhere,
+                ...servedWhere,
+                { userId: { in: followingCandidateIds } },
+                { createdAt: { gte: followedSince } },
+                { views: { none: { userId: viewerUserId } } },
+              ],
+            },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            take: scanTake + 1,
+            select: { id: true, userId: true, createdAt: true, trendingScore: true },
+          }) as Promise<ScannedRow[]>
+        : Promise.resolve([] as ScannedRow[]),
+      viewerFollowingIds.length > 0
+        ? this.prisma.post.findMany({
+            where: {
+              AND: [
+                baseWhere,
+                ...servedWhere,
+                {
+                  OR: [
+                    { boosts: { some: { userId: { in: viewerFollowingIds } } } },
+                    { replies: { some: { userId: { in: viewerFollowingIds }, deletedAt: null } } },
+                  ],
+                },
+              ],
+            },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            take: scanTake + 1,
+            select: { id: true, userId: true, createdAt: true, trendingScore: true },
+          }) as Promise<ScannedRow[]>
+        : Promise.resolve([] as ScannedRow[]),
+    ]);
+
+    const followedOverflow = followedRowsRaw.length > scanTake;
+    const friendOverflow = friendRowsRaw.length > scanTake;
+    const followedRows = followedRowsRaw.slice(0, scanTake);
+    const friendRows = friendRowsRaw.slice(0, scanTake);
+
+    const candidateById = new Map<string, Candidate>();
+    const addRows = (rows: ScannedRow[], lane: 'following' | 'friend' | 'discovery') => {
+      for (const row of rows) {
+        const existing = candidateById.get(row.id);
+        if (existing) {
+          if (lane === 'following') existing.followingUnseen = true;
+          if (lane === 'friend') existing.friendEngaged = true;
+          continue;
+        }
+        candidateById.set(row.id, {
+          ...row,
+          followingUnseen: lane === 'following',
+          friendEngaged: lane === 'friend',
+        });
+      }
+    };
+
+    addRows(followedRows, 'following');
+    addRows(friendRows, 'friend');
+    addRows(trendingScanned, 'discovery');
+    addRows(chronoScanned, 'discovery');
+
+    const candidates = [...candidateById.values()];
     if (candidates.length === 0) {
       return { posts: [], nextCursor: null, scoreByPostId: new Map() };
     }
@@ -1568,18 +1662,10 @@ export class PostsService {
     const candidateIds = candidates.map((c) => c.id);
     const authorIds = [...new Set(candidates.map((c) => c.userId))];
 
-    const [followingRows, followerRows, viewerFollowingAll, viewedRows] = await Promise.all([
-      this.prisma.follow.findMany({
-        where: { followerId: viewerUserId, followingId: { in: authorIds } },
-        select: { followingId: true },
-      }),
+    const [followerRows, viewedRows] = await Promise.all([
       this.prisma.follow.findMany({
         where: { followingId: viewerUserId, followerId: { in: authorIds } },
         select: { followerId: true },
-      }),
-      this.prisma.follow.findMany({
-        where: { followerId: viewerUserId },
-        select: { followingId: true },
       }),
       this.prisma.postView.findMany({
         where: { userId: viewerUserId, postId: { in: candidateIds } },
@@ -1587,32 +1673,9 @@ export class PostsService {
       }),
     ]);
 
-    const youFollow = new Set(followingRows.map((r) => r.followingId));
+    const youFollow = new Set(viewerFollowingIds);
     const followsYou = new Set(followerRows.map((r) => r.followerId));
-    const viewerFollowingIds = viewerFollowingAll.map((r) => r.followingId);
     const seenAtById = new Map<string, Date>(viewedRows.map((r) => [r.postId, r.createdAt]));
-
-    let friendEngagedIds = new Set<string>();
-    if (viewerFollowingIds.length > 0) {
-      const [friendReplies, friendBoosts] = await Promise.all([
-        this.prisma.post.findMany({
-          where: {
-            parentId: { in: candidateIds },
-            userId: { in: viewerFollowingIds },
-            deletedAt: null,
-          },
-          select: { parentId: true },
-        }),
-        this.prisma.boost.findMany({
-          where: { postId: { in: candidateIds }, userId: { in: viewerFollowingIds } },
-          select: { postId: true },
-        }),
-      ]);
-      friendEngagedIds = new Set<string>([
-        ...friendReplies.map((r) => r.parentId).filter((x): x is string => Boolean(x)),
-        ...friendBoosts.map((r) => r.postId),
-      ]);
-    }
 
     const now = Date.now();
     const ranked = candidates.map((c) => {
@@ -1634,17 +1697,21 @@ export class PostsService {
         seenMult = PostsService.forYouSeenFloor + (1 - PostsService.forYouSeenFloor) * recovery;
       }
 
-      const friendMult = friendEngagedIds.has(c.id) ? PostsService.forYouFriendEngagementMult : 1.0;
+      const friendMult = c.friendEngaged ? PostsService.forYouFriendEngagementMult : 1.0;
+      const followedUnseenMult = c.followingUnseen ? PostsService.forYouFollowedUnseenMult : 1.0;
 
       // Chrono-tail rows have null/0 trendingScore — give them a base of 1.0 so personal multipliers
       // can still rank them. Engaged rows keep their real trending score as the base.
-      const base = c.trendingScore != null && c.trendingScore > 0 ? c.trendingScore : 1.0;
-      const adjusted = base * relMult * seenMult * friendMult;
+      const rawBase = c.trendingScore != null && c.trendingScore > 0 ? c.trendingScore : 1.0;
+      const base = c.friendEngaged ? Math.max(rawBase, PostsService.forYouFriendEngagementBaseFloor) : rawBase;
+      const adjusted = base * relMult * seenMult * friendMult * followedUnseenMult;
       return { candidate: c, adjusted };
     });
 
     ranked.sort((a, b) => {
       if (b.adjusted !== a.adjusted) return b.adjusted - a.adjusted;
+      if (a.candidate.followingUnseen !== b.candidate.followingUnseen) return a.candidate.followingUnseen ? -1 : 1;
+      if (a.candidate.friendEngaged !== b.candidate.friendEngaged) return a.candidate.friendEngaged ? -1 : 1;
       const aBase = a.candidate.trendingScore ?? 0;
       const bBase = b.candidate.trendingScore ?? 0;
       if (bBase !== aBase) return bBase - aBase;
@@ -1660,23 +1727,36 @@ export class PostsService {
     // verifiedOnly with few authors) never returns near-empty pages or churns its single
     // visible row as the seen-decay shuffles things between requests.
     const window = Math.max(1, PostsService.forYouMaxPerAuthorWindow);
-    const recentAuthors: string[] = [];
     const picked: typeof ranked = [];
+    const pickedIdSet = new Set<string>();
     const skipped: typeof ranked = [];
-    for (const r of ranked) {
-      if (picked.length >= limit) break;
-      if (recentAuthors.includes(r.candidate.userId)) {
-        skipped.push(r);
-        continue;
+
+    const recentAuthors: string[] = [];
+    const pickFrom = (source: typeof ranked, maxPicked: number) => {
+      for (const r of source) {
+        if (picked.length >= maxPicked) break;
+        if (pickedIdSet.has(r.candidate.id)) continue;
+        if (recentAuthors.includes(r.candidate.userId)) {
+          skipped.push(r);
+          continue;
+        }
+        picked.push(r);
+        pickedIdSet.add(r.candidate.id);
+        recentAuthors.push(r.candidate.userId);
+        if (recentAuthors.length >= window) recentAuthors.shift();
       }
-      picked.push(r);
-      recentAuthors.push(r.candidate.userId);
-      if (recentAuthors.length >= window) recentAuthors.shift();
-    }
+    };
+
+    const followedQuota = Math.min(limit, Math.ceil(limit * PostsService.forYouFollowedUnseenQuotaRatio));
+    pickFrom(ranked.filter((r) => r.candidate.followingUnseen), followedQuota);
+    pickFrom(ranked, limit);
+
     if (picked.length < limit && skipped.length > 0) {
       for (const r of skipped) {
         if (picked.length >= limit) break;
+        if (pickedIdSet.has(r.candidate.id)) continue;
         picked.push(r);
+        pickedIdSet.add(r.candidate.id);
       }
     }
 
@@ -1690,25 +1770,12 @@ export class PostsService {
     const byId = new Map(posts.map((p) => [p.id, p] as const));
     const ordered = pickedIds.map((id) => byId.get(id)).filter((p): p is FeedPost => Boolean(p));
 
-    // Cursor advances in scan order, not personal-rank order. Prefer chrono boundary if we
-    // touched the chrono tail this page (next page stays in chrono mode); otherwise use the
-    // trending boundary.
-    let nextCursor: string | null = null;
-    if (chronoBoundary) {
-      // score:0 is our sentinel for "this cursor lives in the chrono tail" — the lookup at
-      // the start of the next call will return trendingScore=null/0 and route to chrono mode.
-      nextCursor = this.encodePopularCursor({
-        score: 0,
-        createdAt: chronoBoundary.createdAt.toISOString(),
-        id: chronoBoundary.id,
-      });
-    } else if (trendingBoundary) {
-      nextCursor = this.encodePopularCursor({
-        score: trendingBoundary.trendingScore,
-        createdAt: trendingBoundary.createdAt.toISOString(),
-        id: trendingBoundary.id,
-      });
-    }
+    const moreAvailable =
+      ranked.some((r) => !pickedIdSet.has(r.candidate.id)) ||
+      followedOverflow ||
+      friendOverflow ||
+      discoveryOverflow;
+    const nextCursor = moreAvailable ? this.encodeForYouCursor([...servedIds, ...pickedIds]) : null;
 
     const scoreByPostId = new Map<string, number>(picked.map((p) => [p.candidate.id, p.adjusted]));
 
