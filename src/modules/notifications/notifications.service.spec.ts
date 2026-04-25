@@ -126,6 +126,65 @@ describe('NotificationsService.list batching', () => {
   });
 });
 
+describe('NotificationsService.markNewPostsRead', () => {
+  it('marks followed_post notifications read and delivered, then emits the remaining badge count', async () => {
+    const notification = {
+      updateMany: jest.fn()
+        .mockResolvedValueOnce({ count: 3 })
+        .mockResolvedValueOnce({ count: 5 }),
+      count: jest.fn(async () => 7),
+      findUnique: jest.fn(),
+      findMany: jest.fn(async () => []),
+    };
+    const tx = {
+      notification,
+      $executeRaw: jest.fn(async () => undefined),
+    };
+    const prisma = {
+      notification,
+      post: { findMany: jest.fn(async () => []), findUnique: jest.fn() },
+      user: { findMany: jest.fn(async () => []), findUnique: jest.fn(async () => null) },
+      follow: { findMany: jest.fn(async () => []) },
+      userBlock: { findMany: jest.fn(async () => []) },
+      $transaction: jest.fn(async (fn: (txArg: any) => Promise<any>) => fn(tx)),
+    };
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitNotificationsDeleted: jest.fn(),
+      emitNotificationNew: jest.fn(),
+    };
+    const svc = new NotificationsService(
+      prisma as any,
+      { r2: jest.fn(() => null) } as any,
+      presenceRealtime as any,
+      { enqueueCron: jest.fn(async () => undefined) } as any,
+      { capture: jest.fn() } as any,
+      { getViewer: jest.fn(async () => null) } as any,
+    );
+
+    await expect(svc.markNewPostsRead('viewer-1')).resolves.toEqual({ undeliveredCount: 7 });
+
+    expect(notification.updateMany).toHaveBeenNthCalledWith(1, {
+      where: expect.objectContaining({
+        recipientUserId: 'viewer-1',
+        kind: 'followed_post',
+        deliveredAt: null,
+      }),
+      data: { deliveredAt: expect.any(Date) },
+    });
+    expect(notification.updateMany).toHaveBeenNthCalledWith(2, {
+      where: expect.objectContaining({
+        recipientUserId: 'viewer-1',
+        kind: 'followed_post',
+      }),
+      data: { readAt: expect.any(Date), deliveredAt: expect.any(Date) },
+    });
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(notification.count).toHaveBeenCalledWith({ where: { recipientUserId: 'viewer-1', deliveredAt: null } });
+    expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalledWith('viewer-1', { undeliveredCount: 7 });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // upsertGroupMemberJoinedNotification — create-then-update semantics
 // ---------------------------------------------------------------------------

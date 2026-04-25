@@ -264,6 +264,19 @@ export class NotificationsController {
       ttl: rateLimitTtl('interact', 60),
     },
   })
+  @Post('new-posts/mark-read')
+  async markNewPostsRead(@CurrentUserId() userId: string) {
+    const data = await this.notifications.markNewPostsRead(userId);
+    return { data };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
   @Post('mark-read')
   async markReadBySubject(
     @CurrentUserId() userId: string,

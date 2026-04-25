@@ -96,6 +96,12 @@ export class CheckinsService {
 
     const crew = await this.buildCrewBlock({ userId, dayKey, publicBaseUrl });
 
+    const socialProof = await this.getTodayAnswered({
+      viewerUserId: userId,
+      publicBaseUrl,
+      now,
+    });
+
     return {
       dayKey,
       prompt,
@@ -104,6 +110,7 @@ export class CheckinsService {
       checkinStreakDays: user.checkinStreakDays ?? 0,
       allowedVisibilities: allowedCheckinVisibilities,
       crew,
+      socialProof,
     };
   }
 

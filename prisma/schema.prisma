@@ -1386,6 +1386,7 @@ model PostView {
 
   @@id([postId, userId])
   @@index([postId])
+  @@index([userId, postId])
 }
 
 model PostAnonView {

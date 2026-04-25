@@ -2440,6 +2440,38 @@ export class NotificationsService {
     });
   }
 
+  async markNewPostsRead(recipientUserId: string): Promise<{ undeliveredCount: number }> {
+    const undeliveredCount = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const where = {
+        recipientUserId,
+        kind: 'followed_post' as const,
+        OR: [{ readAt: null }, { deliveredAt: null }],
+      };
+      const deliveredRes = await tx.notification.updateMany({
+        where: { ...where, deliveredAt: null },
+        data: { deliveredAt: now },
+      });
+      await tx.notification.updateMany({
+        where,
+        data: { readAt: now, deliveredAt: now },
+      });
+      if (deliveredRes.count > 0) {
+        await tx.$executeRaw`
+          UPDATE "User"
+          SET "undeliveredNotificationCount" = GREATEST(0, "undeliveredNotificationCount" - ${deliveredRes.count})
+          WHERE id = ${recipientUserId}
+        `;
+      }
+      return tx.notification.count({ where: { recipientUserId, deliveredAt: null } });
+    });
+
+    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
+      undeliveredCount,
+    });
+    return { undeliveredCount };
+  }
+
   async markReadBySubject(
     recipientUserId: string,
     params: {
