@@ -1141,6 +1141,7 @@ describe('PostsService.listForYouFeed', () => {
     id: string;
     userId: string;
     parentId: string | null;
+    communityGroupId: string | null;
     createdAt: Date;
     trendingScore: number | null;
   };
@@ -1182,8 +1183,19 @@ describe('PostsService.listForYouFeed', () => {
     const ands: any[] = args?.where?.AND ?? [];
     return ands.some((c) => Array.isArray(c?.userId?.in)) &&
       ands.some((c) => c?.createdAt?.gte instanceof Date) &&
+      !ands.some((c) => c?.communityGroupId) &&
       !ands.some((c) => c?.views?.none?.userId === 'viewer') &&
       !isFriendEngagedScan(args);
+  }
+
+  function isMemberGroupScan(args: any): boolean {
+    const ands: any[] = args?.where?.AND ?? [];
+    return ands.some((c) => Array.isArray(c?.communityGroupId?.in));
+  }
+
+  function isOpenFollowGroupScan(args: any): boolean {
+    const ands: any[] = args?.where?.AND ?? [];
+    return ands.some((c) => c?.communityGroup?.is?.joinPolicy === 'open');
   }
 
   function excludedIds(args: any): Set<string> {
@@ -1195,6 +1207,8 @@ describe('PostsService.listForYouFeed', () => {
   function applyBaseAuthorFilter(args: any, pool: ForYouCandidate[]): ForYouCandidate[] {
     const base = args?.where?.AND?.[0] ?? {};
     const userId = base?.userId;
+    const communityGroupId = base?.communityGroupId;
+    if (communityGroupId === null) pool = pool.filter((c) => c.communityGroupId == null);
     if (Array.isArray(userId?.in)) return pool.filter((c) => userId.in.includes(c.userId));
     if (Array.isArray(userId?.notIn)) return pool.filter((c) => !userId.notIn.includes(c.userId));
     if (typeof userId?.not === 'string') return pool.filter((c) => c.userId !== userId.not);
@@ -1210,6 +1224,8 @@ describe('PostsService.listForYouFeed', () => {
     friendBoostPostIds?: string[];
     secondDegreeEdges?: Array<{ followerId: string; followingId: string }>;
     blockedAuthorIds?: string[];
+    memberGroupIds?: string[];
+    viewerVerified?: boolean;
   }) {
     const candidates = opts.candidates;
     const youFollowAuthorIds = opts.youFollowAuthorIds ?? [];
@@ -1219,6 +1235,8 @@ describe('PostsService.listForYouFeed', () => {
     const friendBoostPostIds = opts.friendBoostPostIds ?? [];
     const secondDegreeEdges = opts.secondDegreeEdges ?? [];
     const blockedAuthorIds = opts.blockedAuthorIds ?? [];
+    const memberGroupIds = opts.memberGroupIds ?? [];
+    const viewerVerified = opts.viewerVerified ?? true;
 
     function sortTrending(a: ForYouCandidate, b: ForYouCandidate) {
       const sa = a.trendingScore ?? 0;
@@ -1255,6 +1273,15 @@ describe('PostsService.listForYouFeed', () => {
             const engaged = new Set([...friendReplyParentIds, ...friendBoostPostIds]);
             pool = pool.filter((c) => engaged.has(c.id));
             pool.sort(sortChrono);
+          } else if (isMemberGroupScan(args)) {
+            const groupIds: string[] = (args?.where?.AND ?? []).find((c: any) => Array.isArray(c?.communityGroupId?.in))?.communityGroupId?.in ?? [];
+            pool = pool.filter((c) => c.communityGroupId != null && groupIds.includes(c.communityGroupId));
+            pool.sort(sortTrending);
+          } else if (isOpenFollowGroupScan(args)) {
+            const authorIds: string[] = (args?.where?.AND ?? []).find((c: any) => Array.isArray(c?.userId?.in))?.userId?.in ?? [];
+            const notInGroups: string[] = (args?.where?.AND ?? []).find((c: any) => Array.isArray(c?.communityGroupId?.notIn))?.communityGroupId?.notIn ?? [];
+            pool = pool.filter((c) => c.communityGroupId != null && authorIds.includes(c.userId) && !notInGroups.includes(c.communityGroupId));
+            pool.sort(sortTrending);
           } else if (isSecondDegreeScan(args)) {
             const authorIds: string[] = (args?.where?.AND ?? []).find((c: any) => Array.isArray(c?.userId?.in))?.userId?.in ?? [];
             pool = pool.filter((c) => authorIds.includes(c.userId));
@@ -1281,7 +1308,7 @@ describe('PostsService.listForYouFeed', () => {
               createdAt: c?.createdAt ?? new Date(),
               trendingScore: c?.trendingScore ?? 0,
               parentId: c?.parentId ?? null,
-              communityGroupId: null,
+              communityGroupId: c?.communityGroupId ?? null,
               kind: 'regular',
               visibility: 'public',
               deletedAt: null,
@@ -1378,6 +1405,9 @@ describe('PostsService.listForYouFeed', () => {
         userBlock: {
           findMany: jest.fn(async () => blockedAuthorIds.map((blockedId) => ({ blockerId: 'viewer', blockedId }))),
         },
+        communityGroupMember: {
+          findMany: jest.fn(async () => memberGroupIds.map((groupId) => ({ groupId }))),
+        },
       },
       {
         viewerContext: {
@@ -1391,7 +1421,7 @@ describe('PostsService.listForYouFeed', () => {
           })),
           allowedPostVisibilities: jest.fn(() => ['public', 'verifiedOnly']),
           isPremium: jest.fn(() => false),
-          isVerified: jest.fn(() => true),
+          isVerified: jest.fn(() => viewerVerified),
         },
         redis: {
           getJson: jest.fn(async () => null),
@@ -1405,7 +1435,7 @@ describe('PostsService.listForYouFeed', () => {
   }
 
   function cand(id: string, userId: string, score: number | null, ageHours = 1): ForYouCandidate {
-    return { id, userId, parentId: null, trendingScore: score, createdAt: new Date(Date.now() - ageHours * 60 * 60 * 1000) };
+    return { id, userId, parentId: null, communityGroupId: null, trendingScore: score, createdAt: new Date(Date.now() - ageHours * 60 * 60 * 1000) };
   }
 
   it('excludes the viewer from candidate authors via the prisma where filter', async () => {
@@ -1503,6 +1533,20 @@ describe('PostsService.listForYouFeed', () => {
     expect(out.posts.map((p: any) => p.id)).toContain('p-friend-boosted-quiet');
   });
 
+  it('lets friend-engaged quiet posts beat weak generic trending', async () => {
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-generic-trending', 'u-stranger', 10, 1),
+        cand('p-friend-boosted-quiet', 'u-quiet', null, 1),
+      ],
+      youFollowAuthorIds: ['friend-1'],
+      friendBoostPostIds: ['p-friend-boosted-quiet'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-friend-boosted-quiet', 'p-generic-trending']);
+  });
+
   it('penalizes posts seen recently and recovers as the seen age grows', async () => {
     const justNow = new Date();
     const aWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -1517,6 +1561,18 @@ describe('PostsService.listForYouFeed', () => {
 
     const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-fresh', 'p-seen-old', 'p-seen-new']);
+  });
+
+  it('gives newer posts a gentle edge when relevance is otherwise close', async () => {
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-older-slightly-higher', 'u-old', 11, 72),
+        cand('p-newer-slightly-lower', 'u-new', 10, 1),
+      ],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-newer-slightly-lower', 'p-older-slightly-higher']);
   });
 
   it('uses lastSeenAt, not first createdAt, so refreshes suppress posts seen again moments ago', async () => {
@@ -1554,6 +1610,54 @@ describe('PostsService.listForYouFeed', () => {
 
     const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-direct-follow', 'p-second-degree', 'p-stranger']);
+  });
+
+  it('mixes readable member-group posts into For You below comparable non-group direct-follow posts', async () => {
+    const memberGroupPost = cand('p-member-group', 'u-group-follow', 10, 1);
+    memberGroupPost.communityGroupId = 'g-member';
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-direct-follow', 'u-direct-follow', 10, 1),
+        memberGroupPost,
+        cand('p-stranger', 'u-stranger', 10, 1),
+      ],
+      youFollowAuthorIds: ['u-direct-follow', 'u-group-follow'],
+      memberGroupIds: ['g-member'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-direct-follow', 'p-member-group', 'p-stranger']);
+  });
+
+  it('mixes open-group posts by followed authors only for verified viewers', async () => {
+    const openGroupPost = cand('p-open-group-follow', 'u-follow', 10, 1);
+    openGroupPost.communityGroupId = 'g-open';
+    const { service } = setupForYou({
+      candidates: [
+        openGroupPost,
+        cand('p-stranger', 'u-stranger', 10, 1),
+      ],
+      youFollowAuthorIds: ['u-follow'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-open-group-follow', 'p-stranger']);
+  });
+
+  it('does not include open-group followed-author posts for unverified viewers', async () => {
+    const openGroupPost = cand('p-open-group-follow', 'u-follow', 10, 1);
+    openGroupPost.communityGroupId = 'g-open';
+    const { service } = setupForYou({
+      candidates: [
+        openGroupPost,
+        cand('p-stranger', 'u-stranger', 10, 1),
+      ],
+      youFollowAuthorIds: ['u-follow'],
+      viewerVerified: false,
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-stranger']);
   });
 
   it('excludes blocked authors before ranking so they do not consume For You slots', async () => {

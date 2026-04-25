@@ -258,7 +258,7 @@ export class PostsService {
   // For You: blends followed-unseen posts, friend-engaged discovery, and broader trending.
   private static forYouScanTakeMax = 240;
   private static forYouCursorServedIdMax = 300;
-  private static forYouRecentFollowedWindowHours = 72;
+  private static forYouRecentFollowedWindowHours = 48;
   private static forYouFollowedUnseenQuotaRatio = 0.6;
   private static forYouFollowedUnseenMult = 3.5;
   private static forYouRelMultMutual = 1.25;
@@ -268,15 +268,22 @@ export class PostsService {
   /** Floor multiplier for a post you saw moments ago (recovers toward ~0.95 after about four days). */
   private static forYouSeenFloor = 0.12;
   /** Time constant (hours) for the seen-decay recovery. */
-  private static forYouSeenHalfLifeHours = 36;
+  private static forYouSeenHalfLifeHours = 48;
   /** Bonus when someone the viewer follows has replied to or boosted the post. */
-  private static forYouFriendEngagementMult = 1.6;
-  private static forYouFriendEngagementBaseFloor = 4;
+  private static forYouFriendEngagementMult = 2.2;
+  private static forYouFriendEngagementBaseFloor = 6;
   /** Low-priority discovery: authors followed by people the viewer follows. */
-  private static forYouSecondDegreeMult = 1.8;
-  private static forYouSecondDegreeWindowHours = 168;
+  private static forYouSecondDegreeMult = 1.5;
+  private static forYouSecondDegreeWindowHours = 72;
   private static forYouSecondDegreeMaxAuthors = 80;
   private static forYouSecondDegreePathBonusMax = 1.5;
+  /** Gentle freshness bias: close scores should favor newer posts without burying strong older posts. */
+  private static forYouRecencyHalfLifeHours = 72;
+  private static forYouRecencyFloor = 0.65;
+  /** Group posts are useful discovery, but should not dominate the home feed. */
+  private static forYouMemberGroupMult = 0.8;
+  private static forYouOpenFollowGroupMult = 0.55;
+  private static forYouGroupWindowHours = 72;
   /** Repeated exposures should recover slower than posts seen once. */
   private static forYouSeenRepeatPenaltyStrength = 0.35;
   private static forYouRecentFeedSeenExtraPenaltyHours = 24;
@@ -1413,6 +1420,7 @@ export class PostsService {
    * Lanes:
    *  - recent unseen posts by authors the viewer follows,
    *  - posts recently engaged by authors the viewer follows,
+   *  - low-priority group posts the viewer can read,
    *  - broader trending + chronological discovery.
    *
    * The cursor is opaque and records ids already served by this For You session. That lets the next
@@ -1472,14 +1480,17 @@ export class PostsService {
       return { posts: [], nextCursor: null, scoreByPostId: new Map() };
     }
 
-    const baseWhere: Prisma.PostWhereInput = {
+    const commonWhere: Prisma.PostWhereInput = {
       deletedAt: null,
-      communityGroupId: null,
       kind: { not: 'repost' },
       user: { bannedAt: null },
       userId: userIdWhere,
       ...(kind ? { kind } : {}),
       ...baseVisibilityWhere,
+    };
+    const baseWhere: Prisma.PostWhereInput = {
+      ...commonWhere,
+      communityGroupId: null,
     };
 
     const decodedForYouCursor = this.decodeForYouCursor(cursor);
@@ -1501,8 +1512,22 @@ export class PostsService {
 
     const scanTake = Math.min(PostsService.forYouScanTakeMax, Math.max(limit + 10, limit * 4));
 
-    type ScannedRow = { id: string; userId: string; parentId: string | null; createdAt: Date; trendingScore: number | null };
-    type Candidate = ScannedRow & { followingUnseen: boolean; friendEngaged: boolean; secondDegree: boolean; secondDegreePaths: number };
+    type ScannedRow = {
+      id: string;
+      userId: string;
+      parentId: string | null;
+      communityGroupId: string | null;
+      createdAt: Date;
+      trendingScore: number | null;
+    };
+    type Candidate = ScannedRow & {
+      followingUnseen: boolean;
+      friendEngaged: boolean;
+      secondDegree: boolean;
+      secondDegreePaths: number;
+      memberGroup: boolean;
+      openFollowGroup: boolean;
+    };
     let trendingScanned: ScannedRow[] = [];
     let chronoScanned: ScannedRow[] = [];
     let discoveryOverflow = false;
@@ -1518,7 +1543,10 @@ export class PostsService {
 
     const followedSince = new Date(Date.now() - PostsService.forYouRecentFollowedWindowHours * 60 * 60 * 1000);
     const secondDegreeSince = new Date(Date.now() - PostsService.forYouSecondDegreeWindowHours * 60 * 60 * 1000);
+    const groupSince = new Date(Date.now() - PostsService.forYouGroupWindowHours * 60 * 60 * 1000);
     const directNetworkExcludedIds = [...new Set([viewerUserId, ...viewerFollowingIds, ...blockedAuthorIds])];
+    const memberGroupIds = await this.listActiveCommunityGroupIdsForUser(viewerUserId);
+    const viewerCanReadOpenGroups = this.viewerContextService.isVerified(viewer);
     const secondDegreePathCountByAuthor = new Map<string, number>();
     if (viewerFollowingIds.length > 0) {
       const secondDegreeRows = await this.prisma.follow.findMany({
@@ -1573,7 +1601,7 @@ export class PostsService {
         where: { AND: [baseWhere, ...servedWhere, { trendingScore: { gt: 0 } }, ...trendingCursorWhere] },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         take: scanTake + 1,
-        select: { id: true, userId: true, parentId: true, createdAt: true, trendingScore: true },
+        select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
       })) as ScannedRow[];
 
       const haveMoreTrending = tRows.length > scanTake;
@@ -1590,7 +1618,7 @@ export class PostsService {
           },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           take: remaining + 1,
-          select: { id: true, userId: true, parentId: true, createdAt: true, trendingScore: true },
+          select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
         })) as ScannedRow[];
 
         const haveMoreChrono = cRows.length > remaining;
@@ -1622,7 +1650,7 @@ export class PostsService {
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: scanTake + 1,
-        select: { id: true, userId: true, parentId: true, createdAt: true, trendingScore: true },
+        select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
       })) as ScannedRow[];
 
       const haveMoreChrono = cRows.length > scanTake;
@@ -1630,7 +1658,7 @@ export class PostsService {
       discoveryOverflow = discoveryOverflow || haveMoreChrono;
     }
 
-    const [followedRowsRaw, friendRowsRaw, secondDegreeRowsRaw] = await Promise.all([
+    const [followedRowsRaw, friendRowsRaw, secondDegreeRowsRaw, memberGroupRowsRaw, openFollowGroupRowsRaw] = await Promise.all([
       followingCandidateIds.length > 0
         ? this.prisma.post.findMany({
             where: {
@@ -1644,7 +1672,7 @@ export class PostsService {
             },
             orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
             take: scanTake + 1,
-            select: { id: true, userId: true, parentId: true, createdAt: true, trendingScore: true },
+            select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
           }) as Promise<ScannedRow[]>
         : Promise.resolve([] as ScannedRow[]),
       viewerFollowingIds.length > 0
@@ -1663,7 +1691,7 @@ export class PostsService {
             },
             orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
             take: scanTake + 1,
-            select: { id: true, userId: true, parentId: true, createdAt: true, trendingScore: true },
+            select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
           }) as Promise<ScannedRow[]>
         : Promise.resolve([] as ScannedRow[]),
       secondDegreeAuthorIds.length > 0
@@ -1678,7 +1706,41 @@ export class PostsService {
             },
             orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
             take: scanTake + 1,
-            select: { id: true, userId: true, parentId: true, createdAt: true, trendingScore: true },
+            select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
+          }) as Promise<ScannedRow[]>
+        : Promise.resolve([] as ScannedRow[]),
+      memberGroupIds.length > 0
+        ? this.prisma.post.findMany({
+            where: {
+              AND: [
+                commonWhere,
+                ...servedWhere,
+                { communityGroupId: { in: memberGroupIds } },
+                { createdAt: { gte: groupSince } },
+              ],
+            },
+            orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            take: scanTake + 1,
+            select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
+          }) as Promise<ScannedRow[]>
+        : Promise.resolve([] as ScannedRow[]),
+      viewerCanReadOpenGroups && followingCandidateIds.length > 0
+        ? this.prisma.post.findMany({
+            where: {
+              AND: [
+                commonWhere,
+                ...servedWhere,
+                { userId: { in: followingCandidateIds } },
+                memberGroupIds.length > 0
+                  ? { communityGroupId: { notIn: memberGroupIds } }
+                  : { communityGroupId: { not: null } },
+                { communityGroup: { is: { deletedAt: null, joinPolicy: 'open' } } },
+                { createdAt: { gte: groupSince } },
+              ],
+            },
+            orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            take: scanTake + 1,
+            select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
           }) as Promise<ScannedRow[]>
         : Promise.resolve([] as ScannedRow[]),
     ]);
@@ -1686,12 +1748,16 @@ export class PostsService {
     const followedOverflow = followedRowsRaw.length > scanTake;
     const friendOverflow = friendRowsRaw.length > scanTake;
     const secondDegreeOverflow = secondDegreeRowsRaw.length > scanTake;
+    const memberGroupOverflow = memberGroupRowsRaw.length > scanTake;
+    const openFollowGroupOverflow = openFollowGroupRowsRaw.length > scanTake;
     const followedRows = followedRowsRaw.slice(0, scanTake);
     const friendRows = friendRowsRaw.slice(0, scanTake);
     const secondDegreeRows = secondDegreeRowsRaw.slice(0, scanTake);
+    const memberGroupRows = memberGroupRowsRaw.slice(0, scanTake);
+    const openFollowGroupRows = openFollowGroupRowsRaw.slice(0, scanTake);
 
     const candidateById = new Map<string, Candidate>();
-    const addRows = (rows: ScannedRow[], lane: 'following' | 'friend' | 'secondDegree' | 'discovery') => {
+    const addRows = (rows: ScannedRow[], lane: 'following' | 'friend' | 'secondDegree' | 'memberGroup' | 'openFollowGroup' | 'discovery') => {
       for (const row of rows) {
         const existing = candidateById.get(row.id);
         if (existing) {
@@ -1701,6 +1767,8 @@ export class PostsService {
             existing.secondDegree = true;
             existing.secondDegreePaths = Math.max(existing.secondDegreePaths, secondDegreePathCountByAuthor.get(row.userId) ?? 1);
           }
+          if (lane === 'memberGroup') existing.memberGroup = true;
+          if (lane === 'openFollowGroup') existing.openFollowGroup = true;
           continue;
         }
         candidateById.set(row.id, {
@@ -1709,6 +1777,8 @@ export class PostsService {
           friendEngaged: lane === 'friend',
           secondDegree: lane === 'secondDegree',
           secondDegreePaths: lane === 'secondDegree' ? (secondDegreePathCountByAuthor.get(row.userId) ?? 1) : 0,
+          memberGroup: lane === 'memberGroup',
+          openFollowGroup: lane === 'openFollowGroup',
         });
       }
     };
@@ -1716,6 +1786,8 @@ export class PostsService {
     addRows(followedRows, 'following');
     addRows(friendRows, 'friend');
     addRows(secondDegreeRows, 'secondDegree');
+    addRows(memberGroupRows, 'memberGroup');
+    addRows(openFollowGroupRows, 'openFollowGroup');
     addRows(trendingScanned, 'discovery');
     addRows(chronoScanned, 'discovery');
 
@@ -1784,12 +1856,21 @@ export class PostsService {
         ? Math.min(PostsService.forYouSecondDegreePathBonusMax, 1 + Math.max(0, c.secondDegreePaths - 1) * 0.15)
         : 1.0;
       const secondDegreeMult = c.secondDegree ? PostsService.forYouSecondDegreeMult * secondDegreePathBonus : 1.0;
+      const groupMult = c.memberGroup
+        ? PostsService.forYouMemberGroupMult
+        : c.openFollowGroup
+          ? PostsService.forYouOpenFollowGroupMult
+          : 1.0;
+      const ageHours = Math.max(0, (now - c.createdAt.getTime()) / (60 * 60 * 1000));
+      const recencyMult =
+        PostsService.forYouRecencyFloor +
+        (1 - PostsService.forYouRecencyFloor) * Math.exp(-ageHours / PostsService.forYouRecencyHalfLifeHours);
 
       // Chrono-tail rows have null/0 trendingScore — give them a base of 1.0 so personal multipliers
       // can still rank them. Engaged rows keep their real trending score as the base.
       const rawBase = c.trendingScore != null && c.trendingScore > 0 ? c.trendingScore : 1.0;
       const base = c.friendEngaged ? Math.max(rawBase, PostsService.forYouFriendEngagementBaseFloor) : rawBase;
-      const adjusted = base * relMult * seenMult * friendMult * followedUnseenMult * secondDegreeMult;
+      const adjusted = base * recencyMult * relMult * seenMult * friendMult * followedUnseenMult * secondDegreeMult * groupMult;
       return { candidate: c, adjusted };
     });
 
@@ -1864,6 +1945,8 @@ export class PostsService {
       followedOverflow ||
       friendOverflow ||
       secondDegreeOverflow ||
+      memberGroupOverflow ||
+      openFollowGroupOverflow ||
       discoveryOverflow;
     const nextCursor = moreAvailable ? this.encodeForYouCursor([...servedIds, ...pickedIds]) : null;
 
