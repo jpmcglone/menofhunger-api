@@ -4,7 +4,7 @@ function makeService(overrides?: { prisma?: any }) {
   const prisma =
     overrides?.prisma ??
     ({
-      notification: { findUnique: jest.fn(), findMany: jest.fn(async () => []), count: jest.fn(async () => 0) },
+      notification: { findUnique: jest.fn(), findMany: jest.fn(async () => []), count: jest.fn(async () => 0), groupBy: jest.fn(async () => []) },
       post: { findMany: jest.fn(async () => []), findUnique: jest.fn() },
       user: { findMany: jest.fn(async () => []), findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 0 })) },
       follow: { findMany: jest.fn(async () => []) },
@@ -84,6 +84,7 @@ describe('NotificationsService.list batching', () => {
             },
           ]),
           count: jest.fn(async () => 2),
+          groupBy: jest.fn(async () => []),
         },
         post: {
           findUnique: jest.fn(),
@@ -125,6 +126,134 @@ describe('NotificationsService.list batching', () => {
     expect(buildSpy).not.toHaveBeenCalled();
   });
 
+  it('uses the actor post as the repost notification preview target', async () => {
+    const { svc, prisma } = makeService({
+      prisma: {
+        notification: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => [
+            {
+              id: 'n_repost',
+              createdAt: new Date('2026-02-02T00:00:00.000Z'),
+              kind: 'repost',
+              deliveredAt: null,
+              readAt: null,
+              ignoredAt: null,
+              nudgedBackAt: null,
+              actorUserId: 'a1',
+              actorPostId: 'p_quote',
+              subjectPostId: 'p_original',
+              subjectUserId: null,
+              title: 'quoted your post',
+              body: null,
+              actor: {
+                id: 'a1',
+                username: 'actor',
+                name: 'Actor',
+                avatarKey: null,
+                avatarUpdatedAt: null,
+                premium: false,
+                isOrganization: false,
+                verifiedStatus: 'none',
+              },
+            },
+          ]),
+          count: jest.fn(async () => 1),
+          groupBy: jest.fn(async () => []),
+        },
+        post: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => [
+            {
+              id: 'p_quote',
+              body: 'This is why the original post matters.',
+              visibility: 'public',
+              media: [],
+            },
+          ]),
+        },
+        user: {
+          findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 1 })),
+          findMany: jest.fn(async () => []),
+        },
+        follow: { findMany: jest.fn(async () => []) },
+        userBlock: { findMany: jest.fn(async () => []) },
+      } as any,
+    });
+
+    const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null });
+    const item = res.items[0];
+
+    expect(prisma.post.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: { in: ['p_quote', 'p_original'] } },
+    }));
+    expect(item?.type).toBe('single');
+    if (item?.type !== 'single') throw new Error('Expected single notification item');
+    expect(item.notification.actorPostId).toBe('p_quote');
+    expect(item.notification.subjectPostId).toBe('p_original');
+    expect(item.notification.subjectPostPreview?.bodySnippet).toBe('This is why the original post matters.');
+  });
+
+  it('falls back to the original post preview for plain repost notifications', async () => {
+    const { svc } = makeService({
+      prisma: {
+        notification: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => [
+            {
+              id: 'n_repost',
+              createdAt: new Date('2026-02-02T00:00:00.000Z'),
+              kind: 'repost',
+              deliveredAt: null,
+              readAt: null,
+              ignoredAt: null,
+              nudgedBackAt: null,
+              actorUserId: 'a1',
+              actorPostId: 'p_repost',
+              subjectPostId: 'p_original',
+              subjectUserId: null,
+              title: 'reposted your post',
+              body: null,
+              actor: {
+                id: 'a1',
+                username: 'actor',
+                name: 'Actor',
+                avatarKey: null,
+                avatarUpdatedAt: null,
+                premium: false,
+                isOrganization: false,
+                verifiedStatus: 'none',
+              },
+            },
+          ]),
+          count: jest.fn(async () => 1),
+          groupBy: jest.fn(async () => []),
+        },
+        post: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => [
+            { id: 'p_repost', body: '', visibility: 'public', media: [] },
+            { id: 'p_original', body: 'Original post preview.', visibility: 'public', media: [] },
+          ]),
+        },
+        user: {
+          findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 1 })),
+          findMany: jest.fn(async () => []),
+        },
+        follow: { findMany: jest.fn(async () => []) },
+        userBlock: { findMany: jest.fn(async () => []) },
+      } as any,
+    });
+
+    const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null });
+    const item = res.items[0];
+
+    expect(item?.type).toBe('single');
+    if (item?.type !== 'single') throw new Error('Expected single notification item');
+    expect(item.notification.actorPostId).toBe('p_repost');
+    expect(item.notification.subjectPostPreview?.bodySnippet).toBe('Original post preview.');
+  });
+
   it('does not expose chat message notifications in the notifications feed', async () => {
     const { svc, prisma } = makeService({
       prisma: {
@@ -132,6 +261,7 @@ describe('NotificationsService.list batching', () => {
           findUnique: jest.fn(),
           findMany: jest.fn(async () => []),
           count: jest.fn(async () => 0),
+          groupBy: jest.fn(async () => []),
         },
         post: { findUnique: jest.fn(), findMany: jest.fn(async () => []) },
         user: { findUnique: jest.fn(async () => null), findMany: jest.fn(async () => []) },
@@ -142,7 +272,7 @@ describe('NotificationsService.list batching', () => {
 
     const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null, kind: 'message' as any });
 
-    expect(res).toEqual({ items: [], nextCursor: null, undeliveredCount: 0 });
+    expect(res).toEqual({ items: [], nextCursor: null, undeliveredCount: 0, unreadByKind: { all: 0 } });
     expect(prisma.notification.findMany).not.toHaveBeenCalled();
   });
 });

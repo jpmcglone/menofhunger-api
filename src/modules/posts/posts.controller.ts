@@ -30,6 +30,7 @@ const listSchema = z.object({
   cursor: z.string().optional(),
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
   followingOnly: z.coerce.boolean().optional(),
+  mediaOnly: z.coerce.boolean().optional(),
   kind: z.enum(['regular', 'checkin']).optional(),
   // Optional author filter (comma-separated user IDs). Used by Explore to show trending by recommended users.
   authorIds: z.string().optional(),
@@ -331,8 +332,13 @@ export class PostsController {
     // to the public discovery ranking instead of rejecting the feed request.
     const sortKind = requestedSortKind === 'forYou' && !viewerUserId ? 'popular' : requestedSortKind;
     const isForYou = sortKind === 'forYou';
-
     const groupScoped = Boolean(parsed.groupsHub || parsed.communityGroupId);
+    // Media grids should be exhaustive and paginated by time. Trending/For You candidate
+    // pools intentionally drop old or unscored posts, which is correct for the text feed
+    // but wrong for "show me media".
+    const mediaOnly = parsed.mediaOnly ?? false;
+    const mediaChronological = mediaOnly && !groupScoped;
+
     if (groupScoped) {
       if (!viewerUserId) throw new ForbiddenException('Sign in to view this feed.');
       const groupSort = sortKind === 'popular' || sort === 'trending' ? 'trending' : 'new';
@@ -378,6 +384,7 @@ export class PostsController {
       && (sortKind === 'new' || sortKind === 'popular' || sortKind === 'featured')
       && !authorUserIds.length
       && !(parsed.kind ?? null)
+      && !(parsed.mediaOnly ?? false)
       && !(parsed.followingOnly ?? false)
       && String(cursor).trim().length <= 64;
     const feedVer = (anonCache || authFirstPageCache || authCursorCache)
@@ -393,6 +400,7 @@ export class PostsController {
           visibility: parsed.visibility ?? 'all',
           followingOnly: parsed.followingOnly ?? false,
           kind: parsed.kind ?? null,
+          mediaOnly: parsed.mediaOnly ?? false,
           authorUserIds,
           collapseByRoot: parsed.collapseByRoot ?? false,
           collapseMode: parsed.collapseMode ?? 'root',
@@ -416,16 +424,17 @@ export class PostsController {
       compute: async () => {
         const listStartMs = Date.now();
         const result =
-          sortKind === 'forYou'
+          sortKind === 'forYou' && !mediaChronological
             ? await this.posts.listForYouFeed({
                 viewerUserId: viewerUserId!,
                 limit,
                 cursor,
                 visibility: parsed.visibility ?? 'all',
                 kind: parsed.kind ?? null,
+                mediaOnly,
                 authorUserIds: authorUserIds.length ? authorUserIds : null,
               })
-            : sortKind === 'featured'
+            : sortKind === 'featured' && !mediaChronological
               ? await this.posts.listFeaturedFeed({
                   viewerUserId,
                   limit,
@@ -433,9 +442,10 @@ export class PostsController {
                   visibility: parsed.visibility ?? 'all',
                   followingOnly: parsed.followingOnly ?? false,
                   kind: parsed.kind ?? null,
+                  mediaOnly,
                   authorUserIds: authorUserIds.length ? authorUserIds : null,
                 })
-              : sortKind === 'popular'
+              : sortKind === 'popular' && !mediaChronological
                 ? await this.posts.listPopularFeed({
                     viewerUserId,
                     limit,
@@ -443,6 +453,7 @@ export class PostsController {
                     visibility: parsed.visibility ?? 'all',
                     followingOnly: parsed.followingOnly ?? false,
                     kind: parsed.kind ?? null,
+                    mediaOnly,
                     authorUserIds: authorUserIds.length ? authorUserIds : null,
                   })
                 : await this.posts.listFeed({
@@ -452,6 +463,7 @@ export class PostsController {
                     visibility: parsed.visibility ?? 'all',
                     followingOnly: parsed.followingOnly ?? false,
                     kind: parsed.kind ?? null,
+                    mediaOnly,
                     authorUserIds: authorUserIds.length ? authorUserIds : null,
                   });
         stageMs.list = Date.now() - listStartMs;

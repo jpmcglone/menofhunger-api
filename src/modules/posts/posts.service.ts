@@ -77,6 +77,10 @@ export class PostsService {
     return { communityGroupId: null };
   }
 
+  private mediaOnlyWhere(): Prisma.PostWhereInput {
+    return { media: { some: { deletedAt: null } } };
+  }
+
   /**
    * Group post read access:
    *   • OPEN groups: any signed-in, verified user can read posts.
@@ -791,6 +795,7 @@ export class PostsService {
     visibility: 'all' | PostVisibility;
     followingOnly: boolean;
     kind?: 'regular' | 'checkin' | null;
+    mediaOnly?: boolean;
     authorUserIds?: string[] | null;
   }): Promise<FeedResult> {
     const { viewerUserId, limit, cursor, visibility, followingOnly } = params;
@@ -847,6 +852,7 @@ export class PostsService {
             this.excludeCommunityGroupPostsWhere(),
             this.userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
+            ...(params.mediaOnly ? [this.mediaOnlyWhere()] : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
             {
               OR: [
@@ -863,6 +869,7 @@ export class PostsService {
             this.excludeCommunityGroupPostsWhere(),
             this.userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
+            ...(params.mediaOnly ? [this.mediaOnlyWhere()] : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
           ],
         };
@@ -1336,6 +1343,7 @@ export class PostsService {
     allowed: PostVisibility[];
     authorUserIds: string[] | null;
     kind: 'regular' | 'checkin' | null;
+    mediaOnly?: boolean;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, decodedCursor, visibility, allowed, authorUserIds, kind } = params;
 
@@ -1385,6 +1393,7 @@ export class PostsService {
         user: { bannedAt: null },
         ...(kind ? { kind } : {}),
         ...(authorUserIds?.length ? { userId: { in: authorUserIds } } : {}),
+        ...(params.mediaOnly ? this.mediaOnlyWhere() : {}),
         ...visibilityWhere,
         ...cursorWhere,
       },
@@ -1433,6 +1442,7 @@ export class PostsService {
     cursor: string | null;
     visibility: 'all' | PostVisibility;
     kind?: 'regular' | 'checkin' | null;
+    mediaOnly?: boolean;
     authorUserIds?: string[] | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, cursor, visibility } = params;
@@ -1486,6 +1496,7 @@ export class PostsService {
       user: { bannedAt: null },
       userId: userIdWhere,
       ...(kind ? { kind } : {}),
+      ...(params.mediaOnly ? this.mediaOnlyWhere() : {}),
       ...baseVisibilityWhere,
     };
     const baseWhere: Prisma.PostWhereInput = {
@@ -1963,6 +1974,7 @@ export class PostsService {
     visibility: 'all' | PostVisibility;
     allowed: PostVisibility[];
     authorUserIds: string[] | null;
+    mediaOnly?: boolean;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, decodedCursor, visibility, allowed, authorUserIds } = params;
     const now = new Date();
@@ -2000,6 +2012,7 @@ export class PostsService {
           user: { bannedAt: null },
           ...(viewerUserId ? { userId: { not: viewerUserId } } : {}),
           ...(authorUserIds?.length ? { userId: { in: authorUserIds } } : {}),
+          ...(params.mediaOnly ? this.mediaOnlyWhere() : {}),
           ...visibilityWhere,
           OR: [
             { trendingScore: { lt: cursorScore } } as Prisma.PostWhereInput,
@@ -2066,6 +2079,7 @@ export class PostsService {
         user: { bannedAt: null },
         ...(viewerUserId ? { userId: { not: viewerUserId } } : {}),
         ...(authorUserIds?.length ? { userId: { in: authorUserIds } } : {}),
+        ...(params.mediaOnly ? this.mediaOnlyWhere() : {}),
         ...visibilityWhere,
       },
       orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
@@ -2107,6 +2121,9 @@ export class PostsService {
       authorUserIds?.length
         ? Prisma.sql`AND p."userId" IN (${Prisma.join(authorUserIds.map((id) => Prisma.sql`${id}`))})`
         : Prisma.sql``;
+    const mediaOnlySql = params.mediaOnly
+      ? Prisma.sql`AND EXISTS (SELECT 1 FROM "PostMedia" pm WHERE pm."postId" = p."id" AND pm."deletedAt" IS NULL)`
+      : Prisma.sql``;
 
     const risingWindowMs = PostsService.featuredRisingWindowHours * 60 * 60 * 1000;
     const risingMinCreatedAt = new Date(now.getTime() - risingWindowMs);
@@ -2152,6 +2169,7 @@ export class PostsService {
                 ${risingVisibilityFilterSql}
                 ${excludeSelfSql}
                 ${authorFilterSql}
+                ${mediaOnlySql}
                 ${excludePostIdsSql}
                 ${excludeAuthorIdsSql}
                 AND (p."boostCount" > 0 OR p."bookmarkCount" > 0 OR p."commentCount" > 0)
@@ -2330,6 +2348,7 @@ export class PostsService {
     visibility: 'all' | PostVisibility;
     followingOnly?: boolean;
     kind?: 'regular' | 'checkin' | null;
+    mediaOnly?: boolean;
     authorUserIds?: string[] | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, cursor, visibility, followingOnly = false } = params;
@@ -2395,6 +2414,7 @@ export class PostsService {
         allowed,
         authorUserIds,
         kind,
+        mediaOnly: params.mediaOnly,
       });
     }
 
@@ -2811,6 +2831,7 @@ export class PostsService {
     visibility: 'all' | PostVisibility;
     followingOnly?: boolean;
     kind?: 'regular' | 'checkin' | null;
+    mediaOnly?: boolean;
     authorUserIds?: string[] | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, cursor, visibility, followingOnly = false } = params;
@@ -2860,6 +2881,7 @@ export class PostsService {
         visibility,
         followingOnly,
         kind,
+        mediaOnly: params.mediaOnly,
         authorUserIds,
       });
     }
@@ -2873,6 +2895,7 @@ export class PostsService {
       visibility,
       allowed,
       authorUserIds,
+      mediaOnly: params.mediaOnly,
     });
 
   }

@@ -235,6 +235,7 @@ export class AuthService {
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     return {
       isNewUser,
+      referralApplied: Boolean(isNewUser && recruitedById),
       user: toUserDto(user, publicBaseUrl),
       sessionId: session.id,
     };

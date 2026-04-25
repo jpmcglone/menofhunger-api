@@ -4,7 +4,7 @@ import { hmacSha256Hex, randomSessionToken } from './auth.utils';
 
 const HMAC_SECRET = 'test-secret';
 
-function makeMinimalUser() {
+function makeMinimalUser(overrides?: Record<string, unknown>) {
   return {
     id: 'user-1',
     createdAt: new Date('2024-01-01T00:00:00.000Z'),
@@ -50,6 +50,7 @@ function makeMinimalUser() {
     checkinStreakDays: 0,
     longestStreakDays: 0,
     lastCheckinDayKey: null,
+    ...overrides,
   };
 }
 
@@ -92,6 +93,8 @@ function makeService(overrides?: { prisma?: any }) {
   const appConfig = {
     sessionHmacSecret: jest.fn(() => HMAC_SECRET),
     isProd: jest.fn(() => false),
+    disableTwilioInDev: jest.fn(() => true),
+    twilioVerify: jest.fn(() => null),
     cookieDomain: jest.fn(() => undefined),
     r2: jest.fn(() => null),
   } as any;
@@ -108,7 +111,7 @@ function makeService(overrides?: { prisma?: any }) {
 
   const otpProvider = { send: jest.fn(), verify: jest.fn() } as any;
   const posthog = { capture: jest.fn() } as any;
-  const slack = { send: jest.fn() } as any;
+  const slack = { send: jest.fn(), notifySignup: jest.fn() } as any;
   const requestCache = { get: jest.fn(() => undefined), set: jest.fn() } as any;
 
   const svc = new AuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack, requestCache);
@@ -199,5 +202,92 @@ describe('AuthService.meFromSessionToken — sliding window renewal', () => {
 
     expect(result).toBeNull();
     expect(prisma.session.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthService.verifyPhoneCode — referral signup linking', () => {
+  function makeResponse() {
+    return {
+      cookie: jest.fn(),
+      clearCookie: jest.fn(),
+    } as any;
+  }
+
+  it('sets recruitedById while creating a new user when a valid premium referral code is supplied', async () => {
+    const createdUser = makeMinimalUser({
+      id: 'new-user',
+      phone: '+15555550000',
+      username: null,
+      usernameIsSet: false,
+      recruitedById: 'recruiter-1',
+    });
+    const prisma = {
+      user: {
+        findUnique: jest.fn(async () => null),
+        findFirst: jest.fn(async () => ({ id: 'recruiter-1', premium: true })),
+        create: jest.fn(async () => createdUser),
+      },
+      phoneOtp: {
+        findFirst: jest.fn(async () => null),
+        update: jest.fn(),
+      },
+      follow: {
+        create: jest.fn(async () => ({})),
+      },
+      session: {
+        create: jest.fn(async () => ({ id: 'session-1' })),
+      },
+      post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    };
+    const { svc } = makeService({ prisma });
+
+    const result = await svc.verifyPhoneCode('+15555550000', '000000', makeResponse(), 'john-code');
+
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({
+      where: { referralCode: 'JOHN-CODE' },
+      select: { id: true, premium: true },
+    });
+    expect(prisma.user.create).toHaveBeenCalledWith({
+      data: {
+        phone: '+15555550000',
+        username: null,
+        usernameIsSet: false,
+        recruitedById: 'recruiter-1',
+      },
+    });
+    expect(prisma.follow.create).toHaveBeenCalledWith({
+      data: { followerId: 'new-user', followingId: 'recruiter-1' },
+    });
+    expect(result.referralApplied).toBe(true);
+  });
+
+  it('does not link a recruiter for existing users even when a referral code is supplied', async () => {
+    const existingUser = makeMinimalUser({ id: 'existing-user', phone: '+15555550000' });
+    const prisma = {
+      user: {
+        findUnique: jest.fn(async () => existingUser),
+        findFirst: jest.fn(),
+        create: jest.fn(),
+      },
+      phoneOtp: {
+        findFirst: jest.fn(async () => null),
+        update: jest.fn(),
+      },
+      follow: {
+        create: jest.fn(),
+      },
+      session: {
+        create: jest.fn(async () => ({ id: 'session-1' })),
+      },
+      post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    };
+    const { svc } = makeService({ prisma });
+
+    const result = await svc.verifyPhoneCode('+15555550000', '000000', makeResponse(), 'john-code');
+
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(prisma.follow.create).not.toHaveBeenCalled();
+    expect(result.referralApplied).toBe(false);
   });
 });

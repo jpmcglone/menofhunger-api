@@ -24,6 +24,8 @@ import { toPostDto } from '../../common/dto/post.dto';
 import { toCommunityGroupPreviewDto, type CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import { collapseFeedByRoot, type FeedCollapseMode, type FeedCollapsePrefer } from '../../common/feed-collapse/collapse-by-root';
 
+export type NotificationUnreadByKind = Partial<Record<NotificationKind | 'all', number>>;
+
 export type CreateNotificationParams = {
   recipientUserId: string;
   kind: NotificationKind;
@@ -165,6 +167,26 @@ export class NotificationsService {
       deliveredAt: null,
       kind: { not: 'message' },
     };
+  }
+
+  async getUnreadCountsByKind(recipientUserId: string): Promise<NotificationUnreadByKind> {
+    const rows = await this.prisma.notification.groupBy({
+      by: ['kind'],
+      where: {
+        recipientUserId,
+        readAt: null,
+        kind: { not: 'message' },
+      },
+      _count: { _all: true },
+    });
+
+    const counts: NotificationUnreadByKind = { all: 0 };
+    for (const row of rows) {
+      const count = row._count._all;
+      counts[row.kind] = count;
+      counts.all = (counts.all ?? 0) + count;
+    }
+    return counts;
   }
 
   /**
@@ -378,6 +400,7 @@ export class NotificationsService {
         this.sendWebPushToRecipient(recipientUserId, {
           title: pushCopy.title,
           body: pushCopy.body,
+          notificationId: notification.id,
           subjectPostId: subjectPostId ?? null,
           subjectUserId: subjectUserId ?? null,
           url: pushUrl,
@@ -907,6 +930,7 @@ export class NotificationsService {
     params: {
       title: string;
       body?: string;
+      notificationId?: string | null;
       subjectPostId?: string | null;
       subjectUserId?: string | null;
       test?: boolean;
@@ -964,6 +988,7 @@ export class NotificationsService {
     const payload = JSON.stringify({
       title: params.title,
       body,
+      notificationId: params.notificationId ?? undefined,
       url,
       tag,
       kind,
@@ -1722,10 +1747,15 @@ export class NotificationsService {
     const maxGroupNotifications = 50;
     const rawFetchLimit = Math.min(desiredItemLimit * 6, 250);
     if (kind === 'message') {
+      const [undeliveredCount, unreadByKind] = await Promise.all([
+        this.getUndeliveredCount(recipientUserId),
+        this.getUnreadCountsByKind(recipientUserId),
+      ]);
       return {
         items: [] as NotificationFeedItemDto[],
         nextCursor: null,
-        undeliveredCount: await this.getUndeliveredCount(recipientUserId),
+        undeliveredCount,
+        unreadByKind,
       };
     }
 
@@ -1777,14 +1807,27 @@ export class NotificationsService {
 
     const raw = notifications.slice(0, rawFetchLimit);
     const hasMoreRaw = notifications.length > rawFetchLimit;
-    const undeliveredCount = await this.getUndeliveredCount(recipientUserId);
+    const [undeliveredCount, unreadByKind] = await Promise.all([
+      this.getUndeliveredCount(recipientUserId),
+      this.getUnreadCountsByKind(recipientUserId),
+    ]);
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const subjectPostIds = [...new Set(raw.map((n) => n.subjectPostId).filter(Boolean))] as string[];
+    const previewPostIds = [
+      ...new Set(
+        raw
+          .flatMap((n) => (
+            n.kind === 'repost' && n.actorPostId
+              ? [n.actorPostId, n.subjectPostId]
+              : [n.subjectPostId]
+          ))
+          .filter(Boolean),
+      ),
+    ] as string[];
     const subjectPosts =
-      subjectPostIds.length > 0
+      previewPostIds.length > 0
         ? await this.prisma.post.findMany({
-            where: { id: { in: subjectPostIds } },
+            where: { id: { in: previewPostIds } },
             select: {
               id: true,
               body: true,
@@ -1944,11 +1987,14 @@ export class NotificationsService {
     );
 
     const dtos: NotificationDto[] = raw.map((n) => {
-      const preview = n.subjectPostId ? subjectPreviewByPostId.get(n.subjectPostId) ?? null : null;
+      const actorPreview = n.kind === 'repost' && n.actorPostId ? subjectPreviewByPostId.get(n.actorPostId) ?? null : null;
+      const hasActorPreview = Boolean(actorPreview?.bodySnippet || actorPreview?.media?.length);
+      const previewPostId = hasActorPreview ? n.actorPostId : n.subjectPostId;
+      const preview = previewPostId ? subjectPreviewByPostId.get(previewPostId) ?? null : null;
       const articlePreview = n.subjectArticleId ? subjectArticlePreviewById.get(n.subjectArticleId) ?? null : null;
-      const subjectPostVisibility = n.subjectPostId ? subjectVisibilityByPostId.get(n.subjectPostId) ?? null : null;
+      const subjectPostVisibility = previewPostId ? subjectVisibilityByPostId.get(previewPostId) ?? null : null;
       let subjectTier: SubjectTier = null;
-      if (n.subjectPostId) subjectTier = subjectTierByPostId.get(n.subjectPostId) ?? null;
+      if (previewPostId) subjectTier = subjectTierByPostId.get(previewPostId) ?? null;
       else if (n.subjectUserId) subjectTier = subjectTierByUserId.get(n.subjectUserId) ?? null;
       const subjectGroup = n.subjectGroupId ? subjectGroupById.get(n.subjectGroupId) ?? null : null;
       const subjectCrewInviteStatus = n.subjectCrewInviteId
@@ -2005,7 +2051,6 @@ export class NotificationsService {
 
     function groupKey(n: NotificationDto): string | null {
       if (n.kind === 'boost' && n.subjectPostId) return `boost:post:${n.subjectPostId}`;
-      if (n.kind === 'repost' && n.subjectPostId) return `repost:post:${n.subjectPostId}`;
       if (n.kind === 'comment' && n.subjectPostId) return `comment:post:${n.subjectPostId}`;
       if (n.kind === 'community_group_member_joined' && n.subjectGroupId) return `community_group_member_joined:group:${n.subjectGroupId}`;
       if (n.kind === 'crew_member_joined' && n.subjectCrewId) return `crew_member_joined:crew:${n.subjectCrewId}`;
@@ -2083,6 +2128,7 @@ export class NotificationsService {
         items: page.map((n) => ({ type: 'single' as const, notification: n })),
         nextCursor: hasMore ? (lastItem?.id ?? null) : null,
         undeliveredCount,
+        unreadByKind,
       };
     }
 
@@ -2175,6 +2221,7 @@ export class NotificationsService {
       items,
       nextCursor,
       undeliveredCount,
+      unreadByKind,
     };
   }
 
@@ -3033,9 +3080,13 @@ export class NotificationsService {
     let subjectTier: SubjectTier = null;
     let subjectPostVisibility: SubjectPostVisibility | null = null;
 
-    if (n.subjectPostId) {
-      const p = await this.prisma.post.findUnique({
-        where: { id: n.subjectPostId },
+    const previewPostIds = [
+      n.kind === 'repost' && n.actorPostId ? n.actorPostId : null,
+      n.subjectPostId,
+    ].filter((postId, index, arr): postId is string => Boolean(postId) && arr.indexOf(postId) === index);
+    if (previewPostIds.length > 0) {
+      const posts = await this.prisma.post.findMany({
+        where: { id: { in: previewPostIds } },
         select: {
           id: true,
           body: true,
@@ -3047,6 +3098,18 @@ export class NotificationsService {
           },
         },
       });
+      const postById = new Map(posts.map((post) => [post.id, post] as const));
+      const actorPost = n.kind === 'repost' && n.actorPostId ? postById.get(n.actorPostId) ?? null : null;
+      const actorBodySnippet = (actorPost?.body ?? '').trim().slice(0, 150) || null;
+      const actorHasMedia = Boolean(actorPost?.media?.some((m) => {
+        const url =
+          (m as { url?: string }).url?.trim() ||
+          (publicAssetUrl({ publicBaseUrl, key: (m as { r2Key?: string }).r2Key ?? null }) ?? '');
+        return Boolean(url);
+      }));
+      const p = actorBodySnippet || actorHasMedia
+        ? actorPost
+        : (n.subjectPostId ? postById.get(n.subjectPostId) ?? null : actorPost);
       if (p) {
         const bodySnippet = (p.body ?? '').trim().slice(0, 150) || null;
         const media = (p.media ?? [])

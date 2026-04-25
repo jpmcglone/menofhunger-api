@@ -161,6 +161,7 @@ export class NotificationsController {
       pagination: {
         nextCursor: res.nextCursor,
         undeliveredCount: res.undeliveredCount,
+        unreadByKind: res.unreadByKind,
       },
     };
   }
