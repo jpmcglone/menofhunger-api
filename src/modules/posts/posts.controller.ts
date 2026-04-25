@@ -46,7 +46,7 @@ const listSchema = z.object({
   groupsHub: z.coerce.boolean().optional(),
   /** Single community group feed (members-only). */
   communityGroupId: z.string().trim().min(1).max(40).optional(),
-  /** When true and a group-scoped request, return only top-level (non-reply) posts. */
+  /** When true, return only top-level (non-reply) posts. */
   topLevelOnly: z.coerce.boolean().optional(),
 });
 
@@ -401,6 +401,7 @@ export class PostsController {
           followingOnly: parsed.followingOnly ?? false,
           kind: parsed.kind ?? null,
           mediaOnly: parsed.mediaOnly ?? false,
+          topLevelOnly: parsed.topLevelOnly ?? false,
           authorUserIds,
           collapseByRoot: parsed.collapseByRoot ?? false,
           collapseMode: parsed.collapseMode ?? 'root',
@@ -432,6 +433,7 @@ export class PostsController {
                 visibility: parsed.visibility ?? 'all',
                 kind: parsed.kind ?? null,
                 mediaOnly,
+                topLevelOnly: parsed.topLevelOnly ?? false,
                 authorUserIds: authorUserIds.length ? authorUserIds : null,
               })
             : sortKind === 'featured' && !mediaChronological
@@ -443,6 +445,7 @@ export class PostsController {
                   followingOnly: parsed.followingOnly ?? false,
                   kind: parsed.kind ?? null,
                   mediaOnly,
+                  topLevelOnly: parsed.topLevelOnly ?? false,
                   authorUserIds: authorUserIds.length ? authorUserIds : null,
                 })
               : sortKind === 'popular' && !mediaChronological
@@ -454,6 +457,7 @@ export class PostsController {
                     followingOnly: parsed.followingOnly ?? false,
                     kind: parsed.kind ?? null,
                     mediaOnly,
+                    topLevelOnly: parsed.topLevelOnly ?? false,
                     authorUserIds: authorUserIds.length ? authorUserIds : null,
                   })
                 : await this.posts.listFeed({
@@ -464,6 +468,7 @@ export class PostsController {
                     followingOnly: parsed.followingOnly ?? false,
                     kind: parsed.kind ?? null,
                     mediaOnly,
+                    topLevelOnly: parsed.topLevelOnly ?? false,
                     authorUserIds: authorUserIds.length ? authorUserIds : null,
                   });
         stageMs.list = Date.now() - listStartMs;

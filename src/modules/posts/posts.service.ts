@@ -796,6 +796,7 @@ export class PostsService {
     followingOnly: boolean;
     kind?: 'regular' | 'checkin' | null;
     mediaOnly?: boolean;
+    topLevelOnly?: boolean;
     authorUserIds?: string[] | null;
   }): Promise<FeedResult> {
     const { viewerUserId, limit, cursor, visibility, followingOnly } = params;
@@ -853,6 +854,7 @@ export class PostsService {
             this.userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
             ...(params.mediaOnly ? [this.mediaOnlyWhere()] : []),
+            ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
             {
               OR: [
@@ -870,6 +872,7 @@ export class PostsService {
             this.userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
             ...(params.mediaOnly ? [this.mediaOnlyWhere()] : []),
+            ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
           ],
         };
@@ -1344,6 +1347,7 @@ export class PostsService {
     authorUserIds: string[] | null;
     kind: 'regular' | 'checkin' | null;
     mediaOnly?: boolean;
+    topLevelOnly?: boolean;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, decodedCursor, visibility, allowed, authorUserIds, kind } = params;
 
@@ -1394,6 +1398,7 @@ export class PostsService {
         ...(kind ? { kind } : {}),
         ...(authorUserIds?.length ? { userId: { in: authorUserIds } } : {}),
         ...(params.mediaOnly ? this.mediaOnlyWhere() : {}),
+        ...(params.topLevelOnly ? { parentId: null } : {}),
         ...visibilityWhere,
         ...cursorWhere,
       },
@@ -1443,6 +1448,7 @@ export class PostsService {
     visibility: 'all' | PostVisibility;
     kind?: 'regular' | 'checkin' | null;
     mediaOnly?: boolean;
+    topLevelOnly?: boolean;
     authorUserIds?: string[] | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, cursor, visibility } = params;
@@ -1497,6 +1503,7 @@ export class PostsService {
       userId: userIdWhere,
       ...(kind ? { kind } : {}),
       ...(params.mediaOnly ? this.mediaOnlyWhere() : {}),
+      ...(params.topLevelOnly ? { parentId: null } : {}),
       ...baseVisibilityWhere,
     };
     const baseWhere: Prisma.PostWhereInput = {
@@ -1975,6 +1982,7 @@ export class PostsService {
     allowed: PostVisibility[];
     authorUserIds: string[] | null;
     mediaOnly?: boolean;
+    topLevelOnly?: boolean;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, decodedCursor, visibility, allowed, authorUserIds } = params;
     const now = new Date();
@@ -2013,6 +2021,7 @@ export class PostsService {
           ...(viewerUserId ? { userId: { not: viewerUserId } } : {}),
           ...(authorUserIds?.length ? { userId: { in: authorUserIds } } : {}),
           ...(params.mediaOnly ? this.mediaOnlyWhere() : {}),
+          ...(params.topLevelOnly ? { parentId: null } : {}),
           ...visibilityWhere,
           OR: [
             { trendingScore: { lt: cursorScore } } as Prisma.PostWhereInput,
@@ -2080,6 +2089,7 @@ export class PostsService {
         ...(viewerUserId ? { userId: { not: viewerUserId } } : {}),
         ...(authorUserIds?.length ? { userId: { in: authorUserIds } } : {}),
         ...(params.mediaOnly ? this.mediaOnlyWhere() : {}),
+        ...(params.topLevelOnly ? { parentId: null } : {}),
         ...visibilityWhere,
       },
       orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
@@ -2124,6 +2134,7 @@ export class PostsService {
     const mediaOnlySql = params.mediaOnly
       ? Prisma.sql`AND EXISTS (SELECT 1 FROM "PostMedia" pm WHERE pm."postId" = p."id" AND pm."deletedAt" IS NULL)`
       : Prisma.sql``;
+    const featuredTopLevelOnlySql = params.topLevelOnly ? Prisma.sql`AND p."parentId" IS NULL` : Prisma.sql``;
 
     const risingWindowMs = PostsService.featuredRisingWindowHours * 60 * 60 * 1000;
     const risingMinCreatedAt = new Date(now.getTime() - risingWindowMs);
@@ -2170,6 +2181,7 @@ export class PostsService {
                 ${excludeSelfSql}
                 ${authorFilterSql}
                 ${mediaOnlySql}
+                ${featuredTopLevelOnlySql}
                 ${excludePostIdsSql}
                 ${excludeAuthorIdsSql}
                 AND (p."boostCount" > 0 OR p."bookmarkCount" > 0 OR p."commentCount" > 0)
@@ -2349,6 +2361,7 @@ export class PostsService {
     followingOnly?: boolean;
     kind?: 'regular' | 'checkin' | null;
     mediaOnly?: boolean;
+    topLevelOnly?: boolean;
     authorUserIds?: string[] | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, cursor, visibility, followingOnly = false } = params;
@@ -2415,6 +2428,7 @@ export class PostsService {
         authorUserIds,
         kind,
         mediaOnly: params.mediaOnly,
+        topLevelOnly: params.topLevelOnly,
       });
     }
 
@@ -2429,6 +2443,7 @@ export class PostsService {
       ? ({ userId: { in: authorUserIds } } as Prisma.PostWhereInput)
       : undefined;
     const warmupKindFilter = kind ? ({ kind } as Prisma.PostWhereInput) : undefined;
+    const warmupTopLevelFilter = params.topLevelOnly ? ({ parentId: null } as Prisma.PostWhereInput) : undefined;
 
     // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
     // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
@@ -2453,6 +2468,7 @@ export class PostsService {
             this.excludeCommunityGroupPostsWhere(),
             ...(warmupAuthorFilter ? [warmupAuthorFilter] : []),
             ...(warmupKindFilter ? [warmupKindFilter] : []),
+            ...(warmupTopLevelFilter ? [warmupTopLevelFilter] : []),
             this.notDeletedWhere(),
             this.userNotBannedWhere(),
             { createdAt: { gte: minCreatedAt } },
@@ -2483,6 +2499,7 @@ export class PostsService {
         : Prisma.sql``;
     // NOTE: Postgres enum compare requires matching enum type. Cast to text to safely compare against our string param.
     const kindFilterSql = kind ? Prisma.sql`AND (p."kind"::text = ${kind})` : Prisma.sql``;
+    const topLevelOnlySql = params.topLevelOnly ? Prisma.sql`AND p."parentId" IS NULL` : Prisma.sql``;
 
     // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
     // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
@@ -2531,6 +2548,7 @@ export class PostsService {
               ${visibilityFilterSql}
               ${authorFilterSql}
               ${kindFilterSql}
+              ${topLevelOnlySql}
               ${bannedAuthorSql}
             ORDER BY p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesRecentTake}
@@ -2548,6 +2566,7 @@ export class PostsService {
               ${visibilityFilterSql}
               ${authorFilterSql}
               ${kindFilterSql}
+              ${topLevelOnlySql}
               ${bannedAuthorSql}
             ORDER BY p."boostCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesBoostedTake}
@@ -2564,6 +2583,7 @@ export class PostsService {
               ${visibilityFilterSql}
               ${authorFilterSql}
               ${kindFilterSql}
+              ${topLevelOnlySql}
               ${bannedAuthorSql}
             ORDER BY p."bookmarkCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesBookmarkedTake}
@@ -2580,6 +2600,7 @@ export class PostsService {
               ${visibilityFilterSql}
               ${authorFilterSql}
               ${kindFilterSql}
+              ${topLevelOnlySql}
               ${bannedAuthorSql}
             ORDER BY p."commentCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesCommentedTake}
@@ -2598,6 +2619,7 @@ export class PostsService {
               ${visibilityFilterSql}
               ${authorFilterSql}
               ${kindFilterSql}
+              ${topLevelOnlySql}
               ${bannedAuthorSql}
             ORDER BY p."repostCount" DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesRepostedTake}
@@ -2615,6 +2637,7 @@ export class PostsService {
               ${visibilityFilterSql}
               ${authorFilterSql}
               ${kindFilterSql}
+              ${topLevelOnlySql}
               ${bannedAuthorSql}
             ORDER BY (p."boostCount" + p."bookmarkCount") DESC, p."createdAt" DESC, p."id" DESC
             LIMIT ${PostsService.popularCandidatesRepliesTake}
@@ -2832,6 +2855,7 @@ export class PostsService {
     followingOnly?: boolean;
     kind?: 'regular' | 'checkin' | null;
     mediaOnly?: boolean;
+    topLevelOnly?: boolean;
     authorUserIds?: string[] | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, cursor, visibility, followingOnly = false } = params;
@@ -2882,6 +2906,7 @@ export class PostsService {
         followingOnly,
         kind,
         mediaOnly: params.mediaOnly,
+        topLevelOnly: params.topLevelOnly,
         authorUserIds,
       });
     }
@@ -2896,6 +2921,7 @@ export class PostsService {
       allowed,
       authorUserIds,
       mediaOnly: params.mediaOnly,
+      topLevelOnly: params.topLevelOnly,
     });
 
   }
