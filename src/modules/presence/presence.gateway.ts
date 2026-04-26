@@ -396,6 +396,17 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         }
         void this.emitSpaceMembers(spaceLeft.spaceId);
         this.emitSpacesLobbyCounts();
+        const spaceUserId = String(spaceLeft.userId ?? userId ?? '').trim();
+        if (spaceUserId) {
+          const spaceChangedDto: UsersSpaceChangedPayloadDto = {
+            userId: spaceUserId,
+            spaceId: null,
+            previousSpaceId: spaceLeft.spaceId,
+          };
+          const targets = this.getTargetsForUser(spaceUserId);
+          this.emitToSockets(targets, WsEventNames.usersSpaceChanged, spaceChangedDto);
+          void this.presenceRedis.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
+        }
       }
     } catch (err) {
       this.logger.warn(
@@ -1176,8 +1187,9 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
     const lastConnectAt = this.presence.getLastConnectAt(userId) ?? Date.now();
     const idle = this.presence.isUserIdle(userId);
+    const status = userPayload ? await this.presence.getActiveStatusByUserId(userId) : null;
     const payload = userPayload
-      ? { userId, user: userPayload, lastConnectAt, idle }
+      ? { userId, user: { ...userPayload, status }, lastConnectAt, idle }
       : { userId, lastConnectAt, idle };
     this.emitToSockets(allTargets, 'presence:online', payload);
   }
@@ -1371,10 +1383,12 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       });
       const lastConnectAtById = await this.presenceRedis.lastConnectAtMsByUserId(userIds);
       const idleById = await this.presenceRedis.idleByUserIds(userIds);
+      const statusesById = new Map((await this.presence.getActiveStatuses(userIds)).map((status) => [status.userId, status]));
       const payload = users.map((u) => ({
         ...u,
         lastConnectAt: lastConnectAtById.get(u.id) ?? null,
         idle: idleById.get(u.id) ?? false,
+        status: statusesById.get(u.id) ?? null,
       }));
       client.emit('presence:onlineFeedSnapshot', { users: payload, totalOnline: userIds.length });
       if (this.logPresenceVerbose) {

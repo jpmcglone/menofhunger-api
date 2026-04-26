@@ -9,6 +9,7 @@ describe('PresenceService user statuses', () => {
 
   it('filters expired statuses from active status lookups', async () => {
     const now = new Date('2026-04-25T03:00:00.000Z');
+    jest.useFakeTimers().setSystemTime(now);
     const prismaUser = {
       findMany: jest.fn().mockResolvedValue([
         {
@@ -49,6 +50,7 @@ describe('PresenceService user statuses', () => {
         expiresAt: '2026-04-26T02:00:00.000Z',
       },
     ]);
+    jest.useRealTimers();
   });
 
   it('sets a status with a 24 hour expiry and clears it', async () => {
