@@ -20,7 +20,7 @@ import type { NotificationPreferencesDto } from '../../common/dto';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
 import { buildAttachParentChain } from '../posts/posts.utils';
-import { toPostDto } from '../../common/dto/post.dto';
+import { toPostDto, type PostDto } from '../../common/dto/post.dto';
 import { toCommunityGroupPreviewDto, type CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import { collapseFeedByRoot, type FeedCollapseMode, type FeedCollapsePrefer } from '../../common/feed-collapse/collapse-by-root';
 
@@ -141,6 +141,134 @@ export class NotificationsService {
       toFetch = next;
     }
     return parentMap;
+  }
+
+  private notificationPostId(
+    n: { kind: NotificationKind; actorPostId?: string | null; subjectPostId?: string | null },
+  ): string | null {
+    if (n.kind === 'followed_post') return (n.subjectPostId ?? '').trim() || null;
+    if (n.kind === 'comment') return (n.actorPostId ?? '').trim() || null;
+    if (n.kind === 'mention') return (n.actorPostId ?? '').trim() || null;
+    if (n.kind === 'repost') return (n.actorPostId ?? n.subjectPostId ?? '').trim() || null;
+    return null;
+  }
+
+  private async composePostDtoMapForViewer(
+    viewerUserId: string,
+    posts: Array<Prisma.PostGetPayload<{ include: typeof POST_WITH_POLL_INCLUDE }>>,
+  ): Promise<Map<string, PostDto>> {
+    if (!posts.length) return new Map();
+
+    const repostedPostIds = posts
+      .filter((p) => (p as { kind?: string; repostedPostId?: string | null }).kind === 'repost' && (p as { repostedPostId?: string | null }).repostedPostId)
+      .map((p) => (p as { repostedPostId?: string | null }).repostedPostId as string);
+    const [viewer, parentMap, repostedPostMap] = await Promise.all([
+      this.viewerContextService.getViewer(viewerUserId),
+      this.collectParentMapForViewer(viewerUserId, posts.map((p) => p.parentId)),
+      this.collectRepostedMapForViewer(viewerUserId, repostedPostIds),
+    ]);
+    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const allPostIds = [...posts.map((p) => p.id), ...parentMap.keys()];
+
+    const [
+      boostedRows,
+      bookmarksRows,
+      votedRows,
+      repostedRows,
+      blockSets,
+    ] = await Promise.all([
+      this.prisma.boost.findMany({
+        where: { userId: viewerUserId, postId: { in: allPostIds } },
+        select: { postId: true },
+      }),
+      this.prisma.bookmark.findMany({
+        where: { userId: viewerUserId, postId: { in: allPostIds } },
+        select: { postId: true, collections: { select: { collectionId: true } } },
+      }).catch((e: unknown) => {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2021') return [];
+        throw e;
+      }),
+      this.prisma.postPollVote.findMany({
+        where: { userId: viewerUserId, poll: { postId: { in: allPostIds } } },
+        select: { optionId: true, poll: { select: { postId: true } } },
+      }),
+      (this.prisma.post as any).findMany({
+        where: { userId: viewerUserId, kind: 'repost', repostedPostId: { in: allPostIds }, deletedAt: null },
+        select: { repostedPostId: true },
+      }) as Promise<Array<{ repostedPostId: string | null }>>,
+      this.prisma.userBlock.findMany({
+        where: { OR: [{ blockerId: viewerUserId }, { blockedId: viewerUserId }] },
+        select: { blockerId: true, blockedId: true },
+      }),
+    ]);
+
+    const boosted = new Set(boostedRows.map((r) => r.postId));
+    const bookmarksByPostId = new Map<string, { collectionIds: string[] }>();
+    for (const row of bookmarksRows) {
+      bookmarksByPostId.set(row.postId, { collectionIds: (row.collections ?? []).map((c) => c.collectionId) });
+    }
+    const votedPollOptionIdByPostId = new Map<string, string>();
+    for (const row of votedRows) votedPollOptionIdByPostId.set(row.poll.postId, row.optionId);
+    const repostedByPostId = new Set(
+      repostedRows
+        .map((r) => (r.repostedPostId ?? '').trim())
+        .filter(Boolean),
+    );
+    const blockedByViewer = new Set<string>();
+    const viewerBlockedBy = new Set<string>();
+    for (const row of blockSets) {
+      if (row.blockerId === viewerUserId) blockedByViewer.add(row.blockedId);
+      if (row.blockedId === viewerUserId) viewerBlockedBy.add(row.blockerId);
+    }
+
+    const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    const groupIds = new Set<string>();
+    const collectGroupId = (row: { communityGroupId?: string | null } | null | undefined) => {
+      const g = String(row?.communityGroupId ?? '').trim();
+      if (g) groupIds.add(g);
+    };
+    for (const p of posts) collectGroupId(p as { communityGroupId?: string | null });
+    for (const p of parentMap.values()) collectGroupId(p as { communityGroupId?: string | null });
+    for (const p of repostedPostMap.values()) collectGroupId(p as { communityGroupId?: string | null });
+    const groupPreviewByGroupId = new Map<string, CommunityGroupPreviewDto>();
+    if (groupIds.size > 0) {
+      const ids = [...groupIds];
+      const [groups, memberships] = await Promise.all([
+        this.prisma.communityGroup.findMany({
+          where: { id: { in: ids }, deletedAt: null },
+        }),
+        this.prisma.communityGroupMember.findMany({
+          where: { groupId: { in: ids }, userId: viewerUserId },
+          select: { groupId: true, status: true, role: true },
+        }),
+      ]);
+      const memberByGroup = new Map(memberships.map((m) => [m.groupId, m] as const));
+      for (const g of groups) {
+        const dto = toCommunityGroupPreviewDto(g, memberByGroup.get(g.id) ?? null);
+        if (dto) groupPreviewByGroupId.set(g.id, dto);
+      }
+    }
+
+    const attachParentChain = buildAttachParentChain({
+      parentMap,
+      baseUrl,
+      boosted,
+      bookmarksByPostId,
+      votedPollOptionIdByPostId,
+      viewerUserId,
+      viewerHasAdmin,
+      internalByPostId: null,
+      scoreByPostId: undefined,
+      toPostDto,
+      blockedByViewer,
+      viewerBlockedBy,
+      repostedByPostId,
+      repostedPostMap: repostedPostMap as any,
+      groupPreviewByGroupId,
+    });
+
+    return new Map(posts.map((p) => [p.id, attachParentChain(p)] as const));
   }
 
   private async collectRepostedMapForViewer(viewerUserId: string, repostedPostIds: string[]) {
@@ -542,8 +670,8 @@ export class NotificationsService {
       }
       if (subjectArticleId) {
         return {
-          title: `${actorName} commented on your article`,
-          body: snippet ?? 'Open to view the comment.',
+          title: `${actorName} replied to your article`,
+          body: snippet ?? 'Open to view the reply.',
         };
       }
       return {
@@ -1903,6 +2031,27 @@ export class NotificationsService {
       });
     }
 
+    const notificationPostIds = [
+      ...new Set(
+        raw
+          .flatMap((n) => {
+            const primary = this.notificationPostId(n);
+            const fallback = n.kind === 'repost' ? n.subjectPostId : null;
+            return [primary, fallback].filter(Boolean);
+          })
+          .filter(Boolean),
+      ),
+    ] as string[];
+    const notificationPostDtoById =
+      notificationPostIds.length > 0
+        ? await this.getVisiblePostsByIds({
+            viewerUserId: recipientUserId,
+            ids: notificationPostIds,
+            includeDeleted: false,
+            excludeBannedAuthors: true,
+          }).then((posts) => this.composePostDtoMapForViewer(recipientUserId, posts))
+        : new Map<string, PostDto>();
+
     // Batch-lookup groups for any notification that carries a subjectGroupId
     // (group_join_request and community_group_invite_* both use it for routing).
     const subjectGroupIds = [
@@ -2010,6 +2159,10 @@ export class NotificationsService {
       const subjectCommunityGroupInviteStatus = n.subjectCommunityGroupInviteId
         ? subjectCommunityGroupInviteStatusById.get(n.subjectCommunityGroupInviteId) ?? null
         : null;
+      const notificationPostId = this.notificationPostId(n);
+      const notificationPost =
+        (notificationPostId ? notificationPostDtoById.get(notificationPostId) ?? null : null)
+        ?? (n.kind === 'repost' && n.subjectPostId ? notificationPostDtoById.get(n.subjectPostId) ?? null : null);
       return this.toNotificationDto(
         n,
         publicBaseUrl,
@@ -2022,6 +2175,7 @@ export class NotificationsService {
         subjectCrewInviteStatus,
         subjectCrewName,
         subjectCommunityGroupInviteStatus,
+        notificationPost,
       );
     });
 
@@ -2160,6 +2314,11 @@ export class NotificationsService {
     ) {
       const n = dtos[i]!;
 
+      if (n.post && (n.kind === 'followed_post' || n.kind === 'comment' || n.kind === 'mention' || n.kind === 'repost')) {
+        items.push({ type: 'single', notification: n });
+        i += 1;
+        continue;
+      }
       // Collapse followed_post notifications when bell is not enabled.
       if (n.kind === 'followed_post' && !isBellEnabledFollowedPost(n)) {
         if (rollupInsertIndex === null) rollupInsertIndex = items.length;
@@ -2353,121 +2512,10 @@ export class NotificationsService {
       return { posts: [], nextCursor };
     }
 
-    const repostedPostIds = pagePosts
-      .filter((p) => (p as { kind?: string; repostedPostId?: string | null }).kind === 'repost' && (p as { repostedPostId?: string | null }).repostedPostId)
-      .map((p) => (p as { repostedPostId?: string | null }).repostedPostId as string);
-    const [viewer, parentMap, repostedPostMap] = await Promise.all([
-      this.viewerContextService.getViewer(recipientUserId),
-      this.collectParentMapForViewer(recipientUserId, pagePosts.map((p) => p.parentId)),
-      this.collectRepostedMapForViewer(recipientUserId, repostedPostIds),
-    ]);
-    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-    const allPostIds = [...pagePosts.map((p) => p.id), ...parentMap.keys()];
-
-    const [
-      boostedRows,
-      bookmarksRows,
-      votedRows,
-      repostedRows,
-      blockSets,
-    ] = await Promise.all([
-      this.prisma.boost.findMany({
-        where: { userId: recipientUserId, postId: { in: allPostIds } },
-        select: { postId: true },
-      }),
-      this.prisma.bookmark.findMany({
-        where: { userId: recipientUserId, postId: { in: allPostIds } },
-        select: { postId: true, collections: { select: { collectionId: true } } },
-      }).catch((e: unknown) => {
-        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2021') return [];
-        throw e;
-      }),
-      this.prisma.postPollVote.findMany({
-        where: { userId: recipientUserId, poll: { postId: { in: allPostIds } } },
-        select: { optionId: true, poll: { select: { postId: true } } },
-      }),
-      (this.prisma.post as any).findMany({
-        where: { userId: recipientUserId, kind: 'repost', repostedPostId: { in: allPostIds }, deletedAt: null },
-        select: { repostedPostId: true },
-      }) as Promise<Array<{ repostedPostId: string | null }>>,
-      this.prisma.userBlock.findMany({
-        where: { OR: [{ blockerId: recipientUserId }, { blockedId: recipientUserId }] },
-        select: { blockerId: true, blockedId: true },
-      }),
-    ]);
-
-    const boosted = new Set(boostedRows.map((r) => r.postId));
-    const bookmarksByPostId = new Map<string, { collectionIds: string[] }>();
-    for (const row of bookmarksRows) {
-      bookmarksByPostId.set(row.postId, { collectionIds: (row.collections ?? []).map((c) => c.collectionId) });
-    }
-    const votedPollOptionIdByPostId = new Map<string, string>();
-    for (const row of votedRows) votedPollOptionIdByPostId.set(row.poll.postId, row.optionId);
-    const repostedByPostId = new Set(
-      repostedRows
-        .map((r) => (r.repostedPostId ?? '').trim())
-        .filter(Boolean),
-    );
-    const blockedByViewer = new Set<string>();
-    const viewerBlockedBy = new Set<string>();
-    for (const row of blockSets) {
-      if (row.blockerId === recipientUserId) blockedByViewer.add(row.blockedId);
-      if (row.blockedId === recipientUserId) viewerBlockedBy.add(row.blockerId);
-    }
-
-    const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-
-    // Inline join-preview build (mirrors PostsService.communityGroupPreviewMapForFeed)
-    // so /new-posts can render a clickable group tag on rows that belong to a group,
-    // matching the home/explore feeds. We avoid depending on PostsService to keep
-    // module wiring acyclic.
-    const groupIds = new Set<string>();
-    const collectGroupId = (row: { communityGroupId?: string | null } | null | undefined) => {
-      const g = String(row?.communityGroupId ?? '').trim();
-      if (g) groupIds.add(g);
-    };
-    for (const p of pagePosts) collectGroupId(p as { communityGroupId?: string | null });
-    for (const p of parentMap.values()) collectGroupId(p as { communityGroupId?: string | null });
-    for (const p of repostedPostMap.values()) collectGroupId(p as { communityGroupId?: string | null });
-    const groupPreviewByGroupId = new Map<string, CommunityGroupPreviewDto>();
-    if (groupIds.size > 0) {
-      const ids = [...groupIds];
-      const [groups, memberships] = await Promise.all([
-        this.prisma.communityGroup.findMany({
-          where: { id: { in: ids }, deletedAt: null },
-        }),
-        this.prisma.communityGroupMember.findMany({
-          where: { groupId: { in: ids }, userId: recipientUserId },
-          select: { groupId: true, status: true, role: true },
-        }),
-      ]);
-      const memberByGroup = new Map(memberships.map((m) => [m.groupId, m] as const));
-      for (const g of groups) {
-        const dto = toCommunityGroupPreviewDto(g, memberByGroup.get(g.id) ?? null);
-        if (dto) groupPreviewByGroupId.set(g.id, dto);
-      }
-    }
-
-    const attachParentChain = buildAttachParentChain({
-      parentMap,
-      baseUrl,
-      boosted,
-      bookmarksByPostId,
-      votedPollOptionIdByPostId,
-      viewerUserId: recipientUserId,
-      viewerHasAdmin,
-      internalByPostId: null,
-      scoreByPostId: undefined,
-      toPostDto,
-      blockedByViewer,
-      viewerBlockedBy,
-      repostedByPostId,
-      repostedPostMap: repostedPostMap as any,
-      groupPreviewByGroupId,
-    });
+    const postDtoById = await this.composePostDtoMapForViewer(recipientUserId, pagePosts);
 
     return {
-      posts: pagePosts.map((p) => attachParentChain(p)),
+      posts: pagePosts.map((p) => postDtoById.get(p.id)).filter((p): p is PostDto => Boolean(p)),
       nextCursor,
     };
   }
@@ -2996,6 +3044,7 @@ export class NotificationsService {
     subjectCrewInviteStatus: NotificationDto['subjectCrewInviteStatus'] = null,
     subjectCrewName: string | null = null,
     subjectCommunityGroupInviteStatus: NotificationDto['subjectCommunityGroupInviteStatus'] = null,
+    post: PostDto | null = null,
   ): NotificationDto {
     let actor: NotificationActorDto | null = null;
     if (n.actor && !(n.actor as { bannedAt?: Date | null }).bannedAt) {
@@ -3040,6 +3089,7 @@ export class NotificationsService {
       title: n.title,
       body: n.body,
       subjectPostPreview: subjectPostPreview ?? null,
+      post: post ?? null,
       subjectArticlePreview: subjectArticlePreview ?? null,
       subjectPostVisibility,
       subjectTier,
@@ -3079,6 +3129,7 @@ export class NotificationsService {
     let subjectPostPreview: SubjectPostPreviewDto | null = null;
     let subjectTier: SubjectTier = null;
     let subjectPostVisibility: SubjectPostVisibility | null = null;
+    let post: PostDto | null = null;
 
     const previewPostIds = [
       n.kind === 'repost' && n.actorPostId ? n.actorPostId : null,
@@ -3142,6 +3193,24 @@ export class NotificationsService {
       }
     }
 
+    const notificationPostId = this.notificationPostId(n);
+    const notificationPostIds = [
+      notificationPostId,
+      n.kind === 'repost' ? n.subjectPostId : null,
+    ].filter((postId, index, arr): postId is string => Boolean(postId) && arr.indexOf(postId) === index);
+    if (notificationPostIds.length > 0) {
+      const visiblePosts = await this.getVisiblePostsByIds({
+        viewerUserId: recipientUserId,
+        ids: notificationPostIds,
+        includeDeleted: false,
+        excludeBannedAuthors: true,
+      });
+      const postDtoById = await this.composePostDtoMapForViewer(recipientUserId, visiblePosts);
+      post =
+        (notificationPostId ? postDtoById.get(notificationPostId) ?? null : null)
+        ?? (n.kind === 'repost' && n.subjectPostId ? postDtoById.get(n.subjectPostId) ?? null : null);
+    }
+
     let subjectGroupSlug: string | null = null;
     let subjectGroupName: string | null = null;
     if (n.subjectGroupId) {
@@ -3201,6 +3270,7 @@ export class NotificationsService {
       subjectCrewInviteStatus,
       subjectCrewName,
       subjectCommunityGroupInviteStatus,
+      post,
     );
   }
 

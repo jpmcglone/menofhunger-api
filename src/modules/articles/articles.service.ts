@@ -916,9 +916,9 @@ export class ArticlesService {
       where: { id: opts.parentCommentId },
       select: { id: true, articleId: true, parentId: true, deletedAt: true },
     });
-    if (!parent || parent.deletedAt) throw new NotFoundException('Comment not found.');
-    if (parent.articleId !== opts.articleId) throw new NotFoundException('Comment not found.');
-    if (parent.parentId !== null) throw new BadRequestException('Replies can only be loaded for top-level comments.');
+    if (!parent || parent.deletedAt) throw new NotFoundException('Reply not found.');
+    if (parent.articleId !== opts.articleId) throw new NotFoundException('Reply not found.');
+    if (parent.parentId !== null) throw new BadRequestException('Replies can only be loaded for top-level replies.');
 
     const limit = Math.min(opts.limit ?? 20, 50);
     const replies = await this.prisma.articleComment.findMany({
@@ -1026,7 +1026,7 @@ export class ArticlesService {
           ? (await this.prisma.articleComment.findUnique({ where: { id: data.parentId }, select: { authorId: true } }))?.authorId ?? art.authorId
           : art.authorId;
 
-        // Keep parity with post comment behavior: explicit @mentions take priority over comment notifications.
+        // Keep parity with post reply behavior: explicit @mentions take priority over reply notifications.
         if (recipientId !== userId && !mentionUserIds.has(recipientId)) {
           await this.notifications.create({
             recipientUserId: recipientId,
@@ -1034,14 +1034,14 @@ export class ArticlesService {
             actorUserId: userId,
             subjectArticleId: articleId,
             subjectArticleCommentId: comment.id,
-            title: data.parentId ? 'replied to your comment' : 'commented on your article',
+            title: data.parentId ? 'replied to your reply' : 'replied to your article',
             body: bodySnippet,
           });
         }
 
         const mentionTitle = data.parentId
           ? 'mentioned you in an article reply'
-          : 'mentioned you in an article comment';
+          : 'mentioned you in an article reply';
         for (const mentionedUserId of mentionUserIds) {
           if (mentionedUserId === userId) continue;
           await this.notifications.create({

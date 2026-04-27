@@ -1,15 +1,34 @@
 import { NotificationsService } from './notifications.service';
 
 function makeService(overrides?: { prisma?: any }) {
-  const prisma =
-    overrides?.prisma ??
-    ({
-      notification: { findUnique: jest.fn(), findMany: jest.fn(async () => []), count: jest.fn(async () => 0), groupBy: jest.fn(async () => []) },
-      post: { findMany: jest.fn(async () => []), findUnique: jest.fn() },
-      user: { findMany: jest.fn(async () => []), findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 0 })) },
-      follow: { findMany: jest.fn(async () => []) },
-      userBlock: { findMany: jest.fn(async () => []) },
-    } as any);
+  const basePrisma = {
+    notification: { findUnique: jest.fn(), findMany: jest.fn(async () => []), count: jest.fn(async () => 0), groupBy: jest.fn(async () => []) },
+    post: { findMany: jest.fn(async () => []), findUnique: jest.fn() },
+    user: { findMany: jest.fn(async () => []), findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 0 })) },
+    follow: { findMany: jest.fn(async () => []) },
+    userBlock: { findMany: jest.fn(async () => []) },
+    boost: { findMany: jest.fn(async () => []) },
+    bookmark: { findMany: jest.fn(async () => []) },
+    postPollVote: { findMany: jest.fn(async () => []) },
+    communityGroup: { findMany: jest.fn(async () => []) },
+    communityGroupMember: { findMany: jest.fn(async () => []) },
+  } as any;
+  const prisma = overrides?.prisma
+    ? {
+        ...basePrisma,
+        ...overrides.prisma,
+        notification: { ...basePrisma.notification, ...(overrides.prisma.notification ?? {}) },
+        post: { ...basePrisma.post, ...(overrides.prisma.post ?? {}) },
+        user: { ...basePrisma.user, ...(overrides.prisma.user ?? {}) },
+        follow: { ...basePrisma.follow, ...(overrides.prisma.follow ?? {}) },
+        userBlock: { ...basePrisma.userBlock, ...(overrides.prisma.userBlock ?? {}) },
+        boost: { ...basePrisma.boost, ...(overrides.prisma.boost ?? {}) },
+        bookmark: { ...basePrisma.bookmark, ...(overrides.prisma.bookmark ?? {}) },
+        postPollVote: { ...basePrisma.postPollVote, ...(overrides.prisma.postPollVote ?? {}) },
+        communityGroup: { ...basePrisma.communityGroup, ...(overrides.prisma.communityGroup ?? {}) },
+        communityGroupMember: { ...basePrisma.communityGroupMember, ...(overrides.prisma.communityGroupMember ?? {}) },
+      }
+    : basePrisma;
 
   const appConfig = { r2: jest.fn(() => null) } as any;
   const presenceRealtime = {
@@ -19,10 +38,59 @@ function makeService(overrides?: { prisma?: any }) {
   } as any;
   const jobs = { enqueueCron: jest.fn(async () => undefined) } as any;
   const posthog = { capture: jest.fn() } as any;
-  const viewerContextService = { getViewer: jest.fn(async () => null) } as any;
+  const viewerContextService = {
+    getViewer: jest.fn(async () => null),
+    allowedPostVisibilities: jest.fn(() => ['public', 'verifiedOnly', 'premiumOnly']),
+  } as any;
 
   const svc = new NotificationsService(prisma, appConfig, presenceRealtime, jobs, posthog, viewerContextService);
   return { svc, prisma };
+}
+
+function makePost(id: string, overrides: Record<string, any> = {}) {
+  return {
+    id,
+    createdAt: new Date('2026-02-01T00:00:00.000Z'),
+    editedAt: null,
+    editCount: 0,
+    body: 'Post body',
+    deletedAt: null,
+    kind: 'regular',
+    checkinDayKey: null,
+    checkinPrompt: null,
+    visibility: 'public',
+    isDraft: false,
+    topics: [],
+    hashtags: [],
+    boostCount: 0,
+    bookmarkCount: 0,
+    commentCount: 0,
+    repostCount: 0,
+    viewerCount: 0,
+    parentId: null,
+    communityGroupId: null,
+    pinnedInGroupAt: null,
+    repostedPostId: null,
+    media: [],
+    mentions: [],
+    poll: null,
+    userId: 'actor',
+    user: {
+      id: 'actor',
+      username: 'actor',
+      name: 'Actor',
+      premium: false,
+      premiumPlus: false,
+      isOrganization: false,
+      stewardBadgeEnabled: true,
+      verifiedStatus: 'none',
+      avatarKey: null,
+      avatarUpdatedAt: null,
+      bannedAt: null,
+      orgAffiliations: [],
+    },
+    ...overrides,
+  };
 }
 
 describe('NotificationsService.list batching', () => {
@@ -112,9 +180,12 @@ describe('NotificationsService.list batching', () => {
     const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null });
     expect(res.items.length).toBeGreaterThan(0);
     expect(res.undeliveredCount).toBe(2);
+    const followItem = res.items.find((item) => item.type === 'single' && item.notification.kind === 'follow');
+    if (followItem?.type !== 'single') throw new Error('Expected follow notification item');
+    expect(followItem.notification.post).toBeNull();
 
     // Batch post/user loads (not per notification).
-    expect(prisma.post.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.post.findMany).toHaveBeenCalledTimes(2);
     expect(prisma.user.findMany).toHaveBeenCalledTimes(1);
 
     // No per-notification loads.
@@ -164,12 +235,7 @@ describe('NotificationsService.list batching', () => {
         post: {
           findUnique: jest.fn(),
           findMany: jest.fn(async () => [
-            {
-              id: 'p_quote',
-              body: 'This is why the original post matters.',
-              visibility: 'public',
-              media: [],
-            },
+            makePost('p_quote', { body: 'This is why the original post matters.' }),
           ]),
         },
         user: {
@@ -192,6 +258,122 @@ describe('NotificationsService.list batching', () => {
     expect(item.notification.actorPostId).toBe('p_quote');
     expect(item.notification.subjectPostId).toBe('p_original');
     expect(item.notification.subjectPostPreview?.bodySnippet).toBe('This is why the original post matters.');
+    expect(item.notification.post?.id).toBe('p_quote');
+  });
+
+  it('attaches full post payloads for followed posts, replies, and post mentions', async () => {
+    const { svc } = makeService({
+      prisma: {
+        notification: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => [
+            {
+              id: 'n_followed',
+              createdAt: new Date('2026-02-03T00:00:00.000Z'),
+              kind: 'followed_post',
+              deliveredAt: null,
+              readAt: null,
+              ignoredAt: null,
+              nudgedBackAt: null,
+              actorUserId: 'a1',
+              actorPostId: null,
+              subjectPostId: 'p_followed',
+              subjectUserId: null,
+              title: null,
+              body: null,
+              actor: {
+                id: 'a1',
+                username: 'actor',
+                name: 'Actor',
+                avatarKey: null,
+                avatarUpdatedAt: null,
+                premium: false,
+                isOrganization: false,
+                verifiedStatus: 'none',
+              },
+            },
+            {
+              id: 'n_reply',
+              createdAt: new Date('2026-02-02T00:00:00.000Z'),
+              kind: 'comment',
+              deliveredAt: null,
+              readAt: null,
+              ignoredAt: null,
+              nudgedBackAt: null,
+              actorUserId: 'a1',
+              actorPostId: 'p_reply',
+              subjectPostId: 'p_root',
+              subjectUserId: null,
+              title: null,
+              body: 'reply',
+              actor: {
+                id: 'a1',
+                username: 'actor',
+                name: 'Actor',
+                avatarKey: null,
+                avatarUpdatedAt: null,
+                premium: false,
+                isOrganization: false,
+                verifiedStatus: 'none',
+              },
+            },
+            {
+              id: 'n_mention',
+              createdAt: new Date('2026-02-01T00:00:00.000Z'),
+              kind: 'mention',
+              deliveredAt: null,
+              readAt: null,
+              ignoredAt: null,
+              nudgedBackAt: null,
+              actorUserId: 'a1',
+              actorPostId: 'p_mention',
+              subjectPostId: 'p_mention',
+              subjectUserId: 'u_recipient',
+              title: null,
+              body: 'mentioned you',
+              actor: {
+                id: 'a1',
+                username: 'actor',
+                name: 'Actor',
+                avatarKey: null,
+                avatarUpdatedAt: null,
+                premium: false,
+                isOrganization: false,
+                verifiedStatus: 'none',
+              },
+            },
+          ]),
+          count: jest.fn(async () => 3),
+          groupBy: jest.fn(async () => []),
+        },
+        post: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => [
+            makePost('p_followed', { body: 'New post from someone you follow.' }),
+            makePost('p_reply', { body: 'Actual reply row.' }),
+            makePost('p_mention', { body: '@u_recipient hey.' }),
+            makePost('p_root', { body: 'Original post.' }),
+          ]),
+        },
+        user: {
+          findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 3 })),
+          findMany: jest.fn(async () => []),
+        },
+      } as any,
+    });
+
+    const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null });
+
+    expect(res.items).toHaveLength(3);
+    expect(res.items[0]?.type).toBe('single');
+    expect(res.items[1]?.type).toBe('single');
+    expect(res.items[2]?.type).toBe('single');
+    if (res.items[0]?.type !== 'single' || res.items[1]?.type !== 'single' || res.items[2]?.type !== 'single') {
+      throw new Error('Expected single notification items');
+    }
+    expect(res.items[0].notification.post?.id).toBe('p_followed');
+    expect(res.items[1].notification.post?.id).toBe('p_reply');
+    expect(res.items[2].notification.post?.id).toBe('p_mention');
   });
 
   it('falls back to the original post preview for plain repost notifications', async () => {
@@ -232,8 +414,8 @@ describe('NotificationsService.list batching', () => {
         post: {
           findUnique: jest.fn(),
           findMany: jest.fn(async () => [
-            { id: 'p_repost', body: '', visibility: 'public', media: [] },
-            { id: 'p_original', body: 'Original post preview.', visibility: 'public', media: [] },
+            makePost('p_repost', { body: '', kind: 'repost', repostedPostId: 'p_original' }),
+            makePost('p_original', { body: 'Original post preview.' }),
           ]),
         },
         user: {

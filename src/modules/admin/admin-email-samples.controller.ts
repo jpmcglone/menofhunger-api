@@ -252,7 +252,7 @@ export class AdminEmailSamplesController {
         `<div style="margin-bottom:10px;">${renderPill('Best post of the week', 'success')}</div>`,
         `<div style="font-size:13px;line-height:1.7;color:#6b7280;">by <strong style="color:#111827;">@${escapeHtml(samplePost.username)}</strong></div>`,
         `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:#111827;">${escapeHtml(samplePost.body)}</div>`,
-        `<div style="margin-top:10px;font-size:12px;color:#6b7280;">🔁 ${samplePost.boostCount} boosts · 💬 ${samplePost.commentCount} comments</div>`,
+        `<div style="margin-top:10px;font-size:12px;color:#6b7280;">🔁 ${samplePost.boostCount} boosts · 💬 ${samplePost.commentCount} replies</div>`,
         `<div style="margin-top:12px;">${renderButton({ href: samplePostUrl, label: 'Open post' })}</div>`,
       ].join(''),
     );

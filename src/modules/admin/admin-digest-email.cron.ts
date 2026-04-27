@@ -640,7 +640,7 @@ export class AdminDailyDigestCron {
         `<p style="margin:0 0 10px 0;font-size:13px;color:#374151;line-height:1.5;font-style:italic;">"${escapeHtml(snippet)}"</p>` +
         `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:12px;"><tr>` +
         `<td style="padding-right:14px;font-size:12px;color:#6b7280;">🔁 ${topPost.boostCount} boosts</td>` +
-        `<td style="padding-right:14px;font-size:12px;color:#6b7280;">💬 ${topPost.commentCount} comments</td>` +
+        `<td style="padding-right:14px;font-size:12px;color:#6b7280;">💬 ${topPost.commentCount} replies</td>` +
         `<td style="font-size:12px;color:#6b7280;">👁 ${topPost.viewerCount} views</td>` +
         `</tr></table>` +
         renderButton({ href: postUrl, label: 'View Post →', variant: 'secondary' });
@@ -835,7 +835,7 @@ export class AdminDailyDigestCron {
       lines.push('── Top Post of the Day ────────────');
       if (topPost.username) lines.push(`@${topPost.username}`);
       lines.push(truncate(topPost.body, 200));
-      lines.push(`Boosts: ${topPost.boostCount}  Comments: ${topPost.commentCount}`);
+      lines.push(`Boosts: ${topPost.boostCount}  Replies: ${topPost.commentCount}`);
       lines.push(`${baseUrl}/p/${topPost.id}`);
     }
     if (topArticles.length > 0) {

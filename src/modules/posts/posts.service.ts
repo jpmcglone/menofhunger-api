@@ -4776,7 +4776,7 @@ export class PostsService {
       parentAuthorUserId = parentPost.userId;
       parentTopics = Array.isArray(parentPost.topics) ? (parentPost.topics as string[]) : [];
       if (parentPost.visibility === 'onlyMe') {
-        throw new ForbiddenException('Comments are not allowed on only-me posts.');
+        throw new ForbiddenException('Replies are not allowed on only-me posts.');
       }
       const parentGid = parentPost.communityGroupId ?? null;
       const isCrossUser = Boolean(parentAuthorUserId && parentAuthorUserId !== userId);

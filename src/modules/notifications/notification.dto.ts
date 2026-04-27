@@ -1,4 +1,5 @@
 import type { NotificationKind } from '@prisma/client';
+import type { PostDto } from '../../common/dto/post.dto';
 
 export type NotificationActorDto = {
   id: string;
@@ -94,6 +95,8 @@ export type NotificationDto = {
   body: string | null;
   /** When set (e.g. boost), for quote + stacked images / video thumbnail in the UI. */
   subjectPostPreview?: SubjectPostPreviewDto | null;
+  /** Full post row payload for notifications that should render as a post. */
+  post?: PostDto | null;
   /** When subject is an article (followed_article), article card preview. */
   subjectArticlePreview?: SubjectArticlePreviewDto | null;
   /** When subject is a post, its visibility (used for UI tinting). */
