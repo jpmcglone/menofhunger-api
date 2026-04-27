@@ -48,12 +48,14 @@ function makeService(
     deleteBySubjectPostId: jest.fn(async () => undefined),
     deleteByActorPostId: jest.fn(async () => undefined),
     create: jest.fn(async () => undefined),
+    upsertRepostNotification: jest.fn(async () => undefined),
   };
   const requestCache: any = {};
   const presenceRealtime: any = {
     emitPostsLiveUpdated: jest.fn(),
     emitPostsCommentDeleted: jest.fn(),
     emitPostsInteraction: jest.fn(),
+    emitFeedNewPost: jest.fn(),
   };
   const polls: any = {};
   const viewerContext: any = {};
@@ -863,6 +865,172 @@ describe('PostsService.runPostCreateSideEffects — mention privacy gating', () 
   });
 });
 
+// ─── runPostCreateSideEffects: group post notification membership gating ─────
+
+describe('PostsService.runPostCreateSideEffects — group notification gating', () => {
+  function setup(activeMemberIds: string[] = []) {
+    const { service, deps } = makeService();
+    deps.prisma.communityGroup = { findUnique: jest.fn() };
+    deps.prisma.communityGroupMember = {
+      findMany: jest.fn(async (args: any) => {
+        const ids: string[] = args?.where?.userId?.in ?? [];
+        return activeMemberIds.filter((id) => ids.includes(id)).map((userId) => ({ userId }));
+      }),
+    };
+    deps.prisma.follow = { findMany: jest.fn(async () => []) };
+    return { service, deps };
+  }
+
+  function basePost(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      id: 'post-1',
+      userId: 'author',
+      body: 'hello',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      editedAt: null,
+      editCount: 0,
+      deletedAt: null,
+      kind: 'regular',
+      checkinDayKey: null,
+      checkinPrompt: null,
+      visibility: 'public',
+      isDraft: false,
+      topics: [],
+      hashtags: [],
+      boostCount: 0,
+      bookmarkCount: 0,
+      commentCount: 0,
+      repostCount: 0,
+      viewerCount: 0,
+      parentId: null,
+      communityGroupId: 'g1',
+      pinnedInGroupAt: null,
+      media: [],
+      mentions: [],
+      poll: null,
+      user: {
+        id: 'author',
+        username: 'author',
+        name: 'Author',
+        premium: false,
+        premiumPlus: false,
+        isOrganization: false,
+        stewardBadgeEnabled: false,
+        verifiedStatus: 'identity',
+        avatarKey: null,
+        avatarUpdatedAt: null,
+        orgMemberships: [],
+        bannedAt: null,
+      },
+      ...overrides,
+    } as any;
+  }
+
+  async function callSideEffects(service: PostsService, args: any): Promise<void> {
+    await (service as any).runPostCreateSideEffects({
+      actorUserId: 'author',
+      post: basePost(args.postOverrides),
+      parentId: args.parentId ?? null,
+      parentAuthorUserId: args.parentAuthorUserId ?? null,
+      threadPostsForRoles: args.threadPostsForRoles ?? [],
+      bodyMentionIds: args.bodyMentionIds ?? [],
+      bodyMentionSet: new Set(args.bodyMentionSet ?? args.bodyMentionIds ?? []),
+      bodySnippet: '',
+      visibility: args.visibility ?? 'public',
+      quotedInfo: args.quotedInfo ?? null,
+      didAwardStreak: false,
+    });
+  }
+
+  it('creates followed_post notifications and feed inserts only for active members of the post group', async () => {
+    const { service, deps } = setup(['member-follower']);
+    deps.prisma.follow.findMany.mockResolvedValue([
+      { followerId: 'member-follower', follower: { verifiedStatus: 'identity', premium: false, premiumPlus: false } },
+      { followerId: 'outside-follower', follower: { verifiedStatus: 'identity', premium: false, premiumPlus: false } },
+    ]);
+
+    await callSideEffects(service, {
+      postOverrides: { communityGroupId: 'g1' },
+    });
+
+    const followedPostCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
+      (c) => c[0]?.kind === 'followed_post',
+    );
+    expect(followedPostCalls.map((c) => c[0].recipientUserId)).toEqual(['member-follower']);
+    expect(deps.presenceRealtime.emitFeedNewPost).toHaveBeenCalledWith(
+      ['member-follower'],
+      expect.objectContaining({ post: expect.objectContaining({ id: 'post-1' }) }),
+    );
+  });
+
+  it('suppresses reply notifications for non-members of the post group', async () => {
+    const { service, deps } = setup(['parent-member', 'thread-member']);
+
+    await callSideEffects(service, {
+      parentId: 'parent-1',
+      parentAuthorUserId: 'parent-member',
+      threadPostsForRoles: [
+        {
+          id: 'parent-1',
+          parentId: null,
+          userId: 'parent-member',
+          mentions: [{ userId: 'thread-member' }, { userId: 'outside-thread-user' }],
+        },
+      ],
+      postOverrides: { communityGroupId: 'g1' },
+    });
+
+    const commentCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
+      (c) => c[0]?.kind === 'comment',
+    );
+    expect(commentCalls.map((c) => c[0].recipientUserId)).toEqual(['parent-member', 'thread-member']);
+  });
+
+  it('suppresses quote notifications for non-members of the post group', async () => {
+    const { service, deps } = setup([]);
+
+    await callSideEffects(service, {
+      quotedInfo: { quotedAuthorId: 'quoted-author', quotedPostId: 'quoted-post' },
+      postOverrides: { communityGroupId: 'g1' },
+    });
+
+    expect(deps.notifications.upsertRepostNotification).not.toHaveBeenCalled();
+  });
+
+  it('allows non-member mentions only for public posts in open groups', async () => {
+    const { service, deps } = setup([]);
+    deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy: 'open' });
+
+    await callSideEffects(service, {
+      bodyMentionIds: ['outside-mentioned'],
+      visibility: 'public',
+      postOverrides: { communityGroupId: 'g1', visibility: 'public' },
+    });
+
+    const mentionCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
+      (c) => c[0]?.kind === 'mention',
+    );
+    expect(mentionCalls.map((c) => c[0].recipientUserId)).toEqual(['outside-mentioned']);
+    expect(deps.prisma.communityGroupMember.findMany).not.toHaveBeenCalled();
+  });
+
+  it('suppresses non-member mentions in open groups when the post is not public', async () => {
+    const { service, deps } = setup([]);
+    deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy: 'open' });
+
+    await callSideEffects(service, {
+      bodyMentionIds: ['outside-mentioned'],
+      visibility: 'verifiedOnly',
+      postOverrides: { communityGroupId: 'g1', visibility: 'verifiedOnly' },
+    });
+
+    const mentionCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
+      (c) => c[0]?.kind === 'mention',
+    );
+    expect(mentionCalls).toHaveLength(0);
+  });
+});
+
 // ─── assertCanReadCommunityGroup: open vs private gating ─────────────────────
 //
 // The read-access gate that group feeds use to decide whether a viewer may load
@@ -1642,6 +1810,22 @@ describe('PostsService.listForYouFeed', () => {
 
     const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-open-group-follow', 'p-stranger']);
+  });
+
+  it('downranks open-group followed-author posts below comparable non-group direct follows', async () => {
+    const openGroupPost = cand('p-open-group-follow', 'u-group-follow', 10, 1);
+    openGroupPost.communityGroupId = 'g-open';
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-direct-follow', 'u-direct-follow', 10, 1),
+        openGroupPost,
+        cand('p-stranger', 'u-stranger', 10, 1),
+      ],
+      youFollowAuthorIds: ['u-direct-follow', 'u-group-follow'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-direct-follow', 'p-open-group-follow', 'p-stranger']);
   });
 
   it('does not include open-group followed-author posts for unverified viewers', async () => {

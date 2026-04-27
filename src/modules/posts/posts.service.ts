@@ -5441,10 +5441,80 @@ export class PostsService {
       didAwardStreak,
     } = args;
     const userId = actorUserId;
+    const postCommunityGroupId = (post as { communityGroupId?: string | null }).communityGroupId ?? null;
+    let postGroupJoinPolicy: CommunityGroupJoinPolicy | null | undefined = undefined;
+    const checkedGroupNotificationMemberIds = new Set<string>();
+    const activeGroupNotificationMemberIds = new Set<string>();
+    let groupNotificationMembershipLookupFailed = false;
+
+    const loadPostGroupJoinPolicy = async (): Promise<CommunityGroupJoinPolicy | null> => {
+      if (!postCommunityGroupId) return null;
+      if (postGroupJoinPolicy !== undefined) return postGroupJoinPolicy;
+      try {
+        const group = await this.prisma.communityGroup.findUnique({
+          where: { id: postCommunityGroupId },
+          select: { joinPolicy: true },
+        });
+        postGroupJoinPolicy = group?.joinPolicy ?? null;
+        return postGroupJoinPolicy;
+      } catch (err) {
+        this.logger.warn(
+          `[notifications] Failed to evaluate group policy for post notifications: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        postGroupJoinPolicy = null;
+        return null;
+      }
+    };
+
+    const loadActiveGroupNotificationMembers = async (recipientUserIds: string[]): Promise<void> => {
+      if (!postCommunityGroupId || groupNotificationMembershipLookupFailed) return;
+      const missingIds = [...new Set(recipientUserIds.filter((id) => id && !checkedGroupNotificationMemberIds.has(id)))];
+      if (missingIds.length === 0) return;
+
+      try {
+        const members = await this.prisma.communityGroupMember.findMany({
+          where: {
+            groupId: postCommunityGroupId,
+            userId: { in: missingIds },
+            status: 'active',
+          },
+          select: { userId: true },
+        });
+        for (const uid of missingIds) checkedGroupNotificationMemberIds.add(uid);
+        for (const member of members) activeGroupNotificationMemberIds.add(member.userId);
+      } catch (err) {
+        this.logger.warn(
+          `[notifications] Failed to evaluate group membership for post notifications: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        groupNotificationMembershipLookupFailed = true;
+      }
+    };
+
+    const canNotifyForGroupPost = async (
+      recipientUserId: string | null | undefined,
+      opts?: { allowPublicOpenGroupMention?: boolean },
+    ): Promise<boolean> => {
+      if (!postCommunityGroupId) return true;
+      const uid = (recipientUserId ?? '').trim();
+      if (!uid) return false;
+
+      if (opts?.allowPublicOpenGroupMention && visibility === 'public') {
+        const joinPolicy = await loadPostGroupJoinPolicy();
+        if (joinPolicy === 'open') return true;
+      }
+
+      await loadActiveGroupNotificationMembers([uid]);
+      if (groupNotificationMembershipLookupFailed) return false;
+      return activeGroupNotificationMemberIds.has(uid);
+    };
 
     try {
       // Quote repost notification: notify the quoted post's author (skip self-quotes).
-      if (quotedInfo && quotedInfo.quotedAuthorId !== userId) {
+      if (
+        quotedInfo &&
+        quotedInfo.quotedAuthorId !== userId &&
+        await canNotifyForGroupPost(quotedInfo.quotedAuthorId)
+      ) {
         this.notifications
           .upsertRepostNotification({
             recipientUserId: quotedInfo.quotedAuthorId,
@@ -5472,7 +5542,11 @@ export class PostsService {
               ? PostsService.REPLY_TITLE.root_author
               : PostsService.REPLY_TITLE.reply_author;
 
-        if (parentAuthorUserId && !bodyMentionSet.has(parentAuthorUserId)) {
+        if (
+          parentAuthorUserId &&
+          !bodyMentionSet.has(parentAuthorUserId) &&
+          await canNotifyForGroupPost(parentAuthorUserId)
+        ) {
           this.notifications
             .create({
               recipientUserId: parentAuthorUserId,
@@ -5490,6 +5564,7 @@ export class PostsService {
 
         for (const [uid, role] of threadRoles) {
           if (uid === userId || uid === parentAuthorUserId || bodyMentionSet.has(uid)) continue;
+          if (!await canNotifyForGroupPost(uid)) continue;
           const title = PostsService.REPLY_TITLE[role];
           this.notifications
             .create({
@@ -5508,41 +5583,20 @@ export class PostsService {
       }
 
       // Explicit @mentions in body: one notification each (priority over comment notifications).
-      // Suppress mentions when the post lives in a private (approval) group and the
-      // recipient is not an active member — they cannot read the post anyway, so
-      // the notification would be a dead end and could leak existence of private content.
-      const postCommunityGroupId = (post as { communityGroupId?: string | null }).communityGroupId ?? null;
-      let privateGroupMemberSet: Set<string> | null = null;
-      if (postCommunityGroupId && bodyMentionIds.length > 0) {
-        try {
-          const group = await this.prisma.communityGroup.findUnique({
-            where: { id: postCommunityGroupId },
-            select: { joinPolicy: true },
-          });
-          if (group?.joinPolicy === 'approval') {
-            const members = await this.prisma.communityGroupMember.findMany({
-              where: {
-                groupId: postCommunityGroupId,
-                userId: { in: bodyMentionIds },
-                status: 'active',
-              },
-              select: { userId: true },
-            });
-            privateGroupMemberSet = new Set(members.map((m) => m.userId));
-          }
-        } catch (err) {
-          this.logger.warn(
-            `[notifications] Failed to evaluate private-group membership for mentions: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          // On error, fall back to the safer behavior of suppressing all mentions for
-          // a group post we couldn't verify access for.
-          privateGroupMemberSet = new Set();
-        }
+      // Group posts are members-only for notifications, except public posts in OPEN
+      // groups where an explicit mention is allowed to reach a non-member.
+      const canMentionNonMembersInPublicOpenGroup =
+        Boolean(postCommunityGroupId) &&
+        bodyMentionIds.length > 0 &&
+        visibility === 'public' &&
+        await loadPostGroupJoinPolicy() === 'open';
+      if (postCommunityGroupId && bodyMentionIds.length > 0 && !canMentionNonMembersInPublicOpenGroup) {
+        await loadActiveGroupNotificationMembers(bodyMentionIds.filter((uid) => uid !== userId));
       }
 
       for (const uid of bodyMentionIds) {
         if (uid === userId) continue;
-        if (privateGroupMemberSet && !privateGroupMemberSet.has(uid)) continue;
+        if (!canMentionNonMembersInPublicOpenGroup && !await canNotifyForGroupPost(uid)) continue;
         let mentionTitle: string;
         if (!parentId) {
           mentionTitle = 'mentioned you in a post';
@@ -5583,6 +5637,7 @@ export class PostsService {
             if (!recipientUserId || recipientUserId === userId) continue;
             if (bodyMentionSet.has(recipientUserId)) continue;
             if (parentId && (recipientUserId === parentAuthorUserId || threadRoles?.has(recipientUserId))) continue;
+            if (!await canNotifyForGroupPost(recipientUserId)) continue;
 
             if (visibility === 'verifiedOnly') {
               const vs = f.follower?.verifiedStatus ?? 'none';
