@@ -23,6 +23,10 @@ function makeService(
     hashtag: { deleteMany: jest.fn(async () => ({ count: 0 })) },
     hashtagVariant: { deleteMany: jest.fn(async () => ({ count: 0 })) },
     user: { update: jest.fn(async () => ({})) },
+    communityGroupMember: {
+      findMany: jest.fn(async () => []),
+      findUnique: jest.fn(async () => null),
+    },
     $transaction: jest.fn(async (fn: any) => {
       if (typeof fn === 'function') {
         const tx: any = {
@@ -103,6 +107,177 @@ function makeService(
 
   return { service, deps };
 }
+
+// ─── listFeed ────────────────────────────────────────────────────────────────
+
+describe('PostsService.listFeed', () => {
+  function setup(memberGroupIds: string[] = []) {
+    const post = {
+      findUnique: jest.fn(),
+      findMany: jest.fn(async () => []),
+      update: jest.fn(async () => ({})),
+      updateMany: jest.fn(async () => ({ count: 0 })),
+      create: jest.fn(),
+    };
+    const communityGroupMember = {
+      findMany: jest.fn(async () => memberGroupIds.map((groupId) => ({ groupId }))),
+      findUnique: jest.fn(async () => null),
+    };
+    const follow = {
+      findMany: jest.fn(async () => [{ followingId: 'followed-author' }]),
+    };
+    const { service, deps } = makeService(
+      { post, communityGroupMember, follow },
+      {
+        viewerContext: {
+          getViewer: jest.fn(async (viewerUserId: string | null) =>
+            viewerUserId
+              ? {
+                  id: viewerUserId,
+                  verifiedStatus: 'identity',
+                  premium: false,
+                  premiumPlus: false,
+                  siteAdmin: false,
+                  allowedPostVisibilities: ['public', 'verifiedOnly'],
+                }
+              : null,
+          ),
+          allowedPostVisibilities: jest.fn(() => ['public', 'verifiedOnly']),
+          isPremium: jest.fn(() => false),
+        },
+      },
+    );
+    return { service, deps, post, communityGroupMember, follow };
+  }
+
+  async function listHomeFeed(service: PostsService, overrides: Partial<Parameters<PostsService['listFeed']>[0]> = {}) {
+    await service.listFeed({
+      viewerUserId: 'viewer',
+      limit: 30,
+      cursor: null,
+      visibility: 'all',
+      followingOnly: false,
+      ...overrides,
+    });
+  }
+
+  function findCommunityScope(where: any): any {
+    const ands: any[] = where?.AND ?? [];
+    return ands.find((part) =>
+      Array.isArray(part?.OR) &&
+      part.OR.some((item: any) => item?.communityGroupId === null) &&
+      part.OR.some((item: any) => Array.isArray(item?.communityGroupId?.in)),
+    );
+  }
+
+  function isCommunityScope(part: any): boolean {
+    return Array.isArray(part?.OR) &&
+      part.OR.some((item: any) => item?.communityGroupId === null) &&
+      part.OR.some((item: any) => Array.isArray(item?.communityGroupId?.in));
+  }
+
+  it('includes active member-group posts in the home All chronological feed', async () => {
+    const { service, post, communityGroupMember } = setup(['group-1', 'group-2']);
+
+    await listHomeFeed(service);
+
+    expect(communityGroupMember.findMany).toHaveBeenCalledWith({
+      where: { userId: 'viewer', status: 'active' },
+      select: { groupId: true },
+    });
+    const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
+    expect(findCommunityScope(where)).toEqual({
+      OR: [
+        { communityGroupId: null },
+        { communityGroupId: { in: ['group-1', 'group-2'] } },
+      ],
+    });
+  });
+
+  it('includes followed authors inside active member groups in the home Following chronological feed', async () => {
+    const { service, post } = setup(['group-1']);
+
+    await listHomeFeed(service, { followingOnly: true });
+
+    const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
+    expect(findCommunityScope(where)).toEqual({
+      OR: [
+        { communityGroupId: null },
+        { communityGroupId: { in: ['group-1'] } },
+      ],
+    });
+    expect((where?.AND ?? [])).toContainEqual({
+      OR: [
+        { userId: 'viewer' },
+        { user: { followers: { some: { followerId: 'viewer' } } } },
+      ],
+    });
+  });
+
+  it('keeps author-filtered chronological feeds global-only', async () => {
+    const { service, post, communityGroupMember } = setup(['group-1']);
+
+    await listHomeFeed(service, { authorUserIds: ['author-1'] });
+
+    expect(communityGroupMember.findMany).not.toHaveBeenCalled();
+    const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
+    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+  });
+
+  it('includes active member-group posts in the home All trending feed', async () => {
+    const { service, post, communityGroupMember } = setup(['group-1', 'group-2']);
+
+    await service.listPopularFeed({
+      viewerUserId: 'viewer',
+      limit: 30,
+      cursor: null,
+      visibility: 'all',
+      followingOnly: false,
+    });
+
+    expect(communityGroupMember.findMany).toHaveBeenCalledWith({
+      where: { userId: 'viewer', status: 'active' },
+      select: { groupId: true },
+    });
+    const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
+    const communityScope = (where?.AND ?? []).find(isCommunityScope);
+    expect(communityScope).toBeTruthy();
+    expect(communityScope.OR[1]).toEqual({ communityGroupId: { in: ['group-1', 'group-2'] } });
+  });
+
+  it('includes followed authors inside active member groups in the home Following trending feed', async () => {
+    const { service, post } = setup(['group-1']);
+
+    await service.listPopularFeed({
+      viewerUserId: 'viewer',
+      limit: 30,
+      cursor: null,
+      visibility: 'all',
+      followingOnly: true,
+    });
+
+    const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
+    expect((where?.AND ?? []).some(isCommunityScope)).toBe(true);
+    expect(where?.AND ?? []).toContainEqual({ userId: { in: ['viewer', 'followed-author'] } });
+  });
+
+  it('keeps author-filtered trending feeds global-only', async () => {
+    const { service, post, communityGroupMember } = setup(['group-1']);
+
+    await service.listPopularFeed({
+      viewerUserId: 'viewer',
+      limit: 30,
+      cursor: null,
+      visibility: 'all',
+      followingOnly: false,
+      authorUserIds: ['author-1'],
+    });
+
+    expect(communityGroupMember.findMany).not.toHaveBeenCalled();
+    const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
+    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+  });
+});
 
 // ─── deletePost ──────────────────────────────────────────────────────────────
 
@@ -1780,7 +1955,7 @@ describe('PostsService.listForYouFeed', () => {
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-direct-follow', 'p-second-degree', 'p-stranger']);
   });
 
-  it('mixes readable member-group posts into For You below comparable non-group direct-follow posts', async () => {
+  it('mixes readable member-group posts into For You using relationship scoring', async () => {
     const memberGroupPost = cand('p-member-group', 'u-group-follow', 10, 1);
     memberGroupPost.communityGroupId = 'g-member';
     const { service } = setupForYou({
@@ -1795,6 +1970,30 @@ describe('PostsService.listForYouFeed', () => {
 
     const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-direct-follow', 'p-member-group', 'p-stranger']);
+  });
+
+  it('orders member-group posts by mutual, following, follower, then stranger relationship', async () => {
+    const mutual = cand('p-group-mutual', 'u-mutual', 10, 1);
+    const following = cand('p-group-following', 'u-following', 10, 1);
+    const follower = cand('p-group-follower', 'u-follower', 10, 1);
+    const stranger = cand('p-group-stranger', 'u-stranger', 10, 1);
+    for (const post of [mutual, following, follower, stranger]) {
+      post.communityGroupId = 'g-member';
+    }
+    const { service } = setupForYou({
+      candidates: [stranger, mutual, follower, following],
+      youFollowAuthorIds: ['u-mutual', 'u-following'],
+      followsYouAuthorIds: ['u-mutual', 'u-follower'],
+      memberGroupIds: ['g-member'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual([
+      'p-group-mutual',
+      'p-group-following',
+      'p-group-follower',
+      'p-group-stranger',
+    ]);
   });
 
   it('mixes open-group posts by followed authors only for verified viewers', async () => {

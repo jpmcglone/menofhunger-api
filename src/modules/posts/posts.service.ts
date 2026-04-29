@@ -265,9 +265,9 @@ export class PostsService {
   private static forYouRecentFollowedWindowHours = 48;
   private static forYouFollowedUnseenQuotaRatio = 0.6;
   private static forYouFollowedUnseenMult = 3.5;
-  private static forYouRelMultMutual = 1.25;
+  private static forYouRelMultMutual = 1.6;
   private static forYouRelMultFollowing = 1.1;
-  private static forYouRelMultFollower = 0.55;
+  private static forYouRelMultFollower = 0.65;
   private static forYouRelMultStranger = 0.3;
   /** Floor multiplier for a post you saw moments ago (recovers toward ~0.95 after about four days). */
   private static forYouSeenFloor = 0.12;
@@ -284,8 +284,8 @@ export class PostsService {
   /** Gentle freshness bias: close scores should favor newer posts without burying strong older posts. */
   private static forYouRecencyHalfLifeHours = 72;
   private static forYouRecencyFloor = 0.65;
-  /** Group posts are useful discovery, but should not dominate the home feed. */
-  private static forYouMemberGroupMult = 0.8;
+  /** Member-group posts should rank by relationship; open non-member groups stay lower-priority discovery. */
+  private static forYouMemberGroupMult = 1.0;
   private static forYouOpenFollowGroupMult = 0.55;
   private static forYouGroupWindowHours = 72;
   /** Repeated exposures should recover slower than posts seen once. */
@@ -845,12 +845,26 @@ export class PostsService {
       return { posts: [], nextCursor: null };
     }
 
+    // Home chronological feeds should include the viewer's member-group posts:
+    // - All: any post in a group the viewer is actively in.
+    // - Following: posts by followed authors/self, including inside those groups.
+    // Keep author-filtered feeds (profile/crew/explore shapes) on the global-only
+    // contract so group posts do not leak into unrelated surfaces.
+    const canIncludeMemberGroupPosts = Boolean(viewerUserId && !authorUserIds?.length);
+    const memberGroupIds = canIncludeMemberGroupPosts
+      ? await this.listActiveCommunityGroupIdsForUser(viewerUserId!)
+      : [];
+    const communityScopeWhere: Prisma.PostWhereInput =
+      memberGroupIds.length > 0
+        ? { OR: [this.excludeCommunityGroupPostsWhere(), { communityGroupId: { in: memberGroupIds } }] }
+        : this.excludeCommunityGroupPostsWhere();
+
     const where = followingOnly
       ? {
           AND: [
             visibilityWhere,
             this.notDeletedWhere(),
-            this.excludeCommunityGroupPostsWhere(),
+            communityScopeWhere,
             this.userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
             ...(params.mediaOnly ? [this.mediaOnlyWhere()] : []),
@@ -868,7 +882,7 @@ export class PostsService {
           AND: [
             visibilityWhere,
             this.notDeletedWhere(),
-            this.excludeCommunityGroupPostsWhere(),
+            communityScopeWhere,
             this.userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
             ...(params.mediaOnly ? [this.mediaOnlyWhere()] : []),
@@ -1348,8 +1362,10 @@ export class PostsService {
     kind: 'regular' | 'checkin' | null;
     mediaOnly?: boolean;
     topLevelOnly?: boolean;
+    memberGroupIds?: string[];
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, decodedCursor, visibility, allowed, authorUserIds, kind } = params;
+    const memberGroupIds = params.memberGroupIds ?? [];
 
     const baseVisibilityWhere: Prisma.PostWhereInput =
       visibility === 'all'
@@ -1387,20 +1403,26 @@ export class PostsService {
             ],
           }
         : {};
+    const communityScopeWhere: Prisma.PostWhereInput =
+      memberGroupIds.length > 0
+        ? { OR: [this.excludeCommunityGroupPostsWhere(), { communityGroupId: { in: memberGroupIds } }] }
+        : this.excludeCommunityGroupPostsWhere();
 
     const posts = await this.prisma.post.findMany({
       where: {
-        deletedAt: null,
-        communityGroupId: null,
-        trendingScore: params.mediaOnly ? { gte: 0 } : { gt: 0 },
-        kind: { not: 'repost' },
-        user: { bannedAt: null },
-        ...(kind ? { kind } : {}),
-        ...(authorUserIds?.length ? { userId: { in: authorUserIds } } : {}),
-        ...(params.mediaOnly ? this.mediaOnlyWhere() : {}),
-        ...(params.topLevelOnly ? { parentId: null } : {}),
-        ...visibilityWhere,
-        ...cursorWhere,
+        AND: [
+          { deletedAt: null },
+          { trendingScore: params.mediaOnly ? { gte: 0 } : { gt: 0 } },
+          { kind: { not: 'repost' } },
+          { user: { bannedAt: null } },
+          communityScopeWhere,
+          ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
+          ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
+          ...(params.mediaOnly ? [this.mediaOnlyWhere()] : []),
+          ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
+          visibilityWhere,
+          cursorWhere,
+        ],
       },
       orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
@@ -2438,6 +2460,11 @@ export class PostsService {
       return { posts: [], nextCursor: null, scoreByPostId: new Map() };
     }
 
+    const canIncludeMemberGroupPosts = Boolean(viewerUserId && !requestedAuthorUserIds?.length);
+    const memberGroupIds = canIncludeMemberGroupPosts
+      ? await this.listActiveCommunityGroupIdsForUser(viewerUserId!)
+      : [];
+
     const visibilityWhere =
       visibility === 'all'
         ? ({ visibility: { in: allowed } } as Prisma.PostWhereInput)
@@ -2465,6 +2492,7 @@ export class PostsService {
         kind,
         mediaOnly: params.mediaOnly,
         topLevelOnly: params.topLevelOnly,
+        memberGroupIds,
       });
     }
 
