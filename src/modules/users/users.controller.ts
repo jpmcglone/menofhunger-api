@@ -1,4 +1,4 @@
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, Patch, Put, Query, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, NotFoundException, Param, Patch, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import type { Response } from 'express';
@@ -27,6 +27,21 @@ import { SlackService } from '../../common/slack/slack.service';
 const setUsernameSchema = z.object({
   username: z.string().min(1),
 });
+
+const PREVIEW_BATCH_MAX = 50;
+const previewBatchSchema = z.object({
+  usernames: z.array(z.string().min(1).max(64)).min(1).max(PREVIEW_BATCH_MAX),
+});
+
+type PreviewBatchEntry = {
+  username: string;
+  id: string | null;
+  premium?: boolean;
+  premiumPlus?: boolean;
+  isOrganization?: boolean;
+  stewardBadgeEnabled?: boolean;
+  verifiedStatus?: string;
+};
 
 function formatBirthdayMonthDay(birthdate: Date): string {
   // Use UTC to avoid timezone surprises.
@@ -841,6 +856,80 @@ export class UsersController {
       }
       throw err;
     }
+  }
+
+  /**
+   * Lightweight batch lookup for chat @mention validation.
+   *
+   * Returns one entry per requested username with `id` (null when the username
+   * doesn't resolve to a real user) plus tier signals (`premium`, `premiumPlus`,
+   * `isOrganization`, `stewardBadgeEnabled`, `verifiedStatus`) that the chat UI
+   * uses to color the mention.
+   *
+   * Replaces the per-message GET /users/:username/preview fan-out that was
+   * dispatched on chat mount — at 50 messages with a few mentions each, the old
+   * shape produced 50+ HTTP requests; this is one round-trip.
+   */
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 300),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @UseGuards(OptionalAuthGuard)
+  @Post('preview/batch')
+  @HttpCode(200)
+  async userPreviewBatch(@Body() body: unknown) {
+    const parsed = previewBatchSchema.parse(body);
+
+    // Normalize + dedupe input (preserve insertion order for the response shape).
+    const requested: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of parsed.usernames) {
+      const un = (raw ?? '').toLowerCase().trim();
+      if (!un || seen.has(un)) continue;
+      seen.add(un);
+      requested.push(un);
+    }
+    if (requested.length === 0) return { data: { results: [] as PreviewBatchEntry[] } };
+
+    const rows = await this.prisma.user.findMany({
+      where: {
+        username: { in: requested, mode: 'insensitive' },
+        bannedAt: null,
+      },
+      select: {
+        id: true,
+        username: true,
+        premium: true,
+        premiumPlus: true,
+        isOrganization: true,
+        stewardBadgeEnabled: true,
+        verifiedStatus: true,
+      },
+    });
+
+    const byLowerUsername = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const key = (row.username ?? '').toLowerCase().trim();
+      if (key) byLowerUsername.set(key, row);
+    }
+
+    const results: PreviewBatchEntry[] = requested.map((username) => {
+      const found = byLowerUsername.get(username);
+      if (!found) return { username, id: null };
+      return {
+        username,
+        id: found.id,
+        premium: Boolean(found.premium),
+        premiumPlus: Boolean(found.premiumPlus),
+        isOrganization: Boolean(found.isOrganization),
+        stewardBadgeEnabled: Boolean(found.stewardBadgeEnabled),
+        verifiedStatus: String(found.verifiedStatus ?? 'none'),
+      };
+    });
+
+    return { data: { results } };
   }
 
   @Throttle({

@@ -44,3 +44,8 @@ export const POST_WITH_POLL_INCLUDE = {
   article: ARTICLE_SHARE_INCLUDE,
 } as const;
 
+export const POST_MEDIA_FEED_INCLUDE = {
+  user: { select: USER_LIST_SELECT },
+  media: { orderBy: { position: 'asc' as const } },
+} as const;
+

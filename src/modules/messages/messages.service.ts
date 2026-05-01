@@ -42,6 +42,15 @@ import { PosthogService } from '../../common/posthog/posthog.service';
 
 const MESSAGE_UNREAD_CACHE_TTL_MS = 30_000;
 
+/**
+ * Minimum interval between successive `messages:updated` socket emits per user.
+ * Multiple state-changing operations in a burst (mark-read on chat open with
+ * many unread, rapid send + auto-mark-read, etc.) used to re-run the unread
+ * query and re-emit identical totals N times within a few milliseconds. We
+ * coalesce them to one emit per window per user.
+ */
+const UNREAD_EMIT_COALESCE_WINDOW_MS = 250;
+
 const CONVERSATION_LIST_LIMIT = 30;
 const MESSAGE_LIST_LIMIT = 50;
 const MESSAGE_BODY_MAX = 2000;
@@ -85,6 +94,17 @@ type ConversationCursor = { updatedAt: string; id: string };
 @Injectable()
 export class MessagesService {
   private readonly logger = new Logger(MessagesService.name);
+
+  /**
+   * Per-user state for `emitUnreadCounts` coalescing.
+   * - `timer`: a pending timer that will fire `runUnreadEmit` after the window.
+   * - `lastEmitAt`: epoch ms of the last successful emit; used to compute the
+   *   minimum delay before the next one can fire.
+   */
+  private readonly unreadEmitState = new Map<
+    string,
+    { timer: NodeJS.Timeout | null; lastEmitAt: number }
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -264,19 +284,47 @@ export class MessagesService {
   }
 
   private emitUnreadCounts(userId: string): void {
-    // Bust the HTTP cache so the next /unread-count poll gets fresh data.
-    this.invalidateUnreadSummaryCache(userId);
+    const id = (userId ?? '').trim();
+    if (!id) return;
 
-    void this.getUnreadCounts(userId)
-      .then((counts) => {
-        this.presenceRealtime.emitMessagesUpdated(userId, {
-          primaryUnreadCount: counts.primary,
-          requestUnreadCount: counts.requests,
-        });
-      })
-      .catch((err) => {
-        this.logger.warn(`emitUnreadCounts failed for userId=${userId}: ${(err as Error)?.message ?? String(err)}`);
+    // Bust the HTTP cache eagerly so the next /unread-count poll gets fresh
+    // data even if we coalesce the socket emit.
+    this.invalidateUnreadSummaryCache(id);
+
+    const state = this.unreadEmitState.get(id) ?? { timer: null, lastEmitAt: 0 };
+    if (state.timer) {
+      // A run is already scheduled — it will pick up the latest counts.
+      return;
+    }
+
+    const now = Date.now();
+    const elapsed = now - state.lastEmitAt;
+    const delay = elapsed >= UNREAD_EMIT_COALESCE_WINDOW_MS ? 0 : UNREAD_EMIT_COALESCE_WINDOW_MS - elapsed;
+
+    state.timer = setTimeout(() => {
+      // Clear timer slot BEFORE the async work so a fresh emit landing while
+      // the query is in flight queues a follow-up rather than getting dropped.
+      const current = this.unreadEmitState.get(id);
+      if (current) current.timer = null;
+      void this.runUnreadEmit(id);
+    }, delay);
+    state.timer.unref?.();
+    this.unreadEmitState.set(id, state);
+  }
+
+  private async runUnreadEmit(userId: string): Promise<void> {
+    try {
+      const counts = await this.getUnreadCounts(userId);
+      this.presenceRealtime.emitMessagesUpdated(userId, {
+        primaryUnreadCount: counts.primary,
+        requestUnreadCount: counts.requests,
       });
+      const state = this.unreadEmitState.get(userId);
+      if (state) state.lastEmitAt = Date.now();
+      else this.unreadEmitState.set(userId, { timer: null, lastEmitAt: Date.now() });
+    } catch (err) {
+      this.logger.warn(`emitUnreadCounts failed for userId=${userId}: ${(err as Error)?.message ?? String(err)}`);
+    }
   }
 
   /**

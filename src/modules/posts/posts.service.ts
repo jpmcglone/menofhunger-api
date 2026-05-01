@@ -16,7 +16,7 @@ import { inferTopicsFromText } from '../../common/topics/topic-utils';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
-import { ARTICLE_SHARE_INCLUDE, POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
+import { ARTICLE_SHARE_INCLUDE, POST_MEDIA_FEED_INCLUDE, POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
@@ -41,6 +41,7 @@ export type PostCounts = {
 };
 
 const feedPostInclude = POST_WITH_POLL_INCLUDE;
+const mediaFeedPostInclude = POST_MEDIA_FEED_INCLUDE;
 type FeedPost = Prisma.PostGetPayload<{ include: typeof feedPostInclude }>;
 type FeedResult = { posts: FeedPost[]; nextCursor: string | null };
 type PopularFeedResult = FeedResult & { scoreByPostId: Map<string, number> };
@@ -896,13 +897,14 @@ export class PostsService {
       lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
     });
     const whereWithCursor = cursorWhere ? ({ AND: [where, cursorWhere] } as Prisma.PostWhereInput) : where;
+    const include = params.mediaOnly ? mediaFeedPostInclude : feedPostInclude;
 
-    const posts = await this.prisma.post.findMany({
+    const posts = (await this.prisma.post.findMany({
       where: whereWithCursor,
-      include: feedPostInclude,
+      include,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
-    });
+    })) as FeedPost[];
 
     const slice = posts.slice(0, limit);
     const nextCursor = posts.length > limit ? slice[slice.length - 1]?.id ?? null : null;
@@ -1412,7 +1414,9 @@ export class PostsService {
       where: {
         AND: [
           { deletedAt: null },
-          { trendingScore: params.mediaOnly ? { gte: 0 } : { gt: 0 } },
+          params.mediaOnly
+            ? { OR: [{ trendingScore: { gte: 0 } }, { trendingScore: null }] }
+            : { trendingScore: { gt: 0 } },
           { kind: { not: 'repost' } },
           { user: { bannedAt: null } },
           communityScopeWhere,
@@ -1426,7 +1430,7 @@ export class PostsService {
       },
       orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
-      include: feedPostInclude,
+      include: params.mediaOnly ? mediaFeedPostInclude : feedPostInclude,
     }) as FeedPost[];
 
     const slicePosts = posts.slice(0, limit);
@@ -1553,7 +1557,7 @@ export class PostsService {
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: take + 1,
-        include: feedPostInclude,
+        include: mediaFeedPostInclude,
       })) as FeedPost[];
       return { posts: rows.slice(0, take), overflow: rows.length > take };
     };
@@ -2003,7 +2007,7 @@ export class PostsService {
     const posts = pickedIds.length
       ? ((await this.prisma.post.findMany({
           where: { id: { in: pickedIds }, ...this.notDeletedWhere() },
-          include: feedPostInclude,
+          include: params.mediaOnly ? mediaFeedPostInclude : feedPostInclude,
         })) as FeedPost[])
       : [];
     const byId = new Map(posts.map((p) => [p.id, p] as const));

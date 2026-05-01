@@ -19,6 +19,6 @@ describe('PostsController media feed guardrails', () => {
 
   it('lets media trending include zero-score media instead of going empty', () => {
     const src = readFromRepo('src/modules/posts/posts.service.ts');
-    expect(src).toContain('{ trendingScore: params.mediaOnly ? { gte: 0 } : { gt: 0 } },');
+    expect(src).toContain("? { OR: [{ trendingScore: { gte: 0 } }, { trendingScore: null }] }");
   });
 });
