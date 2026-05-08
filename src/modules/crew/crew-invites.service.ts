@@ -136,9 +136,10 @@ export class CrewInvitesService {
     // Invitee must also be verified (crews require verified men only).
     const invitee = await this.prisma.user.findUnique({
       where: { id: inviteeId },
-      select: { id: true, verifiedStatus: true, bannedAt: true },
+      select: { id: true, verifiedStatus: true, bannedAt: true, isBot: true },
     });
     if (!invitee || invitee.bannedAt) throw new NotFoundException('User not found.');
+    if (invitee.isBot) throw new BadRequestException('Bot users cannot be added to a crew.');
     if (!invitee.verifiedStatus || invitee.verifiedStatus === 'none') {
       throw new BadRequestException('You can only invite verified members to your crew.');
     }

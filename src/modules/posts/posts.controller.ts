@@ -904,13 +904,30 @@ export class PostsController {
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
 
-    // Collect ancestor chain (post + all parents) for boost/bookmark and DTO building
+    // Collect ancestor chain (post + all parents) for boost/bookmark and DTO building.
+    // If the viewer can't access an ancestor (e.g. public reply inside a verified-only thread),
+    // fall back to the gated preview instead of propagating a 403 for the whole permalink.
     const chain: Awaited<ReturnType<typeof this.posts.getById>>[] = [];
+    const gatedChainIndices = new Set<number>();
     let current: Awaited<ReturnType<typeof this.posts.getById>> | null = post;
     while (current) {
       chain.push(current);
       const parentId: string | null | undefined = (current as { parentId?: string | null }).parentId;
-      current = parentId ? await this.posts.getById({ viewerUserId, id: parentId }) : null;
+      if (!parentId) { current = null; break; }
+      try {
+        current = await this.posts.getById({ viewerUserId, id: parentId });
+      } catch (e) {
+        if (e instanceof ForbiddenException) {
+          const gatedParent = await this.posts.getByIdNoAccess(parentId).catch(() => null);
+          if (gatedParent) {
+            chain.push(gatedParent);
+            gatedChainIndices.add(chain.length - 1);
+          }
+          current = null;
+        } else {
+          throw e;
+        }
+      }
     }
 
     // Also fetch the reposted post if this is a flat repost.
@@ -1002,11 +1019,18 @@ export class PostsController {
     // Build reposted post DTO first (if this is a flat repost).
     const repostedPostDto = repostedPostRaw ? toDto(repostedPostRaw as any, {}) : undefined;
 
-    // Build from root down: chain[chain.length-1] is root, chain[0] is leaf (the post we're viewing)
-    let dto = toDto(chain[chain.length - 1], { repostedPost: repostedPostDto });
+    // Build from root down: chain[chain.length-1] is root, chain[0] is leaf (the post we're viewing).
+    // A chain entry is gated when either (a) the leaf was inaccessible (!viewerCanAccess && i===0)
+    // or (b) an ancestor was fetched via getByIdNoAccess because the viewer's tier was too low.
+    const rootIdx = chain.length - 1;
+    let dto = toDto(chain[rootIdx], {
+      repostedPost: repostedPostDto,
+      isGatedRoot: gatedChainIndices.has(rootIdx),
+      groupPreview: gatedChainIndices.has(rootIdx) ? groupPreview ?? undefined : undefined,
+    });
     for (let i = chain.length - 2; i >= 0; i--) {
-      // chain[0] is the leaf post (the one actually requested); mark it gated if access was denied.
-      dto = toDto(chain[i], { parent: dto, isGatedRoot: !viewerCanAccess && i === 0, groupPreview });
+      const isGated = (!viewerCanAccess && i === 0) || gatedChainIndices.has(i);
+      dto = toDto(chain[i], { parent: dto, isGatedRoot: isGated, groupPreview: isGated ? groupPreview ?? undefined : undefined });
     }
     // Single-post case (no parent): the chain has only one entry, already built above.
     if (!viewerCanAccess && chain.length === 1) {

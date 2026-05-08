@@ -61,6 +61,7 @@ export type UserListRow = {
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
   createdAt?: Date;
+  isBot?: boolean;
   /** Org affiliations (populated when USER_LIST_SELECT is used). */
   orgMemberships?: OrgMembershipRow[];
 };
@@ -79,6 +80,7 @@ export type UserListDto = {
   orgAffiliations: OrgAffiliationDto[];
   relationship?: UserListRelationship;
   createdAt?: string;
+  isBot?: boolean;
 };
 
 export function toUserListDto(
@@ -112,6 +114,7 @@ export function toUserListDto(
       }),
     })),
   };
+  if (row.isBot) dto.isBot = true;
   if (opts?.relationship) dto.relationship = opts.relationship;
   if (opts?.createdAt !== undefined) dto.createdAt = opts.createdAt.toISOString();
   else if (row.createdAt) dto.createdAt = row.createdAt.toISOString();

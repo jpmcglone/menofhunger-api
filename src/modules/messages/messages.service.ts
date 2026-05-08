@@ -69,6 +69,7 @@ const MESSAGE_SENDER_SELECT = {
   verifiedStatus: true,
   avatarKey: true,
   avatarUpdatedAt: true,
+  isBot: true,
 } as const;
 
 const MESSAGE_INCLUDE = {
@@ -211,6 +212,7 @@ export class MessagesService {
                 avatarKey: true,
                 avatarUpdatedAt: true,
                 bannedAt: true,
+                isBot: true,
               },
             },
           },
@@ -409,6 +411,7 @@ export class MessagesService {
                 avatarKey: true,
                 avatarUpdatedAt: true,
                 bannedAt: true,
+                isBot: true,
               },
             },
           },
@@ -523,6 +526,7 @@ export class MessagesService {
             avatarKey: true,
             avatarUpdatedAt: true,
             bannedAt: true,
+            isBot: true,
           },
         },
       },
