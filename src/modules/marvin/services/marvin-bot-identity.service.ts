@@ -11,7 +11,8 @@ import { MARV_BOT_TYPE } from '../marvin.constants';
  *
  *  1. On boot, looks up the configured Marv user (preferring `MARV_USER_ID`, falling
  *     back to a username lookup).
- *  2. If missing, upserts a User row with `isBot=true`, `botType='marvin'`, `premium=true`.
+ *  2. If missing, creates a User row with `isBot=true`, `botType='marvin'`, `premium=true`
+ *     and seeds an introductory post. If found, nothing is changed.
  *  3. Caches the resolved id in memory so subsequent callers (`MarvinMentionDetector`,
  *     `MarvinPublicReplyProcessor`, etc.) never hit the database.
  *
@@ -94,18 +95,6 @@ export class MarvinBotIdentityService implements OnModuleInit {
       `
     )[0];
     if (byUsername) {
-      // Re-assert bot flags + premium in case they got reset by an earlier admin tool.
-      await this.prisma.user.update({
-        where: { id: byUsername.id },
-        data: {
-          isBot: true,
-          botType: MARV_BOT_TYPE,
-          premium: true,
-          usernameIsSet: true,
-          name: cfg.displayName,
-          bio: cfg.bio,
-        },
-      });
       this.cachedUserId = byUsername.id;
       this.cachedUsernameLower = usernameLower;
       return byUsername.id;
