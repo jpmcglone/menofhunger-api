@@ -131,6 +131,27 @@ export class PresenceRealtimeService {
     this.emitToUser(userId, 'messages:updated', payload);
   }
 
+  /**
+   * Server-initiated typing indicator (e.g. Marv "is typing" while the AI call is
+   * in flight). Mirrors the payload shape of the client-emitted `messages:typing`
+   * event so the existing web `useChatTyping` composable picks it up unchanged.
+   *
+   * @param toUserId   Recipient (the human who's seeing "Marv is typing…")
+   * @param fromUserId The "typing" user id (Marv's bot user id)
+   * @param payload    `{ conversationId, typing }`
+   */
+  emitMessagesTypingFromUser(
+    toUserId: string,
+    fromUserId: string,
+    payload: { conversationId: string; typing: boolean },
+  ): void {
+    this.emitToUser(toUserId, 'messages:typing', {
+      conversationId: payload.conversationId,
+      userId: fromUserId,
+      typing: payload.typing,
+    });
+  }
+
   emitMessagesRead(userId: string, payload: MessagesReadPayloadDto): void {
     this.emitToUser(userId, 'messages:read', payload);
   }
@@ -334,6 +355,36 @@ export class PresenceRealtimeService {
 
   emitCrewTransferVote(userIds: Iterable<string>, payload: { crewId: string; vote: unknown }): void {
     this.emitToUsers(userIds, 'crew:transfer-vote', payload);
+  }
+
+  /**
+   * Marv credits changed for a user (refill applied or credits spent on a reply). The web
+   * client uses this to refresh the credits chip in the chat page / settings without polling.
+   * Carries the same shape as `MarvCreditSummaryDto` so the client can patch state in place.
+   */
+  emitMarvCreditsUpdated(
+    userId: string,
+    payload: {
+      credits: number;
+      maxCredits: number;
+      creditsPerDay: number;
+      lastRefilledAt: string;
+    },
+  ): void {
+    this.emitToUser(userId, 'marv:credits-updated', payload);
+  }
+
+  /**
+   * Marv finished generating a public reply on a thread the viewer is watching. Mirrors
+   * `posts:comment-added` semantics — the payload is the same `PostsCommentAddedPayloadDto`
+   * the room broadcast already uses, so callers should typically just call
+   * `emitPostsCommentAdded` for the reply itself. This event is reserved for surfaces that
+   * specifically want to highlight a Marv-authored reply in real time.
+   */
+  emitMarvPublicReplyPosted(parentPostId: string, payload: { post: unknown }): void {
+    const pid = (parentPostId ?? '').trim();
+    if (!pid) return;
+    this.emitToRoom(`post:${pid}`, 'marv:public-reply-posted', payload);
   }
 }
 

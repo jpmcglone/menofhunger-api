@@ -73,6 +73,10 @@ function makeService(
   const jobs: any = { enqueue: jest.fn(async () => undefined) };
   const posthog: any = { capture: jest.fn() };
   const redis: any = {};
+  const marvIdentity: any = {
+    cachedMarvUserId: jest.fn(() => null),
+    getMarvUserId: jest.fn(async () => null),
+  };
 
   const deps = {
     prisma,
@@ -87,6 +91,7 @@ function makeService(
     jobs,
     posthog,
     redis,
+    marvIdentity,
     ...extraOverrides,
   };
 
@@ -103,6 +108,7 @@ function makeService(
     deps.jobs,
     deps.posthog,
     deps.redis,
+    deps.marvIdentity,
   );
 
   return { service, deps };

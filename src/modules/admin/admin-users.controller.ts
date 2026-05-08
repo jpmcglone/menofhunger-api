@@ -34,6 +34,8 @@ import { BillingService } from '../billing/billing.service';
 import { sanitizeFeatureToggles } from '../../common/feature-toggles';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { CoinsService } from '../coins/coins.service';
+import { UsersLocationService } from '../users/users-location.service';
+import { UploadsService } from '../uploads/uploads.service';
 
 const paginatedSearchSchema = z.object({
   q: z.string().optional(),
@@ -54,6 +56,8 @@ const updateUserSchema = z.object({
   username: z.union([z.string().trim().min(1), z.null()]).optional(),
   name: z.string().trim().max(50).nullable().optional(),
   bio: z.string().trim().max(160).nullable().optional(),
+  website: z.union([z.string().trim().max(200), z.literal('')]).optional(),
+  locationQuery: z.union([z.string().trim().max(120), z.literal('')]).optional(),
   isOrganization: z.boolean().optional(),
   verifiedStatus: z.enum(['none', 'identity', 'manual']).optional(),
   featureToggles: z.array(z.string()).max(50).optional(),
@@ -88,6 +92,8 @@ export class AdminUsersController {
     private readonly entitlementService: EntitlementService,
     private readonly billingService: BillingService,
     private readonly coinsService: CoinsService,
+    private readonly usersLocation: UsersLocationService,
+    private readonly uploads: UploadsService,
   ) {}
 
   private get publicBaseUrl(): string | null {
@@ -601,6 +607,44 @@ export class AdminUsersController {
       data.bio = parsed.bio === null ? null : (parsed.bio || null);
     }
 
+    if (parsed.website !== undefined) {
+      const raw = (parsed.website ?? '').trim();
+      if (!raw) {
+        data.website = null;
+      } else {
+        const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+        try {
+          const u = new URL(withScheme);
+          u.hash = '';
+          data.website = u.toString();
+        } catch {
+          throw new BadRequestException('Website must be a valid URL.');
+        }
+      }
+    }
+
+    if (parsed.locationQuery !== undefined) {
+      const q = (parsed.locationQuery ?? '').trim();
+      if (!q) {
+        data.locationInput = null;
+        data.locationDisplay = null;
+        data.locationZip = null;
+        data.locationCity = null;
+        data.locationCounty = null;
+        data.locationState = null;
+        data.locationCountry = null;
+      } else {
+        const loc = await this.usersLocation.normalizeUsLocation(q);
+        data.locationInput = loc.input;
+        data.locationDisplay = loc.display;
+        data.locationZip = loc.zip;
+        data.locationCity = loc.city;
+        data.locationCounty = loc.county;
+        data.locationState = loc.state;
+        data.locationCountry = loc.country;
+      }
+    }
+
     // Org invariant: org accounts must be verified AND have at least some form of premium access.
     // current.premium reflects all sources (Stripe + grants) as computed by EntitlementService.
     const effectiveVerifiedStatus = parsed.verifiedStatus ?? current.verifiedStatus;
@@ -689,6 +733,34 @@ export class AdminUsersController {
       }
       throw err;
     }
+  }
+
+  @Post(':id/uploads/avatar/init')
+  async adminInitAvatar(@Param('id') id: string, @Body() body: unknown) {
+    const { contentType } = z.object({ contentType: z.string().min(1) }).parse(body);
+    const result = await this.uploads.initAvatarUpload(id, contentType);
+    return { data: result };
+  }
+
+  @Post(':id/uploads/avatar/commit')
+  async adminCommitAvatar(@Param('id') id: string, @Body() body: unknown) {
+    const { key } = z.object({ key: z.string().min(1) }).parse(body);
+    const result = await this.uploads.commitAvatarUpload(id, key);
+    return { data: result };
+  }
+
+  @Post(':id/uploads/banner/init')
+  async adminInitBanner(@Param('id') id: string, @Body() body: unknown) {
+    const { contentType } = z.object({ contentType: z.string().min(1) }).parse(body);
+    const result = await this.uploads.initBannerUpload(id, contentType);
+    return { data: result };
+  }
+
+  @Post(':id/uploads/banner/commit')
+  async adminCommitBanner(@Param('id') id: string, @Body() body: unknown) {
+    const { key } = z.object({ key: z.string().min(1) }).parse(body);
+    const result = await this.uploads.commitBannerUpload(id, key);
+    return { data: result };
   }
 
   @Post(':id/coins/adjust')

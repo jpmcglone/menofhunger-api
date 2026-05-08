@@ -30,6 +30,7 @@ import { PostViewsService } from '../post-views/post-views.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { PosthogService } from '../../common/posthog/posthog.service';
+import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
 import { LOGGED_IN_VIEW_WEIGHT } from '../views/view-tracking.utils';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 
@@ -63,6 +64,7 @@ export class PostsService {
     private readonly jobs: JobsService,
     private readonly posthog: PosthogService,
     private readonly redis: RedisService,
+    private readonly marvIdentity: MarvinBotIdentityService,
   ) {}
 
   /**
@@ -4738,8 +4740,15 @@ export class PostsService {
     checkinPrompt?: string | null;
     /** Top-level post only: creates a post inside this community group (membership required). */
     communityGroupId?: string | null;
+    /**
+     * Optional Marv reply-mode hint, sourced from the `x-marv-mode` request header. Only
+     * has any effect when @marv is mentioned in the body — the public-reply processor reads
+     * this off the enqueued job to choose the OpenAI model. Ignored otherwise.
+     */
+    marvMode?: 'fast' | 'regular' | 'smart' | null;
   }) {
     const { userId, body, visibility: requestedVisibility, parentId, mentions: clientMentions } = params;
+    const requestedMarvMode = params.marvMode ?? null;
     const requestedCommunityGroupId = (params.communityGroupId ?? '').trim() || null;
     const kind = (params.kind ?? 'regular') as 'regular' | 'checkin';
     const now = new Date();
@@ -5406,6 +5415,7 @@ export class PostsService {
         visibility,
         quotedInfo,
         didAwardStreak: didAwardStreakSnapshot,
+        requestedMarvMode,
       });
     });
 
@@ -5458,6 +5468,7 @@ export class PostsService {
     visibility: PostVisibility;
     quotedInfo: { quotedAuthorId: string; quotedPostId: string } | null;
     didAwardStreak: boolean;
+    requestedMarvMode: 'fast' | 'regular' | 'smart' | null;
   }): Promise<void> {
     const {
       actorUserId,
@@ -5471,6 +5482,7 @@ export class PostsService {
       visibility,
       quotedInfo,
       didAwardStreak,
+      requestedMarvMode,
     } = args;
     const userId = actorUserId;
     const postCommunityGroupId = (post as { communityGroupId?: string | null }).communityGroupId ?? null;
@@ -5805,6 +5817,95 @@ export class PostsService {
         } catch {
           // Best-effort
         }
+      }
+
+      // ─── Marv: detect @marv in the post body and enqueue an async reply job ────
+      // Fully decoupled — PostsService doesn't know about MarvinModule. Mention detection
+      // runs against the configured Marv username from env so the queueing surface stays
+      // dumb and the processor handles all gating (premium, credits, rate limits, AI call).
+      //
+      // Two triggers:
+      //   1. Explicit — the body contains @marv (the configured username).
+      //   2. Implicit — the post is a direct reply to a post authored by Marv. The
+      //      user doesn't need to type @marv; replying to Marv directly implies the mention.
+      try {
+        const marvCfg = this.appConfig.marvBot();
+        if (!marvCfg.enabled) {
+          this.logger.log(`[marv] mention-detect post=${post.id} skip reason=marv_disabled`);
+        } else {
+          const marvUsernameLower = marvCfg.username.trim().toLowerCase();
+          const bodyMentions = this.parseMentionsFromBody(post.body ?? '').map((u) =>
+            u.trim().toLowerCase(),
+          );
+          const bodyMentionUsernamesLower = new Set(bodyMentions);
+          const resolvedMarvId = this.marvIdentity.cachedMarvUserId() ?? marvCfg.userId ?? null;
+          const actorIsMarv = Boolean(resolvedMarvId && actorUserId === resolvedMarvId);
+          const mentionsMarv = bodyMentionUsernamesLower.has(marvUsernameLower);
+
+          // Check for implied mention: direct reply to one of Marv's posts.
+          let impliedMention = false;
+          const parentPostId = (post as { parentId?: string | null }).parentId ?? null;
+          if (!mentionsMarv && !actorIsMarv && parentPostId && resolvedMarvId) {
+            const parentAuthor = await this.prisma.post.findFirst({
+              where: { id: parentPostId, deletedAt: null },
+              select: { userId: true },
+            });
+            impliedMention = parentAuthor?.userId === resolvedMarvId;
+            if (impliedMention) {
+              this.logger.log(
+                `[marv] mention-detect post=${post.id} implied-mention via direct reply to parent=${parentPostId} (authored by marv)`,
+              );
+            }
+          }
+
+          if (!mentionsMarv && !impliedMention) {
+            this.logger.log(
+              `[marv] mention-detect post=${post.id} skip reason=no_mention mentions=[${bodyMentions.join(',') || '-'}] expected=@${marvUsernameLower}`,
+            );
+          } else if (actorIsMarv) {
+            this.logger.log(`[marv] mention-detect post=${post.id} skip reason=actor_is_marv`);
+          } else {
+            const rootPostId = (post as { rootId?: string | null }).rootId ?? post.id;
+            this.logger.log(
+              `[marv] mention-detect post=${post.id} HIT enqueueing root=${rootPostId} actor=${actorUserId} requestedMode=${requestedMarvMode ?? 'null'}`,
+            );
+            await this.jobs
+              .enqueue(
+                JOBS.marvinReplyPublic,
+                {
+                  postId: post.id,
+                  rootPostId,
+                  requestingUserId: actorUserId,
+                  requestedMode: requestedMarvMode,
+                  bodySnippet,
+                  visibility,
+                },
+                {
+                  // Stable job id per (post, requester) so duplicate side-effect runs
+                  // (which shouldn't happen, but guard cheaply) don't enqueue twice.
+                  jobId: `marv-public-${post.id}`,
+                  removeOnComplete: true,
+                  removeOnFail: false,
+                  attempts: 3,
+                  backoff: { type: 'exponential' as const, delay: 5000 },
+                },
+              )
+              .then(() => {
+                this.logger.log(`[marv] mention-detect post=${post.id} enqueued ok`);
+              })
+              .catch((err) => {
+                this.logger.warn(
+                  `[marv] Failed to enqueue public reply job for post=${post.id}: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                );
+              });
+          }
+        }
+      } catch (err) {
+        this.logger.warn(
+          `[marv] mention-detection during side-effects failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     } catch (err) {
       this.logger.warn(

@@ -47,6 +47,13 @@ export const JOBS = {
   crewInvitesExpire: 'crew.invitesExpire',
   crewTransferVotesExpire: 'crew.transferVotesExpire',
   crewInactiveOwnerAutoTransfer: 'crew.inactiveOwnerAutoTransfer',
+
+  // Marvin (the AI helper)
+  marvinReplyPublic: 'marvin.reply.public',
+  marvinReplyPrivate: 'marvin.reply.private',
+  marvinContextCardsRefresh: 'marvin.contextCards.refresh',
+  marvinSummarizeThread: 'marvin.summarizeThread',
+  marvinCostRollup: 'marvin.costRollup',
 } as const;
 
 export type JobName = (typeof JOBS)[keyof typeof JOBS];

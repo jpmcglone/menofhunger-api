@@ -54,6 +54,8 @@ import { TaxonomyModule } from '../taxonomy/taxonomy.module';
 import { GroupsModule } from '../groups/groups.module';
 import { CrewModule } from '../crew/crew.module';
 import { LandingModule } from '../landing/landing.module';
+import { MarvinIdentityModule } from '../marvin/marvin-identity.module';
+import { MarvinModule } from '../marvin/marvin.module';
 
 // Module wiring is static; use env flags as a pragmatic switch for which processes host consumers.
 const RUN_JOB_CONSUMERS_RAW = (process.env.RUN_JOB_CONSUMERS ?? 'true').trim().toLowerCase();
@@ -126,6 +128,8 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     CrewModule,
     LandingModule,
     CoinsModule,
+    MarvinIdentityModule,
+    MarvinModule,
     ...(RUN_JOB_CONSUMERS ? [JobsConsumersModule] : []),
   ],
   controllers: [AppController],

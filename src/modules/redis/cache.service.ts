@@ -13,6 +13,10 @@ export class CacheService {
     await this.redis.setJson(key, value, opts);
   }
 
+  async del(...keys: string[]): Promise<void> {
+    await this.redis.del(...keys);
+  }
+
   /**
    * Read-through cache for JSON values.
    * If `enabled` is false, it bypasses cache but still computes the value.

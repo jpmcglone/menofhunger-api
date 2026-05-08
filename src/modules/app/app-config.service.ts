@@ -53,6 +53,54 @@ export type MapboxConfig = {
   geocodeTimeoutMs: number;
 };
 
+export type MarvBotConfig = {
+  enabled: boolean;
+  /** When set, prefer this id over username lookup. */
+  userId: string | null;
+  username: string;
+  displayName: string;
+  bio: string;
+  phone: string;
+};
+
+export type MarvOpenAIConfig = {
+  apiKey: string;
+  /** OpenAI Stored Prompt id (e.g. "pmpt_..."). When unset, OpenAI calls are short-circuited. */
+  promptId: string | null;
+  promptVersion: string | null;
+  fastModel: string;
+  regularModel: string;
+  smartModel: string;
+  /** When true, `web_search_preview` is added to Marv requests for qualifying modes. */
+  webSearchEnabled: boolean;
+  /** Modes (subset of 'fast' | 'regular' | 'smart') that may use web search. */
+  webSearchModes: string[];
+  /** max_output_tokens override when web search is active — must be larger than the base limit. */
+  webSearchMaxOutputTokens: number;
+};
+
+export type MarvCreditConfig = {
+  monthlyCredits: number;
+  maxCredits: number;
+  creditsPerDay: number;
+  fastCost: number;
+  regularCost: number;
+  smartCost: number;
+  /** Extra credits charged per web search call Marv makes within a single reply. */
+  webSearchCreditCost: number;
+};
+
+export type MarvLimitsConfig = {
+  publicMaxInputTokens: number;
+  privateMaxInputTokens: number;
+  maxOutputTokens: number;
+  publicMaxPerUserPerHour: number;
+  publicMaxPerUserPerDay: number;
+  publicThreadCooldownSeconds: number;
+  privateMaxPerUserPerDay: number;
+  privateMaxPer10Minutes: number;
+};
+
 @Injectable()
 export class AppConfigService {
   private readonly logger = new Logger(AppConfigService.name);
@@ -390,6 +438,71 @@ export class AppConfigService {
 
   posthogHost(): string {
     return (this.config.get<string>('POSTHOG_HOST')?.trim() || 'https://us.i.posthog.com').trim();
+  }
+
+  // ─── Marv (AI helper) ────────────────────────────────────────────────────
+
+  marvBot(): MarvBotConfig {
+    const enabled = this.readBool('MARV_ENABLED', true);
+    const userId = this.config.get<string>('MARV_USER_ID')?.trim() || null;
+    const username = this.config.get<string>('MARV_USERNAME')?.trim() || 'marv';
+    const displayName = this.config.get<string>('MARV_DISPLAY_NAME')?.trim() || 'Marv';
+    const bio =
+      this.config.get<string>('MARV_BIO')?.trim() ||
+      'AI helper for Men of Hunger. Brief. Bible-conscious. Mention me to ask.';
+    const phone = this.config.get<string>('MARV_PHONE')?.trim() || '+10000000001';
+    return { enabled, userId, username, displayName, bio, phone };
+  }
+
+  marvOpenAI(): MarvOpenAIConfig {
+    const apiKey = this.config.get<string>('OPENAI_API_KEY')?.trim() ?? '';
+    const promptId = this.config.get<string>('OPENAI_MARV_PROMPT_ID')?.trim() || null;
+    const promptVersion = this.config.get<string>('OPENAI_MARV_PROMPT_VERSION')?.trim() || null;
+    const fastModel = this.config.get<string>('OPENAI_MARV_FAST_MODEL')?.trim() || 'gpt-5-nano';
+    const regularModel = this.config.get<string>('OPENAI_MARV_REGULAR_MODEL')?.trim() || 'gpt-5';
+    const smartModel = this.config.get<string>('OPENAI_MARV_SMART_MODEL')?.trim() || 'gpt-5-thinking';
+    // Set MARV_WEB_SEARCH_ENABLED=true to let Marv use OpenAI's built-in web_search_preview tool.
+    // Each search call costs ~$0.03 (OpenAI pricing) and MARV_WEB_SEARCH_CREDIT_COST extra credits.
+    const webSearchEnabled = this.readBool('MARV_WEB_SEARCH_ENABLED', false);
+    // Comma-separated list of modes that may use web search. Defaults to regular,smart only —
+    // fast (gpt-5-nano) exhausts its token budget on search processing before producing any text.
+    const webSearchModesRaw = this.config.get<string>('MARV_WEB_SEARCH_MODES')?.trim() || 'regular,smart';
+    const webSearchModes = webSearchModesRaw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    // When web search is active, use a larger output-token budget so the model has room to
+    // both process search results AND write a reply. Default 4096; tune with MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS.
+    const webSearchMaxOutputTokens = this.readPositiveInt('MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS', 4096);
+    return { apiKey, promptId, promptVersion, fastModel, regularModel, smartModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens };
+  }
+
+  marvCredits(): MarvCreditConfig {
+    return {
+      monthlyCredits: this.readPositiveInt('MARV_MONTHLY_CREDITS', 1200),
+      maxCredits: this.readPositiveInt('MARV_MAX_CREDITS', 1500),
+      creditsPerDay: this.readPositiveInt('MARV_CREDITS_PER_DAY', 40),
+      fastCost: this.readPositiveInt('MARV_FAST_COST', 1),
+      regularCost: this.readPositiveInt('MARV_REGULAR_COST', 2),
+      smartCost: this.readPositiveInt('MARV_SMART_COST', 4),
+      // Extra credits deducted per web search call Marv makes. Default 2 (= one "regular" reply worth).
+      webSearchCreditCost: this.readPositiveInt('MARV_WEB_SEARCH_CREDIT_COST', 2),
+    };
+  }
+
+  marvLimits(): MarvLimitsConfig {
+    return {
+      publicMaxInputTokens: this.readPositiveInt('MARV_PUBLIC_MAX_INPUT_TOKENS', 8000),
+      privateMaxInputTokens: this.readPositiveInt('MARV_PRIVATE_MAX_INPUT_TOKENS', 4000),
+      // 1024 gives reasoning models (gpt-5, o-series) room to think before producing
+      // visible text. The actual reply is kept short by the system prompt, so in
+      // practice output_tokens land in the 50-120 range — but the cap must be high
+      // enough that thinking tokens don't exhaust the budget before any text is emitted.
+      // Override with MARV_MAX_OUTPUT_TOKENS in .env if you need to tune it.
+      maxOutputTokens: this.readPositiveInt('MARV_MAX_OUTPUT_TOKENS', 1024),
+      publicMaxPerUserPerHour: this.readPositiveInt('MARV_PUBLIC_MAX_PER_USER_PER_HOUR', 10),
+      publicMaxPerUserPerDay: this.readPositiveInt('MARV_PUBLIC_MAX_PER_USER_PER_DAY', 30),
+      publicThreadCooldownSeconds: this.readPositiveInt('MARV_PUBLIC_THREAD_COOLDOWN_SECONDS', 120),
+      privateMaxPerUserPerDay: this.readPositiveInt('MARV_PRIVATE_MAX_PER_USER_PER_DAY', 60),
+      privateMaxPer10Minutes: this.readPositiveInt('MARV_PRIVATE_MAX_PER_10_MIN', 10),
+    };
   }
 
   // Optional: typed access to full validated env object if needed later.

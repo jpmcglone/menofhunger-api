@@ -25,10 +25,72 @@ function makeService(overrides?: {
   const events = overrides?.events ?? ({} as any);
   const redis = { getJson: jest.fn(async () => null), setJson: jest.fn(async () => undefined), del: jest.fn(async () => 0) } as any;
   const posthog = { capture: jest.fn() } as any;
+  const jobs = { enqueue: jest.fn(async () => ({} as any)) } as any;
+  const marvIdentity = {
+    cachedMarvUserId: jest.fn(() => null),
+    getMarvUserId: jest.fn(async () => null),
+  } as any;
 
-  const svc = new MessagesService(prisma, appConfig, presenceRealtime, events, redis, posthog);
+  const svc = new MessagesService(prisma, appConfig, presenceRealtime, events, redis, posthog, jobs, marvIdentity);
   return { svc, prisma };
 }
+
+describe('MessagesService — Marv group block (env-less identity)', () => {
+  it('lookupConversation returns null for a group lookup that includes Marv, even when MARV_USER_ID env is unset', async () => {
+    // Reproduces the bug where the env-only `marvCfg.userId` gate silently no-ops:
+    // user has Marv as a real bot user in the DB but never pinned `MARV_USER_ID`.
+    const { svc } = makeService({
+      prisma: {
+        userBlock: { findMany: jest.fn(async () => []) },
+        messageConversation: { findFirst: jest.fn(), findMany: jest.fn(async () => []) },
+      } as any,
+      appConfig: {
+        // Env says "no MARV_USER_ID configured".
+        marvBot: jest.fn(() => ({ enabled: true, userId: null, username: 'marv' })),
+        r2: jest.fn(() => null),
+      } as any,
+    });
+    // But the live identity service has resolved Marv via username lookup.
+    (svc as unknown as { marvIdentity: { cachedMarvUserId: jest.Mock; getMarvUserId: jest.Mock } }).marvIdentity = {
+      cachedMarvUserId: jest.fn(() => 'marv-id-from-cache'),
+      getMarvUserId: jest.fn(async () => 'marv-id-from-cache'),
+    };
+
+    const result = await (svc as any).lookupConversation({
+      userId: 'u1',
+      recipientUserIds: ['marv-id-from-cache', 'other-id'],
+    });
+    expect(result).toEqual({ conversationId: null });
+  });
+
+  it('createConversation throws when a group contains Marv resolved via the identity cache', async () => {
+    const { svc } = makeService({
+      prisma: {
+        userBlock: { findMany: jest.fn(async () => []) },
+        user: {
+          findUnique: jest.fn(async () => ({ premium: true, premiumPlus: false, verifiedStatus: 'manual' })),
+          findMany: jest.fn(async () => []),
+        },
+      } as any,
+      appConfig: {
+        marvBot: jest.fn(() => ({ enabled: true, userId: null, username: 'marv' })),
+        r2: jest.fn(() => null),
+      } as any,
+    });
+    (svc as unknown as { marvIdentity: { cachedMarvUserId: jest.Mock; getMarvUserId: jest.Mock } }).marvIdentity = {
+      cachedMarvUserId: jest.fn(() => 'marv-id-from-cache'),
+      getMarvUserId: jest.fn(async () => 'marv-id-from-cache'),
+    };
+
+    await expect(
+      (svc as any).createConversation({
+        userId: 'u1',
+        recipientUserIds: ['marv-id-from-cache', 'other-id'],
+        body: 'hi',
+      }),
+    ).rejects.toThrow(/group chat/);
+  });
+});
 
 describe('MessagesService unread count batching', () => {
   it('getUnreadCounts uses a single batched query and sums by tab', async () => {

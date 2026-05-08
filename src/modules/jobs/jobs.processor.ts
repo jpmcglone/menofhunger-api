@@ -20,6 +20,11 @@ import { CheckinsStreakResetCron } from '../checkins/checkins-streak-reset.cron'
 import { PostsService } from '../posts/posts.service';
 import { ArticlesTrendingScoreCron } from '../articles/articles-trending-score.cron';
 import { CrewJobsCron } from '../crew/crew-jobs.cron';
+import { MarvinPublicReplyProcessor } from '../marvin/jobs/marvin-public-reply.processor';
+import { MarvinPrivateReplyProcessor } from '../marvin/jobs/marvin-private-reply.processor';
+import { MarvinContextCardsProcessor } from '../marvin/jobs/marvin-context-cards.processor';
+import { MarvinSummarizeThreadProcessor } from '../marvin/jobs/marvin-summarize-thread.processor';
+import { MarvinCostRollupProcessor } from '../marvin/jobs/marvin-cost-rollup.processor';
 
 @Processor(MOH_BACKGROUND_QUEUE)
 export class JobsProcessor extends WorkerHost {
@@ -44,6 +49,11 @@ export class JobsProcessor extends WorkerHost {
     private readonly postsService: PostsService,
     private readonly articlesTrendingScore: ArticlesTrendingScoreCron,
     private readonly crewJobs: CrewJobsCron,
+    private readonly marvinPublicReply: MarvinPublicReplyProcessor,
+    private readonly marvinPrivateReply: MarvinPrivateReplyProcessor,
+    private readonly marvinContextCards: MarvinContextCardsProcessor,
+    private readonly marvinSummarizeThread: MarvinSummarizeThreadProcessor,
+    private readonly marvinCostRollup: MarvinCostRollupProcessor,
   ) {
     super();
   }
@@ -133,6 +143,21 @@ export class JobsProcessor extends WorkerHost {
           return { ok: true };
         case JOBS.crewInactiveOwnerAutoTransfer:
           await this.crewJobs.runInactiveOwnerAutoTransfer();
+          return { ok: true };
+        case JOBS.marvinReplyPublic:
+          await this.marvinPublicReply.process(job.data ?? {});
+          return { ok: true };
+        case JOBS.marvinReplyPrivate:
+          await this.marvinPrivateReply.process(job.data ?? {});
+          return { ok: true };
+        case JOBS.marvinContextCardsRefresh:
+          await this.marvinContextCards.process();
+          return { ok: true };
+        case JOBS.marvinSummarizeThread:
+          await this.marvinSummarizeThread.process(job.data ?? {});
+          return { ok: true };
+        case JOBS.marvinCostRollup:
+          await this.marvinCostRollup.process();
           return { ok: true };
         default:
           this.logger.warn(`Unknown job name: ${name}`);

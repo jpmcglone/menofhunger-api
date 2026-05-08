@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, ForbiddenException, Get, Logger, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Headers, Logger, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
@@ -24,6 +24,17 @@ const readThrottle = {
     ttl: rateLimitTtl('read', 60),
   },
 };
+
+/**
+ * Parse the optional `x-marv-mode` request header into the `MarvinMode` enum.
+ * Returns null when the header is missing/invalid — the public-reply processor will
+ * fall back to the user's stored preferred mode in that case.
+ */
+function parseMarvModeHeader(raw: string | undefined): 'fast' | 'regular' | 'smart' | null {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (v === 'fast' || v === 'regular' || v === 'smart') return v;
+  return null;
+}
 
 const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -1015,8 +1026,13 @@ export class PostsController {
     },
   })
   @Post()
-  async create(@Body() body: unknown, @CurrentUserId() userId: string) {
+  async create(
+    @Body() body: unknown,
+    @CurrentUserId() userId: string,
+    @Headers('x-marv-mode') marvModeHeader?: string,
+  ) {
     const parsed = createSchema.parse(body);
+    const marvMode = parseMarvModeHeader(marvModeHeader);
     const media = (parsed.media ?? null) as CreateMediaItem[] | null;
     const poll =
       parsed.poll
@@ -1048,6 +1064,7 @@ export class PostsController {
       mentions: parsed.mentions ?? null,
       media,
       poll,
+      marvMode,
     });
 
     const viewer = await this.posts.viewerContext(userId);

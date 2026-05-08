@@ -15,6 +15,7 @@ import { PresenceRedisStateService } from './presence-redis-state.service';
 import { AppConfigService } from '../app/app-config.service';
 import { FollowsService } from '../follows/follows.service';
 import type { FollowListUser } from '../follows/follows.service';
+import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
 import { MessagesService } from '../messages/messages.service';
 import { RadioChatService } from '../radio/radio-chat.service';
 import { RadioService } from '../radio/radio.service';
@@ -113,6 +114,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     private readonly watchPartyState: WatchPartyStateService,
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly marvIdentity: MarvinBotIdentityService,
   ) {
     this.logPresenceVerbose = !this.appConfig.isProd();
   }
@@ -1375,24 +1377,57 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     }
 
     const userIds = await this.presenceRedis.onlineUserIds();
-    if (userIds.length === 0) return;
+    // Resolve Marv pin (if enabled) once. We still emit a snapshot even when
+    // there are no real online users, because Marv himself should appear as a
+    // single-row snapshot when nobody else is connected.
+    const marvId = this.appConfig.marvBot().enabled
+      ? await this.marvIdentity.getMarvUserId().catch(() => null)
+      : null;
+    if (userIds.length === 0 && !marvId) return;
     try {
-      const users = await this.follows.getFollowListUsersByIds({
-        viewerUserId: null,
-        userIds,
-      });
+      const users = userIds.length
+        ? await this.follows.getFollowListUsersByIds({
+            viewerUserId: null,
+            userIds,
+          })
+        : [];
       const lastConnectAtById = await this.presenceRedis.lastConnectAtMsByUserId(userIds);
       const idleById = await this.presenceRedis.idleByUserIds(userIds);
       const statusesById = new Map((await this.presence.getActiveStatuses(userIds)).map((status) => [status.userId, status]));
-      const payload = users.map((u) => ({
-        ...u,
-        lastConnectAt: lastConnectAtById.get(u.id) ?? null,
-        idle: idleById.get(u.id) ?? false,
-        status: statusesById.get(u.id) ?? null,
-      }));
-      client.emit('presence:onlineFeedSnapshot', { users: payload, totalOnline: userIds.length });
+      const payload: Array<FollowListUser & { lastConnectAt: number | null; idle: boolean; status: unknown; isBot?: boolean }> =
+        users.map((u) => ({
+          ...u,
+          lastConnectAt: lastConnectAtById.get(u.id) ?? null,
+          idle: idleById.get(u.id) ?? false,
+          status: statusesById.get(u.id) ?? null,
+        }));
+
+      // Pin Marv to the front of the snapshot (consistent with REST). The
+      // viewer here is anonymous (snapshot is keyed only by the socket) so we
+      // pass null and let the frontend's `isBot` sort handle ordering.
+      let totalOnline = userIds.length;
+      if (marvId) {
+        const [marvUser] = await this.follows.getFollowListUsersByIds({
+          viewerUserId: null,
+          userIds: [marvId],
+        });
+        if (marvUser) {
+          payload.unshift({
+            ...marvUser,
+            lastConnectAt: Date.now(),
+            idle: false,
+            status: null,
+            isBot: true,
+          });
+          totalOnline += 1;
+        }
+      }
+
+      client.emit('presence:onlineFeedSnapshot', { users: payload, totalOnline });
       if (this.logPresenceVerbose) {
-        this.logger.debug(`[presence] EMIT_OUT presence:onlineFeedSnapshot to socket=${client.id} users=${userIds.length}`);
+        this.logger.debug(
+          `[presence] EMIT_OUT presence:onlineFeedSnapshot to socket=${client.id} users=${payload.length}`,
+        );
       }
     } catch (err) {
       this.logger.warn(`[presence] Failed to send onlineFeedSnapshot: ${err}`);

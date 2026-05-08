@@ -4,12 +4,14 @@ import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { Throttle } from '@nestjs/throttler';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AuthGuard } from '../auth/auth.guard';
+import { AppConfigService } from '../app/app-config.service';
 import { FollowsService } from '../follows/follows.service';
+import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
 import { PresenceService } from './presence.service';
 import { PresenceRealtimeService } from './presence-realtime.service';
 import { PresenceRedisStateService } from './presence-redis-state.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import type { PresenceOnlinePageDto, RecentlyOnlineUserDto, UserStatusDto } from '../../common/dto';
+import type { OnlineUserDto, PresenceOnlinePageDto, RecentlyOnlineUserDto, UserStatusDto } from '../../common/dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
@@ -85,7 +87,41 @@ export class PresenceController {
     private readonly follows: FollowsService,
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly appConfig: AppConfigService,
+    private readonly marvIdentity: MarvinBotIdentityService,
   ) {}
+
+  /**
+   * Builds the synthetic Marv "always online" row when `MARV_ENABLED=true` and
+   * the bot user has been resolved. Returns null otherwise (Marv hidden
+   * entirely when disabled). The row is decorated with `isBot: true` so the
+   * frontend can sort it to the top and add a small bot badge.
+   */
+  private async buildMarvOnlineRow(args: {
+    viewerUserId: string | null;
+    statusesById: Map<string, UserStatusDto>;
+  }): Promise<OnlineUserDto | null> {
+    if (!this.appConfig.marvBot().enabled) return null;
+    const marvId = await this.marvIdentity.getMarvUserId();
+    if (!marvId) return null;
+    if (args.viewerUserId === marvId) return null; // Defensive: never list Marv as the viewer.
+    const [marvUser] = await this.follows.getFollowListUsersByIds({
+      viewerUserId: args.viewerUserId,
+      userIds: [marvId],
+    });
+    if (!marvUser) return null;
+    return {
+      ...(marvUser as OnlineUserDto),
+      // We sort online lists ascending by `lastConnectAt` (oldest connect first), so
+      // pinning Marv requires a sentinel value the frontend will recognize. We use
+      // the actual current timestamp here as a sane default for HTTP-only consumers,
+      // and the frontend's sort treats `isBot` as the primary ordering key.
+      lastConnectAt: Date.now(),
+      idle: false,
+      status: args.statusesById.get(marvId) ?? null,
+      isBot: true,
+    };
+  }
 
   @UseGuards(OptionalAuthGuard)
   @Throttle({
@@ -193,13 +229,25 @@ export class PresenceController {
     users.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
     const idleById = await this.presenceRedis.idleByUserIds(userIds);
     const statusesById = statusMap(await this.presence.getActiveStatuses(userIds));
-    const data = users.map((u) => ({
-      ...u,
-      lastConnectAt: lastConnectAtById.get(u.id),
+    const data: OnlineUserDto[] = users.map((u) => ({
+      ...(u as OnlineUserDto),
+      lastConnectAt: lastConnectAtById.get(u.id) ?? null,
       idle: idleById.get(u.id) ?? false,
       status: statusesById.get(u.id) ?? null,
     }));
-    const result = { data, pagination: { totalOnline: userIds.length } };
+
+    // Pin Marv to the front when enabled, and bump totalOnline so the right-rail
+    // count stays consistent with the list. The bot is a list-time injection only —
+    // it never appears in `userIds` (Redis-tracked sockets) and we don't broadcast
+    // synthetic online/offline events for it elsewhere.
+    let totalOnline = userIds.length;
+    const marvRow = await this.buildMarvOnlineRow({ viewerUserId, statusesById });
+    if (marvRow) {
+      data.unshift(marvRow);
+      totalOnline += 1;
+    }
+
+    const result = { data, pagination: { totalOnline } };
     void this.redis.setJson(cacheKey, result, { ttlMs: ONLINE_LIST_CACHE_TTL_MS }).catch(() => undefined);
     return result;
   }
@@ -418,12 +466,24 @@ export class PresenceController {
     const idleById = await this.presenceRedis.idleByUserIds(onlineUserIds);
     const onlineStatusesById = statusMap(await this.presence.getActiveStatuses(onlineUserIds));
 
-    const onlineData = onlineUsers.map((u) => ({
-      ...(u as any),
+    const onlineData: OnlineUserDto[] = onlineUsers.map((u) => ({
+      ...(u as OnlineUserDto),
       lastConnectAt: lastConnectAtById.get(u.id) ?? null,
       idle: idleById.get(u.id) ?? false,
       status: onlineStatusesById.get(u.id) ?? null,
     }));
+
+    // Pin Marv to the top when enabled. Same rationale as in `online()`: the
+    // bot is a list-time injection, totalOnline gets bumped to match the list.
+    let totalOnline = onlineUserIds.length;
+    const marvRow = await this.buildMarvOnlineRow({
+      viewerUserId,
+      statusesById: onlineStatusesById,
+    });
+    if (marvRow) {
+      onlineData.unshift(marvRow);
+      totalOnline += 1;
+    }
 
     // ——— Recently online (privacy-gated, cursor-paginated) ———
     let recentData: RecentlyOnlineUserDto[] = [];
@@ -566,7 +626,7 @@ export class PresenceController {
         recent: recentData,
       },
       pagination: {
-        totalOnline: onlineUserIds.length,
+        totalOnline,
         recentNextCursor,
       },
     };

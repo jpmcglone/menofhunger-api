@@ -25,6 +25,7 @@ export const USER_LIST_SELECT = {
   avatarKey: true,
   avatarUpdatedAt: true,
   bannedAt: true,
+  isBot: true,
   orgMemberships: {
     select: {
       org: { select: ORG_AFFILIATION_SELECT },

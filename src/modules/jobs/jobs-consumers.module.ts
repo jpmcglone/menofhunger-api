@@ -12,12 +12,14 @@ import { AdminModule } from '../admin/admin.module';
 import { CheckinsModule } from '../checkins/checkins.module';
 import { ArticlesModule } from '../articles/articles.module';
 import { CrewModule } from '../crew/crew.module';
+import { MarvinModule } from '../marvin/marvin.module';
 
 /**
  * Worker-only module: all BullMQ processors live here so we can disable job consumption
  * in the API service by not importing this module (RUN_JOB_CONSUMERS=false).
  *
- * For now, we only wire the module; processors are added in the next step.
+ * MarvinModule is imported here (not just via AppModule) so the worker process can resolve
+ * `MarvinPublicReplyProcessor` / `MarvinPrivateReplyProcessor` for the BullMQ dispatcher.
  */
 @Module({
   imports: [
@@ -33,6 +35,7 @@ import { CrewModule } from '../crew/crew.module';
     CheckinsModule,
     ArticlesModule,
     CrewModule,
+    MarvinModule,
   ],
   providers: [JobsProcessor],
 })

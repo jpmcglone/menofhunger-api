@@ -34,6 +34,7 @@ import { BillingModule } from '../billing/billing.module';
 import { CoinsModule } from '../coins/coins.module';
 import { CrewModule } from '../crew/crew.module';
 import { AdminCrewsController } from './admin-crews.controller';
+import { UploadsModule } from '../uploads/uploads.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { AdminCrewsController } from './admin-crews.controller';
     BillingModule,
     CoinsModule,
     CrewModule,
+    UploadsModule,
   ],
   controllers: [
     AdminUsersController,

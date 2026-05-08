@@ -39,6 +39,9 @@ import {
   type MessageDto,
 } from './message.dto';
 import { PosthogService } from '../../common/posthog/posthog.service';
+import { JobsService } from '../jobs/jobs.service';
+import { JOBS } from '../jobs/jobs.constants';
+import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
 
 const MESSAGE_UNREAD_CACHE_TTL_MS = 30_000;
 
@@ -113,7 +116,28 @@ export class MessagesService {
     private readonly events: DomainEventsService,
     private readonly redis: RedisService,
     private readonly posthog: PosthogService,
+    private readonly jobs: JobsService,
+    private readonly marvIdentity: MarvinBotIdentityService,
   ) {}
+
+  /**
+   * Resolve the configured Marv user id, preferring the live identity cache
+   * (which seeds from `MARV_USERNAME` on boot) over the env var. Without this
+   * fallback, deployments that don't pin `MARV_USER_ID` in `.env` would silently
+   * skip every Marv enqueue / group-chat block — Marv would just never respond.
+   */
+  private async resolveMarvUserId(): Promise<string | null> {
+    const cached = this.marvIdentity.cachedMarvUserId();
+    if (cached) return cached;
+    try {
+      return await this.marvIdentity.getMarvUserId();
+    } catch (err) {
+      this.logger.warn(
+        `[messages] Could not resolve Marv user id: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return this.appConfig.marvBot().userId;
+    }
+  }
 
   private encodeConversationCursor(cursor: ConversationCursor): string {
     return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
@@ -659,6 +683,14 @@ export class MessagesService {
     if (uniqueRecipients.length === 0) return { conversationId: null };
     await this.assertNotBlocked(userId, uniqueRecipients);
 
+    // A group with Marv is not allowed; no such conversation can exist.
+    if (uniqueRecipients.length > 1) {
+      const marvUserId = await this.resolveMarvUserId();
+      if (marvUserId && uniqueRecipients.includes(marvUserId)) {
+        return { conversationId: null };
+      }
+    }
+
     if (uniqueRecipients.length === 1) {
       const directKey = this.directKeyFor(userId, uniqueRecipients[0]);
       const existing = await this.prisma.messageConversation.findFirst({
@@ -901,6 +933,161 @@ export class MessagesService {
     };
   }
 
+  /**
+   * Send a direct message FROM a bot account TO a user, creating the direct conversation
+   * if one doesn't already exist.
+   *
+   * Skips the standard chat-tier gates (verified-only recipients, "premium starts new chat")
+   * because bots only ever speak in response to user-initiated activity. Block checks DO
+   * still apply — if the user has blocked the bot, we silently no-op.
+   *
+   * Used by Marv to deliver canned out-of-credits notices and AI replies in private sessions.
+   */
+  async sendBotDirectMessage(params: {
+    botUserId: string;
+    recipientUserId: string;
+    body: string;
+    media?: MessageMediaInput[];
+  }): Promise<{ conversationId: string; message: MessageDto } | null> {
+    const { botUserId, recipientUserId } = params;
+    const trimmed = (params.body ?? '').trim();
+    const media = params.media ?? [];
+    if (!trimmed && media.length === 0) throw new BadRequestException('Message must have a body or media.');
+    if (trimmed.length > MESSAGE_BODY_MAX) throw new BadRequestException('Message body is too long.');
+
+    if (botUserId === recipientUserId) {
+      throw new BadRequestException('A bot cannot DM itself.');
+    }
+
+    const blocked = await this.isBlockedBetween(botUserId, recipientUserId);
+    if (blocked) {
+      this.logger.debug(`[messages] sendBotDirectMessage: skipping (blocked) ${botUserId}->${recipientUserId}.`);
+      return null;
+    }
+
+    const directKey = this.directKeyFor(botUserId, recipientUserId);
+    const existing = await this.prisma.messageConversation.findFirst({
+      where: { type: 'direct', directKey },
+      select: { id: true },
+    });
+
+    if (existing) {
+      const sent = await this.sendMessage({ userId: botUserId, conversationId: existing.id, body: trimmed, media });
+      return { conversationId: existing.id, message: sent.message };
+    }
+
+    const recipient = await this.prisma.user.findUnique({
+      where: { id: recipientUserId },
+      select: { id: true, bannedAt: true },
+    });
+    if (!recipient) throw new NotFoundException('Recipient not found.');
+    if (recipient.bannedAt) {
+      this.logger.debug(`[messages] sendBotDirectMessage: skipping (recipient banned) ${botUserId}->${recipientUserId}.`);
+      return null;
+    }
+
+    const now = new Date();
+    const result = await this.prisma.$transaction(async (tx) => {
+      const conversation = await tx.messageConversation.create({
+        data: {
+          type: 'direct',
+          createdByUserId: botUserId,
+          directKey,
+          lastMessageAt: now,
+        },
+      });
+
+      // Bot conversations are auto-accepted on both sides — recipient should not see a
+      // "request" tab, since Marv only DMs in response to the user's own actions.
+      await tx.messageParticipant.createMany({
+        data: [
+          {
+            conversationId: conversation.id,
+            userId: botUserId,
+            role: 'owner' as const,
+            status: 'accepted' as const,
+            acceptedAt: now,
+            lastReadAt: now,
+          },
+          {
+            conversationId: conversation.id,
+            userId: recipientUserId,
+            role: 'member' as const,
+            status: 'accepted' as const,
+            acceptedAt: now,
+          },
+        ],
+      });
+
+      const message = await tx.message.create({
+        data: {
+          conversationId: conversation.id,
+          senderId: botUserId,
+          body: trimmed,
+          ...(media.length > 0
+            ? {
+                media: {
+                  createMany: {
+                    data: media.map((m) =>
+                      m.source === 'upload'
+                        ? {
+                            source: m.source,
+                            kind: m.kind,
+                            r2Key: m.r2Key,
+                            thumbnailR2Key: m.thumbnailR2Key ?? null,
+                            width: m.width ?? null,
+                            height: m.height ?? null,
+                            durationSeconds: m.durationSeconds ?? null,
+                            alt: m.alt ?? null,
+                          }
+                        : {
+                            source: m.source,
+                            kind: 'gif' as PostMediaKind,
+                            url: m.url,
+                            mp4Url: m.mp4Url ?? null,
+                            width: m.width ?? null,
+                            height: m.height ?? null,
+                            alt: m.alt ?? null,
+                          },
+                    ),
+                  },
+                },
+              }
+            : {}),
+        },
+        include: MESSAGE_INCLUDE,
+      });
+
+      await tx.messageConversation.update({
+        where: { id: conversation.id },
+        data: { lastMessageId: message.id, lastMessageAt: now },
+      });
+
+      return { conversationId: conversation.id, message };
+    });
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const dtoForBot = toMessageDto({ message: result.message, publicBaseUrl, viewerUserId: botUserId });
+    const dtoForRecipient = toMessageDto({ message: result.message, publicBaseUrl, viewerUserId: recipientUserId });
+
+    this.emitUnreadCounts(botUserId);
+    this.emitUnreadCounts(recipientUserId);
+    this.presenceRealtime.emitMessageCreated(botUserId, { conversationId: result.conversationId, message: dtoForBot });
+    this.presenceRealtime.emitMessageCreated(recipientUserId, {
+      conversationId: result.conversationId,
+      message: dtoForRecipient,
+    });
+    this.events.emitMessagePushRequested({
+      recipientUserId,
+      senderUserId: botUserId,
+      senderName: 'Marv',
+      body: trimmed || (media.length > 0 ? '📷 Sent a photo' : ''),
+      conversationId: result.conversationId,
+    });
+
+    return { conversationId: result.conversationId, message: dtoForRecipient };
+  }
+
   async createConversation(params: {
     userId: string;
     recipientUserIds: string[];
@@ -938,6 +1125,14 @@ export class MessagesService {
     const isDirect = uniqueRecipients.length === 1;
     const type: MessageConversation['type'] = isDirect ? 'direct' : 'group';
     const directKey = isDirect ? this.directKeyFor(userId, uniqueRecipients[0]) : null;
+
+    // Marv cannot be in a group conversation — only 1:1 DMs are allowed.
+    if (!isDirect) {
+      const marvUserId = await this.resolveMarvUserId();
+      if (marvUserId && uniqueRecipients.includes(marvUserId)) {
+        throw new BadRequestException('Marv cannot be added to a group chat.');
+      }
+    }
 
     if (directKey) {
       const existing = await this.prisma.messageConversation.findFirst({
@@ -1211,6 +1406,68 @@ export class MessagesService {
       conversation_id: conversationId,
       conversation_type: conversation.type,
     });
+
+    // ─── Marv: queue an AI reply when this DM is for the configured Marv bot ──
+    // Decoupled from MarvinModule — we only enqueue. The processor handles all gating.
+    // Resolve Marv's user id via the identity service (env var optional) so the gate
+    // doesn't silently skip when `MARV_USER_ID` isn't pinned in `.env`.
+    try {
+      const marvCfg = this.appConfig.marvBot();
+      const marvUserId = marvCfg.enabled ? await this.resolveMarvUserId() : null;
+      const isDirect = conversation.type === 'direct';
+      const recipientIsMarv = !!marvUserId && otherIds.length === 1 && otherIds[0] === marvUserId;
+      const senderIsMarv = !!marvUserId && userId === marvUserId;
+      const hasBody = trimmed.length > 0;
+
+      if (!marvCfg.enabled) {
+        this.logger.log(`[marv] dm-enqueue skip reason=marv_disabled msg=${result.id}`);
+      } else if (!marvUserId) {
+        this.logger.warn(`[marv] dm-enqueue skip reason=marv_user_unresolved msg=${result.id}`);
+      } else if (!isDirect) {
+        // Group chat or wall — never enqueue for Marv. No log needed; spammy.
+      } else if (!recipientIsMarv) {
+        // DM to someone else — silent skip.
+      } else if (senderIsMarv) {
+        this.logger.log(`[marv] dm-enqueue skip reason=sender_is_marv msg=${result.id}`);
+      } else if (!hasBody) {
+        this.logger.log(`[marv] dm-enqueue skip reason=empty_body msg=${result.id}`);
+      } else {
+        this.logger.log(
+          `[marv] dm-enqueue HIT msg=${result.id} convo=${conversationId} sender=${userId}`,
+        );
+        await this.jobs
+          .enqueue(
+            JOBS.marvinReplyPrivate,
+            {
+              conversationId,
+              messageId: result.id,
+              requestingUserId: userId,
+              requestedMode: null,
+            },
+            {
+              jobId: `marv-private-${result.id}`,
+              removeOnComplete: true,
+              removeOnFail: false,
+              attempts: 3,
+              backoff: { type: 'exponential' as const, delay: 5000 },
+            },
+          )
+          .then(() => {
+            this.logger.log(`[marv] dm-enqueue ok msg=${result.id} job=marv-private-${result.id}`);
+          })
+          .catch((err) => {
+            this.logger.warn(
+              `[marv] Failed to enqueue private reply for message=${result.id}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          });
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[marv] private-reply enqueue failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     return { message: dto };
   }

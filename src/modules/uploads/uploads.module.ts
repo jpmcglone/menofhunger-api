@@ -9,6 +9,7 @@ import { UploadsService } from './uploads.service';
   imports: [PrismaModule, AuthModule, UsersModule],
   controllers: [UploadsController],
   providers: [UploadsService],
+  exports: [UploadsService],
 })
 export class UploadsModule {}
 

@@ -206,6 +206,21 @@ function makeFixture(opts: { spaceMode?: string } = {}): GatewayFixture {
   const stub = makeStubServices();
   const watchPartyState = new WatchPartyStateService(redis);
 
+  const marvIdentity = {
+    getMarvUserId: jest.fn().mockResolvedValue(null),
+    marvUsernameLower: jest.fn().mockReturnValue('marv'),
+  } as any;
+  // Marv config defaults to disabled for these watch-party tests; the
+  // online-feed-snapshot tests below override `marvBot()` directly.
+  stub.appConfig.marvBot = jest.fn().mockReturnValue({
+    enabled: false,
+    userId: null,
+    username: 'marv',
+    displayName: 'Marv',
+    bio: '',
+    phone: '',
+  });
+
   const gw = new PresenceGateway(
     stub.appConfig,
     stub.auth,
@@ -222,6 +237,7 @@ function makeFixture(opts: { spaceMode?: string } = {}): GatewayFixture {
     watchPartyState,
     stub.prisma,
     redis,
+    marvIdentity,
   );
 
   const server = new FakeServer();

@@ -189,6 +189,7 @@ type PublicProfilePayload = {
   checkinStreakDays: number;
   longestStreakDays: number;
   inCrew?: boolean;
+  isBot?: boolean;
 };
 
 type UserPreviewPayload = {
@@ -212,6 +213,7 @@ type UserPreviewPayload = {
   followingCount: number | null;
   viewerHasBlockedUser?: boolean;
   userHasBlockedViewer?: boolean;
+  isBot?: boolean;
 };
 
 @Controller('users')
@@ -376,9 +378,10 @@ export class UsersController {
             bannedAt: Date | null;
             checkinStreakDays: number;
             longestStreakDays: number;
+            isBot: boolean;
           }>
         >`
-          SELECT "id", "createdAt", "username", "name", "bio", "website", "locationDisplay", "locationZip", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt", "bannedAt", "checkinStreakDays", "longestStreakDays"
+          SELECT "id", "createdAt", "username", "name", "bio", "website", "locationDisplay", "locationZip", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt", "bannedAt", "checkinStreakDays", "longestStreakDays", "isBot"
           FROM "User"
           WHERE (
             (${isUuidOrCuid} = true AND "id" = ${raw})
@@ -437,6 +440,7 @@ export class UsersController {
       lastOnlineAt: user.lastOnlineAt ? user.lastOnlineAt.toISOString() : null,
       checkinStreakDays: Math.max(0, Math.floor(Number(user.checkinStreakDays) || 0)),
       longestStreakDays: Math.max(0, Math.floor(Number(user.longestStreakDays) || 0)),
+      isBot: Boolean(user.isBot),
     };
 
     // Cache for subsequent reads (both by username and by id).
@@ -1029,6 +1033,7 @@ export class UsersController {
       followingCount,
       viewerHasBlockedUser,
       userHasBlockedViewer,
+      isBot: Boolean((profile as any).isBot),
     };
 
     // Preview includes viewer-specific relationship when authenticated.

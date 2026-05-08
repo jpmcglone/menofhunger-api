@@ -25,6 +25,7 @@ export type PostAuthorDto = {
   verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
   orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;
+  isBot?: boolean;
   /** When true, author is banned; id/username/name/avatar are redacted. */
   authorBanned?: boolean;
 };
@@ -169,6 +170,7 @@ export type PostAuthorRow = {
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
   bannedAt: Date | null;
+  isBot?: boolean | null;
   orgMemberships?: Array<{
     org: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarUpdatedAt: Date | null };
   }>;
@@ -443,6 +445,7 @@ export function toPostDto(
             updatedAt: m.org.avatarUpdatedAt ?? null,
           }),
         })),
+        ...(post.user.isBot ? { isBot: true } : {}),
       },
       viewerCanAccess: false,
     };
@@ -554,6 +557,7 @@ export function toPostDto(
           updatedAt: m.org.avatarUpdatedAt ?? null,
         }),
       })),
+      ...(post.user.isBot ? { isBot: true } : {}),
     },
   };
 }

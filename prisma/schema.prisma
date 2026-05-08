@@ -239,159 +239,190 @@ enum SpaceMode {
 }
 
 model User {
-  id        String    @id @default(cuid())
-  createdAt DateTime  @default(now())
-  phone     String    @unique
-  email     String?   @unique
-  /** When the current email was verified by the user (null means unverified). */
-  emailVerifiedAt DateTime?
-  /** When we last requested verification for the current email (used for resend throttling). */
+  id                           String             @id @default(cuid())
+  createdAt                    DateTime           @default(now())
+  phone                        String             @unique
+  email                        String?            @unique
+  /**
+   * When the current email was verified by the user (null means unverified).
+   */
+  emailVerifiedAt              DateTime?
+  /**
+   * When we last requested verification for the current email (used for resend throttling).
+   */
   emailVerificationRequestedAt DateTime?
   // Username stored as entered (case preserved). Uniqueness is enforced case-insensitively
   // via a functional unique index on LOWER(username) in a migration.
-  username String?
+  username                     String?
   // Public profile fields.
-  name String?
-  bio  String?
-  website String?
-  /** Raw user-entered location query (zip/city/state text). */
-  locationInput String?
-  /** Normalized display string (e.g. "Roanoke, VA"). */
-  locationDisplay String?
-  locationZip     String?
-  locationCity    String?
-  /** US county name (if resolved). */
-  locationCounty  String?
-  /** US state code/name (e.g. "VA"). */
-  locationState   String?
-  /** Country code/name; US only for now. */
-  locationCountry String?
+  name                         String?
+  bio                          String?
+  website                      String?
+  /**
+   * Raw user-entered location query (zip/city/state text).
+   */
+  locationInput                String?
+  /**
+   * Normalized display string (e.g. "Roanoke, VA").
+   */
+  locationDisplay              String?
+  locationZip                  String?
+  locationCity                 String?
+  /**
+   * US county name (if resolved).
+   */
+  locationCounty               String?
+  /**
+   * US state code/name (e.g. "VA").
+   */
+  locationState                String?
+  /**
+   * Country code/name; US only for now.
+   */
+  locationCountry              String?
   // Required onboarding fields (gates app access).
   // Stored as DateTime (UTC midnight) to keep Prisma portable.
-  birthdate DateTime?
-  interests String[] @default([])
+  birthdate                    DateTime?
+  interests                    String[]           @default([])
   // Required onboarding acknowledgement (app store friendly wording; enforced in app).
-  menOnlyConfirmed Boolean @default(false)
+  menOnlyConfirmed             Boolean            @default(false)
   // True when the user has explicitly chosen a username.
-  usernameIsSet Boolean @default(false)
+  usernameIsSet                Boolean            @default(false)
   // Minimal admin flag (will be replaced by real roles later).
-  siteAdmin Boolean @default(false)
+  siteAdmin                    Boolean            @default(false)
   // App entrypoint/feature switches controlled by admins (e.g., "articles").
-  featureToggles String[] @default([])
+  featureToggles               String[]           @default([])
   // Account state: banned users cannot log in (sessions revoked) and should see a clear message.
-  bannedAt DateTime?
-  bannedReason String?
-  bannedByAdminId String?
+  bannedAt                     DateTime?
+  bannedReason                 String?
+  bannedByAdminId              String?
+  // Bot accounts (e.g. Marv, the AI helper). Real User rows so posts/DMs/notifications all "just work";
+  // this flag drives a small "Bot" indicator in clients and lets the API short-circuit certain flows.
+  isBot                        Boolean            @default(false)
+  // Discriminator for bot accounts (e.g. "marvin"). Null for human users.
+  botType                      String?
   // Premium flag (paid product access; used for visibility gating). Computed by EntitlementService.
-  premium Boolean @default(false)
+  premium                      Boolean            @default(false)
   // Premium+ (superset of premium; special supporters tier). Computed by EntitlementService.
-  premiumPlus Boolean @default(false)
+  premiumPlus                  Boolean            @default(false)
   // Organization account (special badge + avatar shape in clients).
-  isOrganization Boolean @default(false)
+  isOrganization               Boolean            @default(false)
   // Premium+ opt-in steward badge shown across the app.
-  stewardBadgeEnabled Boolean @default(true)
+  stewardBadgeEnabled          Boolean            @default(true)
   // Verified badge (more roles/permissions later).
-  verifiedStatus VerifiedStatus @default(none)
-  verifiedAt DateTime?
-  unverifiedAt DateTime?
+  verifiedStatus               VerifiedStatus     @default(none)
+  verifiedAt                   DateTime?
+  unverifiedAt                 DateTime?
   // Stripe billing identifiers (optional; null when user has never subscribed).
-  stripeCustomerId String? @unique
-  stripeSubscriptionId String? @unique
-  stripeSubscriptionStatus String?
-  stripeSubscriptionPriceId String?
-  stripeCurrentPeriodStart DateTime?
-  stripeCurrentPeriodEnd DateTime?
-  stripeCancelAtPeriodEnd Boolean @default(false)
+  stripeCustomerId             String?            @unique
+  stripeSubscriptionId         String?            @unique
+  stripeSubscriptionStatus     String?
+  stripeSubscriptionPriceId    String?
+  stripeCurrentPeriodStart     DateTime?
+  stripeCurrentPeriodEnd       DateTime?
+  stripeCancelAtPeriodEnd      Boolean            @default(false)
   // Follow list privacy (controls counts + follower/following lists).
-  followVisibility FollowVisibility @default(all)
+  followVisibility             FollowVisibility   @default(all)
   // Birthday privacy/display preference for public profile.
-  birthdayVisibility BirthdayVisibility @default(monthDay)
+  birthdayVisibility           BirthdayVisibility @default(monthDay)
   // Public media (stored in object storage; API stores keys only).
-  avatarKey String?
-  avatarUpdatedAt DateTime?
-  bannerKey String?
-  bannerUpdatedAt DateTime?
-  /** Override bio shown in the author section at the bottom of articles. Uses regular bio if null. */
-  articleBio String?
+  avatarKey                    String?
+  avatarUpdatedAt              DateTime?
+  bannerKey                    String?
+  bannerUpdatedAt              DateTime?
+  /**
+   * Override bio shown in the author section at the bottom of articles. Uses regular bio if null.
+   */
+  articleBio                   String?
   // When the user last went offline (set by presence disconnect).
-  lastOnlineAt DateTime?
+  lastOnlineAt                 DateTime?
   // When the user last had in-app activity (presence connect/ping). Used for DAU/MAU.
-  lastSeenAt DateTime?
+  lastSeenAt                   DateTime?
   // Plain-text presence status shown on avatars. Expires at statusExpiresAt.
-  statusText String?
-  statusSetAt DateTime?
-  statusExpiresAt DateTime?
+  statusText                   String?
+  statusSetAt                  DateTime?
+  statusExpiresAt              DateTime?
   // Denormalized badge count for notifications where deliveredAt is still null.
   // Maintained atomically in NotificationsService.
-  undeliveredNotificationCount Int @default(0)
+  undeliveredNotificationCount Int                @default(0)
 
   // Private rewards / retention loops (self-only surfaces).
-  coins Int @default(0)
-  /** Current consecutive-day check-in streak (ET day key boundaries). */
-  checkinStreakDays Int @default(0)
-  /** Last ET day key the user checked in (YYYY-MM-DD). */
-  lastCheckinDayKey String?
-  /** Longest streak achieved (private). */
-  longestStreakDays Int @default(0)
-  /** One-time profile reminder email sent at ~24h after signup. */
+  coins                    Int                  @default(0)
+  /**
+   * Current consecutive-day check-in streak (ET day key boundaries).
+   */
+  checkinStreakDays        Int                  @default(0)
+  /**
+   * Last ET day key the user checked in (YYYY-MM-DD).
+   */
+  lastCheckinDayKey        String?
+  /**
+   * Longest streak achieved (private).
+   */
+  longestStreakDays        Int                  @default(0)
+  /**
+   * One-time profile reminder email sent at ~24h after signup.
+   */
   profileReminder24hSentAt DateTime?
-  /** One-time profile reminder email sent at ~7d after signup. */
-  profileReminder7dSentAt DateTime?
-  dailyActivityDays UserDailyActivity[]
-  sessions  Session[]
-  posts     Post[]
-  boosts    Boost[]
-  pollVotes PostPollVote[]
-  bookmarks Bookmark[]
-  bookmarkCollections BookmarkCollection[]
+  /**
+   * One-time profile reminder email sent at ~7d after signup.
+   */
+  profileReminder7dSentAt  DateTime?
+  dailyActivityDays        UserDailyActivity[]
+  sessions                 Session[]
+  posts                    Post[]
+  boosts                   Boost[]
+  pollVotes                PostPollVote[]
+  bookmarks                Bookmark[]
+  bookmarkCollections      BookmarkCollection[]
   // Pinned post on profile (one per user; must be own post).
-  pinnedPostId String? @unique
-  pinnedPost   Post?   @relation("PinnedPost", fields: [pinnedPostId], references: [id], onDelete: SetNull)
+  pinnedPostId             String?              @unique
+  pinnedPost               Post?                @relation("PinnedPost", fields: [pinnedPostId], references: [id], onDelete: SetNull)
 
   // Social graph (self-referential via Follow).
   // `following`: users this user follows (outgoing edges)
   // `followers`: users who follow this user (incoming edges)
-  following Follow[] @relation("Follow_follower")
-  followers Follow[] @relation("Follow_following")
+  following    Follow[]      @relation("Follow_follower")
+  followers    Follow[]      @relation("Follow_following")
   topicFollows TopicFollow[]
 
   // Admin audit relations
-  deletedPostMedia PostMedia[] @relation("PostMedia_deletedByAdmin")
-  deletedMediaAssets MediaAsset[] @relation("MediaAsset_deletedByAdmin")
-  mentionedIn PostMention[] @relation("PostMention_user")
-  notificationsReceived Notification[] @relation("Notification_recipient")
-  notificationsAsActor Notification[] @relation("Notification_actor")
-  notificationsAsSubjectUser Notification[] @relation("Notification_subjectUser")
-  pushSubscriptions PushSubscription[]
-  notificationPreferences NotificationPreferences?
-  articleTagPreferences UserArticleTagPreference[]
-  taxonomyPreferences UserTaxonomyPreference[]
-  pushCoalesces PushCoalesce[]
-  userSearches     UserSearch[]
-  feedbacks        Feedback[]
-  reportsMade      Report[] @relation("Report_reporter")
-  reportsReceived  Report[] @relation("Report_subjectUser")
-  reportsResolved  Report[] @relation("Report_resolvedBy")
-  verificationRequests VerificationRequest[] @relation("VerificationRequest_user")
-  verificationRequestsReviewed VerificationRequest[] @relation("VerificationRequest_reviewedBy")
-  emailActionTokens EmailActionToken[]
-  subscriptionGrants SubscriptionGrant[] @relation("SubscriptionGrant_user")
-  subscriptionGrantsGiven SubscriptionGrant[] @relation("SubscriptionGrant_grantedByAdmin")
-  messageParticipants MessageParticipant[] @relation("MessageParticipant_user")
-  messagesSent        Message[] @relation("Message_sender")
-  messageConversationsCreated MessageConversation[] @relation("MessageConversation_createdBy")
-  messageReactions    MessageReaction[] @relation("MessageReaction_user")
-  messageDeletions    MessageDeletion[] @relation("MessageDeletion_user")
-  blocksInitiated UserBlock[] @relation("UserBlock_blocker")
-  blocksReceived  UserBlock[] @relation("UserBlock_blocked")
-  postViews    PostView[]
-  viewerIdentities ViewerIdentity[]
-  articleViews ArticleView[]
-  articles  Article[]
-  articleBoosts ArticleBoost[]
-  articleReactions ArticleReaction[]
-  articleComments ArticleComment[]
-  articleCommentReactions ArticleCommentReaction[]
+  deletedPostMedia             PostMedia[]                @relation("PostMedia_deletedByAdmin")
+  deletedMediaAssets           MediaAsset[]               @relation("MediaAsset_deletedByAdmin")
+  mentionedIn                  PostMention[]              @relation("PostMention_user")
+  notificationsReceived        Notification[]             @relation("Notification_recipient")
+  notificationsAsActor         Notification[]             @relation("Notification_actor")
+  notificationsAsSubjectUser   Notification[]             @relation("Notification_subjectUser")
+  pushSubscriptions            PushSubscription[]
+  notificationPreferences      NotificationPreferences?
+  articleTagPreferences        UserArticleTagPreference[]
+  taxonomyPreferences          UserTaxonomyPreference[]
+  pushCoalesces                PushCoalesce[]
+  userSearches                 UserSearch[]
+  feedbacks                    Feedback[]
+  reportsMade                  Report[]                   @relation("Report_reporter")
+  reportsReceived              Report[]                   @relation("Report_subjectUser")
+  reportsResolved              Report[]                   @relation("Report_resolvedBy")
+  verificationRequests         VerificationRequest[]      @relation("VerificationRequest_user")
+  verificationRequestsReviewed VerificationRequest[]      @relation("VerificationRequest_reviewedBy")
+  emailActionTokens            EmailActionToken[]
+  subscriptionGrants           SubscriptionGrant[]        @relation("SubscriptionGrant_user")
+  subscriptionGrantsGiven      SubscriptionGrant[]        @relation("SubscriptionGrant_grantedByAdmin")
+  messageParticipants          MessageParticipant[]       @relation("MessageParticipant_user")
+  messagesSent                 Message[]                  @relation("Message_sender")
+  messageConversationsCreated  MessageConversation[]      @relation("MessageConversation_createdBy")
+  messageReactions             MessageReaction[]          @relation("MessageReaction_user")
+  messageDeletions             MessageDeletion[]          @relation("MessageDeletion_user")
+  blocksInitiated              UserBlock[]                @relation("UserBlock_blocker")
+  blocksReceived               UserBlock[]                @relation("UserBlock_blocked")
+  postViews                    PostView[]
+  viewerIdentities             ViewerIdentity[]
+  articleViews                 ArticleView[]
+  articles                     Article[]
+  articleBoosts                ArticleBoost[]
+  articleReactions             ArticleReaction[]
+  articleComments              ArticleComment[]
+  articleCommentReactions      ArticleCommentReaction[]
 
   // Org affiliations: orgs this user belongs to (non-org users); members of this org (org users).
   orgMemberships UserOrgMembership[] @relation("UserMemberships")
@@ -400,30 +431,42 @@ model User {
   coinTransfersSent     CoinTransfer[] @relation("CoinTransfer_sender")
   coinTransfersReceived CoinTransfer[] @relation("CoinTransfer_recipient")
 
-  communityGroupsCreated CommunityGroup[] @relation("CommunityGroup_createdBy")
-  communityGroupMemberships CommunityGroupMember[]
+  // Marv (AI helper) per-user state.
+  marvinCreditBalance MarvinCreditBalance?
+  marvinUsageEvents   MarvinUsageEvent[]
+  marvinUserSettings  MarvinUserSettings?
+  contextCard         UserContextCard?
+
+  communityGroupsCreated        CommunityGroup[]       @relation("CommunityGroup_createdBy")
+  communityGroupMemberships     CommunityGroupMember[]
   communityGroupInvitesSent     CommunityGroupInvite[] @relation("CommunityGroupInvite_invitedBy")
   communityGroupInvitesReceived CommunityGroupInvite[] @relation("CommunityGroupInvite_invitee")
 
-  crewsOwned              Crew[]                 @relation("Crew_owner")
-  crewsDesignatedSuccessorOf Crew[]              @relation("Crew_designatedSuccessor")
-  crewMembership          CrewMember?            @relation("CrewMember_user")
-  crewInvitesSent         CrewInvite[]           @relation("CrewInvite_invitedBy")
-  crewInvitesReceived     CrewInvite[]           @relation("CrewInvite_invitee")
-  crewTransferVotesProposed CrewOwnerTransferVote[] @relation("CrewOwnerTransferVote_proposer")
-  crewTransferVotesTargeting CrewOwnerTransferVote[] @relation("CrewOwnerTransferVote_target")
-  crewTransferBallots     CrewOwnerTransferBallot[] @relation("CrewOwnerTransferBallot_user")
+  crewsOwned                 Crew[]                    @relation("Crew_owner")
+  crewsDesignatedSuccessorOf Crew[]                    @relation("Crew_designatedSuccessor")
+  crewMembership             CrewMember?               @relation("CrewMember_user")
+  crewInvitesSent            CrewInvite[]              @relation("CrewInvite_invitedBy")
+  crewInvitesReceived        CrewInvite[]              @relation("CrewInvite_invitee")
+  crewTransferVotesProposed  CrewOwnerTransferVote[]   @relation("CrewOwnerTransferVote_proposer")
+  crewTransferVotesTargeting CrewOwnerTransferVote[]   @relation("CrewOwnerTransferVote_target")
+  crewTransferBallots        CrewOwnerTransferBallot[] @relation("CrewOwnerTransferBallot_user")
 
   space Space?
 
   // Referral / recruitment
-  /** Unique promo code set by this user (premium-only). Others use this to mark this user as their recruiter. */
-  referralCode        String?   @unique
-  /** The user who recruited this user (set once via a referral code; immutable after set). */
-  recruitedById       String?
-  recruitedBy         User?     @relation("Recruitment_recruiter", fields: [recruitedById], references: [id], onDelete: SetNull)
-  recruits            User[]    @relation("Recruitment_recruiter")
-  /** When the one-time referral bonus grant was issued (null = not yet triggered). */
+  /**
+   * /** Unique promo code set by this user (premium-only). Others use this to mark this user as their recruiter.
+   */
+  referralCode           String?   @unique
+  /**
+   * The user who recruited this user (set once via a referral code; immutable after set).
+   */
+  recruitedById          String?
+  recruitedBy            User?     @relation("Recruitment_recruiter", fields: [recruitedById], references: [id], onDelete: SetNull)
+  recruits               User[]    @relation("Recruitment_recruiter")
+  /**
+   * When the one-time referral bonus grant was issued (null = not yet triggered).
+   */
   referralBonusGrantedAt DateTime?
 
   @@index([phone])
@@ -451,15 +494,17 @@ model EmailActionToken {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
 
-  purpose   EmailActionTokenPurpose
-  tokenHash String   @unique
-  /** Optional snapshot of email the action was created for (helps invalidate on email change). */
-  email     String?
-  expiresAt DateTime
+  purpose    EmailActionTokenPurpose
+  tokenHash  String                  @unique
+  /**
+   * Optional snapshot of email the action was created for (helps invalidate on email change).
+   */
+  email      String?
+  expiresAt  DateTime
   consumedAt DateTime?
 
   userId String
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, purpose, createdAt])
   @@index([expiresAt])
@@ -467,15 +512,17 @@ model EmailActionToken {
 }
 
 model DailyContentSnapshot {
-  /** Eastern Time day key (YYYY-MM-DD). */
-  dayKey String @id
+  /**
+   * Eastern Time day key (YYYY-MM-DD).
+   */
+  dayKey    String   @id
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  quote Json?
+  quote            Json?
   quoteRefreshedAt DateTime?
 
-  websters1828 Json?
+  websters1828            Json?
   websters1828RefreshedAt DateTime?
   websters1828RecheckedAt DateTime?
 
@@ -508,20 +555,28 @@ model SubscriptionGrant {
   tier   SubscriptionGrantTier
   source SubscriptionGrantSource
 
-  /** Number of months this grant covers. */
+  /**
+   * Number of months this grant covers.
+   */
   months Int
 
   startsAt DateTime
   endsAt   DateTime
 
-  /** Optional internal note (reason for the grant). */
+  /**
+   * Optional internal note (reason for the grant).
+   */
   reason String? @db.Text
 
-  /** Admin who created this grant (null for automated sources). */
+  /**
+   * Admin who created this grant (null for automated sources).
+   */
   grantedByAdminId String?
   grantedByAdmin   User?   @relation("SubscriptionGrant_grantedByAdmin", fields: [grantedByAdminId], references: [id], onDelete: SetNull)
 
-  /** Set when an admin revokes the grant early (null = still active). */
+  /**
+   * Set when an admin revokes the grant early (null = still active).
+   */
   revokedAt DateTime?
 
   /**
@@ -542,7 +597,9 @@ model SubscriptionGrant {
  */
 model UserDailyActivity {
   userId    String
-  /** UTC midnight for the day this activity represents. */
+  /**
+   * UTC midnight for the day this activity represents.
+   */
   day       DateTime
   createdAt DateTime @default(now())
 
@@ -568,10 +625,10 @@ model PushSubscription {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
 
-  userId   String
-  endpoint String   @db.Text
-  p256dh   String   @db.Text
-  auth     String   @db.Text
+  userId    String
+  endpoint  String  @db.Text
+  p256dh    String  @db.Text
+  auth      String  @db.Text
   userAgent String? @db.Text
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -587,7 +644,9 @@ model Follow {
   followerId  String
   followingId String
 
-  /** When true, viewer receives “every post” notifications (bell icon enabled). */
+  /**
+   * When true, viewer receives “every post” notifications (bell icon enabled).
+   */
   postNotificationsEnabled Boolean @default(false)
 
   follower  User @relation("Follow_follower", fields: [followerId], references: [id], onDelete: Cascade)
@@ -604,7 +663,9 @@ model TopicFollow {
   createdAt DateTime @default(now())
 
   userId String
-  /** Canonical topic value (must be in allowlist). */
+  /**
+   * Canonical topic value (must be in allowlist).
+   */
   topic  String @db.VarChar(64)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -619,17 +680,19 @@ model TopicFollow {
  * Shell metadata is visible to signed-in users; posts with communityGroupId are members-only.
  */
 model CommunityGroup {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  slug        String  @unique @db.VarChar(80)
-  name        String  @db.VarChar(120)
-  description String  @db.Text
-  rules       String? @db.Text
-  coverImageUrl String? @db.VarChar(2000)
-  /** Square group avatar (URL), distinct from wide cover/banner. */
+  slug           String  @unique @db.VarChar(80)
+  name           String  @db.VarChar(120)
+  description    String  @db.Text
+  rules          String? @db.Text
+  coverImageUrl  String? @db.VarChar(2000)
+  /**
+   * Square group avatar (URL), distinct from wide cover/banner.
+   */
   avatarImageUrl String? @db.VarChar(2000)
 
   joinPolicy CommunityGroupJoinPolicy @default(open)
@@ -637,16 +700,20 @@ model CommunityGroup {
   createdByUserId String
   createdBy       User   @relation("CommunityGroup_createdBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
 
-  /** Curated discovery ordering; only meaningful when isFeatured is true. */
-  isFeatured     Boolean @default(false)
-  featuredOrder  Int     @default(0)
-  /** Denormalized count of active members (updated on join/leave/approve). */
-  memberCount    Int     @default(0)
+  /**
+   * Curated discovery ordering; only meaningful when isFeatured is true.
+   */
+  isFeatured    Boolean @default(false)
+  featuredOrder Int     @default(0)
+  /**
+   * Denormalized count of active members (updated on join/leave/approve).
+   */
+  memberCount   Int     @default(0)
 
   members       CommunityGroupMember[]
   invites       CommunityGroupInvite[]
   posts         Post[]
-  notifications Notification[] @relation("Notification_subjectGroup")
+  notifications Notification[]         @relation("Notification_subjectGroup")
 
   @@index([deletedAt, isFeatured, featuredOrder])
   @@index([createdAt])
@@ -660,7 +727,7 @@ model CommunityGroupMember {
   group   CommunityGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
   userId String
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   role   CommunityGroupMemberRole
   status CommunityGroupMemberStatus
@@ -672,20 +739,18 @@ model CommunityGroupMember {
 
 /**
  * Owner/moderator-issued invitation for a user to join a CommunityGroup.
- *
  * Lifecycle:
- *   - `pending`   — issued, awaiting invitee response. Re-invites of the same
- *     (groupId, inviteeUserId) reuse this row; we only re-notify the invitee
- *     after `GROUP_INVITE_RENOTIFY_AFTER_HOURS` of silence.
- *   - `accepted`  — invitee joined. If they later leave, a fresh invite can be
- *     created (the prior row remains for history).
- *   - `declined`  — invitee rejected. Re-inviting before
- *     `GROUP_INVITE_REINVITE_AFTER_DECLINE_DAYS` is forbidden; afterward the
- *     row is reset back to `pending` and `lastDeclinedAt` is preserved so the
- *     inviter's UI can still show "previously declined".
- *   - `cancelled` — pulled by the inviter (or any owner/mod).
- *   - `expired`   — flipped by an expiry job after `expiresAt`.
- *
+ * - `pending`   — issued, awaiting invitee response. Re-invites of the same
+ * (groupId, inviteeUserId) reuse this row; we only re-notify the invitee
+ * after `GROUP_INVITE_RENOTIFY_AFTER_HOURS` of silence.
+ * - `accepted`  — invitee joined. If they later leave, a fresh invite can be
+ * created (the prior row remains for history).
+ * - `declined`  — invitee rejected. Re-inviting before
+ * `GROUP_INVITE_REINVITE_AFTER_DECLINE_DAYS` is forbidden; afterward the
+ * row is reset back to `pending` and `lastDeclinedAt` is preserved so the
+ * inviter's UI can still show "previously declined".
+ * - `cancelled` — pulled by the inviter (or any owner/mod).
+ * - `expired`   — flipped by an expiry job after `expiresAt`.
  * Uniqueness on `[groupId, inviteeUserId]` means there's at most one invite
  * row per (group, invitee) — re-invites mutate this row in place.
  */
@@ -703,21 +768,31 @@ model CommunityGroupInvite {
   inviteeUserId String
   invitee       User   @relation("CommunityGroupInvite_invitee", fields: [inviteeUserId], references: [id], onDelete: Cascade)
 
-  /** Optional short note from the inviter (shown to the invitee on the row + push body). */
+  /**
+   * Optional short note from the inviter (shown to the invitee on the row + push body).
+   */
   message String? @db.VarChar(500)
 
   status CommunityGroupInviteStatus @default(pending)
 
-  /** Default expiry is 30 days after most-recent (re)issue; refreshed on re-invite. */
+  /**
+   * Default expiry is 30 days after most-recent (re)issue; refreshed on re-invite.
+   */
   expiresAt DateTime
 
-  /** When the most recent push/in-app notification was sent for this invite. Used for re-notify cooldown. */
+  /**
+   * When the most recent push/in-app notification was sent for this invite. Used for re-notify cooldown.
+   */
   lastNotifiedAt DateTime?
 
-  /** When the invitee last declined. Preserved across re-invites for the picker UI hint. */
+  /**
+   * When the invitee last declined. Preserved across re-invites for the picker UI hint.
+   */
   lastDeclinedAt DateTime?
 
-  /** Timestamp of the most recent terminal transition (accepted/declined/cancelled/expired). */
+  /**
+   * Timestamp of the most recent terminal transition (accepted/declined/cancelled/expired).
+   */
   respondedAt DateTime?
 
   notifications Notification[] @relation("Notification_subjectCommunityGroupInvite")
@@ -734,7 +809,6 @@ model CommunityGroupInvite {
  * (enforced via a UNIQUE on CrewMember.userId). The owner manages invites, membership, and
  * crew metadata. Every crew has an auto-created MessageConversation (type: crew_wall) which
  * backs "The Wall" (persistent chat-like posting inside the crew).
- *
  * Public pages at /c/:slug are always available (display "Untitled Crew" if `name` is null).
  * The wall + member list + settings are private to crew members.
  */
@@ -742,20 +816,30 @@ model Crew {
   id        String    @id @default(cuid())
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
-  /** Soft delete (disbanded). Preserves history without orphaning references. */
+  /**
+   * Soft delete (disbanded). Preserves history without orphaning references.
+   */
   deletedAt DateTime?
 
-  /** URL slug for the public crew page (/c/:slug). Auto-generated, regenerated on rename. */
+  /**
+   * URL slug for the public crew page (/c/:slug). Auto-generated, regenerated on rename.
+   */
   slug String @unique @db.VarChar(80)
 
-  /** Optional crew name. When null, public pages render "Untitled Crew". */
+  /**
+   * Optional crew name. When null, public pages render "Untitled Crew".
+   */
   name    String? @db.VarChar(120)
   tagline String? @db.VarChar(160)
   bio     String? @db.Text
 
-  /** Square avatar (R2 key or URL). Displayed on the public page and on member profiles. */
+  /**
+   * Square avatar (R2 key or URL). Displayed on the public page and on member profiles.
+   */
   avatarImageUrl String? @db.VarChar(2000)
-  /** Wide banner on the public page. */
+  /**
+   * Wide banner on the public page.
+   */
   coverImageUrl  String? @db.VarChar(2000)
 
   ownerUserId String
@@ -775,26 +859,27 @@ model Crew {
   wallConversationId String              @unique
   wallConversation   MessageConversation @relation("Crew_wallConversation", fields: [wallConversationId], references: [id], onDelete: Restrict)
 
-  /** Denormalized count of CrewMember rows. Updated atomically on join/kick/leave. */
+  /**
+   * Denormalized count of CrewMember rows. Updated atomically on join/kick/leave.
+   */
   memberCount Int @default(1)
 
   /**
    * Strict crew streak: a day only counts when EVERY member checks in by ET midnight.
    * One absentee breaks the streak. Stored denormalized so we never have to scan history.
-   *
    * - currentStreakDays: the active run length (resets to 0 on a missed day).
    * - longestStreakDays: best run ever achieved by this crew.
    * - lastCompletedDayKey: ET YYYY-MM-DD for the most recent day all members checked in.
-   *   Used both to advance (todayKey) and to detect breaks (yesterdayKey) in the cron.
+   * Used both to advance (todayKey) and to detect breaks (yesterdayKey) in the cron.
    */
   currentStreakDays   Int     @default(0)
   longestStreakDays   Int     @default(0)
   lastCompletedDayKey String?
 
-  members CrewMember[]
-  invites CrewInvite[]
+  members       CrewMember[]
+  invites       CrewInvite[]
   transferVotes CrewOwnerTransferVote[] @relation("CrewOwnerTransferVote_crew")
-  notifications Notification[] @relation("Notification_subjectCrew")
+  notifications Notification[]          @relation("Notification_subjectCrew")
 
   /**
    * If an old slug exists, we redirect to the current slug.
@@ -837,7 +922,9 @@ model CrewMember {
   user   User   @relation("CrewMember_user", fields: [userId], references: [id], onDelete: Cascade)
 
   role      CrewMemberRole @default(member)
-  /** Owner-controlled display order (0 = first). Ties are broken by joinedAt (createdAt) ascending. */
+  /**
+   * Owner-controlled display order (0 = first). Ties are broken by joinedAt (createdAt) ascending.
+   */
   sortOrder Int            @default(0)
 
   @@id([crewId, userId])
@@ -848,11 +935,10 @@ model CrewMember {
 
 /**
  * Crew invite lifecycle:
- *   - Founding invite: `crewId` is NULL (the inviter has no crew yet). The first accepted
- *     founding invite creates the crew and auto-cancels the inviter's other pending
- *     founding invites (they re-target the new crew as regular invites if the inviter chooses).
- *   - Regular invite: `crewId` is set (the inviter is already the owner of that crew).
- *
+ * - Founding invite: `crewId` is NULL (the inviter has no crew yet). The first accepted
+ * founding invite creates the crew and auto-cancels the inviter's other pending
+ * founding invites (they re-target the new crew as regular invites if the inviter chooses).
+ * - Regular invite: `crewId` is set (the inviter is already the owner of that crew).
  * Only the owner of an existing crew may send regular invites. Crewless users may send
  * founding invites. Invites expire after 14 days (enforced by a periodic job that flips
  * status from pending -> expired).
@@ -867,7 +953,7 @@ model CrewInvite {
    * regular invites sent by an existing crew owner.
    */
   crewId String?
-  crew   Crew?  @relation(fields: [crewId], references: [id], onDelete: Cascade)
+  crew   Crew?   @relation(fields: [crewId], references: [id], onDelete: Cascade)
 
   invitedByUserId String
   invitedBy       User   @relation("CrewInvite_invitedBy", fields: [invitedByUserId], references: [id], onDelete: Cascade)
@@ -875,7 +961,9 @@ model CrewInvite {
   inviteeUserId String
   invitee       User   @relation("CrewInvite_invitee", fields: [inviteeUserId], references: [id], onDelete: Cascade)
 
-  /** Optional short message from the inviter (shown to the invitee). */
+  /**
+   * Optional short message from the inviter (shown to the invitee).
+   */
   message String? @db.VarChar(500)
 
   /**
@@ -887,10 +975,14 @@ model CrewInvite {
 
   status CrewInviteStatus @default(pending)
 
-  /** 14 days after createdAt by default; enforced by expiry job. */
+  /**
+   * 14 days after createdAt by default; enforced by expiry job.
+   */
   expiresAt DateTime
 
-  /** Timestamp of the terminal state transition (accepted/declined/cancelled/expired). */
+  /**
+   * Timestamp of the terminal state transition (accepted/declined/cancelled/expired).
+   */
   respondedAt DateTime?
 
   notifications Notification[] @relation("Notification_subjectCrewInvite")
@@ -918,7 +1010,9 @@ model CrewOwnerTransferVote {
   proposerUserId String
   proposer       User   @relation("CrewOwnerTransferVote_proposer", fields: [proposerUserId], references: [id], onDelete: Cascade)
 
-  /** The member proposed to become the new owner. */
+  /**
+   * The member proposed to become the new owner.
+   */
   targetUserId String
   target       User   @relation("CrewOwnerTransferVote_target", fields: [targetUserId], references: [id], onDelete: Cascade)
 
@@ -928,7 +1022,9 @@ model CrewOwnerTransferVote {
    */
   status String @default("open") @db.VarChar(20)
 
-  /** Soft deadline for the vote (default 7 days). After this the job marks it expired. */
+  /**
+   * Soft deadline for the vote (default 7 days). After this the job marks it expired.
+   */
   expiresAt DateTime
 
   resolvedAt DateTime?
@@ -956,76 +1052,96 @@ model CrewOwnerTransferBallot {
 }
 
 model Space {
-  id          String    @id @default(cuid())
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  ownerId     String    @unique
-  owner       User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId String @unique
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
-  title       String    @db.VarChar(100)
-  description String?   @db.VarChar(500)
+  title       String  @db.VarChar(100)
+  description String? @db.VarChar(500)
 
-  isActive    Boolean   @default(false)
+  isActive Boolean @default(false)
 
-  mode            SpaceMode @default(NONE)
-  watchPartyUrl   String?   @db.VarChar(2000)
-  radioStreamUrl  String?   @db.VarChar(2000)
+  mode           SpaceMode @default(NONE)
+  watchPartyUrl  String?   @db.VarChar(2000)
+  radioStreamUrl String?   @db.VarChar(2000)
 
   @@index([isActive])
 }
 
 model Post {
-  id         String         @id @default(cuid())
-  createdAt  DateTime       @default(now())
-  editedAt   DateTime?
-  editCount  Int            @default(0)
-  deletedAt  DateTime?
-  body       String
-  /** Drafts are only-me posts used for autosave / compose. */
-  isDraft    Boolean        @default(false)
-  /** Inferred topics (from allowlist) used for search/discovery. */
-  topics     String[]       @default([])
-  /** User-created hashtags (parsed from body) used for search/autocomplete. Stored lowercase. */
-  hashtags   String[]       @default([])
-  /** Hashtag casing variants used in this post (one per entry in `hashtags`, without '#'). */
-  hashtagCasings String[]   @default([])
-  kind       PostKind       @default(regular)
-  /** ET day key (YYYY-MM-DD) for check-ins (null for non-check-ins). */
-  checkinDayKey String?
-  /** Prompt text used for this check-in day (stored to keep history stable). */
-  checkinPrompt String?
-  visibility PostVisibility @default(public)
-  boostCount Int            @default(0)
-  bookmarkCount Int         @default(0)
-  commentCount Int          @default(0)
-  /** Denormalized count of flat reposts + quote reposts referencing this post. */
-  repostCount Int           @default(0)
-  viewerCount Int            @default(0)
-  weightedViewCount Float    @default(0)
-  boostScore Float?
-  boostScoreUpdatedAt DateTime?
-  /** Precomputed trending score, refreshed every ~10 min by the popular-score cron. NULL = not yet scored. */
-  trendingScore Float?
+  id                     String         @id @default(cuid())
+  createdAt              DateTime       @default(now())
+  editedAt               DateTime?
+  editCount              Int            @default(0)
+  deletedAt              DateTime?
+  body                   String
+  /**
+   * Drafts are only-me posts used for autosave / compose.
+   */
+  isDraft                Boolean        @default(false)
+  /**
+   * Inferred topics (from allowlist) used for search/discovery.
+   */
+  topics                 String[]       @default([])
+  /**
+   * User-created hashtags (parsed from body) used for search/autocomplete. Stored lowercase.
+   */
+  hashtags               String[]       @default([])
+  /**
+   * Hashtag casing variants used in this post (one per entry in `hashtags`, without '#').
+   */
+  hashtagCasings         String[]       @default([])
+  kind                   PostKind       @default(regular)
+  /**
+   * ET day key (YYYY-MM-DD) for check-ins (null for non-check-ins).
+   */
+  checkinDayKey          String?
+  /**
+   * Prompt text used for this check-in day (stored to keep history stable).
+   */
+  checkinPrompt          String?
+  visibility             PostVisibility @default(public)
+  boostCount             Int            @default(0)
+  bookmarkCount          Int            @default(0)
+  commentCount           Int            @default(0)
+  /**
+   * Denormalized count of flat reposts + quote reposts referencing this post.
+   */
+  repostCount            Int            @default(0)
+  viewerCount            Int            @default(0)
+  weightedViewCount      Float          @default(0)
+  boostScore             Float?
+  boostScoreUpdatedAt    DateTime?
+  /**
+   * Precomputed trending score, refreshed every ~10 min by the popular-score cron. NULL = not yet scored.
+   */
+  trendingScore          Float?
   trendingScoreUpdatedAt DateTime?
 
   userId String
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  /** When set, post belongs to a community group and must not appear on global feeds. */
+  /**
+   * When set, post belongs to a community group and must not appear on global feeds.
+   */
   communityGroupId String?
   communityGroup   CommunityGroup? @relation(fields: [communityGroupId], references: [id], onDelete: Cascade)
-  /** Owner-pinned root post in this group (at most one per group). */
-  pinnedInGroupAt DateTime?
+  /**
+   * Owner-pinned root post in this group (at most one per group).
+   */
+  pinnedInGroupAt  DateTime?
 
   parentId String?
   parent   Post?   @relation("Post_replies", fields: [parentId], references: [id], onDelete: Cascade)
-  replies  Post[] @relation("Post_replies")
+  replies  Post[]  @relation("Post_replies")
 
   // Root post ID for thread hierarchy (null for root posts, set to root post ID for all replies in a thread)
-  rootId String?
-  root   Post?   @relation("Post_thread", fields: [rootId], references: [id], onDelete: Cascade)
-  threadReplies Post[] @relation("Post_thread")
+  rootId        String?
+  root          Post?   @relation("Post_thread", fields: [rootId], references: [id], onDelete: Cascade)
+  threadReplies Post[]  @relation("Post_thread")
 
   // Flat repost: points to the original post being reshared (kind=repost only).
   repostedPostId String?
@@ -1041,23 +1157,23 @@ model Post {
   quotedPost   Post?   @relation("Post_quotes", fields: [quotedPostId], references: [id], onDelete: SetNull)
   quotes       Post[]  @relation("Post_quotes")
 
-  boosts   Boost[]
-  media    PostMedia[]
-  poll     PostPoll?
-  bookmarks Bookmark[]
-  mentions PostMention[]
-  versions PostVersion[]
-  anonViews PostAnonView[]
-  pinnedByUser User? @relation("PinnedPost")
-  notificationsAsSubject Notification[] @relation("Notification_subjectPost")
+  boosts                   Boost[]
+  media                    PostMedia[]
+  poll                     PostPoll?
+  bookmarks                Bookmark[]
+  mentions                 PostMention[]
+  versions                 PostVersion[]
+  anonViews                PostAnonView[]
+  pinnedByUser             User?          @relation("PinnedPost")
+  notificationsAsSubject   Notification[] @relation("Notification_subjectPost")
   notificationsAsActorPost Notification[] @relation("Notification_actorPost")
-  reports Report[] @relation("Report_subjectPost")
-  views PostView[]
+  reports                  Report[]       @relation("Report_subjectPost")
+  views                    PostView[]
 
+  @@unique([userId, kind, checkinDayKey])
   @@index([userId, createdAt])
   @@index([createdAt])
   @@index([kind, createdAt])
-  @@unique([userId, kind, checkinDayKey])
   @@index([parentId])
   @@index([parentId, createdAt])
   @@index([rootId])
@@ -1089,15 +1205,21 @@ model Post {
 }
 
 model PostPoll {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-  /** Poll end timestamp (UTC). */
-  endsAt    DateTime
-  totalVoteCount Int @default(0)
-  /** When set, "poll results ready" notifications have been created. */
+  id                String    @id @default(cuid())
+  createdAt         DateTime  @default(now())
+  /**
+   * Poll end timestamp (UTC).
+   */
+  endsAt            DateTime
+  totalVoteCount    Int       @default(0)
+  /**
+   * When set, "poll results ready" notifications have been created.
+   */
   resultsNotifiedAt DateTime?
-  /** When set, the poll creator chose to skip voting (see results without casting a vote). */
-  creatorSkippedAt DateTime?
+  /**
+   * When set, the poll creator chose to skip voting (see results without casting a vote).
+   */
+  creatorSkippedAt  DateTime?
 
   postId String @unique
   post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
@@ -1120,13 +1242,15 @@ model PostPollOption {
   text     String @db.VarChar(30)
   position Int    @default(0)
 
-  /** Optional image (stored in R2; URL computed server-side from base URL). */
-  imageR2Key String?
-  imageWidth Int?
+  /**
+   * Optional image (stored in R2; URL computed server-side from base URL).
+   */
+  imageR2Key  String?
+  imageWidth  Int?
   imageHeight Int?
-  imageAlt   String? @db.VarChar(500)
+  imageAlt    String? @db.VarChar(500)
 
-  voteCount Int @default(0)
+  voteCount Int            @default(0)
   votes     PostPollVote[]
 
   @@unique([pollId, position])
@@ -1158,11 +1282,11 @@ model PostVersion {
   postId String
   post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
 
-  body String
-  topics String[] @default([])
-  hashtags String[] @default([])
-  hashtagCasings String[] @default([])
-  visibility PostVisibility
+  body           String
+  topics         String[]       @default([])
+  hashtags       String[]       @default([])
+  hashtagCasings String[]       @default([])
+  visibility     PostVisibility
 
   @@index([postId, createdAt])
 }
@@ -1170,11 +1294,15 @@ model PostVersion {
 model Hashtag {
   tag String @id
 
-  usageCount Int @default(0)
-  /** Most common casing for display/autocomplete, e.g. "HashTags". */
-  displayTag String?
-  /** Count for `displayTag` (ties keep existing). */
-  displayTagCount Int @default(0)
+  usageCount      Int     @default(0)
+  /**
+   * Most common casing for display/autocomplete, e.g. "HashTags".
+   */
+  displayTag      String?
+  /**
+   * Count for `displayTag` (ties keep existing).
+   */
+  displayTagCount Int     @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1188,7 +1316,7 @@ model Hashtag {
 model HashtagVariant {
   tag     String
   variant String
-  count   Int @default(0)
+  count   Int    @default(0)
 
   hashtag Hashtag @relation(fields: [tag], references: [tag], onDelete: Cascade)
 
@@ -1203,15 +1331,17 @@ model HashtagBackfillRun {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  status String @default("running")
-  /** Post id cursor for createdAt/id pagination. */
-  cursor String?
-  processedPosts Int @default(0)
-  updatedPosts Int @default(0)
-  resetDone Boolean @default(false)
-  startedAt DateTime @default(now())
-  finishedAt DateTime?
-  lastError String? @db.Text
+  status         String    @default("running")
+  /**
+   * Post id cursor for createdAt/id pagination.
+   */
+  cursor         String?
+  processedPosts Int       @default(0)
+  updatedPosts   Int       @default(0)
+  resetDone      Boolean   @default(false)
+  startedAt      DateTime  @default(now())
+  finishedAt     DateTime?
+  lastError      String?   @db.Text
 
   @@index([status, updatedAt])
 }
@@ -1219,13 +1349,19 @@ model HashtagBackfillRun {
 // Postgres-backed "cache": periodic snapshots of trending hashtag scores.
 // We keep a small rolling window (e.g. last ~1 hour) so paging remains stable across refreshes.
 model HashtagTrendingScoreSnapshot {
-  asOf DateTime
-  /** Canonical lowercase tag (no '#'). */
-  tag String
+  asOf       DateTime
+  /**
+   * Canonical lowercase tag (no '#').
+   */
+  tag        String
   visibility PostVisibility
-  /** Time-decayed score (half-life based); used for ranking only. */
-  score Float
-  /** Raw usage count within the lookback window (not time-decayed). */
+  /**
+   * Time-decayed score (half-life based); used for ranking only.
+   */
+  score      Float
+  /**
+   * Raw usage count within the lookback window (not time-decayed).
+   */
   usageCount Int
 
   @@id([asOf, visibility, tag])
@@ -1253,7 +1389,7 @@ model BookmarkCollection {
   slug String
 
   userId String
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   bookmarks BookmarkCollectionItem[]
 
@@ -1267,10 +1403,10 @@ model Bookmark {
   createdAt DateTime @default(now())
 
   userId String
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   postId String
-  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   collections BookmarkCollectionItem[]
 
@@ -1286,7 +1422,7 @@ model BookmarkCollectionItem {
   bookmarkId   String
   collectionId String
 
-  bookmark   Bookmark          @relation(fields: [bookmarkId], references: [id], onDelete: Cascade)
+  bookmark   Bookmark           @relation(fields: [bookmarkId], references: [id], onDelete: Cascade)
   collection BookmarkCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
 
   @@id([bookmarkId, collectionId])
@@ -1295,33 +1431,33 @@ model BookmarkCollectionItem {
 }
 
 model PostMedia {
-  id        String         @id @default(cuid())
-  createdAt DateTime       @default(now())
-  kind      PostMediaKind
-  source    PostMediaSource
+  id              String          @id @default(cuid())
+  createdAt       DateTime        @default(now())
+  kind            PostMediaKind
+  source          PostMediaSource
   // For "upload" sources, `r2Key` is set; `url` is computed server-side from R2 base URL.
-  r2Key     String?
+  r2Key           String?
   // For video uploads, optional poster image stored in R2.
-  thumbnailR2Key String?
+  thumbnailR2Key  String?
   // For "giphy" sources, `url` is set (and optional mp4Url for better performance later).
-  url       String?
-  mp4Url    String?
-  width     Int?
-  height    Int?
+  url             String?
+  mp4Url          String?
+  width           Int?
+  height          Int?
   // For video: duration in seconds.
   durationSeconds Int?
   // Optional alt text for accessibility.
-  alt       String?
-  position  Int            @default(0)
+  alt             String?
+  position        Int             @default(0)
 
   // Admin tombstone: media can be hard-deleted from storage, but we keep the row so posts can render a placeholder.
   deletedAt        DateTime?
   deletedByAdminId String?
   deletedReason    String?
-  deletedByAdmin   User?    @relation("PostMedia_deletedByAdmin", fields: [deletedByAdminId], references: [id], onDelete: SetNull)
+  deletedByAdmin   User?     @relation("PostMedia_deletedByAdmin", fields: [deletedByAdminId], references: [id], onDelete: SetNull)
 
   postId String
-  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@index([postId, position])
   @@index([postId, createdAt])
@@ -1332,22 +1468,22 @@ model PostMedia {
 
 // Dedupe: one row per unique file content (by SHA-256). Reuse existing R2 key when same file uploaded again.
 model MediaContentHash {
-  contentHash     String   @unique
+  contentHash     String        @unique
   r2Key           String
   kind            PostMediaKind
   width           Int?
   height          Int?
   durationSeconds Int?
   bytes           Int?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime      @default(now())
 }
 
 // Admin indexed view of all R2-backed media objects (including orphans).
 model MediaAsset {
-  id             String   @id @default(cuid())
-  createdAt      DateTime @default(now())
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
 
-  r2Key          String   @unique
+  r2Key          String         @unique
   r2LastModified DateTime?
   bytes          Int?
   contentType    String?
@@ -1359,7 +1495,7 @@ model MediaAsset {
   deletedByAdminId String?
   deleteReason     String?
   r2DeletedAt      DateTime?
-  deletedByAdmin   User?    @relation("MediaAsset_deletedByAdmin", fields: [deletedByAdminId], references: [id], onDelete: SetNull)
+  deletedByAdmin   User?     @relation("MediaAsset_deletedByAdmin", fields: [deletedByAdminId], references: [id], onDelete: SetNull)
 
   @@index([r2LastModified, id])
   @@index([deletedAt])
@@ -1398,9 +1534,9 @@ model PostView {
 }
 
 model PostAnonView {
-  postId      String
-  anonId      String
-  createdAt   DateTime @default(now())
+  postId       String
+  anonId       String
+  createdAt    DateTime @default(now())
   lastViewedAt DateTime @default(now())
 
   post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
@@ -1433,9 +1569,9 @@ model ArticleView {
 }
 
 model ArticleAnonView {
-  articleId   String
-  anonId      String
-  createdAt   DateTime @default(now())
+  articleId    String
+  anonId       String
+  createdAt    DateTime @default(now())
   lastViewedAt DateTime @default(now())
 
   article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
@@ -1451,8 +1587,8 @@ model SiteConfig {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  postsPerWindow     Int @default(5)
-  windowSeconds      Int @default(300)
+  postsPerWindow Int @default(5)
+  windowSeconds  Int @default(300)
 
   // Tier-specific post rate limits (excludes onlyMe posts).
   verifiedPostsPerWindow Int @default(5)
@@ -1489,30 +1625,32 @@ model Session {
 }
 
 model Notification {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-  deliveredAt DateTime?
-  readAt    DateTime?
-  ignoredAt DateTime?
+  id           String    @id @default(cuid())
+  createdAt    DateTime  @default(now())
+  deliveredAt  DateTime?
+  readAt       DateTime?
+  ignoredAt    DateTime?
   nudgedBackAt DateTime?
 
-  recipientUserId String
-  kind      NotificationKind
-  actorUserId    String?
-  /** The post that caused this notification (e.g. a reply or a mention post). */
-  actorPostId    String?
-  subjectPostId  String?
-  subjectUserId  String?
-  subjectArticleId String?
-  subjectArticleCommentId String?
-  subjectGroupId   String?
-  subjectCrewId    String?
+  recipientUserId               String
+  kind                          NotificationKind
+  actorUserId                   String?
+  /**
+   * The post that caused this notification (e.g. a reply or a mention post).
+   */
+  actorPostId                   String?
+  subjectPostId                 String?
+  subjectUserId                 String?
+  subjectArticleId              String?
+  subjectArticleCommentId       String?
+  subjectGroupId                String?
+  subjectCrewId                 String?
   /**
    * Specific crew invite this notification refers to. Lets the notification UI
    * accept/decline the exact invite without resolving by (actor, recipient) pair.
    * SetNull on delete so notifications survive invite cleanup.
    */
-  subjectCrewInviteId String?
+  subjectCrewInviteId           String?
   /**
    * Specific community group invite this notification refers to. Mirrors the
    * crew invite pattern so the notification UI can accept/decline the exact
@@ -1523,22 +1661,22 @@ model Notification {
    * Conversation this notification is about (used for `message` kind).
    * SetNull on delete so the notification survives conversation cleanup.
    */
-  subjectConversationId String?
-  title     String?
-  body      String?
+  subjectConversationId         String?
+  title                         String?
+  body                          String?
 
-  recipient User  @relation("Notification_recipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
-  actor     User? @relation("Notification_actor", fields: [actorUserId], references: [id], onDelete: SetNull)
-  actorPost Post? @relation("Notification_actorPost", fields: [actorPostId], references: [id], onDelete: SetNull)
-  subjectPost Post? @relation("Notification_subjectPost", fields: [subjectPostId], references: [id], onDelete: SetNull)
-  subjectUser User? @relation("Notification_subjectUser", fields: [subjectUserId], references: [id], onDelete: SetNull)
-  subjectArticle Article? @relation("Notification_subjectArticle", fields: [subjectArticleId], references: [id], onDelete: SetNull)
-  subjectArticleComment ArticleComment? @relation("Notification_subjectArticleComment", fields: [subjectArticleCommentId], references: [id], onDelete: SetNull)
-  subjectGroup CommunityGroup? @relation("Notification_subjectGroup", fields: [subjectGroupId], references: [id], onDelete: SetNull)
-  subjectCrew  Crew?           @relation("Notification_subjectCrew", fields: [subjectCrewId], references: [id], onDelete: SetNull)
-  subjectCrewInvite CrewInvite? @relation("Notification_subjectCrewInvite", fields: [subjectCrewInviteId], references: [id], onDelete: SetNull)
+  recipient                   User                  @relation("Notification_recipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
+  actor                       User?                 @relation("Notification_actor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorPost                   Post?                 @relation("Notification_actorPost", fields: [actorPostId], references: [id], onDelete: SetNull)
+  subjectPost                 Post?                 @relation("Notification_subjectPost", fields: [subjectPostId], references: [id], onDelete: SetNull)
+  subjectUser                 User?                 @relation("Notification_subjectUser", fields: [subjectUserId], references: [id], onDelete: SetNull)
+  subjectArticle              Article?              @relation("Notification_subjectArticle", fields: [subjectArticleId], references: [id], onDelete: SetNull)
+  subjectArticleComment       ArticleComment?       @relation("Notification_subjectArticleComment", fields: [subjectArticleCommentId], references: [id], onDelete: SetNull)
+  subjectGroup                CommunityGroup?       @relation("Notification_subjectGroup", fields: [subjectGroupId], references: [id], onDelete: SetNull)
+  subjectCrew                 Crew?                 @relation("Notification_subjectCrew", fields: [subjectCrewId], references: [id], onDelete: SetNull)
+  subjectCrewInvite           CrewInvite?           @relation("Notification_subjectCrewInvite", fields: [subjectCrewInviteId], references: [id], onDelete: SetNull)
   subjectCommunityGroupInvite CommunityGroupInvite? @relation("Notification_subjectCommunityGroupInvite", fields: [subjectCommunityGroupInviteId], references: [id], onDelete: SetNull)
-  subjectConversation MessageConversation? @relation("Notification_subjectConversation", fields: [subjectConversationId], references: [id], onDelete: SetNull)
+  subjectConversation         MessageConversation?  @relation("Notification_subjectConversation", fields: [subjectConversationId], references: [id], onDelete: SetNull)
 
   @@index([recipientUserId, createdAt])
   @@index([recipientUserId, deliveredAt])
@@ -1558,38 +1696,50 @@ model NotificationPreferences {
   updatedAt DateTime @updatedAt
 
   // Web push preferences (in-app notifications are always created; this controls browser notifications).
-  pushComment Boolean @default(true)
-  pushBoost Boolean @default(true)
-  pushFollow Boolean @default(true)
-  pushMention Boolean @default(true)
-  pushMessage Boolean @default(true)
-  pushRepost Boolean @default(true)
-  pushNudge Boolean @default(true)
-  pushFollowedPost Boolean @default(true)
-  /** Send a single push 24h after a reply if the recipient hasn't opened it yet. Once-per-notification, never spammed. */
-  pushReplyNudge Boolean @default(true)
-  /** Crew streak: push when the strict crew streak advances or breaks. Highest-signal push in the product. */
-  pushCrewStreak Boolean @default(true)
-  /** Group activity: push for join, approve/reject, remove, disband events. */
+  pushComment       Boolean @default(true)
+  pushBoost         Boolean @default(true)
+  pushFollow        Boolean @default(true)
+  pushMention       Boolean @default(true)
+  pushMessage       Boolean @default(true)
+  pushRepost        Boolean @default(true)
+  pushNudge         Boolean @default(true)
+  pushFollowedPost  Boolean @default(true)
+  /**
+   * Send a single push 24h after a reply if the recipient hasn't opened it yet. Once-per-notification, never spammed.
+   */
+  pushReplyNudge    Boolean @default(true)
+  /**
+   * Crew streak: push when the strict crew streak advances or breaks. Highest-signal push in the product.
+   */
+  pushCrewStreak    Boolean @default(true)
+  /**
+   * Group activity: push for join, approve/reject, remove, disband events.
+   */
   pushGroupActivity Boolean @default(true)
 
   // Email preferences (requires user.email).
-  emailDigestDaily Boolean @default(true)
-  emailDigestWeekly Boolean @default(true)
-  emailNewNotifications Boolean @default(true)
-  /** Optional: send near-immediate emails for high-signal events (messages + mentions/replies). */
+  emailDigestDaily       Boolean @default(true)
+  emailDigestWeekly      Boolean @default(true)
+  emailNewNotifications  Boolean @default(true)
+  /**
+   * Optional: send near-immediate emails for high-signal events (messages + mentions/replies).
+   */
   emailInstantHighSignal Boolean @default(true)
-  /** Send a reminder email if you're at risk of losing your streak today. */
-  emailStreakReminder Boolean @default(true)
-  /** Send an email when someone you follow publishes a new article. */
-  emailFollowedArticle Boolean @default(true)
+  /**
+   * Send a reminder email if you're at risk of losing your streak today.
+   */
+  emailStreakReminder    Boolean @default(true)
+  /**
+   * Send an email when someone you follow publishes a new article.
+   */
+  emailFollowedArticle   Boolean @default(true)
 
   // Email send timestamps (rate limiting / dedupe).
-  lastEmailDigestDailySentAt DateTime?
-  lastEmailDigestWeeklySentAt DateTime?
-  lastEmailNewNotificationsSentAt DateTime?
+  lastEmailDigestDailySentAt       DateTime?
+  lastEmailDigestWeeklySentAt      DateTime?
+  lastEmailNewNotificationsSentAt  DateTime?
   lastEmailInstantHighSignalSentAt DateTime?
-  lastEmailStreakReminderSentAt DateTime?
+  lastEmailStreakReminderSentAt    DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -1604,10 +1754,14 @@ model UserArticleTagPreference {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
 
-  /** Normalized tag slug (lowercase, alphanumeric + hyphens). */
-  tag       String
-  /** Display label for UI/email sections. */
-  label     String
+  /**
+   * Normalized tag slug (lowercase, alphanumeric + hyphens).
+   */
+  tag   String
+  /**
+   * Display label for UI/email sections.
+   */
+  label String
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1627,11 +1781,11 @@ model TaxonomyTerm {
   kind   TaxonomyTermKind
   status TaxonomyTermStatus @default(active)
 
-  aliases TaxonomyAlias[]
-  outgoingEdges TaxonomyEdge[] @relation("TaxonomyEdge_from")
-  incomingEdges TaxonomyEdge[] @relation("TaxonomyEdge_to")
+  aliases         TaxonomyAlias[]
+  outgoingEdges   TaxonomyEdge[]           @relation("TaxonomyEdge_from")
+  incomingEdges   TaxonomyEdge[]           @relation("TaxonomyEdge_to")
   userPreferences UserTaxonomyPreference[]
-  metrics TaxonomyTermMetric?
+  metrics         TaxonomyTermMetric?
 
   @@unique([slug])
   @@index([kind, status])
@@ -1661,8 +1815,8 @@ model TaxonomyEdge {
 
   fromTermId String
   toTermId   String
-  fromTerm TaxonomyTerm @relation("TaxonomyEdge_from", fields: [fromTermId], references: [id], onDelete: Cascade)
-  toTerm   TaxonomyTerm @relation("TaxonomyEdge_to", fields: [toTermId], references: [id], onDelete: Cascade)
+  fromTerm   TaxonomyTerm @relation("TaxonomyEdge_from", fields: [fromTermId], references: [id], onDelete: Cascade)
+  toTerm     TaxonomyTerm @relation("TaxonomyEdge_to", fields: [toTermId], references: [id], onDelete: Cascade)
 
   @@unique([fromTermId, toTermId, relation])
   @@index([fromTermId, relation])
@@ -1677,7 +1831,7 @@ model UserTaxonomyPreference {
   userId String
   termId String
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   term TaxonomyTerm @relation(fields: [termId], references: [id], onDelete: Cascade)
 
   @@unique([userId, termId])
@@ -1686,13 +1840,13 @@ model UserTaxonomyPreference {
 }
 
 model TaxonomyTermMetric {
-  termId String @id
-  updatedAt DateTime @updatedAt
-  articleCount Int @default(0)
-  postCount Int @default(0)
-  hashtagCount Int @default(0)
-  recentVelocity Float @default(0)
-  engagementScore Float @default(0)
+  termId          String   @id
+  updatedAt       DateTime @updatedAt
+  articleCount    Int      @default(0)
+  postCount       Int      @default(0)
+  hashtagCount    Int      @default(0)
+  recentVelocity  Float    @default(0)
+  engagementScore Float    @default(0)
 
   term TaxonomyTerm @relation(fields: [termId], references: [id], onDelete: Cascade)
 
@@ -1700,7 +1854,9 @@ model TaxonomyTermMetric {
   @@index([recentVelocity(sort: Desc)])
 }
 
-/** Tracks last push sent per user+kind for rate limiting/coalescing. */
+/**
+ * Tracks last push sent per user+kind for rate limiting/coalescing.
+ */
 model PushCoalesce {
   userId String
   kind   String
@@ -1716,21 +1872,25 @@ model MessageConversation {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  type MessageConversationType
-  title String?
+  type            MessageConversationType
+  title           String?
   createdByUserId String
-  /** Unique key for direct conversations (sorted user ids). */
-  directKey String? @unique
+  /**
+   * Unique key for direct conversations (sorted user ids).
+   */
+  directKey       String?                 @unique
 
   lastMessageAt DateTime?
-  lastMessageId String? @unique
+  lastMessageId String?   @unique
 
-  createdBy User @relation("MessageConversation_createdBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  createdBy    User                 @relation("MessageConversation_createdBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
   participants MessageParticipant[]
-  messages Message[] @relation("MessageConversation_messages")
-  lastMessage Message? @relation("MessageConversation_lastMessage", fields: [lastMessageId], references: [id], onDelete: SetNull)
+  messages     Message[]            @relation("MessageConversation_messages")
+  lastMessage  Message?             @relation("MessageConversation_lastMessage", fields: [lastMessageId], references: [id], onDelete: SetNull)
 
-  /** When this conversation is a crew wall (type: crew_wall), links back to the owning crew. */
+  /**
+   * When this conversation is a crew wall (type: crew_wall), links back to the owning crew.
+   */
   crewWall Crew? @relation("Crew_wallConversation")
 
   notifications Notification[] @relation("Notification_subjectConversation")
@@ -1744,16 +1904,18 @@ model MessageParticipant {
   updatedAt DateTime @updatedAt
 
   conversationId String
-  userId String
-  role MessageParticipantRole @default(member)
-  status MessageParticipantStatus @default(pending)
-  acceptedAt DateTime?
-  lastReadAt DateTime?
-  /** When set, push notifications for this conversation are silenced for the viewer. */
-  mutedAt DateTime?
+  userId         String
+  role           MessageParticipantRole   @default(member)
+  status         MessageParticipantStatus @default(pending)
+  acceptedAt     DateTime?
+  lastReadAt     DateTime?
+  /**
+   * When set, push notifications for this conversation are silenced for the viewer.
+   */
+  mutedAt        DateTime?
 
   conversation MessageConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  user User @relation("MessageParticipant_user", fields: [userId], references: [id], onDelete: Cascade)
+  user         User                @relation("MessageParticipant_user", fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([conversationId, userId])
   @@index([userId, status, updatedAt])
@@ -1766,24 +1928,30 @@ model Message {
   body      String   @db.Text
 
   conversationId String
-  senderId String
+  senderId       String
 
-  /** When set, this message is a reply to another message in the same conversation. */
+  /**
+   * When set, this message is a reply to another message in the same conversation.
+   */
   replyToId String?
 
-  /** Set when the sender edits the message body. */
+  /**
+   * Set when the sender edits the message body.
+   */
   editedAt DateTime?
 
-  /** True when the sender has deleted the message for all participants. */
-  deletedForAll    Boolean   @default(false)
-  deletedForAllAt  DateTime?
+  /**
+   * True when the sender has deleted the message for all participants.
+   */
+  deletedForAll   Boolean   @default(false)
+  deletedForAllAt DateTime?
 
-  conversation MessageConversation @relation("MessageConversation_messages", fields: [conversationId], references: [id], onDelete: Cascade)
-  sender User @relation("Message_sender", fields: [senderId], references: [id], onDelete: Cascade)
+  conversation   MessageConversation  @relation("MessageConversation_messages", fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User                 @relation("Message_sender", fields: [senderId], references: [id], onDelete: Cascade)
   lastMessageFor MessageConversation? @relation("MessageConversation_lastMessage")
 
-  replyTo  Message?  @relation("Message_replies", fields: [replyToId], references: [id], onDelete: SetNull)
-  replies  Message[] @relation("Message_replies")
+  replyTo   Message?          @relation("Message_replies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies   Message[]         @relation("Message_replies")
   reactions MessageReaction[]
   deletions MessageDeletion[]
   media     MessageMedia[]
@@ -1794,20 +1962,20 @@ model Message {
 }
 
 model MessageMedia {
-  id        String          @id @default(cuid())
-  createdAt DateTime        @default(now())
-  kind      PostMediaKind
-  source    PostMediaSource
+  id              String          @id @default(cuid())
+  createdAt       DateTime        @default(now())
+  kind            PostMediaKind
+  source          PostMediaSource
   // For "upload" sources: r2Key is set; url is computed server-side.
-  r2Key          String?
-  thumbnailR2Key String?
+  r2Key           String?
+  thumbnailR2Key  String?
   // For "giphy" sources: url/mp4Url are stored directly.
-  url            String?
-  mp4Url         String?
-  width          Int?
-  height         Int?
+  url             String?
+  mp4Url          String?
+  width           Int?
+  height          Int?
   durationSeconds Int?
-  alt            String?
+  alt             String?
 
   messageId String
   message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
@@ -1816,8 +1984,8 @@ model MessageMedia {
 }
 
 model MessageReaction {
-  id         String   @id @default(cuid())
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
 
   messageId  String
   userId     String
@@ -1863,14 +2031,16 @@ model Feedback {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  category FeedbackCategory
-  status   FeedbackStatus @default(new)
-  email    String?        @db.VarChar(200)
-  subject  String         @db.VarChar(200)
-  details  String         @db.Text
-  adminNote String?       @db.Text
+  category  FeedbackCategory
+  status    FeedbackStatus   @default(new)
+  email     String?          @db.VarChar(200)
+  subject   String           @db.VarChar(200)
+  details   String           @db.Text
+  adminNote String?          @db.Text
 
-  /** IP address of submitter (for rate limiting / abuse prevention). */
+  /**
+   * IP address of submitter (for rate limiting / abuse prevention).
+   */
   submitterIp String? @db.VarChar(64)
 
   userId String?
@@ -1889,7 +2059,7 @@ model Report {
 
   targetType ReportTargetType
   reason     ReportReason
-  details    String?      @db.Text
+  details    String?          @db.Text
 
   status     ReportStatus @default(pending)
   adminNote  String?      @db.Text
@@ -1899,13 +2069,13 @@ model Report {
   reporter       User   @relation("Report_reporter", fields: [reporterUserId], references: [id], onDelete: Cascade)
 
   subjectUserId String?
-  subjectUser   User?  @relation("Report_subjectUser", fields: [subjectUserId], references: [id], onDelete: Cascade)
+  subjectUser   User?   @relation("Report_subjectUser", fields: [subjectUserId], references: [id], onDelete: Cascade)
 
   subjectPostId String?
-  subjectPost   Post?  @relation("Report_subjectPost", fields: [subjectPostId], references: [id], onDelete: Cascade)
+  subjectPost   Post?   @relation("Report_subjectPost", fields: [subjectPostId], references: [id], onDelete: Cascade)
 
   resolvedByAdminId String?
-  resolvedByAdmin   User? @relation("Report_resolvedBy", fields: [resolvedByAdminId], references: [id], onDelete: SetNull)
+  resolvedByAdmin   User?   @relation("Report_resolvedBy", fields: [resolvedByAdminId], references: [id], onDelete: SetNull)
 
   @@index([createdAt, id])
   @@index([status, createdAt])
@@ -1926,16 +2096,16 @@ model VerificationRequest {
   status VerificationRequestStatus @default(pending)
 
   // Provider-agnostic fields (null until a provider is integrated).
-  provider String? @db.VarChar(50)
+  provider          String? @db.VarChar(50)
   providerRequestId String? @db.VarChar(200)
-  metadata Json?
+  metadata          Json?
 
   // Admin review fields.
-  reviewedAt DateTime?
+  reviewedAt        DateTime?
   reviewedByAdminId String?
-  reviewedByAdmin User? @relation("VerificationRequest_reviewedBy", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
-  adminNote String? @db.Text
-  rejectionReason String? @db.Text
+  reviewedByAdmin   User?     @relation("VerificationRequest_reviewedBy", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+  adminNote         String?   @db.Text
+  rejectionReason   String?   @db.Text
 
   @@index([createdAt, id])
   @@index([userId, createdAt])
@@ -1971,48 +2141,55 @@ model AdminEmailLog {
 // ─── Articles ────────────────────────────────────────────────────────────────
 
 model Article {
-  id          String          @id @default(cuid())
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   publishedAt DateTime?
   editedAt    DateTime?
   deletedAt   DateTime?
 
-  title       String
-  slug        String
-  /** Tiptap document stored as stringified JSON. */
-  body        String          @default("{}")
-  /** Auto-generated plain-text excerpt (~200 chars). */
-  excerpt     String?
+  title          String
+  slug           String
+  /**
+   * Tiptap document stored as stringified JSON.
+   */
+  body           String  @default("{}")
+  /**
+   * Auto-generated plain-text excerpt (~200 chars).
+   */
+  excerpt        String?
   thumbnailR2Key String?
 
-  visibility  PostVisibility  @default(public)
-  isDraft     Boolean         @default(true)
-  lastSavedAt DateTime        @default(now())
+  visibility  PostVisibility @default(public)
+  isDraft     Boolean        @default(true)
+  lastSavedAt DateTime       @default(now())
 
-  boostCount   Int @default(0)
-  commentCount Int @default(0)
-  viewCount    Int @default(0)
+  boostCount        Int   @default(0)
+  commentCount      Int   @default(0)
+  viewCount         Int   @default(0)
   weightedViewCount Float @default(0)
 
   trendingScore          Float?
   trendingScoreUpdatedAt DateTime?
 
-  /** The highest view-count milestone (50/100/500/1000) already notified to the author. */
-  viewMilestoneNotified  Int?
+  /**
+   * The highest view-count milestone (50/100/500/1000) already notified to the author.
+   */
+  viewMilestoneNotified Int?
 
   authorId String
   author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
 
-  boosts    ArticleBoost[]
-  reactions ArticleReaction[]
-  comments  ArticleComment[]
-  views     ArticleView[]
-  anonViews ArticleAnonView[]
-  sharePosts Post[]
-  tags      ArticleTag[]
-  notifications Notification[] @relation("Notification_subjectArticle")
+  boosts        ArticleBoost[]
+  reactions     ArticleReaction[]
+  comments      ArticleComment[]
+  views         ArticleView[]
+  anonViews     ArticleAnonView[]
+  sharePosts    Post[]
+  tags          ArticleTag[]
+  notifications Notification[]    @relation("Notification_subjectArticle")
 
+  @@unique([slug])
   @@index([authorId, createdAt])
   @@index([publishedAt(sort: Desc), id(sort: Desc)])
   @@index([trendingScore(sort: Desc), publishedAt(sort: Desc)])
@@ -2025,17 +2202,20 @@ model Article {
   @@index([authorId, deletedAt, isDraft, visibility, publishedAt(sort: Desc), id(sort: Desc)])
   // Author-scoped article feeds, trending sort.
   @@index([authorId, deletedAt, isDraft, visibility, trendingScore(sort: Desc), publishedAt(sort: Desc), id(sort: Desc)])
-  @@unique([slug])
 }
 
 model ArticleTag {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
 
-  /** Normalized slug used as the uniqueness key (lowercase, alphanumeric + hyphens). */
-  tag       String
-  /** Display label as the author typed it (may have uppercase, e.g. "Stoicism"). */
-  label     String
+  /**
+   * Normalized slug used as the uniqueness key (lowercase, alphanumeric + hyphens).
+   */
+  tag   String
+  /**
+   * Display label as the author typed it (may have uppercase, e.g. "Stoicism").
+   */
+  label String
 
   articleId String
   article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
@@ -2061,8 +2241,8 @@ model ArticleBoost {
 }
 
 model ArticleReaction {
-  id         String   @id @default(cuid())
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
 
   articleId  String
   userId     String
@@ -2089,15 +2269,17 @@ model ArticleComment {
   authorId  String
   parentId  String?
 
-  /** Denormalized reply count (only meaningful on top-level comments). */
+  /**
+   * Denormalized reply count (only meaningful on top-level comments).
+   */
   replyCount Int @default(0)
 
-  article  Article          @relation(fields: [articleId], references: [id], onDelete: Cascade)
-  author   User             @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  parent   ArticleComment?  @relation("ArticleComment_replies", fields: [parentId], references: [id], onDelete: Cascade)
-  replies  ArticleComment[] @relation("ArticleComment_replies")
-  reactions ArticleCommentReaction[]
-  notifications Notification[] @relation("Notification_subjectArticleComment")
+  article       Article                  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  author        User                     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent        ArticleComment?          @relation("ArticleComment_replies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies       ArticleComment[]         @relation("ArticleComment_replies")
+  reactions     ArticleCommentReaction[]
+  notifications Notification[]           @relation("Notification_subjectArticleComment")
 
   @@index([articleId, createdAt])
   @@index([parentId, createdAt])
@@ -2108,8 +2290,8 @@ model ArticleComment {
 }
 
 model ArticleCommentReaction {
-  id         String   @id @default(cuid())
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
 
   commentId  String
   userId     String
@@ -2125,8 +2307,8 @@ model ArticleCommentReaction {
 }
 
 model CoinTransfer {
-  id          String   @id @default(cuid())
-  createdAt   DateTime @default(now())
+  id          String           @id @default(cuid())
+  createdAt   DateTime         @default(now())
   senderId    String
   recipientId String
   kind        CoinTransferKind @default(transfer)
@@ -2138,4 +2320,268 @@ model CoinTransfer {
 
   @@index([senderId, createdAt(sort: Desc)])
   @@index([recipientId, createdAt(sort: Desc)])
+}
+
+// ─── Marv (AI helper) ──────────────────────────────────────────────────────────
+// Marv is a real User row (with isBot=true). These tables track credits, usage,
+// rolling summaries, and per-user preferences — all keyed off the requesting User.
+
+enum MarvinSource {
+  public_thread
+  private_session
+}
+
+enum MarvinMode {
+  /// Let the routing service pick the best model + web-search tier automatically.
+  auto
+  fast
+  regular
+  smart
+}
+
+enum MarvinCannedReplyReason {
+  /// Posted because the requester isn't a premium member.
+  not_premium
+  /// Posted because the AI client isn't configured (missing OPENAI_API_KEY etc.).
+  ai_not_configured
+  /// Posted because the AI returned no text (e.g. token budget exhausted after retry).
+  transient_error
+}
+
+/**
+ * Per-user Marv credit bucket (token bucket: refills continuously, capped).
+ */
+model MarvinCreditBalance {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /**
+   * Float so partial refills (fractions of a credit) don't get truncated mid-day.
+   */
+  credits        Float
+  lastRefilledAt DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+/**
+ * Append-only log of every Marv interaction (success + canned + error).
+ */
+model MarvinUsageEvent {
+  id                String       @id @default(cuid())
+  userId            String // requesting user (NOT marv)
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  source            MarvinSource
+  /**
+   * Source primary key: postId for public threads, conversationId for private sessions.
+   */
+  sourceId          String
+  /**
+   * Ancestor (root) post id when source=public_thread.
+   */
+  rootPostId        String?
+  requestedMode     MarvinMode
+  effectiveMode     MarvinMode
+  /**
+   * Float so canned (0-credit) events line up with normal events.
+   */
+  creditsSpent      Float        @default(0)
+  inputTokens       Int?
+  outputTokens      Int?
+  cachedInputTokens Int?
+  modelUsed         String?
+  estimatedCostUsd  Decimal?     @db.Decimal(10, 6)
+  /**
+   * OpenAI Responses API id; used to chain follow-up turns in private sessions.
+   */
+  responseId        String?
+  /**
+   * Human-readable explanation of why the router picked effectiveMode.
+   */
+  routingReason     String?
+  /**
+   * Null on success; e.g. "not_premium", "no_credits", "rate_limited", "ai_error".
+   */
+  errorCode         String?
+  latencyMs         Int?
+  createdAt         DateTime     @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([source, createdAt(sort: Desc)])
+  @@index([effectiveMode, createdAt(sort: Desc)])
+}
+
+/**
+ * Idempotency lock for Marv jobs. Format:
+ * marvin:{source}:{sourceId}:{userId}:{messageId}
+ * The processor inserts this row first inside a transaction; on P2002 it short-circuits.
+ */
+model MarvinIdempotencyKey {
+  key       String   @id
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+/**
+ * Rolling summary of a public post thread. Updated incrementally as new posts land.
+ */
+model MarvinThreadSummary {
+  id                    String   @id @default(cuid())
+  rootPostId            String   @unique
+  summary               String   @db.Text
+  /**
+   * Most recent post id covered by this summary (so the next refresh skips already-summarized posts).
+   */
+  lastMessageIdIncluded String?
+  tokensApprox          Int?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+/**
+ * Per-conversation state for private Marv DMs. Stores the OpenAI previous_response_id so
+ * we can chain turns without re-uploading conversation history.
+ */
+model MarvinPrivateSessionState {
+  id             String   @id @default(cuid())
+  conversationId String   @unique
+  summary        String?  @db.Text
+  lastResponseId String?
+  lastMessageId  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+/**
+ * Compact user "context card" Marv reads when answering. Generated/refreshed by a cron;
+ * never contains sensitive details (see MarvinContextCardService.SAFE_FIELDS).
+ */
+model UserContextCard {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cardText  String   @db.Text
+  /**
+   * "generated" | "manual" | "hybrid" (string, not enum, so admin tooling can add new sources without a migration).
+   */
+  source    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/**
+ * Tracks one-shot canned replies Marv posts in a thread for a specific user.
+ * Used for both the "premium-only" message (for non-premium mentions) and the
+ * "AI isn't configured" message (when a premium user mentions Marv but the
+ * agent can't actually answer). Unique by (userId, rootPostId, reason) so each
+ * reason fires at most once per user per thread tree.
+ *
+ * Naming kept as `MarvinNonPremiumThreadReply` for backwards compatibility —
+ * the table now stores any canned thread reply Marv produces in lieu of an AI
+ * response.
+ */
+model MarvinNonPremiumThreadReply {
+  id           String                  @id @default(cuid())
+  userId       String
+  rootPostId   String
+  /**
+   * Why Marv produced this canned reply instead of running the model.
+   */
+  reason       MarvinCannedReplyReason @default(not_premium)
+  /**
+   * Optional: the post id where Marv replied (null if posting failed).
+   */
+  marvinPostId String?
+  createdAt    DateTime                @default(now())
+
+  @@unique([userId, rootPostId, reason])
+  @@index([rootPostId])
+}
+
+/**
+ * Sibling of `MarvinNonPremiumThreadReply` for direct-message canned replies.
+ * DMs aren't threaded, so we key on (userId, conversationId, reason) — Marv
+ * tells the user "I'm not configured" at most once per conversation per reason.
+ */
+model MarvinPrivateCannedReply {
+  id              String                  @id @default(cuid())
+  userId          String
+  conversationId  String
+  reason          MarvinCannedReplyReason
+  /**
+   * Optional: the message id Marv sent (null if sending failed).
+   */
+  marvinMessageId String?
+  createdAt       DateTime                @default(now())
+
+  @@unique([userId, conversationId, reason])
+  @@index([conversationId])
+}
+
+/**
+ * Per-user Marv preferences (preferred reply mode, admin-disable).
+ */
+model MarvinUserSettings {
+  userId          String     @id
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  preferredMode   MarvinMode @default(auto)
+  /**
+   * Set by an admin to silence Marv for this specific user without affecting the global toggle.
+   */
+  disabledByAdmin Boolean    @default(false)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+}
+
+/**
+ * Singleton row for global Marv configuration. Always row id=1; admin-mutable.
+ * The processor reads this on every job; cache TTL handled in MarvinAdminService.
+ */
+model MarvinGlobalSettings {
+  id           Int      @id @default(1)
+  enabled      Boolean  @default(true)
+  /**
+   * Override per-mode credit costs from the admin UI without a deploy.
+   */
+  fastCost     Float?
+  regularCost  Float?
+  smartCost    Float?
+  /**
+   * Override the OpenAI model name per tier from the admin UI.
+   */
+  fastModel    String?
+  regularModel String?
+  smartModel   String?
+  updatedAt    DateTime @updatedAt
+}
+
+/**
+ * Pre-aggregated per-day cost rollup so the admin dashboard is instant.
+ */
+model MarvinCostRollup {
+  id                String      @id @default(cuid())
+  /**
+   * Day key in UTC ISO date (YYYY-MM-DD).
+   */
+  dayKey            String
+  /**
+   * Optional grouping: per-user rollup. Null when this row is a global daily total.
+   */
+  userId            String?
+  /**
+   * Optional grouping: per-mode rollup. Null when not split by mode.
+   */
+  mode              MarvinMode?
+  totalRequests     Int         @default(0)
+  totalCreditsSpent Float       @default(0)
+  totalInputTokens  Int         @default(0)
+  totalOutputTokens Int         @default(0)
+  totalCostUsd      Decimal     @default(0) @db.Decimal(12, 6)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@unique([dayKey, userId, mode])
+  @@index([dayKey])
+  @@index([userId, dayKey])
 }

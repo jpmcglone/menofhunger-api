@@ -304,6 +304,126 @@ export const envSchema = z.object({
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional().default('https://us.i.posthog.com'),
   ),
+
+  // ─── Marv (AI helper) ────────────────────────────────────────────────────
+  // Global on/off. Defaults to true; admin UI can override via MarvinGlobalSettings row.
+  MARV_ENABLED: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('true'),
+  ),
+  // Optional override of the Marv bot user id. When unset, MarvinSeedService
+  // creates/looks up the user by MARV_USERNAME and caches the id in memory.
+  MARV_USER_ID: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  MARV_USERNAME: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('marv'),
+  ),
+  MARV_DISPLAY_NAME: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('Marv'),
+  ),
+  MARV_BIO: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('AI helper for Men of Hunger. Brief. Bible-conscious. Mention me to ask.'),
+  ),
+  // Marv phone (Marv is a real User; users have unique phones). Use a
+  // recognizable bot-only number so it never collides with a real signup.
+  MARV_PHONE: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('+10000000001'),
+  ),
+
+  // OpenAI Responses API. Personality (system prompt + tool schemas) lives in a Stored
+  // Prompt on OpenAI; we override the model per request via the Fast/Regular/Smart router.
+  OPENAI_API_KEY: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  OPENAI_MARV_PROMPT_ID: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  OPENAI_MARV_PROMPT_VERSION: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  OPENAI_MARV_FAST_MODEL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('gpt-5-nano'),
+  ),
+  OPENAI_MARV_REGULAR_MODEL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('gpt-5'),
+  ),
+  OPENAI_MARV_SMART_MODEL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('gpt-5-thinking'),
+  ),
+
+  // Credit bucket — see MarvinCreditService.
+  MARV_MONTHLY_CREDITS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_MONTHLY_CREDITS must be a number'),
+  MARV_MAX_CREDITS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_MAX_CREDITS must be a number'),
+  MARV_CREDITS_PER_DAY: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_CREDITS_PER_DAY must be a number'),
+  MARV_FAST_COST: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_FAST_COST must be a number'),
+  MARV_REGULAR_COST: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_REGULAR_COST must be a number'),
+  MARV_SMART_COST: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_SMART_COST must be a number'),
+
+  // Token caps (passed to the Responses API max_output_tokens + used to clamp prompt assembly).
+  MARV_PUBLIC_MAX_INPUT_TOKENS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PUBLIC_MAX_INPUT_TOKENS must be a number'),
+  MARV_PRIVATE_MAX_INPUT_TOKENS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PRIVATE_MAX_INPUT_TOKENS must be a number'),
+  MARV_MAX_OUTPUT_TOKENS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_MAX_OUTPUT_TOKENS must be a number'),
+
+  // Rate limits (separate from the global throttler — these are enforced inside the job).
+  MARV_PUBLIC_MAX_PER_USER_PER_HOUR: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PUBLIC_MAX_PER_USER_PER_HOUR must be a number'),
+  MARV_PUBLIC_MAX_PER_USER_PER_DAY: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PUBLIC_MAX_PER_USER_PER_DAY must be a number'),
+  MARV_PUBLIC_THREAD_COOLDOWN_SECONDS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PUBLIC_THREAD_COOLDOWN_SECONDS must be a number'),
+  MARV_PRIVATE_MAX_PER_USER_PER_DAY: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PRIVATE_MAX_PER_USER_PER_DAY must be a number'),
+  MARV_PRIVATE_MAX_PER_10_MIN: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PRIVATE_MAX_PER_10_MIN must be a number'),
 }).superRefine((env, ctx) => {
   if (env.NODE_ENV !== 'production') return;
 

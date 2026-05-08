@@ -21,3 +21,4 @@ export * from './landing.dto';
 export * from './coin-transfer.dto';
 export * from './referral.dto';
 export * from './crew.dto';
+export * from './marvin';
