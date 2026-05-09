@@ -40,10 +40,16 @@ function makeService(opts?: {
     })),
   );
 
+  const aggregate = jest.fn(async () => ({
+    _count: { _all: 0 },
+    _sum: { creditsSpent: null, inputTokens: null, outputTokens: null, estimatedCostUsd: null },
+  }));
+
   const prisma: any = {
     user: { findUnique: findUniqueUser },
     userContextCard: { findUnique: jest.fn(async () => null) },
     marvinCostRollup: { groupBy },
+    marvinUsageEvent: { aggregate },
   };
 
   const credits: any = {};
@@ -60,6 +66,7 @@ function makeService(opts?: {
     prisma,
     contextCards,
     groupBy,
+    aggregate,
   };
 }
 
