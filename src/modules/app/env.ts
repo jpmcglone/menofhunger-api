@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  MARV_DEFAULT_FAST_MODEL,
+  MARV_DEFAULT_REGULAR_MODEL,
+  MARV_DEFAULT_SMART_MODEL,
+} from '../marvin/marvin-models';
 
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -352,15 +357,15 @@ export const envSchema = z.object({
   ),
   OPENAI_MARV_FAST_MODEL: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('gpt-5-nano'),
+    z.string().optional().default(MARV_DEFAULT_FAST_MODEL),
   ),
   OPENAI_MARV_REGULAR_MODEL: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('gpt-5'),
+    z.string().optional().default(MARV_DEFAULT_REGULAR_MODEL),
   ),
   OPENAI_MARV_SMART_MODEL: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('gpt-5-thinking'),
+    z.string().optional().default(MARV_DEFAULT_SMART_MODEL),
   ),
 
   // Credit bucket — see MarvinCreditService.
@@ -424,6 +429,44 @@ export const envSchema = z.object({
     .string()
     .optional()
     .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PRIVATE_MAX_PER_10_MIN must be a number'),
+
+  // Marv web search (optional — gates web_search_preview tool attachment).
+  MARV_WEB_SEARCH_ENABLED: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  MARV_WEB_SEARCH_MODES: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS must be a number'),
+  MARV_WEB_SEARCH_CREDIT_COST: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_WEB_SEARCH_CREDIT_COST must be a number'),
+
+  // Marv vision (optional — gates image/GIF inputs to OpenAI). Requires a model that supports vision.
+  MARV_VISION_ENABLED: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  // Comma-separated modes that may receive image inputs. Defaults to regular,smart — gpt-5.4-nano
+  // cannot reliably process images within its token budget.
+  MARV_VISION_MODES: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  MARV_VISION_MAX_IMAGES_PER_TURN: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true), 'MARV_VISION_MAX_IMAGES_PER_TURN must be a positive number'),
+  MARV_VISION_CREDIT_COST_PER_IMAGE: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_VISION_CREDIT_COST_PER_IMAGE must be a number'),
 
   // BullMQ worker concurrency for the dedicated Marv queue. Marv replies are I/O-bound
   // (waiting on OpenAI), so concurrency >> 1 is safe and necessary — the default queue

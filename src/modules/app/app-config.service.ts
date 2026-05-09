@@ -77,6 +77,12 @@ export type MarvOpenAIConfig = {
   webSearchModes: string[];
   /** max_output_tokens override when web search is active — must be larger than the base limit. */
   webSearchMaxOutputTokens: number;
+  /** When true, image inputs (input_image parts) are sent to OpenAI for qualifying modes. */
+  visionEnabled: boolean;
+  /** Modes that may receive image inputs. Default regular,smart. */
+  visionModes: string[];
+  /** Max images per turn (caps both selection logic and input_image parts). Default 4. */
+  visionMaxImagesPerTurn: number;
 };
 
 export type MarvCreditConfig = {
@@ -88,6 +94,8 @@ export type MarvCreditConfig = {
   smartCost: number;
   /** Extra credits charged per web search call Marv makes within a single reply. */
   webSearchCreditCost: number;
+  /** Extra credits charged per image attached to a Marv request. */
+  visionCreditCostPerImage: number;
 };
 
 export type MarvLimitsConfig = {
@@ -464,20 +472,24 @@ export class AppConfigService {
     const apiKey = this.config.get<string>('OPENAI_API_KEY')?.trim() ?? '';
     const promptId = this.config.get<string>('OPENAI_MARV_PROMPT_ID')?.trim() || null;
     const promptVersion = this.config.get<string>('OPENAI_MARV_PROMPT_VERSION')?.trim() || null;
-    const fastModel = this.config.get<string>('OPENAI_MARV_FAST_MODEL')?.trim() || 'gpt-5-nano';
-    const regularModel = this.config.get<string>('OPENAI_MARV_REGULAR_MODEL')?.trim() || 'gpt-5';
-    const smartModel = this.config.get<string>('OPENAI_MARV_SMART_MODEL')?.trim() || 'gpt-5-thinking';
-    // Set MARV_WEB_SEARCH_ENABLED=true to let Marv use OpenAI's built-in web_search_preview tool.
-    // Each search call costs ~$0.03 (OpenAI pricing) and MARV_WEB_SEARCH_CREDIT_COST extra credits.
-    const webSearchEnabled = this.readBool('MARV_WEB_SEARCH_ENABLED', false);
+    const fastModel = this.config.get<string>('OPENAI_MARV_FAST_MODEL')?.trim() || 'gpt-5.4-nano';
+    const regularModel = this.config.get<string>('OPENAI_MARV_REGULAR_MODEL')?.trim() || 'gpt-5.4-mini';
+    const smartModel = this.config.get<string>('OPENAI_MARV_SMART_MODEL')?.trim() || 'gpt-5.5';
+    // Web search is ON by default. Set MARV_WEB_SEARCH_ENABLED=false to disable.
+    const webSearchEnabled = this.readBool('MARV_WEB_SEARCH_ENABLED', true);
     // Comma-separated list of modes that may use web search. Defaults to regular,smart only —
-    // fast (gpt-5-nano) exhausts its token budget on search processing before producing any text.
+    // fast (gpt-5.4-nano) exhausts its token budget on search processing before producing any text.
     const webSearchModesRaw = this.config.get<string>('MARV_WEB_SEARCH_MODES')?.trim() || 'regular,smart';
     const webSearchModes = webSearchModesRaw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
     // When web search is active, use a larger output-token budget so the model has room to
     // both process search results AND write a reply. Default 4096; tune with MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS.
     const webSearchMaxOutputTokens = this.readPositiveInt('MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS', 4096);
-    return { apiKey, promptId, promptVersion, fastModel, regularModel, smartModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens };
+    // Vision is ON by default. Set MARV_VISION_ENABLED=false to disable.
+    const visionEnabled = this.readBool('MARV_VISION_ENABLED', true);
+    const visionModesRaw = this.config.get<string>('MARV_VISION_MODES')?.trim() || 'regular,smart';
+    const visionModes = visionModesRaw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const visionMaxImagesPerTurn = this.readPositiveInt('MARV_VISION_MAX_IMAGES_PER_TURN', 4);
+    return { apiKey, promptId, promptVersion, fastModel, regularModel, smartModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens, visionEnabled, visionModes, visionMaxImagesPerTurn };
   }
 
   marvCredits(): MarvCreditConfig {
@@ -487,9 +499,14 @@ export class AppConfigService {
       creditsPerDay: this.readPositiveInt('MARV_CREDITS_PER_DAY', 40),
       fastCost: this.readPositiveInt('MARV_FAST_COST', 1),
       regularCost: this.readPositiveInt('MARV_REGULAR_COST', 2),
-      smartCost: this.readPositiveInt('MARV_SMART_COST', 4),
-      // Extra credits deducted per web search call Marv makes. Default 2 (= one "regular" reply worth).
-      webSearchCreditCost: this.readPositiveInt('MARV_WEB_SEARCH_CREDIT_COST', 2),
+      // Smart uses gpt-5.5 (~$0.02/req) vs regular gpt-5.4-mini (~$0.004/req) — bumped to 5
+      // so the per-credit USD cost is roughly even with regular mode.
+      smartCost: this.readPositiveInt('MARV_SMART_COST', 5),
+      // Each web_search_preview call costs ~$0.03 (OpenAI pricing). Bumped to 4 so the
+      // per-credit cost aligns with regular mode instead of being ~7x subsidized.
+      webSearchCreditCost: this.readPositiveInt('MARV_WEB_SEARCH_CREDIT_COST', 4),
+      // Extra credits per image sent to the vision model (~$0.002/image on gpt-5.4-mini).
+      visionCreditCostPerImage: this.readPositiveInt('MARV_VISION_CREDIT_COST_PER_IMAGE', 2),
     };
   }
 
@@ -497,7 +514,7 @@ export class AppConfigService {
     return {
       publicMaxInputTokens: this.readPositiveInt('MARV_PUBLIC_MAX_INPUT_TOKENS', 8000),
       privateMaxInputTokens: this.readPositiveInt('MARV_PRIVATE_MAX_INPUT_TOKENS', 4000),
-      // 1024 gives reasoning models (gpt-5, o-series) room to think before producing
+      // 1024 gives reasoning models (gpt-5.5, o-series) room to think before producing
       // visible text. The actual reply is kept short by the system prompt, so in
       // practice output_tokens land in the 50-120 range — but the cap must be high
       // enough that thinking tokens don't exhaust the budget before any text is emitted.

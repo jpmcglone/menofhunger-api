@@ -18,8 +18,8 @@
  * No padding, no summaries, no "I hope that helps".
  */
 export const MARV_CONCISENESS =
-  'Be brief. 20–80 words. One sentence is fine. Say what needs to be said, then stop. ' +
-  'No padding, no sign-offs, no "I hope that helps."';
+  'Use as few words as the answer requires — one word if that is the complete answer. ' +
+  'Maximum 80 words. No padding, no sign-offs, no "I hope that helps."';
 
 /**
  * M.A.R.V. is reactive, not proactive. He answers the question in front

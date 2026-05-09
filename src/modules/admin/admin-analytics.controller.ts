@@ -76,9 +76,11 @@ export class AdminAnalyticsController {
       activeGrantsCountRow,
       dauMauRow,
       signupsRaw,
-      postsRaw,
+      userPostsRaw,
+      aiPostsRaw,
       checkinsRaw,
-      messagesRaw,
+      userMessagesRaw,
+      aiMessagesRaw,
       followsRaw,
       retentionRaw,
       d30Raw,
@@ -116,6 +118,7 @@ export class AdminAnalyticsController {
           COUNT(*) FILTER (WHERE "premiumPlus" = true)::bigint AS premium_plus_users
         FROM "User"
         WHERE "bannedAt" IS NULL
+          AND "isBot" = false
       `,
 
       // All-time public regular posts used for public-facing proof and leaderboards.
@@ -151,41 +154,58 @@ export class AdminAnalyticsController {
           ) AS day
         ),
         daily AS (
-          SELECT DATE_TRUNC('day', "day") AS day, COUNT(DISTINCT "userId")::float AS cnt
-          FROM "UserDailyActivity"
-          WHERE "day" >= ${effectiveStart}::timestamp
-            AND "day" <  ${todayMidnight}::timestamp
+          SELECT DATE_TRUNC('day', uda."day") AS day, COUNT(DISTINCT uda."userId")::float AS cnt
+          FROM "UserDailyActivity" uda
+          JOIN "User" u ON u.id = uda."userId" AND u."isBot" = false
+          WHERE uda."day" >= ${effectiveStart}::timestamp
+            AND uda."day" <  ${todayMidnight}::timestamp
           GROUP BY 1
         )
         SELECT
           AVG(COALESCE(daily.cnt, 0)) AS dau,
-          (SELECT COUNT(DISTINCT "userId")::bigint
-           FROM "UserDailyActivity"
-           WHERE "day" >= ${thirtyDaysAgo}::timestamp) AS mau
+          (SELECT COUNT(DISTINCT uda."userId")::bigint
+           FROM "UserDailyActivity" uda
+           JOIN "User" u ON u.id = uda."userId" AND u."isBot" = false
+           WHERE uda."day" >= ${thirtyDaysAgo}::timestamp) AS mau
         FROM day_series
         LEFT JOIN daily ON daily.day = day_series.day
       `),
 
-      // Signups — range-filtered, granularity-bucketed
+      // Signups — range-filtered, granularity-bucketed; bots excluded
       this.prisma.$queryRaw<Array<{ bucket: Date; count: bigint }>>(Prisma.sql`
         SELECT DATE_TRUNC(${granularity}, "createdAt") AS bucket, COUNT(*)::bigint AS count
         FROM "User"
         WHERE "bannedAt" IS NULL
+          AND "isBot" = false
         ${sinceAnd(Prisma.sql`"createdAt"`)}
         GROUP BY 1
         ORDER BY 1
       `),
 
-      // Posts (regular, published, visible — no drafts, no replies-only filter since
-      // replies are real content creation by the user)
+      // User posts (regular, published, visible — bot authors excluded)
       this.prisma.$queryRaw<Array<{ bucket: Date; count: bigint }>>(Prisma.sql`
-        SELECT DATE_TRUNC(${granularity}, "createdAt") AS bucket, COUNT(*)::bigint AS count
-        FROM "Post"
-        WHERE "deletedAt" IS NULL
-          AND "isDraft" = false
-          AND "kind" = 'regular'
-          AND "visibility" != 'onlyMe'
-        ${sinceAnd(Prisma.sql`"createdAt"`)}
+        SELECT DATE_TRUNC(${granularity}, p."createdAt") AS bucket, COUNT(*)::bigint AS count
+        FROM "Post" p
+        JOIN "User" u ON u.id = p."userId" AND u."isBot" = false
+        WHERE p."deletedAt" IS NULL
+          AND p."isDraft" = false
+          AND p."kind" = 'regular'
+          AND p."visibility" != 'onlyMe'
+        ${sinceAnd(Prisma.sql`p."createdAt"`)}
+        GROUP BY 1
+        ORDER BY 1
+      `),
+
+      // AI posts (regular, published, visible — bot authors only)
+      this.prisma.$queryRaw<Array<{ bucket: Date; count: bigint }>>(Prisma.sql`
+        SELECT DATE_TRUNC(${granularity}, p."createdAt") AS bucket, COUNT(*)::bigint AS count
+        FROM "Post" p
+        JOIN "User" u ON u.id = p."userId" AND u."isBot" = true
+        WHERE p."deletedAt" IS NULL
+          AND p."isDraft" = false
+          AND p."kind" = 'regular'
+          AND p."visibility" != 'onlyMe'
+        ${sinceAnd(Prisma.sql`p."createdAt"`)}
         GROUP BY 1
         ORDER BY 1
       `),
@@ -202,12 +222,24 @@ export class AdminAnalyticsController {
         ORDER BY 1
       `),
 
-      // Messages
+      // User messages (bot senders excluded)
       this.prisma.$queryRaw<Array<{ bucket: Date; count: bigint }>>(Prisma.sql`
-        SELECT DATE_TRUNC(${granularity}, "createdAt") AS bucket, COUNT(*)::bigint AS count
-        FROM "Message"
+        SELECT DATE_TRUNC(${granularity}, m."createdAt") AS bucket, COUNT(*)::bigint AS count
+        FROM "Message" m
+        JOIN "User" u ON u.id = m."senderId" AND u."isBot" = false
         WHERE 1=1
-        ${sinceAnd(Prisma.sql`"createdAt"`)}
+        ${sinceAnd(Prisma.sql`m."createdAt"`)}
+        GROUP BY 1
+        ORDER BY 1
+      `),
+
+      // AI messages (bot senders only)
+      this.prisma.$queryRaw<Array<{ bucket: Date; count: bigint }>>(Prisma.sql`
+        SELECT DATE_TRUNC(${granularity}, m."createdAt") AS bucket, COUNT(*)::bigint AS count
+        FROM "Message" m
+        JOIN "User" u ON u.id = m."senderId" AND u."isBot" = true
+        WHERE 1=1
+        ${sinceAnd(Prisma.sql`m."createdAt"`)}
         GROUP BY 1
         ORDER BY 1
       `),
@@ -236,6 +268,7 @@ export class AdminAnalyticsController {
           WHERE "createdAt" >= ${tenWeeksAgo}::timestamptz
             AND "createdAt" <  DATE_TRUNC('week', ${now}::timestamptz)
             AND "bannedAt" IS NULL
+            AND "isBot" = false
         ),
         activity AS (
           SELECT DISTINCT "userId", DATE_TRUNC('week', "day") AS active_week
@@ -266,6 +299,7 @@ export class AdminAnalyticsController {
           WHERE "createdAt" >= ${new Date(todayMidnight.getTime() - 37 * 86400000)}::timestamptz
             AND "createdAt" <  ${new Date(todayMidnight.getTime() - 30 * 86400000)}::timestamptz
             AND "bannedAt" IS NULL
+            AND "isBot" = false
         ),
         retained AS (
           SELECT DISTINCT "userId"
@@ -287,6 +321,7 @@ export class AdminAnalyticsController {
           SELECT id, "createdAt" FROM "User"
           WHERE "createdAt" <= ${new Date(todayMidnight.getTime() - 7 * 86400000)}::timestamptz
             AND "bannedAt" IS NULL
+            AND "isBot" = false
         ),
         activated AS (
           SELECT DISTINCT e.id
@@ -310,8 +345,10 @@ export class AdminAnalyticsController {
       // Drafts excluded.
       this.prisma.$queryRaw<Array<{ mau_count: bigint; creator_count: bigint }>>`
         WITH mau_users AS (
-          SELECT DISTINCT "userId" FROM "UserDailyActivity"
-          WHERE "day" >= ${thirtyDaysAgo}::timestamp
+          SELECT DISTINCT uda."userId"
+          FROM "UserDailyActivity" uda
+          JOIN "User" u ON u.id = uda."userId" AND u."isBot" = false
+          WHERE uda."day" >= ${thirtyDaysAgo}::timestamp
         ),
         creators AS (
           SELECT DISTINCT "userId" FROM "Post"
@@ -844,6 +881,97 @@ export class AdminAnalyticsController {
       `,
     ]);
 
+    // ── Marvin / AI queries ───────────────────────────────────────────────────
+
+    const [
+      marvSummaryRaw,
+      marvBySourceRaw,
+      marvByModeRaw,
+      marvByOutcomeRaw,
+      marvInteractionsRaw,
+    ] = await Promise.all([
+
+      // Single-row summary of all Marv interactions in range.
+      this.prisma.$queryRaw<Array<{
+        total_interactions: bigint;
+        successful_interactions: bigint;
+        unique_users: bigint;
+        credits_spent: number;
+        estimated_cost_usd: string | null;
+        avg_latency_ms: number | null;
+      }>>(Prisma.sql`
+        SELECT
+          COUNT(*)::bigint AS total_interactions,
+          COUNT(*) FILTER (WHERE "errorCode" IS NULL)::bigint AS successful_interactions,
+          COUNT(DISTINCT "userId")::bigint AS unique_users,
+          COALESCE(SUM("creditsSpent"), 0)::float AS credits_spent,
+          SUM("estimatedCostUsd")::text AS estimated_cost_usd,
+          AVG("latencyMs") FILTER (WHERE "errorCode" IS NULL)::float AS avg_latency_ms
+        FROM "MarvinUsageEvent"
+        WHERE 1=1
+        ${sinceAnd(Prisma.sql`"createdAt"`)}
+      `),
+
+      // Breakdown by source (public_thread | private_session).
+      this.prisma.$queryRaw<Array<{ source: string; cnt: bigint }>>(Prisma.sql`
+        SELECT source::text, COUNT(*)::bigint AS cnt
+        FROM "MarvinUsageEvent"
+        WHERE 1=1
+        ${sinceAnd(Prisma.sql`"createdAt"`)}
+        GROUP BY source
+        ORDER BY cnt DESC
+      `),
+
+      // Breakdown by effectiveMode for successful interactions only.
+      this.prisma.$queryRaw<Array<{ mode: string; cnt: bigint }>>(Prisma.sql`
+        SELECT "effectiveMode"::text AS mode, COUNT(*)::bigint AS cnt
+        FROM "MarvinUsageEvent"
+        WHERE "errorCode" IS NULL
+        ${sinceAnd(Prisma.sql`"createdAt"`)}
+        GROUP BY "effectiveMode"
+        ORDER BY cnt DESC
+      `),
+
+      // Breakdown by outcome: NULL errorCode → 'success', else the errorCode string.
+      this.prisma.$queryRaw<Array<{ outcome: string; cnt: bigint }>>(Prisma.sql`
+        SELECT COALESCE("errorCode", 'success') AS outcome, COUNT(*)::bigint AS cnt
+        FROM "MarvinUsageEvent"
+        WHERE 1=1
+        ${sinceAnd(Prisma.sql`"createdAt"`)}
+        GROUP BY outcome
+        ORDER BY cnt DESC
+      `),
+
+      // Time series of successful interactions per granularity bucket.
+      this.prisma.$queryRaw<Array<{ bucket: Date; count: bigint }>>(Prisma.sql`
+        SELECT DATE_TRUNC(${granularity}, "createdAt") AS bucket, COUNT(*)::bigint AS count
+        FROM "MarvinUsageEvent"
+        WHERE "errorCode" IS NULL
+        ${sinceAnd(Prisma.sql`"createdAt"`)}
+        GROUP BY 1
+        ORDER BY 1
+      `),
+    ]);
+
+    const marvSummary = marvSummaryRaw[0];
+    const estimatedCostUsd = marvSummary?.estimated_cost_usd != null
+      ? Number(marvSummary.estimated_cost_usd)
+      : null;
+    const aiBlock = {
+      totalInteractionsInRange:      Number(marvSummary?.total_interactions      ?? 0),
+      successfulInteractionsInRange: Number(marvSummary?.successful_interactions ?? 0),
+      uniqueUsersInRange:            Number(marvSummary?.unique_users            ?? 0),
+      creditsSpentInRange:           Number(marvSummary?.credits_spent           ?? 0),
+      estimatedCostUsdInRange:       estimatedCostUsd,
+      avgLatencyMsInRange:           marvSummary?.avg_latency_ms != null
+        ? Math.round(Number(marvSummary.avg_latency_ms))
+        : null,
+      bySource:        Object.fromEntries(marvBySourceRaw.map((r) => [r.source, Number(r.cnt)])),
+      byEffectiveMode: Object.fromEntries(marvByModeRaw.map((r)   => [r.mode,   Number(r.cnt)])),
+      byOutcome:       Object.fromEntries(marvByOutcomeRaw.map((r) => [r.outcome, Number(r.cnt)])),
+      interactions:    toTimeSeries(marvInteractionsRaw),
+    };
+
     const spaceSummary = spaceSummaryRaw[0];
     const spacesBlock: AdminAnalyticsSpacesDto = {
       totalSpaces: Number(spaceSummary?.total_spaces ?? 0),
@@ -1052,13 +1180,15 @@ export class AdminAnalyticsController {
         mau: Number(dauMau?.mau ?? 0),
         totalCoinsInEconomy: coins.totalInEconomy,
       },
-      signups:   toTimeSeries(signupsRaw),
+      signups:    toTimeSeries(signupsRaw),
       topPostsAllTime,
       postsByVisibility,
-      posts:     toTimeSeries(postsRaw),
-      checkins:  toTimeSeries(checkinsRaw),
-      messages:  toTimeSeries(messagesRaw),
-      follows:   toTimeSeries(followsRaw),
+      posts:      toTimeSeries(userPostsRaw),
+      aiPosts:    toTimeSeries(aiPostsRaw),
+      checkins:   toTimeSeries(checkinsRaw),
+      messages:   toTimeSeries(userMessagesRaw),
+      aiMessages: toTimeSeries(aiMessagesRaw),
+      follows:    toTimeSeries(followsRaw),
       retention: retentionRaw.map((r) => ({
         cohortWeek: r.cohort_week.toISOString().split('T')[0],
         size:       Number(r.size),
@@ -1078,6 +1208,7 @@ export class AdminAnalyticsController {
       articles,
       groups: groupsBlock,
       spaces: spacesBlock,
+      ai: aiBlock,
       asOf: now.toISOString(),
     };
 

@@ -16,6 +16,8 @@ import { MARV_ERROR_CODES, buildMarvIdempotencyKey } from '../marvin.constants';
 import { JobsService } from '../../jobs/jobs.service';
 import { JOBS } from '../../jobs/jobs.constants';
 import { MarvinThreadSummaryService } from '../services/marvin-thread-summary.service';
+import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
+import { publicAssetUrl } from '../../../common/assets/public-asset-url';
 
 export type MarvinPublicReplyJobPayload = {
   postId: string;
@@ -61,6 +63,7 @@ export class MarvinPublicReplyProcessor {
     private readonly canned: MarvinCannedRepliesService,
     private readonly jobs: JobsService,
     private readonly threadSummary: MarvinThreadSummaryService,
+    private readonly linkMetadata: LinkMetadataService,
   ) {}
 
   async process(payload: MarvinPublicReplyJobPayload): Promise<void> {
@@ -113,7 +116,7 @@ export class MarvinPublicReplyProcessor {
       return;
     }
 
-    // 3. Load the post + author + premium-flag.
+    // 3. Load the post + author + premium-flag + media + poll.
     const post = await this.prisma.post.findFirst({
       where: { id: postId, deletedAt: null },
       select: {
@@ -127,6 +130,21 @@ export class MarvinPublicReplyProcessor {
         },
         mentions: {
           select: { user: { select: { id: true, username: true } } },
+        },
+        media: {
+          where: { kind: { not: 'video' } },
+          select: { id: true, kind: true, source: true, r2Key: true, url: true, position: true },
+          orderBy: { position: 'asc' },
+        },
+        poll: {
+          select: {
+            totalVoteCount: true,
+            endsAt: true,
+            options: {
+              select: { text: true, voteCount: true },
+              orderBy: { position: 'asc' },
+            },
+          },
         },
       },
     });
@@ -209,20 +227,33 @@ export class MarvinPublicReplyProcessor {
       `[marv] public-reply gate-pass step=routing requested=${requestedMode} effective=${effectiveMode} reason=${routed.reason} crisis=${routed.crisisDetected} webSearchDemanded=${routed.webSearchDemanded}`,
     );
 
-    // 6. Credit gate — must afford the routed cost.
+    // 6. Credit gate — must afford the routed cost + vision + worst-case one web search call.
     const cost = this.credits.costForMode(effectiveMode);
+    const creditCfg = this.appConfig.marvCredits();
+    const openAICfg = this.appConfig.marvOpenAI();
+    const visionActive = openAICfg.visionEnabled && openAICfg.visionModes.includes(effectiveMode as string);
+    // Count images on the triggering post for the upfront vision cost estimate.
+    const triggeringPostImageCount = visionActive
+      ? Math.min((post.media ?? []).length, openAICfg.visionMaxImagesPerTurn)
+      : 0;
+    const visionCost = triggeringPostImageCount * creditCfg.visionCreditCostPerImage;
+    // Buffer for at most one web search so the spend call can't fail post-success on a 1-search reply.
+    const webSearchBuffer = openAICfg.webSearchEnabled && openAICfg.webSearchModes.includes(effectiveMode as string)
+      ? creditCfg.webSearchCreditCost
+      : 0;
+    const reservedCost = cost + visionCost + webSearchBuffer;
     const summary = await this.credits.refill(requestingUserId);
     this.logger.log(
-      `[marv] public-reply gate-pass step=credits balance=${summary.credits} cost=${cost} ok=${summary.credits >= cost}`,
+      `[marv] public-reply gate-pass step=credits balance=${summary.credits} cost=${cost} vision=${visionCost} webSearchBuffer=${webSearchBuffer} reserved=${reservedCost} ok=${summary.credits >= reservedCost}`,
     );
-    if (summary.credits < cost) {
+    if (summary.credits < reservedCost) {
       this.logger.log(
-        `[marv] public-reply EXIT reason=no_credits balance=${summary.credits} cost=${cost}`,
+        `[marv] public-reply EXIT reason=no_credits balance=${summary.credits} reserved=${reservedCost}`,
       );
       await this.canned.sendOutOfCreditsDm({
         userId: requestingUserId,
         currentCredits: summary.credits,
-        requiredCredits: cost,
+        requiredCredits: reservedCost,
         triggeringPostId: postId,
       });
       await this.usage.recordEvent({
@@ -325,7 +356,14 @@ export class MarvinPublicReplyProcessor {
 
     // Pre-fetch thread context so the model always sees the full conversation without
     // needing a tool call. Mirrors the get_post_thread_recent_messages tool query.
-    const threadContext = await this.fetchThreadContext(rootPostId, post.id);
+    const { threadContext, imageUrls, hasGifAttached } = await this.fetchThreadContext(rootPostId, post.id, openAICfg);
+
+    // Collect link previews from triggering post + last 3 thread posts (read-only, no fetch).
+    const recentBodies = [
+      post.body ?? '',
+      ...threadContext.slice(-3).map((p) => p.body),
+    ].join('\n');
+    const linkPreviews = await this.linkMetadata.previewLinks(recentBodies);
 
     const built = this.promptBuilder.build({
       source: 'public_thread',
@@ -341,6 +379,8 @@ export class MarvinPublicReplyProcessor {
       referencedUsernames: [...new Set(referenced)],
       crisisDetected: routed.crisisDetected,
       webSearchDemanded: routed.webSearchDemanded,
+      linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,
+      hasGifAttached: hasGifAttached || undefined,
     });
     const aiStartedAt = Date.now();
     this.logger.log(
@@ -354,6 +394,7 @@ export class MarvinPublicReplyProcessor {
         mode: effectiveMode,
         developerNote: built.developerNote,
         userMessage: built.userMessage,
+        imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
         dispatchTool: (name, args, ctx) => this.tools.dispatch(name, args, ctx),
         toolContext: {
           rootPostId,
@@ -506,12 +547,18 @@ export class MarvinPublicReplyProcessor {
     // 9. Spend credits + record success. Pass the pre-check refill summary so spend
     // can skip its own inner refill SELECT — saves one Postgres round-trip on the
     // hot path (the pre-check ran milliseconds ago).
-    // If web search was used, add the per-search credit surcharge on top of the mode cost.
-    const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * this.appConfig.marvCredits().webSearchCreditCost;
-    const totalCost = cost + webSearchSurcharge;
+    // Actual vision cost from images the AI service confirmed were sent.
+    const actualVisionCost = (aiResult.imagesAttached ?? 0) * creditCfg.visionCreditCostPerImage;
+    const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * creditCfg.webSearchCreditCost;
+    const totalCost = cost + actualVisionCost + webSearchSurcharge;
+    if (actualVisionCost > 0) {
+      this.logger.log(
+        `[marv] public-reply vision surcharge: ${aiResult.imagesAttached} image(s) × ${creditCfg.visionCreditCostPerImage} = ${actualVisionCost} extra credits`,
+      );
+    }
     if (webSearchSurcharge > 0) {
       this.logger.log(
-        `[marv] public-reply web-search surcharge: ${aiResult.webSearchCount} search(es) × ${this.appConfig.marvCredits().webSearchCreditCost} = ${webSearchSurcharge} extra credits (total=${totalCost})`,
+        `[marv] public-reply web-search surcharge: ${aiResult.webSearchCount} search(es) × ${creditCfg.webSearchCreditCost} = ${webSearchSurcharge} extra credits (total=${totalCost})`,
       );
     }
     let postSpend: Awaited<ReturnType<typeof this.credits.spend>> | null = null;
@@ -547,7 +594,7 @@ export class MarvinPublicReplyProcessor {
     });
 
     this.logger.log(
-      `[marv] public-reply ok user=${requestingUserId} post=${postId} reply=${createdPostId} cost=${totalCost} (mode=${cost} + webSearch=${webSearchSurcharge})`,
+      `[marv] public-reply ok user=${requestingUserId} post=${postId} reply=${createdPostId} cost=${totalCost} (mode=${cost} + vision=${actualVisionCost} + webSearch=${webSearchSurcharge})`,
     );
 
     // Fire-and-forget: keep the thread summary fresh for future Marv replies.
@@ -565,11 +612,35 @@ export class MarvinPublicReplyProcessor {
   }
 
   /**
-   * Fetch the root post + recent replies for a thread and format them as MarvThreadPost[]
-   * (oldest → newest). The triggering post is flagged so the model knows which message
-   * addressed it. Capped at 20 posts to keep token cost reasonable.
+   * Fetch the root post + recent replies for a thread, format as MarvThreadPost[]
+   * (oldest → newest), and apply the first-then-tail image selection rule.
+   *
+   * Returns:
+   *  - `threadContext`: post rows with poll + body for the developer note.
+   *  - `imageUrls`: up to `visionMaxImagesPerTurn` image/GIF URLs selected from
+   *    the thread (first chronologically, then tail), or [] when vision is off.
+   *  - `hasGifAttached`: true when at least one selected URL came from a GIF.
    */
-  private async fetchThreadContext(rootPostId: string, triggeringPostId: string): Promise<MarvThreadPost[]> {
+  private async fetchThreadContext(
+    rootPostId: string,
+    triggeringPostId: string,
+    openAICfg: ReturnType<AppConfigService['marvOpenAI']>,
+  ): Promise<{ threadContext: MarvThreadPost[]; imageUrls: string[]; hasGifAttached: boolean }> {
+    const mediaSelect = {
+      where: { kind: { not: 'video' as const } },
+      select: { id: true, kind: true, source: true, r2Key: true, url: true, position: true },
+      orderBy: { position: 'asc' as const },
+    };
+    const pollSelect = {
+      select: {
+        totalVoteCount: true,
+        endsAt: true,
+        options: {
+          select: { text: true, voteCount: true },
+          orderBy: { position: 'asc' as const },
+        },
+      },
+    };
     try {
       const marvUserId = await this.identity.getMarvUserId();
       const [root, replies] = await Promise.all([
@@ -582,6 +653,8 @@ export class MarvinPublicReplyProcessor {
             checkinPrompt: true,
             userId: true,
             user: { select: { username: true, name: true } },
+            media: mediaSelect,
+            poll: pollSelect,
           },
         }),
         this.prisma.post.findMany({
@@ -593,41 +666,67 @@ export class MarvinPublicReplyProcessor {
             checkinPrompt: true,
             userId: true,
             user: { select: { username: true, name: true } },
+            media: mediaSelect,
+            poll: pollSelect,
           },
           orderBy: { createdAt: 'desc' },
           take: 19, // room for root as the 20th
         }),
       ]);
-      if (!root) return [];
+      if (!root) return { threadContext: [], imageUrls: [], hasGifAttached: false };
       const orderedReplies: typeof replies = replies.slice().reverse();
-      const all: MarvThreadPost[] = [
-        {
-          id: root.id,
-          authorUsername: root.user.username,
-          authorDisplayName: root.user.name,
-          body: (root.body ?? '').slice(0, 500),
-          createdAt: root.createdAt.toISOString(),
-          isTriggeringPost: root.id === triggeringPostId,
-          isMarv: marvUserId !== null && root.userId === marvUserId,
-          checkinPrompt: root.checkinPrompt,
-        },
-        ...orderedReplies.map((p) => ({
-          id: p.id,
-          authorUsername: p.user.username,
-          authorDisplayName: p.user.name,
-          body: (p.body ?? '').slice(0, 500),
-          createdAt: p.createdAt.toISOString(),
-          isTriggeringPost: p.id === triggeringPostId,
-          isMarv: marvUserId !== null && p.userId === marvUserId,
-          checkinPrompt: p.checkinPrompt,
-        })),
-      ];
-      return all;
+      const allPosts = [root, ...orderedReplies];
+      const publicBase = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+      // Build MarvThreadPost array (used for developer note).
+      const threadContext: MarvThreadPost[] = allPosts.map((p) => ({
+        id: p.id,
+        authorUsername: p.user.username,
+        authorDisplayName: p.user.name,
+        body: (p.body ?? '').slice(0, 500),
+        createdAt: p.createdAt.toISOString(),
+        isTriggeringPost: p.id === triggeringPostId,
+        isMarv: marvUserId !== null && p.userId === marvUserId,
+        checkinPrompt: p.checkinPrompt,
+        poll: p.poll ?? null,
+      }));
+
+      // Build image URL list using first-then-tail rule.
+      if (!openAICfg.visionEnabled) return { threadContext, imageUrls: [], hasGifAttached: false };
+
+      type MediaEntry = { resolvedUrl: string; kind: string };
+      const allEntries: MediaEntry[] = [];
+      for (const p of allPosts) {
+        for (const m of p.media ?? []) {
+          const resolved =
+            m.source === 'upload' && m.r2Key
+              ? publicAssetUrl({ publicBaseUrl: publicBase, key: m.r2Key })
+              : (m.url ?? null);
+          if (resolved) allEntries.push({ resolvedUrl: resolved, kind: m.kind });
+        }
+      }
+
+      const maxImages = openAICfg.visionMaxImagesPerTurn;
+      const selected: MediaEntry[] = [];
+      if (allEntries.length > 0) {
+        selected.push(allEntries[0]); // first chronologically
+        for (let j = allEntries.length - 1; j >= 1 && selected.length < maxImages; j--) {
+          if (allEntries[j].resolvedUrl !== allEntries[0].resolvedUrl) {
+            selected.push(allEntries[j]);
+          }
+        }
+      }
+
+      return {
+        threadContext,
+        imageUrls: selected.map((e) => e.resolvedUrl),
+        hasGifAttached: selected.some((e) => e.kind === 'gif'),
+      };
     } catch (err) {
       this.logger.warn(
         `[marv] fetchThreadContext failed for root=${rootPostId}: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return [];
+      return { threadContext: [], imageUrls: [], hasGifAttached: false };
     }
   }
 

@@ -201,6 +201,40 @@ export class LinkMetadataService {
     };
   }
 
+  /**
+   * Read-only URL preview lookup for Marv. Extracts up to 5 http(s) URLs from `text`,
+   * fetches any that are already cached in the `LinkMetadata` table (no external fetch,
+   * no Redis write), and returns up to 3 results with title/description/siteName.
+   *
+   * Silent-fail: any DB error returns [].
+   */
+  async previewLinks(text: string): Promise<Array<{ url: string; title: string | null; description: string | null; siteName: string | null }>> {
+    if (!text) return [];
+    const urlRegex = /https?:\/\/[^\s"'>)]+/gi;
+    const found = text.match(urlRegex) ?? [];
+    const urls = found
+      .map((u) => normalizeUrl(u))
+      .filter((u): u is string => Boolean(u))
+      .slice(0, 5);
+    if (urls.length === 0) return [];
+    try {
+      const rows = await this.prisma.linkMetadata.findMany({
+        where: { url: { in: urls } },
+        select: { url: true, title: true, description: true, siteName: true },
+        take: 3,
+      });
+      return rows.map((r) => ({
+        url: r.url,
+        title: normalizeText(r.title),
+        description: normalizeText(r.description),
+        siteName: normalizeText(r.siteName),
+      }));
+    } catch (err) {
+      this.logger.warn(`[link-metadata] previewLinks DB error: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    }
+  }
+
   private async fetchAndUpsert(url: string): Promise<{ url: string; title: string | null; description: string | null; imageUrl: string | null; siteName: string | null } | null> {
     try {
       const meta = await this.fetchFromExternal(url);

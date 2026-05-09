@@ -29,6 +29,7 @@ import { MarvinSummarizeThreadProcessor } from './jobs/marvin-summarize-thread.p
 import { MarvinCostRollupCron } from './jobs/marvin-cost-rollup.cron';
 import { MarvinCostRollupProcessor } from './jobs/marvin-cost-rollup.processor';
 import { MarvinProcessor } from './marvin.processor';
+import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
 
 /**
  * Marv (AI helper) module.
@@ -44,7 +45,7 @@ import { MarvinProcessor } from './marvin.processor';
  * pulling in the full AdminModule (which would create a cycle via PostsModule).
  */
 @Module({
-  imports: [AppConfigModule, AuthModule, RealtimeModule, PostsModule, MessagesModule, RedisModule, MarvinIdentityModule],
+  imports: [AppConfigModule, AuthModule, RealtimeModule, PostsModule, MessagesModule, RedisModule, MarvinIdentityModule, LinkMetadataModule],
   controllers: [MarvinController],
   providers: [
     AdminGuard,

@@ -143,12 +143,13 @@ export class PresenceRealtimeService {
   emitMessagesTypingFromUser(
     toUserId: string,
     fromUserId: string,
-    payload: { conversationId: string; typing: boolean },
+    payload: { conversationId: string; typing: boolean; status?: 'thinking' | 'typing' },
   ): void {
     this.emitToUser(toUserId, 'messages:typing', {
       conversationId: payload.conversationId,
       userId: fromUserId,
       typing: payload.typing,
+      ...(payload.status !== undefined ? { status: payload.status } : {}),
     });
   }
 

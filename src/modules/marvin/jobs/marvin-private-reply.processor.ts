@@ -14,6 +14,8 @@ import { MarvinToolHandlersService } from '../services/marvin-tool-handlers.serv
 import { MarvinUsageService } from '../services/marvin-usage.service';
 import { PresenceRealtimeService } from '../../presence/presence-realtime.service';
 import { MARV_ERROR_CODES, buildMarvIdempotencyKey } from '../marvin.constants';
+import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
+import { publicAssetUrl } from '../../../common/assets/public-asset-url';
 
 /**
  * How often to re-emit `messages:typing` while the AI call is in flight.
@@ -62,6 +64,7 @@ export class MarvinPrivateReplyProcessor {
     private readonly usage: MarvinUsageService,
     private readonly canned: MarvinCannedRepliesService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly linkMetadata: LinkMetadataService,
   ) {}
 
   /**
@@ -74,18 +77,22 @@ export class MarvinPrivateReplyProcessor {
     conversationId: string;
     fromUserId: string;
     toUserId: string;
-  }): () => void {
+  }): { stop: () => void; setPhase: (phase: 'thinking' | 'typing') => void } {
     const { conversationId, fromUserId, toUserId } = args;
+    const noop = { stop: () => {}, setPhase: () => {} };
     if (!conversationId || !fromUserId || !toUserId || fromUserId === toUserId) {
-      return () => {};
+      return noop;
     }
 
     let stopped = false;
+    let currentStatus: 'thinking' | 'typing' = 'thinking';
+
     const emit = (typing: boolean): void => {
       try {
         this.presenceRealtime.emitMessagesTypingFromUser(toUserId, fromUserId, {
           conversationId,
           typing,
+          status: typing ? currentStatus : undefined,
         });
       } catch {
         // best-effort: typing is non-essential UX
@@ -98,11 +105,17 @@ export class MarvinPrivateReplyProcessor {
       emit(true);
     }, TYPING_HEARTBEAT_MS);
 
-    return () => {
-      if (stopped) return;
-      stopped = true;
-      clearInterval(interval);
-      emit(false);
+    return {
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        clearInterval(interval);
+        emit(false);
+      },
+      setPhase: (phase: 'thinking' | 'typing') => {
+        currentStatus = phase;
+        if (!stopped) emit(true);
+      },
     };
   }
 
@@ -157,7 +170,12 @@ export class MarvinPrivateReplyProcessor {
       return;
     }
 
-    // 3. Load the message + sender + conversation participants.
+    const mediaSelect = {
+      where: { kind: { not: 'video' as const } },
+      select: { id: true, kind: true, source: true, r2Key: true, url: true },
+    };
+
+    // 3. Load the message + sender + media + optional replyTo media.
     const msg = await this.prisma.message.findFirst({
       where: { id: messageId, conversationId, deletedForAll: false },
       select: {
@@ -166,6 +184,13 @@ export class MarvinPrivateReplyProcessor {
         senderId: true,
         sender: {
           select: { id: true, username: true, name: true, premium: true, premiumPlus: true, bannedAt: true },
+        },
+        media: mediaSelect,
+        replyTo: {
+          select: {
+            body: true,
+            media: mediaSelect,
+          },
         },
       },
     });
@@ -246,20 +271,29 @@ export class MarvinPrivateReplyProcessor {
       `[marv] private-reply gate-pass step=routing requested=${requestedMode} effective=${effectiveMode} reason=${routed.reason} crisis=${routed.crisisDetected} webSearchDemanded=${routed.webSearchDemanded}`,
     );
 
-    // 6. Credit gate.
+    // 6. Credit gate — must afford mode cost + vision + worst-case one web search.
     const cost = this.credits.costForMode(effectiveMode);
+    const creditCfg = this.appConfig.marvCredits();
+    const openAICfg = this.appConfig.marvOpenAI();
+    const visionActive = openAICfg.visionEnabled && openAICfg.visionModes.includes(effectiveMode as string);
+    const msgImageCount = visionActive ? Math.min((msg.media ?? []).length, openAICfg.visionMaxImagesPerTurn) : 0;
+    const visionCost = msgImageCount * creditCfg.visionCreditCostPerImage;
+    const webSearchBuffer = openAICfg.webSearchEnabled && openAICfg.webSearchModes.includes(effectiveMode as string)
+      ? creditCfg.webSearchCreditCost
+      : 0;
+    const reservedCost = cost + visionCost + webSearchBuffer;
     const summary = await this.credits.refill(requestingUserId);
     this.logger.log(
-      `[marv] private-reply gate-pass step=credits balance=${summary.credits} cost=${cost} ok=${summary.credits >= cost}`,
+      `[marv] private-reply gate-pass step=credits balance=${summary.credits} cost=${cost} vision=${visionCost} webSearchBuffer=${webSearchBuffer} reserved=${reservedCost} ok=${summary.credits >= reservedCost}`,
     );
-    if (summary.credits < cost) {
+    if (summary.credits < reservedCost) {
       this.logger.log(
-        `[marv] private-reply EXIT reason=no_credits balance=${summary.credits} cost=${cost}`,
+        `[marv] private-reply EXIT reason=no_credits balance=${summary.credits} reserved=${reservedCost}`,
       );
       await this.canned.sendOutOfCreditsDm({
         userId: requestingUserId,
         currentCredits: summary.credits,
-        requiredCredits: cost,
+        requiredCredits: reservedCost,
         triggeringPostId: null,
       });
       await this.usage.recordEvent({
@@ -354,6 +388,28 @@ export class MarvinPrivateReplyProcessor {
       select: { lastResponseId: true },
     });
 
+    // Collect image URLs: current message first, then replyTo fills remaining slots.
+    const publicBase = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    const msgMedia = (msg.media ?? []).filter((m) => m.kind !== 'video');
+    const replyToMedia = (msg.replyTo?.media ?? []).filter((m) => m.kind !== 'video');
+    const maxImages = visionActive ? openAICfg.visionMaxImagesPerTurn : 0;
+
+    const imageEntries: { resolvedUrl: string; kind: string }[] = [];
+    for (const m of [...msgMedia, ...replyToMedia]) {
+      if (imageEntries.length >= maxImages) break;
+      const resolved = m.source === 'upload' && m.r2Key
+        ? publicAssetUrl({ publicBaseUrl: publicBase, key: m.r2Key })
+        : (m.url ?? null);
+      if (resolved) imageEntries.push({ resolvedUrl: resolved, kind: m.kind });
+    }
+    const imageUrls = imageEntries.map((e) => e.resolvedUrl);
+    const hasGifAttached = imageEntries.some((e) => e.kind === 'gif');
+
+    // Collect link previews from user's message + replyTo body (read-only, no external fetch).
+    const previewBodies = [text, msg.replyTo?.body ?? ''].filter(Boolean).join('\n');
+    const linkPreviews = await this.linkMetadata.previewLinks(previewBodies);
+
     const built = this.promptBuilder.build({
       source: 'private_session',
       requester: {
@@ -365,18 +421,20 @@ export class MarvinPrivateReplyProcessor {
       conversationId,
       crisisDetected: routed.crisisDetected,
       webSearchDemanded: routed.webSearchDemanded,
+      linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,
+      hasGifAttached: hasGifAttached || undefined,
     });
     // Show "Marv is typing…" to the user while the AI call is in flight. The
     // call can take 5–15s with tool loops, so we heartbeat below the client's
     // 3.5s typing TTL. Always stop in `finally` so the dots never stick.
     const marvUserIdForTyping = this.identity.cachedMarvUserId() ?? (await this.identity.getMarvUserId());
-    const stopTyping = marvUserIdForTyping
+    const { stop: stopTyping, setPhase: setTypingPhase } = marvUserIdForTyping
       ? this.startTypingHeartbeat({
           conversationId,
           fromUserId: marvUserIdForTyping,
           toUserId: requestingUserId,
         })
-      : () => {};
+      : { stop: () => {}, setPhase: () => {} };
 
     const aiStartedAt = Date.now();
     this.logger.log(
@@ -390,6 +448,7 @@ export class MarvinPrivateReplyProcessor {
         mode: effectiveMode,
         developerNote: built.developerNote,
         userMessage: built.userMessage,
+        imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
         dispatchTool: (name, args, ctx) => this.tools.dispatch(name, args, ctx),
         toolContext: {
           conversationId,
@@ -409,9 +468,6 @@ export class MarvinPrivateReplyProcessor {
       stopTyping();
       const isNotConfigured = err instanceof MarvinAINotConfiguredError;
       const code = isNotConfigured ? MARV_ERROR_CODES.aiNotConfigured : MARV_ERROR_CODES.aiError;
-      // Same as the public path: surface "ai not configured" as the canned DM
-      // (idempotent per (userId, conversationId)). Other AI errors stay
-      // observability-only since they may be transient.
       if (isNotConfigured) {
         try {
           await this.canned.sendNotConfiguredDm({
@@ -421,6 +477,16 @@ export class MarvinPrivateReplyProcessor {
         } catch (postErr) {
           this.logger.error(
             `[marv] Failed to send not-configured DM (post-AI-error): ${postErr instanceof Error ? postErr.message : String(postErr)}`,
+          );
+        }
+      } else {
+        // Transient / upstream error — tell the user to try again rather than leaving
+        // them with just a typing indicator that vanished.
+        try {
+          await this.canned.sendTransientErrorDm({ userId: requestingUserId });
+        } catch (postErr) {
+          this.logger.error(
+            `[marv] Failed to send transient-error DM (post-AI-throw): ${postErr instanceof Error ? postErr.message : String(postErr)}`,
           );
         }
       }
@@ -440,8 +506,10 @@ export class MarvinPrivateReplyProcessor {
       return;
     }
 
-    // AI succeeded — stop the typing heartbeat now so the indicator clears
-    // right before the reply lands (instead of overlapping with the new message).
+    // AI finished thinking — briefly switch to "typing" so the client shows
+    // the phase change, then stop just before the message lands.
+    setTypingPhase('typing');
+    await new Promise<void>((resolve) => setTimeout(resolve, 350));
     stopTyping();
 
     const replyText = (aiResult.text ?? '').trim();
@@ -481,6 +549,9 @@ export class MarvinPrivateReplyProcessor {
     const marvId = await this.identity.getMarvUserId();
     if (!marvId) {
       this.logger.error('[marv] private-reply EXIT reason=bot_user_missing — cannot send DM.');
+      try {
+        await this.canned.sendTransientErrorDm({ userId: requestingUserId });
+      } catch { /* best-effort */ }
       await this.usage.recordEvent({
         userId: requestingUserId,
         source: 'private_session',
@@ -516,6 +587,9 @@ export class MarvinPrivateReplyProcessor {
         `[marv] private-reply DM SEND FAILED: ${err instanceof Error ? err.message : String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
+      try {
+        await this.canned.sendTransientErrorDm({ userId: requestingUserId });
+      } catch { /* best-effort */ }
       await this.usage.recordEvent({
         userId: requestingUserId,
         source: 'private_session',
@@ -544,12 +618,17 @@ export class MarvinPrivateReplyProcessor {
 
     // Pass the pre-check refill summary so spend can skip its inner refill SELECT —
     // saves one Postgres round-trip on the hot path.
-    // If web search was used, add the per-search credit surcharge on top of the mode cost.
-    const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * this.appConfig.marvCredits().webSearchCreditCost;
-    const totalCost = cost + webSearchSurcharge;
+    const actualVisionCost = (aiResult.imagesAttached ?? 0) * creditCfg.visionCreditCostPerImage;
+    const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * creditCfg.webSearchCreditCost;
+    const totalCost = cost + actualVisionCost + webSearchSurcharge;
+    if (actualVisionCost > 0) {
+      this.logger.log(
+        `[marv] private-reply vision surcharge: ${aiResult.imagesAttached} image(s) × ${creditCfg.visionCreditCostPerImage} = ${actualVisionCost} extra credits`,
+      );
+    }
     if (webSearchSurcharge > 0) {
       this.logger.log(
-        `[marv] private-reply web-search surcharge: ${aiResult.webSearchCount} search(es) × ${this.appConfig.marvCredits().webSearchCreditCost} = ${webSearchSurcharge} extra credits (total=${totalCost})`,
+        `[marv] private-reply web-search surcharge: ${aiResult.webSearchCount} search(es) × ${creditCfg.webSearchCreditCost} = ${webSearchSurcharge} extra credits (total=${totalCost})`,
       );
     }
     let postSpend: Awaited<ReturnType<typeof this.credits.spend>> | null = null;
@@ -584,7 +663,7 @@ export class MarvinPrivateReplyProcessor {
     });
 
     this.logger.log(
-      `[marv] private-reply ok user=${requestingUserId} convo=${conversationId} cost=${totalCost} (mode=${cost} + webSearch=${webSearchSurcharge})`,
+      `[marv] private-reply ok user=${requestingUserId} convo=${conversationId} cost=${totalCost} (mode=${cost} + vision=${actualVisionCost} + webSearch=${webSearchSurcharge})`,
     );
   }
 

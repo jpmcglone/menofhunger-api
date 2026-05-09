@@ -198,6 +198,29 @@ export type AdminAnalyticsSpacesDto = {
   topSpaces: AdminAnalyticsSpacesTopRowDto[];
 };
 
+export type AdminAnalyticsAIDto = {
+  /** All MarvinUsageEvent rows in range (success + errors). */
+  totalInteractionsInRange: number;
+  /** Rows where errorCode IS NULL (actual AI responses delivered). */
+  successfulInteractionsInRange: number;
+  /** Distinct users who triggered Marv in range. */
+  uniqueUsersInRange: number;
+  /** Sum of creditsSpent for all events in range. */
+  creditsSpentInRange: number;
+  /** Sum of estimatedCostUsd in range; null when no cost data yet. */
+  estimatedCostUsdInRange: number | null;
+  /** Average latencyMs for successful events; null when no data. */
+  avgLatencyMsInRange: number | null;
+  /** Count by MarvinSource: "public_thread" | "private_session". */
+  bySource: Record<string, number>;
+  /** Count by effectiveMode for successful events: "fast" | "regular" | "smart". */
+  byEffectiveMode: Record<string, number>;
+  /** Count by outcome for all events: "success" | errorCode string. */
+  byOutcome: Record<string, number>;
+  /** Time series of successful interactions per granularity bucket. */
+  interactions: TimeSeriesPoint[];
+};
+
 export type AdminAnalyticsDto = {
   range: AnalyticsRange;
   granularity: AnalyticsGranularity;
@@ -207,10 +230,15 @@ export type AdminAnalyticsDto = {
   topPostsAllTime: AdminAnalyticsTopPostDto[];
   /** Counts of regular (non-draft, non-deleted) posts per visibility for the selected range. */
   postsByVisibility: Record<string, number>;
-  /** Time series of regular posts visible to others (excludes onlyMe). */
+  /** Time series of regular posts by human (non-bot) users, visible to others (excludes onlyMe). */
   posts: TimeSeriesPoint[];
+  /** Time series of regular posts by AI/bot users in the selected range. */
+  aiPosts: TimeSeriesPoint[];
   checkins: TimeSeriesPoint[];
+  /** Time series of messages sent by human (non-bot) users. */
   messages: TimeSeriesPoint[];
+  /** Time series of messages sent by AI/bot users. */
+  aiMessages: TimeSeriesPoint[];
   follows: TimeSeriesPoint[];
   retention: AdminAnalyticsRetentionRow[];
   engagement: AdminAnalyticsEngagementDto;
@@ -219,5 +247,6 @@ export type AdminAnalyticsDto = {
   articles: AdminAnalyticsArticlesDto;
   groups: AdminAnalyticsGroupsDto;
   spaces: AdminAnalyticsSpacesDto;
+  ai: AdminAnalyticsAIDto;
   asOf: string;
 };

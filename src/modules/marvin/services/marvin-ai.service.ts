@@ -3,6 +3,11 @@ import OpenAI from 'openai';
 import type { MarvinSource } from '@prisma/client';
 import { AppConfigService } from '../../app/app-config.service';
 import type { ResolvedMarvinMode } from './marvin-routing.service';
+import {
+  MARV_DEFAULT_FAST_MODEL,
+  MARV_DEFAULT_REGULAR_MODEL,
+  MARV_DEFAULT_SMART_MODEL,
+} from '../marvin-models';
 
 export type MarvAIToolCallContext = {
   /** Source-scoped ids the tool handlers may use. */
@@ -26,6 +31,12 @@ export type MarvAIRequest = {
   developerNote: string;
   /** The user's actual question text. */
   userMessage: string;
+  /**
+   * Public URLs of images/GIFs to attach as vision inputs on the first turn.
+   * Only attached when `MARV_VISION_ENABLED=true` and the mode is in `MARV_VISION_MODES`.
+   * Already capped to `MARV_VISION_MAX_IMAGES_PER_TURN` by the processor.
+   */
+  imageUrls?: string[];
   /** Tool dispatcher that handles function calls from the model. */
   dispatchTool: MarvAIToolDispatcher;
   /** Per-request context passed to every tool dispatch. */
@@ -47,15 +58,17 @@ export type MarvAIResult = {
   toolCallCount: number;
   /** Number of `web_search_call` items OpenAI executed during this response. */
   webSearchCount: number;
+  /** Number of images actually attached as vision inputs on turn one. */
+  imagesAttached: number;
   /** Set when the model returned no usable text (refusal, max-output stop, etc.). */
   errorCode?: 'no_text' | 'refusal' | 'incomplete';
 };
 
 /** Per-1M-token rate (USD) for cost estimation. Approximate; admins can tweak per-deploy. */
 const MODEL_RATES_USD_PER_M_TOKENS: Record<string, { input: number; output: number; cached?: number }> = {
-  'gpt-5-nano': { input: 0.05, output: 0.4, cached: 0.005 },
-  'gpt-5': { input: 1.25, output: 10, cached: 0.125 },
-  'gpt-5-thinking': { input: 5, output: 30, cached: 0.5 },
+  [MARV_DEFAULT_FAST_MODEL]: { input: 0.05, output: 0.4, cached: 0.005 },
+  [MARV_DEFAULT_REGULAR_MODEL]: { input: 1.25, output: 10, cached: 0.125 },
+  [MARV_DEFAULT_SMART_MODEL]: { input: 5, output: 30, cached: 0.5 },
 };
 
 /** Flat cost per web_search_preview call (OpenAI pricing, USD). */
@@ -135,8 +148,29 @@ export class MarvinAIService {
       `[marv-ai] respond start source=${req.source} mode=${req.mode} model=${model} promptId=${promptId} promptVersion=${cfg.promptVersion ?? 'latest'} maxOut=${limits.maxOutputTokens} prevResp=${req.previousResponseId ?? 'null'} cacheKey=${req.cacheKey ?? '-'}`,
     );
 
+    // Vision: only activate when feature flag is on and mode is in allowed list.
+    const visionActive =
+      cfg.visionEnabled && cfg.visionModes.includes(req.mode as string);
+    const imageUrls = visionActive && req.imageUrls && req.imageUrls.length > 0
+      ? req.imageUrls.slice(0, cfg.visionMaxImagesPerTurn)
+      : [];
+
+    if (visionActive && imageUrls.length > 0) {
+      this.logger.log(
+        `[marv-ai] vision enabled for mode=${req.mode} images=${imageUrls.length}`,
+      );
+    }
+
     // Build the initial input. The personality + tool list live in the Stored Prompt; the
     // developer note + user question travel as the "input" for this turn.
+    // When images are attached, the user role uses a content-parts array; otherwise a plain string.
+    const userContent: unknown = imageUrls.length > 0
+      ? [
+          { type: 'input_text', text: req.userMessage },
+          ...imageUrls.map((u) => ({ type: 'input_image', image_url: u })),
+        ]
+      : req.userMessage;
+
     const initialInput = [
       {
         role: 'developer' as const,
@@ -144,7 +178,7 @@ export class MarvinAIService {
       },
       {
         role: 'user' as const,
-        content: req.userMessage,
+        content: userContent,
       },
     ];
 
@@ -164,7 +198,7 @@ export class MarvinAIService {
     // conversation memory across messages.
 
     // Web search is only enabled when: the feature flag is on AND the current mode is in the
-    // allowed list. fast (gpt-5-nano) is excluded by default — it exhausts its token budget
+    // allowed list. fast (gpt-5.4-nano) is excluded by default — it exhausts its token budget
     // on search result processing and never gets to produce visible text.
     const webSearchActive =
       cfg.webSearchEnabled && cfg.webSearchModes.includes(req.mode as string);
@@ -300,7 +334,7 @@ export class MarvinAIService {
     }
 
     // ── Incomplete-response recovery ────────────────────────────────────────
-    // Reasoning models (gpt-5, o-series) spend tokens on internal thinking
+    // Reasoning models (gpt-5.5, o-series) spend tokens on internal thinking
     // before emitting visible text. If we hit the budget mid-think, the API
     // returns status=incomplete with no text. Retry once with 8× the budget
     // (continuing from the same response chain) to give the model room to
@@ -378,6 +412,7 @@ export class MarvinAIService {
       estimatedCostUsd,
       toolCallCount,
       webSearchCount,
+      imagesAttached: imageUrls.length,
       ...(errorCode ? { errorCode } : {}),
     };
   }

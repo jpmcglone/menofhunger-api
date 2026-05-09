@@ -16,6 +16,17 @@ export type MarvPromptUser = {
   displayName: string | null;
 };
 
+export type MarvPollOption = {
+  text: string;
+  voteCount: number;
+};
+
+export type MarvPoll = {
+  totalVoteCount: number;
+  endsAt: Date | null;
+  options: MarvPollOption[];
+};
+
 export type MarvThreadPost = {
   id: string;
   authorUsername: string | null;
@@ -31,6 +42,15 @@ export type MarvThreadPost = {
    * (e.g. "What are you grateful for today?").
    */
   checkinPrompt?: string | null;
+  /** Poll attached to this post, if any. */
+  poll?: MarvPoll | null;
+};
+
+export type MarvLinkPreview = {
+  url: string;
+  title?: string | null;
+  description?: string | null;
+  siteName?: string | null;
 };
 
 export type MarvPromptInput = {
@@ -73,6 +93,16 @@ export type MarvPromptInput = {
    * Injects a strong instruction so the model always calls web_search_preview.
    */
   webSearchDemanded?: boolean;
+  /**
+   * Link previews fetched from the LinkMetadata cache for URLs in the triggering content.
+   * Rendered as a brief inline block so Marv can reference title/description without a tool call.
+   */
+  linkPreviews?: MarvLinkPreview[];
+  /**
+   * When true, at least one GIF was attached as a vision input. Injects a note telling the
+   * model it is seeing a single still frame, not an animation.
+   */
+  hasGifAttached?: boolean;
 };
 
 export type MarvBuiltPrompt = {
@@ -127,6 +157,9 @@ export class MarvinPromptBuilderService {
             lines.push(`  [Daily check-in prompt]: "${p.checkinPrompt.slice(0, 300)}"`);
           }
           lines.push(`  ${handle}${tag}: "${p.body.slice(0, 500)}"`);
+          if (p.poll) {
+            lines.push(MarvinPromptBuilderService.renderPoll(p.poll));
+          }
         }
         lines.push(
           'Do not repeat or paraphrase what YOU previously said. Build on it or answer the new question.',
@@ -158,9 +191,38 @@ export class MarvinPromptBuilderService {
       lines.push(MARV_WEB_SEARCH_REQUIRED);
     }
 
+    if (input.hasGifAttached) {
+      lines.push(
+        'NOTE: One or more GIFs were attached as images. You are seeing a single still frame per GIF — describe what is visible in that frame; do not assume motion or animation.',
+      );
+    }
+
+    if (input.linkPreviews && input.linkPreviews.length > 0) {
+      lines.push('[Link previews from the message]');
+      for (const lp of input.linkPreviews) {
+        const site = lp.siteName ? ` — ${lp.siteName}` : '';
+        const desc = lp.description ? ` — ${lp.description.slice(0, 120)}` : '';
+        const title = lp.title ?? lp.url;
+        lines.push(`  - "${title}"${site}${desc}`);
+      }
+    }
+
     return {
       developerNote: lines.join('\n'),
       userMessage: (input.currentQuestion ?? '').trim().slice(0, 4000),
     };
+  }
+
+  /** Renders a poll as a compact inline text block for the developer note. */
+  private static renderPoll(poll: MarvPoll): string {
+    const total = poll.totalVoteCount;
+    const closeStr = poll.endsAt
+      ? `closes ${poll.endsAt.toUTCString()}`
+      : 'no close date';
+    const optionLines = poll.options.map((o) => {
+      const pct = total > 0 ? Math.round((o.voteCount / total) * 100) : 0;
+      return `    - "${o.text}" — ${o.voteCount} (${pct}%)`;
+    });
+    return `  [Poll on this post] (${total} vote${total !== 1 ? 's' : ''}, ${closeStr})\n${optionLines.join('\n')}`;
   }
 }

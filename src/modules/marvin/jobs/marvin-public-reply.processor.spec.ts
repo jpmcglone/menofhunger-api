@@ -1,5 +1,10 @@
 import { Prisma } from '@prisma/client';
 import { MarvinPublicReplyProcessor } from './marvin-public-reply.processor';
+import {
+  MARV_DEFAULT_FAST_MODEL,
+  MARV_DEFAULT_REGULAR_MODEL,
+  MARV_DEFAULT_SMART_MODEL,
+} from '../marvin-models';
 
 function p2002(): Error {
   return new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
@@ -38,9 +43,13 @@ function makeProcessor(opts?: {
         name: 'Alice',
         premium: opts?.premium ?? true,
         premiumPlus: false,
+        bannedAt: null,
       },
       mentions: [],
+      media: [],
+      poll: null,
     })),
+    findMany: jest.fn(async () => []),
   };
 
   const prisma: any = {
@@ -79,20 +88,25 @@ function makeProcessor(opts?: {
       creditsPerDay: 40,
       fastCost: 1,
       regularCost: 2,
-      smartCost: 4,
-      webSearchCreditCost: 2,
+      smartCost: 5,
+      webSearchCreditCost: 4,
+      visionCreditCostPerImage: 2,
     })),
     marvOpenAI: jest.fn(() => ({
       apiKey: 'sk-test',
       promptId: 'pmpt_test',
       promptVersion: null,
-      fastModel: 'gpt-5-nano',
-      regularModel: 'gpt-5',
-      smartModel: 'gpt-5',
+      fastModel: MARV_DEFAULT_FAST_MODEL,
+      regularModel: MARV_DEFAULT_REGULAR_MODEL,
+      smartModel: MARV_DEFAULT_SMART_MODEL,
       webSearchEnabled: false,
       webSearchModes: ['regular', 'smart'],
       webSearchMaxOutputTokens: 4096,
+      visionEnabled: false,
+      visionModes: ['regular', 'smart'],
+      visionMaxImagesPerTurn: 4,
     })),
+    r2: jest.fn(() => ({ publicBaseUrl: 'https://cdn.test' })),
     frontendBaseUrl: jest.fn(() => 'https://menofhunger.com'),
   };
 
@@ -123,7 +137,7 @@ function makeProcessor(opts?: {
   };
 
   const routing: any = {
-    resolve: jest.fn(() => ({ mode: 'regular', reason: 'user_selected', crisisDetected: false })),
+    resolve: jest.fn(() => ({ mode: 'regular', reason: 'user_selected', crisisDetected: false, webSearchDemanded: false })),
     estimateTokens: jest.fn(() => 50),
   };
 
@@ -136,10 +150,10 @@ function makeProcessor(opts?: {
 
   const ai: any = {
     isConfigured: jest.fn(() => opts?.aiConfigured !== false),
-    modelForMode: jest.fn(() => 'gpt-5'),
+    modelForMode: jest.fn(() => MARV_DEFAULT_REGULAR_MODEL),
     respond: jest.fn(async () => ({
       text: opts?.aiText ?? 'Brief, kind reply.',
-      modelUsed: 'gpt-5',
+      modelUsed: MARV_DEFAULT_REGULAR_MODEL,
       responseId: 'resp-1',
       inputTokens: 50,
       outputTokens: 40,
@@ -147,6 +161,7 @@ function makeProcessor(opts?: {
       estimatedCostUsd: 0.001,
       toolCallCount: 0,
       webSearchCount: 0,
+      imagesAttached: 0,
     })),
   };
 
@@ -166,6 +181,7 @@ function makeProcessor(opts?: {
 
   const jobs: any = { enqueue: jest.fn(async () => undefined) };
   const threadSummary: any = { shouldSummarize: jest.fn(async () => false) };
+  const linkMetadata: any = { previewLinks: jest.fn(async () => []) };
 
   const processor = new MarvinPublicReplyProcessor(
     prisma,
@@ -181,6 +197,7 @@ function makeProcessor(opts?: {
     canned,
     jobs,
     threadSummary,
+    linkMetadata,
   );
 
   return {
@@ -196,6 +213,7 @@ function makeProcessor(opts?: {
     identity,
     jobs,
     threadSummary,
+    linkMetadata,
   };
 }
 
@@ -373,5 +391,77 @@ describe('MarvinPublicReplyProcessor', () => {
     expect(m.usage.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 'thread_cooldown' }),
     );
+  });
+
+  describe('vision: image selection (first-then-tail rule)', () => {
+    it('passes images from thread when vision is enabled', async () => {
+      const m = makeProcessor();
+      m.appConfig.marvOpenAI.mockReturnValue({
+        apiKey: 'sk-test', promptId: 'pmpt_test', promptVersion: null,
+        fastModel: MARV_DEFAULT_FAST_MODEL, regularModel: MARV_DEFAULT_REGULAR_MODEL, smartModel: MARV_DEFAULT_SMART_MODEL,
+        webSearchEnabled: false, webSearchModes: ['regular', 'smart'], webSearchMaxOutputTokens: 4096,
+        visionEnabled: true, visionModes: ['regular', 'smart'], visionMaxImagesPerTurn: 4,
+      });
+      // triggering post has one upload image
+      m.prisma.post.findFirst.mockResolvedValueOnce({
+        id: 'p-1',
+        body: 'Check this photo',
+        visibility: 'public',
+        rootId: 'r-1',
+        userId: 'u-requester',
+        user: { id: 'u-requester', username: 'alice', name: 'Alice', premium: true, premiumPlus: false, bannedAt: null },
+        mentions: [],
+        media: [{ id: 'med-1', kind: 'image', source: 'upload', r2Key: 'images/photo.jpg', url: null, position: 0 }],
+        poll: null,
+      });
+      // root + reply for fetchThreadContext
+      m.prisma.post.findFirst
+        .mockResolvedValueOnce({ // root post fetch inside fetchThreadContext
+          id: 'r-1', body: 'root', createdAt: new Date('2025-01-01'),
+          checkinPrompt: null, userId: 'u-1', user: { username: 'alice', name: 'Alice' },
+          media: [{ id: 'med-r1', kind: 'image', source: 'upload', r2Key: 'images/root.jpg', url: null, position: 0 }],
+          poll: null,
+        });
+      m.prisma.post.findMany.mockResolvedValueOnce([]); // no replies
+      await m.processor.process({ postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' });
+      // Should call AI with imageUrls populated
+      const aiCall = m.ai.respond.mock.calls[0]?.[0];
+      expect(aiCall?.imageUrls?.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('does not pass imageUrls when vision is disabled', async () => {
+      const m = makeProcessor();
+      m.prisma.post.findFirst
+        .mockResolvedValueOnce({
+          id: 'p-1', body: 'Check this', visibility: 'public', rootId: 'r-1', userId: 'u-requester',
+          user: { id: 'u-requester', username: 'alice', name: 'Alice', premium: true, premiumPlus: false, bannedAt: null },
+          mentions: [],
+          media: [{ id: 'med-1', kind: 'image', source: 'upload', r2Key: 'images/x.jpg', url: null, position: 0 }],
+          poll: null,
+        })
+        .mockResolvedValueOnce({ // root in fetchThreadContext
+          id: 'r-1', body: 'root', createdAt: new Date(), checkinPrompt: null, userId: 'u-1',
+          user: { username: 'alice', name: 'Alice' }, media: [], poll: null,
+        });
+      m.prisma.post.findMany.mockResolvedValueOnce([]);
+      await m.processor.process({ postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' });
+      const aiCall = m.ai.respond.mock.calls[0]?.[0];
+      expect(aiCall?.imageUrls).toBeUndefined();
+    });
+  });
+
+  describe('vision: credit surcharge', () => {
+    it('adds vision surcharge to totalCost when images were attached', async () => {
+      const m = makeProcessor();
+      m.ai.respond.mockResolvedValueOnce({
+        text: 'I see it.', modelUsed: MARV_DEFAULT_REGULAR_MODEL, responseId: 'resp-2',
+        inputTokens: 200, outputTokens: 30, cachedInputTokens: 0, estimatedCostUsd: 0.002,
+        toolCallCount: 0, webSearchCount: 0, imagesAttached: 2,
+      });
+      await m.processor.process({ postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' });
+      // mode cost=2 + vision=2*2=4 → total=6
+      expect(m.credits.spend).toHaveBeenCalledWith('u-requester', 6, expect.any(Object));
+      expect(m.usage.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ creditsSpent: 6 }));
+    });
   });
 });
