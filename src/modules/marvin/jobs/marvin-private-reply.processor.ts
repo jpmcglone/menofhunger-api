@@ -366,13 +366,6 @@ export class MarvinPrivateReplyProcessor {
       crisisDetected: routed.crisisDetected,
       webSearchDemanded: routed.webSearchDemanded,
     });
-    const allowedUsernamesLower = [
-      ...new Set([
-        ...built.allowedUsernamesLower,
-        msg.sender.username?.toLowerCase() ?? '',
-      ].filter(Boolean)),
-    ];
-
     // Show "Marv is typing…" to the user while the AI call is in flight. The
     // call can take 5–15s with tool loops, so we heartbeat below the client's
     // 3.5s typing TTL. Always stop in `finally` so the dots never stick.
@@ -399,7 +392,6 @@ export class MarvinPrivateReplyProcessor {
         userMessage: built.userMessage,
         dispatchTool: (name, args, ctx) => this.tools.dispatch(name, args, ctx),
         toolContext: {
-          allowedUsernamesLower,
           conversationId,
           requesterUserId: msg.sender.id,
         },

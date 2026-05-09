@@ -342,13 +342,6 @@ export class MarvinPublicReplyProcessor {
       crisisDetected: routed.crisisDetected,
       webSearchDemanded: routed.webSearchDemanded,
     });
-    // Always allow the requester to be looked up via the context-card tool.
-    const allowedUsernamesLower = [
-      ...new Set(
-        [...built.allowedUsernamesLower, requesterRow.username?.toLowerCase() ?? ''].filter(Boolean),
-      ),
-    ];
-
     const aiStartedAt = Date.now();
     this.logger.log(
       `[marv] public-reply AI call START mode=${effectiveMode} model=${this.ai.modelForMode(effectiveMode)} userMsgLen=${built.userMessage.length}`,
@@ -363,7 +356,6 @@ export class MarvinPublicReplyProcessor {
         userMessage: built.userMessage,
         dispatchTool: (name, args, ctx) => this.tools.dispatch(name, args, ctx),
         toolContext: {
-          allowedUsernamesLower,
           rootPostId,
           triggeringPostId: post.id,
           requesterUserId: requesterRow.id,

@@ -5,11 +5,6 @@ import { AppConfigService } from '../../app/app-config.service';
 import type { ResolvedMarvinMode } from './marvin-routing.service';
 
 export type MarvAIToolCallContext = {
-  /**
-   * Lowercase whitelist of usernames Marv may resolve via `get_user_context_card`.
-   * Computed up-front in the prompt builder.
-   */
-  allowedUsernamesLower: string[];
   /** Source-scoped ids the tool handlers may use. */
   rootPostId?: string;
   triggeringPostId?: string;

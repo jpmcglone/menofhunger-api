@@ -40,10 +40,9 @@ const TTL_NEGATIVE = 60; // 1 min — dedupe "no_card"/"no_summary" misses
  * is the JSON serialization boundary the model reads.
  *
  * Hard rules:
- *  - `get_user_context_card` / `get_user_basic_info` must respect the per-request
- *    `allowedUsernamesLower` whitelist. Marv may NOT look up arbitrary users. The
- *    whitelist check runs OUTSIDE the cache so a different request with a different
- *    whitelist cannot reuse a cached "allowed" lookup against a disallowed name.
+ *  - `get_user_context_card` / `get_user_basic_info` filter banned users at the SQL layer
+ *    (`bannedAt IS NULL`). Profile data Marv exposes is the same data any signed-in user
+ *    can see by visiting the profile page, so there is no per-request username whitelist.
  *  - All post lookups skip soft-deleted posts AND `onlyMe` visibility.
  *  - All outputs are kept small (≤ ~8KB) — the AI service further clamps to 8KB anyway.
  *
@@ -103,18 +102,11 @@ export class MarvinToolHandlersService {
     }
   }
 
-  private isUsernameAllowed(usernameLower: string, ctx: MarvAIToolCallContext): boolean {
-    return ctx.allowedUsernamesLower.includes(usernameLower);
-  }
-
-  private async getUserBasicInfo(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
+  private async getUserBasicInfo(rawArgs: unknown, _ctx: MarvAIToolCallContext): Promise<unknown> {
     const parsed = getUserBasicInfoSchema.safeParse(rawArgs);
     if (!parsed.success) return { error: 'invalid_args' };
     const { username } = parsed.data;
     const lower = username.toLowerCase();
-    if (!this.isUsernameAllowed(lower, ctx)) {
-      return { error: 'username_not_allowed', note: 'You may only look up usernames mentioned in the request.' };
-    }
     return await this.cache.getOrSetJson<unknown>({
       enabled: true,
       key: `marv:tool:user-basic:${lower}`,
@@ -153,14 +145,11 @@ export class MarvinToolHandlersService {
     });
   }
 
-  private async getUserContextCard(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
+  private async getUserContextCard(rawArgs: unknown, _ctx: MarvAIToolCallContext): Promise<unknown> {
     const parsed = getUserContextCardSchema.safeParse(rawArgs);
     if (!parsed.success) return { error: 'invalid_args' };
     const { username } = parsed.data;
     const lower = username.toLowerCase();
-    if (!this.isUsernameAllowed(lower, ctx)) {
-      return { error: 'username_not_allowed' };
-    }
 
     const cacheKey = `marv:tool:user-card:${lower}`;
 
@@ -172,8 +161,12 @@ export class MarvinToolHandlersService {
       ttlSeconds: TTL_USER_CARD,
       nullTtlSeconds: TTL_NEGATIVE,
       compute: async () => {
+        // `bannedAt: null` ensures we don't surface a previously-cached card for a now-banned
+        // user. The on-the-fly generation path below has the same filter.
         const row = await this.prisma.userContextCard.findFirst({
-          where: { user: { username: { equals: username, mode: 'insensitive' } } },
+          where: {
+            user: { username: { equals: username, mode: 'insensitive' }, bannedAt: null },
+          },
           select: { cardText: true, source: true, updatedAt: true, user: { select: { username: true } } },
         });
         if (!row) return null;

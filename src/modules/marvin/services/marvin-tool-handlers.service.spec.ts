@@ -75,7 +75,6 @@ function makeService() {
 }
 
 const baseCtx: MarvAIToolCallContext = {
-  allowedUsernamesLower: ['alice', 'bob'],
   rootPostId: 'r-1',
   triggeringPostId: 'p-1',
   requesterUserId: 'u-1',
@@ -88,18 +87,17 @@ describe('MarvinToolHandlersService.dispatch', () => {
     expect(JSON.parse(out)).toEqual({ error: 'unknown_tool', name: 'not_a_real_tool' });
   });
 
-  describe('get_user_basic_info whitelist', () => {
-    it('rejects usernames outside the per-request whitelist', async () => {
+  describe('get_user_basic_info', () => {
+    // The SQL query in get_user_basic_info enforces `bannedAt IS NULL`, so a banned user
+    // returns no rows -> `user_not_found`. Non-banned users are looked up freely.
+    it('returns user_not_found when the SQL layer filters the user (e.g. banned or missing)', async () => {
       const { svc, prisma } = makeService();
+      prisma.$queryRaw.mockResolvedValueOnce([]);
       const out = await svc.dispatch('get_user_basic_info', { username: 'eve' }, baseCtx);
-      expect(JSON.parse(out)).toEqual({
-        error: 'username_not_allowed',
-        note: expect.any(String),
-      });
-      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+      expect(JSON.parse(out)).toEqual({ error: 'user_not_found' });
     });
 
-    it('allows whitelisted usernames (case-insensitive)', async () => {
+    it('returns the user record (case-insensitive username match)', async () => {
       const { svc, prisma } = makeService();
       prisma.$queryRaw.mockResolvedValueOnce([
         {
@@ -122,15 +120,16 @@ describe('MarvinToolHandlersService.dispatch', () => {
     });
   });
 
-  describe('get_user_context_card whitelist', () => {
-    it('blocks usernames outside the whitelist', async () => {
+  describe('get_user_context_card', () => {
+    it('returns no_card when no card row exists and on-the-fly generation does not yield one', async () => {
       const { svc, prisma } = makeService();
+      prisma.userContextCard.findFirst.mockResolvedValueOnce(null);
+      prisma.user.findFirst.mockResolvedValueOnce(null);
       const out = await svc.dispatch('get_user_context_card', { username: 'eve' }, baseCtx);
-      expect(JSON.parse(out)).toEqual({ error: 'username_not_allowed' });
-      expect(prisma.userContextCard.findFirst).not.toHaveBeenCalled();
+      expect(JSON.parse(out)).toEqual({ error: 'no_card', note: expect.any(String) });
     });
 
-    it('returns the card for an allowed user', async () => {
+    it('returns the card for any non-banned user', async () => {
       const { svc, prisma } = makeService();
       prisma.userContextCard.findFirst.mockResolvedValueOnce({
         cardText: 'Alice is a long-time member.',

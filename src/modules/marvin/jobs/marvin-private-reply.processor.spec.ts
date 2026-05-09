@@ -134,7 +134,6 @@ function makeProcessor(opts?: {
     build: jest.fn(() => ({
       developerNote: 'note',
       userMessage: 'msg',
-      allowedUsernamesLower: ['alice'],
     })),
   };
 

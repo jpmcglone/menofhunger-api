@@ -147,7 +147,7 @@ export class MarvinThreadSummaryService {
       developerNote,
       userMessage,
       dispatchTool: async () => '{}',
-      toolContext: { allowedUsernamesLower: [], requesterUserId: '' },
+      toolContext: { requesterUserId: '' },
       previousResponseId: null,
       cacheKey: 'marv:thread-summary',
     });

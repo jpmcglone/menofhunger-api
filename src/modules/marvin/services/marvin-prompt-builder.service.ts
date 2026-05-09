@@ -58,9 +58,9 @@ export type MarvPromptInput = {
   /** Private-session context only: the conversation Marv ↔ user. */
   conversationId?: string;
   /**
-   * Other users referenced in the triggering content (e.g. @mentioned in the post). Marv
-   * can call `get_user_context_card({ username })` for any of them; the tool handler
-   * enforces this list as a whitelist to prevent arbitrary user lookups.
+   * Other users referenced in the triggering content (e.g. @mentioned in the post). Surfaced
+   * to the model as a hint ("these users are part of the conversation") — it can call
+   * `get_user_context_card` on any non-banned user, this list is just a routing nudge.
    */
   referencedUsernames?: string[];
   /**
@@ -84,8 +84,6 @@ export type MarvBuiltPrompt = {
   developerNote: string;
   /** The user's actual question, lightly trimmed. */
   userMessage: string;
-  /** Whitelist of usernames Marv may look up via tools (lowercased). */
-  allowedUsernamesLower: string[];
 };
 
 /**
@@ -93,8 +91,8 @@ export type MarvBuiltPrompt = {
  *
  * The Marv "personality" (system prompt + tool schemas + voice rules) lives in an OpenAI
  * Stored Prompt — we never duplicate it here. This service produces the small developer
- * note that travels alongside the user's question (who's asking, where, safety nudges,
- * username whitelist for the context-card tool).
+ * note that travels alongside the user's question (who's asking, where, thread history,
+ * safety nudges).
  */
 @Injectable()
 export class MarvinPromptBuilderService {
@@ -108,7 +106,6 @@ export class MarvinPromptBuilderService {
     const referenced = (input.referencedUsernames ?? [])
       .map((u) => u.trim())
       .filter(Boolean);
-    const allowedLower = [...new Set(referenced.map((u) => u.toLowerCase()))];
 
     const lines: string[] = [];
     if (input.source === 'public_thread') {
@@ -149,13 +146,7 @@ export class MarvinPromptBuilderService {
 
     if (referenced.length > 0) {
       lines.push(
-        `Other users referenced: ${referenced.map((u) => '@' + u).join(', ')}. ` +
-          'You may call get_user_context_card on any of these usernames or on the requester. ' +
-          'Do not look up arbitrary other usernames.',
-      );
-    } else {
-      lines.push(
-        'You may call get_user_context_card on the requester. Do not look up arbitrary other usernames.',
+        `Other users referenced in this conversation: ${referenced.map((u) => '@' + u).join(', ')}.`,
       );
     }
 
@@ -170,7 +161,6 @@ export class MarvinPromptBuilderService {
     return {
       developerNote: lines.join('\n'),
       userMessage: (input.currentQuestion ?? '').trim().slice(0, 4000),
-      allowedUsernamesLower: allowedLower,
     };
   }
 }

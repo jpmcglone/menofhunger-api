@@ -252,7 +252,7 @@ export class MarvinContextCardService {
       // any tool the model tries to call returns the empty payload, so the
       // model converges on text-only output within the standard tool-loop cap.
       dispatchTool: async () => '{}',
-      toolContext: { allowedUsernamesLower: [], requesterUserId: '' },
+      toolContext: { requesterUserId: '' },
       previousResponseId: null,
       cacheKey: 'marv:context-card',
     });
