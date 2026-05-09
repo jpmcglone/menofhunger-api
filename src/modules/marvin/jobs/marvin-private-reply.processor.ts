@@ -393,6 +393,12 @@ export class MarvinPrivateReplyProcessor {
 
     const msgMedia = (msg.media ?? []).filter((m) => m.kind !== 'video');
     const replyToMedia = (msg.replyTo?.media ?? []).filter((m) => m.kind !== 'video');
+    const totalMediaCount = msgMedia.length + replyToMedia.length;
+    if (!visionActive && totalMediaCount > 0) {
+      this.logger.warn(
+        `[marv] private-reply vision DISABLED for mode=${effectiveMode} but ${totalMediaCount} image(s) present — Marv will not see them. To fix: add '${effectiveMode}' to MARV_VISION_MODES.`,
+      );
+    }
     const maxImages = visionActive ? openAICfg.visionMaxImagesPerTurn : 0;
 
     const imageEntries: { resolvedUrl: string; kind: string }[] = [];

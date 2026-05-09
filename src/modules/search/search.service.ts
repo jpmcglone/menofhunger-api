@@ -19,8 +19,11 @@ import { toCommunityGroupShellDto, type CommunityGroupShellDto } from '../../com
  *
  * Users (profiles):
  * - Exact username: 100 | Exact display name: 95
- * - Username starts with query: 85 | Display name starts with: 80
- * - Username contains: 70 | Display name contains: 65
+ * - Username starts with query: 85
+ * - All query words in name (order-independent): 88 | All words in username: 83
+ * - Display name starts with full query: 80
+ * - Username contains: 70 | Each query word is a prefix of a name-word ("ch gr"→"Chris Griffith"): 76
+ * - Display name contains: 65
  * - Bio contains full query (phrase): 60 | Bio contains all query words: 50 | Bio contains any word: 40
  *
  * Posts (mixed feed):
@@ -32,8 +35,14 @@ const USER_SCORE = {
   exactUsername: 100,
   exactName: 95,
   usernameStartsWith: 85,
+  /** All query words (≥ 2 chars each) appear anywhere in the display name — word-order-independent. */
+  nameAllWords: 88,
+  /** All query words appear anywhere in the username. */
+  usernameAllWords: 83,
   nameStartsWith: 80,
   usernameContains: 70,
+  /** Each query word is a prefix of at least one word in the display name (e.g. "ch gr" → "Chris Griffith"). */
+  nameWordPrefixes: 76,
   nameContains: 65,
   bioPhrase: 60,
   bioAllWords: 50,
@@ -107,6 +116,22 @@ function queryToWords(q: string): string[] {
   if (!trimmed) return [];
   const words = trimmed.split(/\s+/).filter((w) => w.length > 0);
   return [...new Set(words)];
+}
+
+/**
+ * Build a prefix-aware `to_tsquery` string from sanitized words.
+ * Each word gets a `:*` suffix so partial words match longer lexemes:
+ *   ["chris", "grif"] → "chris:* & grif:*"
+ *   which matches "Chris Griffith" because `griffith` starts with `grif`.
+ * Words are stripped to `[a-z0-9]` only to prevent tsquery injection.
+ * Returns null when no words survive sanitization.
+ */
+function buildPrefixTsQuery(ws: string[]): string | null {
+  const safe = ws
+    .map((w) => w.replace(/[^a-z0-9]/g, ''))
+    .filter((w) => w.length >= 1);
+  if (!safe.length) return null;
+  return safe.map((w) => `${w}:*`).join(' & ');
 }
 
 function splitSearchQuery(q: string): { hashtags: string[]; text: string } {
@@ -265,19 +290,22 @@ export class SearchService {
 
     let raw: RawUser[] = [];
 
-    // FTS has better scaling than ILIKE/contains, but it changes semantics (especially for prefixes).
-    // Keep substring/prefix matching for single-token queries (mention/autocomplete UX),
-    // switch to FTS only for multi-word queries.
-    const useFts = q.length >= 3 && words.length >= 2;
+    // FTS scales better than ILIKE but has two important caveats:
+    //   1. websearch_to_tsquery drops single-char tokens ("g" in "Chris G") so initials never match.
+    //   2. websearch_to_tsquery matches whole lexemes only — "grif" never matches "griffith".
+    // We use to_tsquery with :* prefix operators instead, which fixes both problems.
+    // Short words (< 2 chars) still fall back to ILIKE so "chris g" uses substring matching.
+    const useFts = q.length >= 4 && words.length >= 2 && words.every((w) => w.length >= 2);
+    const tsqString = useFts ? buildPrefixTsQuery(words) : null;
 
-    if (useFts) {
+    if (tsqString) {
       const cursorRow =
         cursor
           ? await this.prisma.user.findUnique({ where: { id: cursor }, select: { id: true, createdAt: true } })
           : null;
 
       raw = await this.prisma.$queryRaw<RawUser[]>(Prisma.sql`
-        WITH q AS (SELECT websearch_to_tsquery('english', ${q}) AS tsq)
+        WITH q AS (SELECT to_tsquery('english', ${tsqString}) AS tsq)
         SELECT
           u."id",
           u."createdAt",
@@ -322,24 +350,47 @@ export class SearchService {
         lookup: async (id) => await this.prisma.user.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
       });
 
+      // Words that are long enough to be meaningful for substring matching.
+      const meaningfulWords = words.filter((w) => w.length >= 2);
+
       const orConditions: any[] = [
         { username: { contains: q, mode: 'insensitive' as const } },
         { name: { contains: q, mode: 'insensitive' as const } },
         { bio: { not: null, contains: q, mode: 'insensitive' as const } },
       ];
+      // Each individual word as its own condition (e.g. "chris" or "griffith" alone).
       for (const w of words) {
         if (w === qLower) continue;
         orConditions.push({ username: { contains: w, mode: 'insensitive' as const } });
         orConditions.push({ name: { contains: w, mode: 'insensitive' as const } });
         orConditions.push({ bio: { not: null, contains: w, mode: 'insensitive' as const } });
       }
+      // All meaningful words must appear somewhere in name/username (word-order-independent).
+      // This catches "Griffith Chris" matching "Chris Griffith" and similar reversed queries.
+      if (meaningfulWords.length >= 2) {
+        orConditions.push({
+          AND: meaningfulWords.map((w) => ({ name: { contains: w, mode: 'insensitive' as const } })),
+        });
+        orConditions.push({
+          AND: meaningfulWords.map((w) => ({ username: { contains: w, mode: 'insensitive' as const } })),
+        });
+      }
       const matchClause = { OR: orConditions };
-      const nameOnlyMatch = {
+
+      // For users without a set username, also match on name alone — including multi-word.
+      const nameOnlyConditions: any[] = [{ name: { contains: q, mode: 'insensitive' as const } }];
+      if (meaningfulWords.length >= 2) {
+        nameOnlyConditions.push({
+          AND: meaningfulWords.map((w) => ({ name: { contains: w, mode: 'insensitive' as const } })),
+        });
+      }
+      const nameOnlyMatch: Prisma.UserWhereInput = {
         AND: [
           { name: { not: null } },
-          { name: { contains: q, mode: 'insensitive' as const } },
+          { OR: nameOnlyConditions },
         ],
       };
+
       const blockExclude: Prisma.UserWhereInput =
         blockedIds.size > 0 ? { id: { notIn: [...blockedIds] } } : {};
 
@@ -417,11 +468,30 @@ export class SearchService {
       const un = (u.username ?? '').trim().toLowerCase();
       const nm = (u.name ?? '').trim().toLowerCase();
       const bio = (u.bio ?? '').trim().toLowerCase();
+
       if (un === qLower) return USER_SCORE.exactUsername;
       if (nm === qLower) return USER_SCORE.exactName;
       if (un && un.startsWith(qLower)) return USER_SCORE.usernameStartsWith;
+
+      // Multi-word: all query words (≥ 2 chars) appear anywhere in name/username.
+      // Beats nameStartsWith because it's word-order-independent and more specific for
+      // queries like "Chris Griffith" or "Griffith Chris".
+      const mw = words.filter((w) => w.length >= 2);
+      if (mw.length >= 2 && nm && mw.every((w) => nm.includes(w))) return USER_SCORE.nameAllWords;
+      if (mw.length >= 2 && un && mw.every((w) => un.includes(w))) return USER_SCORE.usernameAllWords;
+
       if (nm && nm.startsWith(qLower)) return USER_SCORE.nameStartsWith;
       if (un && un.includes(qLower)) return USER_SCORE.usernameContains;
+
+      // Multi-word: each query word is a prefix of at least one word in the display name.
+      // Handles "ch gr" → "Chris Griffith", "jo sm" → "John Smith".
+      if (mw.length >= 2 && nm) {
+        const nmTokens = nm.split(/\s+/).filter(Boolean);
+        if (mw.every((qw) => nmTokens.some((nw) => nw.startsWith(qw)))) {
+          return USER_SCORE.nameWordPrefixes;
+        }
+      }
+
       if (nm && nm.includes(qLower)) return USER_SCORE.nameContains;
       if (bio && bio.includes(qLower)) return USER_SCORE.bioPhrase;
       if (words.length > 0 && words.every((w) => bio.includes(w))) return USER_SCORE.bioAllWords;

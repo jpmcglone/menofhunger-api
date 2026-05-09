@@ -164,10 +164,12 @@ export class MarvinAIService {
     // Build the initial input. The personality + tool list live in the Stored Prompt; the
     // developer note + user question travel as the "input" for this turn.
     // When images are attached, the user role uses a content-parts array; otherwise a plain string.
+    // ResponseInputImage requires `detail` (non-optional in the SDK type). Omitting it causes
+    // the API to silently ignore the image content — the model responds as if no image was sent.
     const userContent: unknown = imageUrls.length > 0
       ? [
           { type: 'input_text', text: req.userMessage },
-          ...imageUrls.map((u) => ({ type: 'input_image', image_url: u })),
+          ...imageUrls.map((u) => ({ type: 'input_image', image_url: u, detail: 'auto' })),
         ]
       : req.userMessage;
 

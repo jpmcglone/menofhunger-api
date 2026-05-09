@@ -486,7 +486,11 @@ export class AppConfigService {
     const webSearchMaxOutputTokens = this.readPositiveInt('MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS', 4096);
     // Vision is ON by default. Set MARV_VISION_ENABLED=false to disable.
     const visionEnabled = this.readBool('MARV_VISION_ENABLED', true);
-    const visionModesRaw = this.config.get<string>('MARV_VISION_MODES')?.trim() || 'regular,smart';
+    // All three model tiers support image inputs. Previously only regular,smart was default,
+    // which meant auto-routed queries landing on fast would silently drop images and Marv
+    // would claim he can't see them. fast (gpt-5.4-nano) handles vision fine; the token-budget
+    // concern only applies to web search (see webSearchModes).
+    const visionModesRaw = this.config.get<string>('MARV_VISION_MODES')?.trim() || 'fast,regular,smart';
     const visionModes = visionModesRaw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
     const visionMaxImagesPerTurn = this.readPositiveInt('MARV_VISION_MAX_IMAGES_PER_TURN', 4);
     return { apiKey, promptId, promptVersion, fastModel, regularModel, smartModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens, visionEnabled, visionModes, visionMaxImagesPerTurn };

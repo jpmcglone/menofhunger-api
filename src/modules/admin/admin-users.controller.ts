@@ -223,17 +223,41 @@ export class AdminUsersController {
 
     const raw = (q ?? '').trim();
     const cleaned = raw.startsWith('@') ? raw.slice(1) : raw;
+    const words = cleaned
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w) => w.length >= 2);
 
-    const where: Prisma.UserWhereInput | undefined = cleaned
-      ? {
-          OR: [
-            { username: { contains: cleaned, mode: 'insensitive' } },
-            { name: { contains: cleaned, mode: 'insensitive' } },
-            { email: { contains: cleaned, mode: 'insensitive' } },
-            { phone: { contains: cleaned } },
-          ],
-        }
-      : undefined;
+    let where: Prisma.UserWhereInput | undefined;
+    if (cleaned) {
+      const orConditions: Prisma.UserWhereInput[] = [
+        { username: { contains: cleaned, mode: 'insensitive' } },
+        { name: { contains: cleaned, mode: 'insensitive' } },
+        { email: { contains: cleaned, mode: 'insensitive' } },
+        { phone: { contains: cleaned } },
+      ];
+      // Each individual word (catches partial first/last name searches like "chris" or "grif").
+      for (const w of words) {
+        if (w === cleaned.toLowerCase()) continue;
+        orConditions.push({ username: { contains: w, mode: 'insensitive' } });
+        orConditions.push({ name: { contains: w, mode: 'insensitive' } });
+        orConditions.push({ email: { contains: w, mode: 'insensitive' } });
+      }
+      // All words must appear in the same field — catches word-order-independent queries
+      // like "Griffith Chris" or "Chris G" matching "Chris Griffith".
+      if (words.length >= 2) {
+        orConditions.push({
+          AND: words.map((w) => ({ name: { contains: w, mode: 'insensitive' as const } })),
+        });
+        orConditions.push({
+          AND: words.map((w) => ({ username: { contains: w, mode: 'insensitive' as const } })),
+        });
+        orConditions.push({
+          AND: words.map((w) => ({ email: { contains: w, mode: 'insensitive' as const } })),
+        });
+      }
+      where = { OR: orConditions };
+    }
 
     const users = await this.prisma.user.findMany({
       where,
