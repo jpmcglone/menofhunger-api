@@ -6,6 +6,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { PresenceService } from '../presence/presence.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { ViewerContextService } from '../viewer/viewer-context.service';
@@ -80,6 +81,7 @@ export class NotificationsService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly presence: PresenceService,
     private readonly jobs: JobsService,
     private readonly posthog: PosthogService,
     private readonly viewerContextService: ViewerContextService,
@@ -1367,6 +1369,12 @@ export class NotificationsService {
       if (!prefs.pushMessage) return;
     } catch {
       // Best-effort: if prefs read fails, still attempt push (default behavior).
+    }
+    if (this.presence.isUserViewingConversation(params.recipientUserId, params.conversationId)) {
+      this.logger.debug(
+        `[push] Skipping DM push — recipient ${params.recipientUserId} is viewing conversation ${params.conversationId}`,
+      );
+      return;
     }
     const sender = (params.senderName ?? '').trim();
     const title = sender ? `New message from ${sender}` : 'New message';

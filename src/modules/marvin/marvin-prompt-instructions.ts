@@ -54,7 +54,17 @@ export const MARV_THREAD_TOOL_FALLBACK =
 
 /** DM-source context tool hint. */
 export const MARV_DM_CONTEXT_HINT =
-  'You may use get_my_recent_chat_messages for prior context in this conversation only. ';
+  'You may use get_my_recent_chat_messages to retrieve prior messages in this conversation. ';
+
+/**
+ * Reminds Marv that user profile lookup tools are always available, even in DM context.
+ * Without this hint the model sometimes hallucinates that user lookups are "not available
+ * in this session" when the user asks about another member by @username.
+ */
+export const MARV_USER_LOOKUP_HINT =
+  'To learn about any platform member by username, call get_user_basic_info (tier, join date) ' +
+  'or get_user_context_card (detailed profile + public post summary). ' +
+  'These tools work in any context — DM, thread, or otherwise.';
 
 /** Appended to thread replies when pre-fetched context is already injected. */
 export const MARV_THREAD_TOOL_OPTIONAL =

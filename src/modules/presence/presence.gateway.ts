@@ -1443,11 +1443,13 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   @SubscribeMessage('messages:screen')
-  handleMessagesScreen(client: Socket, payload: { active?: boolean }): void {
+  handleMessagesScreen(client: Socket, payload: { active?: boolean; conversationId?: string }): void {
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
     const active = payload?.active !== false;
     this.presence.setChatScreenActive(client.id, active);
+    const convId = active && payload?.conversationId ? payload.conversationId : null;
+    this.presence.setActiveConversation(client.id, convId);
   }
 
   @SubscribeMessage('presence:logout')

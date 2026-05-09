@@ -296,6 +296,14 @@ export class MarvinPublicReplyProcessor {
       this.logger.log(
         `[marv] public-reply EXIT reason=${errorCode} user=${requestingUserId} hour=${pastHourCount}/${limits.publicMaxPerUserPerHour} day=${pastDayCount}/${limits.publicMaxPerUserPerDay} cooldownActive=${!!cooldownActive}`,
       );
+      // Notify the user via DM so they know why Marv didn't reply in the thread.
+      // No extra dedup needed — the BullMQ job is idempotent per postId, so this
+      // method is called at most once per triggering post.
+      await this.canned.sendRateLimitedDm({
+        userId: requestingUserId,
+        kind: overDaily ? 'daily' : cooldownActive ? 'thread_cooldown' : 'per10min',
+        triggeringPostId: postId,
+      });
       await this.usage.recordEvent({
         userId: requestingUserId,
         source: 'public_thread',

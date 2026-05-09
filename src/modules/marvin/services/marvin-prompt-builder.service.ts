@@ -7,6 +7,7 @@ import {
   MARV_NO_PROACTIVE_OFFERS,
   MARV_THREAD_TOOL_FALLBACK,
   MARV_THREAD_TOOL_OPTIONAL,
+  MARV_USER_LOOKUP_HINT,
   MARV_WEB_SEARCH_REQUIRED,
 } from '../marvin-prompt-instructions';
 
@@ -172,7 +173,7 @@ export class MarvinPromptBuilderService {
     } else {
       lines.push('Source: private DM session with the user.');
       if (input.conversationId) lines.push(`Conversation id: ${input.conversationId}.`);
-      lines.push(MARV_DM_CONTEXT_HINT + MARV_CONCISENESS + ' ' + MARV_NO_PROACTIVE_OFFERS);
+      lines.push(MARV_DM_CONTEXT_HINT + MARV_USER_LOOKUP_HINT + MARV_CONCISENESS + ' ' + MARV_NO_PROACTIVE_OFFERS);
     }
 
     lines.push(`Requester: ${requesterDisplay} ${requesterHandle} (id: ${input.requester.userId}).`);

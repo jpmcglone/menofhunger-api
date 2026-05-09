@@ -38,6 +38,8 @@ export class PresenceService {
   private readonly onlineFeedListeners = new Set<string>();
   /** socketIds that are currently on chat screens */
   private readonly chatScreenListeners = new Set<string>();
+  /** socketId -> conversationId the user is actively viewing */
+  private readonly activeConversationBySocket = new Map<string, string>();
   /** userIds currently marked idle (no activity for X time); still online, shown with clock */
   private readonly idleUserIds = new Set<string>();
   /** userId -> last time we persisted lastSeenAt (ms). */
@@ -273,6 +275,7 @@ export class PresenceService {
     this.socketSubscriptions.delete(socketId);
     this.onlineFeedListeners.delete(socketId);
     this.chatScreenListeners.delete(socketId);
+    this.activeConversationBySocket.delete(socketId);
     this.removeSocketFromUserSubscribers(socketId);
 
     const meta = this.socketMeta.get(socketId);
@@ -300,6 +303,7 @@ export class PresenceService {
     this.socketSubscriptions.delete(socketId);
     this.onlineFeedListeners.delete(socketId);
     this.chatScreenListeners.delete(socketId);
+    this.activeConversationBySocket.delete(socketId);
     this.removeSocketFromUserSubscribers(socketId);
 
     const meta = this.socketMeta.get(socketId);
@@ -453,5 +457,27 @@ export class PresenceService {
     const socketIds = this.userSockets.get(userId);
     if (!socketIds) return [];
     return Array.from(socketIds).filter((id) => this.chatScreenListeners.has(id));
+  }
+
+  /** Record (or clear) which conversation a socket is actively viewing. */
+  setActiveConversation(socketId: string, conversationId: string | null): void {
+    if (conversationId) {
+      this.activeConversationBySocket.set(socketId, conversationId);
+    } else {
+      this.activeConversationBySocket.delete(socketId);
+    }
+  }
+
+  /**
+   * Returns true if any socket for the given user is currently viewing the given conversation.
+   * Used to suppress web push when the recipient already has the chat open.
+   */
+  isUserViewingConversation(userId: string, conversationId: string): boolean {
+    const socketIds = this.userSockets.get(userId);
+    if (!socketIds) return false;
+    for (const id of socketIds) {
+      if (this.activeConversationBySocket.get(id) === conversationId) return true;
+    }
+    return false;
   }
 }

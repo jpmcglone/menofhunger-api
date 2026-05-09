@@ -178,6 +178,7 @@ function makeProcessor(opts?: {
     sendOutOfCreditsDm: jest.fn(async () => ({ conversationId: 'c-1', messageId: 'm-1' })),
     sendNotConfiguredDm: jest.fn(async () => ({ conversationId: 'c-1', messageId: 'm-not-configured' })),
     sendTransientErrorDm: jest.fn(async () => undefined),
+    sendRateLimitedDm: jest.fn(async () => undefined),
   };
 
   const presenceRealtime: any = {
@@ -444,7 +445,7 @@ describe('MarvinPrivateReplyProcessor', () => {
     });
   });
 
-  it('honors private rate-limit (per-day)', async () => {
+  it('honors private rate-limit (per-day) and sends a canned DM', async () => {
     const m = makeProcessor();
     m.usage.countRecent
       .mockResolvedValueOnce(2) // 10-min window
@@ -454,7 +455,7 @@ describe('MarvinPrivateReplyProcessor', () => {
       messageId: 'm-1',
       requestingUserId: 'u-requester',
     });
-    expect(m.messages.sendBotDirectMessage).not.toHaveBeenCalled();
+    expect(m.canned.sendRateLimitedDm).toHaveBeenCalledWith({ userId: 'u-requester', kind: 'daily' });
     expect(m.usage.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 'rate_limit_daily' }),
     );

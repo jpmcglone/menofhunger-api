@@ -36,6 +36,7 @@ function makeService(overrides?: { prisma?: any }) {
     emitNotificationsUpdated: jest.fn(),
     emitNotificationNew: jest.fn(),
   } as any;
+  const presence = { isUserViewingConversation: jest.fn(() => false) } as any;
   const jobs = { enqueueCron: jest.fn(async () => undefined) } as any;
   const posthog = { capture: jest.fn() } as any;
   const viewerContextService = {
@@ -43,7 +44,7 @@ function makeService(overrides?: { prisma?: any }) {
     allowedPostVisibilities: jest.fn(() => ['public', 'verifiedOnly', 'premiumOnly']),
   } as any;
 
-  const svc = new NotificationsService(prisma, appConfig, presenceRealtime, jobs, posthog, viewerContextService);
+  const svc = new NotificationsService(prisma, appConfig, presenceRealtime, presence, jobs, posthog, viewerContextService);
   return { svc, prisma };
 }
 
@@ -518,6 +519,7 @@ describe('NotificationsService.markNewPostsRead', () => {
       prisma as any,
       { r2: jest.fn(() => null) } as any,
       presenceRealtime as any,
+      { isUserViewingConversation: jest.fn(() => false) } as any,
       { enqueueCron: jest.fn(async () => undefined) } as any,
       { capture: jest.fn() } as any,
       { getViewer: jest.fn(async () => null) } as any,
@@ -594,7 +596,8 @@ describe('NotificationsService.upsertGroupMemberJoinedNotification', () => {
     const posthog = { capture: jest.fn() } as any;
     const viewerContextService = { getViewer: jest.fn(async () => null) } as any;
 
-    const svc = new NotificationsService(prisma, appConfig, presenceRealtime, jobs, posthog, viewerContextService);
+    const presence = { isUserViewingConversation: jest.fn(() => false) } as any;
+    const svc = new NotificationsService(prisma, appConfig, presenceRealtime, presence, jobs, posthog, viewerContextService);
     return { svc, prisma, presenceRealtime };
   }
 
@@ -703,6 +706,7 @@ describe('NotificationsService.upsertMessageNotification', () => {
       prisma,
       { r2: jest.fn(() => null) } as any,
       presenceRealtime,
+      { isUserViewingConversation: jest.fn(() => false) } as any,
       { enqueueCron: jest.fn() } as any,
       { capture: jest.fn() } as any,
       { getViewer: jest.fn(async () => null) } as any,
@@ -764,6 +768,7 @@ describe('NotificationsService.upsertMessageNotification', () => {
       prisma,
       { r2: jest.fn(() => null) } as any,
       presenceRealtime,
+      { isUserViewingConversation: jest.fn(() => false) } as any,
       { enqueueCron: jest.fn() } as any,
       { capture: jest.fn() } as any,
       { getViewer: jest.fn(async () => null) } as any,

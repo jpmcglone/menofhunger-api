@@ -211,6 +211,61 @@ export class MarvinCannedRepliesService {
   }
 
   /**
+   * DM the user that they've been rate-limited.
+   *
+   * Works for two contexts:
+   *  - **DM context** (`triggeringPostId` omitted): "You've hit your daily limit…"
+   *  - **Thread context** (`triggeringPostId` provided): "I saw your post [link] but
+   *    couldn't reply because [reason]." This is how Marv surfaces public-thread rate
+   *    limits without polluting the thread itself.
+   *
+   * Natural dedup: BullMQ job idempotency (keyed by postId for threads, messageId for DMs)
+   * guarantees the job runs at most once per triggering event, so this method is called
+   * at most once per event with no extra dedup layer required.
+   */
+  async sendRateLimitedDm(args: {
+    userId: string;
+    kind: 'daily' | 'per10min' | 'thread_cooldown';
+    triggeringPostId?: string | null;
+  }): Promise<void> {
+    const marvId = await this.identity.getMarvUserId();
+    if (!marvId || args.userId === marvId) return;
+
+    let body: string;
+    if (args.triggeringPostId) {
+      const postLink = this.postUrl(args.triggeringPostId);
+      const reason =
+        args.kind === 'daily'
+          ? "you've hit your daily Marv limit. Try again tomorrow — the counter resets at midnight."
+          : args.kind === 'thread_cooldown'
+            ? "I just replied in that thread recently. Give it a few minutes and try again."
+            : "you've sent a lot of mentions in a short window. Try again in a bit.";
+      body = `I saw your [post](${postLink}) but couldn't reply — ${reason}`;
+    } else {
+      body =
+        args.kind === 'daily'
+          ? "You've hit your daily message limit with me. Try again tomorrow — the counter resets at midnight."
+          : "You've sent a lot of messages in a short window. Give it a few minutes and try again.";
+    }
+
+    try {
+      const result = await this.messages.sendBotDirectMessage({
+        botUserId: marvId,
+        recipientUserId: args.userId,
+        body,
+        media: [],
+      });
+      this.logger.log(
+        `[marv-canned] rate-limited DM SENT kind=${args.kind} post=${args.triggeringPostId ?? 'dm'} user=${args.userId} msg=${result?.message?.id ?? '?'}`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `[marv-canned] rate-limited DM FAILED: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
    * DM the user that Marv hit a transient error and they should try again.
    * Sent when the AI call returned no text (e.g. max_output_tokens exhausted
    * after retry, or an unexpected empty completion) so the user isn't left

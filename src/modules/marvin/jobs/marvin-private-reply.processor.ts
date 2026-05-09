@@ -16,6 +16,7 @@ import { PresenceRealtimeService } from '../../presence/presence-realtime.servic
 import { MARV_ERROR_CODES, buildMarvIdempotencyKey } from '../marvin.constants';
 import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
 import { publicAssetUrl } from '../../../common/assets/public-asset-url';
+import { parseMentionsFromBody } from '../../../common/mentions/mention-regex';
 
 /**
  * How often to re-emit `messages:typing` while the AI call is in flight.
@@ -323,13 +324,15 @@ export class MarvinPrivateReplyProcessor {
       }),
     ]);
     if (past10MinCount >= limits.privateMaxPer10Minutes || pastDayCount >= limits.privateMaxPerUserPerDay) {
-      const errorCode =
-        pastDayCount >= limits.privateMaxPerUserPerDay
-          ? MARV_ERROR_CODES.rateLimitDaily
-          : MARV_ERROR_CODES.rateLimitHourly;
+      const isDaily = pastDayCount >= limits.privateMaxPerUserPerDay;
+      const errorCode = isDaily ? MARV_ERROR_CODES.rateLimitDaily : MARV_ERROR_CODES.rateLimitHourly;
       this.logger.log(
         `[marv] private-reply EXIT reason=${errorCode} user=${requestingUserId} 10min=${past10MinCount}/${limits.privateMaxPer10Minutes} day=${pastDayCount}/${limits.privateMaxPerUserPerDay}`,
       );
+      await this.canned.sendRateLimitedDm({
+        userId: requestingUserId,
+        kind: isDaily ? 'daily' : 'per10min',
+      });
       await this.usage.recordEvent({
         userId: requestingUserId,
         source: 'private_session',
@@ -416,6 +419,13 @@ export class MarvinPrivateReplyProcessor {
     const previewBodies = [text, msg.replyTo?.body ?? ''].filter(Boolean).join('\n');
     const linkPreviews = await this.linkMetadata.previewLinks(previewBodies);
 
+    // Extract @username mentions from the message (and replyTo) so Marv knows which
+    // users are referenced and can call get_user_context_card / get_user_basic_info.
+    const marvLower = this.identity.marvUsernameLower();
+    const mentionBodies = [text, msg.replyTo?.body ?? ''].filter(Boolean).join('\n');
+    const referencedUsernames = parseMentionsFromBody(mentionBodies)
+      .filter((u) => u.toLowerCase() !== marvLower);
+
     const built = this.promptBuilder.build({
       source: 'private_session',
       requester: {
@@ -425,6 +435,7 @@ export class MarvinPrivateReplyProcessor {
       },
       currentQuestion: text,
       conversationId,
+      referencedUsernames: referencedUsernames.length > 0 ? referencedUsernames : undefined,
       crisisDetected: routed.crisisDetected,
       webSearchDemanded: routed.webSearchDemanded,
       linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,

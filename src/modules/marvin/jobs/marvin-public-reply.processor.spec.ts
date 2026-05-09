@@ -177,6 +177,7 @@ function makeProcessor(opts?: {
     sendNonPremiumThreadReply: jest.fn(async () => 'reply-1'),
     sendOutOfCreditsDm: jest.fn(async () => ({ conversationId: 'c-1', messageId: 'm-1' })),
     sendNotConfiguredThreadReply: jest.fn(async () => 'reply-not-configured'),
+    sendRateLimitedDm: jest.fn(async () => undefined),
   };
 
   const jobs: any = { enqueue: jest.fn(async () => undefined) };
@@ -363,7 +364,7 @@ describe('MarvinPublicReplyProcessor', () => {
     );
   });
 
-  it('honors rate limits (per-day)', async () => {
+  it('honors rate limits (per-day) and DMs the user with a post link', async () => {
     const m = makeProcessor();
     m.usage.countRecent
       .mockResolvedValueOnce(2) // hourly
@@ -374,12 +375,17 @@ describe('MarvinPublicReplyProcessor', () => {
       requestingUserId: 'u-requester',
     });
     expect(m.posts.createPost).not.toHaveBeenCalled();
+    expect(m.canned.sendRateLimitedDm).toHaveBeenCalledWith({
+      userId: 'u-requester',
+      kind: 'daily',
+      triggeringPostId: 'p-1',
+    });
     expect(m.usage.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 'rate_limit_daily' }),
     );
   });
 
-  it('honors per-thread cooldown', async () => {
+  it('honors per-thread cooldown and DMs the user with a post link', async () => {
     const m = makeProcessor();
     m.usage.getLastReplyAtForRoot.mockResolvedValueOnce(new Date(Date.now() - 1000));
     await m.processor.process({
@@ -388,6 +394,11 @@ describe('MarvinPublicReplyProcessor', () => {
       requestingUserId: 'u-requester',
     });
     expect(m.posts.createPost).not.toHaveBeenCalled();
+    expect(m.canned.sendRateLimitedDm).toHaveBeenCalledWith({
+      userId: 'u-requester',
+      kind: 'thread_cooldown',
+      triggeringPostId: 'p-1',
+    });
     expect(m.usage.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 'thread_cooldown' }),
     );
