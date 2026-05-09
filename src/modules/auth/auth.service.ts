@@ -27,10 +27,14 @@ const SESSION_FULL_CACHE_TTL_MS = 30_000;
 /**
  * Translate a Twilio Verify API error into a user-facing message.
  *
- * Twilio error codes relevant to phone auth:
+ * Common Twilio Verify error codes:
  *   60082 – Geographic permission not enabled for this destination.
+ *   60033 – Invalid phone number for this region.
+ *   60034 – Invalid destination country.
  *   60083 – Carrier blocked the message.
- *   60033/60034 – Invalid/unsupported destination.
+ *   21211 – Invalid 'To' phone number (malformed E.164).
+ *   21614 – Not a valid mobile number.
+ *   21612 – Destination not reachable via SMS.
  *
  * When none of these match we fall back to a generic retry message so we
  * don't accidentally leak internal details.
@@ -40,10 +44,20 @@ function twilioUserMessage(err: unknown): string {
   if (code === 60082 || code === 60033 || code === 60034) {
     return 'SMS is not available for this phone number or region. Double-check your country code and number, or contact support.';
   }
-  if (code === 60083) {
+  if (code === 60083 || code === 21612) {
     return 'Your carrier blocked the verification message. Please try a different number or contact support.';
   }
+  if (code === 21211 || code === 21614) {
+    return 'That doesn\'t look like a valid mobile number. For international numbers include your country code (e.g. +44 7911 123456).';
+  }
   return 'Failed to send the verification code. Please try again in a moment.';
+}
+
+function twilioLogDetails(err: unknown): string {
+  const code = (err as any)?.code;
+  const status = (err as any)?.status;
+  const message = (err as any)?.message;
+  return `twilioCode=${code ?? 'unknown'} httpStatus=${status ?? 'unknown'} msg="${message ?? ''}"`;
 }
 
 export interface SessionResult {
@@ -114,7 +128,7 @@ export class AuthService {
       try {
         await this.otpProvider.start(phone);
       } catch (err) {
-        this.logger.error(`Twilio Verify start failed for phone=${this.maskPhone(phone)}`, (err as Error)?.stack);
+        this.logger.error(`Twilio Verify start failed for phone=${this.maskPhone(phone)} ${twilioLogDetails(err)}`, (err as Error)?.stack);
         throw new ServiceUnavailableException(twilioUserMessage(err));
       }
     } else {
@@ -192,7 +206,7 @@ export class AuthService {
           if (!ok) throw new BadRequestException('Invalid code. Please try again.');
         } catch (err) {
           if (err instanceof BadRequestException) throw err;
-          this.logger.error(`Twilio Verify check failed for phone=${this.maskPhone(phone)}`, (err as Error)?.stack);
+          this.logger.error(`Twilio Verify check failed for phone=${this.maskPhone(phone)} ${twilioLogDetails(err)}`, (err as Error)?.stack);
           throw new ServiceUnavailableException(twilioUserMessage(err));
         }
       } else {

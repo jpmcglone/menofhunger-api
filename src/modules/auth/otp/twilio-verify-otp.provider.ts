@@ -23,7 +23,7 @@ export class TwilioVerifyOtpProvider implements OtpProvider {
     const ctx = this.getClient();
     if (!ctx) throw new Error('Twilio Verify is not configured');
 
-    this.logger.log('Starting Verify SMS');
+    this.logger.log(`Starting Verify SMS to=${to}`);
     await ctx.client.verify.v2
       .services(ctx.cfg.verifyServiceSid)
       .verifications.create({ to, channel: 'sms' });
@@ -33,6 +33,7 @@ export class TwilioVerifyOtpProvider implements OtpProvider {
     const ctx = this.getClient();
     if (!ctx) throw new Error('Twilio Verify is not configured');
 
+    this.logger.log(`Checking Verify code to=${to}`);
     const result = await ctx.client.verify.v2
       .services(ctx.cfg.verifyServiceSid)
       .verificationChecks.create({ to, code });
