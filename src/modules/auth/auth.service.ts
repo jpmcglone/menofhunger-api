@@ -24,6 +24,28 @@ import { RequestCacheService } from '../../common/cache/request-cache.service';
 /** TTL for the full session cache (auth guards). Short enough to pick up bans/revocations quickly. */
 const SESSION_FULL_CACHE_TTL_MS = 30_000;
 
+/**
+ * Translate a Twilio Verify API error into a user-facing message.
+ *
+ * Twilio error codes relevant to phone auth:
+ *   60082 – Geographic permission not enabled for this destination.
+ *   60083 – Carrier blocked the message.
+ *   60033/60034 – Invalid/unsupported destination.
+ *
+ * When none of these match we fall back to a generic retry message so we
+ * don't accidentally leak internal details.
+ */
+function twilioUserMessage(err: unknown): string {
+  const code = typeof (err as any)?.code === 'number' ? (err as any).code as number : null;
+  if (code === 60082 || code === 60033 || code === 60034) {
+    return 'SMS is not available for this phone number or region. Double-check your country code and number, or contact support.';
+  }
+  if (code === 60083) {
+    return 'Your carrier blocked the verification message. Please try a different number or contact support.';
+  }
+  return 'Failed to send the verification code. Please try again in a moment.';
+}
+
 export interface SessionResult {
   user: ReturnType<typeof toUserDto>;
   sessionId: string;
@@ -93,7 +115,7 @@ export class AuthService {
         await this.otpProvider.start(phone);
       } catch (err) {
         this.logger.error(`Twilio Verify start failed for phone=${this.maskPhone(phone)}`, (err as Error)?.stack);
-        throw new ServiceUnavailableException('SMS login is not configured yet. Please try again later.');
+        throw new ServiceUnavailableException(twilioUserMessage(err));
       }
     } else {
       this.logger.warn(
@@ -171,7 +193,7 @@ export class AuthService {
         } catch (err) {
           if (err instanceof BadRequestException) throw err;
           this.logger.error(`Twilio Verify check failed for phone=${this.maskPhone(phone)}`, (err as Error)?.stack);
-          throw new ServiceUnavailableException('SMS login is not configured yet. Please try again later.');
+          throw new ServiceUnavailableException(twilioUserMessage(err));
         }
       } else {
         throw new ServiceUnavailableException('SMS login is not configured yet. Please try again later.');
