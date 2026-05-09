@@ -1,5 +1,5 @@
 import { DeleteObjectCommand, ListObjectsV2Command, type ListObjectsV2CommandOutput, S3Client } from '@aws-sdk/client-s3';
-import { BadRequestException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { Prisma, type PostMediaKind } from '@prisma/client';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -43,6 +43,7 @@ function decodeCursor(token: string | null): CursorToken | null {
 
 @Injectable()
 export class AdminImageReviewService {
+  private readonly logger = new Logger(AdminImageReviewService.name);
   private readonly s3: S3Client | null;
   private readonly bucket: string | null;
 
@@ -426,6 +427,36 @@ export class AdminImageReviewService {
       // Tombstone exists; report failure so admin can retry.
       return { success: true, alreadyDeleted: false, r2Deleted: false, error: String((e as any)?.message ?? e), ...affectedCounts };
     }
+  }
+
+  /**
+   * Bulk-delete up to 200 assets in one admin action. Skips already-deleted
+   * assets silently; collects errors per-id so one bad id doesn't abort the batch.
+   */
+  async deleteManyByIds(params: {
+    ids: string[];
+    adminUserId: string;
+    reason: string;
+  }): Promise<{ deleted: number; skipped: number; errors: Array<{ id: string; message: string }> }> {
+    const ids = [...new Set(params.ids.map((id) => id.trim()).filter(Boolean))].slice(0, 200);
+    let deleted = 0;
+    let skipped = 0;
+    const errors: Array<{ id: string; message: string }> = [];
+
+    for (const id of ids) {
+      try {
+        const result = await this.deleteById({ id, adminUserId: params.adminUserId, reason: params.reason });
+        if (result.alreadyDeleted) skipped += 1;
+        else deleted += 1;
+      } catch (err) {
+        errors.push({ id, message: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    this.logger.log(
+      `[media-review] bulk-delete admin=${params.adminUserId} requested=${ids.length} deleted=${deleted} skipped=${skipped} errors=${errors.length}`,
+    );
+    return { deleted, skipped, errors };
   }
 
   // Small helper for controllers to parse booleans without duplicating logic.

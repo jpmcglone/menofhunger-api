@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { z } from 'zod';
 import { AdminGuard, type AdminRequest } from './admin.guard';
@@ -15,6 +15,11 @@ const listSchema = z.object({
 });
 
 const deleteSchema = z.object({
+  reason: z.string().trim().min(1).max(200),
+});
+
+const bulkDeleteSchema = z.object({
+  ids: z.array(z.string().trim().min(1)).min(1).max(200),
   reason: z.string().trim().min(1).max(200),
 });
 
@@ -41,6 +46,14 @@ export class AdminImageReviewController {
   @Get(':assetId')
   async get(@Param('assetId') assetId: string) {
     const result = await this.svc.getById(assetId);
+    return { data: result };
+  }
+
+  @Post('bulk-delete')
+  async bulkDel(@Req() req: Request, @Body() body: unknown) {
+    const parsed = bulkDeleteSchema.parse(body);
+    const adminUserId = (req as AdminRequest).user?.id ?? '';
+    const result = await this.svc.deleteManyByIds({ ids: parsed.ids, adminUserId, reason: parsed.reason });
     return { data: result };
   }
 

@@ -293,14 +293,18 @@ export class MarvinAdminService {
 
   /**
    * Aggregates daily totals across all users for the admin dashboard chart.
-   * Reads the per-(user, mode) rollups produced by `MarvinCostRollupProcessor`
-   * and sums them on the fly so we don't have to maintain a duplicate global
-   * row in the table.
+   *
+   * Historical days come from the pre-aggregated `MarvinCostRollup` table (written
+   * by the nightly cron). Today's data is always live-queried from `MarvinUsageEvent`
+   * so the chart reflects the current day without waiting for the next cron run.
    */
   async listDailyCostRollups(args: { sinceDays?: number } = {}): Promise<MarvDailyCostRow[]> {
     const days = Math.min(90, Math.max(1, args.sinceDays ?? 30));
     const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
     const cutoffKey = toDayKey(new Date(cutoffMs));
+    const todayKey = toDayKey(new Date());
+
+    // Historical rollups (nightly cron covers previous days, never today).
     const grouped = await this.prisma.marvinCostRollup.groupBy({
       by: ['dayKey'],
       where: { dayKey: { gte: cutoffKey } },
@@ -313,7 +317,7 @@ export class MarvinAdminService {
       },
       orderBy: { dayKey: 'asc' },
     });
-    return grouped.map((g) => ({
+    const rows: MarvDailyCostRow[] = grouped.map((g) => ({
       dayKey: g.dayKey,
       totalRequests: g._sum.totalRequests ?? 0,
       totalCreditsSpent: g._sum.totalCreditsSpent ?? 0,
@@ -321,6 +325,30 @@ export class MarvinAdminService {
       totalOutputTokens: g._sum.totalOutputTokens ?? 0,
       totalCostUsd: g._sum.totalCostUsd ? Number(g._sum.totalCostUsd) : 0,
     }));
+
+    // Live data for today — queried directly so it's always up to date.
+    const todayStart = new Date(`${todayKey}T00:00:00.000Z`);
+    const todayAgg = await this.prisma.marvinUsageEvent.aggregate({
+      where: { createdAt: { gte: todayStart }, errorCode: null },
+      _count: { _all: true },
+      _sum: { creditsSpent: true, inputTokens: true, outputTokens: true, estimatedCostUsd: true },
+    });
+    if (todayAgg._count._all > 0) {
+      // Replace any partial rollup for today (cron shouldn't produce one, but be safe).
+      const existingIdx = rows.findIndex((r) => r.dayKey === todayKey);
+      const todayRow: MarvDailyCostRow = {
+        dayKey: todayKey,
+        totalRequests: todayAgg._count._all,
+        totalCreditsSpent: todayAgg._sum.creditsSpent ?? 0,
+        totalInputTokens: todayAgg._sum.inputTokens ?? 0,
+        totalOutputTokens: todayAgg._sum.outputTokens ?? 0,
+        totalCostUsd: todayAgg._sum.estimatedCostUsd ? Number(todayAgg._sum.estimatedCostUsd) : 0,
+      };
+      if (existingIdx >= 0) rows[existingIdx] = todayRow;
+      else rows.push(todayRow);
+    }
+
+    return rows;
   }
 }
 
