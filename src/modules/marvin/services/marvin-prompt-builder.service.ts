@@ -24,6 +24,8 @@ export type MarvThreadPost = {
   createdAt: string;
   /** True when this is the post that contained the @marv mention. */
   isTriggeringPost?: boolean;
+  /** True when Marv himself wrote this post. The model should treat it as its own prior reply. */
+  isMarv?: boolean;
   /**
    * For check-in posts: the daily prompt the author was responding to
    * (e.g. "What are you grateful for today?").
@@ -118,13 +120,20 @@ export class MarvinPromptBuilderService {
       if (input.threadContext && input.threadContext.length > 0) {
         lines.push('Thread (oldest → newest):');
         for (const p of input.threadContext) {
-          const handle = p.authorUsername ? `@${p.authorUsername}` : (p.authorDisplayName ?? 'unknown');
+          const handle = p.isMarv
+            ? '[YOU previously said]'
+            : p.authorUsername
+              ? `@${p.authorUsername}`
+              : (p.authorDisplayName ?? 'unknown');
           const tag = p.isTriggeringPost ? ' [← this message mentions you]' : '';
           if (p.checkinPrompt) {
             lines.push(`  [Daily check-in prompt]: "${p.checkinPrompt.slice(0, 300)}"`);
           }
           lines.push(`  ${handle}${tag}: "${p.body.slice(0, 500)}"`);
         }
+        lines.push(
+          'Do not repeat or paraphrase what YOU previously said. Build on it or answer the new question.',
+        );
         lines.push(MARV_THREAD_TOOL_OPTIONAL + MARV_CONCISENESS);
       } else {
         lines.push(MARV_THREAD_TOOL_FALLBACK + MARV_CONCISENESS);

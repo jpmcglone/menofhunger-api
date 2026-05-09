@@ -165,7 +165,7 @@ export class MarvinPrivateReplyProcessor {
         body: true,
         senderId: true,
         sender: {
-          select: { id: true, username: true, name: true, premium: true, premiumPlus: true },
+          select: { id: true, username: true, name: true, premium: true, premiumPlus: true, bannedAt: true },
         },
       },
     });
@@ -173,6 +173,21 @@ export class MarvinPrivateReplyProcessor {
       this.logger.log(
         `[marv] private-reply EXIT reason=message_missing_or_mismatch msg=${messageId} found=${!!msg}`,
       );
+      return;
+    }
+    if (msg.sender.bannedAt) {
+      this.logger.log(`[marv] private-reply EXIT reason=user_banned user=${requestingUserId}`);
+      await this.usage.recordEvent({
+        userId: requestingUserId,
+        source: 'private_session',
+        sourceId: conversationId,
+        rootPostId: null,
+        requestedMode: payload.requestedMode ?? settings?.preferredMode ?? 'auto',
+        effectiveMode: payload.requestedMode ?? settings?.preferredMode ?? 'auto',
+        creditsSpent: 0,
+        errorCode: MARV_ERROR_CODES.userBanned,
+        latencyMs: Date.now() - startedAt,
+      });
       return;
     }
 
@@ -564,7 +579,7 @@ export class MarvinPrivateReplyProcessor {
       rootPostId: null,
       requestedMode,
       effectiveMode,
-      creditsSpent: cost,
+      creditsSpent: totalCost,
       modelUsed: aiResult.modelUsed,
       routingReason: routed.reason,
       responseId: aiResult.responseId,
@@ -577,7 +592,7 @@ export class MarvinPrivateReplyProcessor {
     });
 
     this.logger.log(
-      `[marv] private-reply ok user=${requestingUserId} convo=${conversationId} cost=${cost}`,
+      `[marv] private-reply ok user=${requestingUserId} convo=${conversationId} cost=${totalCost} (mode=${cost} + webSearch=${webSearchSurcharge})`,
     );
   }
 

@@ -123,7 +123,7 @@ export class MarvinPublicReplyProcessor {
         rootId: true,
         userId: true,
         user: {
-          select: { id: true, username: true, name: true, premium: true, premiumPlus: true },
+          select: { id: true, username: true, name: true, premium: true, premiumPlus: true, bannedAt: true },
         },
         mentions: {
           select: { user: { select: { id: true, username: true } } },
@@ -132,6 +132,21 @@ export class MarvinPublicReplyProcessor {
     });
     if (!post) {
       this.logger.log(`[marv] public-reply EXIT reason=post_missing post=${postId}`);
+      return;
+    }
+    if (post.user.bannedAt) {
+      this.logger.log(`[marv] public-reply EXIT reason=user_banned user=${requestingUserId}`);
+      await this.usage.recordEvent({
+        userId: requestingUserId,
+        source: 'public_thread',
+        sourceId: postId,
+        rootPostId,
+        requestedMode: payload.requestedMode ?? settings?.preferredMode ?? 'auto',
+        effectiveMode: payload.requestedMode ?? settings?.preferredMode ?? 'auto',
+        creditsSpent: 0,
+        errorCode: MARV_ERROR_CODES.userBanned,
+        latencyMs: Date.now() - startedAt,
+      });
       return;
     }
     if (post.visibility === 'onlyMe') {
@@ -527,7 +542,7 @@ export class MarvinPublicReplyProcessor {
       rootPostId,
       requestedMode,
       effectiveMode: effectiveMode,
-      creditsSpent: cost,
+      creditsSpent: totalCost,
       modelUsed: aiResult.modelUsed,
       routingReason: routed.reason,
       responseId: aiResult.responseId,
@@ -540,7 +555,7 @@ export class MarvinPublicReplyProcessor {
     });
 
     this.logger.log(
-      `[marv] public-reply ok user=${requestingUserId} post=${postId} reply=${createdPostId} cost=${cost}`,
+      `[marv] public-reply ok user=${requestingUserId} post=${postId} reply=${createdPostId} cost=${totalCost} (mode=${cost} + webSearch=${webSearchSurcharge})`,
     );
 
     // Fire-and-forget: keep the thread summary fresh for future Marv replies.
@@ -564,6 +579,7 @@ export class MarvinPublicReplyProcessor {
    */
   private async fetchThreadContext(rootPostId: string, triggeringPostId: string): Promise<MarvThreadPost[]> {
     try {
+      const marvUserId = await this.identity.getMarvUserId();
       const [root, replies] = await Promise.all([
         this.prisma.post.findFirst({
           where: { id: rootPostId, deletedAt: null, visibility: { not: 'onlyMe' } },
@@ -572,6 +588,7 @@ export class MarvinPublicReplyProcessor {
             body: true,
             createdAt: true,
             checkinPrompt: true,
+            userId: true,
             user: { select: { username: true, name: true } },
           },
         }),
@@ -582,6 +599,7 @@ export class MarvinPublicReplyProcessor {
             body: true,
             createdAt: true,
             checkinPrompt: true,
+            userId: true,
             user: { select: { username: true, name: true } },
           },
           orderBy: { createdAt: 'desc' },
@@ -598,6 +616,7 @@ export class MarvinPublicReplyProcessor {
           body: (root.body ?? '').slice(0, 500),
           createdAt: root.createdAt.toISOString(),
           isTriggeringPost: root.id === triggeringPostId,
+          isMarv: marvUserId !== null && root.userId === marvUserId,
           checkinPrompt: root.checkinPrompt,
         },
         ...orderedReplies.map((p) => ({
@@ -607,6 +626,7 @@ export class MarvinPublicReplyProcessor {
           body: (p.body ?? '').slice(0, 500),
           createdAt: p.createdAt.toISOString(),
           isTriggeringPost: p.id === triggeringPostId,
+          isMarv: marvUserId !== null && p.userId === marvUserId,
           checkinPrompt: p.checkinPrompt,
         })),
       ];

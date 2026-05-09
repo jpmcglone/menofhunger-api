@@ -562,6 +562,7 @@ export class FollowsService {
 
   async follow(params: { viewerUserId: string; username: string }) {
     const { viewerUserId, username } = params;
+    await this.viewerContext.assertUserIdNotBanned(viewerUserId);
     const target = await this.userByUsernameOrThrow(username);
     if (target.id === viewerUserId) throw new BadRequestException('You cannot follow yourself.');
 
@@ -646,6 +647,7 @@ export class FollowsService {
     nextAllowedAt: string | null;
   }> {
     const { viewerUserId, username } = params;
+    await this.viewerContext.assertUserIdNotBanned(viewerUserId);
     const target = await this.userByUsernameOrThrow(username);
     if (target.id === viewerUserId) throw new BadRequestException('You cannot nudge yourself.');
 

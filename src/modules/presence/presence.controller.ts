@@ -240,7 +240,10 @@ export class PresenceController {
     // count stays consistent with the list. The bot is a list-time injection only —
     // it never appears in `userIds` (Redis-tracked sockets) and we don't broadcast
     // synthetic online/offline events for it elsewhere.
-    let totalOnline = userIds.length;
+    //
+    // Use `users.length` (post-DB-fetch) instead of `userIds.length` so banned users —
+    // which getFollowListUsersByIds filters out — don't inflate the count.
+    let totalOnline = users.length;
     const marvRow = await this.buildMarvOnlineRow({ viewerUserId, statusesById });
     if (marvRow) {
       data.unshift(marvRow);
@@ -475,7 +478,9 @@ export class PresenceController {
 
     // Pin Marv to the top when enabled. Same rationale as in `online()`: the
     // bot is a list-time injection, totalOnline gets bumped to match the list.
-    let totalOnline = onlineUserIds.length;
+    // Use `onlineUsers.length` so banned users (filtered out by getFollowListUsersByIds)
+    // don't inflate the count.
+    let totalOnline = onlineUsers.length;
     const marvRow = await this.buildMarvOnlineRow({
       viewerUserId,
       statusesById: onlineStatusesById,

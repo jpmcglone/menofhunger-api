@@ -4783,6 +4783,7 @@ export class PostsService {
         : Promise.resolve(null),
     ]);
     if (!viewer) throw new NotFoundException('User not found.');
+    this.viewerContextService.assertNotBanned(viewer);
     if (parentId && !parentPost) throw new NotFoundException('Post not found.');
     const user = { verifiedStatus: viewer.verifiedStatus, premium: viewer.premium, premiumPlus: viewer.premiumPlus };
     const viewerIsVerified = Boolean(viewer.verifiedStatus && viewer.verifiedStatus !== 'none');

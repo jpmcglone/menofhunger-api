@@ -1115,9 +1115,17 @@ export class MessagesService {
     // unless the sender is Premium (who can create a new conversation).
     const sender = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { premium: true, premiumPlus: true, verifiedStatus: true },
+      select: { premium: true, premiumPlus: true, verifiedStatus: true, bannedAt: true },
     });
     if (!sender) throw new NotFoundException('User not found.');
+    if (sender.bannedAt) {
+      // Defense-in-depth: AuthGuard already revokes the session and throws on banned users.
+      // This guards the ~30s session-cache window and any internal/job callers.
+      throw new ForbiddenException({
+        message: 'This account was banned. Contact an admin if you think it’s a mistake.',
+        error: 'account_banned',
+      });
+    }
     const senderIsVerified = Boolean(sender.verifiedStatus && sender.verifiedStatus !== 'none');
     const senderIsPremium = Boolean(sender.premium || sender.premiumPlus);
     if (!senderIsVerified && !senderIsPremium) {
@@ -1281,6 +1289,52 @@ export class MessagesService {
       });
     }
 
+    // ─── Marv: queue an AI reply for the first message, same as sendMessage() ──
+    try {
+      const marvCfg = this.appConfig.marvBot();
+      const marvUserId = marvCfg.enabled ? await this.resolveMarvUserId() : null;
+      const recipientIsMarv =
+        !!marvUserId && uniqueRecipients.length === 1 && uniqueRecipients[0] === marvUserId;
+      if (recipientIsMarv && trimmed.length > 0) {
+        this.logger.log(
+          `[marv] dm-enqueue HIT (new-conversation) msg=${result.message.id} convo=${result.conversationId} sender=${userId}`,
+        );
+        await this.jobs
+          .enqueue(
+            JOBS.marvinReplyPrivate,
+            {
+              conversationId: result.conversationId,
+              messageId: result.message.id,
+              requestingUserId: userId,
+              requestedMode: null,
+            },
+            {
+              jobId: `marv-private-${result.message.id}`,
+              removeOnComplete: true,
+              removeOnFail: false,
+              attempts: 3,
+              backoff: { type: 'exponential' as const, delay: 5000 },
+            },
+          )
+          .then(() => {
+            this.logger.log(
+              `[marv] dm-enqueue ok (new-conversation) msg=${result.message.id} job=marv-private-${result.message.id}`,
+            );
+          })
+          .catch((err) => {
+            this.logger.warn(
+              `[marv] Failed to enqueue private reply for new conversation message=${result.message.id}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          });
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[marv] private-reply enqueue (new-conversation) failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     return {
       conversationId: result.conversationId,
       message: dto,
@@ -1303,6 +1357,19 @@ export class MessagesService {
     const conversation = await this.getConversationOrThrow({ userId, conversationId });
     const participant = conversation.participants.find((p) => p.userId === userId);
     if (!participant) throw new NotFoundException('Conversation not found.');
+
+    // Defense-in-depth ban check: AuthGuard normally rejects banned users at the session
+    // boundary, but this protects against stale session caches and any internal callers.
+    const sender = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { bannedAt: true },
+    });
+    if (sender?.bannedAt) {
+      throw new ForbiddenException({
+        message: 'This account was banned. Contact an admin if you think it’s a mistake.',
+        error: 'account_banned',
+      });
+    }
 
     const blockedIds = await this._getBlockedUserIds(userId);
     const otherIds = conversation.participants.filter((p) => p.userId !== userId).map((p) => p.userId);

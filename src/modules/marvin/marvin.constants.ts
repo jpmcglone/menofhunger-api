@@ -62,6 +62,7 @@ export const MARV_ERROR_CODES = {
   botUserMissing: 'bot_user_missing',
   postFailed: 'post_failed',
   messageFailed: 'message_failed',
+  userBanned: 'user_banned',
 } as const;
 
 export type MarvErrorCode = (typeof MARV_ERROR_CODES)[keyof typeof MARV_ERROR_CODES];
