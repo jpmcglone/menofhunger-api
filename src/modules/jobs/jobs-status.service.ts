@@ -1,8 +1,8 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import type { Queue } from 'bullmq';
+import type { Job, Queue } from 'bullmq';
 import { QueueEvents } from 'bullmq';
-import { MOH_BACKGROUND_QUEUE } from './jobs.constants';
+import { MOH_BACKGROUND_QUEUE, MOH_MARVIN_QUEUE } from './jobs.constants';
 import { AppConfigService } from '../app/app-config.service';
 
 export type JobStatus =
@@ -20,25 +20,43 @@ export type JobStatus =
 
 @Injectable()
 export class JobsStatusService implements OnModuleDestroy {
-  private readonly queueEvents: QueueEvents;
+  private readonly backgroundEvents: QueueEvents;
+  private readonly marvinEvents: QueueEvents;
 
   constructor(
-    @InjectQueue(MOH_BACKGROUND_QUEUE) private readonly queue: Queue,
+    @InjectQueue(MOH_BACKGROUND_QUEUE) private readonly backgroundQueue: Queue,
+    @InjectQueue(MOH_MARVIN_QUEUE) private readonly marvinQueue: Queue,
     cfg: AppConfigService,
   ) {
     // QueueEvents is used only for optional admin `wait=true` flows.
-    this.queueEvents = new QueueEvents(MOH_BACKGROUND_QUEUE, {
+    this.backgroundEvents = new QueueEvents(MOH_BACKGROUND_QUEUE, {
+      connection: { url: cfg.redisUrl() },
+    });
+    this.marvinEvents = new QueueEvents(MOH_MARVIN_QUEUE, {
       connection: { url: cfg.redisUrl() },
     });
   }
 
   async onModuleDestroy() {
-    await this.queueEvents.close().catch(() => undefined);
+    await Promise.all([
+      this.backgroundEvents.close().catch(() => undefined),
+      this.marvinEvents.close().catch(() => undefined),
+    ]);
+  }
+
+  /** Look up a job by id across both queues; returns the queue + job that owns it (if any). */
+  private async findJob(jobId: string): Promise<{ queue: Queue; events: QueueEvents; job: Job } | null> {
+    const fromBg = await this.backgroundQueue.getJob(jobId);
+    if (fromBg) return { queue: this.backgroundQueue, events: this.backgroundEvents, job: fromBg };
+    const fromMarvin = await this.marvinQueue.getJob(jobId);
+    if (fromMarvin) return { queue: this.marvinQueue, events: this.marvinEvents, job: fromMarvin };
+    return null;
   }
 
   async getStatus(jobId: string): Promise<JobStatus> {
-    const j = await this.queue.getJob(jobId);
-    if (!j) return { status: 'not_found' };
+    const found = await this.findJob(jobId);
+    if (!found) return { status: 'not_found' };
+    const j = found.job;
 
     const state = await j.getState();
     return {
@@ -54,10 +72,10 @@ export class JobsStatusService implements OnModuleDestroy {
   }
 
   async waitForCompletion(jobId: string, timeoutMs: number): Promise<{ ok: true; result: unknown } | { ok: false; reason: string }> {
-    const j = await this.queue.getJob(jobId);
-    if (!j) return { ok: false, reason: 'not_found' };
+    const found = await this.findJob(jobId);
+    if (!found) return { ok: false, reason: 'not_found' };
     try {
-      const result = await j.waitUntilFinished(this.queueEvents, timeoutMs);
+      const result = await found.job.waitUntilFinished(found.events, timeoutMs);
       return { ok: true, result };
     } catch (err) {
       return { ok: false, reason: (err as Error)?.message ?? 'wait_failed' };

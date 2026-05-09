@@ -1,22 +1,38 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable } from '@nestjs/common';
 import type { Job, JobsOptions, Queue } from 'bullmq';
-import { JOBS, MOH_BACKGROUND_QUEUE, type JobName } from './jobs.constants';
+import {
+  JOBS,
+  MOH_BACKGROUND_QUEUE,
+  MOH_MARVIN_QUEUE,
+  queueForJob,
+  type JobName,
+} from './jobs.constants';
 
 @Injectable()
 export class JobsService {
-  constructor(@InjectQueue(MOH_BACKGROUND_QUEUE) private readonly queue: Queue) {}
+  constructor(
+    @InjectQueue(MOH_BACKGROUND_QUEUE) private readonly backgroundQueue: Queue,
+    @InjectQueue(MOH_MARVIN_QUEUE) private readonly marvinQueue: Queue,
+  ) {}
+
+  private queueFor(name: JobName): Queue {
+    return queueForJob(name) === MOH_MARVIN_QUEUE ? this.marvinQueue : this.backgroundQueue;
+  }
 
   /**
    * Enqueue a job, optionally with a stable jobId for dedupe (best for crons).
    * If a job with the same jobId already exists, BullMQ throws; callers may treat as a no-op.
+   *
+   * The target queue is picked automatically: Marv jobs go to `MOH_MARVIN_QUEUE`,
+   * everything else to `MOH_BACKGROUND_QUEUE`. See `queueForJob` in jobs.constants.
    */
   async enqueue<TPayload extends Record<string, any> = Record<string, any>>(
     name: JobName,
     payload: TPayload,
     opts?: JobsOptions,
   ): Promise<Job<TPayload, any, string>> {
-    return await this.queue.add(name, payload, opts);
+    return await this.queueFor(name).add(name, payload, opts);
   }
 
   /**
@@ -47,8 +63,14 @@ export class JobsService {
     return JOBS;
   }
 
+  /** Default queue name (kept for backwards compatibility — most callers don't need this). */
   queueName() {
     return MOH_BACKGROUND_QUEUE;
+  }
+
+  /** Returns the queue name a given job will be enqueued onto. Useful for tooling/admin. */
+  queueNameFor(name: JobName): string {
+    return queueForJob(name);
   }
 }
 

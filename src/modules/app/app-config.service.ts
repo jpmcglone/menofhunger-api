@@ -99,6 +99,12 @@ export type MarvLimitsConfig = {
   publicThreadCooldownSeconds: number;
   privateMaxPerUserPerDay: number;
   privateMaxPer10Minutes: number;
+  /**
+   * BullMQ worker concurrency for the dedicated Marv queue. AI replies are I/O-bound
+   * (waiting on OpenAI), so values much greater than 1 are safe. Default 8 — sized for
+   * ~50–200 simultaneous premium users. Tune via `MARV_QUEUE_CONCURRENCY`.
+   */
+  queueConcurrency: number;
 };
 
 @Injectable()
@@ -502,6 +508,7 @@ export class AppConfigService {
       publicThreadCooldownSeconds: this.readPositiveInt('MARV_PUBLIC_THREAD_COOLDOWN_SECONDS', 120),
       privateMaxPerUserPerDay: this.readPositiveInt('MARV_PRIVATE_MAX_PER_USER_PER_DAY', 60),
       privateMaxPer10Minutes: this.readPositiveInt('MARV_PRIVATE_MAX_PER_10_MIN', 10),
+      queueConcurrency: this.readPositiveInt('MARV_QUEUE_CONCURRENCY', 8),
     };
   }
 

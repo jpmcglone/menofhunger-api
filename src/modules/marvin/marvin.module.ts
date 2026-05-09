@@ -28,6 +28,7 @@ import { MarvinContextCardsProcessor } from './jobs/marvin-context-cards.process
 import { MarvinSummarizeThreadProcessor } from './jobs/marvin-summarize-thread.processor';
 import { MarvinCostRollupCron } from './jobs/marvin-cost-rollup.cron';
 import { MarvinCostRollupProcessor } from './jobs/marvin-cost-rollup.processor';
+import { MarvinProcessor } from './marvin.processor';
 
 /**
  * Marv (AI helper) module.
@@ -35,9 +36,9 @@ import { MarvinCostRollupProcessor } from './jobs/marvin-cost-rollup.processor';
  * Exports the services other modules need (mention detector, identity) so PostsService
  * and MessagesService can detect @marv mentions and enqueue jobs without a circular dep.
  *
- * Job processors are exposed as regular providers — `JobsConsumersModule` imports this
- * module and wires the `marvin.reply.public` / `marvin.reply.private` job names into the
- * existing `JobsProcessor` switch (BullMQ only allows one `@Processor` per queue).
+ * Marv has its own dedicated BullMQ queue (`MOH_MARVIN_QUEUE`) handled by `MarvinProcessor`
+ * with concurrency tuned via `MARV_QUEUE_CONCURRENCY` (default 8). This isolates AI reply
+ * latency from the cron-heavy shared background queue.
  *
  * AdminGuard is locally provided so the admin sub-controller can be 404-gated without
  * pulling in the full AdminModule (which would create a cycle via PostsModule).
@@ -67,6 +68,7 @@ import { MarvinCostRollupProcessor } from './jobs/marvin-cost-rollup.processor';
     MarvinSummarizeThreadProcessor,
     MarvinCostRollupCron,
     MarvinCostRollupProcessor,
+    MarvinProcessor,
   ],
   exports: [
     MarvinMentionDetectorService,

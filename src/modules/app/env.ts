@@ -424,6 +424,15 @@ export const envSchema = z.object({
     .string()
     .optional()
     .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PRIVATE_MAX_PER_10_MIN must be a number'),
+
+  // BullMQ worker concurrency for the dedicated Marv queue. Marv replies are I/O-bound
+  // (waiting on OpenAI), so concurrency >> 1 is safe and necessary — the default queue
+  // worker would serialize all replies behind cron sweeps. Sized for ~50–200 simultaneous
+  // premium users at peak; lower it if you see OpenAI rate-limit errors.
+  MARV_QUEUE_CONCURRENCY: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true), 'MARV_QUEUE_CONCURRENCY must be a positive number'),
 }).superRefine((env, ctx) => {
   if (env.NODE_ENV !== 'production') return;
 

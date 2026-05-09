@@ -1,9 +1,11 @@
 import { JobsService } from './jobs.service';
 
-function makeService(overrides?: { add?: jest.Mock }) {
+function makeService(overrides?: { add?: jest.Mock; marvinAdd?: jest.Mock }) {
   const add = overrides?.add ?? jest.fn(async () => ({ id: '1' }));
-  const queue = { add } as any;
-  return { svc: new JobsService(queue), add };
+  const marvinAdd = overrides?.marvinAdd ?? jest.fn(async () => ({ id: '1' }));
+  const backgroundQueue = { add } as any;
+  const marvinQueue = { add: marvinAdd } as any;
+  return { svc: new JobsService(backgroundQueue, marvinQueue), add, marvinAdd };
 }
 
 describe('JobsService.enqueueCron — jobId validation', () => {
