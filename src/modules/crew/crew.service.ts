@@ -538,7 +538,7 @@ export class CrewService {
 
   private async toMyCrewDto(
     crew: CrewWithRelations,
-    viewerUserId: string,
+    _viewerUserId: string,
     viewerRole: CrewMemberRole,
   ): Promise<CrewPrivateDto> {
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;

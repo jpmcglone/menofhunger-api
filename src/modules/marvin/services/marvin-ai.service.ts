@@ -16,6 +16,8 @@ export type MarvAIToolCallContext = {
   conversationId?: string;
   /** The requesting user — used by tools that need to scope queries to "the requester". */
   requesterUserId: string;
+  /** @handle of the requesting user — attached to OpenAI response metadata for per-user spend visibility. */
+  requesterUsername?: string | null;
 };
 
 export type MarvAIToolDispatcher = (
@@ -217,6 +219,21 @@ export class MarvinAIService {
       max_output_tokens: effectiveMaxOutputTokens,
       store: true,
       prompt_cache_key: req.cacheKey,
+      // Tag every request with the MOH user id so OpenAI's Usage dashboard
+      // breaks down spend per end-user (Users tab) instead of lumping all
+      // traffic under the API key owner.
+      user: req.toolContext.requesterUserId,
+      // Richer context stored on the response object — queryable via API and
+      // visible in Stored Responses. Helps correlate cost spikes to feature
+      // areas and specific users without parsing logs.
+      metadata: {
+        moh_user_id: req.toolContext.requesterUserId,
+        ...(req.toolContext.requesterUsername
+          ? { moh_username: req.toolContext.requesterUsername }
+          : {}),
+        moh_source: req.source,
+        moh_mode: req.mode,
+      },
     };
 
     if (webSearchActive) {

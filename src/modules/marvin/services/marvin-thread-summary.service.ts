@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MarvinAIService } from './marvin-ai.service';
 
@@ -24,8 +24,6 @@ const SUMMARY_INCLUDE_NEW_LIMIT = 50;
  */
 @Injectable()
 export class MarvinThreadSummaryService {
-  private readonly logger = new Logger(MarvinThreadSummaryService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly ai: MarvinAIService,

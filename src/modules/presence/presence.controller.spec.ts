@@ -140,3 +140,75 @@ describe('PresenceController — Marv pin injection', () => {
     });
   });
 });
+
+describe('PresenceController — online() output shape and per-call invariants', () => {
+  it('produces one row per real online user, in connect-time-asc order, with idle/status/lastConnect populated', async () => {
+    const m = makeController({
+      marvEnabled: false,
+      onlineUserIds: ['user-a', 'user-b', 'user-c'],
+    });
+    // Make user-c the longest-online (smallest lastConnectAtMs), user-a newest.
+    m.presenceRedis.lastConnectAtMsByUserId.mockImplementation(async (ids: string[]) => {
+      const offsets: Record<string, number> = { 'user-a': 3000, 'user-b': 2000, 'user-c': 1000 };
+      return new Map(ids.map((id) => [id, offsets[id] ?? 9999]));
+    });
+    m.presenceRedis.idleByUserIds.mockImplementation(
+      async (ids: string[]) => new Map(ids.map((id) => [id, id === 'user-b'])),
+    );
+
+    const res: any = await m.controller.online(undefined, undefined);
+
+    expect(res.data.map((u: any) => u.id)).toEqual(['user-c', 'user-b', 'user-a']);
+    expect(res.pagination.totalOnline).toBe(3);
+    expect(res.data[0]).toEqual(
+      expect.objectContaining({
+        id: 'user-c',
+        idle: false,
+        status: null,
+        lastConnectAt: 1000,
+      }),
+    );
+    expect(res.data[1]).toEqual(expect.objectContaining({ id: 'user-b', idle: true }));
+  });
+
+  it('calls each downstream collaborator exactly once per online() invocation', async () => {
+    const m = makeController({ marvEnabled: false });
+    await m.controller.online(undefined, undefined);
+
+    expect(m.presenceRedis.onlineUserIds).toHaveBeenCalledTimes(1);
+    expect(m.presenceRedis.lastConnectAtMsByUserId).toHaveBeenCalledTimes(1);
+    expect(m.follows.getFollowListUsersByIds).toHaveBeenCalledTimes(1);
+    expect(m.presenceRedis.idleByUserIds).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs lastConnectAt/follows/idle/statuses concurrently after onlineUserIds resolves', async () => {
+    const m = makeController({ marvEnabled: false });
+    let active = 0;
+    let maxActive = 0;
+    const slow = <T,>(value: T, ms = 25) =>
+      new Promise<T>((resolve) => {
+        active += 1;
+        if (active > maxActive) maxActive = active;
+        setTimeout(() => {
+          active -= 1;
+          resolve(value);
+        }, ms);
+      });
+
+    m.presenceRedis.lastConnectAtMsByUserId.mockImplementation(async (ids: string[]) => {
+      return slow(new Map(ids.map((id, i) => [id, 1000 + i])));
+    });
+    m.follows.getFollowListUsersByIds.mockImplementation(async ({ userIds }: { userIds: string[] }) =>
+      slow(userIds.map((id) => ({ id, username: id, name: id, premium: false }))),
+    );
+    m.presenceRedis.idleByUserIds.mockImplementation(async (ids: string[]) =>
+      slow(new Map(ids.map((id) => [id, false]))),
+    );
+
+    await m.controller.online(undefined, undefined);
+
+    // The four post-onlineUserIds awaits run in parallel, so at least 2
+    // operations should have been in-flight at the same time.
+    expect(maxActive).toBeGreaterThanOrEqual(2);
+  });
+});

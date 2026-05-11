@@ -8,7 +8,7 @@ import { AppConfigService } from '../../modules/app/app-config.service';
  */
 export class PresenceIoAdapter extends IoAdapter {
   constructor(
-    private readonly app: INestApplicationContext,
+    app: INestApplicationContext,
     private readonly appConfig: AppConfigService,
   ) {
     super(app);

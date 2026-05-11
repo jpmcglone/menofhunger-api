@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -20,8 +19,6 @@ import { CrewService } from './crew.service';
  */
 @Injectable()
 export class CrewWallService {
-  private readonly logger = new Logger(CrewWallService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly messages: MessagesService,

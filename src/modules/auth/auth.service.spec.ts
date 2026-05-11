@@ -205,6 +205,276 @@ describe('AuthService.meFromSessionToken — sliding window renewal', () => {
   });
 });
 
+describe('AuthService.meFromSessionToken — request-scoped memoization', () => {
+  it('reuses a cached SessionResult on the second call with the same token (per-request)', async () => {
+    const session = makeSession({
+      expiresAt: new Date(Date.now() + 20 * 24 * 60 * 60_000),
+    });
+    const token = randomSessionToken();
+    session.tokenHash = hmacSha256Hex(HMAC_SECRET, token);
+
+    // Real Map-backed RequestCacheService stand-in: lets us assert that
+    // a second call short-circuits via the cache without touching Redis/DB again.
+    const store = new Map<string, unknown>();
+    const requestCache: any = {
+      get: (key: string) => store.get(key),
+      set: (key: string, value: unknown) => store.set(key, value),
+    };
+    const findFirst = jest.fn(async () => session);
+    const getJson = jest.fn(async () => null);
+
+    const prisma: any = {
+      session: { findFirst, update: jest.fn() },
+      post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+      user: { update: jest.fn() },
+    };
+    const appConfig: any = {
+      sessionHmacSecret: jest.fn(() => HMAC_SECRET),
+      r2: jest.fn(() => null),
+    };
+    const redis: any = { getJson, setJson: jest.fn(async () => undefined) };
+    const cacheInvalidation: any = { deleteSessionFull: jest.fn(async () => undefined) };
+    const otpProvider: any = { send: jest.fn(), verify: jest.fn() };
+    const posthog: any = { capture: jest.fn() };
+    const slack: any = { send: jest.fn(), notifySignup: jest.fn() };
+
+    const svc = new AuthService(
+      prisma,
+      appConfig,
+      cacheInvalidation,
+      redis,
+      otpProvider,
+      posthog,
+      slack,
+      requestCache,
+    );
+
+    const a = await svc.meFromSessionToken(token);
+    const b = await svc.meFromSessionToken(token);
+
+    expect(a).not.toBeNull();
+    expect(b).toBe(a); // same reference — request cache short-circuit
+    expect(findFirst).toHaveBeenCalledTimes(1);
+    expect(getJson).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the same result for 5 concurrent calls with the same token (single-flight)', async () => {
+    const session = makeSession({
+      expiresAt: new Date(Date.now() + 20 * 24 * 60 * 60_000),
+    });
+    const token = randomSessionToken();
+    session.tokenHash = hmacSha256Hex(HMAC_SECRET, token);
+
+    // Mocks must be slow enough that the 5 concurrent callers all queue up
+    // before the first one resolves. With single-flight, only the first
+    // caller hits Redis/DB; the others share that promise.
+    const findFirst = jest.fn(
+      () => new Promise((resolve) => setTimeout(() => resolve(session), 25)),
+    );
+    const getJson = jest.fn(
+      () => new Promise((resolve) => setTimeout(() => resolve(null), 5)),
+    );
+
+    const store = new Map<string, unknown>();
+    const requestCache: any = {
+      get: (key: string) => store.get(key),
+      set: (key: string, value: unknown) => store.set(key, value),
+    };
+    const prisma: any = {
+      session: { findFirst, update: jest.fn() },
+      post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+      user: { update: jest.fn() },
+    };
+    const appConfig: any = {
+      sessionHmacSecret: jest.fn(() => HMAC_SECRET),
+      r2: jest.fn(() => null),
+    };
+    const redis: any = { getJson, setJson: jest.fn(async () => undefined) };
+    const cacheInvalidation: any = { deleteSessionFull: jest.fn(async () => undefined) };
+    const otpProvider: any = { send: jest.fn(), verify: jest.fn() };
+    const posthog: any = { capture: jest.fn() };
+    const slack: any = { send: jest.fn(), notifySignup: jest.fn() };
+
+    const svc = new AuthService(
+      prisma,
+      appConfig,
+      cacheInvalidation,
+      redis,
+      otpProvider,
+      posthog,
+      slack,
+      requestCache,
+    );
+
+    // Simulate 5 concurrent requests all calling meFromSessionToken with the
+    // same cookie at the same instant. Each uses a fresh AsyncLocalStorage
+    // store (different Map) so per-request memoization doesn't dedupe — only
+    // process-level single-flight can.
+    const stores = Array.from({ length: 5 }, () => new Map<string, unknown>());
+    const original = requestCache.get;
+    let currentStore: Map<string, unknown> | null = null;
+    requestCache.get = (key: string) => (currentStore ? currentStore.get(key) : original(key));
+    requestCache.set = (key: string, value: unknown) => {
+      if (currentStore) currentStore.set(key, value);
+      else store.set(key, value);
+    };
+
+    const results = await Promise.all(
+      stores.map(async (s) => {
+        currentStore = s;
+        const r = await svc.meFromSessionToken(token);
+        return r;
+      }),
+    );
+
+    // All five callers see a result of the same shape.
+    expect(results.every((r) => r !== null)).toBe(true);
+    // Single-flight: only ONE underlying Redis lookup + ONE DB lookup,
+    // shared across all 5 concurrent callers.
+    expect(getJson).toHaveBeenCalledTimes(1);
+    expect(findFirst).toHaveBeenCalledTimes(1);
+  });
+
+  it('preloads viewer context into the request cache after a successful resolve', async () => {
+    const userRow = makeMinimalUser({
+      id: 'user-42',
+      verifiedStatus: 'identity',
+      premium: true,
+      premiumPlus: false,
+      siteAdmin: false,
+      bannedAt: null,
+    });
+    const session = makeSession({
+      expiresAt: new Date(Date.now() + 20 * 24 * 60 * 60_000),
+      user: userRow,
+    });
+    const token = randomSessionToken();
+    session.tokenHash = hmacSha256Hex(HMAC_SECRET, token);
+
+    const store = new Map<string, unknown>();
+    const requestCache: any = {
+      get: (key: string) => store.get(key),
+      set: (key: string, value: unknown) => store.set(key, value),
+    };
+    const prisma: any = {
+      session: { findFirst: jest.fn(async () => session), update: jest.fn() },
+      post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+      user: { update: jest.fn() },
+    };
+    const appConfig: any = {
+      sessionHmacSecret: jest.fn(() => HMAC_SECRET),
+      r2: jest.fn(() => null),
+    };
+    const redis: any = { getJson: jest.fn(async () => null), setJson: jest.fn(async () => undefined) };
+    const cacheInvalidation: any = { deleteSessionFull: jest.fn(async () => undefined) };
+    const otpProvider: any = { send: jest.fn(), verify: jest.fn() };
+    const posthog: any = { capture: jest.fn() };
+    const slack: any = { send: jest.fn(), notifySignup: jest.fn() };
+
+    const svc = new AuthService(
+      prisma,
+      appConfig,
+      cacheInvalidation,
+      redis,
+      otpProvider,
+      posthog,
+      slack,
+      requestCache,
+    );
+
+    await svc.meFromSessionToken(token);
+
+    // After a successful resolve, the viewer context for this user MUST be
+    // preloaded under the same key ViewerContextService uses, so getViewer
+    // becomes a free Map.get() in the same request.
+    const preloaded = store.get('viewerContext:user-42') as
+      | {
+          id: string;
+          verifiedStatus: string;
+          premium: boolean;
+          premiumPlus: boolean;
+          siteAdmin: boolean;
+          bannedAt: Date | null;
+        }
+      | undefined;
+
+    expect(preloaded).toBeDefined();
+    expect(preloaded!.id).toBe('user-42');
+    expect(preloaded!.verifiedStatus).toBe('identity');
+    expect(preloaded!.premium).toBe(true);
+    expect(preloaded!.premiumPlus).toBe(false);
+    expect(preloaded!.siteAdmin).toBe(false);
+    expect(preloaded!.bannedAt).toBeNull();
+  });
+
+  it('preloads viewer context from a Redis cache hit too', async () => {
+    const token = randomSessionToken();
+    const tokenHash = hmacSha256Hex(HMAC_SECRET, token);
+    const cachedDto = {
+      id: 'user-42',
+      verifiedStatus: 'identity',
+      premium: true,
+      premiumPlus: false,
+      siteAdmin: true,
+      bannedAt: null,
+      // (other DTO fields irrelevant for the viewer-context preload)
+    };
+
+    const store = new Map<string, unknown>();
+    const requestCache: any = {
+      get: (key: string) => store.get(key),
+      set: (key: string, value: unknown) => store.set(key, value),
+    };
+    const findFirst = jest.fn();
+    const prisma: any = {
+      session: { findFirst, update: jest.fn() },
+      post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+      user: { update: jest.fn() },
+    };
+    const appConfig: any = {
+      sessionHmacSecret: jest.fn(() => HMAC_SECRET),
+      r2: jest.fn(() => null),
+    };
+    const redis: any = {
+      getJson: jest.fn(async () => ({
+        user: cachedDto,
+        sessionId: 'session-cached',
+        expiresAt: new Date(Date.now() + 10 * 24 * 60 * 60_000).toISOString(),
+      })),
+      setJson: jest.fn(async () => undefined),
+    };
+    const cacheInvalidation: any = { deleteSessionFull: jest.fn(async () => undefined) };
+    const otpProvider: any = { send: jest.fn(), verify: jest.fn() };
+    const posthog: any = { capture: jest.fn() };
+    const slack: any = { send: jest.fn(), notifySignup: jest.fn() };
+
+    const svc = new AuthService(
+      prisma,
+      appConfig,
+      cacheInvalidation,
+      redis,
+      otpProvider,
+      posthog,
+      slack,
+      requestCache,
+    );
+
+    const result = await svc.meFromSessionToken(token);
+    expect(result).not.toBeNull();
+    expect(findFirst).not.toHaveBeenCalled(); // Redis cache hit, no DB query
+
+    const preloaded = store.get('viewerContext:user-42') as any;
+    expect(preloaded).toBeDefined();
+    expect(preloaded.id).toBe('user-42');
+    expect(preloaded.premium).toBe(true);
+    expect(preloaded.siteAdmin).toBe(true);
+    expect(preloaded.bannedAt).toBeNull();
+
+    // Quiet the unused-var lint warning on tokenHash (kept for clarity above).
+    expect(tokenHash).toBeDefined();
+  });
+});
+
 describe('AuthService.verifyPhoneCode — referral signup linking', () => {
   function makeResponse() {
     return {

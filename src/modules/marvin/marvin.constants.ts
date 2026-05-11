@@ -19,8 +19,6 @@ export const MARV_JOBS = {
   costRollupDaily: 'marvin.cost-rollup.daily',
 } as const;
 
-export type MarvJobName = (typeof MARV_JOBS)[keyof typeof MARV_JOBS];
-
 /**
  * Stable idempotency key for a Marv reply request.
  * Format: `marvin:{source}:{sourceId}:{userId}:{messageId}`.

@@ -6,7 +6,6 @@
  * - display parsing: '#' must not be preceded by a word char (avoid matching mid-word)
  */
 export const HASHTAG_TAG_RE_SOURCE = '[A-Za-z][A-Za-z0-9_]{0,49}';
-export const HASHTAG_IN_TEXT_RE = new RegExp(`#(${HASHTAG_TAG_RE_SOURCE})`, 'g');
 export const HASHTAG_IN_TEXT_DISPLAY_RE = new RegExp(`(?<![a-zA-Z0-9_])#(${HASHTAG_TAG_RE_SOURCE})`, 'g');
 
 export type HashtagToken = { tag: string; variant: string };

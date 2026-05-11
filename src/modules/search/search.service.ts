@@ -5,7 +5,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FollowsService } from '../follows/follows.service';
 import { PostsService } from '../posts/posts.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
-import { RequestCacheService } from '../../common/cache/request-cache.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { queryToTopicValues } from '../../common/topics/topic-utils';
 import { HASHTAG_IN_TEXT_DISPLAY_RE, parseHashtagsFromText } from '../../common/hashtags/hashtag-regex';
@@ -161,7 +160,6 @@ export class SearchService {
     private readonly prisma: PrismaService,
     private readonly follows: FollowsService,
     private readonly posts: PostsService,
-    private readonly requestCache: RequestCacheService,
     private readonly viewerContext: ViewerContextService,
   ) {}
 

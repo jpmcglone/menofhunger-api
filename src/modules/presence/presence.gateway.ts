@@ -1590,27 +1590,4 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       }
     }
   }
-
-  private scheduleIdleDisconnectTimer(userId: string): void {
-    this.cancelIdleDisconnectTimer(userId);
-    const idleDisconnectMs = this.presence.idleDisconnectMs();
-    const idleDisconnectTimer = setTimeout(() => {
-      this.userTimers.delete(userId);
-      if (!this.presence.isUserIdle(userId)) return;
-      const socketIds = this.presence.getSocketIdsForUser(userId);
-      this.logger.log(`[presence] IDLE_DISCONNECT userId=${userId} sockets=${socketIds.length}`);
-      for (const socketId of socketIds) {
-        const socket = this.server.sockets.sockets.get(socketId);
-        if (socket) {
-          socket.emit('presence:idleDisconnected', {});
-        }
-        this.presence.forceUnregister(socketId);
-        socket?.disconnect(true);
-      }
-      this.presence.persistLastOnlineAt(userId);
-      this.emitOffline(userId);
-    }, idleDisconnectMs);
-    const existing = this.userTimers.get(userId);
-    this.userTimers.set(userId, { ...existing, idleDisconnectTimer });
-  }
 }

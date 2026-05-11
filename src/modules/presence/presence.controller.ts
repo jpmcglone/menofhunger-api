@@ -206,11 +206,20 @@ export class PresenceController {
       }
     }
 
-    // Sort by longest online first (earliest connect time first).
-    const lastConnectAtById = await this.presenceRedis.lastConnectAtMsByUserId(userIds);
+    // The four downstream lookups are all keyed off the same `userIds` array
+    // and don't depend on each other, so we run them concurrently. This trades
+    // 4 sequential round-trips (Redis + Postgres + Redis + Postgres) for 1
+    // wall-clock wait on the slowest of them.
+    const [lastConnectAtById, users, idleById, activeStatuses] = await Promise.all([
+      this.presenceRedis.lastConnectAtMsByUserId(userIds),
+      this.follows.getFollowListUsersByIds({ viewerUserId, userIds }),
+      this.presenceRedis.idleByUserIds(userIds),
+      this.presence.getActiveStatuses(userIds),
+    ]);
     if (viewerUserId && includeSelf && !lastConnectAtById.has(viewerUserId)) {
       lastConnectAtById.set(viewerUserId, Date.now());
     }
+    // Sort by longest online first (earliest connect time first).
     userIds = userIds
       .slice()
       .sort((a, b) => {
@@ -221,14 +230,9 @@ export class PresenceController {
         if (aKey !== bKey) return aKey - bKey;
         return a.localeCompare(b);
       });
-    const users = await this.follows.getFollowListUsersByIds({
-      viewerUserId,
-      userIds,
-    });
     const orderMap = new Map(userIds.map((id, i) => [id, i]));
     users.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
-    const idleById = await this.presenceRedis.idleByUserIds(userIds);
-    const statusesById = statusMap(await this.presence.getActiveStatuses(userIds));
+    const statusesById = statusMap(activeStatuses);
     const data: OnlineUserDto[] = users.map((u) => ({
       ...(u as OnlineUserDto),
       lastConnectAt: lastConnectAtById.get(u.id) ?? null,
@@ -444,11 +448,19 @@ export class PresenceController {
       }
     }
 
-    // Sort by longest online first (earliest connect time first).
-    const lastConnectAtById = await this.presenceRedis.lastConnectAtMsByUserId(onlineUserIds);
+    // Same parallel-fan-out optimization as `/presence/online`: the four lookups
+    // below all key off `onlineUserIds` and don't depend on each other, so we
+    // run them concurrently to drop 3 round-trips of wall-clock wait.
+    const [lastConnectAtById, onlineUsers, idleById, onlineStatuses] = await Promise.all([
+      this.presenceRedis.lastConnectAtMsByUserId(onlineUserIds),
+      this.follows.getFollowListUsersByIds({ viewerUserId, userIds: onlineUserIds }),
+      this.presenceRedis.idleByUserIds(onlineUserIds),
+      this.presence.getActiveStatuses(onlineUserIds),
+    ]);
     if (viewerUserId && includeSelf && !lastConnectAtById.has(viewerUserId)) {
       lastConnectAtById.set(viewerUserId, Date.now());
     }
+    // Sort by longest online first (earliest connect time first).
     onlineUserIds = onlineUserIds
       .slice()
       .sort((a, b) => {
@@ -459,15 +471,9 @@ export class PresenceController {
         if (aKey !== bKey) return aKey - bKey;
         return a.localeCompare(b);
       });
-
-    const onlineUsers = await this.follows.getFollowListUsersByIds({
-      viewerUserId,
-      userIds: onlineUserIds,
-    });
     const orderMap = new Map(onlineUserIds.map((id, i) => [id, i]));
     onlineUsers.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
-    const idleById = await this.presenceRedis.idleByUserIds(onlineUserIds);
-    const onlineStatusesById = statusMap(await this.presence.getActiveStatuses(onlineUserIds));
+    const onlineStatusesById = statusMap(onlineStatuses);
 
     const onlineData: OnlineUserDto[] = onlineUsers.map((u) => ({
       ...(u as OnlineUserDto),

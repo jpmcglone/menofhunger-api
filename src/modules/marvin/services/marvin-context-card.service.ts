@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { AppConfigService } from '../../app/app-config.service';
 import { MarvinAIService } from './marvin-ai.service';
 
 export type GeneratedContextCard = {
@@ -50,7 +49,6 @@ export class MarvinContextCardService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly appConfig: AppConfigService,
     private readonly ai: MarvinAIService,
   ) {}
 

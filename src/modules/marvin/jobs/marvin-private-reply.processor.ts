@@ -470,6 +470,7 @@ export class MarvinPrivateReplyProcessor {
         toolContext: {
           conversationId,
           requesterUserId: msg.sender.id,
+          requesterUsername: msg.sender.username,
         },
         previousResponseId: sessionState?.lastResponseId ?? null,
         cacheKey: `marv:private:${conversationId}`,

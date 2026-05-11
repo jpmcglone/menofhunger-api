@@ -27,7 +27,6 @@ function makeService(viewer: any = null) {
     prisma,
     {} as any,
     posts,
-    {} as any,
     viewerContext,
   );
 

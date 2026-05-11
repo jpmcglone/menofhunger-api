@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppConfigService } from '../../app/app-config.service';
@@ -41,8 +41,6 @@ export type MarvCreditSummary = MarvCreditState & {
  */
 @Injectable()
 export class MarvinCreditService {
-  private readonly logger = new Logger(MarvinCreditService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,

@@ -3,7 +3,6 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -36,8 +35,6 @@ type InviteWithRelations = Prisma.CrewInviteGetPayload<{ include: typeof INVITE_
 
 @Injectable()
 export class CrewInvitesService {
-  private readonly logger = new Logger(CrewInvitesService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,

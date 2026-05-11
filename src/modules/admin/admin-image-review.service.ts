@@ -6,6 +6,94 @@ import { PrismaService } from '../prisma/prisma.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 
+// ============================================================
+// REFERENCE TYPES — shapes returned by resolveAllReferences()
+// ============================================================
+
+type PostRef = {
+  postMediaId: string;
+  postId: string;
+  postCreatedAt: string;
+  postVisibility: string;
+  authorId: string;
+  authorUsername: string | null;
+  deletedAt: string | null;
+  /** true when this key is a video poster frame (thumbnailR2Key), not the main asset */
+  isThumbnail: boolean;
+};
+
+type MessageRef = {
+  messageMediaId: string;
+  messageId: string;
+  conversationId: string;
+  isThumbnail: boolean;
+};
+
+type UserRef = {
+  userId: string;
+  username: string | null;
+  name: string | null;
+  premium: boolean;
+  premiumPlus: boolean;
+  stewardBadgeEnabled: boolean;
+  verifiedStatus: string | null;
+  isAvatar: boolean;
+  isBanner: boolean;
+};
+
+type GroupRef = {
+  groupId: string;
+  slug: string;
+  name: string;
+  isAvatar: boolean;
+  isCover: boolean;
+};
+
+type CrewRef = {
+  crewId: string;
+  slug: string;
+  name: string | null;
+  isAvatar: boolean;
+  isCover: boolean;
+};
+
+type PollRef = {
+  pollOptionId: string;
+  pollId: string;
+  postId: string;
+};
+
+type ArticleRef = {
+  articleId: string;
+  title: string | null;
+  authorId: string;
+};
+
+export type AssetPrimaryType =
+  | 'post'
+  | 'post_thumbnail'
+  | 'message'
+  | 'message_thumbnail'
+  | 'user'
+  | 'group'
+  | 'crew'
+  | 'poll'
+  | 'article'
+  | 'orphan';
+
+type AssetRefs = {
+  posts: PostRef[];
+  messages: MessageRef[];
+  users: UserRef[];
+  groups: GroupRef[];
+  crews: CrewRef[];
+  polls: PollRef[];
+  articles: ArticleRef[];
+  primaryType: AssetPrimaryType;
+};
+
+// ============================================================
+
 function parseBool(v: unknown): boolean {
   if (typeof v === 'boolean') return v;
   const s = String(v ?? '').trim().toLowerCase();
@@ -86,12 +174,24 @@ export class AdminImageReviewService {
     const { s3, bucket } = this.requireR2();
     const prefix = this.objectKeyPrefix();
 
-    // Index known buckets of images.
+    // ── SYNC PREFIX REGISTRY ────────────────────────────────────────────────
+    // All R2 subdirectories that can receive uploads. Add here when a new
+    // upload surface is wired so the admin index stays complete.
+    //
+    //   uploads/       — post media, group images, crew images (purpose-routed)
+    //   avatars/       — user profile avatars
+    //   covers/        — legacy (user covers / banners)
+    //   banners/       — legacy
+    //   article-thumbnails/ — article cover thumbnails
+    //   article-media/      — inline images embedded in article body
+    // ────────────────────────────────────────────────────────────────────────
     const prefixes = [
       `${prefix}uploads/`,
       `${prefix}avatars/`,
       `${prefix}covers/`,
-      `${prefix}banners/`, // legacy
+      `${prefix}banners/`,
+      `${prefix}article-thumbnails/`,
+      `${prefix}article-media/`,
     ].slice(0, opts?.maxPrefixes ?? 20);
 
     for (const pfx of prefixes) {
@@ -112,7 +212,6 @@ export class AdminImageReviewService {
         const objs = res.Contents ?? [];
         if (objs.length === 0) break;
 
-        // Upsert in small batches.
         const now = new Date();
         for (const o of objs) {
           const key = (o.Key ?? '').trim();
@@ -141,6 +240,242 @@ export class AdminImageReviewService {
     }
   }
 
+  /**
+   * ============================================================
+   * REFERENCE REGISTRY — the single source of truth for every
+   * DB table that stores an R2 object key.
+   *
+   * When you add a new upload surface you MUST add it here, or:
+   *   • orphan detection will false-positive on those assets
+   *   • admin deletes will leave dangling references in the DB
+   *
+   * Current holders:
+   *   PostMedia.r2Key              (post images / GIFs / videos)
+   *   PostMedia.thumbnailR2Key     (video poster frames for posts)
+   *   MessageMedia.r2Key           (DM / crew-wall images)
+   *   MessageMedia.thumbnailR2Key  (DM / crew-wall video thumbnails)
+   *   User.avatarKey               (profile avatar)
+   *   User.bannerKey               (profile banner)
+   *   CommunityGroup.avatarImageUrl  (full URL — group square avatar)
+   *   CommunityGroup.coverImageUrl   (full URL — group wide banner)
+   *   Crew.avatarImageUrl            (full URL — crew square avatar)
+   *   Crew.coverImageUrl             (full URL — crew wide banner)
+   *   PostPollOption.imageR2Key    (poll option images)
+   *   Article.thumbnailR2Key       (article cover thumbnails)
+   * ============================================================
+   */
+  private async resolveAllReferences(keys: string[]): Promise<Map<string, AssetRefs>> {
+    const result = new Map<string, AssetRefs>();
+    const keySet = new Set(keys.filter(Boolean));
+
+    for (const key of keySet) {
+      result.set(key, { posts: [], messages: [], users: [], groups: [], crews: [], polls: [], articles: [], primaryType: 'orphan' });
+    }
+
+    if (!keySet.size) return result;
+
+    const keyArr = [...keySet];
+
+    // ── 1. PostMedia (r2Key + thumbnailR2Key) ──────────────────────────────
+    const postMediaRows = await this.prisma.postMedia.findMany({
+      where: { OR: [{ r2Key: { in: keyArr } }, { thumbnailR2Key: { in: keyArr } }] },
+      select: {
+        id: true,
+        postId: true,
+        r2Key: true,
+        thumbnailR2Key: true,
+        deletedAt: true,
+        post: {
+          select: {
+            id: true,
+            createdAt: true,
+            visibility: true,
+            user: { select: { id: true, username: true } },
+          },
+        },
+      },
+      orderBy: [{ createdAt: 'desc' }],
+    });
+    for (const m of postMediaRows) {
+      const base: PostRef = {
+        postMediaId: m.id,
+        postId: m.postId,
+        postCreatedAt: m.post.createdAt.toISOString(),
+        postVisibility: m.post.visibility,
+        authorId: m.post.user.id,
+        authorUsername: m.post.user.username ?? null,
+        deletedAt: m.deletedAt ? m.deletedAt.toISOString() : null,
+        isThumbnail: false,
+      };
+      if (m.r2Key && keySet.has(m.r2Key)) {
+        result.get(m.r2Key)!.posts.push(base);
+      }
+      if (m.thumbnailR2Key && keySet.has(m.thumbnailR2Key)) {
+        result.get(m.thumbnailR2Key)!.posts.push({ ...base, isThumbnail: true });
+      }
+    }
+
+    // ── 2. MessageMedia (r2Key + thumbnailR2Key) ───────────────────────────
+    const msgMediaRows = await this.prisma.messageMedia.findMany({
+      where: { OR: [{ r2Key: { in: keyArr } }, { thumbnailR2Key: { in: keyArr } }] },
+      select: {
+        id: true,
+        messageId: true,
+        r2Key: true,
+        thumbnailR2Key: true,
+        message: { select: { conversationId: true } },
+      },
+    });
+    for (const m of msgMediaRows) {
+      const base: MessageRef = {
+        messageMediaId: m.id,
+        messageId: m.messageId,
+        conversationId: m.message.conversationId,
+        isThumbnail: false,
+      };
+      if (m.r2Key && keySet.has(m.r2Key)) {
+        result.get(m.r2Key)!.messages.push(base);
+      }
+      if (m.thumbnailR2Key && keySet.has(m.thumbnailR2Key)) {
+        result.get(m.thumbnailR2Key)!.messages.push({ ...base, isThumbnail: true });
+      }
+    }
+
+    // ── 3. User (avatarKey + bannerKey) ────────────────────────────────────
+    const userRows = await this.prisma.user.findMany({
+      where: { OR: [{ avatarKey: { in: keyArr } }, { bannerKey: { in: keyArr } }] },
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        premium: true,
+        premiumPlus: true,
+        stewardBadgeEnabled: true,
+        verifiedStatus: true,
+        avatarKey: true,
+        bannerKey: true,
+      },
+    });
+    for (const u of userRows) {
+      const base: UserRef = {
+        userId: u.id,
+        username: u.username ?? null,
+        name: u.name ?? null,
+        premium: u.premium,
+        premiumPlus: u.premiumPlus,
+        stewardBadgeEnabled: u.stewardBadgeEnabled,
+        verifiedStatus: u.verifiedStatus ?? null,
+        isAvatar: false,
+        isBanner: false,
+      };
+      if (u.avatarKey && keySet.has(u.avatarKey)) {
+        result.get(u.avatarKey)!.users.push({ ...base, isAvatar: true });
+      }
+      if (u.bannerKey && keySet.has(u.bannerKey)) {
+        result.get(u.bannerKey)!.users.push({ ...base, isBanner: true });
+      }
+    }
+
+    // ── 4. CommunityGroup + Crew (stored as full URLs) ─────────────────────
+    // Build a URL → key reverse-lookup so we can match full-URL fields back
+    // to the raw R2 key we're resolving.
+    const urlToKey = new Map<string, string>();
+    const publicBase = this.cfg.r2()?.publicBaseUrl ?? null;
+    if (publicBase) {
+      for (const key of keySet) {
+        const url = this.publicUrlForKey(key);
+        if (url) urlToKey.set(url, key);
+      }
+    } else {
+      this.logger.warn(
+        '[media-review] R2 publicBaseUrl not configured — group/crew references cannot be resolved by URL',
+      );
+    }
+
+    if (urlToKey.size > 0) {
+      const urlArr = [...urlToKey.keys()];
+
+      const groupRows = await this.prisma.communityGroup.findMany({
+        where: { OR: [{ avatarImageUrl: { in: urlArr } }, { coverImageUrl: { in: urlArr } }] },
+        select: { id: true, slug: true, name: true, avatarImageUrl: true, coverImageUrl: true },
+      });
+      for (const g of groupRows) {
+        if (g.avatarImageUrl && urlToKey.has(g.avatarImageUrl)) {
+          const key = urlToKey.get(g.avatarImageUrl)!;
+          result.get(key)!.groups.push({ groupId: g.id, slug: g.slug, name: g.name, isAvatar: true, isCover: false });
+        }
+        if (g.coverImageUrl && urlToKey.has(g.coverImageUrl)) {
+          const key = urlToKey.get(g.coverImageUrl)!;
+          result.get(key)!.groups.push({ groupId: g.id, slug: g.slug, name: g.name, isAvatar: false, isCover: true });
+        }
+      }
+
+      const crewRows = await this.prisma.crew.findMany({
+        where: { OR: [{ avatarImageUrl: { in: urlArr } }, { coverImageUrl: { in: urlArr } }] },
+        select: { id: true, slug: true, name: true, avatarImageUrl: true, coverImageUrl: true },
+      });
+      for (const c of crewRows) {
+        if (c.avatarImageUrl && urlToKey.has(c.avatarImageUrl)) {
+          const key = urlToKey.get(c.avatarImageUrl)!;
+          result.get(key)!.crews.push({ crewId: c.id, slug: c.slug, name: c.name ?? null, isAvatar: true, isCover: false });
+        }
+        if (c.coverImageUrl && urlToKey.has(c.coverImageUrl)) {
+          const key = urlToKey.get(c.coverImageUrl)!;
+          result.get(key)!.crews.push({ crewId: c.id, slug: c.slug, name: c.name ?? null, isAvatar: false, isCover: true });
+        }
+      }
+    }
+
+    // ── 5. PostPollOption (imageR2Key) ─────────────────────────────────────
+    const pollOptionRows = await this.prisma.postPollOption.findMany({
+      where: { imageR2Key: { in: keyArr } },
+      select: {
+        id: true,
+        pollId: true,
+        imageR2Key: true,
+        poll: { select: { postId: true } },
+      },
+    });
+    for (const o of pollOptionRows) {
+      if (!o.imageR2Key || !keySet.has(o.imageR2Key)) continue;
+      result.get(o.imageR2Key)!.polls.push({
+        pollOptionId: o.id,
+        pollId: o.pollId,
+        postId: o.poll.postId,
+      });
+    }
+
+    // ── 6. Article (thumbnailR2Key) ────────────────────────────────────────
+    const articleRows = await this.prisma.article.findMany({
+      where: { thumbnailR2Key: { in: keyArr } },
+      select: { id: true, title: true, thumbnailR2Key: true, authorId: true },
+    });
+    for (const a of articleRows) {
+      if (!a.thumbnailR2Key || !keySet.has(a.thumbnailR2Key)) continue;
+      result.get(a.thumbnailR2Key)!.articles.push({
+        articleId: a.id,
+        title: a.title ?? null,
+        authorId: a.authorId,
+      });
+    }
+
+    // ── Determine primaryType for each key ─────────────────────────────────
+    for (const refs of result.values()) {
+      if (refs.posts.some((p) => !p.isThumbnail)) refs.primaryType = 'post';
+      else if (refs.messages.some((m) => !m.isThumbnail)) refs.primaryType = 'message';
+      else if (refs.users.length > 0) refs.primaryType = 'user';
+      else if (refs.groups.length > 0) refs.primaryType = 'group';
+      else if (refs.crews.length > 0) refs.primaryType = 'crew';
+      else if (refs.polls.length > 0) refs.primaryType = 'poll';
+      else if (refs.articles.length > 0) refs.primaryType = 'article';
+      else if (refs.posts.some((p) => p.isThumbnail)) refs.primaryType = 'post_thumbnail';
+      else if (refs.messages.some((m) => m.isThumbnail)) refs.primaryType = 'message_thumbnail';
+      else refs.primaryType = 'orphan';
+    }
+
+    return result;
+  }
+
   async list(params: {
     limit: number;
     cursor: string | null;
@@ -158,7 +493,6 @@ export class AdminImageReviewService {
     const kindFilter = params.kind ?? 'all';
 
     if (sync) {
-      // Admin-triggered incremental sync. Keep bounded so we don't time out.
       await this.syncSome({ maxPagesPerPrefix: 2 });
     }
 
@@ -175,7 +509,6 @@ export class AdminImageReviewService {
       ...kindWhere,
     };
 
-    // Scan pagination (supports onlyOrphans without complex SQL by scanning and filtering).
     const out: any[] = [];
     let scannedThrough: { r2LastModified: Date; id: string } | null = null;
     let scanCursor = decoded ? { lm: cursorLm as Date, id: cursorId as string } : null;
@@ -204,51 +537,24 @@ export class AdminImageReviewService {
       if (!page.length) break;
 
       const keys = page.map((x) => x.r2Key);
-      const postMedia = await this.prisma.postMedia.findMany({
-        where: { r2Key: { in: keys } },
-        select: { r2Key: true, postId: true },
-        orderBy: [{ createdAt: 'desc' }],
-      });
-      const postKeySet = new Set(postMedia.map((m) => m.r2Key ?? '').filter(Boolean));
-      const postIds = [...new Set(postMedia.map((m) => m.postId))];
-      const postsWithUser = await this.prisma.post.findMany({
-        where: { id: { in: postIds } },
-        select: { id: true, user: { select: { username: true } } },
-      });
-      const usernameByPostId = new Map(postsWithUser.map((p) => [p.id, p.user?.username ?? null]));
-      const postRefByKey = new Map<string, { postId: string; authorUsername: string | null }>();
-      for (const m of postMedia) {
-        const k = (m.r2Key ?? '').trim();
-        if (!k || postRefByKey.has(k)) continue;
-        postRefByKey.set(k, { postId: m.postId, authorUsername: usernameByPostId.get(m.postId) ?? null });
-      }
-
-      const userRefs = await this.prisma.user.findMany({
-        where: { OR: [{ avatarKey: { in: keys } }, { bannerKey: { in: keys } }] },
-        select: { id: true, username: true, avatarKey: true, bannerKey: true },
-      });
-      const userKeySet = new Set<string>();
-      const userRefByKey = new Map<string, { userId: string; username: string | null }>();
-      for (const u of userRefs) {
-        if (u.avatarKey) {
-          userKeySet.add(u.avatarKey);
-          if (!userRefByKey.has(u.avatarKey)) userRefByKey.set(u.avatarKey, { userId: u.id, username: u.username });
-        }
-        if (u.bannerKey) {
-          userKeySet.add(u.bannerKey);
-          if (!userRefByKey.has(u.bannerKey)) userRefByKey.set(u.bannerKey, { userId: u.id, username: u.username });
-        }
-      }
+      const refsMap = await this.resolveAllReferences(keys);
 
       for (const a of page) {
         scannedThrough = { r2LastModified: a.r2LastModified ?? a.createdAt, id: a.id };
-        const inPost = postKeySet.has(a.r2Key);
-        const inUser = userKeySet.has(a.r2Key);
-        const belongsToSummary = inPost ? 'post' : inUser ? 'user' : 'orphan';
-        if (onlyOrphans && belongsToSummary !== 'orphan') continue;
+        const refs = refsMap.get(a.r2Key) ?? {
+          posts: [], messages: [], users: [], groups: [], crews: [], polls: [], articles: [], primaryType: 'orphan' as AssetPrimaryType,
+        };
+        const { primaryType } = refs;
+        if (onlyOrphans && primaryType !== 'orphan') continue;
 
-        const postRef = postRefByKey.get(a.r2Key);
-        const userRef = userRefByKey.get(a.r2Key);
+        const postRef = refs.posts[0];
+        const userRef = refs.users[0];
+        const groupRef = refs.groups[0];
+        const crewRef = refs.crews[0];
+        const pollRef = refs.polls[0];
+        const articleRef = refs.articles[0];
+        const msgRef = refs.messages[0];
+
         out.push({
           id: a.id,
           r2Key: a.r2Key,
@@ -256,11 +562,21 @@ export class AdminImageReviewService {
           lastModified: (a.r2LastModified ?? a.createdAt).toISOString(),
           publicUrl: this.publicUrlForKey(a.deletedAt ? null : a.r2Key),
           deletedAt: a.deletedAt ? a.deletedAt.toISOString() : null,
-          belongsToSummary,
+          belongsToSummary: primaryType,
+          // Post (backward compat fields preserved)
           postId: postRef?.postId ?? null,
           authorUsername: postRef?.authorUsername ?? null,
+          // User (backward compat fields preserved)
           userId: userRef?.userId ?? null,
           profileUsername: userRef?.username ?? null,
+          // New fields
+          groupId: groupRef?.groupId ?? null,
+          groupName: groupRef?.name ?? null,
+          crewId: crewRef?.crewId ?? null,
+          crewName: crewRef?.name ?? null,
+          pollPostId: pollRef?.postId ?? null,
+          articleId: articleRef?.articleId ?? null,
+          messageId: msgRef?.messageId ?? null,
         });
         if (out.length >= take) break;
       }
@@ -285,25 +601,10 @@ export class AdminImageReviewService {
     const a = await this.prisma.mediaAsset.findUnique({ where: { id: assetId } });
     if (!a) throw new NotFoundException('Not found.');
 
-    const postMedia = await this.prisma.postMedia.findMany({
-      where: { r2Key: a.r2Key },
-      include: {
-        post: {
-          select: {
-            id: true,
-            createdAt: true,
-            visibility: true,
-            user: { select: { id: true, username: true } },
-          },
-        },
-      },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    });
-
-    const users = await this.prisma.user.findMany({
-      where: { OR: [{ avatarKey: a.r2Key }, { bannerKey: a.r2Key }] },
-      select: { id: true, username: true, name: true, premium: true, premiumPlus: true, stewardBadgeEnabled: true, verifiedStatus: true },
-    });
+    const refsMap = await this.resolveAllReferences([a.r2Key]);
+    const refs = refsMap.get(a.r2Key) ?? {
+      posts: [], messages: [], users: [], groups: [], crews: [], polls: [], articles: [], primaryType: 'orphan' as AssetPrimaryType,
+    };
 
     const publicUrl = this.publicUrlForKey(a.deletedAt ? null : a.r2Key);
 
@@ -321,20 +622,34 @@ export class AdminImageReviewService {
         deleteReason: a.deleteReason ?? null,
         r2DeletedAt: a.r2DeletedAt ? a.r2DeletedAt.toISOString() : null,
         publicUrl,
+        primaryType: refs.primaryType,
       },
       references: {
-        posts: postMedia.map((m) => ({
-          postMediaId: m.id,
-          postId: m.postId,
-          postCreatedAt: m.post.createdAt.toISOString(),
-          postVisibility: m.post.visibility,
-          author: {
-            id: m.post.user.id,
-            username: m.post.user.username,
-          },
-          deletedAt: m.deletedAt ? m.deletedAt.toISOString() : null,
+        posts: refs.posts.map((p) => ({
+          postMediaId: p.postMediaId,
+          postId: p.postId,
+          postCreatedAt: p.postCreatedAt,
+          postVisibility: p.postVisibility,
+          author: { id: p.authorId, username: p.authorUsername },
+          deletedAt: p.deletedAt,
+          isThumbnail: p.isThumbnail,
         })),
-        users,
+        messages: refs.messages,
+        users: refs.users.map((u) => ({
+          id: u.userId,
+          username: u.username,
+          name: u.name,
+          premium: u.premium,
+          premiumPlus: u.premiumPlus,
+          stewardBadgeEnabled: u.stewardBadgeEnabled,
+          verifiedStatus: u.verifiedStatus,
+          isAvatar: u.isAvatar,
+          isBanner: u.isBanner,
+        })),
+        groups: refs.groups,
+        crews: refs.crews,
+        polls: refs.polls,
+        articles: refs.articles,
       },
     };
   }
@@ -353,8 +668,10 @@ export class AdminImageReviewService {
 
     const now = new Date();
     const r2Key = a.r2Key;
+    const fullUrl = this.publicUrlForKey(r2Key);
 
     const affected = await this.prisma.$transaction(async (tx) => {
+      // ── Tombstone the asset index row ──────────────────────────────────────
       await tx.mediaAsset.update({
         where: { id: a.id },
         data: {
@@ -364,67 +681,105 @@ export class AdminImageReviewService {
         },
       });
 
-        // Prevent future "same file" uploads from reusing this tombstoned key.
-        // (MediaContentHash is a dedupe map: hash -> r2Key.)
-        await tx.mediaContentHash.deleteMany({ where: { r2Key } });
+      // Prevent future "same file" uploads from reusing this tombstoned key.
+      await tx.mediaContentHash.deleteMany({ where: { r2Key } });
 
-      const postMedia = await tx.postMedia.findMany({
+      // ── PostMedia: tombstone rows where this is the main asset ─────────────
+      const postMediaDirect = await tx.postMedia.findMany({
         where: { r2Key, source: 'upload' },
         select: { id: true, postId: true },
       });
-
-      if (postMedia.length) {
+      if (postMediaDirect.length) {
         await tx.postMedia.updateMany({
           where: { r2Key, source: 'upload' },
-          data: {
-            deletedAt: now,
-            deletedByAdminId: params.adminUserId,
-            deletedReason: reason,
-          },
+          data: { deletedAt: now, deletedByAdminId: params.adminUserId, deletedReason: reason },
         });
       }
 
+      // ── PostMedia: null out thumbnail where this is a poster frame ─────────
+      const { count: postMediaThumbnailCount } = await tx.postMedia.updateMany({
+        where: { thumbnailR2Key: r2Key },
+        data: { thumbnailR2Key: null },
+      });
+
+      // ── MessageMedia: hard-delete rows where this is the main upload ───────
+      // (MessageMedia has no tombstone field; the message body still exists)
+      const { count: messageMediaCount } = await tx.messageMedia.deleteMany({ where: { r2Key, source: 'upload' } });
+
+      // ── MessageMedia: null out thumbnail ───────────────────────────────────
+      const { count: messageMediaThumbnailCount } = await tx.messageMedia.updateMany({
+        where: { thumbnailR2Key: r2Key },
+        data: { thumbnailR2Key: null },
+      });
+
+      // ── User avatar / banner ───────────────────────────────────────────────
       const users = await tx.user.findMany({
         where: { OR: [{ avatarKey: r2Key }, { bannerKey: r2Key }] },
         select: { id: true, username: true, avatarKey: true, bannerKey: true },
       });
-
       const invalidatedUsers: Array<{ id: string; username: string | null }> = [];
       for (const u of users) {
         const data: Prisma.UserUpdateInput = {};
-        if (u.avatarKey === r2Key) {
-          data.avatarKey = null;
-          data.avatarUpdatedAt = now;
-        }
-        if (u.bannerKey === r2Key) {
-          data.bannerKey = null;
-          data.bannerUpdatedAt = now;
-        }
+        if (u.avatarKey === r2Key) { data.avatarKey = null; data.avatarUpdatedAt = now; }
+        if (u.bannerKey === r2Key) { data.bannerKey = null; data.bannerUpdatedAt = now; }
         if (Object.keys(data).length) {
           await tx.user.update({ where: { id: u.id }, data });
           invalidatedUsers.push({ id: u.id, username: u.username ?? null });
         }
       }
 
+      // ── CommunityGroup avatar / cover (stored as full URL) ─────────────────
+      let groupCount = 0;
+      let crewCount = 0;
+      if (fullUrl) {
+        const { count: ga } = await tx.communityGroup.updateMany({ where: { avatarImageUrl: fullUrl }, data: { avatarImageUrl: null } });
+        const { count: gc } = await tx.communityGroup.updateMany({ where: { coverImageUrl: fullUrl }, data: { coverImageUrl: null } });
+        groupCount = ga + gc;
+
+        // ── Crew avatar / cover (stored as full URL) ─────────────────────────
+        const { count: ca } = await tx.crew.updateMany({ where: { avatarImageUrl: fullUrl }, data: { avatarImageUrl: null } });
+        const { count: cc } = await tx.crew.updateMany({ where: { coverImageUrl: fullUrl }, data: { coverImageUrl: null } });
+        crewCount = ca + cc;
+      }
+
+      // ── PostPollOption image ───────────────────────────────────────────────
+      const { count: pollOptionCount } = await tx.postPollOption.updateMany({
+        where: { imageR2Key: r2Key },
+        data: { imageR2Key: null },
+      });
+
+      // ── Article thumbnail ──────────────────────────────────────────────────
+      const { count: articleCount } = await tx.article.updateMany({
+        where: { thumbnailR2Key: r2Key },
+        data: { thumbnailR2Key: null },
+      });
+
       return {
-        postMediaCount: postMedia.length,
+        postMediaCount: postMediaDirect.length,
+        postMediaThumbnailCount,
+        messageMediaCount,
+        messageMediaThumbnailCount,
         userCount: users.length,
+        groupCount,
+        crewCount,
+        pollOptionCount,
+        articleCount,
         invalidatedUsers,
       };
     });
+
     const { invalidatedUsers, ...affectedCounts } = affected;
     for (const u of invalidatedUsers) {
       await this.publicProfileCache.invalidateForUser(u);
     }
 
-    // Hard delete from R2.
+    // ── Hard-delete from R2 ────────────────────────────────────────────────
     const { s3, bucket } = this.requireR2();
     try {
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: r2Key }));
       await this.prisma.mediaAsset.update({ where: { id: a.id }, data: { r2DeletedAt: new Date() } });
       return { success: true, alreadyDeleted: false, r2Deleted: true, ...affectedCounts };
     } catch (e: unknown) {
-      // Tombstone exists; report failure so admin can retry.
       return { success: true, alreadyDeleted: false, r2Deleted: false, error: String((e as any)?.message ?? e), ...affectedCounts };
     }
   }
@@ -459,9 +814,7 @@ export class AdminImageReviewService {
     return { deleted, skipped, errors };
   }
 
-  // Small helper for controllers to parse booleans without duplicating logic.
   parseBool(v: unknown) {
     return parseBool(v);
   }
 }
-

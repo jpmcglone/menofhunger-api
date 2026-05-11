@@ -408,6 +408,7 @@ export class MarvinPublicReplyProcessor {
           rootPostId,
           triggeringPostId: post.id,
           requesterUserId: requesterRow.id,
+          requesterUsername: requesterRow.username,
         },
         cacheKey: `marv:public:${rootPostId}`,
       });

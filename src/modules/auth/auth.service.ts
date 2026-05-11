@@ -71,6 +71,9 @@ export interface SessionResult {
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
+  /** Process-level single-flight deduplication: concurrent requests with the same token share one promise. */
+  private readonly inflightSessions = new Map<string, Promise<SessionResult | null>>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
@@ -286,8 +289,32 @@ export class AuthService {
     const cached = this.requestCache.get<SessionResult | null>(cacheKey);
     if (cached !== undefined) return cached;
 
-    const result = await this._resolveSession(token);
+    // Process-level single-flight: if another concurrent request is already resolving
+    // this token, share its promise instead of issuing a duplicate DB/Redis lookup.
+    let pending = this.inflightSessions.get(token);
+    if (!pending) {
+      pending = this._resolveSession(token).finally(() => {
+        this.inflightSessions.delete(token);
+      });
+      this.inflightSessions.set(token, pending);
+    }
+
+    const result = await pending;
     this.requestCache.set(cacheKey, result);
+
+    // Pre-warm ViewerContextService's per-request cache so downstream getViewer() calls
+    // are free Map lookups for the rest of this request — no extra DB round-trip.
+    if (result) {
+      this.requestCache.set(`viewerContext:${result.user.id}`, {
+        id: result.user.id,
+        verifiedStatus: result.user.verifiedStatus,
+        premium: result.user.premium,
+        premiumPlus: result.user.premiumPlus,
+        siteAdmin: result.user.siteAdmin,
+        bannedAt: result.user.bannedAt ? new Date(result.user.bannedAt) : null,
+      });
+    }
+
     return result;
   }
 

@@ -45,13 +45,6 @@ export function canonicalizeTopicValue(raw: string): string | null {
   return null;
 }
 
-export function topicCategory(value: string): string | null {
-  const v = (value ?? '').trim();
-  if (!v) return null;
-  const opt = TOPIC_OPTIONS.find((o) => o.value === v);
-  return opt?.group ?? null;
-}
-
 // Very strong signal: link domain → topic(s)
 // Keep this small + high precision; it's easy to extend safely.
 const DOMAIN_TOPIC_MAP: Record<string, string[]> = {

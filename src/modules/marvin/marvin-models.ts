@@ -17,5 +17,3 @@ export const MARV_DEFAULT_MODELS = [
   MARV_DEFAULT_REGULAR_MODEL,
   MARV_DEFAULT_SMART_MODEL,
 ] as const;
-
-export type MarvDefaultModel = (typeof MARV_DEFAULT_MODELS)[number];

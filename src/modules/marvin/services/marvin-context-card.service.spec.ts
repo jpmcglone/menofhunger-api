@@ -83,7 +83,7 @@ function makeService(opts?: {
   };
 
   return {
-    service: new MarvinContextCardService(prisma, appConfig, ai),
+    service: new MarvinContextCardService(prisma, ai),
     prisma,
     ai,
     findManyPosts,
