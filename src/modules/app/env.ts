@@ -417,10 +417,17 @@ export const envSchema = z.object({
     .string()
     .optional()
     .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PUBLIC_MAX_PER_USER_PER_DAY must be a number'),
-  MARV_PUBLIC_THREAD_COOLDOWN_SECONDS: z
+  MARV_PUBLIC_THREAD_BURST_LIMIT: z
     .string()
     .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PUBLIC_THREAD_COOLDOWN_SECONDS must be a number'),
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PUBLIC_THREAD_BURST_LIMIT must be a number'),
+  MARV_PUBLIC_THREAD_BURST_WINDOW_SECONDS: z
+    .string()
+    .optional()
+    .refine(
+      (v) => (v ? !Number.isNaN(Number(v)) : true),
+      'MARV_PUBLIC_THREAD_BURST_WINDOW_SECONDS must be a number',
+    ),
   MARV_PRIVATE_MAX_PER_USER_PER_DAY: z
     .string()
     .optional()

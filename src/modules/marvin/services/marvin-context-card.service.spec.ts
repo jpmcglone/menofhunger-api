@@ -57,17 +57,6 @@ function makeService(opts?: {
     },
   };
 
-  const appConfig: any = {
-    marvBot: jest.fn(() => ({
-      enabled: true,
-      userId: 'marv-id',
-      username: 'marv',
-      displayName: 'Marv',
-      bio: '',
-      phone: '',
-    })),
-  };
-
   const ai: any = {
     isConfigured: jest.fn(() => opts?.aiConfigured !== false),
     respond: jest.fn(async () => ({

@@ -122,14 +122,28 @@ export class MarvinUsageService {
     return await this.prisma.marvinUsageEvent.count({ where });
   }
 
-  /** Get the last successful Marv reply timestamp in a given thread (for cooldown). */
-  async getLastReplyAtForRoot(rootPostId: string): Promise<Date | null> {
-    const last = await this.prisma.marvinUsageEvent.findFirst({
-      where: { source: 'public_thread', rootPostId, errorCode: null },
-      orderBy: { createdAt: 'desc' },
-      select: { createdAt: true },
+  /**
+   * Count successful Marv replies for a (thread, requesting user) pair within a sliding window.
+   *
+   * Used by the public-reply processor as a burst limiter: allow a small burst of mentions
+   * in quick succession (e.g. 3) before the cooldown DM kicks in. Scoped by `userId` so
+   * different users in the same thread don't block each other.
+   */
+  async countRecentRepliesForRootAndUser(args: {
+    rootPostId: string;
+    userId: string;
+    windowSeconds: number;
+  }): Promise<number> {
+    const since = new Date(Date.now() - args.windowSeconds * 1_000);
+    return await this.prisma.marvinUsageEvent.count({
+      where: {
+        source: 'public_thread',
+        rootPostId: args.rootPostId,
+        userId: args.userId,
+        errorCode: null,
+        createdAt: { gte: since },
+      },
     });
-    return last?.createdAt ?? null;
   }
 }
 

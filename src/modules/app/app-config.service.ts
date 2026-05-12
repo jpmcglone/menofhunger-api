@@ -104,7 +104,10 @@ export type MarvLimitsConfig = {
   maxOutputTokens: number;
   publicMaxPerUserPerHour: number;
   publicMaxPerUserPerDay: number;
-  publicThreadCooldownSeconds: number;
+  /** Max successful Marv replies to the same (thread, user) within `publicThreadBurstWindowSeconds`. */
+  publicThreadBurstLimit: number;
+  /** Sliding window (seconds) over which `publicThreadBurstLimit` is enforced. */
+  publicThreadBurstWindowSeconds: number;
   privateMaxPerUserPerDay: number;
   privateMaxPer10Minutes: number;
   /**
@@ -526,7 +529,8 @@ export class AppConfigService {
       maxOutputTokens: this.readPositiveInt('MARV_MAX_OUTPUT_TOKENS', 1024),
       publicMaxPerUserPerHour: this.readPositiveInt('MARV_PUBLIC_MAX_PER_USER_PER_HOUR', 10),
       publicMaxPerUserPerDay: this.readPositiveInt('MARV_PUBLIC_MAX_PER_USER_PER_DAY', 30),
-      publicThreadCooldownSeconds: this.readPositiveInt('MARV_PUBLIC_THREAD_COOLDOWN_SECONDS', 120),
+      publicThreadBurstLimit: this.readPositiveInt('MARV_PUBLIC_THREAD_BURST_LIMIT', 3),
+      publicThreadBurstWindowSeconds: this.readPositiveInt('MARV_PUBLIC_THREAD_BURST_WINDOW_SECONDS', 60),
       privateMaxPerUserPerDay: this.readPositiveInt('MARV_PRIVATE_MAX_PER_USER_PER_DAY', 60),
       privateMaxPer10Minutes: this.readPositiveInt('MARV_PRIVATE_MAX_PER_10_MIN', 10),
       queueConcurrency: this.readPositiveInt('MARV_QUEUE_CONCURRENCY', 8),

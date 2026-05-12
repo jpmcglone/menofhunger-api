@@ -78,7 +78,8 @@ function makeProcessor(opts?: {
       maxOutputTokens: 1024,
       publicMaxPerUserPerHour: 10,
       publicMaxPerUserPerDay: 30,
-      publicThreadCooldownSeconds: 120,
+      publicThreadBurstLimit: 3,
+      publicThreadBurstWindowSeconds: 60,
       privateMaxPerUserPerDay: 60,
       privateMaxPer10Minutes: 10,
     })),
@@ -170,7 +171,7 @@ function makeProcessor(opts?: {
   const usage: any = {
     recordEvent: jest.fn(async () => undefined),
     countRecent: jest.fn(async () => 0),
-    getLastReplyAtForRoot: jest.fn(async () => null),
+    countRecentRepliesForRootAndUser: jest.fn(async () => 0),
   };
 
   const canned: any = {
@@ -385,13 +386,19 @@ describe('MarvinPublicReplyProcessor', () => {
     );
   });
 
-  it('honors per-thread cooldown and DMs the user with a post link', async () => {
+  it('honors per-(thread,user) burst limit and DMs the user with a post link', async () => {
     const m = makeProcessor();
-    m.usage.getLastReplyAtForRoot.mockResolvedValueOnce(new Date(Date.now() - 1000));
+    // At/over the burst limit of 3 within the window — next mention should be blocked.
+    m.usage.countRecentRepliesForRootAndUser.mockResolvedValueOnce(3);
     await m.processor.process({
       postId: 'p-1',
       rootPostId: 'r-1',
       requestingUserId: 'u-requester',
+    });
+    expect(m.usage.countRecentRepliesForRootAndUser).toHaveBeenCalledWith({
+      rootPostId: 'r-1',
+      userId: 'u-requester',
+      windowSeconds: 60,
     });
     expect(m.posts.createPost).not.toHaveBeenCalled();
     expect(m.canned.sendRateLimitedDm).toHaveBeenCalledWith({
@@ -402,6 +409,74 @@ describe('MarvinPublicReplyProcessor', () => {
     expect(m.usage.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 'thread_cooldown' }),
     );
+  });
+
+  it('allows replies while under the per-(thread,user) burst limit', async () => {
+    const m = makeProcessor();
+    // 2 recent successful replies — still under the limit of 3, so this 3rd attempt
+    // should pass through the rate-limit gate (not be blocked).
+    m.usage.countRecentRepliesForRootAndUser.mockResolvedValueOnce(2);
+    await m.processor.process({
+      postId: 'p-1',
+      rootPostId: 'r-1',
+      requestingUserId: 'u-requester',
+    });
+    expect(m.canned.sendRateLimitedDm).not.toHaveBeenCalled();
+  });
+
+  it('rolls over: a 4th mention after the window passes is NOT blocked', async () => {
+    // This locks in the sliding-window behavior at the processor level. The burst
+    // limiter must release the user as soon as old events fall out of the window —
+    // it must NOT be a per-thread permanent cap.
+    const m = makeProcessor();
+
+    // First attempt: at the limit (3 prior successes in window) → blocked.
+    m.usage.countRecentRepliesForRootAndUser.mockResolvedValueOnce(3);
+    await m.processor.process({
+      postId: 'p-1',
+      rootPostId: 'r-1',
+      requestingUserId: 'u-requester',
+    });
+    expect(m.canned.sendRateLimitedDm).toHaveBeenCalledTimes(1);
+    expect(m.posts.createPost).not.toHaveBeenCalled();
+
+    // Second attempt: window has rolled, the prior successes have aged out → count=0.
+    // The processor must let this one through and post a public reply.
+    m.usage.countRecentRepliesForRootAndUser.mockResolvedValueOnce(0);
+    await m.processor.process({
+      postId: 'p-2',
+      rootPostId: 'r-1',
+      requestingUserId: 'u-requester',
+    });
+
+    // Still only the one cooldown DM from the first attempt — no new block.
+    expect(m.canned.sendRateLimitedDm).toHaveBeenCalledTimes(1);
+    expect(m.posts.createPost).toHaveBeenCalled();
+  });
+
+  it('does not block one user just because another user hit the burst limit in the same thread', async () => {
+    // Locks in per-(thread, user) scoping at the processor level — the usage service
+    // is queried with the specific requesting userId, so a different user pinging
+    // Marv in the same thread has their own independent budget.
+    const m = makeProcessor();
+
+    // Simulate: user A burned through the limit in this thread (the count reflects
+    // their events, not anyone else's). User B's call returns 0 because the service
+    // filters by userId, so this call shouldn't be blocked.
+    m.usage.countRecentRepliesForRootAndUser.mockResolvedValueOnce(0);
+    await m.processor.process({
+      postId: 'p-1',
+      rootPostId: 'r-1',
+      requestingUserId: 'u-second-user',
+    });
+
+    expect(m.usage.countRecentRepliesForRootAndUser).toHaveBeenCalledWith({
+      rootPostId: 'r-1',
+      userId: 'u-second-user',
+      windowSeconds: 60,
+    });
+    expect(m.canned.sendRateLimitedDm).not.toHaveBeenCalled();
+    expect(m.posts.createPost).toHaveBeenCalled();
   });
 
   describe('vision: image selection (first-then-tail rule)', () => {

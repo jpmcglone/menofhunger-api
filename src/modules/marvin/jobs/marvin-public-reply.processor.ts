@@ -274,34 +274,41 @@ export class MarvinPublicReplyProcessor {
 
     // 7. Rate-limit gate.
     const limits = this.appConfig.marvLimits();
-    const [pastHourCount, pastDayCount, lastReplyAt] = await Promise.all([
+    const [pastHourCount, pastDayCount, threadBurstCount] = await Promise.all([
       this.usage.countRecent({ userId: requestingUserId, source: 'public_thread', windowMinutes: 60 }),
       this.usage.countRecent({
         userId: requestingUserId,
         source: 'public_thread',
         windowMinutes: 24 * 60,
       }),
-      this.usage.getLastReplyAtForRoot(rootPostId),
+      this.usage.countRecentRepliesForRootAndUser({
+        rootPostId,
+        userId: requestingUserId,
+        windowSeconds: limits.publicThreadBurstWindowSeconds,
+      }),
     ]);
     const overHourly = pastHourCount >= limits.publicMaxPerUserPerHour;
     const overDaily = pastDayCount >= limits.publicMaxPerUserPerDay;
-    const cooldownActive =
-      lastReplyAt && Date.now() - lastReplyAt.getTime() < limits.publicThreadCooldownSeconds * 1_000;
-    if (overHourly || overDaily || cooldownActive) {
+    // Burst limiter: allow up to `publicThreadBurstLimit` Marv replies to the same
+    // (thread, user) within the sliding window before kicking the cooldown DM. The
+    // count reflects successful replies already issued; once it hits the limit, the
+    // *next* mention is blocked.
+    const threadBurstHit = threadBurstCount >= limits.publicThreadBurstLimit;
+    if (overHourly || overDaily || threadBurstHit) {
       const errorCode = overDaily
         ? MARV_ERROR_CODES.rateLimitDaily
         : overHourly
           ? MARV_ERROR_CODES.rateLimitHourly
           : MARV_ERROR_CODES.threadCooldown;
       this.logger.log(
-        `[marv] public-reply EXIT reason=${errorCode} user=${requestingUserId} hour=${pastHourCount}/${limits.publicMaxPerUserPerHour} day=${pastDayCount}/${limits.publicMaxPerUserPerDay} cooldownActive=${!!cooldownActive}`,
+        `[marv] public-reply EXIT reason=${errorCode} user=${requestingUserId} hour=${pastHourCount}/${limits.publicMaxPerUserPerHour} day=${pastDayCount}/${limits.publicMaxPerUserPerDay} threadBurst=${threadBurstCount}/${limits.publicThreadBurstLimit}`,
       );
       // Notify the user via DM so they know why Marv didn't reply in the thread.
       // No extra dedup needed — the BullMQ job is idempotent per postId, so this
       // method is called at most once per triggering post.
       await this.canned.sendRateLimitedDm({
         userId: requestingUserId,
-        kind: overDaily ? 'daily' : cooldownActive ? 'thread_cooldown' : 'per10min',
+        kind: overDaily ? 'daily' : threadBurstHit ? 'thread_cooldown' : 'per10min',
         triggeringPostId: postId,
       });
       await this.usage.recordEvent({

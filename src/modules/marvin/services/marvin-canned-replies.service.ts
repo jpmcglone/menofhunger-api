@@ -238,7 +238,7 @@ export class MarvinCannedRepliesService {
         args.kind === 'daily'
           ? "you've hit your daily Marv limit. Try again tomorrow — the counter resets at midnight."
           : args.kind === 'thread_cooldown'
-            ? "I just replied in that thread recently. Give it a few minutes and try again."
+            ? "we've gone back and forth in that thread a lot in the last minute. Give it a beat and try again."
             : "you've sent a lot of mentions in a short window. Try again in a bit.";
       body = `I saw your [post](${postLink}) but couldn't reply — ${reason}`;
     } else {
