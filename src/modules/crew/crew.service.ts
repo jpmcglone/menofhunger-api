@@ -223,9 +223,55 @@ export class CrewService {
       where: { userId: params.viewerUserId },
     });
     if (!mem) throw new NotFoundException('You are not in a crew.');
-    await this.assertCrewOwner(mem.crewId, params.viewerUserId);
+    return this.updateCrew({
+      viewerUserId: params.viewerUserId,
+      isSiteAdmin: false,
+      crewId: mem.crewId,
+      name: params.name,
+      tagline: params.tagline,
+      bio: params.bio,
+      avatarImageUrl: params.avatarImageUrl,
+      coverImageUrl: params.coverImageUrl,
+      designatedSuccessorUserId: params.designatedSuccessorUserId,
+    });
+  }
 
-    const crew = await this.prisma.crew.findUniqueOrThrow({ where: { id: mem.crewId } });
+  /**
+   * Update a crew identified by id. Owners can update their own crew; site
+   * admins can update any crew (the public "Edit Crew" affordance falls back
+   * to this path when the viewer is admin but not the owner).
+   *
+   * Verification (`assertVerified`) is required for owner edits — site admins
+   * skip the gate so they can correct a crew belonging to a user whose
+   * verification later lapsed.
+   */
+  async updateCrew(params: {
+    viewerUserId: string;
+    isSiteAdmin: boolean;
+    crewId: string;
+    name?: string | null;
+    tagline?: string | null;
+    bio?: string | null;
+    avatarImageUrl?: string | null;
+    coverImageUrl?: string | null;
+    designatedSuccessorUserId?: string | null;
+  }): Promise<CrewPrivateDto> {
+    const crew = await this.prisma.crew.findUnique({ where: { id: params.crewId } });
+    if (!crew || crew.deletedAt) throw new NotFoundException('Crew not found.');
+
+    const viewerMembership = await this.prisma.crewMember.findUnique({
+      where: { crewId_userId: { crewId: crew.id, userId: params.viewerUserId } },
+      select: { role: true },
+    });
+    const isOwner = viewerMembership?.role === 'owner';
+    if (!isOwner && !params.isSiteAdmin) {
+      throw new ForbiddenException('Only the crew owner can do that.');
+    }
+    if (isOwner) {
+      // Owners must still be verified; admin edits bypass to keep moderation
+      // functional even when a user's verification has expired.
+      await this.assertVerified(params.viewerUserId);
+    }
 
     const data: Prisma.CrewUpdateInput = {};
     let slugRotation: { oldSlug: string; newSlug: string } | null = null;
@@ -291,7 +337,10 @@ export class CrewService {
     });
 
     const updated = await this.loadCrewWithRelationsOrThrow(crew.id);
-    const dto = this.toMyCrewDto(updated, params.viewerUserId, 'owner');
+    // DTO is shaped as if the owner is viewing — admins editing a crew they
+    // don't belong to receive the same private snapshot so the dialog can show
+    // pending invites + successor without re-fetching from a second endpoint.
+    const dto = await this.toMyCrewDto(updated, params.viewerUserId, 'owner');
     const memberIds = updated.members.map((m) => m.userId);
     this.presenceRealtime.emitCrewUpdated(memberIds, { crew: dto });
     return dto;

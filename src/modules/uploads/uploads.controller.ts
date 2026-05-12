@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Post, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { Throttle } from '@nestjs/throttler';
 import { AuthGuard } from '../auth/auth.guard';
@@ -97,6 +97,18 @@ export class UploadsController {
       ttl: rateLimitTtl('upload', 60),
     },
   })
+  @Delete('avatar')
+  async deleteAvatar(@CurrentUserId() userId: string) {
+    const result = await this.uploads.deleteAvatarForUser(userId);
+    return { data: result };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('upload', 60),
+      ttl: rateLimitTtl('upload', 60),
+    },
+  })
   @Post('banner/init')
   async initBanner(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = initBannerSchema.parse(body);
@@ -114,6 +126,18 @@ export class UploadsController {
   async commitBanner(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = commitBannerSchema.parse(body);
     const result = await this.uploads.commitBannerUpload(userId, parsed.key);
+    return { data: result };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('upload', 60),
+      ttl: rateLimitTtl('upload', 60),
+    },
+  })
+  @Delete('banner')
+  async deleteBanner(@CurrentUserId() userId: string) {
+    const result = await this.uploads.deleteBannerForUser(userId);
     return { data: result };
   }
 

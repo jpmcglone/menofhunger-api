@@ -155,6 +155,193 @@ describe('GroupsService.updateGroup — privacy transitions', () => {
       }),
     ).rejects.toThrow(BadRequestException);
   });
+
+  it('site admin (not a member) can edit name, description, rules, avatar, banner', async () => {
+    const { service, prisma } = makeService();
+    prisma.communityGroup.findFirst.mockResolvedValue({
+      ...FAKE_GROUP,
+      id: 'g1',
+      joinPolicy: 'open',
+      deletedAt: null,
+    });
+    // Admin is not a member of the group.
+    prisma.communityGroupMember.findUnique.mockResolvedValue(null);
+
+    await service.updateGroup({
+      viewerUserId: 'admin',
+      isSiteAdmin: true,
+      groupId: 'g1',
+      name: 'Renamed by admin',
+      description: 'New desc',
+      rules: 'New rules',
+      avatarImageUrl: 'https://cdn/avatar.png',
+      coverImageUrl: 'https://cdn/banner.png',
+    });
+
+    expect(prisma.communityGroup.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'g1' },
+        data: expect.objectContaining({
+          name: 'Renamed by admin',
+          description: 'New desc',
+          rules: 'New rules',
+          avatarImageUrl: 'https://cdn/avatar.png',
+          coverImageUrl: 'https://cdn/banner.png',
+        }),
+      }),
+    );
+  });
+
+  it('sending avatarImageUrl: null clears the avatar (and same for cover)', async () => {
+    const { service, prisma } = makeService();
+    prisma.communityGroup.findFirst.mockResolvedValue({
+      ...FAKE_GROUP,
+      id: 'g1',
+      joinPolicy: 'open',
+      deletedAt: null,
+    });
+    prisma.communityGroupMember.findUnique.mockResolvedValue({
+      role: 'owner',
+      status: 'active',
+    });
+
+    await service.updateGroup({
+      viewerUserId: 'u-owner',
+      isSiteAdmin: false,
+      groupId: 'g1',
+      avatarImageUrl: null,
+      coverImageUrl: null,
+    });
+
+    expect(prisma.communityGroup.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'g1' },
+        data: expect.objectContaining({
+          avatarImageUrl: null,
+          coverImageUrl: null,
+        }),
+      }),
+    );
+  });
+});
+
+describe('GroupsService — owner-or-admin gates on pin / promote / demote', () => {
+  it('pinPost lets a site admin who is not a member pin posts', async () => {
+    const { service, prisma } = makeService();
+    prisma.communityGroupMember.findUnique.mockResolvedValue(null);
+    prisma.post = {
+      findFirst: jest.fn(async () => ({ id: 'p1' })),
+      update: jest.fn(),
+      updateMany: jest.fn(),
+    };
+    prisma.$transaction = jest.fn(async (cb: any) =>
+      cb({
+        post: { updateMany: jest.fn(), update: jest.fn() },
+      }),
+    );
+
+    const result = await service.pinPost({
+      viewerUserId: 'admin',
+      isSiteAdmin: true,
+      groupId: 'g1',
+      postId: 'p1',
+    });
+    expect(result).toEqual({ data: { ok: true } });
+  });
+
+  it('pinPost rejects non-owner non-admin', async () => {
+    const { service, prisma } = makeService();
+    prisma.communityGroupMember.findUnique.mockResolvedValue({
+      role: 'member',
+      status: 'active',
+    });
+
+    await expect(
+      service.pinPost({
+        viewerUserId: 'someone',
+        isSiteAdmin: false,
+        groupId: 'g1',
+        postId: 'p1',
+      }),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('unpinGroupPost lets a site admin who is not a member unpin', async () => {
+    const { service, prisma } = makeService();
+    prisma.communityGroupMember.findUnique.mockResolvedValue(null);
+    prisma.post = { updateMany: jest.fn(async () => ({ count: 0 })) };
+
+    const result = await service.unpinGroupPost({
+      viewerUserId: 'admin',
+      isSiteAdmin: true,
+      groupId: 'g1',
+    });
+    expect(result).toEqual({ data: { ok: true } });
+  });
+
+  it('promoteModerator lets a site admin who is not a member promote', async () => {
+    const { service, prisma } = makeService();
+    prisma.communityGroup.findFirst.mockResolvedValue({ id: 'g1', deletedAt: null });
+    // First call: viewer membership lookup -> null (admin is not in the group).
+    // Second call: target member lookup.
+    prisma.communityGroupMember.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ role: 'member', status: 'active' });
+    prisma.communityGroupMember.update = jest.fn();
+
+    const result = await service.promoteModerator({
+      viewerUserId: 'admin',
+      isSiteAdmin: true,
+      groupId: 'g1',
+      userId: 'u1',
+    });
+    expect(prisma.communityGroupMember.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { role: 'moderator' },
+      }),
+    );
+    expect(result).toEqual({ data: { ok: true } });
+  });
+
+  it('promoteModerator rejects non-owner non-admin', async () => {
+    const { service, prisma } = makeService();
+    prisma.communityGroup.findFirst.mockResolvedValue({ id: 'g1', deletedAt: null });
+    prisma.communityGroupMember.findUnique.mockResolvedValue({
+      role: 'moderator',
+      status: 'active',
+    });
+
+    await expect(
+      service.promoteModerator({
+        viewerUserId: 'mod',
+        isSiteAdmin: false,
+        groupId: 'g1',
+        userId: 'u1',
+      }),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('demoteModerator lets a site admin who is not a member demote', async () => {
+    const { service, prisma } = makeService();
+    prisma.communityGroup.findFirst.mockResolvedValue({ id: 'g1', deletedAt: null });
+    prisma.communityGroupMember.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ role: 'moderator', status: 'active' });
+    prisma.communityGroupMember.update = jest.fn();
+
+    const result = await service.demoteModerator({
+      viewerUserId: 'admin',
+      isSiteAdmin: true,
+      groupId: 'g1',
+      userId: 'u1',
+    });
+    expect(prisma.communityGroupMember.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { role: 'member' },
+      }),
+    );
+    expect(result).toEqual({ data: { ok: true } });
+  });
 });
 
 describe('GroupsService.searchGroups', () => {

@@ -1,6 +1,6 @@
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { BadRequestException, ForbiddenException, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { imageSize } from 'image-size';
 import sharp from 'sharp';
@@ -579,6 +579,74 @@ export class UploadsService {
       const canDelete = prefix === '' || oldKey.startsWith(prefix);
       if (canDelete) {
         s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: oldKey })).catch(() => undefined);
+      }
+    }
+
+    return { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+  }
+
+  /**
+   * Clear the user's avatar. Idempotent — calling on a user with no avatar
+   * still returns the current UserDto (no error, no realtime emit). When an
+   * avatar existed we update the row, invalidate caches, emit the standard
+   * `avatar_changed` realtime signal, and best-effort delete the old S3
+   * object (subject to the same prefix safety check as commit*).
+   */
+  async deleteAvatarForUser(userId: string) {
+    const existing = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!existing) throw new NotFoundException('User not found.');
+    if (!existing.avatarKey) {
+      return { user: toUserDto(existing, this.appConfig.r2()?.publicBaseUrl ?? null) };
+    }
+    const oldKey = existing.avatarKey;
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: { avatarKey: null, avatarUpdatedAt: new Date() },
+    });
+
+    await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    void this.usersPublicRealtime.emitPublicProfileUpdated(updated.id);
+    this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'avatar_changed');
+
+    const prefix = this.objectKeyPrefix();
+    if (prefix === '' || oldKey.startsWith(prefix)) {
+      try {
+        const { s3, bucket } = this.requireR2();
+        s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: oldKey })).catch(() => undefined);
+      } catch {
+        // R2 not configured (e.g., local dev) — DB state is still cleared.
+      }
+    }
+
+    return { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) };
+  }
+
+  /**
+   * Clear the user's banner. Mirrors {@link deleteAvatarForUser}.
+   */
+  async deleteBannerForUser(userId: string) {
+    const existing = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!existing) throw new NotFoundException('User not found.');
+    if (!existing.bannerKey) {
+      return { user: toUserDto(existing, this.appConfig.r2()?.publicBaseUrl ?? null) };
+    }
+    const oldKey = existing.bannerKey;
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: { bannerKey: null, bannerUpdatedAt: new Date() },
+    });
+
+    await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    void this.usersPublicRealtime.emitPublicProfileUpdated(updated.id);
+    this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'banner_changed');
+
+    const prefix = this.objectKeyPrefix();
+    if (prefix === '' || oldKey.startsWith(prefix)) {
+      try {
+        const { s3, bucket } = this.requireR2();
+        s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: oldKey })).catch(() => undefined);
+      } catch {
+        // R2 not configured — DB state is still cleared.
       }
     }
 

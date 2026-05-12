@@ -318,7 +318,16 @@ export class GroupsController {
     @Param('groupId') groupId: string,
     @Param('postId') postId: string,
   ) {
-    return await this.groups.pinPost({ viewerUserId, groupId, postId });
+    const u = await this.prisma.user.findUnique({
+      where: { id: viewerUserId },
+      select: { siteAdmin: true },
+    });
+    return await this.groups.pinPost({
+      viewerUserId,
+      isSiteAdmin: Boolean(u?.siteAdmin),
+      groupId,
+      postId,
+    });
   }
 
   @UseGuards(AuthGuard)
@@ -327,7 +336,15 @@ export class GroupsController {
   })
   @Delete(':groupId/pin')
   async unpinPost(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string) {
-    return await this.groups.unpinGroupPost({ viewerUserId, groupId });
+    const u = await this.prisma.user.findUnique({
+      where: { id: viewerUserId },
+      select: { siteAdmin: true },
+    });
+    return await this.groups.unpinGroupPost({
+      viewerUserId,
+      isSiteAdmin: Boolean(u?.siteAdmin),
+      groupId,
+    });
   }
 
   @UseGuards(AuthGuard)
@@ -351,13 +368,31 @@ export class GroupsController {
   @UseGuards(AuthGuard)
   @Post(':groupId/members/:userId/promote-moderator')
   async promote(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
-    return await this.groups.promoteModerator({ viewerUserId, groupId, userId });
+    const u = await this.prisma.user.findUnique({
+      where: { id: viewerUserId },
+      select: { siteAdmin: true },
+    });
+    return await this.groups.promoteModerator({
+      viewerUserId,
+      isSiteAdmin: Boolean(u?.siteAdmin),
+      groupId,
+      userId,
+    });
   }
 
   @UseGuards(AuthGuard)
   @Post(':groupId/members/:userId/demote-moderator')
   async demote(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
-    return await this.groups.demoteModerator({ viewerUserId, groupId, userId });
+    const u = await this.prisma.user.findUnique({
+      where: { id: viewerUserId },
+      select: { siteAdmin: true },
+    });
+    return await this.groups.demoteModerator({
+      viewerUserId,
+      isSiteAdmin: Boolean(u?.siteAdmin),
+      groupId,
+      userId,
+    });
   }
 
   // ---------- invites ----------

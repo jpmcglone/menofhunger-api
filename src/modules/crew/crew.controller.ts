@@ -122,13 +122,16 @@ export class CrewController {
   @Patch('me')
   async updateMyCrew(@CurrentUserId() viewerUserId: string, @Body() body: unknown) {
     const parsed = updateCrewSchema.parse(body);
+    // NOTE: avatar/coverImageUrl preserve `null` explicitly to signal removal.
+    // Collapsing `null` to `undefined` here would silently drop a "remove
+    // image" request from the client.
     const crew = await this.crew.updateMyCrew({
       viewerUserId,
       name: parsed.name ?? undefined,
       tagline: parsed.tagline ?? undefined,
       bio: parsed.bio ?? undefined,
-      avatarImageUrl: parsed.avatarImageUrl ?? undefined,
-      coverImageUrl: parsed.coverImageUrl ?? undefined,
+      avatarImageUrl: parsed.avatarImageUrl,
+      coverImageUrl: parsed.coverImageUrl,
       designatedSuccessorUserId: parsed.designatedSuccessorUserId ?? undefined,
     });
     return { data: { crew } };
@@ -165,6 +168,45 @@ export class CrewController {
     if (!mine) return { data: {} };
     await this.crew.kickMember({ viewerUserId, crewId: mine.id, userId });
     return { data: {} };
+  }
+
+  /**
+   * Edit any crew by id. Owners can edit their own crew via this path or via
+   * `PATCH /crew/me`; site admins use this path to moderate a crew they don't
+   * belong to (parity with `PATCH /admin/users/:id/profile` for profile edits).
+   *
+   * Routing note: this route MUST appear after every `/crew/me*`, `/crew/invites/*`,
+   * `/crew/by-slug/*`, and `/crew/for-user/*` declaration so Nest's first-match
+   * resolution doesn't treat literal segments as `:crewId`.
+   */
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: { limit: rateLimitLimit('interact', 30), ttl: rateLimitTtl('interact', 60) },
+  })
+  @Patch(':crewId')
+  async updateCrewById(
+    @CurrentUserId() viewerUserId: string,
+    @Param('crewId') crewId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = updateCrewSchema.parse(body);
+    const u = await this.prisma.user.findUnique({
+      where: { id: viewerUserId },
+      select: { siteAdmin: true },
+    });
+    const crew = await this.crew.updateCrew({
+      viewerUserId,
+      isSiteAdmin: Boolean(u?.siteAdmin),
+      crewId,
+      name: parsed.name ?? undefined,
+      tagline: parsed.tagline ?? undefined,
+      bio: parsed.bio ?? undefined,
+      // Preserve explicit `null` to clear images; see note on updateMyCrew.
+      avatarImageUrl: parsed.avatarImageUrl,
+      coverImageUrl: parsed.coverImageUrl,
+      designatedSuccessorUserId: parsed.designatedSuccessorUserId ?? undefined,
+    });
+    return { data: { crew } };
   }
 
   @UseGuards(AuthGuard)

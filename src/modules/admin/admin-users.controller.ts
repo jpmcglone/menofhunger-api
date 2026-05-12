@@ -773,6 +773,12 @@ export class AdminUsersController {
     return { data: result };
   }
 
+  @Delete(':id/uploads/avatar')
+  async adminDeleteAvatar(@Param('id') id: string) {
+    const result = await this.uploads.deleteAvatarForUser(id);
+    return { data: result };
+  }
+
   @Post(':id/uploads/banner/init')
   async adminInitBanner(@Param('id') id: string, @Body() body: unknown) {
     const { contentType } = z.object({ contentType: z.string().min(1) }).parse(body);
@@ -784,6 +790,12 @@ export class AdminUsersController {
   async adminCommitBanner(@Param('id') id: string, @Body() body: unknown) {
     const { key } = z.object({ key: z.string().min(1) }).parse(body);
     const result = await this.uploads.commitBannerUpload(id, key);
+    return { data: result };
+  }
+
+  @Delete(':id/uploads/banner')
+  async adminDeleteBanner(@Param('id') id: string) {
+    const result = await this.uploads.deleteBannerForUser(id);
     return { data: result };
   }
 

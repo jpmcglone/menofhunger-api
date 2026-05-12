@@ -644,7 +644,7 @@ export class GroupsService {
     return { data: { ok: true as const } };
   }
 
-  async promoteModerator(params: { viewerUserId: string; groupId: string; userId: string }) {
+  async promoteModerator(params: { viewerUserId: string; isSiteAdmin: boolean; groupId: string; userId: string }) {
     const group = await this.prisma.communityGroup.findFirst({
       where: { id: params.groupId, deletedAt: null },
       select: { id: true },
@@ -655,7 +655,8 @@ export class GroupsService {
       where: { groupId_userId: { groupId: group.id, userId: params.viewerUserId } },
       select: { role: true, status: true },
     });
-    if (!mem || mem.status !== 'active' || mem.role !== 'owner') {
+    const isOwner = mem?.status === 'active' && mem.role === 'owner';
+    if (!isOwner && !params.isSiteAdmin) {
       throw new ForbiddenException('Only the owner can promote moderators.');
     }
 
@@ -672,7 +673,7 @@ export class GroupsService {
     return { data: { ok: true as const } };
   }
 
-  async demoteModerator(params: { viewerUserId: string; groupId: string; userId: string }) {
+  async demoteModerator(params: { viewerUserId: string; isSiteAdmin: boolean; groupId: string; userId: string }) {
     const group = await this.prisma.communityGroup.findFirst({
       where: { id: params.groupId, deletedAt: null },
       select: { id: true },
@@ -683,7 +684,8 @@ export class GroupsService {
       where: { groupId_userId: { groupId: group.id, userId: params.viewerUserId } },
       select: { role: true, status: true },
     });
-    if (!mem || mem.status !== 'active' || mem.role !== 'owner') {
+    const isOwner = mem?.status === 'active' && mem.role === 'owner';
+    if (!isOwner && !params.isSiteAdmin) {
       throw new ForbiddenException('Only the owner can demote moderators.');
     }
 
@@ -917,12 +919,13 @@ export class GroupsService {
     return { data, pagination: { nextCursor } };
   }
 
-  async pinPost(params: { viewerUserId: string; groupId: string; postId: string }) {
+  async pinPost(params: { viewerUserId: string; isSiteAdmin: boolean; groupId: string; postId: string }) {
     const mem = await this.prisma.communityGroupMember.findUnique({
       where: { groupId_userId: { groupId: params.groupId, userId: params.viewerUserId } },
       select: { status: true, role: true },
     });
-    if (!mem || mem.status !== 'active' || mem.role !== 'owner') {
+    const isOwner = mem?.status === 'active' && mem.role === 'owner';
+    if (!isOwner && !params.isSiteAdmin) {
       throw new ForbiddenException('Only the group owner can pin posts.');
     }
     const postId = (params.postId ?? '').trim();
@@ -952,12 +955,13 @@ export class GroupsService {
     return { data: { ok: true as const } };
   }
 
-  async unpinGroupPost(params: { viewerUserId: string; groupId: string }) {
+  async unpinGroupPost(params: { viewerUserId: string; isSiteAdmin: boolean; groupId: string }) {
     const mem = await this.prisma.communityGroupMember.findUnique({
       where: { groupId_userId: { groupId: params.groupId, userId: params.viewerUserId } },
       select: { status: true, role: true },
     });
-    if (!mem || mem.status !== 'active' || mem.role !== 'owner') {
+    const isOwner = mem?.status === 'active' && mem.role === 'owner';
+    if (!isOwner && !params.isSiteAdmin) {
       throw new ForbiddenException('Only the group owner can unpin posts.');
     }
     await this.prisma.post.updateMany({
