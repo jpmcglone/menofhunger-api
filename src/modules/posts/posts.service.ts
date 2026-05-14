@@ -270,13 +270,25 @@ export class PostsService {
   private static forYouFollowedUnseenMult = 3.5;
   private static forYouRelMultMutual = 1.6;
   private static forYouRelMultFollowing = 1.1;
+  /**
+   * E tier: viewer doesn't follow the author, but someone they follow engaged (replied/boosted).
+   * Sits between "you follow them" (1.1) and "they follow you" (0.65) — trusted social proof
+   * without a direct follow relationship. The `forYouFriendEngagementMult` bonus does NOT stack
+   * on top of this tier; it is already factored into the 0.85 value.
+   */
+  private static forYouFriendCommentedMult = 0.85;
   private static forYouRelMultFollower = 0.65;
   private static forYouRelMultStranger = 0.3;
   /** Floor multiplier for a post you saw moments ago (recovers toward ~0.95 after about four days). */
   private static forYouSeenFloor = 0.12;
   /** Time constant (hours) for the seen-decay recovery. */
   private static forYouSeenHalfLifeHours = 48;
-  /** Bonus when someone the viewer follows has replied to or boosted the post. */
+  /**
+   * Extra compounding bonus for posts by authors the viewer follows that ALSO got friend
+   * engagement — both signals point at the same post, so compounding is warranted. For the E
+   * tier (friend engaged, viewer doesn't follow the author) this mult is NOT applied; the
+   * social proof is already captured in forYouFriendCommentedMult.
+   */
   private static forYouFriendEngagementMult = 2.2;
   private static forYouFriendEngagementBaseFloor = 6;
   /** Low-priority discovery: authors followed by people the viewer follows. */
@@ -284,9 +296,16 @@ export class PostsService {
   private static forYouSecondDegreeWindowHours = 72;
   private static forYouSecondDegreeMaxAuthors = 80;
   private static forYouSecondDegreePathBonusMax = 1.5;
-  /** Gentle freshness bias: close scores should favor newer posts without burying strong older posts. */
-  private static forYouRecencyHalfLifeHours = 72;
-  private static forYouRecencyFloor = 0.65;
+  /**
+   * Strong freshness bias: posts in the last 24h dominate, then 48h, then 72h, with a low floor so
+   * months-old content can't ride a tall trendingScore back onto page one. A genuinely popular older
+   * post still wins when its raw trending is high enough — the floor is non-zero on purpose.
+   */
+  private static forYouRecencyHalfLifeHours = 36;
+  private static forYouRecencyFloor = 0.1;
+  /** Explicit fresh-window boosts so 24h > 48h > 72h ordering is unambiguous at parity. */
+  private static forYouFreshBoost24h = 1.2;
+  private static forYouFreshBoost48h = 1.05;
   /** Member-group posts should rank by relationship; open non-member groups stay lower-priority discovery. */
   private static forYouMemberGroupMult = 1.0;
   private static forYouOpenFollowGroupMult = 0.55;
@@ -296,7 +315,7 @@ export class PostsService {
   private static forYouRecentFeedSeenExtraPenaltyHours = 24;
   private static forYouRecentFeedSeenExtraPenaltyMult = 0.65;
   /** Per-author diversity walk: max 1 occurrence in any window of this many consecutive rows. */
-  private static forYouMaxPerAuthorWindow = 3;
+  private static forYouMaxPerAuthorWindow = 5;
 
   private encodePopularCursor(cursor: { score: number; createdAt: string; id: string }) {
     return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
@@ -1593,6 +1612,7 @@ export class PostsService {
       secondDegreePaths: number;
       memberGroup: boolean;
       openFollowGroup: boolean;
+      lastFriendEngagementAt: Date | null;
     };
     let trendingScanned: ScannedRow[] = [];
     let chronoScanned: ScannedRow[] = [];
@@ -1845,6 +1865,7 @@ export class PostsService {
           secondDegreePaths: lane === 'secondDegree' ? (secondDegreePathCountByAuthor.get(row.userId) ?? 1) : 0,
           memberGroup: lane === 'memberGroup',
           openFollowGroup: lane === 'openFollowGroup',
+          lastFriendEngagementAt: null,
         });
       }
     };
@@ -1873,8 +1894,9 @@ export class PostsService {
 
     const candidateIds = candidates.map((c) => c.id);
     const authorIds = [...new Set(candidates.map((c) => c.userId))];
+    const friendEngagedIds = candidates.filter((c) => c.friendEngaged).map((c) => c.id);
 
-    const [followerRows, viewedRows] = await Promise.all([
+    const [followerRows, viewedRows, friendBoostRows, friendReplyRows] = await Promise.all([
       this.prisma.follow.findMany({
         where: { followingId: viewerUserId, followerId: { in: authorIds } },
         select: { followerId: true },
@@ -1883,6 +1905,27 @@ export class PostsService {
         where: { userId: viewerUserId, postId: { in: candidateIds } },
         select: { postId: true, createdAt: true, lastSeenAt: true, seenCount: true, lastSource: true },
       }),
+      // Latest boost timestamp per post by anyone the viewer follows. Drives `lastFriendEngagementAt`
+      // so an old post with a fresh friend-boost ranks like fresh content.
+      friendEngagedIds.length > 0 && viewerFollowingIds.length > 0
+        ? this.prisma.boost.groupBy({
+            by: ['postId'],
+            where: { postId: { in: friendEngagedIds }, userId: { in: viewerFollowingIds } },
+            _max: { createdAt: true },
+          })
+        : Promise.resolve([] as Array<{ postId: string; _max: { createdAt: Date | null } }>),
+      // Latest reply timestamp per post by anyone the viewer follows.
+      friendEngagedIds.length > 0 && viewerFollowingIds.length > 0
+        ? this.prisma.post.groupBy({
+            by: ['parentId'],
+            where: {
+              parentId: { in: friendEngagedIds },
+              userId: { in: viewerFollowingIds },
+              deletedAt: null,
+            },
+            _max: { createdAt: true },
+          })
+        : Promise.resolve([] as Array<{ parentId: string | null; _max: { createdAt: Date | null } }>),
     ]);
 
     const youFollow = new Set(viewerFollowingIds);
@@ -1898,17 +1941,43 @@ export class PostsService {
       ]),
     );
 
+    const lastFriendEngagementAt = new Map<string, Date>();
+    for (const row of friendBoostRows) {
+      const at = row._max.createdAt;
+      if (at) lastFriendEngagementAt.set(row.postId, at);
+    }
+    for (const row of friendReplyRows) {
+      const pid = row.parentId;
+      const at = row._max.createdAt;
+      if (!pid || !at) continue;
+      const existing = lastFriendEngagementAt.get(pid);
+      if (!existing || at.getTime() > existing.getTime()) lastFriendEngagementAt.set(pid, at);
+    }
+    for (const c of candidates) {
+      if (c.friendEngaged) {
+        c.lastFriendEngagementAt = lastFriendEngagementAt.get(c.id) ?? null;
+      }
+    }
+
     const now = Date.now();
     const ranked = candidates.map((c) => {
       const youFollowThem = youFollow.has(c.userId);
       const theyFollowYou = followsYou.has(c.userId);
+      // Relationship tiers (A > B > E > C > D):
+      //   A (1.6)  — mutual follow
+      //   B (1.1)  — you follow them
+      //   E (0.85) — friend engaged, but you don't follow the author
+      //   C (0.65) — they follow you (no friend engagement)
+      //   D (0.3)  — no relationship
       const relMult = youFollowThem && theyFollowYou
         ? PostsService.forYouRelMultMutual
         : youFollowThem
           ? PostsService.forYouRelMultFollowing
-          : theyFollowYou
-            ? PostsService.forYouRelMultFollower
-            : PostsService.forYouRelMultStranger;
+          : c.friendEngaged
+            ? PostsService.forYouFriendCommentedMult
+            : theyFollowYou
+              ? PostsService.forYouRelMultFollower
+              : PostsService.forYouRelMultStranger;
 
       const seen = seenById.get(c.id);
       let seenMult = 1.0;
@@ -1925,7 +1994,10 @@ export class PostsService {
         }
       }
 
-      const friendMult = c.friendEngaged ? PostsService.forYouFriendEngagementMult : 1.0;
+      // Only compound the 2.2x bonus when you already follow the author (tiers A/B). For the
+      // E tier (friend engaged, stranger/follower author) the social proof is fully captured in
+      // forYouFriendCommentedMult — stacking would over-reward the same signal twice.
+      const friendMult = c.friendEngaged && youFollowThem ? PostsService.forYouFriendEngagementMult : 1.0;
       const followedUnseenMult = c.followingUnseen ? PostsService.forYouFollowedUnseenMult : 1.0;
       const secondDegreePathBonus = c.secondDegree
         ? Math.min(PostsService.forYouSecondDegreePathBonusMax, 1 + Math.max(0, c.secondDegreePaths - 1) * 0.15)
@@ -1936,10 +2008,21 @@ export class PostsService {
         : c.openFollowGroup
           ? PostsService.forYouOpenFollowGroupMult
           : 1.0;
-      const ageHours = Math.max(0, (now - c.createdAt.getTime()) / (60 * 60 * 1000));
-      const recencyMult =
+      // Effective age uses the freshest of (post createdAt, latest friend engagement) — a months-old
+      // post with a 2h-ago reply from someone the viewer follows ranks like fresh content.
+      const friendEngagementMs = c.lastFriendEngagementAt?.getTime() ?? 0;
+      const effectiveAtMs = Math.max(c.createdAt.getTime(), friendEngagementMs);
+      const ageHours = Math.max(0, (now - effectiveAtMs) / (60 * 60 * 1000));
+      const decay =
         PostsService.forYouRecencyFloor +
         (1 - PostsService.forYouRecencyFloor) * Math.exp(-ageHours / PostsService.forYouRecencyHalfLifeHours);
+      const freshBoost =
+        ageHours < 24
+          ? PostsService.forYouFreshBoost24h
+          : ageHours < 48
+            ? PostsService.forYouFreshBoost48h
+            : 1.0;
+      const recencyMult = decay * freshBoost;
 
       // Chrono-tail rows have null/0 trendingScore — give them a base of 1.0 so personal multipliers
       // can still rank them. Engaged rows keep their real trending score as the base.

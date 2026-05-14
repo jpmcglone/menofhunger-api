@@ -1571,6 +1571,12 @@ describe('PostsService.listForYouFeed', () => {
     seenAtByPostId?: Record<string, SeenFixture>;
     friendReplyParentIds?: string[];
     friendBoostPostIds?: string[];
+    /**
+     * When set, the friend-engagement timestamp lookup (used to give old posts a recent-engagement
+     * "effective age") returns these dates. Keyed by postId. Posts without an entry fall back to
+     * their own createdAt (i.e. no engagement-driven freshness).
+     */
+    friendEngagementAtByPostId?: Record<string, Date>;
     secondDegreeEdges?: Array<{ followerId: string; followingId: string }>;
     blockedAuthorIds?: string[];
     memberGroupIds?: string[];
@@ -1582,6 +1588,7 @@ describe('PostsService.listForYouFeed', () => {
     const seenAtByPostId = opts.seenAtByPostId ?? {};
     const friendReplyParentIds = opts.friendReplyParentIds ?? [];
     const friendBoostPostIds = opts.friendBoostPostIds ?? [];
+    const friendEngagementAtByPostId = opts.friendEngagementAtByPostId ?? {};
     const secondDegreeEdges = opts.secondDegreeEdges ?? [];
     const blockedAuthorIds = opts.blockedAuthorIds ?? [];
     const memberGroupIds = opts.memberGroupIds ?? [];
@@ -1607,6 +1614,18 @@ describe('PostsService.listForYouFeed', () => {
     const post = {
       findUnique: jest.fn(),
       findFirst: jest.fn(async () => null),
+      groupBy: jest.fn(async (args: any) => {
+        // The For You ranker groups replies by parentId to find the latest reply by anyone the
+        // viewer follows. Mirror that exact shape here.
+        if (Array.isArray(args?.by) && args.by.includes('parentId')) {
+          const inSet: string[] = args?.where?.parentId?.in ?? [];
+          return friendReplyParentIds
+            .filter((id) => inSet.includes(id))
+            .filter((id) => friendEngagementAtByPostId[id] != null)
+            .map((id) => ({ parentId: id, _max: { createdAt: friendEngagementAtByPostId[id] } }));
+        }
+        return [];
+      }),
       findMany: jest.fn(async (args: any) => {
         if (args?.select) {
           let pool = candidates.slice();
@@ -1730,6 +1749,17 @@ describe('PostsService.listForYouFeed', () => {
           .filter((id) => inSet.includes(id))
           .map((id) => ({ postId: id }));
       }),
+      groupBy: jest.fn(async (args: any) => {
+        // The For You ranker groups boosts by postId for friend-engaged candidates only.
+        if (Array.isArray(args?.by) && args.by.includes('postId')) {
+          const inSet: string[] = args?.where?.postId?.in ?? [];
+          return friendBoostPostIds
+            .filter((id) => inSet.includes(id))
+            .filter((id) => friendEngagementAtByPostId[id] != null)
+            .map((id) => ({ postId: id, _max: { createdAt: friendEngagementAtByPostId[id] } }));
+        }
+        return [];
+      }),
     };
 
     // The friend-replies query reuses post.findMany with `parentId.in` and `userId.in`.
@@ -1838,6 +1868,27 @@ describe('PostsService.listForYouFeed', () => {
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-mutual', 'p-follow', 'p-follower', 'p-stranger']);
   });
 
+  it('ranks friend-engaged-stranger post (E tier) between you-follow (B) and they-follow (C) tiers', async () => {
+    // Three posts with identical trendingScore and age. The only signal is the author relationship:
+    //   B — viewer follows the author (relMult = 1.1, no friend engagement)
+    //   E — viewer doesn't follow author, but someone they follow engaged (relMult = 0.85)
+    //   C — author follows viewer, no friend engagement (relMult = 0.65)
+    // Expected order: B > E > C (A > B > E > C > D is the full tier hierarchy).
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-b-follow',      'u-follow',   10, 1),
+        cand('p-e-friend',      'u-stranger', 10, 1),
+        cand('p-c-follower',    'u-follower', 10, 1),
+      ],
+      youFollowAuthorIds: ['u-follow', 'friend-1'],
+      followsYouAuthorIds: ['u-follower'],
+      friendBoostPostIds: ['p-e-friend'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-b-follow', 'p-e-friend', 'p-c-follower']);
+  });
+
   it('puts recent unseen followed posts ahead of unrelated trending on page one', async () => {
     const { service } = setupForYou({
       candidates: [
@@ -1912,7 +1963,11 @@ describe('PostsService.listForYouFeed', () => {
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-fresh', 'p-seen-old', 'p-seen-new']);
   });
 
-  it('gives newer posts a gentle edge when relevance is otherwise close', async () => {
+  it('gives newer posts a strong edge over a slightly-higher older post', async () => {
+    // Under the recency formula, a 1h-old post with `trendingScore=10` clobbers a 72h-old post
+    // with `trendingScore=11`. The recency multiplier collapses by ~5x between 1h and 72h, so a
+    // marginally higher older score can't win — only a meaningfully bigger one can (covered in
+    // the dedicated "blockbuster" test below).
     const { service } = setupForYou({
       candidates: [
         cand('p-older-slightly-higher', 'u-old', 11, 72),
@@ -1922,6 +1977,57 @@ describe('PostsService.listForYouFeed', () => {
 
     const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-newer-slightly-lower', 'p-older-slightly-higher']);
+  });
+
+  it('orders posts strictly by recency when trending and relationship are equal (24h > 48h > 72h)', async () => {
+    // All three posts have identical `trendingScore` and stranger relationship. The only signal
+    // left is post age, so the result must be strictly newest-first across the 24h/48h/72h
+    // buckets the user described.
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-12h', 'u-a', 50, 12),
+        cand('p-36h', 'u-b', 50, 36),
+        cand('p-60h', 'u-c', 50, 60),
+      ],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-12h', 'p-36h', 'p-60h']);
+  });
+
+  it('lets a high-trending 72h post still beat a moderately-trending 6h post', async () => {
+    // The user's explicit requirement: a *really* popular older post can still rank above a
+    // fresher post. Engagement has to be much higher (~5x), but it's not impossible — the floor
+    // on the recency multiplier is non-zero on purpose.
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-blockbuster-72h', 'u-old', 100, 72),
+        cand('p-fresh-modest', 'u-new', 20, 6),
+      ],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-blockbuster-72h', 'p-fresh-modest']);
+  });
+
+  it('uses the latest friend-engagement timestamp as effective age for friend-engaged posts', async () => {
+    // A 30-day-old post with a 2h-ago reply from someone the viewer follows should rank like
+    // fresh content — that's the user's "older posts that have RECENT replies by people you
+    // follow can also be scored up a bit" requirement. Without engagement-based recency this
+    // post would be hammered to ~floor by its 30-day age.
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-old-friend-replied', 'u-old', 10, 24 * 30),
+        cand('p-fresh-stranger', 'u-stranger', 10, 24),
+      ],
+      youFollowAuthorIds: ['friend-1'],
+      friendReplyParentIds: ['p-old-friend-replied'],
+      friendEngagementAtByPostId: { 'p-old-friend-replied': twoHoursAgo },
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-old-friend-replied', 'p-fresh-stranger']);
   });
 
   it('uses lastSeenAt, not first createdAt, so refreshes suppress posts seen again moments ago', async () => {
@@ -2082,8 +2188,8 @@ describe('PostsService.listForYouFeed', () => {
   });
 
   it('prefers per-author diversity in the first pass when alternates exist', async () => {
-    // Populated universe: alternates exist for every cap-blocked slot, so the soft second-pass
-    // never has to fire — diversity wins outright.
+    // Populated universe with 4 unique authors: alternates exist for every cap-blocked slot, so
+    // the soft second-pass never has to fire — diversity wins outright across a 4-row page.
     const { service } = setupForYou({
       candidates: [
         cand('p1', 'hot-author', 100, 1),
@@ -2092,17 +2198,48 @@ describe('PostsService.listForYouFeed', () => {
         cand('p4', 'hot-author', 40, 1),
         cand('p5', 'other-b', 30, 1),
         cand('p6', 'hot-author', 20, 1),
+        cand('p7', 'other-c', 15, 1),
       ],
     });
 
     const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 4, cursor: null, visibility: 'all' });
     const ids = out.posts.map((p: any) => p.id);
-    // p2 blocked (immediately after hot-author at p1).
-    // p3 picked (other-a).
-    // p4 blocked (hot-author still inside the 3-row window: positions 0,2,3).
+    // p2 blocked (hot-author already at p1).
+    // p3 picked (other-a — first appearance).
+    // p4 blocked (hot-author still inside the 5-row window).
     // p5 picked (other-b — first appearance).
-    // p6 picked (hot-author re-eligible: 3 picks since p1).
-    expect(ids).toEqual(['p1', 'p3', 'p5', 'p6']);
+    // p6 blocked (hot-author still inside the 5-row window).
+    // p7 picked (other-c — first appearance fills the 4th slot).
+    expect(ids).toEqual(['p1', 'p3', 'p5', 'p7']);
+  });
+
+  it('keeps a single author from clustering across the 5-row diversity window', async () => {
+    // u-prolific authors most of the candidate pool; with `forYouMaxPerAuthorWindow = 5`, only
+    // ONE u-prolific post should appear in any 5-pick window — and the page should be filled
+    // with filler authors instead. Under the previous window=3, two u-prolific posts could
+    // share the same 5-row window; under window=5, they cannot.
+    const { service } = setupForYou({
+      candidates: [
+        cand('p1', 'u-prolific', 100, 1),
+        cand('p2', 'u-prolific', 95, 1),
+        cand('p-a', 'u-a', 90, 1),
+        cand('p3', 'u-prolific', 85, 1),
+        cand('p-b', 'u-b', 80, 1),
+        cand('p4', 'u-prolific', 75, 1),
+        cand('p-c', 'u-c', 70, 1),
+        cand('p5', 'u-prolific', 65, 1),
+        cand('p-d', 'u-d', 60, 1),
+        cand('p-e', 'u-e', 55, 1),
+        cand('p-f', 'u-f', 50, 1),
+      ],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 6, cursor: null, visibility: 'all' });
+    const ids = out.posts.map((p: any) => p.id);
+    // First-pass picks the highest-scored u-prolific (p1) then walks past every subsequent
+    // u-prolific candidate inside the 5-row window, picking fillers instead until the page is
+    // full at 6.
+    expect(ids).toEqual(['p1', 'p-a', 'p-b', 'p-c', 'p-d', 'p-e']);
   });
 
   it('prefers root diversity in the first pass when one conversation has multiple high-ranked replies', async () => {
