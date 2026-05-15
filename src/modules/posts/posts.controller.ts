@@ -996,6 +996,10 @@ export class PostsController {
       const resolvedGroupPreview = opts.isGatedRoot
         ? opts.groupPreview ?? null
         : ownGroupPreview ?? undefined;
+      const quotedPostRaw = (p as any).quotedPost ?? null;
+      const quotedPostDto = quotedPostRaw
+        ? toPostDto(quotedPostRaw, r2)
+        : undefined;
       const dto = toPostDto(p, r2, {
         viewerHasBoosted: boosted.has(p.id),
         viewerHasBookmarked: bookmarksByPostId.has(p.id),
@@ -1009,6 +1013,7 @@ export class PostsController {
             ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
             : undefined,
         repostedPost: opts.repostedPost,
+        quotedPost: quotedPostDto,
         // Only the root (requested) post is gated; ancestors are accessible.
         viewerCanAccess: opts.isGatedRoot ? false : undefined,
         groupPreview: resolvedGroupPreview,

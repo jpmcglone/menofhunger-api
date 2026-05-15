@@ -73,6 +73,15 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     const repostedPostRaw = repostedPostIdVal ? repostedPostMap?.get(repostedPostIdVal) : undefined;
     const repostedPostDto = repostedPostRaw ? attachParentChain(repostedPostRaw) : undefined;
 
+    // For posts with an embedded quoted-post link, convert the nested DB row (if already
+    // fetched via the Prisma include) into a DTO so the client renders it instantly without
+    // a secondary network round-trip.  Deliberately uses toPostDto directly (not
+    // attachParentChain) to stay shallow — no parent threading needed for a quoted post.
+    const quotedPostRaw = (post as any).quotedPost ?? null;
+    const quotedPostDto = quotedPostRaw
+      ? toPostDto(quotedPostRaw as PostWithAuthorAndMedia, baseUrl)
+      : undefined;
+
     const postViewerCanAccess = viewerCanAccessByPostId ? (viewerCanAccessByPostId.get(post.id) ?? true) : undefined;
 
     const gid = String((post as { communityGroupId?: string | null }).communityGroupId ?? '').trim();
@@ -87,6 +96,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
       viewerBlockStatus: viewerBlockStatus ?? undefined,
       viewerHasReposted: repostedByPostId ? repostedByPostId.has(post.id) : undefined,
       repostedPost: repostedPostDto,
+      quotedPost: quotedPostDto,
       includeInternal: viewerHasAdmin,
       internalOverride:
         internalOverride || (typeof score === 'number' ? { score } : undefined)

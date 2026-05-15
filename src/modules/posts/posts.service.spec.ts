@@ -1903,6 +1903,44 @@ describe('PostsService.listForYouFeed', () => {
     expect(out.posts.map((p: any) => p.id)[0]).toBe('p-followed-new');
   });
 
+  it('puts a brand-new unseen mutual-follow post at the top, even when older followed posts have much higher trendingScore', async () => {
+    // Reproduces the reported regression: viewer (A) follows several active users; user B (a
+    // mutual follow) posts something a minute ago, but every other followed author has an older
+    // post with a fat trendingScore. Because the new post has trendingScore=null, its `adjusted`
+    // score lands well below the older posts. Picking the followed-unseen quota by `adjusted`
+    // would bury the new post — A would refresh For You and not see B's new post anywhere.
+    // The quota must be ordered by recency so the freshest follow post wins the "tippy top" slot.
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-fresh-mutual', 'u-fresh-mutual', null, 1 / 60),
+        cand('p-old-popular-1', 'u-pop-a', 500, 24),
+        cand('p-old-popular-2', 'u-pop-b', 400, 30),
+        cand('p-old-popular-3', 'u-pop-c', 300, 36),
+      ],
+      youFollowAuthorIds: ['u-fresh-mutual', 'u-pop-a', 'u-pop-b', 'u-pop-c'],
+      followsYouAuthorIds: ['u-fresh-mutual'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 5, cursor: null, visibility: 'all' });
+    expect(out.posts[0]?.id).toBe('p-fresh-mutual');
+  });
+
+  it('prefers a mutual-follow post over a one-way-follow post when both are in the same recency tier', async () => {
+    // Within a 2h freshness tier, mutual follows beat one-way follows — the user explicitly
+    // asked for mutuals to sit higher at the top. Outside the tier (older), recency wins.
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-one-way', 'u-one-way', null, 0.25),
+        cand('p-mutual', 'u-mutual', null, 0.75),
+      ],
+      youFollowAuthorIds: ['u-mutual', 'u-one-way'],
+      followsYouAuthorIds: ['u-mutual'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 5, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id).slice(0, 2)).toEqual(['p-mutual', 'p-one-way']);
+  });
+
   it('keeps unseen followed posts above recently seen followed posts', async () => {
     const { service } = setupForYou({
       candidates: [

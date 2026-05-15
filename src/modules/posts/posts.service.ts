@@ -16,7 +16,7 @@ import { inferTopicsFromText } from '../../common/topics/topic-utils';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
-import { ARTICLE_SHARE_INCLUDE, POST_MEDIA_FEED_INCLUDE, POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
+import { ARTICLE_SHARE_INCLUDE, POST_MEDIA_FEED_INCLUDE, POST_WITH_POLL_INCLUDE, QUOTED_POST_INCLUDE } from '../../common/prisma-includes/post.include';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
@@ -316,6 +316,13 @@ export class PostsService {
   private static forYouRecentFeedSeenExtraPenaltyMult = 0.65;
   /** Per-author diversity walk: max 1 occurrence in any window of this many consecutive rows. */
   private static forYouMaxPerAuthorWindow = 5;
+  /**
+   * Width of the recency tier used when ordering the followed-unseen quota. Within the same tier
+   * we prefer mutual follows; across tiers, the newer tier always wins. Wider tiers give mutuals
+   * more reach; narrower tiers make recency dominate. 2h is the sweet spot: a brand-new follow-only
+   * post still beats a 3-hour-old mutual, but a 30-minute-old mutual beats a 90-minute-old one-way.
+   */
+  private static forYouFollowedQuotaBucketHours = 2;
 
   private encodePopularCursor(cursor: { score: number; createdAt: string; id: string }) {
     return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
@@ -2076,7 +2083,27 @@ export class PostsService {
     };
 
     const followedQuota = Math.min(limit, Math.ceil(limit * PostsService.forYouFollowedUnseenQuotaRatio));
-    pickFrom(ranked.filter((r) => r.candidate.followingUnseen), followedQuota);
+    // The followed-unseen quota is the "tippy top" of the feed for the viewer. Order it by
+    // recency (newest first), with mutual follows preferred within the same recency bucket.
+    // Using `ranked`'s `adjusted` score here would bury a brand-new follow post under older
+    // follow posts that already accumulated trendingScore — the viewer would refresh and not
+    // see the post their friend just sent.
+    const bucketHours = PostsService.forYouFollowedQuotaBucketHours;
+    const followedUnseenSorted = ranked
+      .filter((r) => r.candidate.followingUnseen)
+      .slice()
+      .sort((a, b) => {
+        const aAgeH = Math.max(0, (now - a.candidate.createdAt.getTime()) / (60 * 60 * 1000));
+        const bAgeH = Math.max(0, (now - b.candidate.createdAt.getTime()) / (60 * 60 * 1000));
+        const aBucket = Math.floor(aAgeH / bucketHours);
+        const bBucket = Math.floor(bAgeH / bucketHours);
+        if (aBucket !== bBucket) return aBucket - bBucket;
+        const aMutual = youFollow.has(a.candidate.userId) && followsYou.has(a.candidate.userId);
+        const bMutual = youFollow.has(b.candidate.userId) && followsYou.has(b.candidate.userId);
+        if (aMutual !== bMutual) return aMutual ? -1 : 1;
+        return b.candidate.createdAt.getTime() - a.candidate.createdAt.getTime();
+      });
+    pickFrom(followedUnseenSorted, followedQuota);
     pickFrom(ranked, limit);
 
     if (picked.length < limit && skipped.length > 0) {
@@ -3614,6 +3641,7 @@ export class PostsService {
         media: { orderBy: { position: 'asc' } },
         poll: { include: { options: { orderBy: { position: 'asc' } } } },
         mentions: { include: { user: { select: MENTION_USER_SELECT } } },
+        quotedPost: { include: QUOTED_POST_INCLUDE },
       },
     });
     if (!post) throw new NotFoundException('Post not found.');
@@ -3690,6 +3718,7 @@ export class PostsService {
             poll: { include: { options: { orderBy: { position: 'asc' } } } },
             mentions: { include: { user: { select: MENTION_USER_SELECT } } },
             article: ARTICLE_SHARE_INCLUDE,
+            quotedPost: { include: QUOTED_POST_INCLUDE },
           },
         })
       : [];
@@ -3753,6 +3782,7 @@ export class PostsService {
         media: { orderBy: { position: 'asc' } },
         poll: { include: { options: { orderBy: { position: 'asc' } } } },
         mentions: { include: { user: { select: MENTION_USER_SELECT } } },
+        quotedPost: { include: QUOTED_POST_INCLUDE },
       },
     });
     if (!post) throw new NotFoundException('Post not found.');
