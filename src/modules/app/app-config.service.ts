@@ -67,7 +67,6 @@ export type MarvOpenAIConfig = {
   apiKey: string;
   /** OpenAI Stored Prompt id (e.g. "pmpt_..."). When unset, OpenAI calls are short-circuited. */
   promptId: string | null;
-  promptVersion: string | null;
   fastModel: string;
   regularModel: string;
   smartModel: string;
@@ -476,7 +475,6 @@ export class AppConfigService {
   marvOpenAI(): MarvOpenAIConfig {
     const apiKey = this.config.get<string>('OPENAI_API_KEY')?.trim() ?? '';
     const promptId = this.config.get<string>('OPENAI_MARV_PROMPT_ID')?.trim() || null;
-    const promptVersion = this.config.get<string>('OPENAI_MARV_PROMPT_VERSION')?.trim() || null;
     const fastModel = this.config.get<string>('OPENAI_MARV_FAST_MODEL')?.trim() || 'gpt-5.4-nano';
     const regularModel = this.config.get<string>('OPENAI_MARV_REGULAR_MODEL')?.trim() || 'gpt-5.4-mini';
     const smartModel = this.config.get<string>('OPENAI_MARV_SMART_MODEL')?.trim() || 'gpt-5.5';
@@ -498,7 +496,7 @@ export class AppConfigService {
     const visionModesRaw = this.config.get<string>('MARV_VISION_MODES')?.trim() || 'fast,regular,smart';
     const visionModes = visionModesRaw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
     const visionMaxImagesPerTurn = this.readPositiveInt('MARV_VISION_MAX_IMAGES_PER_TURN', 4);
-    return { apiKey, promptId, promptVersion, fastModel, regularModel, smartModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens, visionEnabled, visionModes, visionMaxImagesPerTurn };
+    return { apiKey, promptId, fastModel, regularModel, smartModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens, visionEnabled, visionModes, visionMaxImagesPerTurn };
   }
 
   marvCredits(): MarvCreditConfig {

@@ -149,7 +149,7 @@ export class MarvinAIService {
 
     const model = this.modelForMode(req.mode);
     this.logger.log(
-      `[marv-ai] respond start source=${req.source} mode=${req.mode} model=${model} promptId=${promptId} promptVersion=${cfg.promptVersion ?? 'latest'} maxOut=${limits.maxOutputTokens} prevResp=${req.previousResponseId ?? 'null'} cacheKey=${req.cacheKey ?? '-'}`,
+      `[marv-ai] respond start source=${req.source} mode=${req.mode} model=${model} promptId=${promptId} maxOut=${limits.maxOutputTokens} prevResp=${req.previousResponseId ?? 'null'} cacheKey=${req.cacheKey ?? '-'}`,
     );
 
     // Vision: only activate when feature flag is on and mode is in allowed list.
@@ -218,7 +218,7 @@ export class MarvinAIService {
 
     const baseRequest: Record<string, unknown> = {
       model,
-      prompt: cfg.promptVersion ? { id: promptId, version: cfg.promptVersion } : { id: promptId },
+      prompt: { id: promptId },
       max_output_tokens: effectiveMaxOutputTokens,
       store: true,
       prompt_cache_key: req.cacheKey,
