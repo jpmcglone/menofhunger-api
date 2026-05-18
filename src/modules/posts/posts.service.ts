@@ -266,9 +266,28 @@ export class PostsService {
   private static forYouScanTakeMax = 240;
   private static forYouCursorServedIdMax = 300;
   private static forYouRecentFollowedWindowHours = 48;
-  private static forYouFollowedUnseenQuotaRatio = 0.6;
+  /**
+   * Followed-unseen quota ratio is now depth-aware (see listForYouFeed):
+   *   page 1 (servedIds == 0):  70% — strongly user-first
+   *   page 2 (servedIds 1–50): 55% — slightly more discovery
+   *   page 3+ (servedIds 50+): 40% — fans out further
+   * This constant is kept for reference only.
+   */
+  private static forYouFollowedUnseenQuotaRatio = 0.65;
   private static forYouFollowedUnseenMult = 3.5;
-  private static forYouRelMultMutual = 1.6;
+  /**
+   * Relationship tiers (A+ > A > B > E > C > D):
+   *   A+ (2.0) — you follow them AND recently boosted/replied to their content (engagement history)
+   *   A  (1.8) — mutual follow
+   *   B  (1.1) — you follow them
+   *   E  (0.85) — friend engaged, but you don't follow the author
+   *   C  (0.65) — they follow you (no friend engagement)
+   *   D  (0.15) — no relationship
+   */
+  private static forYouRelMultEngaged = 2.0;
+  /** Lookback window (days) for viewer's boost/reply engagement history used to identify A+ tier authors. */
+  private static forYouEngagedWithWindowDays = 30;
+  private static forYouRelMultMutual = 1.8;
   private static forYouRelMultFollowing = 1.1;
   /**
    * E tier: viewer doesn't follow the author, but someone they follow engaged (replied/boosted).
@@ -278,7 +297,8 @@ export class PostsService {
    */
   private static forYouFriendCommentedMult = 0.85;
   private static forYouRelMultFollower = 0.65;
-  private static forYouRelMultStranger = 0.3;
+  /** Demoted: no social connection means global virality is not a good relevance signal. */
+  private static forYouRelMultStranger = 0.15;
   /** Floor multiplier for a post you saw moments ago (recovers toward ~0.95 after about four days). */
   private static forYouSeenFloor = 0.12;
   /** Time constant (hours) for the seen-decay recovery. */
@@ -291,10 +311,17 @@ export class PostsService {
    */
   private static forYouFriendEngagementMult = 2.2;
   private static forYouFriendEngagementBaseFloor = 6;
+  /**
+   * Social proof base weight: each following-user who engaged a friend-engaged post adds this
+   * many base points, making social-graph density the primary ranking signal over global virality.
+   */
+  private static forYouSocialProofBaseWeight = 4.0;
   /** Low-priority discovery: authors followed by people the viewer follows. */
   private static forYouSecondDegreeMult = 1.5;
-  private static forYouSecondDegreeWindowHours = 72;
-  private static forYouSecondDegreeMaxAuthors = 80;
+  /** Extended to 1 week so the second-degree lane fans out meaningfully as users scroll deeper. */
+  private static forYouSecondDegreeWindowHours = 168;
+  /** Widened to surface more social-graph-adjacent authors for discovery. */
+  private static forYouSecondDegreeMaxAuthors = 200;
   private static forYouSecondDegreePathBonusMax = 1.5;
   /**
    * Strong freshness bias: posts in the last 24h dominate, then 48h, then 72h, with a low floor so
@@ -308,7 +335,8 @@ export class PostsService {
   private static forYouFreshBoost48h = 1.05;
   /** Member-group posts should rank by relationship; open non-member groups stay lower-priority discovery. */
   private static forYouMemberGroupMult = 1.0;
-  private static forYouOpenFollowGroupMult = 0.55;
+  /** Demoted: open groups are weakly social and should not crowd the early feed. */
+  private static forYouOpenFollowGroupMult = 0.35;
   private static forYouGroupWindowHours = 72;
   /** Repeated exposures should recover slower than posts seen once. */
   private static forYouSeenRepeatPenaltyStrength = 0.35;
@@ -318,9 +346,9 @@ export class PostsService {
   private static forYouMaxPerAuthorWindow = 5;
   /**
    * Width of the recency tier used when ordering the followed-unseen quota. Within the same tier
-   * we prefer mutual follows; across tiers, the newer tier always wins. Wider tiers give mutuals
-   * more reach; narrower tiers make recency dominate. 2h is the sweet spot: a brand-new follow-only
-   * post still beats a 3-hour-old mutual, but a 30-minute-old mutual beats a 90-minute-old one-way.
+   * we prefer engaged-with > mutuals > one-way follows; across tiers, the newer tier always wins.
+   * 2h is the sweet spot: a brand-new follow-only post still beats a 3-hour-old mutual, but a
+   * 30-minute-old mutual beats a 90-minute-old one-way.
    */
   private static forYouFollowedQuotaBucketHours = 2;
 
@@ -1637,6 +1665,7 @@ export class PostsService {
     const followedSince = new Date(Date.now() - PostsService.forYouRecentFollowedWindowHours * 60 * 60 * 1000);
     const secondDegreeSince = new Date(Date.now() - PostsService.forYouSecondDegreeWindowHours * 60 * 60 * 1000);
     const groupSince = new Date(Date.now() - PostsService.forYouGroupWindowHours * 60 * 60 * 1000);
+    const engagedWithSince = new Date(Date.now() - PostsService.forYouEngagedWithWindowDays * 24 * 60 * 60 * 1000);
     const directNetworkExcludedIds = [...new Set([viewerUserId, ...viewerFollowingIds, ...blockedAuthorIds])];
     const memberGroupIds = await this.listActiveCommunityGroupIdsForUser(viewerUserId);
     const viewerCanReadOpenGroups = this.viewerContextService.isVerified(viewer);
@@ -1903,7 +1932,7 @@ export class PostsService {
     const authorIds = [...new Set(candidates.map((c) => c.userId))];
     const friendEngagedIds = candidates.filter((c) => c.friendEngaged).map((c) => c.id);
 
-    const [followerRows, viewedRows, friendBoostRows, friendReplyRows] = await Promise.all([
+    const [followerRows, viewedRows, friendBoostRows, friendReplyRows, viewerBoostRows, viewerReplyRows] = await Promise.all([
       this.prisma.follow.findMany({
         where: { followingId: viewerUserId, followerId: { in: authorIds } },
         select: { followerId: true },
@@ -1912,16 +1941,18 @@ export class PostsService {
         where: { userId: viewerUserId, postId: { in: candidateIds } },
         select: { postId: true, createdAt: true, lastSeenAt: true, seenCount: true, lastSource: true },
       }),
-      // Latest boost timestamp per post by anyone the viewer follows. Drives `lastFriendEngagementAt`
-      // so an old post with a fresh friend-boost ranks like fresh content.
+      // Latest boost timestamp + count of following-users per post. Drives `lastFriendEngagementAt`
+      // so an old post with a fresh friend-boost ranks like fresh content, and `_count` feeds the
+      // social-proof base score so graph density beats global virality in discovery.
       friendEngagedIds.length > 0 && viewerFollowingIds.length > 0
         ? this.prisma.boost.groupBy({
             by: ['postId'],
             where: { postId: { in: friendEngagedIds }, userId: { in: viewerFollowingIds } },
             _max: { createdAt: true },
+            _count: { userId: true },
           })
-        : Promise.resolve([] as Array<{ postId: string; _max: { createdAt: Date | null } }>),
-      // Latest reply timestamp per post by anyone the viewer follows.
+        : Promise.resolve([] as Array<{ postId: string; _max: { createdAt: Date | null }; _count: { userId: number } }>),
+      // Latest reply timestamp + count of following-users per post.
       friendEngagedIds.length > 0 && viewerFollowingIds.length > 0
         ? this.prisma.post.groupBy({
             by: ['parentId'],
@@ -1931,12 +1962,45 @@ export class PostsService {
               deletedAt: null,
             },
             _max: { createdAt: true },
+            _count: { userId: true },
           })
-        : Promise.resolve([] as Array<{ parentId: string | null; _max: { createdAt: Date | null } }>),
+        : Promise.resolve([] as Array<{ parentId: string | null; _max: { createdAt: Date | null }; _count: { userId: number } }>),
+      // Viewer's own recent boosts — used to identify A+ tier authors (people you actively engage with).
+      // Boost has @@unique([postId, userId]) so _count is effectively distinct users.
+      this.prisma.boost.findMany({
+        where: { userId: viewerUserId, createdAt: { gte: engagedWithSince } },
+        select: { post: { select: { userId: true } } },
+        take: 200,
+      }),
+      // Viewer's own recent replies — surfaces authors the viewer actively talks to.
+      this.prisma.post.findMany({
+        where: { userId: viewerUserId, parentId: { not: null }, createdAt: { gte: engagedWithSince } },
+        select: { parent: { select: { userId: true } } },
+        take: 200,
+      }),
     ]);
 
     const youFollow = new Set(viewerFollowingIds);
     const followsYou = new Set(followerRows.map((r) => r.followerId));
+
+    // A+ tier: authors the viewer has recently boosted or replied to (explicit engagement history).
+    const engagedWithAuthorIds = new Set<string>([
+      ...viewerBoostRows.map((r) => r.post.userId).filter(Boolean),
+      ...viewerReplyRows.map((r) => r.parent?.userId).filter((id): id is string => Boolean(id)),
+    ]);
+
+    // Social proof count: total engagements from following-users per candidate post.
+    // Used to make social-graph density the primary base for discovery slots instead of global trending.
+    const socialProofCountById = new Map<string, number>();
+    for (const row of friendBoostRows) {
+      socialProofCountById.set(row.postId, (socialProofCountById.get(row.postId) ?? 0) + row._count.userId);
+    }
+    for (const row of friendReplyRows) {
+      const pid = row.parentId;
+      if (!pid) continue;
+      socialProofCountById.set(pid, (socialProofCountById.get(pid) ?? 0) + row._count.userId);
+    }
+
     const seenById = new Map<string, { lastSeenAt: Date; seenCount: number; lastSource: string | null }>(
       viewedRows.map((r) => [
         r.postId,
@@ -1970,21 +2034,25 @@ export class PostsService {
     const ranked = candidates.map((c) => {
       const youFollowThem = youFollow.has(c.userId);
       const theyFollowYou = followsYou.has(c.userId);
-      // Relationship tiers (A > B > E > C > D):
-      //   A (1.6)  — mutual follow
-      //   B (1.1)  — you follow them
-      //   E (0.85) — friend engaged, but you don't follow the author
-      //   C (0.65) — they follow you (no friend engagement)
-      //   D (0.3)  — no relationship
-      const relMult = youFollowThem && theyFollowYou
-        ? PostsService.forYouRelMultMutual
-        : youFollowThem
-          ? PostsService.forYouRelMultFollowing
-          : c.friendEngaged
-            ? PostsService.forYouFriendCommentedMult
-            : theyFollowYou
-              ? PostsService.forYouRelMultFollower
-              : PostsService.forYouRelMultStranger;
+      const youEngagedWithThem = youFollowThem && engagedWithAuthorIds.has(c.userId);
+      // Relationship tiers (A+ > A > B > E > C > D):
+      //   A+ (2.0) — you follow them AND recently boosted/replied to their content
+      //   A  (1.8) — mutual follow
+      //   B  (1.1) — you follow them
+      //   E  (0.85) — friend engaged, but you don't follow the author
+      //   C  (0.65) — they follow you (no friend engagement)
+      //   D  (0.15) — no relationship
+      const relMult = youEngagedWithThem
+        ? PostsService.forYouRelMultEngaged
+        : youFollowThem && theyFollowYou
+          ? PostsService.forYouRelMultMutual
+          : youFollowThem
+            ? PostsService.forYouRelMultFollowing
+            : c.friendEngaged
+              ? PostsService.forYouFriendCommentedMult
+              : theyFollowYou
+                ? PostsService.forYouRelMultFollower
+                : PostsService.forYouRelMultStranger;
 
       const seen = seenById.get(c.id);
       let seenMult = 1.0;
@@ -2031,9 +2099,27 @@ export class PostsService {
             : 1.0;
       const recencyMult = decay * freshBoost;
 
-      // Chrono-tail rows have null/0 trendingScore — give them a base of 1.0 so personal multipliers
-      // can still rank them. Engaged rows keep their real trending score as the base.
-      const rawBase = c.trendingScore != null && c.trendingScore > 0 ? c.trendingScore : 1.0;
+      // Base score is user-first, not content-first:
+      //   - Friend-engaged: social proof (N follows who engaged × weight) dominates over global trending,
+      //     so a post engaged by 3 of your follows outranks a viral post with zero social connection.
+      //   - Pure discovery (no social connection to author + no second-degree/group signal): global
+      //     trending is demoted 40% so strangers' viral content doesn't crowd out social posts.
+      //     We check the RELATIONSHIP (youFollowThem/theyFollowYou), not lane flags, because a seen
+      //     post from a followed author only enters via trending scan (followingUnseen=false) but still
+      //     has a social connection and must NOT be demoted.
+      //   - All other cases (author in social graph, second-degree, groups): use trendingScore as-is.
+      const rawTrending = c.trendingScore != null && c.trendingScore > 0 ? c.trendingScore : 1.0;
+      const socialProofCount = socialProofCountById.get(c.id) ?? 0;
+      const noSocialConnection = !youFollowThem && !theyFollowYou && !c.secondDegree && !c.memberGroup && !c.openFollowGroup;
+      let rawBase: number;
+      if (c.friendEngaged) {
+        const socialBase = socialProofCount * PostsService.forYouSocialProofBaseWeight;
+        rawBase = Math.max(socialBase, rawTrending);
+      } else if (noSocialConnection) {
+        rawBase = rawTrending * 0.4;
+      } else {
+        rawBase = rawTrending;
+      }
       const base = c.friendEngaged ? Math.max(rawBase, PostsService.forYouFriendEngagementBaseFloor) : rawBase;
       const adjusted = base * recencyMult * relMult * seenMult * friendMult * followedUnseenMult * secondDegreeMult * groupMult;
       return { candidate: c, adjusted };
@@ -2082,9 +2168,18 @@ export class PostsService {
       }
     };
 
-    const followedQuota = Math.min(limit, Math.ceil(limit * PostsService.forYouFollowedUnseenQuotaRatio));
-    // The followed-unseen quota is the "tippy top" of the feed for the viewer. Order it by
-    // recency (newest first), with mutual follows preferred within the same recency bucket.
+    // Depth-aware quota: the feed fans out from user-first toward social discovery as the viewer
+    // scrolls deeper. servedIds.length is the number of posts already served in this session.
+    const paginationDepth = servedIds.length;
+    const followedUnseenRatio =
+      paginationDepth === 0
+        ? 0.70  // page 1: strongly user-first (people you follow dominate)
+        : paginationDepth <= 50
+          ? 0.55  // page 2: still follow-heavy but opens discovery
+          : 0.40; // page 3+: fans out into friend-engaged + second-degree
+    const followedQuota = Math.min(limit, Math.ceil(limit * followedUnseenRatio));
+    // The followed-unseen quota is the "tippy top" of the feed. Order it by recency bucket with
+    // preference for authors the viewer actively engages with, then mutuals, then recency.
     // Using `ranked`'s `adjusted` score here would bury a brand-new follow post under older
     // follow posts that already accumulated trendingScore — the viewer would refresh and not
     // see the post their friend just sent.
@@ -2098,6 +2193,10 @@ export class PostsService {
         const aBucket = Math.floor(aAgeH / bucketHours);
         const bBucket = Math.floor(bAgeH / bucketHours);
         if (aBucket !== bBucket) return aBucket - bBucket;
+        // Within bucket: engaged-with authors first (A+ tier), then mutuals (A), then one-way.
+        const aEngaged = engagedWithAuthorIds.has(a.candidate.userId);
+        const bEngaged = engagedWithAuthorIds.has(b.candidate.userId);
+        if (aEngaged !== bEngaged) return aEngaged ? -1 : 1;
         const aMutual = youFollow.has(a.candidate.userId) && followsYou.has(a.candidate.userId);
         const bMutual = youFollow.has(b.candidate.userId) && followsYou.has(b.candidate.userId);
         if (aMutual !== bMutual) return aMutual ? -1 : 1;

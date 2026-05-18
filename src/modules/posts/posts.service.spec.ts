@@ -1581,6 +1581,10 @@ describe('PostsService.listForYouFeed', () => {
     blockedAuthorIds?: string[];
     memberGroupIds?: string[];
     viewerVerified?: boolean;
+    /** Author IDs the viewer has recently boosted (A+ tier engagement history). */
+    viewerBoostedAuthorIds?: string[];
+    /** Author IDs of posts the viewer has recently replied to (A+ tier engagement history). */
+    viewerRepliedToAuthorIds?: string[];
   }) {
     const candidates = opts.candidates;
     const youFollowAuthorIds = opts.youFollowAuthorIds ?? [];
@@ -1593,6 +1597,8 @@ describe('PostsService.listForYouFeed', () => {
     const blockedAuthorIds = opts.blockedAuthorIds ?? [];
     const memberGroupIds = opts.memberGroupIds ?? [];
     const viewerVerified = opts.viewerVerified ?? true;
+    const viewerBoostedAuthorIds = opts.viewerBoostedAuthorIds ?? [];
+    const viewerRepliedToAuthorIds = opts.viewerRepliedToAuthorIds ?? [];
 
     function sortTrending(a: ForYouCandidate, b: ForYouCandidate) {
       const sa = a.trendingScore ?? 0;
@@ -1615,14 +1621,14 @@ describe('PostsService.listForYouFeed', () => {
       findUnique: jest.fn(),
       findFirst: jest.fn(async () => null),
       groupBy: jest.fn(async (args: any) => {
-        // The For You ranker groups replies by parentId to find the latest reply by anyone the
-        // viewer follows. Mirror that exact shape here.
+        // The For You ranker groups replies by parentId to find the latest reply + count by anyone
+        // the viewer follows. Mirror that exact shape here including _count.
         if (Array.isArray(args?.by) && args.by.includes('parentId')) {
           const inSet: string[] = args?.where?.parentId?.in ?? [];
           return friendReplyParentIds
             .filter((id) => inSet.includes(id))
             .filter((id) => friendEngagementAtByPostId[id] != null)
-            .map((id) => ({ parentId: id, _max: { createdAt: friendEngagementAtByPostId[id] } }));
+            .map((id) => ({ parentId: id, _max: { createdAt: friendEngagementAtByPostId[id] }, _count: { userId: 1 } }));
         }
         return [];
       }),
@@ -1744,6 +1750,10 @@ describe('PostsService.listForYouFeed', () => {
 
     const boost = {
       findMany: jest.fn(async (args: any) => {
+        // Viewer's own engagement history (A+ tier): returns author IDs of boosted posts.
+        if (args?.where?.userId === 'viewer') {
+          return viewerBoostedAuthorIds.map((authorId) => ({ post: { userId: authorId } }));
+        }
         const inSet: string[] = args?.where?.postId?.in ?? [];
         return friendBoostPostIds
           .filter((id) => inSet.includes(id))
@@ -1756,16 +1766,21 @@ describe('PostsService.listForYouFeed', () => {
           return friendBoostPostIds
             .filter((id) => inSet.includes(id))
             .filter((id) => friendEngagementAtByPostId[id] != null)
-            .map((id) => ({ postId: id, _max: { createdAt: friendEngagementAtByPostId[id] } }));
+            .map((id) => ({ postId: id, _max: { createdAt: friendEngagementAtByPostId[id] }, _count: { userId: 1 } }));
         }
         return [];
       }),
     };
 
-    // The friend-replies query reuses post.findMany with `parentId.in` and `userId.in`.
-    // Re-route that one specific shape to our friendReplyParentIds set.
+    // Re-route special post.findMany shapes that the For You ranker uses for supplementary lookups.
     const baseFindMany = post.findMany;
     post.findMany = jest.fn(async (args: any) => {
+      // Viewer's own recent replies (A+ tier engagement history): `parentId.not` means top-level only
+      // is NOT requested, and userId is the viewer.
+      if (args?.where?.userId === 'viewer' && args?.where?.parentId?.not === null) {
+        return viewerRepliedToAuthorIds.map((authorId) => ({ parent: { userId: authorId } }));
+      }
+      // Friend-replies: parentId.in + userId.in scoped to following set.
       if (args?.where?.parentId?.in && args?.where?.userId?.in) {
         const inSet: string[] = args.where.parentId.in;
         return friendReplyParentIds
@@ -2456,5 +2471,120 @@ describe('PostsService.listForYouFeed', () => {
     expect(out.posts).toEqual([]);
     expect(out.nextCursor).toBeNull();
     expect(post.findMany).not.toHaveBeenCalled();
+  });
+
+  it('ranks engaged-with author (A+ tier) above plain mutual (A tier) at equal trendingScore and age', async () => {
+    // Four posts, same trendingScore and age. Only the author's relationship to the viewer differs.
+    // A+ (2.0×): viewer follows the author AND recently boosted their content.
+    // A  (1.8×): mutual follow (no engagement history).
+    // B  (1.1×): viewer follows, author does not follow back.
+    // D  (0.15×): no relationship.
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-engaged',  'u-engaged',  10, 1),
+        cand('p-mutual',   'u-mutual',   10, 1),
+        cand('p-follow',   'u-follow',   10, 1),
+        cand('p-stranger', 'u-stranger', 10, 1),
+      ],
+      youFollowAuthorIds:     ['u-engaged', 'u-mutual', 'u-follow'],
+      followsYouAuthorIds:    ['u-mutual'],
+      viewerBoostedAuthorIds: ['u-engaged'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    const ids = out.posts.map((p: any) => p.id);
+    // A+ (engaged) must beat A (mutual) must beat B (follow) must beat D (stranger).
+    expect(ids.indexOf('p-engaged')).toBeLessThan(ids.indexOf('p-mutual'));
+    expect(ids.indexOf('p-mutual')).toBeLessThan(ids.indexOf('p-follow'));
+    expect(ids.indexOf('p-follow')).toBeLessThan(ids.indexOf('p-stranger'));
+  });
+
+  it('ranks engaged-with author (A+ tier) via reply history above plain mutual', async () => {
+    // Same as the boost variant but the engagement signal comes from the viewer's own replies.
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-replied-to', 'u-replied-to', 10, 1),
+        cand('p-mutual',     'u-mutual',     10, 1),
+      ],
+      youFollowAuthorIds:       ['u-replied-to', 'u-mutual'],
+      followsYouAuthorIds:      ['u-mutual'],
+      viewerRepliedToAuthorIds: ['u-replied-to'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    const ids = out.posts.map((p: any) => p.id);
+    expect(ids.indexOf('p-replied-to')).toBeLessThan(ids.indexOf('p-mutual'));
+  });
+
+  it('demotes pure-discovery viral posts below friend-engaged posts with social proof', async () => {
+    // A post engaged by one of the viewer's follows (friend-engaged) should outrank a viral
+    // stranger post. Under the old base=trendingScore logic a trendingScore=20 stranger post
+    // with relMult=0.15 after 40% demotion = 20*0.4*0.15=1.2 adjusted; the friend-engaged
+    // post with base=6 (floor) and relMult=0.85 yields 6*0.85=5.1 — friend-engaged wins.
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-viral-stranger',  'u-stranger', 20, 1),
+        cand('p-friend-boosted',  'u-quiet',    null, 1),
+      ],
+      youFollowAuthorIds: ['friend-1'],
+      friendBoostPostIds: ['p-friend-boosted'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    const ids = out.posts.map((p: any) => p.id);
+    expect(ids.indexOf('p-friend-boosted')).toBeLessThan(ids.indexOf('p-viral-stranger'));
+  });
+
+  it('does not demote posts from authors in the social graph (followed/follower) even when seen', async () => {
+    // A seen post from a followed author should keep its trendingScore base (not get 40% demotion)
+    // because the author IS in the viewer's social graph. Only authors with no relationship at all
+    // get the pure-discovery penalty.
+    const { service } = setupForYou({
+      candidates: [
+        cand('p-seen-follow', 'u-follow', 10, 1),
+        cand('p-stranger',    'u-stranger', 12, 1),
+      ],
+      youFollowAuthorIds: ['u-follow'],
+      seenAtByPostId: { 'p-seen-follow': new Date() }, // recently seen → seenMult ≈ 0.12
+    });
+
+    // p-seen-follow: base=10 (NOT 10*0.4 since youFollowThem), relMult=1.1, seenMult≈0.12 → ~1.3
+    // p-stranger:   base=12*0.4=4.8, relMult=0.15 → ~0.7
+    // Even with the seen penalty, followed-author's post beats the demoted stranger.
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    const ids = out.posts.map((p: any) => p.id);
+    expect(ids.indexOf('p-seen-follow')).toBeLessThan(ids.indexOf('p-stranger'));
+  });
+
+  it('allocates a larger followed-unseen quota on page 1 than on deep pages', async () => {
+    // Page 1 (no cursor): quota = ceil(limit * 0.70) — strongly user-first.
+    // Page 3+ (cursor with >50 served IDs): quota = ceil(limit * 0.40) — more room for discovery.
+    // Setup: 10 followed-unseen posts (low trending) + 5 high-trending stranger posts.
+    // On page 1 the quota ensures 7 followed-unseen fill first, only 3 stranger slots remain.
+    // On deep pages the quota is 4, so 5 strangers can fill in — more discovery.
+    const followedCandidates = Array.from({ length: 10 }, (_, i) =>
+      cand(`fu${i}`, `u-followed-${i}`, 2, 1),
+    );
+    const strangerCandidates = Array.from({ length: 5 }, (_, i) =>
+      cand(`st${i}`, `u-stranger-${i}`, 1000, 1),
+    );
+    const youFollowAuthorIds = followedCandidates.map((c) => c.userId);
+    const { service } = setupForYou({ candidates: [...followedCandidates, ...strangerCandidates], youFollowAuthorIds });
+
+    // Page 1 — no cursor.
+    const page1 = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    const p1FollowedCount = page1.posts.filter((p: any) => youFollowAuthorIds.includes(p.userId)).length;
+    const p1StrangerCount = page1.posts.filter((p: any) => !youFollowAuthorIds.includes(p.userId)).length;
+
+    // Page 3+ — craft a cursor with 51 non-overlapping served IDs.
+    const deepCursorData = { v: 2, s: Array.from({ length: 51 }, (_, i) => `old-${i}`) };
+    const deepCursor = Buffer.from(JSON.stringify(deepCursorData), 'utf8').toString('base64url');
+    const page3 = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: deepCursor, visibility: 'all' });
+    const p3FollowedCount = page3.posts.filter((p: any) => youFollowAuthorIds.includes(p.userId)).length;
+    const p3StrangerCount = page3.posts.filter((p: any) => !youFollowAuthorIds.includes(p.userId)).length;
+
+    // Page 1 must deliver more followed-unseen (and fewer strangers) than a deep page.
+    expect(p1FollowedCount).toBeGreaterThan(p3FollowedCount);
+    expect(p1StrangerCount).toBeLessThan(p3StrangerCount);
   });
 });
