@@ -12,12 +12,20 @@ import { MarvinPromptBuilderService, type MarvThreadPost } from '../services/mar
 import { MarvinRoutingService } from '../services/marvin-routing.service';
 import { MarvinToolHandlersService } from '../services/marvin-tool-handlers.service';
 import { MarvinUsageService } from '../services/marvin-usage.service';
+import { PresenceRealtimeService } from '../../presence/presence-realtime.service';
 import { MARV_ERROR_CODES, buildMarvIdempotencyKey } from '../marvin.constants';
 import { JobsService } from '../../jobs/jobs.service';
 import { JOBS } from '../../jobs/jobs.constants';
 import { MarvinThreadSummaryService } from '../services/marvin-thread-summary.service';
 import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
 import { publicAssetUrl } from '../../../common/assets/public-asset-url';
+
+/**
+ * How often to re-emit `posts:typing` while the AI call is in flight.
+ * The web client expires the indicator after 7 000ms (`usePostTyping.TYPING_TTL_MS`),
+ * so we heartbeat at half that to keep the indicator alive through long tool loops.
+ */
+const TYPING_HEARTBEAT_MS = 3000;
 
 export type MarvinPublicReplyJobPayload = {
   postId: string;
@@ -64,6 +72,7 @@ export class MarvinPublicReplyProcessor {
     private readonly jobs: JobsService,
     private readonly threadSummary: MarvinThreadSummaryService,
     private readonly linkMetadata: LinkMetadataService,
+    private readonly presenceRealtime: PresenceRealtimeService,
   ) {}
 
   async process(payload: MarvinPublicReplyJobPayload): Promise<void> {
@@ -402,6 +411,12 @@ export class MarvinPublicReplyProcessor {
       `[marv] public-reply AI call START mode=${effectiveMode} model=${this.ai.modelForMode(effectiveMode)} userMsgLen=${built.userMessage.length}`,
     );
 
+    // Show "@marv is replying…" on the triggering post while the AI call runs.
+    const marvUserIdForTyping = this.identity.cachedMarvUserId() ?? (await this.identity.getMarvUserId());
+    const { stop: stopTyping } = marvUserIdForTyping
+      ? this.startTypingHeartbeat({ postId, marvUserId: marvUserIdForTyping })
+      : { stop: () => {} };
+
     let aiResult: Awaited<ReturnType<typeof this.ai.respond>> | null = null;
     try {
       aiResult = await this.ai.respond({
@@ -423,6 +438,7 @@ export class MarvinPublicReplyProcessor {
         `[marv] public-reply AI call DONE in ${Date.now() - aiStartedAt}ms textLen=${(aiResult.text ?? '').length} model=${aiResult.modelUsed} resp=${aiResult.responseId} tools=${aiResult.toolCallCount} tokens=in${aiResult.inputTokens ?? 0}/out${aiResult.outputTokens ?? 0}/cached${aiResult.cachedInputTokens ?? 0} errorCode=${aiResult.errorCode ?? '-'}`,
       );
     } catch (err) {
+      stopTyping();
       const isNotConfigured = err instanceof MarvinAINotConfiguredError;
       const code = isNotConfigured ? MARV_ERROR_CODES.aiNotConfigured : MARV_ERROR_CODES.aiError;
       this.logger.error(
@@ -464,6 +480,7 @@ export class MarvinPublicReplyProcessor {
 
     const replyText = (aiResult.text ?? '').trim();
     if (!replyText) {
+      stopTyping();
       this.logger.warn(
         `[marv] public-reply EXIT reason=ai_no_text errorCode=${aiResult.errorCode ?? 'no_text'} resp=${aiResult.responseId} model=${aiResult.modelUsed} — posting transient-error thread reply`,
       );
@@ -504,6 +521,7 @@ export class MarvinPublicReplyProcessor {
     // Post the reply as Marv. createPost will mirror parent visibility automatically.
     const marvId = await this.identity.getMarvUserId();
     if (!marvId) {
+      stopTyping();
       this.logger.error('[marv] Cannot post AI reply — Marv user not resolved.');
       await this.usage.recordEvent({
         userId: requestingUserId,
@@ -521,6 +539,10 @@ export class MarvinPublicReplyProcessor {
       });
       return;
     }
+
+    // Brief pause so the indicator is still visible right before the post lands.
+    await new Promise<void>((resolve) => setTimeout(resolve, 350));
+    stopTyping();
 
     this.logger.log(
       `[marv] public-reply posting reply parent=${postId} length=${replyText.length}`,
@@ -631,6 +653,56 @@ export class MarvinPublicReplyProcessor {
         `[marv] failed to enqueue summarize-thread for root=${rootPostId}: ${(err as Error).message}`,
       );
     }
+  }
+
+  /**
+   * Show "@marv is replying…" to post-room subscribers for the duration of the
+   * AI call. Returns `stop()`. Always call it in a `finally` block so the
+   * indicator never gets stuck.
+   */
+  private startTypingHeartbeat(args: {
+    postId: string;
+    marvUserId: string;
+  }): { stop: () => void } {
+    const { postId, marvUserId } = args;
+    if (!postId || !marvUserId) return { stop: () => {} };
+
+    const marvUsername = this.appConfig.marvBot().username;
+    let stopped = false;
+
+    const emit = (typing: boolean): void => {
+      try {
+        this.presenceRealtime.emitPostsTyping(postId, {
+          postId,
+          user: {
+            id: marvUserId,
+            username: marvUsername,
+            verifiedStatus: 'manual',
+            premium: true,
+            premiumPlus: false,
+            isOrganization: false,
+          },
+          typing,
+          status: typing ? 'replying' : undefined,
+        });
+      } catch {
+        // best-effort: typing indicator is non-essential UX
+      }
+    };
+
+    emit(true);
+    const interval = setInterval(() => {
+      if (!stopped) emit(true);
+    }, TYPING_HEARTBEAT_MS);
+
+    return {
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        clearInterval(interval);
+        emit(false);
+      },
+    };
   }
 
   /**

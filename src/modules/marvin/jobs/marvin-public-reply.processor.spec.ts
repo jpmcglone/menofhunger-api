@@ -114,6 +114,7 @@ function makeProcessor(opts?: {
 
   const identity: any = {
     getMarvUserId: jest.fn(async () => 'marv-id'),
+    cachedMarvUserId: jest.fn(() => 'marv-id'),
     marvUsernameLower: jest.fn(() => 'marv'),
   };
 
@@ -185,6 +186,7 @@ function makeProcessor(opts?: {
   const jobs: any = { enqueue: jest.fn(async () => undefined) };
   const threadSummary: any = { shouldSummarize: jest.fn(async () => false) };
   const linkMetadata: any = { previewLinks: jest.fn(async () => []) };
+  const presenceRealtime: any = { emitPostsTyping: jest.fn() };
 
   const processor = new MarvinPublicReplyProcessor(
     prisma,
@@ -201,6 +203,7 @@ function makeProcessor(opts?: {
     jobs,
     threadSummary,
     linkMetadata,
+    presenceRealtime,
   );
 
   return {

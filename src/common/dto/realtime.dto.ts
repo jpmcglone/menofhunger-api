@@ -272,6 +272,10 @@ export type PostsCommentDeletedPayloadDto = {
  * Live "someone is replying to this post" indicator.
  * Emitted to `post:{postId}` room subscribers (excluding the sender) while a user is composing a reply.
  * Mirrors the shape of `messages:typing` / `spaces:typing` — no state persisted server-side.
+ *
+ * `status` is only set by server-side emitters (e.g. Marvin):
+ *   - `'thinking'` — AI is processing (show purple "thinking" label)
+ *   - `'replying'` — about to post the reply (show standard wave animation)
  */
 export type PostsTypingPayloadDto = {
   postId: string;
@@ -284,6 +288,7 @@ export type PostsTypingPayloadDto = {
     isOrganization: boolean;
   };
   typing: boolean;
+  status?: 'thinking' | 'replying';
 };
 
 /**
