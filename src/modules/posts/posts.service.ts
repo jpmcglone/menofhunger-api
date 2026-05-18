@@ -5499,24 +5499,27 @@ export class PostsService {
           : Promise.resolve();
 
         // Self-view seed: create the row then increment view counters (sequential by data dep).
-        const selfViewOp = (async () => {
-          const seededView = await tx.postView.createMany({
-            data: [{ postId: created.id, userId }],
-            skipDuplicates: true,
-          });
-          if (seededView.count > 0) {
-            const updatedCounts = await tx.post.update({
-              where: { id: created.id },
-              data: {
-                viewerCount: { increment: 1 },
-                weightedViewCount: { increment: LOGGED_IN_VIEW_WEIGHT },
-              },
-              select: { viewerCount: true, weightedViewCount: true },
-            });
-            created.viewerCount = updatedCounts.viewerCount;
-            created.weightedViewCount = updatedCounts.weightedViewCount;
-          }
-        })();
+        // Bots (e.g. Marv) do not count as viewers of their own posts.
+        const selfViewOp = viewer.isBot
+          ? Promise.resolve()
+          : (async () => {
+              const seededView = await tx.postView.createMany({
+                data: [{ postId: created.id, userId }],
+                skipDuplicates: true,
+              });
+              if (seededView.count > 0) {
+                const updatedCounts = await tx.post.update({
+                  where: { id: created.id },
+                  data: {
+                    viewerCount: { increment: 1 },
+                    weightedViewCount: { increment: LOGGED_IN_VIEW_WEIGHT },
+                  },
+                  select: { viewerCount: true, weightedViewCount: true },
+                });
+                created.viewerCount = updatedCounts.viewerCount;
+                created.weightedViewCount = updatedCounts.weightedViewCount;
+              }
+            })();
 
         // Parent commentCount increment (only when this is a reply).
         const parentBumpOp = parentId

@@ -60,6 +60,8 @@ export type MarvAIResult = {
   toolCallCount: number;
   /** Number of `web_search_call` items OpenAI executed during this response. */
   webSearchCount: number;
+  /** Number of `fetch_url_content` tool calls dispatched during this response. */
+  urlFetchCount: number;
   /** Number of images actually attached as vision inputs on turn one. */
   imagesAttached: number;
   /** Set when the model returned no usable text (refusal, max-output stop, etc.). */
@@ -192,6 +194,7 @@ export class MarvinAIService {
     let aggregatedCachedTokens = 0;
     let toolCallCount = 0;
     let webSearchCount = 0;
+    let urlFetchCount = 0;
     let lastTextFromAssistant = '';
     let errorCode: MarvAIResult['errorCode'] | undefined;
 
@@ -236,12 +239,32 @@ export class MarvinAIService {
       },
     };
 
+    // fetch_url_content is always available so Marv can read linked pages on demand.
+    const tools: unknown[] = [
+      {
+        type: 'function',
+        name: 'fetch_url_content',
+        description:
+          'Fetch and read the full text content of a web page. Use this when the user or conversation contains a URL and you need to understand what the page says before responding. Only fetch URLs that are directly relevant to your reply.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: {
+              type: 'string',
+              description: 'The full URL to fetch, starting with http:// or https://.',
+            },
+          },
+          required: ['url'],
+        },
+      },
+    ];
     if (webSearchActive) {
-      baseRequest.tools = [{ type: 'web_search_preview' }];
+      tools.push({ type: 'web_search_preview' });
       this.logger.log(
         `[marv-ai] web_search_preview enabled for mode=${req.mode} maxOutputTokens=${effectiveMaxOutputTokens}`,
       );
     }
+    baseRequest.tools = tools;
 
     // First turn: send the developer note + user question. If the caller provided
     // `previousResponseId` (private session continuation), reference it.
@@ -314,6 +337,7 @@ export class MarvinAIService {
       const toolOutputs: Array<{ type: 'function_call_output'; call_id: string; output: string }> = [];
       for (const call of pendingToolCalls) {
         toolCallCount++;
+        if (call.name === 'fetch_url_content') urlFetchCount++;
         const argsStr = call.arguments ?? '{}';
         let args: unknown = {};
         try {
@@ -431,6 +455,7 @@ export class MarvinAIService {
       estimatedCostUsd,
       toolCallCount,
       webSearchCount,
+      urlFetchCount,
       imagesAttached: imageUrls.length,
       ...(errorCode ? { errorCode } : {}),
     };

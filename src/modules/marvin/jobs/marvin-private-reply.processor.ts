@@ -638,7 +638,8 @@ export class MarvinPrivateReplyProcessor {
     // saves one Postgres round-trip on the hot path.
     const actualVisionCost = (aiResult.imagesAttached ?? 0) * creditCfg.visionCreditCostPerImage;
     const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * creditCfg.webSearchCreditCost;
-    const totalCost = cost + actualVisionCost + webSearchSurcharge;
+    const urlFetchSurcharge = (aiResult.urlFetchCount ?? 0) * creditCfg.urlFetchCreditCost;
+    const totalCost = cost + actualVisionCost + webSearchSurcharge + urlFetchSurcharge;
     if (actualVisionCost > 0) {
       this.logger.log(
         `[marv] private-reply vision surcharge: ${aiResult.imagesAttached} image(s) × ${creditCfg.visionCreditCostPerImage} = ${actualVisionCost} extra credits`,
@@ -647,6 +648,11 @@ export class MarvinPrivateReplyProcessor {
     if (webSearchSurcharge > 0) {
       this.logger.log(
         `[marv] private-reply web-search surcharge: ${aiResult.webSearchCount} search(es) × ${creditCfg.webSearchCreditCost} = ${webSearchSurcharge} extra credits (total=${totalCost})`,
+      );
+    }
+    if (urlFetchSurcharge > 0) {
+      this.logger.log(
+        `[marv] private-reply url-fetch surcharge: ${aiResult.urlFetchCount} fetch(es) × ${creditCfg.urlFetchCreditCost} = ${urlFetchSurcharge} extra credits (total=${totalCost})`,
       );
     }
     let postSpend: Awaited<ReturnType<typeof this.credits.spend>> | null = null;
@@ -681,7 +687,7 @@ export class MarvinPrivateReplyProcessor {
     });
 
     this.logger.log(
-      `[marv] private-reply ok user=${requestingUserId} convo=${conversationId} cost=${totalCost} (mode=${cost} + vision=${actualVisionCost} + webSearch=${webSearchSurcharge})`,
+      `[marv] private-reply ok user=${requestingUserId} convo=${conversationId} cost=${totalCost} (mode=${cost} + vision=${actualVisionCost} + webSearch=${webSearchSurcharge} + urlFetch=${urlFetchSurcharge})`,
     );
   }
 

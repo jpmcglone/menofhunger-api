@@ -19,6 +19,7 @@ import type {
   PostsLiveUpdatedPayloadDto,
   PostsCommentAddedPayloadDto,
   PostsCommentDeletedPayloadDto,
+  PostsTypingPayloadDto,
   UsersMeUpdatedPayloadDto,
   NotificationsDeletedPayloadDto,
   NotificationsNewPayloadDto,
@@ -243,6 +244,17 @@ export class PresenceRealtimeService {
    */
   emitFeedNewPost(followerIds: Iterable<string>, payload: FeedNewPostPayloadDto): void {
     this.emitToUsers(followerIds, WsEventNames.feedNewPost, payload);
+  }
+
+  /**
+   * Server-initiated typing indicator on a post thread (e.g. Marv "is replying").
+   * Mirrors the payload shape of the client-emitted `posts:typing` gateway event.
+   * The gateway handles client-to-server typing; this method is for server-originated emits only.
+   */
+  emitPostsTyping(postId: string, payload: PostsTypingPayloadDto): void {
+    const pid = (postId ?? '').trim();
+    if (!pid) return;
+    this.emitToRoom(`post:${pid}`, WsEventNames.postsTyping, payload);
   }
 
   /** Delete hint pushed to post room subscribers when a reply is soft-deleted. */

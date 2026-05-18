@@ -77,14 +77,17 @@ export class PostViewsService {
       });
       if (!post) return;
 
+      // Fetch viewer for bot-exclusion and visibility checks. Bots never count as viewers.
+      const viewer = uid
+        ? await this.prisma.user.findFirst({
+            where: { id: uid },
+            select: { isBot: true, verifiedStatus: true, premium: true, premiumPlus: true },
+          })
+        : null;
+      if (viewer?.isBot) return;
+
       // Authors can always view their own posts; everyone else must meet the tier requirement.
-      if (uid && post.userId !== uid) {
-        const viewer = await this.prisma.user.findFirst({
-          where: { id: uid },
-          select: { verifiedStatus: true, premium: true, premiumPlus: true },
-        });
-        if (!viewerCanAccessVisibility(post.visibility, viewer)) return;
-      }
+      if (uid && post.userId !== uid && !viewerCanAccessVisibility(post.visibility, viewer)) return;
       if (!uid && post.visibility !== 'public') return;
 
       if (uid && anonId) {

@@ -91,6 +91,7 @@ function makeProcessor(opts?: {
       smartCost: 5,
       webSearchCreditCost: 4,
       visionCreditCostPerImage: 2,
+      urlFetchCreditCost: 1,
     })),
     marvOpenAI: jest.fn(() => ({
       apiKey: 'sk-test',

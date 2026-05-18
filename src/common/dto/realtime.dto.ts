@@ -150,6 +150,7 @@ export const WsEventNames = {
   postsLiveUpdated: 'posts:liveUpdated',
   postsCommentAdded: 'posts:commentAdded',
   postsCommentDeleted: 'posts:commentDeleted',
+  postsTyping: 'posts:typing',
   /** New top-level post from someone the viewer follows; pushed to follower user rooms. */
   feedNewPost: 'feed:newPost',
   articlesSubscribe: 'articles:subscribe',
@@ -265,6 +266,24 @@ export type FeedNewPostPayloadDto = {
 export type PostsCommentDeletedPayloadDto = {
   parentPostId: string;
   commentId: string;
+};
+
+/**
+ * Live "someone is replying to this post" indicator.
+ * Emitted to `post:{postId}` room subscribers (excluding the sender) while a user is composing a reply.
+ * Mirrors the shape of `messages:typing` / `spaces:typing` — no state persisted server-side.
+ */
+export type PostsTypingPayloadDto = {
+  postId: string;
+  user: {
+    id: string;
+    username: string | null;
+    verifiedStatus: string | null;
+    premium: boolean;
+    premiumPlus: boolean;
+    isOrganization: boolean;
+  };
+  typing: boolean;
 };
 
 /**

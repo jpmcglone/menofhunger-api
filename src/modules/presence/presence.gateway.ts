@@ -37,6 +37,7 @@ import {
   WsEventNames,
   type ArticlesSubscribePayloadDto,
   type PostsSubscribePayloadDto,
+  type PostsTypingPayloadDto,
   type UsersSpaceChangedPayloadDto,
 } from '../../common/dto';
 import { parseSessionCookieFromHeader } from '../../common/session-cookie';
@@ -1547,6 +1548,46 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         typing,
       });
     }
+  }
+
+  @SubscribeMessage('posts:typing')
+  handlePostsTyping(client: Socket, payload: { postId?: string; typing?: boolean }): void {
+    const userId = this.presence.getUserIdForSocket(client.id);
+    if (!userId) return;
+    const postId = String(payload?.postId ?? '').trim();
+    if (!postId) return;
+
+    // Only broadcast to clients that have subscribed to this post room.
+    if (!(client.data as any).postSubs?.has(postId)) return;
+
+    const typing = payload?.typing !== false;
+    const key = `posts:${userId}:${postId}:${typing ? '1' : '0'}`;
+    const now = Date.now();
+    this.maybePruneTypingThrottle(now);
+    const last = this.typingThrottleByKey.get(key) ?? 0;
+    if (now - last < 700) return;
+    this.typingThrottleByKey.set(key, now);
+
+    // Reuse the user data stored on the socket during connection — no DB call needed.
+    const sender = ((client.data as any)?.spaceChatUser ?? null) as { id: string; username: string | null; verifiedStatus: string; premium: boolean; premiumPlus: boolean; isOrganization: boolean } | null;
+    if (!sender?.id) return;
+
+    const room = postRoom(postId);
+    const out: PostsTypingPayloadDto = {
+      postId,
+      user: {
+        id: sender.id,
+        username: sender.username,
+        verifiedStatus: sender.verifiedStatus ?? null,
+        premium: Boolean(sender.premium),
+        premiumPlus: Boolean(sender.premiumPlus),
+        isOrganization: Boolean(sender.isOrganization),
+      },
+      typing,
+    };
+    // client.to() skips the sender's socket.
+    client.to(room).emit(WsEventNames.postsTyping, out);
+    void this.presenceRedis.publishEmitToRoom({ room, event: WsEventNames.postsTyping, payload: out }).catch(() => undefined);
   }
 
   private scheduleIdleMarkTimer(userId: string): void {

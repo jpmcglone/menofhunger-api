@@ -96,6 +96,8 @@ export type MarvCreditConfig = {
   webSearchCreditCost: number;
   /** Extra credits charged per image attached to a Marv request. */
   visionCreditCostPerImage: number;
+  /** Extra credits charged per fetch_url_content tool call Marv makes within a single reply. */
+  urlFetchCreditCost: number;
 };
 
 export type MarvLimitsConfig = {
@@ -514,6 +516,9 @@ export class AppConfigService {
       webSearchCreditCost: this.readPositiveInt('MARV_WEB_SEARCH_CREDIT_COST', 4),
       // Extra credits per image sent to the vision model (~$0.002/image on gpt-5.4-mini).
       visionCreditCostPerImage: this.readPositiveInt('MARV_VISION_CREDIT_COST_PER_IMAGE', 2),
+      // Extra credits per URL fetched via Jina Reader. Jina's public endpoint is free-tier,
+      // so 1 credit per fetch keeps it cheap while still accounting for the network overhead.
+      urlFetchCreditCost: this.readPositiveInt('MARV_URL_FETCH_CREDIT_COST', 1),
     };
   }
 

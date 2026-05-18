@@ -10,6 +10,7 @@ export type ViewerContext = {
   premiumPlus: boolean;
   siteAdmin: boolean;
   bannedAt: Date | null;
+  isBot: boolean;
 };
 
 @Injectable()
@@ -33,7 +34,7 @@ export class ViewerContextService {
 
     const viewer = await this.prisma.user.findUnique({
       where: { id: uid },
-      select: { id: true, verifiedStatus: true, premium: true, premiumPlus: true, siteAdmin: true, bannedAt: true },
+      select: { id: true, verifiedStatus: true, premium: true, premiumPlus: true, siteAdmin: true, bannedAt: true, isBot: true },
     });
     this.requestCache.set(key, viewer);
     return viewer;

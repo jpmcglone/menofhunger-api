@@ -757,3 +757,134 @@ describe('PresenceGateway — watch party sync', () => {
     });
   });
 });
+
+// ─── posts:typing ────────────────────────────────────────────────────────────
+
+const POST_ID = 'post-abc';
+const POST_ROOM = `post:${POST_ID}`;
+const TYPER_ID = 'user-typer';
+const WATCHER_ID = 'user-watcher';
+
+const TYPER_SENDER = {
+  id: TYPER_ID,
+  username: 'typer',
+  premium: false,
+  premiumPlus: false,
+  isOrganization: false,
+  verifiedStatus: 'none',
+  stewardBadgeEnabled: false,
+};
+
+function makePostTypingFixture() {
+  const redis = makeRedis();
+  const presenceRedis = makePresenceRedis();
+  const presence = makePresenceService(TYPER_ID);
+  const spacesPresence = makeSpacesPresenceService();
+  const stub = makeStubServices();
+  const watchPartyState = new WatchPartyStateService(redis);
+  const marvIdentity = {
+    getMarvUserId: jest.fn().mockResolvedValue(null),
+    marvUsernameLower: jest.fn().mockReturnValue('marv'),
+  } as any;
+  stub.appConfig.marvBot = jest.fn().mockReturnValue({ enabled: false, userId: null, username: 'marv', displayName: 'Marv', bio: '', phone: '' });
+
+  const spacesService = makeSpacesService(TYPER_ID, 'NONE');
+  const gw = new PresenceGateway(
+    stub.appConfig, stub.auth, presence, presenceRedis, stub.realtime,
+    stub.follows, stub.messages, stub.radio, stub.radioChat,
+    spacesService, spacesPresence, stub.spacesChat,
+    watchPartyState, stub.prisma, redis, marvIdentity,
+  );
+
+  const server = new FakeServer();
+  const typerSocket = new FakeSocket('socket-typer', { spaceChatUser: TYPER_SENDER });
+  const watcherSocket = new FakeSocket('socket-watcher', { spaceChatUser: { ...TYPER_SENDER, id: WATCHER_ID, username: 'watcher' } });
+  server.register(typerSocket);
+  server.register(watcherSocket);
+
+  const fakeIoServer = {
+    sockets: { sockets: server.socketsMap.sockets },
+    to: (room: string) => server.to(room),
+    emit: (event: string, payload?: unknown) => server.emitted.push({ event, payload }),
+  };
+  (gw as any).server = fakeIoServer;
+  gw.afterInit(fakeIoServer as any);
+
+  // Helpers: subscribe a socket to the post room
+  const subscribeSocket = (socket: FakeSocket) => {
+    const subs = new Set<string>();
+    subs.add(POST_ID);
+    (socket.data as any).postSubs = subs;
+    server.joinRoom(socket.id, POST_ROOM);
+  };
+
+  return { gw, server, presence, presenceRedis, typerSocket, watcherSocket, subscribeSocket };
+}
+
+describe('posts:typing', () => {
+  // Note: handlePostsTyping uses `client.to(room).emit()` which in real Socket.IO
+  // delivers to all room members except the sender. In tests we verify via
+  // presenceRedis.publishEmitToRoom (the cross-instance delivery path) and by
+  // asserting the correct payload shape.
+
+  it('fans out with correct payload when subscribed and typing=true', () => {
+    const { gw, presence, presenceRedis, typerSocket, subscribeSocket } = makePostTypingFixture();
+    subscribeSocket(typerSocket);
+    jest.spyOn(presence, 'getUserIdForSocket').mockReturnValue(TYPER_ID);
+
+    (gw as any).handlePostsTyping(typerSocket, { postId: POST_ID, typing: true });
+
+    expect(presenceRedis.publishEmitToRoom).toHaveBeenCalledWith(
+      expect.objectContaining({
+        room: POST_ROOM,
+        event: 'posts:typing',
+        payload: expect.objectContaining({ postId: POST_ID, typing: true, user: expect.objectContaining({ id: TYPER_ID, username: 'typer' }) }),
+      }),
+    );
+  });
+
+  it('fans out with typing=false when user stops replying', () => {
+    const { gw, presence, presenceRedis, typerSocket, subscribeSocket } = makePostTypingFixture();
+    subscribeSocket(typerSocket);
+    jest.spyOn(presence, 'getUserIdForSocket').mockReturnValue(TYPER_ID);
+
+    (gw as any).handlePostsTyping(typerSocket, { postId: POST_ID, typing: false });
+
+    expect(presenceRedis.publishEmitToRoom).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: expect.objectContaining({ typing: false }) }),
+    );
+  });
+
+  it('is a no-op when the socket has not subscribed to the post', () => {
+    const { gw, presence, presenceRedis, typerSocket } = makePostTypingFixture();
+    // Deliberately NOT calling subscribeSocket — no postSubs entry
+    jest.spyOn(presence, 'getUserIdForSocket').mockReturnValue(TYPER_ID);
+
+    (gw as any).handlePostsTyping(typerSocket, { postId: POST_ID, typing: true });
+
+    expect(presenceRedis.publishEmitToRoom).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when userId is not found', () => {
+    const { gw, presence, presenceRedis, typerSocket, subscribeSocket } = makePostTypingFixture();
+    subscribeSocket(typerSocket);
+    jest.spyOn(presence, 'getUserIdForSocket').mockReturnValue(null);
+
+    (gw as any).handlePostsTyping(typerSocket, { postId: POST_ID, typing: true });
+
+    expect(presenceRedis.publishEmitToRoom).not.toHaveBeenCalled();
+  });
+
+  it('throttles repeated typing=true emits from the same user within 700ms', () => {
+    const { gw, presence, presenceRedis, typerSocket, subscribeSocket } = makePostTypingFixture();
+    subscribeSocket(typerSocket);
+    jest.spyOn(presence, 'getUserIdForSocket').mockReturnValue(TYPER_ID);
+
+    (gw as any).handlePostsTyping(typerSocket, { postId: POST_ID, typing: true });
+    (gw as any).handlePostsTyping(typerSocket, { postId: POST_ID, typing: true });
+    (gw as any).handlePostsTyping(typerSocket, { postId: POST_ID, typing: true });
+
+    // Only the first call should have made it through
+    expect(presenceRedis.publishEmitToRoom).toHaveBeenCalledTimes(1);
+  });
+});

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { z } from 'zod';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -20,6 +21,7 @@ const getPostThreadSummarySchema = z.object({ rootPostId: z.string().min(1).max(
 const getMyRecentChatMessagesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(RECENT_MESSAGES_MAX).optional(),
 });
+const fetchUrlContentSchema = z.object({ url: z.string().min(1).max(2_000) });
 
 // Per-tool TTLs (seconds). Tuned so the model's tool loop sees consistent data across
 // rounds, and a hot thread/user doesn't repeatedly hit Postgres while several premium
@@ -30,7 +32,11 @@ const TTL_POST = 30; // 30s — body edits should reflect quickly
 const TTL_THREAD_RECENT = 30; // 30s — replies arrive frequently
 const TTL_THREAD_SUMMARY = 300; // 5 min — only updated by summarize job
 const TTL_CHAT_RECENT = 15; // 15s — keep tight, the user's own chat
-const TTL_NEGATIVE = 60; // 1 min — dedupe "no_card"/"no_summary" misses
+const TTL_URL_CONTENT = 3_600; // 1 hour — page content is stable enough
+const TTL_NEGATIVE = 60; // 1 min — dedupe "no_card"/"no_summary"/"fetch_failed" misses
+
+const MAX_URL_CONTENT_CHARS = 6_000; // Keeps the tool output inside the 8KB AI-layer cap
+const URL_FETCH_TIMEOUT_MS = 10_000;
 
 /**
  * Local tool handlers Marv calls back into via OpenAI Responses tool calls.
@@ -97,6 +103,8 @@ export class MarvinToolHandlersService {
         return await this.getPostThreadSummary(args, ctx);
       case 'get_my_recent_chat_messages':
         return await this.getMyRecentChatMessages(args, ctx);
+      case 'fetch_url_content':
+        return await this.fetchUrlContent(args);
       default:
         return { error: 'unknown_tool', name };
     }
@@ -404,5 +412,75 @@ export class MarvinToolHandlersService {
         };
       },
     });
+  }
+
+  /**
+   * Fetches the full text content of a web page via Jina Reader (r.jina.ai).
+   * Results are cached in Redis for one hour so repeated references to the same URL
+   * within a session don't incur extra network round-trips or credit charges.
+   */
+  private async fetchUrlContent(rawArgs: unknown): Promise<unknown> {
+    const parsed = fetchUrlContentSchema.safeParse(rawArgs);
+    if (!parsed.success) return { error: 'invalid_args' };
+
+    const { url } = parsed.data;
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      return { error: 'invalid_url', note: 'The provided value is not a valid URL.' };
+    }
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      return { error: 'invalid_url', note: 'Only http and https URLs are supported.' };
+    }
+
+    const urlHash = crypto.createHash('sha1').update(url).digest('hex').slice(0, 20);
+    const cacheKey = `marv:tool:url-content:${urlHash}`;
+
+    type ContentShape = { url: string; content: string; truncated: boolean; fetchedAt: string };
+
+    const result = await this.cache.getOrSetNullableJson<ContentShape>({
+      enabled: true,
+      key: cacheKey,
+      ttlSeconds: TTL_URL_CONTENT,
+      nullTtlSeconds: TTL_NEGATIVE,
+      compute: async () => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), URL_FETCH_TIMEOUT_MS);
+        try {
+          // Jina Reader converts any web page to clean markdown — ideal for LLM consumption.
+          const res = await fetch(`https://r.jina.ai/${url}`, {
+            method: 'GET',
+            signal: controller.signal,
+            headers: { Accept: 'text/plain, text/markdown, */*' },
+          });
+          if (!res.ok) {
+            this.logger.warn(`[marv-tools] fetch_url_content: Jina returned ${res.status} for ${url}`);
+            return null;
+          }
+          const text = (await res.text()).trim();
+          if (!text) return null;
+          const truncated = text.length > MAX_URL_CONTENT_CHARS;
+          return {
+            url,
+            content: text.slice(0, MAX_URL_CONTENT_CHARS),
+            truncated,
+            fetchedAt: new Date().toISOString(),
+          };
+        } catch (err) {
+          this.logger.warn(
+            `[marv-tools] fetch_url_content: fetch failed for ${url}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return null;
+        } finally {
+          clearTimeout(timeout);
+        }
+      },
+    });
+
+    if (!result) {
+      return { error: 'fetch_failed', note: 'Could not retrieve content for this URL. It may be unavailable, paywalled, or require JavaScript.' };
+    }
+    return result;
   }
 }
