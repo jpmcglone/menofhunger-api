@@ -92,6 +92,7 @@ describe('ViewerContextService.getViewer — request cache reuse', () => {
       where: { id: 'user-1' },
       select: {
         id: true,
+        isBot: true,
         verifiedStatus: true,
         premium: true,
         premiumPlus: true,
