@@ -916,6 +916,11 @@ export class PostsService {
         ? { OR: [this.excludeCommunityGroupPostsWhere(), { communityGroupId: { in: memberGroupIds } }] }
         : this.excludeCommunityGroupPostsWhere();
 
+    // Exclude the viewer's own posts from home feeds (Following + All) unless the feed
+    // is explicitly scoped to a set of author IDs (e.g. profile view, crew feed).
+    const excludeSelfWhere: Prisma.PostWhereInput[] =
+      viewerUserId && !authorUserIds?.length ? ([{ NOT: { userId: viewerUserId } }] as Prisma.PostWhereInput[]) : [];
+
     const where = followingOnly
       ? {
           AND: [
@@ -927,12 +932,8 @@ export class PostsService {
             ...(params.mediaOnly ? [this.mediaOnlyWhere()] : []),
             ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
-            {
-              OR: [
-                { userId: viewerUserId as string },
-                { user: { followers: { some: { followerId: viewerUserId as string } } } },
-              ],
-            },
+            ...excludeSelfWhere,
+            { user: { followers: { some: { followerId: viewerUserId as string } } } },
           ],
         }
       : {
@@ -945,6 +946,7 @@ export class PostsService {
             ...(params.mediaOnly ? [this.mediaOnlyWhere()] : []),
             ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
+            ...excludeSelfWhere,
           ],
         };
 
@@ -1397,7 +1399,9 @@ export class PostsService {
   }
 
   /**
-   * Returns [viewerUserId, ...userIds the viewer follows] for "following" feed scope.
+   * Returns userIds the viewer follows for "following" feed scope.
+   * The viewer is intentionally excluded so their own posts do not appear in
+   * the home Following/All feeds (only other people's posts are returned).
    * Used by trending (popular) feed when followingOnly is true.
    */
   private async getAuthorIdsForFollowingFilter(viewerUserId: string): Promise<string[]> {
@@ -1405,8 +1409,7 @@ export class PostsService {
       where: { followerId: viewerUserId },
       select: { followingId: true },
     });
-    const followingIds = follows.map((f) => f.followingId);
-    return [viewerUserId, ...followingIds];
+    return follows.map((f) => f.followingId);
   }
 
   /** Trending feed: reads directly from Post.trendingScore (set by the popular-score cron). */
@@ -1421,6 +1424,7 @@ export class PostsService {
     mediaOnly?: boolean;
     topLevelOnly?: boolean;
     memberGroupIds?: string[];
+    excludeAuthorUserId?: string | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, decodedCursor, visibility, allowed, authorUserIds, kind } = params;
     const memberGroupIds = params.memberGroupIds ?? [];
@@ -1478,6 +1482,7 @@ export class PostsService {
           communityScopeWhere,
           ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
           ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
+          ...(params.excludeAuthorUserId ? ([{ NOT: { userId: params.excludeAuthorUserId } }] as Prisma.PostWhereInput[]) : []),
           ...(params.mediaOnly ? [this.mediaOnlyWhere()] : []),
           ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
           visibilityWhere,
@@ -2693,6 +2698,13 @@ export class PostsService {
 
     const decoded = this.decodePopularCursor(cursor);
 
+    // Exclude the viewer's own posts from home feeds (Following + All) unless the feed
+    // is explicitly scoped to a set of author IDs (e.g. profile view, crew feed).
+    // Use requestedAuthorUserIds (not authorUserIds) as the gate so the trending Following
+    // path (where authorUserIds already excludes the viewer via getAuthorIdsForFollowingFilter)
+    // doesn't double-apply the exclusion.
+    const excludeViewerAuthor = Boolean(viewerUserId) && !requestedAuthorUserIds?.length;
+
     // Fast path: use the stored trendingScore column (set by the popular-score cron every ~10 min).
     // For kind-filtered views (e.g. check-ins), fall back to real-time scoring so brand-new posts
     // that haven't been scored yet can still surface immediately.
@@ -2708,6 +2720,7 @@ export class PostsService {
         mediaOnly: params.mediaOnly,
         topLevelOnly: params.topLevelOnly,
         memberGroupIds,
+        excludeAuthorUserId: excludeViewerAuthor ? viewerUserId : null,
       });
     }
 
@@ -2746,6 +2759,7 @@ export class PostsService {
             { parentId: null },
             this.excludeCommunityGroupPostsWhere(),
             ...(warmupAuthorFilter ? [warmupAuthorFilter] : []),
+            ...(excludeViewerAuthor && viewerUserId ? ([{ NOT: { userId: viewerUserId } }] as Prisma.PostWhereInput[]) : []),
             ...(warmupKindFilter ? [warmupKindFilter] : []),
             ...(warmupTopLevelFilter ? [warmupTopLevelFilter] : []),
             this.notDeletedWhere(),
@@ -2776,6 +2790,9 @@ export class PostsService {
       authorUserIds?.length
         ? Prisma.sql`AND p."userId" IN (${Prisma.join(authorUserIds.map((id) => Prisma.sql`${id}`))})`
         : Prisma.sql``;
+    const excludeSelfSql = excludeViewerAuthor && viewerUserId
+      ? Prisma.sql`AND p."userId" <> ${viewerUserId}`
+      : Prisma.sql``;
     // NOTE: Postgres enum compare requires matching enum type. Cast to text to safely compare against our string param.
     const kindFilterSql = kind ? Prisma.sql`AND (p."kind"::text = ${kind})` : Prisma.sql``;
     const topLevelOnlySql = params.topLevelOnly ? Prisma.sql`AND p."parentId" IS NULL` : Prisma.sql``;
@@ -2826,6 +2843,7 @@ export class PostsService {
               AND p."createdAt" >= ${recentCutoff}
               ${visibilityFilterSql}
               ${authorFilterSql}
+              ${excludeSelfSql}
               ${kindFilterSql}
               ${topLevelOnlySql}
               ${bannedAuthorSql}
@@ -2844,6 +2862,7 @@ export class PostsService {
               AND p."boostCount" > 0
               ${visibilityFilterSql}
               ${authorFilterSql}
+              ${excludeSelfSql}
               ${kindFilterSql}
               ${topLevelOnlySql}
               ${bannedAuthorSql}
@@ -2861,6 +2880,7 @@ export class PostsService {
               AND p."bookmarkCount" > 0
               ${visibilityFilterSql}
               ${authorFilterSql}
+              ${excludeSelfSql}
               ${kindFilterSql}
               ${topLevelOnlySql}
               ${bannedAuthorSql}
@@ -2878,6 +2898,7 @@ export class PostsService {
               AND p."commentCount" > 0
               ${visibilityFilterSql}
               ${authorFilterSql}
+              ${excludeSelfSql}
               ${kindFilterSql}
               ${topLevelOnlySql}
               ${bannedAuthorSql}
@@ -2897,6 +2918,7 @@ export class PostsService {
               AND p."kind"::text <> 'repost'
               ${visibilityFilterSql}
               ${authorFilterSql}
+              ${excludeSelfSql}
               ${kindFilterSql}
               ${topLevelOnlySql}
               ${bannedAuthorSql}
@@ -2915,6 +2937,7 @@ export class PostsService {
               AND (p."boostCount" > 0 OR p."bookmarkCount" > 0)
               ${visibilityFilterSql}
               ${authorFilterSql}
+              ${excludeSelfSql}
               ${kindFilterSql}
               ${topLevelOnlySql}
               ${bannedAuthorSql}

@@ -212,7 +212,12 @@ describe('PostsService.listFeed', () => {
         { communityGroupId: { in: ['group-1'] } },
       ],
     });
+    // Viewer is excluded from results; only followed authors' posts appear.
+    expect((where?.AND ?? [])).toContainEqual({ NOT: { userId: 'viewer' } });
     expect((where?.AND ?? [])).toContainEqual({
+      user: { followers: { some: { followerId: 'viewer' } } },
+    });
+    expect((where?.AND ?? [])).not.toContainEqual({
       OR: [
         { userId: 'viewer' },
         { user: { followers: { some: { followerId: 'viewer' } } } },
@@ -264,7 +269,9 @@ describe('PostsService.listFeed', () => {
 
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
     expect((where?.AND ?? []).some(isCommunityScope)).toBe(true);
-    expect(where?.AND ?? []).toContainEqual({ userId: { in: ['viewer', 'followed-author'] } });
+    // Viewer is excluded from the author scope — only followed authors' posts appear.
+    expect(where?.AND ?? []).toContainEqual({ userId: { in: ['followed-author'] } });
+    expect(where?.AND ?? []).not.toContainEqual({ userId: { in: ['viewer', 'followed-author'] } });
   });
 
   it('keeps author-filtered trending feeds global-only', async () => {
@@ -282,6 +289,64 @@ describe('PostsService.listFeed', () => {
     expect(communityGroupMember.findMany).not.toHaveBeenCalled();
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
     expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+  });
+
+  it('excludes the viewer from the home All chronological feed', async () => {
+    const { service, post } = setup();
+
+    await listHomeFeed(service, { followingOnly: false });
+
+    const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
+    expect((where?.AND ?? [])).toContainEqual({ NOT: { userId: 'viewer' } });
+  });
+
+  it('excludes the viewer from the home Following chronological feed', async () => {
+    const { service, post } = setup();
+
+    await listHomeFeed(service, { followingOnly: true });
+
+    const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
+    expect((where?.AND ?? [])).toContainEqual({ NOT: { userId: 'viewer' } });
+  });
+
+  it('does NOT exclude the viewer from author-scoped chronological feeds', async () => {
+    const { service, post } = setup();
+
+    await listHomeFeed(service, { authorUserIds: ['viewer'] });
+
+    const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
+    expect((where?.AND ?? [])).not.toContainEqual({ NOT: { userId: 'viewer' } });
+  });
+
+  it('excludes the viewer from the home All trending feed', async () => {
+    const { service, post } = setup();
+
+    await service.listPopularFeed({
+      viewerUserId: 'viewer',
+      limit: 30,
+      cursor: null,
+      visibility: 'all',
+      followingOnly: false,
+    });
+
+    const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
+    expect((where?.AND ?? [])).toContainEqual({ NOT: { userId: 'viewer' } });
+  });
+
+  it('does NOT exclude the viewer from author-scoped trending feeds', async () => {
+    const { service, post } = setup();
+
+    await service.listPopularFeed({
+      viewerUserId: 'viewer',
+      limit: 30,
+      cursor: null,
+      visibility: 'all',
+      followingOnly: false,
+      authorUserIds: ['viewer'],
+    });
+
+    const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
+    expect((where?.AND ?? [])).not.toContainEqual({ NOT: { userId: 'viewer' } });
   });
 });
 
