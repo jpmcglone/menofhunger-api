@@ -6,8 +6,10 @@ import { OTP_PROVIDER } from './otp/otp-provider.token';
 import { TwilioVerifyOtpProvider } from './otp/twilio-verify-otp.provider';
 import { NoopOtpProvider } from './otp/noop-otp.provider';
 import { AuthCleanupCron } from './auth-cleanup.cron';
+import { RealtimeModule } from '../realtime/realtime.module';
 
 @Module({
+  imports: [RealtimeModule],
   controllers: [AuthController],
   providers: [
     AuthService,

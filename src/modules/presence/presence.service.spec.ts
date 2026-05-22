@@ -92,3 +92,52 @@ describe('PresenceService user statuses', () => {
     jest.useRealTimers();
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe('PresenceService.markSeenFromHttp', () => {
+  function makeService() {
+    const prismaUser = { update: jest.fn(async () => ({})) };
+    const svc = new PresenceService(
+      { presenceIdleAfterMinutes: jest.fn(), presenceIdleDisconnectMinutes: jest.fn() } as any,
+      { user: prismaUser } as any,
+    );
+    return { svc, prismaUser };
+  }
+
+  it('writes lastSeenAt when the user has no live socket', () => {
+    jest.useFakeTimers();
+    const { svc, prismaUser } = makeService();
+    svc.markSeenFromHttp('user-offline');
+    expect(prismaUser.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ lastSeenAt: expect.any(Date) }),
+    }));
+    jest.useRealTimers();
+  });
+
+  it('writes lastOnlineAt when the user has no live socket', () => {
+    jest.useFakeTimers();
+    const { svc, prismaUser } = makeService();
+    svc.markSeenFromHttp('user-offline');
+    expect(prismaUser.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ lastOnlineAt: expect.any(Date) }),
+    }));
+    jest.useRealTimers();
+  });
+
+  it('does NOT write lastOnlineAt when the user has a live socket', () => {
+    jest.useFakeTimers();
+    const { svc, prismaUser } = makeService();
+    // Register a fake socket so isUserOnline returns true.
+    svc.register('socket-1', 'user-online', 'web');
+    prismaUser.update.mockClear();
+    svc.markSeenFromHttp('user-online');
+    // Only one update call — for lastSeenAt, not lastOnlineAt.
+    const calls = (prismaUser.update as jest.Mock).mock.calls;
+    const callsWithLastOnline = calls.filter((c: any[]) =>
+      Object.prototype.hasOwnProperty.call(c[0]?.data ?? {}, 'lastOnlineAt'),
+    );
+    expect(callsWithLastOnline).toHaveLength(0);
+    jest.useRealTimers();
+  });
+});

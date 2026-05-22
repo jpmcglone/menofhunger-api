@@ -5,6 +5,7 @@ import { Interval } from '@nestjs/schedule';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { AppConfigService } from '../app/app-config.service';
+import { PresenceService } from './presence.service';
 
 type PresenceEvent =
   | { type: 'online'; userId: string; instanceId: string }
@@ -33,6 +34,7 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
   constructor(
     private readonly redis: RedisService,
     private readonly appConfig: AppConfigService,
+    private readonly presence: PresenceService,
   ) {
     // Subscriber connections must not run the ready-check: ioredis sends INFO
     // for the check, which is rejected in subscriber mode after a reconnect.
@@ -444,7 +446,9 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
       }
       if (remaining > 0) continue;
 
-      // No sockets tracked => offline.
+      // No sockets tracked => offline. Persist lastOnlineAt so the user appears in
+      // "recently around" even if the process crashed before handleDisconnect ran.
+      this.presence.persistLastOnlineAt(uid);
       await Promise.allSettled([
         this.redis.raw().zrem(RedisKeys.presenceOnlineZset(), uid),
         this.redis.raw().srem(RedisKeys.presenceIdleSet(), uid),

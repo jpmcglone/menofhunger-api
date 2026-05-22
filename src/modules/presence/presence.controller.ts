@@ -273,19 +273,8 @@ export class PresenceController {
   ): Promise<{ data: RecentlyOnlineUserDto[]; pagination: { nextCursor: string | null } }> {
     const viewerUserId = userId ?? null;
 
-    // Privacy: only verified viewers can see "recently online" / last-online timestamps.
-    // (Unverified viewers should not be able to infer last-online recency ordering.)
+    // Require sign-in: anonymous visitors cannot see "recently online".
     if (!viewerUserId) {
-      return { data: [], pagination: { nextCursor: null } };
-    }
-    const viewer = await this.prisma.user.findUnique({
-      where: { id: viewerUserId },
-      select: { verifiedStatus: true, siteAdmin: true },
-    });
-    const viewerVerifiedStatus = (viewer as any)?.verifiedStatus ?? 'none';
-    const viewerCanSeeLastOnline =
-      Boolean((viewer as any)?.siteAdmin) || (typeof viewerVerifiedStatus === 'string' && viewerVerifiedStatus !== 'none');
-    if (!viewerCanSeeLastOnline) {
       return { data: [], pagination: { nextCursor: null } };
     }
 
@@ -501,17 +490,7 @@ export class PresenceController {
     let recentNextCursor: string | null = null;
 
     if (viewerUserId) {
-      const viewer = await this.prisma.user.findUnique({
-        where: { id: viewerUserId },
-        select: { verifiedStatus: true, siteAdmin: true },
-      });
-      const viewerVerifiedStatus = (viewer as any)?.verifiedStatus ?? 'none';
-      const viewerCanSeeLastOnline =
-        Boolean((viewer as any)?.siteAdmin) ||
-        (typeof viewerVerifiedStatus === 'string' && viewerVerifiedStatus !== 'none');
-
-      if (viewerCanSeeLastOnline) {
-        const limit = parsed.recentLimit ?? 30;
+      const limit = parsed.recentLimit ?? 30;
         const cursorRaw = (parsed.recentCursor ?? '').trim();
         const cursor = decodePageCursor(cursorRaw);
         if (cursorRaw && !cursor) throw new BadRequestException('Invalid cursor.');
@@ -628,7 +607,6 @@ export class PresenceController {
           lastOnlineAt: lastOnlineAtById.get(u.id) ?? null,
           status: recentStatusesById.get(u.id) ?? null,
         }));
-      }
     }
 
     return {

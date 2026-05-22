@@ -113,9 +113,10 @@ function makeService(overrides?: { prisma?: any }) {
   const posthog = { capture: jest.fn() } as any;
   const slack = { send: jest.fn(), notifySignup: jest.fn() } as any;
   const requestCache = { get: jest.fn(() => undefined), set: jest.fn() } as any;
+  const presence = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() } as any;
 
-  const svc = new AuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack, requestCache);
-  return { svc, prisma, token, tokenHash };
+  const svc = new AuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack, requestCache, presence);
+  return { svc, prisma, token, tokenHash, presence };
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +238,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const otpProvider: any = { send: jest.fn(), verify: jest.fn() };
     const posthog: any = { capture: jest.fn() };
     const slack: any = { send: jest.fn(), notifySignup: jest.fn() };
+    const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
 
     const svc = new AuthService(
       prisma,
@@ -247,6 +249,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
       posthog,
       slack,
       requestCache,
+      presence,
     );
 
     const a = await svc.meFromSessionToken(token);
@@ -294,6 +297,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const otpProvider: any = { send: jest.fn(), verify: jest.fn() };
     const posthog: any = { capture: jest.fn() };
     const slack: any = { send: jest.fn(), notifySignup: jest.fn() };
+    const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
 
     const svc = new AuthService(
       prisma,
@@ -304,6 +308,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
       posthog,
       slack,
       requestCache,
+      presence,
     );
 
     // Simulate 5 concurrent requests all calling meFromSessionToken with the
@@ -370,6 +375,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const otpProvider: any = { send: jest.fn(), verify: jest.fn() };
     const posthog: any = { capture: jest.fn() };
     const slack: any = { send: jest.fn(), notifySignup: jest.fn() };
+    const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
 
     const svc = new AuthService(
       prisma,
@@ -380,6 +386,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
       posthog,
       slack,
       requestCache,
+      presence,
     );
 
     await svc.meFromSessionToken(token);
@@ -447,6 +454,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const otpProvider: any = { send: jest.fn(), verify: jest.fn() };
     const posthog: any = { capture: jest.fn() };
     const slack: any = { send: jest.fn(), notifySignup: jest.fn() };
+    const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
 
     const svc = new AuthService(
       prisma,
@@ -457,6 +465,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
       posthog,
       slack,
       requestCache,
+      presence,
     );
 
     const result = await svc.meFromSessionToken(token);
@@ -518,12 +527,14 @@ describe('AuthService.verifyPhoneCode — referral signup linking', () => {
       select: { id: true, premium: true },
     });
     expect(prisma.user.create).toHaveBeenCalledWith({
-      data: {
+      data: expect.objectContaining({
         phone: '+15555550000',
         username: null,
         usernameIsSet: false,
         recruitedById: 'recruiter-1',
-      },
+        lastSeenAt: expect.any(Date),
+        lastOnlineAt: expect.any(Date),
+      }),
     });
     expect(prisma.follow.create).toHaveBeenCalledWith({
       data: { followerId: 'new-user', followingId: 'recruiter-1' },
@@ -559,5 +570,53 @@ describe('AuthService.verifyPhoneCode — referral signup linking', () => {
     expect(prisma.user.create).not.toHaveBeenCalled();
     expect(prisma.follow.create).not.toHaveBeenCalled();
     expect(result.referralApplied).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('AuthService.verifyPhoneCode — presence on signup', () => {
+  function makeResponse() {
+    return { cookie: jest.fn(), clearCookie: jest.fn() } as any;
+  }
+
+  it('seeds lastSeenAt and lastOnlineAt when creating a new user', async () => {
+    const newUser = makeMinimalUser({ id: 'brand-new', phone: '+15550001234', username: null, usernameIsSet: false });
+    const prisma = {
+      user: {
+        findUnique: jest.fn(async () => null),
+        findFirst: jest.fn(async () => null),
+        create: jest.fn(async () => newUser),
+      },
+      phoneOtp: { findFirst: jest.fn(async () => null), update: jest.fn() },
+      follow: { create: jest.fn() },
+      session: { create: jest.fn(async () => ({ id: 'session-1' })) },
+      post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    };
+    const { svc } = makeService({ prisma });
+    await svc.verifyPhoneCode('+15550001234', '000000', makeResponse());
+
+    const createCall = (prisma.user.create as jest.Mock).mock.calls[0][0];
+    expect(createCall.data.lastSeenAt).toBeInstanceOf(Date);
+    expect(createCall.data.lastOnlineAt).toBeInstanceOf(Date);
+  });
+
+  it('calls markSeenFromHttp after successful login', async () => {
+    const existingUser = makeMinimalUser({ id: 'existing-user', phone: '+15550001234' });
+    const prisma = {
+      user: {
+        findUnique: jest.fn(async () => existingUser),
+        findFirst: jest.fn(async () => null),
+        create: jest.fn(),
+      },
+      phoneOtp: { findFirst: jest.fn(async () => null), update: jest.fn() },
+      follow: { create: jest.fn() },
+      session: { create: jest.fn(async () => ({ id: 'session-1' })) },
+      post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    };
+    const { svc, presence } = makeService({ prisma });
+    await svc.verifyPhoneCode('+15550001234', '000000', makeResponse());
+
+    expect(presence.markSeenFromHttp).toHaveBeenCalledWith(existingUser.id);
   });
 });

@@ -323,6 +323,27 @@ export class PresenceService {
     return { userId: meta.userId, isNowOffline: false };
   }
 
+  /**
+   * Called from HTTP endpoints (login, onboarding, profile update, etc.) when a user performs
+   * authenticated activity outside of a WebSocket session. Two behaviors:
+   *
+   * 1. Always bumps `lastSeenAt` (throttled to 1× per 2 min — same as the socket path).
+   * 2. Bumps `lastOnlineAt` **only if the user has no live socket**, so we never overwrite a
+   *    more-recent "went offline" timestamp with a stale HTTP-activity time.
+   *
+   * This guarantees that HTTP-only users (e.g. mobile apps that never connected a socket, or
+   * users mid-onboarding before the socket is established) still show up in "recently around"
+   * with a sane last-active time.
+   */
+  markSeenFromHttp(userId: string): void {
+    const uid = (userId ?? '').trim();
+    if (!uid) return;
+    this.persistLastSeenAt(uid);
+    if (!this.isUserOnline(uid)) {
+      this.persistLastOnlineAt(uid);
+    }
+  }
+
   /** Persist last-online as the moment the user went fully offline (called by gateway after Redis confirms). */
   persistLastOnlineAt(userId: string): void {
     // Fire-and-forget: presence disconnect should never block gateway cleanup.

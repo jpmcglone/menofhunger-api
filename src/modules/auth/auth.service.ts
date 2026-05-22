@@ -20,6 +20,7 @@ import { dayIndexEastern, easternDayKey, easternDayKeyFromDayIndex } from '../..
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
+import { PresenceService } from '../presence/presence.service';
 
 /** TTL for the full session cache (auth guards). Short enough to pick up bans/revocations quickly. */
 const SESSION_FULL_CACHE_TTL_MS = 30_000;
@@ -83,6 +84,7 @@ export class AuthService {
     private readonly posthog: PosthogService,
     private readonly slack: SlackService,
     private readonly requestCache: RequestCacheService,
+    private readonly presence: PresenceService,
   ) {}
 
   private maskPhone(phone: string) {
@@ -247,6 +249,10 @@ export class AuthService {
             phone,
             username: null,
             usernameIsSet: false,
+            // Seed presence timestamps so a brand-new user appears in "recently around"
+            // immediately, even before they connect a WebSocket.
+            lastSeenAt: now,
+            lastOnlineAt: now,
             ...(recruitedById ? { recruitedById } : {}),
           },
         });
@@ -263,6 +269,10 @@ export class AuthService {
     }
 
     const session = await this.createSessionAndSetCookie(user.id, res);
+
+    // Fire-and-forget: update presence so the user appears in "recently around"
+    // even if they never open a WebSocket (e.g. mobile sign-up, abandoned onboarding).
+    this.presence.markSeenFromHttp(user.id);
 
     if (isNewUser) {
       this.posthog.capture(user.id, 'user_signed_up', { phone_masked: this.maskPhone(phone) });
@@ -313,6 +323,9 @@ export class AuthService {
         siteAdmin: result.user.siteAdmin,
         bannedAt: result.user.bannedAt ? new Date(result.user.bannedAt) : null,
       });
+      // Keep presence timestamps fresh for HTTP-only sessions (e.g. mid-onboarding before socket
+      // connects). Throttled to 1× per 2 min so it's safe to call on every authenticated request.
+      this.presence.markSeenFromHttp(result.user.id);
     }
 
     return result;

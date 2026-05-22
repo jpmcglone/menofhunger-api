@@ -23,6 +23,7 @@ import { UsersLocationService } from './users-location.service';
 import { EmailVerificationService } from '../email/email-verification.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
+import { PresenceService } from '../presence/presence.service';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -229,6 +230,7 @@ export class UsersController {
     private readonly emailVerification: EmailVerificationService,
     private readonly posthog: PosthogService,
     private readonly slack: SlackService,
+    private readonly presence: PresenceService,
   ) {}
 
   private async viewerCanSeeLastOnline(viewerUserId: string | null): Promise<boolean> {
@@ -827,6 +829,7 @@ export class UsersController {
       });
       await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
+      this.presence.markSeenFromHttp(userId);
       return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
     }
 
@@ -851,6 +854,8 @@ export class UsersController {
 
       await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
+      this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'username_set');
+      this.presence.markSeenFromHttp(userId);
       return {
         data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
       };
@@ -1192,6 +1197,7 @@ export class UsersController {
       await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
       this.usersMeRealtime.emitMeUpdatedFromUser(updated, emailChanged ? 'email_changed' : 'profile_changed');
+      this.presence.markSeenFromHttp(userId);
 
       if (emailChanged && nextEmail) {
         const greetingName = (updated.name ?? updated.username ?? '').trim() || null;
@@ -1399,6 +1405,7 @@ export class UsersController {
       await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
       this.usersMeRealtime.emitMeUpdatedFromUser(updated, emailChanged ? 'email_changed' : 'onboarding_changed');
+      this.presence.markSeenFromHttp(userId);
 
       if (emailChanged && nextEmail) {
         const greetingName = (updated.name ?? updated.username ?? '').trim() || null;

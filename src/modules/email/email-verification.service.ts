@@ -6,6 +6,7 @@ import { EmailActionTokensService } from './email-action-tokens.service';
 import { escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from './templates/moh-email';
 import { toUserDto } from '../../common/dto';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { PresenceService } from '../presence/presence.service';
 
 const VERIFY_EXPIRES_HOURS = 48;
 // Protect deliverability + cost: prevent hammering resend.
@@ -27,6 +28,7 @@ export class EmailVerificationService {
     private readonly tokens: EmailActionTokensService,
     private readonly email: EmailService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly presence: PresenceService,
   ) {}
 
   async requestVerification(params: { userId: string; email: string; name?: string | null }): Promise<{ sent: boolean }> {
@@ -176,6 +178,8 @@ export class EmailVerificationService {
       user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
       reason: 'email_verified',
     });
+    // Presence: email verification is active engagement — keep "recently around" fresh.
+    this.presence.markSeenFromHttp(updated.id);
     return { ok: true };
   }
 }
