@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
+import { ApiTags } from '@nestjs/swagger';
 import type { SpaceDto, SpaceLobbyCountsDto, SpaceReactionDto } from '../../common/dto';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
@@ -25,6 +26,7 @@ const setModeSchema = z.object({
   radioStreamUrl: z.string().trim().max(2000).nullish(),
 });
 
+@ApiTags('Radio & Spaces')
 @Controller('spaces')
 export class SpacesController {
   constructor(

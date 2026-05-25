@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { apiReference } from '@scalar/nestjs-api-reference';
 import cookieParser = require('cookie-parser');
 import compression = require('compression');
 import * as express from 'express';
@@ -21,8 +22,31 @@ function isUnsafeMethod(method: string | undefined) {
   return m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE';
 }
 
+/**
+ * Strip an optional leading /vN/ (or /vN) REST API version prefix from a request path.
+ *
+ * Used in middleware that must recognize both versioned and unversioned forms of
+ * the small set of operational endpoints that deliberately live at the document root
+ * (never receive the /v1 prefix):
+ *
+ *   - '' (root identity)
+ *   - health, health/config
+ *   - billing/webhook (Stripe target)
+ *   - .well-known/apple-app-site-association
+ *
+ * This normalization lives in one place so the list of unversioned surfaces stays consistent
+ * during transition windows and future version bumps.
+ */
+function stripVersionPrefix(p: string): string {
+  return p.replace(/^\/v\d+\/?/, '/');
+}
+
 function isStripeWebhookPath(req: Request): boolean {
-  const path = String(req.originalUrl || req.url || '');
+  let path = String(req.originalUrl || req.url || '');
+  // Normalize away a leading /vN prefix so the check remains correct even if
+  // the webhook path were ever (incorrectly) requested under a version prefix,
+  // or during any transition window. The actual webhook route is excluded from versioning.
+  path = stripVersionPrefix(path);
   return path === '/billing/webhook' || path.startsWith('/billing/webhook?');
 }
 
@@ -88,6 +112,31 @@ async function bootstrap() {
     app.set('trust proxy', 1);
   }
 
+  /**
+   * Paths that deliberately remain at the document root (never receive the /v1 prefix).
+   * These are stable operational surfaces used by load balancers, Stripe, Apple, etc.
+   *
+   * This is the single source of truth for the unversioned surface.
+   * Any new unversioned endpoint must be added here and to the exclude list below
+   * (and the corresponding normalization in stripVersionPrefix + docs) in the same change.
+   */
+  const UNVERSIONED_ROOT_PATHS = [
+    '', // root identity (GET /)
+    'health',
+    'health/config',
+    'billing/webhook',
+    '.well-known/apple-app-site-association',
+  ] as const;
+
+  // URL versioning for the entire public + admin API surface.
+  //
+  // The operational endpoints listed in UNVERSIONED_ROOT_PATHS above are kept at the
+  // document root. Middleware normalizers and client health probes must continue to
+  // recognize them without a version prefix.
+  app.setGlobalPrefix('v1', {
+    exclude: [...UNVERSIONED_ROOT_PATHS],
+  });
+
   if (!appConfig.isProd() && appConfig.logStartupInfo()) {
     startup.log(
       [
@@ -139,7 +188,11 @@ async function bootstrap() {
   // Sensitive endpoints should never be cached (prevents 304 loops in production behind CDNs/proxies,
   // and avoids caching auth state).
   app.use((req: Request, res: Response, next: NextFunction) => {
-    const path = String(req.originalUrl || req.url || '');
+    let path = String(req.originalUrl || req.url || '');
+    // Recognize both the versioned (/v1/admin, /v1/auth) and unversioned forms so the
+    // no-store behavior works during the cutover window and for any clients that might
+    // still be pointed at the old base temporarily.
+    path = stripVersionPrefix(path);
     const isAdmin = path.startsWith('/admin/') || path === '/admin';
     const isAuth = path.startsWith('/auth/') || path === '/auth' || path.startsWith('/auth?');
     if (isAdmin || isAuth) {
@@ -166,6 +219,8 @@ async function bootstrap() {
   });
 
   // Dev-only: lightweight request logging (opt-in via LOG_REQUESTS=true).
+  // Intentionally logs the raw incoming path (including any /vN prefix) so developers
+  // see exactly what clients are sending during version cutovers.
   if (!appConfig.isProd() && appConfig.logRequests()) {
     app.use((req: Request, res: Response, next: NextFunction) => {
       const start = Date.now();
@@ -256,13 +311,73 @@ async function bootstrap() {
   });
 
   if (!appConfig.isProd()) {
-    const swaggerConfig = new DocumentBuilder()
+    const documentConfig = new DocumentBuilder()
       .setTitle('Men of Hunger API')
-      .setDescription('NestJS API intended for consumption by a Next.js app.')
+      .setDescription(
+        'Official API for Men of Hunger (v1).\n\n' +
+          'SUCCESS ENVELOPE: All successful responses are wrapped as `{ data: T, pagination? }`.\n' +
+          'ERROR ENVELOPE: `{ meta: { status, errors: [{ code, message, reason? }], requestId? } }` (produced by the global exception filter).\n\n' +
+          'AUTH: HTTP-only cookie named `moh_session`. For unsafe methods (POST, PUT, PATCH, DELETE), browsers must send a matching Origin or Referer header that is in the allowed list (or same-origin) when running in production. This is the CSRF mitigation for cookie auth. Non-browser clients (curl, mobile apps) may omit Origin/Referer in development.\n\n' +
+          'PAGINATION: List endpoints accept `?cursor=<opaque>&limit=N`. Responses include `pagination.nextCursor` (null when exhausted). Some endpoints also return counts by visibility tier.\n\n' +
+          'RATE LIMITS: Global + operation-specific (auth start/verify, post creation, uploads, interactions). Limits are enforced via the Throttler guard; clients should respect Retry-After or back off on 429.\n\n' +
+          'REALTIME (WebSocket): Primary transport for live updates. Connect to Socket.IO at `/socket.io` (engine.io v4). Authenticate with the same `moh_session` cookie.\n' +
+          'Subscription model: After connect, clients call `posts:subscribe`, `articles:subscribe`, `presence:subscribe` (users), and room-specific joins for spaces/radio/crew-wall. The server then pushes targeted events.\n' +
+          'Major event families (kebab-case, namespaced; payloads mirror the HTTP DTOs in src/common/dto/realtime.dto.ts and siblings):\n' +
+          '  - posts:* (live-updated, interaction/boost/bookmark, comment-added/deleted, typing, feed:new-post for followers)\n' +
+          '  - articles:* (live-updated, comment-added/deleted/updated, reaction changed)\n' +
+          '  - users:meUpdated (canonical self), users:selfUpdated (public profile for subscribed users)\n' +
+          '  - notifications:* (new, deleted, undelivered/waiting counts)\n' +
+          '  - messages:* (created, edited, deleted, reaction, read receipts, typing, unread counts)\n' +
+          '  - follows:changed\n' +
+          '  - presence:* (status updated/cleared, online-feed snapshots, init/subscribed)\n' +
+          '  - crews:* (updated, members changed, owner changed, disbanded, invites received/updated, wall messages + edits/deletes/reactions, streaks advanced/broken, transfer votes)\n' +
+          '  - groups:* (invites received/updated)\n' +
+          '  - spaces:* (lobby counts, members, chat messages/snapshots, reactions, typing, watch-party state/control/owner replaced, mode changed)\n' +
+          '  - radio:* (listeners, lobby counts, chat messages/snapshots, replaced)\n' +
+          '  - checkins:answered-today\n' +
+          '  - marv:* (credits updated, public reply posted)\n' +
+          'See the Realtime & Presence tag and the DTOs for exact payload shapes. Many events are also available via the HTTP presence controller helpers.\n\n' +
+          'This reference is generated from the running NestJS application. New public routes and controllers appear automatically on next dev server restart (non-production). Production docs are intentionally disabled.\n\n' +
+          'STABILITY CONTRACT: Within any v1.x release, response shapes, status codes, and error formats are stable. Breaking changes (field removal, type change, new required input, behavior change) will only be introduced behind a v2 path or equivalent. See docs/api-contract.md for the full type-sync and change process.',
+      )
       .setVersion('0.1.0')
+      .addCookieAuth('moh_session', {
+        type: 'apiKey',
+        in: 'cookie',
+        name: 'moh_session',
+      })
+      .addTag('Auth', 'Phone (SMS/OTP) login, existence checks, session management, logout')
+      .addTag('Feed & Posts', 'Home feed (following vs all, filters), create post/reply, comments, boosts, bookmarks, polls, drafts, delete own, view tracking')
+      .addTag('Profiles & Social', 'Public profile, self profile (me), edit profile, follow/unfollow, nudge, relationship status, stats')
+      .addTag('Notifications', 'Notification inbox (grouped + rollups), mark delivered/read, follow-back and nudge smart actions')
+      .addTag('Moderation', 'Report a post or user (spam, harassment, etc.) - required surface for App Store safety and community health')
+      .addTag('Uploads & Media', 'Generate presigned R2 upload URLs, avatar and banner management (including delete)')
+      .addTag('Verification', 'Request identity verification, view status and requirements')
+      .addTag('Search & Discovery', 'User and post search, trending hashtags, interest/topic categories, who-to-follow / recommendations')
+      .addTag('Realtime & Presence', 'HTTP presence helpers and the full catalog of WebSocket events for live feed, notifications, presence, and cross-device sync')
+      .addTag('Billing & Entitlements', 'Current subscription state, active grants, referral/recruit info (read-only surfaces for clients)')
+      .addTag('Messages (Chat)', 'Conversations, messages, reactions, read receipts, blocks, typing, unread counts — full realtime + HTTP surface')
+      .addTag('Articles', 'Long-form articles with comments, reactions, boosts, drafts, publishing, sharing')
+      .addTag('Crews & Groups', 'Crew and community group membership, invites, wall chat, owner transfer, streaks, moderation')
+      .addTag('Check-ins & Streaks', 'Daily check-in answers, today/leaderboard, streak events')
+      .addTag('Radio & Spaces', 'Radio stations + live chat/lobbies; collaborative Spaces with watch parties, chat, reactions')
+      .addTag('Other', 'Topics/interests/follows, daily-content, hashtags/trending, link metadata, feedback, app meta, public metrics')
       .build();
-    const document = SwaggerModule.createDocument(app, swaggerConfig);
-    SwaggerModule.setup('docs', app, document);
+    const document = SwaggerModule.createDocument(app, documentConfig);
+
+    app.use(
+      '/docs',
+      apiReference({
+        content: document,
+        pageTitle: 'Men of Hunger API Reference',
+        theme: 'moon',
+        contact: { url: 'https://menofhunger.com/feedback', email: 'feedback@menofhunger.com' },
+      }),
+    );
+
+    http.get('/openapi.json', (req: Request, res: Response) => {
+      res.json(document);
+    });
   }
 
   try {

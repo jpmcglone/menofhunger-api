@@ -1,5 +1,6 @@
 import { Controller, Delete, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
+import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { AuthGuard } from '../auth/auth.guard';
@@ -32,6 +33,7 @@ const listCategoriesSchema = z.object({
 });
 
 @UseGuards(OptionalAuthGuard)
+@ApiTags('Other')
 @Controller('topics')
 export class TopicsController {
   constructor(

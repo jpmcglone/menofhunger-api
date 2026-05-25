@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, ForbiddenException, Get, Headers, Logger, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
+import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
@@ -285,6 +286,7 @@ const publishFromOnlyMeSchema = z.object({
     .optional(),
 });
 
+@ApiTags('Feed & Posts')
 @Controller('posts')
 export class PostsController {
   private readonly logger = new Logger(PostsController.name);

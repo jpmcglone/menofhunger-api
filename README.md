@@ -53,21 +53,33 @@ npm run dev:check
 npm run dev:kill
 ```
 
-## Endpoints
+## Endpoints & Documentation
 
-- `GET /` → `{ ok: true, service: "menofhunger-api" }`
-- `GET /health` → `{ ok: true }`
-- Swagger UI → `/docs`
+A small set of operational endpoints live at the document root for stability (load balancers, Stripe dashboard, Apple universal links, etc.). This list is the single source of truth and is defined as the `UNVERSIONED_ROOT_PATHS` constant in `src/main.ts` (used for both `setGlobalPrefix` exclusion and path normalization helpers).
+
+- `GET /` → service identity
+- `GET /health` (and `/health/config`) → health/readiness + config dump (admin)
+- `POST /billing/webhook` → Stripe signature-verified webhook (CSRF-exempt)
+- `GET /.well-known/apple-app-site-association` → Apple universal links file
+
+Everything else (the entire public product surface and all admin surfaces) is under the `/v1` prefix:
+
+- Scalar API Reference (interactive, categorized docs for the full `/v1` surface) → `/docs` (enabled only in non-production)
+- Raw OpenAPI JSON (for iOS codegen, Postman, CI, etc.) → `/openapi.json` (non-production only)
+
+See `docs/api-contract.md` for the stability contract and type-sync process. The OpenAPI document (and Scalar) reflects the live routing, including the `/v1` prefix, automatically.
+
+Any new unversioned surface must be added to `UNVERSIONED_ROOT_PATHS` (and the exclude list + normalization logic + these docs) in the same commit.
 
 ## Using from Next.js (local)
 
-In your Next.js app, set:
+In your Next.js app, set the base to the versioned root (product routes live under `/v1`):
 
-- `NEXT_PUBLIC_API_URL=http://localhost:3001`
+- `NEXT_PUBLIC_API_URL=http://localhost:3001/v1`
 
-Then call:
+Then call (example for an unversioned infra endpoint; most product calls append their path under the `/v1` base):
 
-- `${process.env.NEXT_PUBLIC_API_URL}/health`
+- `${process.env.NEXT_PUBLIC_API_URL}/health`  (note: health is one of the few endpoints that stays at the raw host root)
 
 ## Production env checklist
 

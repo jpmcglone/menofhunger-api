@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
+import { ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
 import { VerifiedGuard } from '../auth/verified.guard';
 import { CurrentUserId } from '../users/users.decorator';
@@ -79,6 +80,7 @@ const addReactionSchema = z.object({
   reactionId: z.string().trim().min(1),
 });
 
+@ApiTags('Messages (Chat)')
 @Controller('messages')
 @UseGuards(AuthGuard, VerifiedGuard)
 export class MessagesController {

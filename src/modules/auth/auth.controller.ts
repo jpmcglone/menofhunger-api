@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { ModuleRef } from '@nestjs/core';
 import { z } from 'zod';
+import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { getSessionCookie } from '../../common/session-cookie';
 import { AuthService } from './auth.service';
 import { OTP_CODE_LENGTH } from './auth.constants';
@@ -30,6 +31,7 @@ const verifySchema = z.object({
   referralCode: z.string().max(50).optional().nullable(),
 });
 
+@ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -37,6 +39,7 @@ export class AuthController {
     private readonly moduleRef: ModuleRef,
   ) {}
 
+  @ApiOperation({ summary: 'Send 6-digit login code via SMS' })
   @Throttle({
     default: {
       limit: rateLimitLimit('authStart', 8),
@@ -61,6 +64,7 @@ export class AuthController {
    * first-time signup intro before sending an OTP. Intentionally returns only a
    * boolean — no PII, no enumeration risk beyond the existing /phone/start flow.
    */
+  @ApiOperation({ summary: 'Check if a phone number has an existing account (lightweight, no PII)' })
   @Throttle({
     default: {
       limit: rateLimitLimit('authStart', 8),
@@ -80,6 +84,7 @@ export class AuthController {
     return { data: { exists } };
   }
 
+  @ApiOperation({ summary: 'Verify SMS code and create/restore session (login or first-time signup)' })
   @Throttle({
     default: {
       limit: rateLimitLimit('authVerify', 20),
@@ -99,6 +104,7 @@ export class AuthController {
     return { data: result };
   }
 
+  @ApiOperation({ summary: 'Get the authenticated user (me) plus live notification/message counts' })
   @Get('me')
   async me(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const token = getSessionCookie(req);
@@ -145,6 +151,7 @@ export class AuthController {
     };
   }
 
+  @ApiOperation({ summary: 'Logout current session, clear cookie, and disconnect realtime sockets' })
   @Post('logout')
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const token = getSessionCookie(req);

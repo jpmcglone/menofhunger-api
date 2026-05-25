@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Header, Post, UseGuards, Query } from '@nestjs/common';
 import { z } from 'zod';
+import { ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
@@ -17,6 +18,7 @@ const leaderboardQuerySchema = z.object({
   scope: z.enum(['weekly', 'best']).optional(),
 });
 
+@ApiTags('Check-ins & Streaks')
 @Controller('checkins')
 export class CheckinsController {
   constructor(

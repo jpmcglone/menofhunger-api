@@ -1,6 +1,7 @@
 import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { z } from 'zod';
+import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { OptionalCurrentUserId } from '../users/users.decorator';
 import { FeedbackService } from './feedback.service';
@@ -13,11 +14,13 @@ const createSchema = z.object({
   details: z.string().trim().min(1).max(5000),
 });
 
+@ApiTags('Feedback')
 @UseGuards(OptionalAuthGuard)
 @Controller('feedback')
 export class FeedbackController {
   constructor(private readonly feedback: FeedbackService) {}
 
+  @ApiOperation({ summary: 'Submit user feedback (bug, feature, account, other) - optional auth' })
   @Post()
   async create(@Req() req: Request, @Body() body: unknown, @OptionalCurrentUserId() userId?: string) {
     const parsed = createSchema.parse(body);

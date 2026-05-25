@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
+import { ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
@@ -93,6 +94,7 @@ const reorderMembersSchema = z.object({
   order: z.array(z.string().trim().min(1)).min(1).max(5),
 });
 
+@ApiTags('Crews & Groups')
 @Controller('crew')
 export class CrewController {
   constructor(

@@ -1,7 +1,9 @@
 import { Controller, Get } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { RADIO_STATIONS } from './radio.constants';
 import type { RadioStationDto } from '../../common/dto';
 
+@ApiTags('Radio & Spaces')
 @Controller('radio')
 export class RadioController {
   /**

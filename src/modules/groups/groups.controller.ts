@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
+import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
@@ -80,6 +81,7 @@ const exploreQuerySchema = z.object({
   cursor: z.string().trim().min(1).max(200).optional(),
 });
 
+@ApiTags('Crews & Groups')
 @Controller('groups')
 export class GroupsController {
   constructor(
