@@ -928,6 +928,149 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
     );
   });
 
+  it('repostPost preserves the canonical post group scope when the actor is an active member', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique = jest.fn(async () => ({
+      id: 'u1',
+      usernameIsSet: true,
+      verifiedStatus: 'verified',
+    }));
+    deps.prisma.post.findFirst = jest
+      .fn()
+      .mockResolvedValueOnce({
+        id: 'canonical-1',
+        userId: 'author',
+        visibility: 'public',
+        kind: 'regular',
+        repostedPostId: null,
+        communityGroupId: 'group-1',
+      })
+      .mockResolvedValueOnce(null);
+    deps.prisma.userBlock = { count: jest.fn(async () => 0) };
+    deps.prisma.communityGroupMember.findUnique = jest.fn(async () => ({ status: 'active' }));
+    const create = jest.fn(async () => ({ id: 'repost-1' }));
+    deps.prisma.$transaction = jest.fn(async (fn: any) => {
+      const tx: any = { post: { create, update: jest.fn(async () => ({ repostCount: 3 })) } };
+      return fn(tx);
+    });
+    deps.cacheInvalidation.bumpFeedGlobal = jest.fn(async () => undefined);
+    deps.notifications.upsertRepostNotification = jest.fn(async () => undefined);
+    deps.postViews.markViewed = jest.fn(async () => undefined);
+
+    await service.repostPost({ userId: 'u1', postId: 'canonical-1' });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ kind: 'repost', communityGroupId: 'group-1' }),
+      }),
+    );
+  });
+
+  it('repostPost pushes the new repost to the group feed room when the canonical post is in a group', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique = jest.fn(async () => ({
+      id: 'u1',
+      usernameIsSet: true,
+      verifiedStatus: 'verified',
+    }));
+    deps.prisma.post.findFirst = jest
+      .fn()
+      .mockResolvedValueOnce({
+        id: 'canonical-1',
+        userId: 'author',
+        visibility: 'public',
+        kind: 'regular',
+        repostedPostId: null,
+        communityGroupId: 'group-1',
+      })
+      .mockResolvedValueOnce(null);
+    deps.prisma.userBlock = { count: jest.fn(async () => 0) };
+    deps.prisma.communityGroupMember.findUnique = jest.fn(async () => ({ status: 'active' }));
+    deps.prisma.$transaction = jest.fn(async (fn: any) => {
+      const tx: any = {
+        post: {
+          create: jest.fn(async () => ({ id: 'repost-1' })),
+          update: jest.fn(async () => ({ repostCount: 4 })),
+        },
+      };
+      return fn(tx);
+    });
+    deps.cacheInvalidation.bumpFeedGlobal = jest.fn(async () => undefined);
+    deps.notifications.upsertRepostNotification = jest.fn(async () => undefined);
+    deps.postViews.markViewed = jest.fn(async () => undefined);
+    // Decouple from DTO assembly internals — assert the group emit is wired.
+    const emitSpy = jest
+      .spyOn(service as any, 'emitGroupRepostCreated')
+      .mockResolvedValue(undefined);
+
+    await service.repostPost({ userId: 'u1', postId: 'canonical-1' });
+
+    expect(emitSpy).toHaveBeenCalledWith('group-1', 'repost-1', 'canonical-1');
+  });
+
+  it('repostPost does NOT push to a group feed room for a non-group repost', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique = jest.fn(async () => ({
+      id: 'u1',
+      usernameIsSet: true,
+      verifiedStatus: 'verified',
+    }));
+    deps.prisma.post.findFirst = jest
+      .fn()
+      .mockResolvedValueOnce({
+        id: 'canonical-1',
+        userId: 'author',
+        visibility: 'public',
+        kind: 'regular',
+        repostedPostId: null,
+        communityGroupId: null,
+      })
+      .mockResolvedValueOnce(null);
+    deps.prisma.userBlock = { count: jest.fn(async () => 0) };
+    deps.prisma.$transaction = jest.fn(async (fn: any) => {
+      const tx: any = {
+        post: {
+          create: jest.fn(async () => ({ id: 'repost-1' })),
+          update: jest.fn(async () => ({ repostCount: 4 })),
+        },
+      };
+      return fn(tx);
+    });
+    deps.cacheInvalidation.bumpFeedGlobal = jest.fn(async () => undefined);
+    deps.notifications.upsertRepostNotification = jest.fn(async () => undefined);
+    deps.postViews.markViewed = jest.fn(async () => undefined);
+    const emitSpy = jest
+      .spyOn(service as any, 'emitGroupRepostCreated')
+      .mockResolvedValue(undefined);
+
+    await service.repostPost({ userId: 'u1', postId: 'canonical-1' });
+
+    expect(emitSpy).not.toHaveBeenCalled();
+  });
+
+  it('repostPost throws when the canonical post is in a group the actor has not joined', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique = jest.fn(async () => ({
+      id: 'u1',
+      usernameIsSet: true,
+      verifiedStatus: 'verified',
+    }));
+    deps.prisma.post.findFirst = jest.fn().mockResolvedValueOnce({
+      id: 'canonical-1',
+      userId: 'author',
+      visibility: 'public',
+      kind: 'regular',
+      repostedPostId: null,
+      communityGroupId: 'group-1',
+    });
+    deps.prisma.userBlock = { count: jest.fn(async () => 0) };
+    deps.prisma.communityGroupMember.findUnique = jest.fn(async () => null);
+
+    await expect(service.repostPost({ userId: 'u1', postId: 'canonical-1' })).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
   it('unrepostPost emits posts:liveUpdated to the canonical post room with the new repostCount', async () => {
     const { service, deps } = makeService();
     deps.prisma.post.findFirst = jest
@@ -2619,6 +2762,92 @@ describe('PostsService.listForYouFeed', () => {
     const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
     const ids = out.posts.map((p: any) => p.id);
     expect(ids.indexOf('p-seen-follow')).toBeLessThan(ids.indexOf('p-stranger'));
+  });
+
+  it('null viewerUserId: skips postView query, skips follow queries, returns discovery posts', async () => {
+    // When viewerUserId is null the service must skip all personalized lookups
+    // (no postView.findMany for last-seen, no follow.findMany for outbound follows)
+    // and return public-only discovery posts from the trending/chrono lane.
+    const candidates: ForYouCandidate[] = [
+      { id: 'p-trend', userId: 'u-a', parentId: null, communityGroupId: null, trendingScore: 10, createdAt: new Date(Date.now() - 60 * 60 * 1000) },
+      { id: 'p-chrono', userId: 'u-b', parentId: null, communityGroupId: null, trendingScore: null, createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+    ];
+
+    const postFindMany = jest.fn(async (args: any) => {
+      if (args?.select) {
+        let pool = candidates.slice();
+        const ands: any[] = args?.where?.AND ?? [];
+        const notIn = new Set<string>(ands.flatMap((c: any) => Array.isArray(c?.id?.notIn) ? c.id.notIn : []));
+        if (notIn.size > 0) pool = pool.filter((c) => !notIn.has(c.id));
+        const hasTrending = ands.some((c: any) => c?.trendingScore?.gt === 0);
+        const hasChrono = ands.some(
+          (c: any) => Array.isArray(c?.OR) && c.OR.some((o: any) => o?.trendingScore === 0) && c.OR.some((o: any) => o?.trendingScore === null),
+        );
+        if (hasTrending) pool = pool.filter((c) => c.trendingScore != null && c.trendingScore > 0);
+        if (hasChrono) pool = pool.filter((c) => c.trendingScore == null || c.trendingScore === 0);
+        return pool;
+      }
+      if (args?.include) {
+        const ids: string[] = args.where?.id?.in ?? [];
+        return ids.map((id) => {
+          const c = candidates.find((x) => x.id === id);
+          return { id, userId: c?.userId ?? 'u-unknown', createdAt: c?.createdAt ?? new Date(), trendingScore: c?.trendingScore ?? null, parentId: null, communityGroupId: null, kind: 'regular', visibility: 'public', deletedAt: null } as any;
+        });
+      }
+      return [];
+    });
+
+    const postViewFindMany = jest.fn(async () => []);
+    const followFindMany = jest.fn(async () => []);
+
+    const { service } = makeService(
+      {
+        post: {
+          findUnique: jest.fn(),
+          findFirst: jest.fn(async () => null),
+          groupBy: jest.fn(async () => []),
+          findMany: postFindMany,
+          update: jest.fn(async () => ({})),
+          updateMany: jest.fn(async () => ({ count: 0 })),
+          create: jest.fn(),
+        },
+        follow: { findMany: followFindMany },
+        postView: { findMany: postViewFindMany },
+        boost: { findMany: jest.fn(async () => []), groupBy: jest.fn(async () => []) },
+        userBlock: { findMany: jest.fn(async () => []) },
+        communityGroupMember: { findMany: jest.fn(async () => []), findUnique: jest.fn(async () => null) },
+      },
+      {
+        viewerContext: {
+          getViewer: jest.fn(async () => null),
+          allowedPostVisibilities: jest.fn(() => ['public']),
+          isPremium: jest.fn(() => false),
+          isVerified: jest.fn(() => false),
+        },
+        redis: {
+          getJson: jest.fn(async () => null),
+          setJson: jest.fn(async () => undefined),
+          del: jest.fn(async () => undefined),
+        },
+      },
+    );
+
+    const out = await service.listForYouFeed({ viewerUserId: null, limit: 10, cursor: null, visibility: 'all' });
+
+    // Discovery posts returned.
+    expect(out.posts.length).toBeGreaterThan(0);
+    expect(out.posts.map((p: any) => p.id)).toContain('p-trend');
+
+    // postView.findMany must NOT have been called — no last-seen for anonymous viewers.
+    expect(postViewFindMany).not.toHaveBeenCalled();
+
+    // follow.findMany for outbound-follows (followerId = viewerUserId) must NOT have been called.
+    // More specifically: the viewer's own follow list fetch (where: { followerId: <viewerUserId> })
+    // must not have happened, because viewerUserId is null.
+    const allFollowArgs = followFindMany.mock.calls.map((callArgs: any[]) => callArgs[0]);
+    expect(allFollowArgs.every((a: any) => a?.where?.followerId !== null)).toBe(true);
+    // There should be no follow.findMany calls at all (no following IDs = no queries needed).
+    expect(followFindMany).not.toHaveBeenCalled();
   });
 
   it('allocates a larger followed-unseen quota on page 1 than on deep pages', async () => {

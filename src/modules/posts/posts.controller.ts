@@ -341,9 +341,10 @@ export class PostsController {
 
     const sort = parsed.sort ?? 'new';
     const requestedSortKind = sort === 'trending' ? 'popular' : sort;
-    // Anonymous /home is framed as For You in the UI, but without a viewer we fall back
-    // to the public discovery ranking instead of rejecting the feed request.
-    const sortKind = requestedSortKind === 'forYou' && !viewerUserId ? 'popular' : requestedSortKind;
+    // For You works for anonymous viewers too — listForYouFeed handles null viewerUserId
+    // by restricting to public posts and skipping all personalized lanes (no last-seen,
+    // no follows, no blocks). The result is a public discovery blend with For You scoring.
+    const sortKind = requestedSortKind;
     const isForYou = sortKind === 'forYou';
     const groupScoped = Boolean(parsed.groupsHub || parsed.communityGroupId);
     // Media grids should be exhaustive for Newest, while Trending/For You still
@@ -388,8 +389,9 @@ export class PostsController {
       return scopedOut;
     }
 
-    // For You is per-user and depends on view history that changes constantly — no caching.
-    const anonCache = !isForYou && viewerUserId == null;
+    // Authed For You is per-user and depends on view history — no caching.
+    // Anon For You is public-only discovery (no per-user state) so it can be cached.
+    const anonCache = viewerUserId == null;
     const authFirstPageCache = !isForYou && Boolean(viewerUserId) && !cursor;
     const authCursorCache = !isForYou
       && Boolean(viewerUserId)
@@ -440,7 +442,7 @@ export class PostsController {
         const result =
           sortKind === 'forYou' && !mediaChronological
             ? await this.posts.listForYouFeed({
-                viewerUserId: viewerUserId!,
+                viewerUserId,
                 limit,
                 cursor,
                 visibility: parsed.visibility ?? 'all',

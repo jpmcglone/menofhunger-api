@@ -36,6 +36,7 @@ import type {
 import {
   WsEventNames,
   type ArticlesSubscribePayloadDto,
+  type GroupsSubscribePayloadDto,
   type PostsSubscribePayloadDto,
   type PostsTypingPayloadDto,
   type UsersSpaceChangedPayloadDto,
@@ -50,8 +51,12 @@ type UserTimers = {
 
 const MAX_POST_SUBSCRIPTIONS_PER_SOCKET = 60;
 const MAX_ARTICLE_SUBSCRIPTIONS_PER_SOCKET = 20;
+const MAX_GROUP_SUBSCRIPTIONS_PER_SOCKET = 20;
 function postRoom(postId: string): string {
   return `post:${postId}`;
+}
+function groupRoom(groupId: string): string {
+  return `group:${groupId}`;
 }
 function articleRoom(articleId: string): string {
   return `article:${articleId}`;
@@ -1308,6 +1313,73 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       client.leave(postRoom(postId));
     }
     (client.data as any).postSubs = subs;
+  }
+
+  @SubscribeMessage('groups:subscribe')
+  async handleGroupsSubscribe(client: Socket, payload: Partial<GroupsSubscribePayloadDto>): Promise<void> {
+    const raw = Array.isArray((payload as any)?.groupIds) ? ((payload as any).groupIds as unknown[]) : [];
+    const requested = raw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 50);
+    if (requested.length === 0) return;
+
+    const subs: Set<string> = (client.data as any).groupSubs ?? new Set<string>();
+    (client.data as any).groupSubs = subs;
+    const remainingCap = Math.max(0, MAX_GROUP_SUBSCRIPTIONS_PER_SOCKET - subs.size);
+    if (remainingCap <= 0) return;
+
+    const toConsider = Array.from(new Set(requested)).filter((id) => !subs.has(id)).slice(0, remainingCap);
+    if (toConsider.length === 0) return;
+
+    const viewerId = (client.data as { userId?: string })?.userId ?? null;
+    const viewer = (client.data as any)?.viewer ?? {};
+    const viewerIsAdmin = Boolean(viewer?.siteAdmin);
+    const viewerIsVerified = viewerIsAdmin || Boolean(viewer?.verified);
+
+    // Group feeds are private surfaces: a socket may only join a group's room if the
+    // viewer can read that group's feed (active member, or an open group they're verified
+    // for, or a site admin). This mirrors `PostsService.assertCanReadCommunityGroup`.
+    const groups = await this.prisma.communityGroup.findMany({
+      where: { id: { in: toConsider }, deletedAt: null },
+      select: { id: true, joinPolicy: true },
+    });
+    const policyById = new Map(groups.map((g) => [g.id, g.joinPolicy] as const));
+
+    const memberships = viewerId
+      ? await this.prisma.communityGroupMember.findMany({
+          where: { userId: viewerId, groupId: { in: toConsider }, status: 'active' },
+          select: { groupId: true },
+        })
+      : [];
+    const activeGroupIds = new Set(memberships.map((m) => m.groupId));
+
+    const accepted: string[] = [];
+    for (const groupId of toConsider) {
+      const policy = policyById.get(groupId);
+      if (!policy) continue;
+      const isActiveMember = activeGroupIds.has(groupId);
+      const canRead = viewerIsAdmin || isActiveMember || (policy === 'open' && viewerIsVerified);
+      if (!canRead) continue;
+
+      subs.add(groupId);
+      accepted.push(groupId);
+      client.join(groupRoom(groupId));
+    }
+
+    if (accepted.length > 0) {
+      client.emit(WsEventNames.groupsSubscribed, { groupIds: accepted });
+    }
+  }
+
+  @SubscribeMessage('groups:unsubscribe')
+  handleGroupsUnsubscribe(client: Socket, payload: Partial<GroupsSubscribePayloadDto>): void {
+    const raw = Array.isArray((payload as any)?.groupIds) ? ((payload as any).groupIds as unknown[]) : [];
+    const ids = raw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 50);
+    if (ids.length === 0) return;
+    const subs: Set<string> = (client.data as any).groupSubs ?? new Set<string>();
+    for (const groupId of ids) {
+      subs.delete(groupId);
+      client.leave(groupRoom(groupId));
+    }
+    (client.data as any).groupSubs = subs;
   }
 
   @SubscribeMessage('articles:subscribe')

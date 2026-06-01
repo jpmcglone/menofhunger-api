@@ -1529,7 +1529,7 @@ export class PostsService {
    * where lower-ranked candidates inside a scanned window could disappear forever.
    */
   async listForYouFeed(params: {
-    viewerUserId: string;
+    viewerUserId: string | null;
     limit: number;
     cursor: string | null;
     visibility: 'all' | PostVisibility;
@@ -1565,7 +1565,9 @@ export class PostsService {
           ? { visibility: 'public' }
           : { visibility };
 
-    const blockSets = await this.viewerBlockSets(viewerUserId);
+    const blockSets = viewerUserId
+      ? await this.viewerBlockSets(viewerUserId)
+      : { blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() };
     const blockedAuthorIds = [...new Set([...blockSets.blockedByViewer, ...blockSets.viewerBlockedBy])];
     const blockedAuthorSet = new Set(blockedAuthorIds);
 
@@ -1576,8 +1578,10 @@ export class PostsService {
       requestedAuthorUserIds?.length
         ? { in: requestedAuthorUserIds.filter((id) => id !== viewerUserId && !blockedAuthorSet.has(id)) }
         : blockedAuthorIds.length > 0
-          ? { notIn: [viewerUserId, ...blockedAuthorIds] }
-          : { not: viewerUserId };
+          ? { notIn: viewerUserId ? [viewerUserId, ...blockedAuthorIds] : blockedAuthorIds }
+          : viewerUserId
+            ? { not: viewerUserId }
+            : undefined;
 
     if (requestedAuthorUserIds?.length && (userIdWhere as { in: string[] }).in.length === 0) {
       return { posts: [], nextCursor: null, scoreByPostId: new Map() };
@@ -1587,7 +1591,7 @@ export class PostsService {
       deletedAt: null,
       kind: { not: 'repost' },
       user: { bannedAt: null },
-      userId: userIdWhere,
+      ...(userIdWhere !== undefined ? { userId: userIdWhere } : {}),
       ...(kind ? { kind } : {}),
       ...(params.mediaOnly ? this.mediaOnlyWhere() : {}),
       ...(params.topLevelOnly ? { parentId: null } : {}),
@@ -1658,10 +1662,12 @@ export class PostsService {
     let chronoScanned: ScannedRow[] = [];
     let discoveryOverflow = false;
 
-    const viewerFollowingRows = await this.prisma.follow.findMany({
-      where: { followerId: viewerUserId },
-      select: { followingId: true },
-    });
+    const viewerFollowingRows = viewerUserId
+      ? await this.prisma.follow.findMany({
+          where: { followerId: viewerUserId },
+          select: { followingId: true },
+        })
+      : [];
     const viewerFollowingIds = [...new Set(viewerFollowingRows.map((r) => r.followingId).filter(Boolean))];
     const followingCandidateIds = requestedAuthorUserIds
       ? viewerFollowingIds.filter((id) => requestedAuthorUserIds.includes(id) && id !== viewerUserId)
@@ -1671,8 +1677,8 @@ export class PostsService {
     const secondDegreeSince = new Date(Date.now() - PostsService.forYouSecondDegreeWindowHours * 60 * 60 * 1000);
     const groupSince = new Date(Date.now() - PostsService.forYouGroupWindowHours * 60 * 60 * 1000);
     const engagedWithSince = new Date(Date.now() - PostsService.forYouEngagedWithWindowDays * 24 * 60 * 60 * 1000);
-    const directNetworkExcludedIds = [...new Set([viewerUserId, ...viewerFollowingIds, ...blockedAuthorIds])];
-    const memberGroupIds = await this.listActiveCommunityGroupIdsForUser(viewerUserId);
+    const directNetworkExcludedIds = [...new Set([...(viewerUserId ? [viewerUserId] : []), ...viewerFollowingIds, ...blockedAuthorIds])];
+    const memberGroupIds = viewerUserId ? await this.listActiveCommunityGroupIdsForUser(viewerUserId) : [];
     const viewerCanReadOpenGroups = this.viewerContextService.isVerified(viewer);
     const secondDegreePathCountByAuthor = new Map<string, number>();
     if (viewerFollowingIds.length > 0) {
@@ -1794,7 +1800,8 @@ export class PostsService {
                 ...servedWhere,
                 { userId: { in: followingCandidateIds } },
                 { createdAt: { gte: followedSince } },
-                { views: { none: { userId: viewerUserId } } },
+                // followingCandidateIds.length > 0 implies viewerUserId is non-null
+                { views: { none: { userId: viewerUserId! } } },
               ],
             },
             orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -1938,14 +1945,20 @@ export class PostsService {
     const friendEngagedIds = candidates.filter((c) => c.friendEngaged).map((c) => c.id);
 
     const [followerRows, viewedRows, friendBoostRows, friendReplyRows, viewerBoostRows, viewerReplyRows] = await Promise.all([
-      this.prisma.follow.findMany({
-        where: { followingId: viewerUserId, followerId: { in: authorIds } },
-        select: { followerId: true },
-      }),
-      this.prisma.postView.findMany({
-        where: { userId: viewerUserId, postId: { in: candidateIds } },
-        select: { postId: true, createdAt: true, lastSeenAt: true, seenCount: true, lastSource: true },
-      }),
+      // Who follows the viewer — used for mutual-follow scoring. Skip when anonymous.
+      viewerUserId
+        ? this.prisma.follow.findMany({
+            where: { followingId: viewerUserId, followerId: { in: authorIds } },
+            select: { followerId: true },
+          })
+        : Promise.resolve([] as Array<{ followerId: string }>),
+      // Viewer's post-view history — used for seen-decay scoring. Skip when anonymous (no last-seen).
+      viewerUserId
+        ? this.prisma.postView.findMany({
+            where: { userId: viewerUserId, postId: { in: candidateIds } },
+            select: { postId: true, createdAt: true, lastSeenAt: true, seenCount: true, lastSource: true },
+          })
+        : Promise.resolve([] as Array<{ postId: string; createdAt: Date; lastSeenAt: Date | null; seenCount: bigint | number | null; lastSource: string | null }>),
       // Latest boost timestamp + count of following-users per post. Drives `lastFriendEngagementAt`
       // so an old post with a fresh friend-boost ranks like fresh content, and `_count` feeds the
       // social-proof base score so graph density beats global virality in discovery.
@@ -1972,17 +1985,21 @@ export class PostsService {
         : Promise.resolve([] as Array<{ parentId: string | null; _max: { createdAt: Date | null }; _count: { userId: number } }>),
       // Viewer's own recent boosts — used to identify A+ tier authors (people you actively engage with).
       // Boost has @@unique([postId, userId]) so _count is effectively distinct users.
-      this.prisma.boost.findMany({
-        where: { userId: viewerUserId, createdAt: { gte: engagedWithSince } },
-        select: { post: { select: { userId: true } } },
-        take: 200,
-      }),
+      viewerUserId
+        ? this.prisma.boost.findMany({
+            where: { userId: viewerUserId, createdAt: { gte: engagedWithSince } },
+            select: { post: { select: { userId: true } } },
+            take: 200,
+          })
+        : Promise.resolve([] as Array<{ post: { userId: string } }>),
       // Viewer's own recent replies — surfaces authors the viewer actively talks to.
-      this.prisma.post.findMany({
-        where: { userId: viewerUserId, parentId: { not: null }, createdAt: { gte: engagedWithSince } },
-        select: { parent: { select: { userId: true } } },
-        take: 200,
-      }),
+      viewerUserId
+        ? this.prisma.post.findMany({
+            where: { userId: viewerUserId, parentId: { not: null }, createdAt: { gte: engagedWithSince } },
+            select: { parent: { select: { userId: true } } },
+            take: 200,
+          })
+        : Promise.resolve([] as Array<{ parent: { userId: string } | null }>),
     ]);
 
     const youFollow = new Set(viewerFollowingIds);
@@ -5634,6 +5651,26 @@ export class PostsService {
       }
     }
 
+    // Realtime: push the full DTO to the community-group feed room so members viewing
+    // the group see the new post instantly (best-effort). Top-level group posts only —
+    // replies surface through the post-room `posts:commentAdded` channel. `post` already
+    // carries user/media/mentions/poll from the create's nested include.
+    const createdGroupId = (post as { communityGroupId?: string | null }).communityGroupId ?? null;
+    if (!parentId && createdGroupId) {
+      try {
+        const groupPostDto = toPostDto(post, this.appConfig.r2()?.publicBaseUrl ?? null, {
+          viewerHasBoosted: false,
+          includeInternal: false,
+        });
+        this.presenceRealtime.emitGroupNewPost(createdGroupId, {
+          groupId: createdGroupId,
+          post: groupPostDto,
+        });
+      } catch {
+        // Best-effort
+      }
+    }
+
     // ─── Defer all notification + follower-fanout work off the response path ─────
     // None of the work below is observed by the caller; running it inline only adds
     // latency for users with deep threads or many followers. We re-throw nothing.
@@ -6412,7 +6449,7 @@ export class PostsService {
     // Resolve the canonical original post (flatten repost-of-repost).
     const targetPost = await this.prisma.post.findFirst({
       where: { id, deletedAt: null },
-      select: { id: true, userId: true, visibility: true, kind: true, repostedPostId: true },
+      select: { id: true, userId: true, visibility: true, kind: true, repostedPostId: true, communityGroupId: true },
     });
     if (!targetPost) throw new NotFoundException('Post not found.');
     if (targetPost.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be reposted.');
@@ -6422,15 +6459,30 @@ export class PostsService {
     if (targetPost.kind === 'repost' && targetPost.repostedPostId) {
       const canonical = await this.prisma.post.findFirst({
         where: { id: targetPost.repostedPostId, deletedAt: null },
-        select: { id: true, userId: true, visibility: true },
+        select: { id: true, userId: true, visibility: true, communityGroupId: true },
       });
       if (!canonical) throw new NotFoundException('Post not found.');
       canonicalId = canonical.id;
     }
 
     // Block check.
-    const canonicalPost = canonicalId === id ? targetPost : await this.prisma.post.findFirst({ where: { id: canonicalId }, select: { id: true, userId: true, visibility: true } });
+    const canonicalPost = canonicalId === id ? targetPost : await this.prisma.post.findFirst({ where: { id: canonicalId }, select: { id: true, userId: true, visibility: true, communityGroupId: true } });
     if (!canonicalPost) throw new NotFoundException('Post not found.');
+
+    // Scope preservation: a repost must live in the same place as the post it reshares.
+    // If the canonical post belongs to a community group, the repost stays in that group
+    // (never leaks to global feeds) AND requires the actor to be an active member — you
+    // can only repost into a group you're allowed to post in.
+    const canonicalGroupId = (canonicalPost as { communityGroupId?: string | null }).communityGroupId ?? null;
+    if (canonicalGroupId) {
+      const membership = await this.prisma.communityGroupMember.findUnique({
+        where: { groupId_userId: { groupId: canonicalGroupId, userId } },
+        select: { status: true },
+      });
+      if (!membership || membership.status !== 'active') {
+        throw new ForbiddenException('Join this group to repost here.');
+      }
+    }
 
     if (canonicalPost.userId && canonicalPost.userId !== userId) {
       const blockCount = await this.prisma.userBlock.count({
@@ -6463,6 +6515,7 @@ export class PostsService {
           kind: 'repost',
           visibility: canonicalPost.visibility,
           repostedPostId: canonicalId,
+          communityGroupId: canonicalGroupId,
           topics: [],
           hashtags: [],
           hashtagCasings: [],
@@ -6500,11 +6553,54 @@ export class PostsService {
       // Best-effort
     }
 
+    // Realtime: a group repost is a new item in the group feed. Push the full repost DTO
+    // (with its embedded original) to the `group:{id}` room so members viewing the group
+    // see it live. Fire-and-forget: building the DTO needs two reads, so we keep it off
+    // the response path.
+    if (canonicalGroupId) {
+      void this.emitGroupRepostCreated(canonicalGroupId, repostId, canonicalId);
+    }
+
     void this.postViews.markViewed(userId, canonicalId);
     await this.cacheInvalidation.bumpFeedGlobal();
     this.enqueueScoreRefresh(canonicalId);
 
     return { reposted: true as const, repostId, repostCount };
+  }
+
+  /**
+   * Best-effort: assemble the full DTO for a freshly created group repost (including its
+   * embedded original post) and emit it to the group feed room. Swallows all errors — a
+   * missed live emit just means the post shows up on the next group-feed fetch.
+   */
+  private async emitGroupRepostCreated(groupId: string, repostId: string, canonicalId: string): Promise<void> {
+    try {
+      const include = {
+        user: { select: USER_LIST_SELECT },
+        media: { orderBy: { position: 'asc' as const } },
+        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
+        poll: { include: { options: { orderBy: { position: 'asc' as const } } } },
+      };
+      const [repostRow, canonicalRow] = await Promise.all([
+        this.prisma.post.findFirst({ where: { id: repostId, deletedAt: null }, include }),
+        this.prisma.post.findFirst({ where: { id: canonicalId, deletedAt: null }, include }),
+      ]);
+      if (!repostRow || !canonicalRow) return;
+
+      const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+      const repostedPostDto = toPostDto(canonicalRow as any, baseUrl, {
+        viewerHasBoosted: false,
+        includeInternal: false,
+      });
+      const repostDto = toPostDto(repostRow as any, baseUrl, {
+        viewerHasBoosted: false,
+        includeInternal: false,
+        repostedPost: repostedPostDto,
+      });
+      this.presenceRealtime.emitGroupNewPost(groupId, { groupId, post: repostDto });
+    } catch {
+      // Best-effort
+    }
   }
 
   async unrepostPost(params: { userId: string; postId: string }) {

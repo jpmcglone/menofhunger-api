@@ -888,3 +888,105 @@ describe('posts:typing', () => {
     expect(presenceRedis.publishEmitToRoom).toHaveBeenCalledTimes(1);
   });
 });
+
+// ─── groups:subscribe — membership/visibility gating ──────────────────────────
+
+const GROUP_ID = 'group-1';
+
+function makeGroupsSubscribeFixture(opts: {
+  joinPolicy?: 'open' | 'approval';
+  activeMember?: boolean;
+  viewer?: Record<string, unknown>;
+  userId?: string | null;
+}) {
+  const redis = makeRedis();
+  const presenceRedis = makePresenceRedis();
+  const presence = makePresenceService('u1');
+  const spacesPresence = makeSpacesPresenceService();
+  const stub = makeStubServices();
+  const watchPartyState = new WatchPartyStateService(redis);
+  const marvIdentity = {
+    getMarvUserId: jest.fn().mockResolvedValue(null),
+    marvUsernameLower: jest.fn().mockReturnValue('marv'),
+  } as any;
+  stub.appConfig.marvBot = jest.fn().mockReturnValue({ enabled: false, userId: null, username: 'marv', displayName: 'Marv', bio: '', phone: '' });
+
+  stub.prisma = {
+    communityGroup: {
+      findMany: jest.fn().mockResolvedValue([{ id: GROUP_ID, joinPolicy: opts.joinPolicy ?? 'approval' }]),
+    },
+    communityGroupMember: {
+      findMany: jest.fn().mockResolvedValue(opts.activeMember ? [{ groupId: GROUP_ID }] : []),
+    },
+  } as any;
+
+  const spacesService = makeSpacesService('u1', 'NONE');
+  const gw = new PresenceGateway(
+    stub.appConfig, stub.auth, presence, presenceRedis, stub.realtime,
+    stub.follows, stub.messages, stub.radio, stub.radioChat,
+    spacesService, spacesPresence, stub.spacesChat,
+    watchPartyState, stub.prisma, redis, marvIdentity,
+  );
+
+  const server = new FakeServer();
+  const socket = new FakeSocket('socket-1', {
+    userId: opts.userId === undefined ? 'u1' : opts.userId,
+    viewer: opts.viewer ?? {},
+  });
+  server.register(socket);
+  const fakeIoServer = {
+    sockets: { sockets: server.socketsMap.sockets },
+    to: (room: string) => server.to(room),
+    emit: (event: string, payload?: unknown) => server.emitted.push({ event, payload }),
+  };
+  (gw as any).server = fakeIoServer;
+  gw.afterInit(fakeIoServer as any);
+
+  return { gw, socket, prisma: stub.prisma };
+}
+
+describe('groups:subscribe', () => {
+  it('subscribes an active member to the group room', async () => {
+    const { gw, socket } = makeGroupsSubscribeFixture({ joinPolicy: 'approval', activeMember: true });
+
+    await (gw as any).handleGroupsSubscribe(socket, { groupIds: [GROUP_ID] });
+
+    expect(socket.lastEmitted('groups:subscribed')).toEqual({ groupIds: [GROUP_ID] });
+  });
+
+  it('subscribes a verified non-member to an OPEN group room', async () => {
+    const { gw, socket } = makeGroupsSubscribeFixture({
+      joinPolicy: 'open',
+      activeMember: false,
+      viewer: { verified: true },
+    });
+
+    await (gw as any).handleGroupsSubscribe(socket, { groupIds: [GROUP_ID] });
+
+    expect(socket.lastEmitted('groups:subscribed')).toEqual({ groupIds: [GROUP_ID] });
+  });
+
+  it('does NOT subscribe a non-member to an approval (private) group', async () => {
+    const { gw, socket } = makeGroupsSubscribeFixture({
+      joinPolicy: 'approval',
+      activeMember: false,
+      viewer: { verified: true },
+    });
+
+    await (gw as any).handleGroupsSubscribe(socket, { groupIds: [GROUP_ID] });
+
+    expect(socket.allEmitted('groups:subscribed')).toHaveLength(0);
+  });
+
+  it('does NOT subscribe an unverified non-member to an OPEN group', async () => {
+    const { gw, socket } = makeGroupsSubscribeFixture({
+      joinPolicy: 'open',
+      activeMember: false,
+      viewer: { verified: false },
+    });
+
+    await (gw as any).handleGroupsSubscribe(socket, { groupIds: [GROUP_ID] });
+
+    expect(socket.allEmitted('groups:subscribed')).toHaveLength(0);
+  });
+});

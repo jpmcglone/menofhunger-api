@@ -69,3 +69,36 @@ describe('PresenceRealtimeService user statuses', () => {
     });
   });
 });
+
+describe('PresenceRealtimeService.emitGroupNewPost', () => {
+  function makeRoomService() {
+    const roomEmit = jest.fn();
+    const server = { to: jest.fn().mockReturnValue({ emit: roomEmit }) };
+    const presence = {} as any;
+    const presenceRedis = { publishEmitToRoom: jest.fn().mockResolvedValue(undefined) };
+    const service = new PresenceRealtimeService(presence, presenceRedis as any);
+    service.setServer(server as any);
+    return { service, server, roomEmit, presenceRedis };
+  }
+
+  it('emits groups:newPost to the group room', () => {
+    const { service, server, roomEmit, presenceRedis } = makeRoomService();
+    const payload = { groupId: 'group-1', post: { id: 'p1' } as any };
+
+    service.emitGroupNewPost('group-1', payload);
+
+    expect(server.to).toHaveBeenCalledWith('group:group-1');
+    expect(roomEmit).toHaveBeenCalledWith('groups:newPost', payload);
+    expect(presenceRedis.publishEmitToRoom).toHaveBeenCalledWith({
+      room: 'group:group-1',
+      event: 'groups:newPost',
+      payload,
+    });
+  });
+
+  it('ignores a blank group id', () => {
+    const { service, server } = makeRoomService();
+    service.emitGroupNewPost('  ', { groupId: '', post: {} as any });
+    expect(server.to).not.toHaveBeenCalled();
+  });
+});

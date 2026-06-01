@@ -153,6 +153,12 @@ export const WsEventNames = {
   postsTyping: 'posts:typing',
   /** New top-level post from someone the viewer follows; pushed to follower user rooms. */
   feedNewPost: 'feed:newPost',
+  /** Room subscription handshake for community-group feeds. */
+  groupsSubscribe: 'groups:subscribe',
+  groupsUnsubscribe: 'groups:unsubscribe',
+  groupsSubscribed: 'groups:subscribed',
+  /** New top-level post (or repost) in a community group; pushed to the `group:{id}` room. */
+  groupsNewPost: 'groups:newPost',
   articlesSubscribe: 'articles:subscribe',
   articlesUnsubscribe: 'articles:unsubscribe',
   articlesSubscribed: 'articles:subscribed',
@@ -197,6 +203,27 @@ export type PostsLiveUpdatedPayloadDto = {
     bookmarkCount: number;
     repostCount: number;
   }>;
+};
+
+/** Client → server: subscribe to live updates for one or more community-group feeds. */
+export type GroupsSubscribePayloadDto = {
+  groupIds: string[];
+};
+
+/** Server → client ack listing the group ids the socket was actually subscribed to. */
+export type GroupsSubscribedPayloadDto = {
+  groupIds: string[];
+};
+
+/**
+ * New top-level post (or flat repost) created inside a community group.
+ * Emitted to the `group:{groupId}` room so members viewing the group feed can prepend
+ * it in real time. Payload mirrors the HTTP feed shape (`PostDto`) so the client can
+ * splice it into its in-memory list without a refetch.
+ */
+export type GroupNewPostPayloadDto = {
+  groupId: string;
+  post: PostDto;
 };
 
 export type ArticlesSubscribePayloadDto = {

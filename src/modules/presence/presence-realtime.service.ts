@@ -15,6 +15,7 @@ import type {
   CrewStreakBrokenPayloadDto,
   FeedNewPostPayloadDto,
   FollowsChangedPayloadDto,
+  GroupNewPostPayloadDto,
   MessagesReadPayloadDto,
   PostsLiveUpdatedPayloadDto,
   PostsCommentAddedPayloadDto,
@@ -244,6 +245,17 @@ export class PresenceRealtimeService {
    */
   emitFeedNewPost(followerIds: Iterable<string>, payload: FeedNewPostPayloadDto): void {
     this.emitToUsers(followerIds, WsEventNames.feedNewPost, payload);
+  }
+
+  /**
+   * New top-level post (or repost) in a community group. Pushed to the `group:{groupId}`
+   * room so members currently viewing the group feed see it instantly. Only sockets that
+   * passed the membership/visibility check in `groups:subscribe` are in the room.
+   */
+  emitGroupNewPost(groupId: string, payload: GroupNewPostPayloadDto): void {
+    const gid = (groupId ?? '').trim();
+    if (!gid) return;
+    this.emitToRoom(`group:${gid}`, WsEventNames.groupsNewPost, payload);
   }
 
   /**

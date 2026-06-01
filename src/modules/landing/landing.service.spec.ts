@@ -62,22 +62,28 @@ function makePost(id: string, body: string) {
   };
 }
 
-function makeService() {
+function makeTopPostRow(id: string, weeklyViews: number, authorId: string, rootId: string): { id: string; weekly_views: bigint; root_id: string; author_id: string } {
+  return { id, weekly_views: BigInt(weeklyViews), root_id: rootId, author_id: authorId };
+}
+
+function makeService(topPostRowOverride?: Array<{ id: string; weekly_views: bigint; root_id: string; author_id: string }>) {
+  const defaultRows = [
+    makeTopPostRow('post-2', 8, 'user-1', 'post-2'),
+    makeTopPostRow('post-1', 5, 'user-1', 'post-1'),
+  ];
+  const rows = topPostRowOverride ?? defaultRows;
   const prisma = {
     $queryRaw: jest.fn()
       .mockResolvedValueOnce([{ public_post_count: 42n, verified_men_count: 7n }])
-      .mockResolvedValueOnce([
-        { id: 'post-2', weekly_views: 8n },
-        { id: 'post-1', weekly_views: 5n },
-      ]),
+      .mockResolvedValueOnce(rows),
     user: {
       findMany: jest.fn().mockResolvedValue([makeUser()]),
     },
     post: {
-      findMany: jest.fn().mockResolvedValue([
-        makePost('post-1', 'Second ranked post'),
-        makePost('post-2', 'Top ranked post'),
-      ]),
+      findMany: jest.fn().mockImplementation(async (args: any) => {
+        const ids: string[] = args?.where?.id?.in ?? [];
+        return ids.map((id) => makePost(id, `Post ${id}`));
+      }),
     },
   };
   const config = {
@@ -131,5 +137,63 @@ describe('LandingService', () => {
       { id: 'post-2', weeklyViewCount: 8 },
       { id: 'post-1', weeklyViewCount: 5 },
     ]);
+  });
+
+  it('defers 3rd post from the same author to backfill after first-pass cap', async () => {
+    // 4 rows: 3 from author-a (cap is 2), 1 from author-b.
+    // First pass: p1, p2 admitted; p3 skipped (author-a cap hit); p4 admitted.
+    // Backfill: p3 appended.
+    const rows = [
+      makeTopPostRow('p1', 100, 'author-a', 'root-1'),
+      makeTopPostRow('p2', 90,  'author-a', 'root-2'),
+      makeTopPostRow('p3', 80,  'author-a', 'root-3'), // 3rd from author-a — deferred
+      makeTopPostRow('p4', 70,  'author-b', 'root-4'),
+    ];
+    const { service } = makeService(rows);
+
+    const snapshot = await service.getSnapshot(NOW);
+
+    const ids = snapshot.topPostsThisWeek.map((p) => p.id);
+    expect(ids).toContain('p1');
+    expect(ids).toContain('p2');
+    expect(ids).toContain('p4');
+    // p3 must appear after p4 because it was deferred to backfill.
+    const p3idx = ids.indexOf('p3');
+    const p4idx = ids.indexOf('p4');
+    if (p3idx !== -1 && p4idx !== -1) expect(p3idx).toBeGreaterThan(p4idx);
+  });
+
+  it('defers 3rd post from the same thread root to backfill after first-pass cap', async () => {
+    // 4 rows: 3 that share root-x (cap is 2), 1 from a different root.
+    // First pass: pa and pb admitted; pc skipped (root-x cap hit); pd admitted.
+    const rows = [
+      makeTopPostRow('pa', 100, 'author-1', 'root-x'),
+      makeTopPostRow('pb', 90,  'author-2', 'root-x'),
+      makeTopPostRow('pc', 80,  'author-3', 'root-x'), // 3rd in root-x — deferred
+      makeTopPostRow('pd', 70,  'author-4', 'root-y'),
+    ];
+    const { service } = makeService(rows);
+
+    const snapshot = await service.getSnapshot(NOW);
+
+    const ids = snapshot.topPostsThisWeek.map((p) => p.id);
+    expect(ids).toContain('pa');
+    expect(ids).toContain('pb');
+    expect(ids).toContain('pd');
+    const pcIdx = ids.indexOf('pc');
+    const pdIdx = ids.indexOf('pd');
+    if (pcIdx !== -1 && pdIdx !== -1) expect(pcIdx).toBeGreaterThan(pdIdx);
+  });
+
+  it('returns up to 14 posts in the pool when the query returns ≥14 candidates', async () => {
+    const rows = Array.from({ length: 20 }, (_, i) =>
+      makeTopPostRow(`p${i}`, 100 - i, `author-${i}`, `root-${i}`),
+    );
+    const { service } = makeService(rows);
+
+    const snapshot = await service.getSnapshot(NOW);
+
+    expect(snapshot.topPostsThisWeek.length).toBeLessThanOrEqual(14);
+    expect(snapshot.topPostsThisWeek.length).toBeGreaterThan(0);
   });
 });
