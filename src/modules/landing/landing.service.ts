@@ -95,6 +95,7 @@ export class LandingService {
           AND p."isDraft" = false
           AND p."kind" = 'regular'
           AND p."visibility" = 'public'
+          AND p."communityGroupId" IS NULL
         GROUP BY p.id
         ORDER BY
           (CASE WHEN p."commentCount" > 0 OR p."parentId" IS NOT NULL THEN 1 ELSE 0 END) DESC,
@@ -142,7 +143,7 @@ export class LandingService {
     // section is never empty.
     if (poolRows.length === 0) {
       const fallbackPosts = await this.prisma.post.findMany({
-        where: { deletedAt: null, isDraft: false, kind: 'regular', visibility: 'public' },
+        where: { deletedAt: null, isDraft: false, kind: 'regular', visibility: 'public', communityGroupId: null },
         orderBy: [{ commentCount: 'desc' }, { viewerCount: 'desc' }, { createdAt: 'desc' }],
         take: TOP_POSTS_SCAN_LIMIT,
         select: { id: true, userId: true, rootId: true, parentId: true },
