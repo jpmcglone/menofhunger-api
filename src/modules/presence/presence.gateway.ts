@@ -1278,19 +1278,50 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
     const rows = await this.prisma.post.findMany({
       where: { id: { in: toConsider }, deletedAt: null },
-      select: { id: true, userId: true, visibility: true },
+      select: { id: true, userId: true, visibility: true, communityGroupId: true },
     });
     const byId = new Map(rows.map((r) => [r.id, r]));
+
+    // Batch-fetch group membership for any group-scoped posts.
+    const groupIds = [...new Set(rows.map((r) => (r as any).communityGroupId).filter(Boolean))] as string[];
+    const [groupPolicies, groupMemberships] = await Promise.all([
+      groupIds.length
+        ? this.prisma.communityGroup.findMany({
+            where: { id: { in: groupIds }, deletedAt: null },
+            select: { id: true, joinPolicy: true },
+          })
+        : Promise.resolve([]),
+      groupIds.length && viewerId
+        ? this.prisma.communityGroupMember.findMany({
+            where: { userId: viewerId, groupId: { in: groupIds }, status: 'active' },
+            select: { groupId: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const policyById = new Map(groupPolicies.map((g) => [g.id, g.joinPolicy] as const));
+    const activeMemberGroupIds = new Set(groupMemberships.map((m) => m.groupId));
+
     const accepted: string[] = [];
 
     for (const postId of toConsider) {
       const row = byId.get(postId);
       if (!row) continue;
       const vis = String((row as any).visibility ?? '');
+      const gid: string | null = (row as any).communityGroupId ?? null;
       const isSelf = Boolean(viewerId && row.userId === viewerId);
+
+      // Tier gate (applies to all posts, including group posts).
       if (vis === 'onlyMe' && !isSelf) continue;
       if (vis === 'verifiedOnly' && !viewerIsVerified && !isSelf) continue;
       if (vis === 'premiumOnly' && !viewerIsPremium && !isSelf) continue;
+
+      // Group membership gate (group posts require active membership or open-group access).
+      if (gid && !isSelf && !Boolean(viewer?.siteAdmin)) {
+        const policy = policyById.get(gid);
+        const isActiveMember = activeMemberGroupIds.has(gid);
+        const canRead = isActiveMember || (policy === 'open' && viewerIsVerified);
+        if (!canRead) continue;
+      }
 
       subs.add(postId);
       accepted.push(postId);

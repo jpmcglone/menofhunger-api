@@ -5,8 +5,21 @@ import { ArticlesService } from '../articles/articles.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { LandingSnapshotDto } from '../../common/dto/landing.dto';
 import { toPostDto, toUserListDto, type UserListRow } from '../../common/dto';
+import type { PostWithAuthorAndMedia } from '../../common/dto/post.dto';
 import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
-import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
+import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
+
+/** Extends the standard poll include with a shallow parent for "Replying to @username". */
+const LANDING_POST_INCLUDE = {
+  ...POST_WITH_POLL_INCLUDE,
+  parent: {
+    include: {
+      user: { select: USER_LIST_SELECT },
+      media: { orderBy: { position: 'asc' as const } },
+      mentions: { include: { user: { select: MENTION_USER_SELECT } } },
+    },
+  },
+} as const;
 
 type TopPostRow = {
   id: string;
@@ -91,11 +104,14 @@ export class LandingService {
         LEFT JOIN "PostAnonView" pav
           ON pav."postId" = p.id
           AND pav."lastViewedAt" >= ${sevenDaysAgo}::timestamptz
+        JOIN "User" u ON u.id = p."userId"
         WHERE p."deletedAt" IS NULL
           AND p."isDraft" = false
           AND p."kind" = 'regular'
           AND p."visibility" = 'public'
           AND p."communityGroupId" IS NULL
+          AND u."isBot" = false
+          AND u."bannedAt" IS NULL
         GROUP BY p.id
         ORDER BY
           (CASE WHEN p."commentCount" > 0 OR p."parentId" IS NOT NULL THEN 1 ELSE 0 END) DESC,
@@ -143,7 +159,7 @@ export class LandingService {
     // section is never empty.
     if (poolRows.length === 0) {
       const fallbackPosts = await this.prisma.post.findMany({
-        where: { deletedAt: null, isDraft: false, kind: 'regular', visibility: 'public', communityGroupId: null },
+        where: { deletedAt: null, isDraft: false, kind: 'regular', visibility: 'public', communityGroupId: null, user: { isBot: false, bannedAt: null } },
         orderBy: [{ commentCount: 'desc' }, { viewerCount: 'desc' }, { createdAt: 'desc' }],
         take: TOP_POSTS_SCAN_LIMIT,
         select: { id: true, userId: true, rootId: true, parentId: true },
@@ -166,7 +182,7 @@ export class LandingService {
     const topPosts = topPostIds.length
       ? await this.prisma.post.findMany({
           where: { id: { in: topPostIds } },
-          include: POST_WITH_POLL_INCLUDE,
+          include: LANDING_POST_INCLUDE,
         })
       : [];
     const topPostsById = new Map(topPosts.map((post) => [post.id, post]));
@@ -183,10 +199,16 @@ export class LandingService {
         .map((row) => {
           const post = topPostsById.get(row.id);
           if (!post) return null;
-          return {
-            ...toPostDto(post, this.publicBaseUrl, { viewerCanAccess: true }),
-            weeklyViewCount: weeklyViewsById.get(row.id) ?? 0,
-          };
+          const dto = toPostDto(post as unknown as PostWithAuthorAndMedia, this.publicBaseUrl, { viewerCanAccess: true });
+          const parentRaw = (post as { parent?: PostWithAuthorAndMedia | null }).parent;
+          if (parentRaw?.user) {
+            (dto as { parent?: ReturnType<typeof toPostDto> }).parent = toPostDto(
+              parentRaw,
+              this.publicBaseUrl,
+              { viewerCanAccess: true },
+            );
+          }
+          return { ...dto, weeklyViewCount: weeklyViewsById.get(row.id) ?? 0 };
         })
         .filter((post): post is NonNullable<typeof post> => post != null),
       trendingArticles,

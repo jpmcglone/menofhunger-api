@@ -1028,6 +1028,7 @@ export class PostsService {
     sort: 'new' | 'trending';
     applyPinnedHead: boolean;
     topLevelOnly?: boolean;
+    allowedVisibilities: PostVisibility[];
   }): Promise<FeedResult> {
     const { groupIds, limit, cursor, sort } = params;
     if (groupIds.length === 0) return { posts: [], nextCursor: null };
@@ -1049,6 +1050,7 @@ export class PostsService {
           parentId: null,
           ...this.notDeletedWhere(),
           pinnedInGroupAt: { not: null },
+          visibility: { in: params.allowedVisibilities },
         },
         orderBy: { pinnedInGroupAt: 'desc' },
         include: feedPostInclude,
@@ -1059,7 +1061,12 @@ export class PostsService {
 
     const takeMain = pinnedId && !cursor ? Math.max(1, limit - 1) : limit;
 
-    const baseAnd: Prisma.PostWhereInput[] = [groupWhere, this.notDeletedWhere(), this.userNotBannedWhere()];
+    const baseAnd: Prisma.PostWhereInput[] = [
+      groupWhere,
+      this.notDeletedWhere(),
+      this.userNotBannedWhere(),
+      { visibility: { in: params.allowedVisibilities } },
+    ];
     if (pinnedId) baseAnd.push({ id: { not: pinnedId } });
     if (params.topLevelOnly) baseAnd.push(topLevelFilter);
 
@@ -1354,6 +1361,8 @@ export class PostsService {
     collapseMaxPerRoot: number;
     topLevelOnly?: boolean;
   }): Promise<{ data: PostDto[]; pagination: { nextCursor: string | null } }> {
+    const viewer = await this.viewerContextService.getViewer(params.viewerUserId);
+    const allowedVisibilities = this.allowedVisibilitiesForViewer(viewer);
     const raw = await this.listCommunityGroupsTimelinePosts({
       groupIds: params.groupIds,
       limit: params.limit,
@@ -1361,6 +1370,7 @@ export class PostsService {
       sort: params.sort,
       applyPinnedHead: params.applyPinnedHead,
       topLevelOnly: params.topLevelOnly,
+      allowedVisibilities,
     });
     const { items: filteredPosts, collapsedCountByItemId } = collapseFeedByRoot(raw.posts, {
       collapseByRoot: params.collapseByRoot,
@@ -3801,8 +3811,7 @@ export class PostsService {
     if (!isSelf) {
       // Only-me posts are private. Allow site admins to view for support/moderation.
       if (post.visibility === 'onlyMe' && !viewer?.siteAdmin) throw new ForbiddenException('This post is private.');
-      // Group wall: tier visibility is not the gate — active membership is (below).
-      const visibilityOk = allowed.includes(post.visibility) || Boolean(gid && knownActiveGroupMember);
+      const visibilityOk = allowed.includes(post.visibility);
       if (!visibilityOk) {
         if (post.visibility === 'verifiedOnly') throw new ForbiddenException('Verify to view verified-only posts.');
         if (post.visibility === 'premiumOnly') throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
@@ -5653,19 +5662,46 @@ export class PostsService {
 
     // Realtime: push the full DTO to the community-group feed room so members viewing
     // the group see the new post instantly (best-effort). Top-level group posts only —
-    // replies surface through the post-room `posts:commentAdded` channel. `post` already
-    // carries user/media/mentions/poll from the create's nested include.
+    // replies surface through the post-room `posts:commentAdded` channel.
+    // For non-public posts, emit only to members whose tier meets the visibility requirement.
     const createdGroupId = (post as { communityGroupId?: string | null }).communityGroupId ?? null;
+    const createdVisibility = (post as { visibility?: string }).visibility ?? 'public';
     if (!parentId && createdGroupId) {
       try {
         const groupPostDto = toPostDto(post, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: false,
           includeInternal: false,
         });
-        this.presenceRealtime.emitGroupNewPost(createdGroupId, {
-          groupId: createdGroupId,
-          post: groupPostDto,
-        });
+        if (createdVisibility === 'public') {
+          this.presenceRealtime.emitGroupNewPost(createdGroupId, { groupId: createdGroupId, post: groupPostDto });
+        } else {
+          // Fetch active members who meet the tier requirement for this visibility.
+          const tierWhere =
+            createdVisibility === 'premiumOnly'
+              ? { OR: [{ premium: true }, { premiumPlus: true }] }
+              : createdVisibility === 'verifiedOnly'
+                ? { OR: [{ verifiedStatus: { not: 'none' } }, { premium: true }, { premiumPlus: true }] }
+                : null;
+          if (tierWhere) {
+            const eligibleMembers = await this.prisma.communityGroupMember.findMany({
+              where: { groupId: createdGroupId, status: 'active' },
+              select: { userId: true, user: { select: { premium: true, premiumPlus: true, verifiedStatus: true } } },
+            });
+            const eligible = eligibleMembers
+              .filter((m) => {
+                if (createdVisibility === 'premiumOnly') return m.user.premium || m.user.premiumPlus;
+                return (m.user.verifiedStatus && m.user.verifiedStatus !== 'none') || m.user.premium || m.user.premiumPlus;
+              })
+              .map((m) => m.userId);
+            if (eligible.length > 0) {
+              this.presenceRealtime.emitGroupNewPost(
+                createdGroupId,
+                { groupId: createdGroupId, post: groupPostDto },
+                { eligibleMemberUserIds: eligible },
+              );
+            }
+          }
+        }
       } catch {
         // Best-effort
       }
@@ -6597,7 +6633,24 @@ export class PostsService {
         includeInternal: false,
         repostedPost: repostedPostDto,
       });
-      this.presenceRealtime.emitGroupNewPost(groupId, { groupId, post: repostDto });
+      const repostVisibility = (repostRow as any).visibility ?? 'public';
+      if (repostVisibility === 'public') {
+        this.presenceRealtime.emitGroupNewPost(groupId, { groupId, post: repostDto });
+      } else {
+        const eligibleMembers = await this.prisma.communityGroupMember.findMany({
+          where: { groupId, status: 'active' },
+          select: { userId: true, user: { select: { premium: true, premiumPlus: true, verifiedStatus: true } } },
+        });
+        const eligible = eligibleMembers
+          .filter((m) => {
+            if (repostVisibility === 'premiumOnly') return m.user.premium || m.user.premiumPlus;
+            return (m.user.verifiedStatus && m.user.verifiedStatus !== 'none') || m.user.premium || m.user.premiumPlus;
+          })
+          .map((m) => m.userId);
+        if (eligible.length > 0) {
+          this.presenceRealtime.emitGroupNewPost(groupId, { groupId, post: repostDto }, { eligibleMemberUserIds: eligible });
+        }
+      }
     } catch {
       // Best-effort
     }
@@ -6887,6 +6940,9 @@ export class PostsService {
 
     const r2BaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
+    const allowedVisibilities = this.allowedVisibilitiesForViewer(viewer);
+
     const baseWhere: Prisma.PostMediaWhereInput = {
       kind: { in: ['image', 'video'] },
       source: 'upload',
@@ -6894,6 +6950,7 @@ export class PostsService {
       post: {
         communityGroupId: { in: groupIds },
         deletedAt: null,
+        visibility: { in: allowedVisibilities },
       },
     };
 

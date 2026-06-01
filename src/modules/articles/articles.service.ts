@@ -200,6 +200,7 @@ export class ArticlesService {
           deletedAt: null,
           isDraft: false,
           publishedAt: { not: null },
+          visibility: 'public',
         },
       },
       _count: { tag: true },

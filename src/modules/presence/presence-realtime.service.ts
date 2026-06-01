@@ -248,14 +248,25 @@ export class PresenceRealtimeService {
   }
 
   /**
-   * New top-level post (or repost) in a community group. Pushed to the `group:{groupId}`
-   * room so members currently viewing the group feed see it instantly. Only sockets that
-   * passed the membership/visibility check in `groups:subscribe` are in the room.
+   * New top-level post (or repost) in a community group.
+   *
+   * - `public` posts: broadcast to the entire `group:{id}` room (all group members subscribed).
+   * - `verifiedOnly` / `premiumOnly` posts: emit only to the subset of group members whose
+   *   tier meets the visibility requirement, using per-user delivery so non-qualifying members
+   *   don't receive content above their tier.
    */
-  emitGroupNewPost(groupId: string, payload: GroupNewPostPayloadDto): void {
+  emitGroupNewPost(
+    groupId: string,
+    payload: GroupNewPostPayloadDto,
+    options?: { eligibleMemberUserIds?: string[] },
+  ): void {
     const gid = (groupId ?? '').trim();
     if (!gid) return;
-    this.emitToRoom(`group:${gid}`, WsEventNames.groupsNewPost, payload);
+    if (options?.eligibleMemberUserIds) {
+      this.emitToUsers(options.eligibleMemberUserIds, WsEventNames.groupsNewPost, payload);
+    } else {
+      this.emitToRoom(`group:${gid}`, WsEventNames.groupsNewPost, payload);
+    }
   }
 
   /**

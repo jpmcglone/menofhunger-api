@@ -1552,6 +1552,7 @@ describe('PostsService.listCommunityGroupsTimelinePosts trending blended paginat
       cursor: null,
       sort: 'trending',
       applyPinnedHead: false,
+      allowedVisibilities: ['public', 'verifiedOnly', 'premiumOnly'],
     });
 
     expect(deps.prisma.post.findMany).toHaveBeenCalledTimes(2);
@@ -1584,6 +1585,7 @@ describe('PostsService.listCommunityGroupsTimelinePosts trending blended paginat
       cursor: null,
       sort: 'trending',
       applyPinnedHead: false,
+      allowedVisibilities: ['public', 'verifiedOnly', 'premiumOnly'],
     });
 
     expect(out.posts.map((p: any) => p.id)).toEqual(['p4', 'p3', 'p2']);
@@ -1614,6 +1616,7 @@ describe('PostsService.listCommunityGroupsTimelinePosts trending blended paginat
       cursor: 'cur',
       sort: 'trending',
       applyPinnedHead: false,
+      allowedVisibilities: ['public', 'verifiedOnly', 'premiumOnly'],
     });
 
     expect(deps.prisma.post.findMany).toHaveBeenCalledTimes(1);
@@ -1642,6 +1645,7 @@ describe('PostsService.listCommunityGroupsTimelinePosts trending blended paginat
       cursor: null,
       sort: 'trending',
       applyPinnedHead: false,
+      allowedVisibilities: ['public', 'verifiedOnly', 'premiumOnly'],
     });
 
     expect(out.posts.map((p: any) => p.id)).toEqual(['t1', 'c2', 'c1']);
@@ -1683,6 +1687,7 @@ describe('PostsService.listCommunityGroupsTimelinePosts trending blended paginat
       cursor: null,
       sort: 'trending',
       applyPinnedHead: false,
+      allowedVisibilities: ['public', 'verifiedOnly', 'premiumOnly'],
     });
 
     expect(deps.prisma.post.findMany).toHaveBeenCalledTimes(1);
