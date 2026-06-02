@@ -825,30 +825,54 @@ export class PostsController {
       : null;
     const scoreByPostIdComments =
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(result.comments.map((p) => p.id)) : undefined;
+
+    const r2comments = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    // Collect unique parentIds and communityGroupIds from comments so we can:
+    //   (a) attach parent chain info ("Replying to @username" in the reply preview)
+    //   (b) attach group preview chip (same as the main feed)
+    const uniqueParentIds = [
+      ...new Set(
+        result.comments
+          .map((p) => String((p as { parentId?: string | null }).parentId ?? '').trim())
+          .filter(Boolean),
+      ),
+    ];
+    const uniqueGroupIds = [
+      ...new Set(
+        result.comments
+          .map((p) => String((p as { communityGroupId?: string | null }).communityGroupId ?? '').trim())
+          .filter(Boolean),
+      ),
+    ];
+
+    const [parentPosts, groupPreviewByGroupId] = await Promise.all([
+      uniqueParentIds.length
+        ? this.posts.getByIds({ viewerUserId, ids: uniqueParentIds })
+        : Promise.resolve([]),
+      uniqueGroupIds.length
+        ? this.communityGroupPreviewMapForIds(viewerUserId, uniqueGroupIds)
+        : Promise.resolve(new Map<string, CommunityGroupPreviewDto>()),
+    ]);
+    const parentMap = new Map(parentPosts.map((p) => [p.id, p] as const));
+
+    const attachParentChain = buildAttachParentChain({
+      parentMap: parentMap as any,
+      baseUrl: r2comments,
+      boosted,
+      bookmarksByPostId,
+      votedPollOptionIdByPostId,
+      viewerUserId,
+      viewerHasAdmin,
+      internalByPostId,
+      scoreByPostId: scoreByPostIdComments,
+      toPostDto,
+      groupPreviewByGroupId,
+    });
+
     setReadCache(httpRes, { viewerUserId });
     return {
-      data: result.comments.map((p) => {
-        const pWithPoll = p as { user?: { id?: string }; poll?: { creatorSkippedAt?: Date | null } };
-        const viewerCreatorSkipped =
-          Boolean(viewerUserId) &&
-          pWithPoll.user?.id === viewerUserId &&
-          Boolean(pWithPoll.poll?.creatorSkippedAt);
-        return toPostDto(p, this.appConfig.r2()?.publicBaseUrl ?? null, {
-          viewerHasBoosted: boosted.has(p.id),
-          viewerHasBookmarked: bookmarksByPostId.has(p.id),
-          viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
-          viewerVotedPollOptionId: votedPollOptionIdByPostId.get(p.id) ?? null,
-          viewerCreatorSkipped: viewerCreatorSkipped || undefined,
-          includeInternal: viewerHasAdmin,
-          internalOverride: (() => {
-            const base = internalByPostId?.get(p.id);
-            const score = scoreByPostIdComments?.get(p.id);
-            return base || (typeof score === 'number' ? { score } : undefined)
-              ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
-              : undefined;
-          })(),
-        });
-      }),
+      data: result.comments.map((p) => attachParentChain(p as any)),
       pagination: { nextCursor: result.nextCursor, counts: result.counts ?? null },
     };
   }
