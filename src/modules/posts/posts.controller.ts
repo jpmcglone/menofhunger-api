@@ -390,8 +390,9 @@ export class PostsController {
     }
 
     // Authed For You is per-user and depends on view history — no caching.
-    // Anon For You is public-only discovery (no per-user state) so it can be cached.
-    const anonCache = viewerUserId == null;
+    // Anon For You applies a per-request score jitter so each refresh shows a different order —
+    // caching would freeze that order, so we skip the cache for anon For You as well.
+    const anonCache = viewerUserId == null && !isForYou;
     const authFirstPageCache = !isForYou && Boolean(viewerUserId) && !cursor;
     const authCursorCache = !isForYou
       && Boolean(viewerUserId)

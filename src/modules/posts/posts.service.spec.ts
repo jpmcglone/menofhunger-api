@@ -2886,4 +2886,46 @@ describe('PostsService.listForYouFeed', () => {
     expect(p1FollowedCount).toBeGreaterThan(p3FollowedCount);
     expect(p1StrangerCount).toBeLessThan(p3StrangerCount);
   });
+
+  it('anon: jitter varies the order across refreshes (different orders on repeated calls)', async () => {
+    // 10 discovery candidates with distinct but similarly-ranked trending scores.
+    // Without jitter the order would be deterministic; with +/-35% jitter two independent
+    // calls are statistically near-certain to produce a different permutation.
+    const candidates = Array.from({ length: 10 }, (_, i) =>
+      cand(`p${i}`, `u${i}`, 100 - i, 1),
+    );
+    const { service } = setupForYou({ candidates });
+
+    let sawDifferentOrder = false;
+    // Run up to 5 pairs of calls; the probability that all 5 pairs are identical is ~(1/10!)^5 ≈ 0.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const a = await service.listForYouFeed({ viewerUserId: null, limit: 10, cursor: null, visibility: 'all' });
+      const b = await service.listForYouFeed({ viewerUserId: null, limit: 10, cursor: null, visibility: 'all' });
+      const aIds = a.posts.map((p: any) => p.id);
+      const bIds = b.posts.map((p: any) => p.id);
+      if (aIds.join(',') !== bIds.join(',')) {
+        sawDifferentOrder = true;
+        break;
+      }
+    }
+    expect(sawDifferentOrder).toBe(true);
+  });
+
+  it('authed: ordering is stable across calls with identical mock data (jitter is 1.0)', async () => {
+    // Authed path must remain deterministic — seen-decay depends on exact score values.
+    const candidates = Array.from({ length: 10 }, (_, i) =>
+      cand(`p${i}`, `u${i}`, 100 - i, 1),
+    );
+    const { service } = setupForYou({ candidates });
+
+    const results: string[][] = [];
+    for (let i = 0; i < 4; i++) {
+      const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+      results.push(out.posts.map((p: any) => p.id));
+    }
+    // All four runs must produce the same order.
+    for (const ids of results) {
+      expect(ids).toEqual(results[0]);
+    }
+  });
 });

@@ -345,6 +345,12 @@ export class PostsService {
   /** Per-author diversity walk: max 1 occurrence in any window of this many consecutive rows. */
   private static forYouMaxPerAuthorWindow = 5;
   /**
+   * Logged-out viewers have no last-seen signal, so jitter the adjusted score +/- this
+   * fraction to vary ordering between refreshes while keeping recent/relevant posts near
+   * the top. Authed paths are unaffected (jitter is 1.0 when viewerUserId is set).
+   */
+  private static forYouAnonJitterStrength = 0.35;
+  /**
    * Width of the recency tier used when ordering the followed-unseen quota. Within the same tier
    * we prefer engaged-with > mutuals > one-way follows; across tiers, the newer tier always wins.
    * 2h is the sweet spot: a brand-new follow-only post still beats a 3-hour-old mutual, but a
@@ -2153,7 +2159,11 @@ export class PostsService {
         rawBase = rawTrending;
       }
       const base = c.friendEngaged ? Math.max(rawBase, PostsService.forYouFriendEngagementBaseFloor) : rawBase;
-      const adjusted = base * recencyMult * relMult * seenMult * friendMult * followedUnseenMult * secondDegreeMult * groupMult;
+      const jitter =
+        viewerUserId == null
+          ? 1 + (Math.random() * 2 - 1) * PostsService.forYouAnonJitterStrength
+          : 1;
+      const adjusted = base * recencyMult * relMult * seenMult * friendMult * followedUnseenMult * secondDegreeMult * groupMult * jitter;
       return { candidate: c, adjusted };
     });
 
