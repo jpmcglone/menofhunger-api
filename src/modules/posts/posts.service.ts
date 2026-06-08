@@ -858,6 +858,9 @@ export class PostsService {
     visibility: 'all' | PostVisibility;
     followingOnly: boolean;
     kind?: 'regular' | 'checkin' | null;
+    checkinDayKey?: string | null;
+    /** When true, include the viewer's own posts (overrides home-feed self-exclusion). */
+    includeSelf?: boolean;
     mediaOnly?: boolean;
     topLevelOnly?: boolean;
     authorUserIds?: string[] | null;
@@ -865,6 +868,7 @@ export class PostsService {
     const { viewerUserId, limit, cursor, visibility, followingOnly } = params;
     const authorUserIds = (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean) ?? null;
     const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
+    const checkinDayKey = (params.checkinDayKey ?? null)?.trim() || null;
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
 
@@ -923,9 +927,12 @@ export class PostsService {
         : this.excludeCommunityGroupPostsWhere();
 
     // Exclude the viewer's own posts from home feeds (Following + All) unless the feed
-    // is explicitly scoped to a set of author IDs (e.g. profile view, crew feed).
+    // is explicitly scoped to a set of author IDs (e.g. profile view, crew feed),
+    // or the caller explicitly opts in with includeSelf (e.g. per-day check-in feeds).
     const excludeSelfWhere: Prisma.PostWhereInput[] =
-      viewerUserId && !authorUserIds?.length ? ([{ NOT: { userId: viewerUserId } }] as Prisma.PostWhereInput[]) : [];
+      viewerUserId && !authorUserIds?.length && !params.includeSelf
+        ? ([{ NOT: { userId: viewerUserId } }] as Prisma.PostWhereInput[])
+        : [];
 
     const where = followingOnly
       ? {
@@ -935,6 +942,7 @@ export class PostsService {
             communityScopeWhere,
             this.userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
+            ...(checkinDayKey ? ([{ checkinDayKey }] as Prisma.PostWhereInput[]) : []),
             ...(params.mediaOnly ? [this.mediaOnlyWhere()] : []),
             ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
@@ -949,6 +957,7 @@ export class PostsService {
             communityScopeWhere,
             this.userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
+            ...(checkinDayKey ? ([{ checkinDayKey }] as Prisma.PostWhereInput[]) : []),
             ...(params.mediaOnly ? [this.mediaOnlyWhere()] : []),
             ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
@@ -1550,12 +1559,16 @@ export class PostsService {
     cursor: string | null;
     visibility: 'all' | PostVisibility;
     kind?: 'regular' | 'checkin' | null;
+    checkinDayKey?: string | null;
+    /** When true, include the viewer's own posts (overrides home-feed self-exclusion). */
+    includeSelf?: boolean;
     mediaOnly?: boolean;
     topLevelOnly?: boolean;
     authorUserIds?: string[] | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, cursor, visibility } = params;
     const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
+    const checkinDayKey = (params.checkinDayKey ?? null)?.trim() || null;
     const requestedAuthorUserIds =
       (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
     if (requestedAuthorUserIds && requestedAuthorUserIds.length === 0) {
@@ -1590,12 +1603,15 @@ export class PostsService {
     // Author filter: intersect requested authors (if any) with "not the viewer". We don't filter
     // `parentId IS NULL` so engaged replies stay first-class trending candidates — the controller's
     // `collapseFeedByRoot` rolls them up to their root for display.
+    // When includeSelf is true (e.g. per-day check-in feeds), the viewer's own posts are kept.
     const userIdWhere: Prisma.PostWhereInput['userId'] =
       requestedAuthorUserIds?.length
         ? { in: requestedAuthorUserIds.filter((id) => id !== viewerUserId && !blockedAuthorSet.has(id)) }
         : blockedAuthorIds.length > 0
-          ? { notIn: viewerUserId ? [viewerUserId, ...blockedAuthorIds] : blockedAuthorIds }
-          : viewerUserId
+          ? params.includeSelf
+            ? { notIn: blockedAuthorIds }
+            : { notIn: viewerUserId ? [viewerUserId, ...blockedAuthorIds] : blockedAuthorIds }
+          : viewerUserId && !params.includeSelf
             ? { not: viewerUserId }
             : undefined;
 
@@ -1605,10 +1621,10 @@ export class PostsService {
 
     const commonWhere: Prisma.PostWhereInput = {
       deletedAt: null,
-      kind: { not: 'repost' },
+      kind: kind ? kind : { not: 'repost' },
       user: { bannedAt: null },
       ...(userIdWhere !== undefined ? { userId: userIdWhere } : {}),
-      ...(kind ? { kind } : {}),
+      ...(checkinDayKey ? { checkinDayKey } : {}),
       ...(params.mediaOnly ? this.mediaOnlyWhere() : {}),
       ...(params.topLevelOnly ? { parentId: null } : {}),
       ...baseVisibilityWhere,
@@ -2675,6 +2691,9 @@ export class PostsService {
     visibility: 'all' | PostVisibility;
     followingOnly?: boolean;
     kind?: 'regular' | 'checkin' | null;
+    checkinDayKey?: string | null;
+    /** When true, include the viewer's own posts (overrides home-feed self-exclusion). */
+    includeSelf?: boolean;
     mediaOnly?: boolean;
     topLevelOnly?: boolean;
     authorUserIds?: string[] | null;
@@ -2683,6 +2702,7 @@ export class PostsService {
     const requestedAuthorUserIds =
       (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
     const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
+    const checkinDayKey = (params.checkinDayKey ?? null)?.trim() || null;
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
@@ -2736,16 +2756,17 @@ export class PostsService {
     const decoded = this.decodePopularCursor(cursor);
 
     // Exclude the viewer's own posts from home feeds (Following + All) unless the feed
-    // is explicitly scoped to a set of author IDs (e.g. profile view, crew feed).
+    // is explicitly scoped to a set of author IDs (e.g. profile view, crew feed),
+    // or the caller explicitly opts in with includeSelf (e.g. per-day check-in feeds).
     // Use requestedAuthorUserIds (not authorUserIds) as the gate so the trending Following
     // path (where authorUserIds already excludes the viewer via getAuthorIdsForFollowingFilter)
     // doesn't double-apply the exclusion.
-    const excludeViewerAuthor = Boolean(viewerUserId) && !requestedAuthorUserIds?.length;
+    const excludeViewerAuthor = Boolean(viewerUserId) && !requestedAuthorUserIds?.length && !params.includeSelf;
 
     // Fast path: use the stored trendingScore column (set by the popular-score cron every ~10 min).
-    // For kind-filtered views (e.g. check-ins), fall back to real-time scoring so brand-new posts
-    // that haven't been scored yet can still surface immediately.
-    if (!kind) {
+    // For kind-filtered views (e.g. check-ins) or day-scoped views, fall back to real-time scoring
+    // so brand-new posts that haven't been scored yet can still surface immediately.
+    if (!kind && !checkinDayKey) {
       return await this.listPopularFeedFromScore({
         viewerUserId,
         limit,
@@ -2766,12 +2787,15 @@ export class PostsService {
     const asOf = new Date();
     const asOfMs = asOf.getTime();
     const lookbackMs = PostsService.popularLookbackDays * 24 * 60 * 60 * 1000;
-    const minCreatedAt = new Date(asOfMs - lookbackMs);
+    // When scoped to a specific check-in day the day key is the natural date bound —
+    // skip the rolling lookback window so historical day feeds are never empty.
+    const minCreatedAt = checkinDayKey ? new Date(0) : new Date(asOfMs - lookbackMs);
 
     const warmupAuthorFilter = authorUserIds?.length
       ? ({ userId: { in: authorUserIds } } as Prisma.PostWhereInput)
       : undefined;
     const warmupKindFilter = kind ? ({ kind } as Prisma.PostWhereInput) : undefined;
+    const warmupCheckinDayKeyFilter = checkinDayKey ? ({ checkinDayKey } as Prisma.PostWhereInput) : undefined;
     const warmupTopLevelFilter = params.topLevelOnly ? ({ parentId: null } as Prisma.PostWhereInput) : undefined;
 
     // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
@@ -2798,6 +2822,7 @@ export class PostsService {
             ...(warmupAuthorFilter ? [warmupAuthorFilter] : []),
             ...(excludeViewerAuthor && viewerUserId ? ([{ NOT: { userId: viewerUserId } }] as Prisma.PostWhereInput[]) : []),
             ...(warmupKindFilter ? [warmupKindFilter] : []),
+            ...(warmupCheckinDayKeyFilter ? [warmupCheckinDayKeyFilter] : []),
             ...(warmupTopLevelFilter ? [warmupTopLevelFilter] : []),
             this.notDeletedWhere(),
             this.userNotBannedWhere(),
@@ -2816,8 +2841,13 @@ export class PostsService {
 
     // Snapshot `asOf` *after* any warmup updates, so we never "amplify" scores.
     const snapshotAsOf = decoded ? asOf : new Date();
-    const snapshotMinCreatedAt = new Date(snapshotAsOf.getTime() - lookbackMs);
-    const recentCutoff = new Date(snapshotAsOf.getTime() - PostsService.popularRecentWindowHours * 60 * 60 * 1000);
+    // For day-scoped feeds the lookback is irrelevant — use epoch so no posts are dropped.
+    const snapshotMinCreatedAt = checkinDayKey ? new Date(0) : new Date(snapshotAsOf.getTime() - lookbackMs);
+    // recentCutoff is only meaningful for the "recency bucket" on global feeds.
+    // For day-scoped feeds set it to epoch so the recency bucket captures everything.
+    const recentCutoff = checkinDayKey
+      ? new Date(0)
+      : new Date(snapshotAsOf.getTime() - PostsService.popularRecentWindowHours * 60 * 60 * 1000);
 
     const cursorCreatedAt = decoded ? new Date(decoded.createdAt) : null;
     const cursorScore = decoded?.score ?? null;
@@ -2832,6 +2862,7 @@ export class PostsService {
       : Prisma.sql``;
     // NOTE: Postgres enum compare requires matching enum type. Cast to text to safely compare against our string param.
     const kindFilterSql = kind ? Prisma.sql`AND (p."kind"::text = ${kind})` : Prisma.sql``;
+    const checkinDayKeyFilterSql = checkinDayKey ? Prisma.sql`AND p."checkinDayKey" = ${checkinDayKey}` : Prisma.sql``;
     const topLevelOnlySql = params.topLevelOnly ? Prisma.sql`AND p."parentId" IS NULL` : Prisma.sql``;
 
     // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
@@ -2882,6 +2913,7 @@ export class PostsService {
               ${authorFilterSql}
               ${excludeSelfSql}
               ${kindFilterSql}
+              ${checkinDayKeyFilterSql}
               ${topLevelOnlySql}
               ${bannedAuthorSql}
             ORDER BY p."createdAt" DESC, p."id" DESC
@@ -2901,6 +2933,7 @@ export class PostsService {
               ${authorFilterSql}
               ${excludeSelfSql}
               ${kindFilterSql}
+              ${checkinDayKeyFilterSql}
               ${topLevelOnlySql}
               ${bannedAuthorSql}
             ORDER BY p."boostCount" DESC, p."createdAt" DESC, p."id" DESC
@@ -2919,6 +2952,7 @@ export class PostsService {
               ${authorFilterSql}
               ${excludeSelfSql}
               ${kindFilterSql}
+              ${checkinDayKeyFilterSql}
               ${topLevelOnlySql}
               ${bannedAuthorSql}
             ORDER BY p."bookmarkCount" DESC, p."createdAt" DESC, p."id" DESC
@@ -2937,6 +2971,7 @@ export class PostsService {
               ${authorFilterSql}
               ${excludeSelfSql}
               ${kindFilterSql}
+              ${checkinDayKeyFilterSql}
               ${topLevelOnlySql}
               ${bannedAuthorSql}
             ORDER BY p."commentCount" DESC, p."createdAt" DESC, p."id" DESC
@@ -2957,6 +2992,7 @@ export class PostsService {
               ${authorFilterSql}
               ${excludeSelfSql}
               ${kindFilterSql}
+              ${checkinDayKeyFilterSql}
               ${topLevelOnlySql}
               ${bannedAuthorSql}
             ORDER BY p."repostCount" DESC, p."createdAt" DESC, p."id" DESC
@@ -2976,6 +3012,7 @@ export class PostsService {
               ${authorFilterSql}
               ${excludeSelfSql}
               ${kindFilterSql}
+              ${checkinDayKeyFilterSql}
               ${topLevelOnlySql}
               ${bannedAuthorSql}
             ORDER BY (p."boostCount" + p."bookmarkCount") DESC, p."createdAt" DESC, p."id" DESC
@@ -3193,6 +3230,9 @@ export class PostsService {
     visibility: 'all' | PostVisibility;
     followingOnly?: boolean;
     kind?: 'regular' | 'checkin' | null;
+    checkinDayKey?: string | null;
+    /** When true, include the viewer's own posts (overrides home-feed self-exclusion). */
+    includeSelf?: boolean;
     mediaOnly?: boolean;
     topLevelOnly?: boolean;
     authorUserIds?: string[] | null;
@@ -3201,6 +3241,7 @@ export class PostsService {
     const requestedAuthorUserIds =
       (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
     const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
+    const checkinDayKey = (params.checkinDayKey ?? null)?.trim() || null;
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
@@ -3235,8 +3276,8 @@ export class PostsService {
       return { posts: [], nextCursor: null, scoreByPostId: new Map() };
     }
 
-    // Featured snapshots don't encode post kind; for kind-filtered feeds, fall back to trending.
-    if (kind) {
+    // Featured snapshots don't encode post kind or day key; fall back to trending for filtered feeds.
+    if (kind || checkinDayKey) {
       return await this.listPopularFeed({
         viewerUserId,
         limit,
@@ -3244,6 +3285,8 @@ export class PostsService {
         visibility,
         followingOnly,
         kind,
+        checkinDayKey,
+        includeSelf: params.includeSelf,
         mediaOnly: params.mediaOnly,
         topLevelOnly: params.topLevelOnly,
         authorUserIds,

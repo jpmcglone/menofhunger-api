@@ -44,6 +44,10 @@ const listSchema = z.object({
   followingOnly: z.coerce.boolean().optional(),
   mediaOnly: z.coerce.boolean().optional(),
   kind: z.enum(['regular', 'checkin']).optional(),
+  /** Filter check-ins to a specific ET day (YYYY-MM-DD). Forces kind=checkin when present. */
+  checkinDayKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  /** When true, include the viewer's own posts in results (overrides home-feed self-exclusion). */
+  includeSelf: z.coerce.boolean().optional(),
   // Optional author filter (comma-separated user IDs). Used by Explore to show trending by recommended users.
   authorIds: z.string().optional(),
   // "trending" is the UI-friendly name for our half-life boost scoring feed.
@@ -339,6 +343,12 @@ export class PostsController {
         .filter(Boolean)
         .slice(0, 50) || [];
 
+    // When checkinDayKey is provided, the request is scoped to a specific check-in day;
+    // force kind=checkin and disable the shared feed cache (day-scoped feeds are small/specific).
+    const checkinDayKey = parsed.checkinDayKey ?? null;
+    const effectiveKind: 'regular' | 'checkin' | null = checkinDayKey ? 'checkin' : (parsed.kind ?? null);
+    const includeSelf = parsed.includeSelf ?? false;
+
     const sort = parsed.sort ?? 'new';
     const requestedSortKind = sort === 'trending' ? 'popular' : sort;
     // For You works for anonymous viewers too — listForYouFeed handles null viewerUserId
@@ -399,7 +409,8 @@ export class PostsController {
       && Boolean(cursor)
       && (sortKind === 'new' || sortKind === 'popular' || sortKind === 'featured')
       && !authorUserIds.length
-      && !(parsed.kind ?? null)
+      && !effectiveKind
+      && !checkinDayKey
       && !(parsed.mediaOnly ?? false)
       && !(parsed.followingOnly ?? false)
       && String(cursor).trim().length <= 64;
@@ -415,7 +426,8 @@ export class PostsController {
           cursor,
           visibility: parsed.visibility ?? 'all',
           followingOnly: parsed.followingOnly ?? false,
-          kind: parsed.kind ?? null,
+          kind: effectiveKind,
+          checkinDayKey,
           mediaOnly: parsed.mediaOnly ?? false,
           topLevelOnly: parsed.topLevelOnly ?? false,
           authorUserIds,
@@ -447,7 +459,9 @@ export class PostsController {
                 limit,
                 cursor,
                 visibility: parsed.visibility ?? 'all',
-                kind: parsed.kind ?? null,
+                kind: effectiveKind,
+                checkinDayKey,
+                includeSelf,
                 mediaOnly,
                 topLevelOnly: parsed.topLevelOnly ?? false,
                 authorUserIds: authorUserIds.length ? authorUserIds : null,
@@ -459,7 +473,9 @@ export class PostsController {
                   cursor,
                   visibility: parsed.visibility ?? 'all',
                   followingOnly: parsed.followingOnly ?? false,
-                  kind: parsed.kind ?? null,
+                  kind: effectiveKind,
+                  checkinDayKey,
+                  includeSelf,
                   mediaOnly,
                   topLevelOnly: parsed.topLevelOnly ?? false,
                   authorUserIds: authorUserIds.length ? authorUserIds : null,
@@ -471,7 +487,9 @@ export class PostsController {
                     cursor,
                     visibility: parsed.visibility ?? 'all',
                     followingOnly: parsed.followingOnly ?? false,
-                    kind: parsed.kind ?? null,
+                    kind: effectiveKind,
+                    checkinDayKey,
+                    includeSelf,
                     mediaOnly,
                     topLevelOnly: parsed.topLevelOnly ?? false,
                     authorUserIds: authorUserIds.length ? authorUserIds : null,
@@ -482,7 +500,9 @@ export class PostsController {
                     cursor,
                     visibility: parsed.visibility ?? 'all',
                     followingOnly: parsed.followingOnly ?? false,
-                    kind: parsed.kind ?? null,
+                    kind: effectiveKind,
+                    checkinDayKey,
+                    includeSelf,
                     mediaOnly,
                     topLevelOnly: parsed.topLevelOnly ?? false,
                     authorUserIds: authorUserIds.length ? authorUserIds : null,

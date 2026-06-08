@@ -278,20 +278,11 @@ export class PostViewsService {
     });
     if (!post) throw new NotFoundException('Post not found.');
 
-    // Keep private/tier-gated post breakdowns hidden from unauthorized viewers.
+    // onlyMe posts expose their breakdown to the author only; all other visibility levels
+    // expose the aggregate tier counts publicly (matching the viewerCount already shown in feeds).
     const isSelf = Boolean(uid && post.userId === uid);
-    if (!isSelf) {
-      if (!uid) {
-        if (post.visibility !== 'public') throw new NotFoundException('Post not found.');
-      } else {
-        const viewer = await this.prisma.user.findFirst({
-          where: { id: uid },
-          select: { verifiedStatus: true, premium: true, premiumPlus: true },
-        });
-        if (!viewerCanAccessVisibility(post.visibility, viewer)) {
-          throw new NotFoundException('Post not found.');
-        }
-      }
+    if (!isSelf && post.visibility === 'onlyMe') {
+      throw new NotFoundException('Post not found.');
     }
 
     const computeBreakdown = async (): Promise<PostViewBreakdown> => {

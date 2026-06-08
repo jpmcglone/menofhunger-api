@@ -1174,6 +1174,7 @@ model Post {
   @@index([userId, createdAt])
   @@index([createdAt])
   @@index([kind, createdAt])
+  @@index([kind, checkinDayKey, createdAt(sort: Desc)])
   @@index([parentId])
   @@index([parentId, createdAt])
   @@index([rootId])
