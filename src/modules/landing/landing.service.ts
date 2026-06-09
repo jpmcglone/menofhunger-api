@@ -80,13 +80,10 @@ export class LandingService {
             { lastSeenAt: { not: null } },
           ],
         },
-        select: USER_LIST_SELECT,
-        orderBy: [
-          { lastSeenAt: 'desc' },
-          { lastOnlineAt: 'desc' },
-          { createdAt: 'desc' },
-        ],
-        take: 10,
+        // Fetch a wider pool so the JS sort can promote avatar-holders.
+        select: { ...USER_LIST_SELECT, createdAt: true },
+        orderBy: { createdAt: 'asc' },
+        take: 30,
       }),
       this.prisma.$queryRaw<TopPostRow[]>(Prisma.sql`
         SELECT
@@ -194,7 +191,16 @@ export class LandingService {
         publicPostCount: Number(stats?.public_post_count ?? 0),
         verifiedMenCount: Number(stats?.verified_men_count ?? 0),
       },
-      recentlyActiveMen: recentlyActiveRows.map((user) => toUserListDto(user as UserListRow, this.publicBaseUrl)),
+      recentlyActiveMen: [...recentlyActiveRows]
+        // Avatar-holders first, then by oldest account (longest-standing members).
+        .sort((a, b) => {
+          const aHasAvatar = a.avatarKey != null ? 1 : 0;
+          const bHasAvatar = b.avatarKey != null ? 1 : 0;
+          if (bHasAvatar !== aHasAvatar) return bHasAvatar - aHasAvatar;
+          return a.createdAt.getTime() - b.createdAt.getTime();
+        })
+        .slice(0, 10)
+        .map((user) => toUserListDto(user as UserListRow, this.publicBaseUrl)),
       topPostsThisWeek: poolRows
         .map((row) => {
           const post = topPostsById.get(row.id);

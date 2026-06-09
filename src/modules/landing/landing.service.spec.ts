@@ -16,6 +16,7 @@ function makeUser(overrides: Record<string, unknown> = {}) {
     avatarUpdatedAt: null,
     bannedAt: null,
     orgMemberships: [],
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
     ...overrides,
   };
 }
@@ -120,7 +121,7 @@ describe('LandingService', () => {
         isOrganization: false,
         verifiedStatus: { not: 'none' },
       }),
-      take: 10,
+      take: 30,
     }));
     expect(articles.listTrending).toHaveBeenCalledWith({ viewerUserId: null, limit: 3 });
   });

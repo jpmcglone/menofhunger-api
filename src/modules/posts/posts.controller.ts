@@ -347,7 +347,8 @@ export class PostsController {
     // force kind=checkin and disable the shared feed cache (day-scoped feeds are small/specific).
     const checkinDayKey = parsed.checkinDayKey ?? null;
     const effectiveKind: 'regular' | 'checkin' | null = checkinDayKey ? 'checkin' : (parsed.kind ?? null);
-    const includeSelf = parsed.includeSelf ?? false;
+    // Check-in feeds always include the viewer's own posts — no need for callers to opt in.
+    const includeSelf = effectiveKind === 'checkin' ? true : (parsed.includeSelf ?? false);
 
     const sort = parsed.sort ?? 'new';
     const requestedSortKind = sort === 'trending' ? 'popular' : sort;
@@ -428,6 +429,7 @@ export class PostsController {
           followingOnly: parsed.followingOnly ?? false,
           kind: effectiveKind,
           checkinDayKey,
+          includeSelf,
           mediaOnly: parsed.mediaOnly ?? false,
           topLevelOnly: parsed.topLevelOnly ?? false,
           authorUserIds,
