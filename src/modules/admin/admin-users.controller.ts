@@ -57,7 +57,7 @@ const updateUserSchema = z.object({
   name: z.string().trim().max(50).nullable().optional(),
   bio: z.string().trim().max(160).nullable().optional(),
   website: z.union([z.string().trim().max(200), z.literal('')]).optional(),
-  locationQuery: z.union([z.string().trim().max(120), z.literal('')]).optional(),
+  locationQuery: z.union([z.string().trim().max(10), z.literal('')]).optional(),
   isOrganization: z.boolean().optional(),
   verifiedStatus: z.enum(['none', 'identity', 'manual']).optional(),
   featureToggles: z.array(z.string()).max(50).optional(),

@@ -280,6 +280,8 @@ model User {
    * Country code/name; US only for now.
    */
   locationCountry              String?
+  // True when the user has dismissed the location prompt and does not want to be asked again.
+  locationPromptSkipped        Boolean            @default(false)
   // Required onboarding fields (gates app access).
   // Stored as DateTime (UTC midnight) to keep Prisma portable.
   birthdate                    DateTime?

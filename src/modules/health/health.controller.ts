@@ -58,7 +58,7 @@ export class HealthController {
         giphyConfigured: Boolean(this.appConfig.giphyApiKey()),
         twilioConfigured: Boolean(this.appConfig.twilioVerify()),
         ...(this.appConfig.nodeEnv() !== 'production' ? { twilioDisabledInDev: this.appConfig.disableTwilioInDev() } : {}),
-        locationSearchConfigured: Boolean(this.appConfig.mapbox()),
+        locationSearchConfigured: true,
         stripeConfigured: Boolean(this.appConfig.stripe()),
         emailConfigured: Boolean(this.appConfig.email()),
         browserPushConfigured: this.appConfig.vapidConfigured(),

@@ -61,6 +61,7 @@
     "swagger-ui-express": "^5.0.1",
     "twilio": "^5.12.2",
     "web-push": "^3.6.7",
+    "zipcodes-nrviens": "^8.0.6",
     "zod": "^3.25.76"
   },
   "devDependencies": {

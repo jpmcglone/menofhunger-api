@@ -165,6 +165,7 @@ export type UserDto = {
   checkinStreakDays: number;
   lastCheckinDayKey: string | null;
   longestStreakDays: number;
+  locationPromptSkipped: boolean;
 };
 
 export type AdminUserSensitiveFieldsDto = {
@@ -275,6 +276,7 @@ export type UserDtoRow = {
   checkinStreakDays: number;
   lastCheckinDayKey: string | null;
   longestStreakDays: number;
+  locationPromptSkipped: boolean;
 };
 
 export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = null): UserDto {
@@ -336,5 +338,6 @@ export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = 
       typeof (user as any).longestStreakDays === 'number' ? ((user as any).longestStreakDays as number) : 0,
       typeof (user as any).checkinStreakDays === 'number' ? ((user as any).checkinStreakDays as number) : 0,
     ),
+    locationPromptSkipped: Boolean((user as any).locationPromptSkipped),
   };
 }

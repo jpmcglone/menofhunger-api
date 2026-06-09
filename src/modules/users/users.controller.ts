@@ -20,7 +20,7 @@ import { PublicProfileCacheService } from './public-profile-cache.service';
 import { UsersMeRealtimeService } from './users-me-realtime.service';
 import { UsersPublicRealtimeService } from './users-public-realtime.service';
 import { canonicalizeTopicValue } from '../../common/topics/topic-utils';
-import { UsersLocationService } from './users-location.service';
+import { UsersLocationService, STATE_NAMES } from './users-location.service';
 import { EmailVerificationService } from '../email/email-verification.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
@@ -96,7 +96,7 @@ const profileSchema = z.object({
   email: z.union([z.string().trim().email(), z.literal('')]).optional(),
   interests: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
   website: z.union([z.string().trim().max(200), z.literal('')]).optional(),
-  locationQuery: z.union([z.string().trim().max(120), z.literal('')]).optional(),
+  locationQuery: z.union([z.string().trim().max(10), z.literal('')]).optional(),
 });
 
 const settingsSchema = z.object({
@@ -113,6 +113,7 @@ const onboardingSchema = z.object({
   birthdate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Birthdate must be a date (YYYY-MM-DD).').optional(),
   interests: z.array(z.string().trim().min(1).max(40)).min(1).max(30).optional(),
   menOnlyConfirmed: z.boolean().optional(),
+  locationQuery: z.union([z.string().trim().max(10), z.literal('')]).optional(),
 });
 
 const newestUsersSchema = z.object({
@@ -124,7 +125,7 @@ const byLocationSchema = z.object({
   zip: z.string().trim().max(20).optional(),
   city: z.string().trim().max(100).optional(),
   county: z.string().trim().max(100).optional(),
-  limit: z.coerce.number().int().min(1).max(20).optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
 const articleTagPreferencesSchema = z.object({
@@ -580,6 +581,37 @@ export class UsersController {
   }
 
   @UseGuards(AuthGuard)
+  @Throttle({ default: { limit: rateLimitLimit('publicRead', 60), ttl: rateLimitTtl('publicRead', 60) } })
+  @Get('location-preview')
+  async locationPreview(@Query() query: unknown) {
+    const { zip } = z.object({ zip: z.string().trim() }).parse(query);
+    const result = this.usersLocation.normalizeUsLocation(zip);
+    const stateCode = (result.state ?? '').toUpperCase();
+    return {
+      data: {
+        zip: result.zip,
+        city: result.city,
+        state: result.state,
+        stateDisplay: STATE_NAMES[stateCode] ?? result.state,
+        display: result.display,
+      },
+    };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({ default: { limit: rateLimitLimit('interact', 60), ttl: rateLimitTtl('interact', 60) } })
+  @Post('me/skip-location-prompt')
+  async skipLocationPrompt(@CurrentUserId() userId: string) {
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: { locationPromptSkipped: true },
+    });
+    const r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    void this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'profile_changed');
+    return { data: { user: toUserDto(updated, r2PublicBaseUrl) } };
+  }
+
+  @UseGuards(AuthGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('publicRead', 60),
@@ -590,17 +622,20 @@ export class UsersController {
   async byLocation(@CurrentUserId() viewerUserId: string, @Query() query: unknown) {
     const { state, zip, city, county, limit = 10 } = byLocationSchema.parse(query);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const stateDisplay = STATE_NAMES[state.toUpperCase()] ?? state;
 
     const baseWhere = { usernameIsSet: true, bannedAt: null };
 
-    // Accumulate excluded IDs as we build each section (closest → furthest).
-    const excludedIds = new Set<string>([viewerUserId]);
+    // State-only queries show all members including the viewer themselves.
+    const isStateOnly = !zip && !city && !county;
+    const excludedIds = new Set<string>(isStateOnly ? [] : [viewerUserId]);
 
     const fetchSection = async (where: Record<string, unknown>) => {
       const rows = await this.prisma.user.findMany({
         where: { ...baseWhere, ...where, id: { notIn: Array.from(excludedIds) } },
         select: USER_LIST_SELECT,
-        orderBy: [{ checkinStreakDays: 'desc' }, { createdAt: 'desc' }],
+        // Most active streakers first; oldest/founding members break ties.
+        orderBy: [{ checkinStreakDays: 'desc' }, { createdAt: 'asc' }],
         take: limit,
       });
       rows.forEach((r) => excludedIds.add(r.id));
@@ -634,7 +669,7 @@ export class UsersController {
       ...(zip ? [{ key: 'sameZip', label: 'Same ZIP code', users: mapUsers(zipRows) }] : []),
       ...(city ? [{ key: 'sameCity', label: 'Same city', users: mapUsers(cityRows) }] : []),
       ...(county ? [{ key: 'sameCounty', label: 'Same county', users: mapUsers(countyRows) }] : []),
-      { key: 'sameState', label: 'Same state', users: mapUsers(stateRows) },
+      { key: 'sameState', label: `Members in ${stateDisplay}`, users: mapUsers(stateRows) },
     ];
 
     return {
@@ -644,6 +679,7 @@ export class UsersController {
           ...(city ? { city } : {}),
           ...(county ? { county } : {}),
           state,
+          stateDisplay,
         },
         sections,
       },
@@ -1379,6 +1415,22 @@ export class UsersController {
         data.usernameIsSet = true;
       } catch (err: unknown) {
         throw err;
+      }
+    }
+
+    // Optional ZIP — silently ignored if invalid (non-blocking for onboarding).
+    if (parsed.locationQuery) {
+      try {
+        const loc = this.usersLocation.normalizeUsLocation(parsed.locationQuery);
+        data.locationInput = loc.input;
+        data.locationDisplay = loc.display;
+        data.locationZip = loc.zip;
+        data.locationCity = loc.city;
+        data.locationCounty = loc.county;
+        data.locationState = loc.state;
+        data.locationCountry = loc.country;
+      } catch {
+        // Invalid ZIP — skip silently so onboarding still completes.
       }
     }
 
