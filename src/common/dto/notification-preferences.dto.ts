@@ -18,6 +18,8 @@ export type NotificationPreferencesDto = {
   emailNewNotifications: boolean;
   /** Optional: near-immediate emails for high-signal events (messages + mentions/replies). */
   emailInstantHighSignal: boolean;
+  /** Evening reminder email when the user's check-in streak is at risk. */
+  emailStreakReminder: boolean;
   /** Send an email when someone you follow publishes a new article. */
   emailFollowedArticle: boolean;
 };

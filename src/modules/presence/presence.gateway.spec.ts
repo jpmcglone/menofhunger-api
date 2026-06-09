@@ -8,6 +8,14 @@
 
 import { PresenceGateway } from './presence.gateway';
 import { WatchPartyStateService } from '../spaces/watch-party-state.service';
+import { GatewayContextService } from './gateway/gateway-context.service';
+import { GatewayThrottleService } from './gateway/gateway-throttle.service';
+import { PresenceStatusHandler } from './gateway/gateway-presence.handler';
+import { SpacesGatewayHandler } from './gateway/gateway-spaces.handler';
+import { RadioGatewayHandler } from './gateway/gateway-radio.handler';
+import { ContentSubscriptionsHandler } from './gateway/gateway-subscriptions.handler';
+import { MessagingGatewayHandler } from './gateway/gateway-messaging.handler';
+import { CommunityGroupReadAccessService } from '../viewer/community-group-read-access.service';
 
 // ─── Lightweight fake socket.io infrastructure ──────────────────────────────
 
@@ -185,12 +193,90 @@ function makeStubServices() {
   };
 }
 
+/** Wires the gateway with its handler modules, mirroring the providers in PresenceModule. */
+function buildGateway(deps: {
+  appConfig: any;
+  auth: any;
+  presence: any;
+  presenceRedis: any;
+  realtime: any;
+  follows: any;
+  messages: any;
+  radio: any;
+  radioChat: any;
+  spacesService: any;
+  spacesPresence: any;
+  spacesChat: any;
+  watchPartyState: WatchPartyStateService;
+  prisma: any;
+  redis: any;
+  marvIdentity: any;
+}): PresenceGateway {
+  const context = new GatewayContextService(deps.appConfig, deps.presence);
+  const throttle = new GatewayThrottleService();
+  const presenceHandler = new PresenceStatusHandler(
+    deps.appConfig,
+    deps.auth,
+    deps.presence,
+    deps.presenceRedis,
+    deps.follows,
+    deps.redis,
+    deps.spacesPresence,
+    deps.marvIdentity,
+    throttle,
+    context,
+  );
+  const spacesHandler = new SpacesGatewayHandler(
+    deps.presence,
+    deps.presenceRedis,
+    deps.follows,
+    deps.spacesService,
+    deps.spacesPresence,
+    deps.spacesChat,
+    deps.watchPartyState,
+    deps.redis,
+    throttle,
+    context,
+  );
+  const radioHandler = new RadioGatewayHandler(
+    deps.presence,
+    deps.presenceRedis,
+    deps.follows,
+    deps.radio,
+    deps.radioChat,
+    context,
+  );
+  // filterReadableGroupIds doesn't touch ViewerContextService, so a bare stub suffices.
+  const groupReadAccess = new CommunityGroupReadAccessService(deps.prisma, {} as any);
+  const subscriptionsHandler = new ContentSubscriptionsHandler(deps.prisma, groupReadAccess);
+  const messagingHandler = new MessagingGatewayHandler(
+    deps.presence,
+    deps.presenceRedis,
+    deps.messages,
+    throttle,
+    context,
+  );
+  return new PresenceGateway(
+    deps.presence,
+    deps.presenceRedis,
+    deps.realtime,
+    context,
+    presenceHandler,
+    spacesHandler,
+    radioHandler,
+    subscriptionsHandler,
+    messagingHandler,
+  );
+}
+
 interface GatewayFixture {
   gw: PresenceGateway;
   server: FakeServer;
   watchPartyState: WatchPartyStateService;
   spacesService: ReturnType<typeof makeSpacesService>;
   spacesPresence: ReturnType<typeof makeSpacesPresenceService>;
+  presence: ReturnType<typeof makePresenceService>;
+  presenceRedis: ReturnType<typeof makePresenceRedis>;
   ownerSocket: FakeSocket;
   viewerSocket: FakeSocket;
   joinOwner: (socket?: FakeSocket) => Promise<void>;
@@ -221,24 +307,16 @@ function makeFixture(opts: { spaceMode?: string } = {}): GatewayFixture {
     phone: '',
   });
 
-  const gw = new PresenceGateway(
-    stub.appConfig,
-    stub.auth,
+  const gw = buildGateway({
+    ...stub,
     presence,
     presenceRedis,
-    stub.realtime,
-    stub.follows,
-    stub.messages,
-    stub.radio,
-    stub.radioChat,
     spacesService,
     spacesPresence,
-    stub.spacesChat,
     watchPartyState,
-    stub.prisma,
     redis,
     marvIdentity,
-  );
+  });
 
   const server = new FakeServer();
 
@@ -273,7 +351,7 @@ function makeFixture(opts: { spaceMode?: string } = {}): GatewayFixture {
     await (gw as any).handleSpacesJoin(socket, { spaceId: SPACE_ID });
   };
 
-  return { gw, server, watchPartyState, spacesService, spacesPresence, ownerSocket, viewerSocket, joinOwner, joinViewer };
+  return { gw, server, watchPartyState, spacesService, spacesPresence, presence, presenceRedis, ownerSocket, viewerSocket, joinOwner, joinViewer };
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -290,10 +368,10 @@ describe('PresenceGateway — watch party sync', () => {
 
   describe('presence:subscribe', () => {
     it('includes active status in the subscription snapshot', async () => {
-      const { gw, ownerSocket } = makeFixture();
-      (gw as any).presenceRedis.onlineByUserIds.mockResolvedValueOnce(new Map([[OWNER_ID, true]]));
-      (gw as any).presenceRedis.idleByUserIds.mockResolvedValueOnce(new Map([[OWNER_ID, false]]));
-      (gw as any).presence.getActiveStatuses.mockResolvedValueOnce([
+      const { gw, ownerSocket, presence, presenceRedis } = makeFixture();
+      presenceRedis.onlineByUserIds.mockResolvedValueOnce(new Map([[OWNER_ID, true]]));
+      presenceRedis.idleByUserIds.mockResolvedValueOnce(new Map([[OWNER_ID, false]]));
+      presence.getActiveStatuses.mockResolvedValueOnce([
         {
           userId: OWNER_ID,
           text: 'Around tonight',
@@ -789,12 +867,16 @@ function makePostTypingFixture() {
   stub.appConfig.marvBot = jest.fn().mockReturnValue({ enabled: false, userId: null, username: 'marv', displayName: 'Marv', bio: '', phone: '' });
 
   const spacesService = makeSpacesService(TYPER_ID, 'NONE');
-  const gw = new PresenceGateway(
-    stub.appConfig, stub.auth, presence, presenceRedis, stub.realtime,
-    stub.follows, stub.messages, stub.radio, stub.radioChat,
-    spacesService, spacesPresence, stub.spacesChat,
-    watchPartyState, stub.prisma, redis, marvIdentity,
-  );
+  const gw = buildGateway({
+    ...stub,
+    presence,
+    presenceRedis,
+    spacesService,
+    spacesPresence,
+    watchPartyState,
+    redis,
+    marvIdentity,
+  });
 
   const server = new FakeServer();
   const typerSocket = new FakeSocket('socket-typer', { spaceChatUser: TYPER_SENDER });
@@ -921,12 +1003,16 @@ function makeGroupsSubscribeFixture(opts: {
   } as any;
 
   const spacesService = makeSpacesService('u1', 'NONE');
-  const gw = new PresenceGateway(
-    stub.appConfig, stub.auth, presence, presenceRedis, stub.realtime,
-    stub.follows, stub.messages, stub.radio, stub.radioChat,
-    spacesService, spacesPresence, stub.spacesChat,
-    watchPartyState, stub.prisma, redis, marvIdentity,
-  );
+  const gw = buildGateway({
+    ...stub,
+    presence,
+    presenceRedis,
+    spacesService,
+    spacesPresence,
+    watchPartyState,
+    redis,
+    marvIdentity,
+  });
 
   const server = new FakeServer();
   const socket = new FakeSocket('socket-1', {

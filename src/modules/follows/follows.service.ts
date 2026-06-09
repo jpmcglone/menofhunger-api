@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import type { FollowVisibility } from '@prisma/client';
+import type { FollowVisibility, VerifiedStatus } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import * as crypto from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -28,7 +28,7 @@ type RecommendationRow = {
   premiumPlus: boolean;
   isOrganization: boolean;
   stewardBadgeEnabled: boolean;
-  verifiedStatus: string;
+  verifiedStatus: VerifiedStatus;
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
   createdAt: Date;
@@ -59,7 +59,7 @@ export type FollowListUser = {
   premiumPlus: boolean;
   isOrganization: boolean;
   stewardBadgeEnabled: boolean;
-  verifiedStatus: string;
+  verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
   relationship: FollowRelationship;
 };
@@ -402,7 +402,7 @@ export class FollowsService {
       premiumPlus: boolean;
       isOrganization: boolean;
       stewardBadgeEnabled: boolean;
-      verifiedStatus: string;
+      verifiedStatus: VerifiedStatus;
       avatarKey: string | null;
       avatarUpdatedAt: Date | null;
       createdAt: Date;

@@ -12,13 +12,13 @@ describe('PostsController media feed guardrails', () => {
   });
 
   it('fills sparse For You media pages with chronological media fallback rows', () => {
-    const src = readFromRepo('src/modules/posts/posts.service.ts');
+    const src = readFromRepo('src/modules/posts/posts-feed-query.service.ts');
     expect(src).toContain('const fetchChronologicalMediaFallback = async');
     expect(src).toContain('if (!params.mediaOnly || take <= 0) return { posts: [], overflow: false };');
   });
 
   it('lets media trending include zero-score media instead of going empty', () => {
-    const src = readFromRepo('src/modules/posts/posts.service.ts');
+    const src = readFromRepo('src/modules/posts/posts-feed-query.service.ts');
     expect(src).toContain("? { OR: [{ trendingScore: { gte: 0 } }, { trendingScore: null }] }");
   });
 });

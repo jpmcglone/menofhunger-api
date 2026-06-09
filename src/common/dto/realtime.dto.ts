@@ -1,3 +1,4 @@
+import type { VerifiedStatus } from '@prisma/client';
 import type { MessageDto } from '../../modules/messages/message.dto';
 import type { NotificationDto } from '../../modules/notifications/notification.dto';
 import type { UserDto } from './user.dto';
@@ -69,6 +70,7 @@ export type PublicProfileDto = {
   bio: string | null;
   website: string | null;
   locationDisplay: string | null;
+  locationZip: string | null;
   locationCity: string | null;
   locationCounty: string | null;
   locationState: string | null;
@@ -81,11 +83,16 @@ export type PublicProfileDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   stewardBadgeEnabled: boolean;
-  verifiedStatus: string;
+  verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
   bannerUrl: string | null;
   pinnedPostId: string | null;
   lastOnlineAt: string | null;
+  checkinStreakDays: number;
+  longestStreakDays: number;
+  /** True when this user is an active member of any Crew. */
+  inCrew?: boolean;
+  isBot?: boolean;
 };
 
 /**

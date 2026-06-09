@@ -58,6 +58,7 @@ export class UsersRealtimeService {
         bio: true,
         website: true,
         locationDisplay: true,
+        locationZip: true,
         locationCity: true,
         locationCounty: true,
         locationState: true,
@@ -75,6 +76,9 @@ export class UsersRealtimeService {
         bannerUpdatedAt: true,
         pinnedPostId: true,
         lastOnlineAt: true,
+        checkinStreakDays: true,
+        longestStreakDays: true,
+        isBot: true,
       },
     });
     if (!user) return null;
@@ -107,6 +111,7 @@ export class UsersRealtimeService {
       bio: user.bio,
       website: user.website ?? null,
       locationDisplay: user.locationDisplay ?? null,
+      locationZip: user.locationZip ?? null,
       locationCity: user.locationCity ?? null,
       locationCounty: user.locationCounty ?? null,
       locationState: user.locationState ?? null,
@@ -124,6 +129,9 @@ export class UsersRealtimeService {
       // Privacy: last-online timestamps are only for verified viewers via HTTP endpoints.
       // Realtime fanout targets can include unverified users, so we redact here.
       lastOnlineAt: null,
+      checkinStreakDays: Math.max(0, Math.floor(Number(user.checkinStreakDays) || 0)),
+      longestStreakDays: Math.max(0, Math.floor(Number(user.longestStreakDays) || 0)),
+      ...(user.isBot ? { isBot: true } : {}),
     };
   }
 

@@ -57,7 +57,7 @@ export type UserListRow = {
   premiumPlus: boolean;
   isOrganization: boolean;
   stewardBadgeEnabled: boolean;
-  verifiedStatus: string;
+  verifiedStatus: VerifiedStatus;
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
   createdAt?: Date;
@@ -75,7 +75,7 @@ export type UserListDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   stewardBadgeEnabled: boolean;
-  verifiedStatus: string;
+  verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
   orgAffiliations: OrgAffiliationDto[];
   relationship?: UserListRelationship;

@@ -9,6 +9,13 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { RedisModule } from '../redis/redis.module';
 import { PresenceController } from './presence.controller';
 import { PresenceGateway } from './presence.gateway';
+import { GatewayContextService } from './gateway/gateway-context.service';
+import { GatewayThrottleService } from './gateway/gateway-throttle.service';
+import { PresenceStatusHandler } from './gateway/gateway-presence.handler';
+import { SpacesGatewayHandler } from './gateway/gateway-spaces.handler';
+import { RadioGatewayHandler } from './gateway/gateway-radio.handler';
+import { ContentSubscriptionsHandler } from './gateway/gateway-subscriptions.handler';
+import { MessagingGatewayHandler } from './gateway/gateway-messaging.handler';
 
 @Module({
   imports: [
@@ -25,7 +32,16 @@ import { PresenceGateway } from './presence.gateway';
     MarvinModule,
   ],
   controllers: [PresenceController],
-  providers: [PresenceGateway],
+  providers: [
+    PresenceGateway,
+    GatewayContextService,
+    GatewayThrottleService,
+    PresenceStatusHandler,
+    SpacesGatewayHandler,
+    RadioGatewayHandler,
+    ContentSubscriptionsHandler,
+    MessagingGatewayHandler,
+  ],
   exports: [RealtimeModule],
 })
 export class PresenceModule {}

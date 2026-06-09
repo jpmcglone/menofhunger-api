@@ -10,11 +10,29 @@ import { PostsPollResultsReadyCron } from './posts-poll-results-ready.cron';
 import { PostsPopularScoreCron } from './posts-popular-score.cron';
 import { PostsTopicsBackfillCron } from './posts-topics-backfill.cron';
 import { PostsService } from './posts.service';
+import { PostsDraftsService } from './posts-drafts.service';
+import { PostsEngagementService } from './posts-engagement.service';
+import { PostsRankingService } from './posts-ranking.service';
+import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
+import { PostsFeedQueryService } from './posts-feed-query.service';
+import { PostsMutationService } from './posts-mutation.service';
 
 @Module({
   imports: [AuthModule, NotificationsModule, RealtimeModule, PostViewsModule],
   controllers: [PostsController, DraftsController],
-  providers: [PostsService, PollsService, PostsPopularScoreCron, PostsTopicsBackfillCron, PostsPollResultsReadyCron],
+  providers: [
+    PostsService,
+    PostsDraftsService,
+    PostsEngagementService,
+    PostsRankingService,
+    PostsViewerEnrichmentService,
+    PostsFeedQueryService,
+    PostsMutationService,
+    PollsService,
+    PostsPopularScoreCron,
+    PostsTopicsBackfillCron,
+    PostsPollResultsReadyCron,
+  ],
   exports: [PostsService, PollsService, PostsPopularScoreCron, PostsTopicsBackfillCron, PostsPollResultsReadyCron],
 })
 export class PostsModule {}

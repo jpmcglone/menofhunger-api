@@ -1,4 +1,31 @@
 import { NotificationsService } from './notifications.service';
+import { NotificationPreferencesService } from './notification-preferences.service';
+import { NotificationPushService } from './notification-push.service';
+import { NotificationReadStateService } from './notification-read-state.service';
+import { NotificationQueryService } from './notification-query.service';
+import { NotificationWriterService } from './notification-writer.service';
+import { PostVisibilityReadService } from '../viewer/post-visibility-read.service';
+
+type FacadeDeps = {
+  prisma: any;
+  appConfig: any;
+  presenceRealtime: any;
+  presence: any;
+  jobs: any;
+  posthog: any;
+  viewerContextService: any;
+};
+
+function buildFacade(deps: FacadeDeps) {
+  const preferences = new NotificationPreferencesService(deps.prisma);
+  const push = new NotificationPushService(deps.prisma, deps.appConfig, deps.presence, preferences);
+  const readState = new NotificationReadStateService(deps.prisma, deps.presenceRealtime, deps.posthog);
+  const postVisibility = new PostVisibilityReadService(deps.prisma, deps.appConfig, deps.viewerContextService);
+  const query = new NotificationQueryService(deps.prisma, deps.appConfig, postVisibility, readState);
+  const writer = new NotificationWriterService(deps.prisma, deps.presenceRealtime, deps.jobs, push, query, readState);
+  const svc = new NotificationsService(preferences, push, readState, query, writer);
+  return { svc, preferences, push, readState, query, writer };
+}
 
 function makeService(overrides?: { prisma?: any }) {
   const basePrisma = {
@@ -44,8 +71,8 @@ function makeService(overrides?: { prisma?: any }) {
     allowedPostVisibilities: jest.fn(() => ['public', 'verifiedOnly', 'premiumOnly']),
   } as any;
 
-  const svc = new NotificationsService(prisma, appConfig, presenceRealtime, presence, jobs, posthog, viewerContextService);
-  return { svc, prisma };
+  const { svc, query } = buildFacade({ prisma, appConfig, presenceRealtime, presence, jobs, posthog, viewerContextService });
+  return { svc, prisma, query };
 }
 
 function makePost(id: string, overrides: Record<string, any> = {}) {
@@ -96,7 +123,7 @@ function makePost(id: string, overrides: Record<string, any> = {}) {
 
 describe('NotificationsService.list batching', () => {
   it('batch loads subject posts/users (no per-notification findUnique/DTO builder)', async () => {
-    const { svc, prisma } = makeService({
+    const { svc, prisma, query } = makeService({
       prisma: {
         notification: {
           findUnique: jest.fn(async () => ({ id: 'cursor', createdAt: new Date('2026-01-01T00:00:00.000Z') })),
@@ -176,7 +203,7 @@ describe('NotificationsService.list batching', () => {
       } as any,
     });
 
-    const buildSpy = jest.spyOn(svc as any, 'buildNotificationDtoForRecipient');
+    const buildSpy = jest.spyOn(query as any, 'buildNotificationDtoForRecipient');
 
     const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null });
     expect(res.items.length).toBeGreaterThan(0);
@@ -515,15 +542,15 @@ describe('NotificationsService.markNewPostsRead', () => {
       emitNotificationsDeleted: jest.fn(),
       emitNotificationNew: jest.fn(),
     };
-    const svc = new NotificationsService(
-      prisma as any,
-      { r2: jest.fn(() => null) } as any,
-      presenceRealtime as any,
-      { isUserViewingConversation: jest.fn(() => false) } as any,
-      { enqueueCron: jest.fn(async () => undefined) } as any,
-      { capture: jest.fn() } as any,
-      { getViewer: jest.fn(async () => null) } as any,
-    );
+    const { svc } = buildFacade({
+      prisma: prisma as any,
+      appConfig: { r2: jest.fn(() => null) } as any,
+      presenceRealtime: presenceRealtime as any,
+      presence: { isUserViewingConversation: jest.fn(() => false) } as any,
+      jobs: { enqueueCron: jest.fn(async () => undefined) } as any,
+      posthog: { capture: jest.fn() } as any,
+      viewerContextService: { getViewer: jest.fn(async () => null) } as any,
+    });
 
     await expect(svc.markNewPostsRead('viewer-1')).resolves.toEqual({ undeliveredCount: 7 });
 
@@ -597,7 +624,7 @@ describe('NotificationsService.upsertGroupMemberJoinedNotification', () => {
     const viewerContextService = { getViewer: jest.fn(async () => null) } as any;
 
     const presence = { isUserViewingConversation: jest.fn(() => false) } as any;
-    const svc = new NotificationsService(prisma, appConfig, presenceRealtime, presence, jobs, posthog, viewerContextService);
+    const { svc } = buildFacade({ prisma, appConfig, presenceRealtime, presence, jobs, posthog, viewerContextService });
     return { svc, prisma, presenceRealtime };
   }
 
@@ -668,78 +695,10 @@ describe('NotificationsService.upsertGroupMemberJoinedNotification', () => {
 });
 
 // ---------------------------------------------------------------------------
-// upsertMessageNotification — DM dedupe and read-on-open
+// markConversationMessageNotificationRead — DM read-on-open
 // ---------------------------------------------------------------------------
 
-describe('NotificationsService.upsertMessageNotification', () => {
-  function makeMessageService(existingNotification: null | { id: string; deliveredAt: Date | null }) {
-    const notification = {
-      findFirst: jest.fn(async () => existingNotification),
-      update: jest.fn(async () => ({})),
-      create: jest.fn(async () => ({ id: 'new-msg-notif' })),
-      count: jest.fn(async () => 1),
-      findUnique: jest.fn(),
-      findMany: jest.fn(async () => []),
-    };
-    const user = {
-      update: jest.fn(async () => ({})),
-      findUnique: jest.fn(async () => null),
-      findMany: jest.fn(async () => []),
-    };
-    const prisma = {
-      notification,
-      user,
-      post: { findMany: jest.fn(async () => []), findUnique: jest.fn() },
-      follow: { findMany: jest.fn(async () => []) },
-      userBlock: { findMany: jest.fn(async () => []) },
-      $transaction: jest.fn(async (fn: (tx: any) => Promise<any>) =>
-        fn({ notification, user }),
-      ),
-      notificationPreferences: { upsert: jest.fn(async () => ({ pushGroupActivity: false, pushMessage: true })) },
-    } as any;
-    const presenceRealtime = {
-      emitNotificationsUpdated: jest.fn(),
-      emitNotificationNew: jest.fn(),
-      emitNotificationsDeleted: jest.fn(),
-    } as any;
-    const svc = new NotificationsService(
-      prisma,
-      { r2: jest.fn(() => null) } as any,
-      presenceRealtime,
-      { isUserViewingConversation: jest.fn(() => false) } as any,
-      { enqueueCron: jest.fn() } as any,
-      { capture: jest.fn() } as any,
-      { getViewer: jest.fn(async () => null) } as any,
-    );
-    return { svc, prisma, presenceRealtime };
-  }
-
-  it('creates a new message notification row', async () => {
-    const { svc, prisma } = makeMessageService(null);
-
-    await svc.upsertMessageNotification({ recipientUserId: 'r1', senderUserId: 's1', conversationId: 'c1' });
-
-    expect(prisma.notification.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ kind: 'message', subjectConversationId: 'c1' }),
-      }),
-    );
-  });
-
-  it('re-bumps existing row when another message arrives in the same conversation', async () => {
-    const { svc, prisma } = makeMessageService({ id: 'existing-msg', deliveredAt: null });
-
-    await svc.upsertMessageNotification({ recipientUserId: 'r1', senderUserId: 's1', conversationId: 'c1' });
-
-    expect(prisma.notification.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'existing-msg' },
-        data: expect.objectContaining({ deliveredAt: null, readAt: null }),
-      }),
-    );
-    expect(prisma.notification.create).not.toHaveBeenCalled();
-  });
-
+describe('NotificationsService.markConversationMessageNotificationRead', () => {
   it('marks notification read + decrements counter when conversation is opened', async () => {
     const notif = { id: 'msg-notif', deliveredAt: null, readAt: null };
     const notification = {
@@ -764,15 +723,15 @@ describe('NotificationsService.upsertMessageNotification', () => {
       emitNotificationsDeleted: jest.fn(),
       emitNotificationNew: jest.fn(),
     } as any;
-    const svc = new NotificationsService(
+    const { svc } = buildFacade({
       prisma,
-      { r2: jest.fn(() => null) } as any,
+      appConfig: { r2: jest.fn(() => null) } as any,
       presenceRealtime,
-      { isUserViewingConversation: jest.fn(() => false) } as any,
-      { enqueueCron: jest.fn() } as any,
-      { capture: jest.fn() } as any,
-      { getViewer: jest.fn(async () => null) } as any,
-    );
+      presence: { isUserViewingConversation: jest.fn(() => false) } as any,
+      jobs: { enqueueCron: jest.fn() } as any,
+      posthog: { capture: jest.fn() } as any,
+      viewerContextService: { getViewer: jest.fn(async () => null) } as any,
+    });
 
     await svc.markConversationMessageNotificationRead({ userId: 'r1', conversationId: 'c1' });
 

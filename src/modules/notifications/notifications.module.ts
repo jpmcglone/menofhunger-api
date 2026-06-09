@@ -11,6 +11,11 @@ import { NotificationsOrphanCleanupCron } from './notifications-orphan-cleanup.c
 import { NotificationsEmailCron } from './notifications-email.cron';
 import { NotificationsReplyNudgeCron } from './notifications-reply-nudge.cron';
 import { NotificationsService } from './notifications.service';
+import { NotificationPreferencesService } from './notification-preferences.service';
+import { NotificationPushService } from './notification-push.service';
+import { NotificationReadStateService } from './notification-read-state.service';
+import { NotificationQueryService } from './notification-query.service';
+import { NotificationWriterService } from './notification-writer.service';
 import { MessagePushEventsHandler } from './message-push-events.handler';
 import { MessageInstantEmailEventsHandler } from './message-instant-email-events.handler';
 
@@ -19,6 +24,11 @@ import { MessageInstantEmailEventsHandler } from './message-instant-email-events
   controllers: [NotificationsController],
   providers: [
     NotificationsService,
+    NotificationPreferencesService,
+    NotificationPushService,
+    NotificationReadStateService,
+    NotificationQueryService,
+    NotificationWriterService,
     MessagePushEventsHandler,
     MessageInstantEmailEventsHandler,
     NotificationsCleanupCron,

@@ -1,5 +1,12 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PostsService } from './posts.service';
+import { PostsDraftsService } from './posts-drafts.service';
+import { PostsEngagementService } from './posts-engagement.service';
+import { PostsRankingService } from './posts-ranking.service';
+import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
+import { PostsFeedQueryService } from './posts-feed-query.service';
+import { PostsMutationService } from './posts-mutation.service';
+import { CommunityGroupReadAccessService } from '../viewer/community-group-read-access.service';
 
 // ─── Deps factory ────────────────────────────────────────────────────────────
 // PostsService has 12 collaborators. For the auth/error paths exercised here we
@@ -95,23 +102,60 @@ function makeService(
     ...extraOverrides,
   };
 
-  const service = new PostsService(
+  const ranking = new PostsRankingService(deps.prisma, deps.jobs);
+  const drafts = new PostsDraftsService(deps.prisma);
+  const enrichment = new PostsViewerEnrichmentService(
+    deps.prisma,
+    deps.requestCache,
+    deps.viewerContext,
+    deps.redis,
+  );
+  const feedQuery = new PostsFeedQueryService(
+    deps.prisma,
+    deps.requestCache,
+    deps.viewerContext,
+    deps.appConfig,
+    enrichment,
+    ranking,
+    new CommunityGroupReadAccessService(deps.prisma, deps.viewerContext),
+  );
+  const engagement = new PostsEngagementService(
     deps.prisma,
     deps.notifications,
-    deps.requestCache,
     deps.presenceRealtime,
-    deps.polls,
-    deps.viewerContext,
+    deps.cacheInvalidation,
+    deps.appConfig,
+    deps.postViews,
+    deps.posthog,
+    ranking,
+    feedQuery,
+  );
+  const mutation = new PostsMutationService(
+    deps.prisma,
+    deps.notifications,
+    deps.presenceRealtime,
     deps.cacheInvalidation,
     deps.appConfig,
     deps.postViews,
     deps.jobs,
     deps.posthog,
-    deps.redis,
     deps.marvIdentity,
+    deps.viewerContext,
+    enrichment,
+    ranking,
   );
 
-  return { service, deps };
+  const service = new PostsService(
+    deps.polls,
+    ranking,
+    drafts,
+    engagement,
+    enrichment,
+    feedQuery,
+    mutation,
+  );
+
+  return { service, deps, engagement, feedQuery, mutation };
 }
 
 // ─── listFeed ────────────────────────────────────────────────────────────────
@@ -804,7 +848,7 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
     const { service, deps } = makeService();
     setupBoostMocks(deps, { boostCount: 7 });
     // getById is heavy; stub it to skip visibility/group resolution.
-    jest.spyOn(service as any, 'getById').mockResolvedValue({
+    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
       id: 'p1',
       userId: 'author',
       deletedAt: null,
@@ -829,7 +873,7 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
   it('unboostPost emits posts:liveUpdated to the post room with the new boostCount', async () => {
     const { service, deps } = makeService();
     setupBoostMocks(deps, { boostCount: 6 });
-    jest.spyOn(service as any, 'getById').mockResolvedValue({
+    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
       id: 'p1',
       userId: 'author',
       deletedAt: null,
@@ -852,7 +896,7 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
     const { service, deps } = makeService();
     setupBoostMocks(deps, { boostCount: 7 });
     deps.presenceRealtime.emitPostsInteraction = jest.fn();
-    jest.spyOn(service as any, 'getById').mockResolvedValue({
+    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
       id: 'p1',
       userId: 'author',
       deletedAt: null,
@@ -967,7 +1011,7 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
   });
 
   it('repostPost pushes the new repost to the group feed room when the canonical post is in a group', async () => {
-    const { service, deps } = makeService();
+    const { service, deps, engagement } = makeService();
     deps.prisma.user.findUnique = jest.fn(async () => ({
       id: 'u1',
       usernameIsSet: true,
@@ -1000,7 +1044,7 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
     deps.postViews.markViewed = jest.fn(async () => undefined);
     // Decouple from DTO assembly internals — assert the group emit is wired.
     const emitSpy = jest
-      .spyOn(service as any, 'emitGroupRepostCreated')
+      .spyOn(engagement as any, 'emitGroupRepostCreated')
       .mockResolvedValue(undefined);
 
     await service.repostPost({ userId: 'u1', postId: 'canonical-1' });
@@ -1009,7 +1053,7 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
   });
 
   it('repostPost does NOT push to a group feed room for a non-group repost', async () => {
-    const { service, deps } = makeService();
+    const { service, deps, engagement } = makeService();
     deps.prisma.user.findUnique = jest.fn(async () => ({
       id: 'u1',
       usernameIsSet: true,
@@ -1040,7 +1084,7 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
     deps.notifications.upsertRepostNotification = jest.fn(async () => undefined);
     deps.postViews.markViewed = jest.fn(async () => undefined);
     const emitSpy = jest
-      .spyOn(service as any, 'emitGroupRepostCreated')
+      .spyOn(engagement as any, 'emitGroupRepostCreated')
       .mockResolvedValue(undefined);
 
     await service.repostPost({ userId: 'u1', postId: 'canonical-1' });
@@ -1115,7 +1159,7 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
     deps.presenceRealtime.emitPostsLiveUpdated = jest.fn(() => {
       throw new Error('redis down');
     });
-    jest.spyOn(service as any, 'getById').mockResolvedValue({
+    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
       id: 'p1',
       userId: 'author',
       deletedAt: null,
@@ -1157,7 +1201,7 @@ describe('PostsService.runPostCreateSideEffects — mention privacy gating', () 
   }
 
   async function callSideEffects(service: PostsService, args: any): Promise<void> {
-    await (service as any).runPostCreateSideEffects({
+    await ((service as any).mutation).runPostCreateSideEffects({
       actorUserId: 'author',
       post: basePost(args.postOverrides),
       parentId: null,
@@ -1316,7 +1360,7 @@ describe('PostsService.runPostCreateSideEffects — group notification gating', 
   }
 
   async function callSideEffects(service: PostsService, args: any): Promise<void> {
-    await (service as any).runPostCreateSideEffects({
+    await ((service as any).mutation).runPostCreateSideEffects({
       actorUserId: 'author',
       post: basePost(args.postOverrides),
       parentId: args.parentId ?? null,

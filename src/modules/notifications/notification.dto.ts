@@ -1,4 +1,4 @@
-import type { NotificationKind } from '@prisma/client';
+import type { NotificationKind, VerifiedStatus } from '@prisma/client';
 import type { PostDto } from '../../common/dto/post.dto';
 
 export type NotificationActorDto = {
@@ -8,7 +8,7 @@ export type NotificationActorDto = {
   avatarUrl: string | null;
   premium: boolean;
   isOrganization: boolean;
-  verifiedStatus: string;
+  verifiedStatus: VerifiedStatus;
 };
 
 /** Preview of the subject post (e.g. boosted post) for display in the notification row. */
