@@ -6,8 +6,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AppConfigService } from '../app/app-config.service';
 import { EntitlementService } from './entitlement.service';
 import { FollowsService } from '../follows/follows.service';
+import { AffiliateService } from './affiliate.service';
+import { toUserListDto } from '../../common/dto/user.dto';
+import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import type { ReferralMeDto, RecruitDto } from '../../common/dto/referral.dto';
 
 // Validated after uppercasing, so lowercase input is accepted and normalized.
@@ -27,8 +31,10 @@ export class ReferralService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly appConfig: AppConfigService,
     private readonly entitlement: EntitlementService,
     private readonly follows: FollowsService,
+    private readonly affiliate: AffiliateService,
   ) {}
 
   // ─── Referral code management ───────────────────────────────────────────────
@@ -98,26 +104,24 @@ export class ReferralService {
     const recruits = await this.prisma.user.findMany({
       where: { recruitedById: userId },
       select: {
-        id: true,
-        username: true,
-        name: true,
-        avatarKey: true,
+        ...USER_LIST_SELECT,
         createdAt: true,
-        premium: true,
         referralBonusGrantedAt: true,
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    return recruits.map((r) => ({
-      id: r.id,
-      username: r.username ?? null,
-      name: r.name ?? null,
-      avatarKey: r.avatarKey ?? null,
-      recruitedAt: r.createdAt.toISOString(),
-      isPremium: r.premium,
-      bonusGranted: r.referralBonusGrantedAt !== null,
-    }));
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    return recruits.map((r) => {
+      const base = toUserListDto(r, publicBaseUrl);
+      return {
+        ...base,
+        recruitedAt: r.createdAt.toISOString(),
+        isVerified: r.verifiedStatus !== 'none',
+        isPremium: r.premium,
+        bonusGranted: r.referralBonusGrantedAt !== null,
+      };
+    });
   }
 
   // ─── Set recruiter ──────────────────────────────────────────────────────────
@@ -212,6 +216,13 @@ export class ReferralService {
     await this.entitlement.recomputeAndApply(recruiterId);
 
     this.logger.log(`[referral] Bonus granted: recruit=${recruitId} recruiter=${recruiterId}`);
+
+    // Record affiliate cash earning for the premium milestone (best-effort; idempotent).
+    try {
+      await this.affiliate.maybeRecordEarning(recruitId, 'premium');
+    } catch (err) {
+      this.logger.warn(`[affiliate] Failed to record premium earning for recruit=${recruitId}: ${err}`);
+    }
   }
 
   private async issueReferralGrant(userId: string, now: Date): Promise<void> {
@@ -249,12 +260,8 @@ export class ReferralService {
         recruitedBy: { select: { id: true, username: true, name: true } },
         recruits: {
           select: {
-            id: true,
-            username: true,
-            name: true,
-            avatarKey: true,
+            ...USER_LIST_SELECT,
             createdAt: true,
-            premium: true,
             referralBonusGrantedAt: true,
           },
           orderBy: { createdAt: 'desc' },
@@ -262,6 +269,8 @@ export class ReferralService {
       },
     });
     if (!user) throw new NotFoundException('User not found.');
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
     return {
       referralCode: user.referralCode ?? null,
@@ -273,15 +282,16 @@ export class ReferralService {
             name: user.recruitedBy.name ?? null,
           }
         : null,
-      recruits: user.recruits.map((r) => ({
-        id: r.id,
-        username: r.username ?? null,
-        name: r.name ?? null,
-        avatarKey: r.avatarKey ?? null,
-        recruitedAt: r.createdAt.toISOString(),
-        isPremium: r.premium,
-        bonusGranted: r.referralBonusGrantedAt !== null,
-      })),
+      recruits: user.recruits.map((r) => {
+        const base = toUserListDto(r, publicBaseUrl);
+        return {
+          ...base,
+          recruitedAt: r.createdAt.toISOString(),
+          isVerified: r.verifiedStatus !== 'none',
+          isPremium: r.premium,
+          bonusGranted: r.referralBonusGrantedAt !== null,
+        };
+      }),
     };
   }
 }

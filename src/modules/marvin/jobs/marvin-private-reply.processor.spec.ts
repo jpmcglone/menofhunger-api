@@ -156,7 +156,7 @@ function makeProcessor(opts?: {
     isConfigured: jest.fn(() => opts?.aiConfigured !== false),
     modelForMode: jest.fn(() => MARV_DEFAULT_REGULAR_MODEL),
     respond: jest.fn(async () => ({
-      text: opts?.aiText ?? 'Be steady, brother.',
+      text: opts?.aiText ?? 'Be steady, man.',
       modelUsed: MARV_DEFAULT_REGULAR_MODEL,
       responseId: 'resp-2',
       inputTokens: 50,
@@ -293,7 +293,7 @@ describe('MarvinPrivateReplyProcessor', () => {
       expect.objectContaining({
         botUserId: 'marv-id',
         recipientUserId: 'u-requester',
-        body: 'Be steady, brother.',
+        body: 'Be steady, man.',
       }),
     );
     expect(m.sessionStateUpsert).toHaveBeenCalled();

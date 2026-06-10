@@ -86,7 +86,7 @@ export class AdminEmailSamplesController {
     const homeUrl = `${ctx.baseUrl}/home`;
     const sampleArticles = [
       { id: 'sample-article-1', title: 'A quiet hour before sunrise', username: 'john_doe' },
-      { id: 'sample-article-2', title: 'Why disciplined men need brotherhood', username: 'mike_ross' },
+      { id: 'sample-article-2', title: 'Why disciplined men need community', username: 'mike_ross' },
       { id: 'sample-article-3', title: 'A weekly reset that actually works', username: 'david_c' },
     ];
 

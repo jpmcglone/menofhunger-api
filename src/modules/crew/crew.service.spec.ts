@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { CrewService } from './crew.service';
 
 // ─── Fixtures + deps factory ─────────────────────────────────────────────────
@@ -320,16 +320,132 @@ describe('CrewService.updateMyCrew — delegates to updateCrew', () => {
     ).rejects.toThrow(NotFoundException);
   });
 
-  it('resolves the viewer\'s crew, then forwards to updateCrew (which still enforces owner-only when isSiteAdmin=false)', async () => {
+  it("resolves the viewer's crew, then forwards to updateCrew (which still enforces owner-only when isSiteAdmin=false)", async () => {
     const { service, prisma } = makeService();
     // First call (in updateMyCrew): user's membership lookup.
     // Second call (in updateCrew): viewer membership for the resolved crewId.
     prisma.crewMember.findUnique
       .mockResolvedValueOnce({ crewId: 'c1', role: 'member' })
-      .mockResolvedValueOnce({ role: 'member' });
+      .mockResolvedValueOnce({ role: 'member' });  
 
     await expect(
       service.updateMyCrew({ viewerUserId: 'u-member', bio: 'x' }),
     ).rejects.toThrow(ForbiddenException);
+  });
+});
+
+// ─── setAvailability ──────────────────────────────────────────────────────────
+
+describe('CrewService.setAvailability', () => {
+  it('rejects unverified users', async () => {
+    const { service, prisma } = makeService();
+    prisma.user.findUnique.mockResolvedValue({ verifiedStatus: 'none', bannedAt: null });
+    await expect(
+      service.setAvailability({ viewerUserId: 'u1', open: true }),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('rejects opt-in when user is already in a multi-member crew', async () => {
+    const { service, prisma } = makeService();
+    prisma.user.findUnique.mockResolvedValue({ verifiedStatus: 'verified', bannedAt: null });
+    prisma.crewMember.findUnique.mockResolvedValue({
+      crewId: 'c1',
+      crew: { memberCount: 2 },
+    });
+    await expect(
+      service.setAvailability({ viewerUserId: 'u1', open: true }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('sets openToCrewAt when opting in as solo-crew founder (memberCount = 1)', async () => {
+    const { service, prisma } = makeService();
+    prisma.user.findUnique.mockResolvedValue({ verifiedStatus: 'verified', bannedAt: null });
+    prisma.crewMember.findUnique.mockResolvedValue({
+      crewId: 'c1',
+      crew: { memberCount: 1 },
+    });
+    prisma.user.update = jest.fn(async () => ({}));
+    const result = await service.setAvailability({ viewerUserId: 'u1', open: true });
+    expect(result).toEqual({ open: true });
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ openToCrewAt: expect.any(Date) }) }),
+    );
+  });
+
+  it('clears openToCrewAt when opting out', async () => {
+    const { service, prisma } = makeService();
+    prisma.user.findUnique.mockResolvedValue({ verifiedStatus: 'verified', bannedAt: null });
+    prisma.user.update = jest.fn(async () => ({}));
+    const result = await service.setAvailability({ viewerUserId: 'u1', open: false });
+    expect(result).toEqual({ open: false });
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { openToCrewAt: null } }),
+    );
+  });
+});
+
+// ─── listOpenMembers ──────────────────────────────────────────────────────────
+
+describe('CrewService.listOpenMembers', () => {
+  function makeOpenMemberService(candidates: any[]) {
+    const prismaOverrides = {
+      user: {
+        findUnique: jest.fn(async () => ({ verifiedStatus: 'verified', bannedAt: null, interests: ['faith', 'fitness'] })),
+        findMany: jest.fn(async () => candidates),
+        update: jest.fn(async () => ({})),
+      },
+    };
+    return makeService(prismaOverrides);
+  }
+
+  const candidateBase = {
+    id: 'u-candidate',
+    username: 'candidate',
+    name: 'Candidate',
+    premium: false,
+    premiumPlus: false,
+    isOrganization: false,
+    stewardBadgeEnabled: true,
+    verifiedStatus: 'verified',
+    avatarKey: null,
+    avatarUpdatedAt: null,
+    bannedAt: null,
+    isBot: false,
+    orgMemberships: [],
+    interests: ['faith'],
+    openToCrewAt: new Date('2025-06-01T00:00:00Z'),
+    crewMembership: null,
+  };
+
+  it('excludes candidates in a multi-member crew', async () => {
+    const { service } = makeOpenMemberService([
+      { ...candidateBase, crewMembership: { crew: { memberCount: 2 } } },
+    ]);
+    const result = await service.listOpenMembers({ viewerUserId: 'u-viewer' });
+    expect(result).toHaveLength(0);
+  });
+
+  it('includes candidates with no crew membership', async () => {
+    const { service } = makeOpenMemberService([candidateBase]);
+    const result = await service.listOpenMembers({ viewerUserId: 'u-viewer' });
+    expect(result).toHaveLength(1);
+    expect(result[0].sharedInterests).toContain('faith');
+  });
+
+  it('includes solo-crew founders (memberCount = 1)', async () => {
+    const { service } = makeOpenMemberService([
+      { ...candidateBase, crewMembership: { crew: { memberCount: 1 } } },
+    ]);
+    const result = await service.listOpenMembers({ viewerUserId: 'u-viewer' });
+    expect(result).toHaveLength(1);
+  });
+
+  it('ranks by shared interest count descending', async () => {
+    const { service } = makeOpenMemberService([
+      { ...candidateBase, id: 'low', interests: [], openToCrewAt: new Date('2025-06-02T00:00:00Z') },
+      { ...candidateBase, id: 'high', interests: ['faith', 'fitness'], openToCrewAt: new Date('2025-06-01T00:00:00Z') },
+    ]);
+    const result = await service.listOpenMembers({ viewerUserId: 'u-viewer' });
+    expect(result[0].user.id).toBe('high');
   });
 });

@@ -12,6 +12,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
+import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import {
   CREW_MEMBER_CAP,
   toCrewPrivateDto,
@@ -23,6 +24,21 @@ import { ensureUniqueCrewSlug, slugifyBase } from './crew.utils';
 
 type UserRow = Prisma.UserGetPayload<{ select: typeof USER_LIST_SELECT }>;
 type MemberRow = CrewMember & { user: UserRow };
+
+/** Minimal user shape returned in the open-to-crew directory. */
+type OpenMemberEntry = {
+  id: string;
+  username: string | null;
+  name: string | null;
+  premium: boolean;
+  premiumPlus: boolean;
+  isOrganization: boolean;
+  stewardBadgeEnabled: boolean;
+  verifiedStatus: string;
+  avatarUrl: string | null;
+  avatarKey?: string | null;
+  avatarUpdatedAt?: Date | null;
+};
 type CrewWithRelations = Crew & {
   owner: UserRow;
   members: MemberRow[];
@@ -609,6 +625,123 @@ export class CrewService {
     const mem = await this.assertCrewMember(crewId, viewerUserId);
     const crew = await this.loadCrewWithRelationsOrThrow(crewId);
     return this.toMyCrewDto(crew, viewerUserId, mem.role);
+  }
+
+  // ---------- open-to-crew directory ----------
+
+  /**
+   * Opt the viewer in or out of the crew-discovery directory.
+   * - Verified users only.
+   * - Cannot opt in while already in a crew.
+   */
+  async setAvailability(params: {
+    viewerUserId: string;
+    open: boolean;
+  }): Promise<{ open: boolean }> {
+    await this.assertVerified(params.viewerUserId);
+
+    if (params.open) {
+      // Reject if already in a real crew (solo-crew founders are still
+      // available — they can be recruited away).
+      const membership = await this.prisma.crewMember.findUnique({
+        where: { userId: params.viewerUserId },
+        select: { crewId: true, crew: { select: { memberCount: true } } },
+      });
+      if (membership && membership.crew.memberCount > 1) {
+        throw new BadRequestException('You are already in a crew.');
+      }
+    }
+
+    await this.prisma.user.update({
+      where: { id: params.viewerUserId },
+      data: { openToCrewAt: params.open ? new Date() : null },
+    });
+
+    return { open: params.open };
+  }
+
+  /**
+   * Returns verified users who are open to joining a crew, excluding the viewer
+   * and anyone already in a multi-member crew.
+   * Ranked by arena overlap (most shared interests first), then openToCrewAt desc.
+   */
+  async listOpenMembers(params: {
+    viewerUserId: string;
+    limit?: number;
+  }): Promise<Array<{ user: OpenMemberEntry; sharedInterests: string[] }>> {
+    const limit = Math.min(params.limit ?? 50, 50);
+    const viewer = await this.prisma.user.findUnique({
+      where: { id: params.viewerUserId },
+      select: { interests: true },
+    });
+    const viewerInterests = new Set(viewer?.interests ?? []);
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    // Fetch candidates: verified, openToCrewAt set, not banned.
+    const candidates = await this.prisma.user.findMany({
+      where: {
+        id: { not: params.viewerUserId },
+        openToCrewAt: { not: null },
+        verifiedStatus: { not: 'none' },
+        bannedAt: null,
+        isBot: false,
+      },
+      select: {
+        ...USER_LIST_SELECT,
+        interests: true,
+        openToCrewAt: true,
+        crewMembership: {
+          select: { crew: { select: { memberCount: true } } },
+        },
+      },
+    });
+
+    return candidates
+      .filter((c) => {
+        // Allow solo-crew founders (they can be recruited away).
+        if (c.crewMembership && c.crewMembership.crew.memberCount > 1) return false;
+        return true;
+      })
+      .map((c) => ({
+        sharedInterests: (c.interests ?? []).filter((i) => viewerInterests.has(i)),
+        openToCrewAt: c.openToCrewAt!,
+        user: c as unknown as OpenMemberEntry,
+      }))
+      .sort((a, b) => {
+        const byArena = b.sharedInterests.length - a.sharedInterests.length;
+        if (byArena !== 0) return byArena;
+        return b.openToCrewAt.getTime() - a.openToCrewAt.getTime();
+      })
+      .slice(0, limit)
+      .map(({ user, sharedInterests }) => ({
+        user: {
+          id: user.id,
+          username: user.username,
+          name: user.name,
+          premium: user.premium,
+          premiumPlus: user.premiumPlus,
+          isOrganization: Boolean(user.isOrganization),
+          stewardBadgeEnabled: Boolean(user.stewardBadgeEnabled),
+          verifiedStatus: user.verifiedStatus,
+          avatarUrl: publicAssetUrl({
+            publicBaseUrl,
+            key: user.avatarKey ?? null,
+            updatedAt: user.avatarUpdatedAt ?? null,
+          }),
+        } as OpenMemberEntry,
+        sharedInterests,
+      }));
+  }
+
+  /**
+   * Clear openToCrewAt for a user who just joined a crew.
+   * Called from CrewInvitesService after successful accept.
+   */
+  async clearOpenToCrewStatus(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { openToCrewAt: null },
+    });
   }
 
   // ---------- constants ----------

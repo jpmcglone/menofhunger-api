@@ -27,6 +27,7 @@ import type {
   PostsInteractionPayloadDto,
   PresenceStatusClearedPayloadDto,
   PresenceStatusUpdatedPayloadDto,
+  ReferralRecruitUpdatedPayloadDto,
   UsersSelfUpdatedPayloadDto,
 } from '../../common/dto';
 
@@ -421,6 +422,11 @@ export class PresenceRealtimeService {
     const pid = (parentPostId ?? '').trim();
     if (!pid) return;
     this.emitToRoom(`post:${pid}`, 'marv:public-reply-posted', payload);
+  }
+
+  /** Notify a recruiter that one of their recruits reached a new milestone (signup / verified / premium). */
+  emitReferralRecruitUpdated(recruiterId: string, payload: ReferralRecruitUpdatedPayloadDto): void {
+    this.emitToUser(recruiterId, 'referrals:recruit-updated', payload);
   }
 }
 

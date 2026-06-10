@@ -426,6 +426,9 @@ export class CrewInvitesService {
       });
     }
 
+    // Clear open-to-crew status now that the invitee has joined a crew.
+    void this.crew.clearOpenToCrewStatus(viewerUserId).catch(() => {});
+
     const updatedInvite = await this.prisma.crewInvite.findUniqueOrThrow({
       where: { id: invite.id },
       include: INVITE_INCLUDE,
@@ -602,6 +605,12 @@ export class CrewInvitesService {
         crewId: soloCrewIdToDisband,
       });
     }
+
+    // Clear open-to-crew status for both founding members.
+    void Promise.allSettled([
+      this.crew.clearOpenToCrewStatus(viewerUserId),
+      this.crew.clearOpenToCrewStatus(inviterUserId),
+    ]);
 
     // Notify + realtime.
     await this.notifications.create({

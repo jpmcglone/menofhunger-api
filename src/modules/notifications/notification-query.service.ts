@@ -249,7 +249,7 @@ export class NotificationQueryService {
     // Batch-lookup invite statuses for crew_invite_* notifications so the row can
     // render the correct terminal state on first load (no extra FE round-trip).
     // We grab the linked crew name (or the founding `crewNameOnAccept`) at the
-    // same time so the row can say "invited you to The Iron Brotherhood".
+    // same time so the row can say "invited you to The Iron Men".
     const subjectCrewInviteIds = [
       ...new Set(raw.map((n) => n.subjectCrewInviteId).filter(Boolean) as string[]),
     ];

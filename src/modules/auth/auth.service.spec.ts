@@ -114,8 +114,9 @@ function makeService(overrides?: { prisma?: any }) {
   const slack = { send: jest.fn(), notifySignup: jest.fn() } as any;
   const requestCache = { get: jest.fn(() => undefined), set: jest.fn() } as any;
   const presence = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() } as any;
+  const presenceRealtime = { emitReferralRecruitUpdated: jest.fn() } as any;
 
-  const svc = new AuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack, requestCache, presence);
+  const svc = new AuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack, requestCache, presence, presenceRealtime);
   return { svc, prisma, token, tokenHash, presence };
 }
 
@@ -239,6 +240,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const posthog: any = { capture: jest.fn() };
     const slack: any = { send: jest.fn(), notifySignup: jest.fn() };
     const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
+    const presenceRealtime: any = { emitReferralRecruitUpdated: jest.fn() };
 
     const svc = new AuthService(
       prisma,
@@ -250,6 +252,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
       slack,
       requestCache,
       presence,
+      presenceRealtime,
     );
 
     const a = await svc.meFromSessionToken(token);
@@ -298,6 +301,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const posthog: any = { capture: jest.fn() };
     const slack: any = { send: jest.fn(), notifySignup: jest.fn() };
     const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
+    const presenceRealtime: any = { emitReferralRecruitUpdated: jest.fn() };
 
     const svc = new AuthService(
       prisma,
@@ -309,6 +313,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
       slack,
       requestCache,
       presence,
+      presenceRealtime,
     );
 
     // Simulate 5 concurrent requests all calling meFromSessionToken with the
@@ -376,6 +381,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const posthog: any = { capture: jest.fn() };
     const slack: any = { send: jest.fn(), notifySignup: jest.fn() };
     const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
+    const presenceRealtime: any = { emitReferralRecruitUpdated: jest.fn() };
 
     const svc = new AuthService(
       prisma,
@@ -387,6 +393,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
       slack,
       requestCache,
       presence,
+      presenceRealtime,
     );
 
     await svc.meFromSessionToken(token);
@@ -455,6 +462,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const posthog: any = { capture: jest.fn() };
     const slack: any = { send: jest.fn(), notifySignup: jest.fn() };
     const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
+    const presenceRealtime: any = { emitReferralRecruitUpdated: jest.fn() };
 
     const svc = new AuthService(
       prisma,
@@ -466,6 +474,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
       slack,
       requestCache,
       presence,
+      presenceRealtime,
     );
 
     const result = await svc.meFromSessionToken(token);

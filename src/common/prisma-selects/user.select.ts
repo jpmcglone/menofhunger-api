@@ -95,6 +95,7 @@ export const USER_DTO_SELECT = {
   lastCheckinDayKey: true,
   longestStreakDays: true,
   locationPromptSkipped: true,
+  openToCrewAt: true,
 } as const;
 
 /** Select shape used for verification admin DTO user summary. */

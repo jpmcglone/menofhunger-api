@@ -233,7 +233,7 @@ export const TOPIC_OPTIONS: TopicOption[] = [
   { value: 'fatherhood', label: 'Fatherhood', group: 'Relationships', aliases: ['dad', 'dads', 'parenting'] },
   { value: 'family', label: 'Family', group: 'Relationships', aliases: ['family', 'kids', 'parenting'] },
   { value: 'friendship', label: 'Friendship', group: 'Relationships', aliases: ['friends', 'friendship'] },
-  { value: 'brotherhood', label: 'Brotherhood', group: 'Relationships', aliases: ['mens groups', "men's groups", 'mens_groups', "men's group", 'brotherhood'] },
+  { value: 'brotherhood', label: 'Community', group: 'Relationships', aliases: ['mens groups', "men's groups", 'mens_groups', "men's group", 'brotherhood'] },
   { value: 'mentorship', label: 'Mentorship', group: 'Relationships', aliases: ['mentoring', 'mentor', 'coaching'] },
   { value: 'community', label: 'Community', group: 'Relationships', aliases: ['community', 'volunteering', 'service', 'volunteer', 'charity', 'nonprofit'] },
   { value: 'communication', label: 'Communication', group: 'Relationships', aliases: ['communication', 'listening'] },

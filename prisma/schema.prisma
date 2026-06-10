@@ -166,6 +166,13 @@ enum SubscriptionGrantSource {
   referral
 }
 
+enum AffiliateEarningType {
+  signup
+  verified
+  premium
+  premium60d
+}
+
 enum TaxonomyTermKind {
   topic
   subtopic
@@ -363,6 +370,11 @@ model User {
    */
   longestStreakDays        Int                  @default(0)
   /**
+   * When the user opted in to the crew-discovery directory ("Open to joining a crew").
+   * Null means opted out. Cleared automatically when the user joins a crew.
+   */
+  openToCrewAt             DateTime?
+  /**
    * One-time profile reminder email sent at ~24h after signup.
    */
   profileReminder24hSentAt DateTime?
@@ -470,6 +482,15 @@ model User {
    * When the one-time referral bonus grant was issued (null = not yet triggered).
    */
   referralBonusGrantedAt DateTime?
+
+  // Affiliate program
+  /**
+   * When this user was enrolled in the affiliate program (null = not an affiliate).
+   * Only admin-set. Affiliates earn cash per recruit milestone.
+   */
+  affiliateAt               DateTime?
+  affiliateEarningsAsAffiliate AffiliateEarning[] @relation("AffiliateEarning_affiliate")
+  affiliateEarningsAsRecruit   AffiliateEarning[] @relation("AffiliateEarning_recruit")
 
   @@index([phone])
   @@index([lastSeenAt])
@@ -2139,6 +2160,33 @@ model AdminEmailLog {
 
   @@unique([kind, dayKey])
   @@index([sentAt])
+}
+
+/**
+ * Append-only cash earnings ledger for the affiliate program.
+ * One row per (affiliate, recruit, event type). The unique constraint is the
+ * hard idempotency guarantee — each recruit can produce each milestone at most once, ever.
+ * Amounts stored in cents (USD). settledAt null = pending payment.
+ */
+model AffiliateEarning {
+  id              String               @id @default(cuid())
+  createdAt       DateTime             @default(now())
+  settledAt       DateTime?
+
+  affiliateUserId String
+  affiliate       User                 @relation("AffiliateEarning_affiliate", fields: [affiliateUserId], references: [id], onDelete: Cascade)
+
+  recruitUserId   String
+  recruit         User                 @relation("AffiliateEarning_recruit", fields: [recruitUserId], references: [id], onDelete: Cascade)
+
+  type            AffiliateEarningType
+  /** Amount in cents (USD). */
+  amountCents     Int
+
+  @@unique([recruitUserId, type])
+  @@index([affiliateUserId, settledAt, createdAt])
+  @@index([affiliateUserId, createdAt])
+  @@index([settledAt])
 }
 
 // ─── Articles ────────────────────────────────────────────────────────────────

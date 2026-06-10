@@ -370,3 +370,8 @@ export type CheckinAnsweredTodayPayloadDto = {
   };
 };
 
+/** Referral recruit updated (emitted to the recruiter when a recruit reaches a milestone). */
+export type ReferralRecruitUpdatedPayloadDto = {
+  recruit: import('./referral.dto').RecruitDto;
+};
+

@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -387,6 +388,29 @@ export class CrewController {
   ) {
     await this.transfer.cancelTransferVote({ viewerUserId, voteId: id });
     return { data: {} };
+  }
+
+  // ---------- open-to-crew directory ----------
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: { limit: rateLimitLimit('interact', 30), ttl: rateLimitTtl('interact', 60) },
+  })
+  @Put('availability')
+  async setAvailability(@CurrentUserId() viewerUserId: string, @Body() body: unknown) {
+    const { open } = z.object({ open: z.boolean() }).parse(body);
+    const result = await this.crew.setAvailability({ viewerUserId, open });
+    return { data: result };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: { limit: rateLimitLimit('publicRead', 60), ttl: rateLimitTtl('publicRead', 60) },
+  })
+  @Get('open-members')
+  async listOpenMembers(@CurrentUserId() viewerUserId: string) {
+    const members = await this.crew.listOpenMembers({ viewerUserId });
+    return { data: { members } };
   }
 
   // ---------- public ----------

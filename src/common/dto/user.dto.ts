@@ -166,6 +166,8 @@ export type UserDto = {
   lastCheckinDayKey: string | null;
   longestStreakDays: number;
   locationPromptSkipped: boolean;
+  /** True when the user has opted in to the crew-discovery directory. */
+  openToCrew: boolean;
 };
 
 export type AdminUserSensitiveFieldsDto = {
@@ -277,6 +279,7 @@ export type UserDtoRow = {
   lastCheckinDayKey: string | null;
   longestStreakDays: number;
   locationPromptSkipped: boolean;
+  openToCrewAt: Date | null;
 };
 
 export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = null): UserDto {
@@ -339,5 +342,6 @@ export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = 
       typeof (user as any).checkinStreakDays === 'number' ? ((user as any).checkinStreakDays as number) : 0,
     ),
     locationPromptSkipped: Boolean((user as any).locationPromptSkipped),
+    openToCrew: Boolean((user as any).openToCrewAt),
   };
 }

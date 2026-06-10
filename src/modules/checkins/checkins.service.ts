@@ -117,7 +117,7 @@ export class CheckinsService {
   /**
    * Crew block returned alongside `GET /checkins/today` when the viewer is in a
    * crew. Tells the UI to reframe the hero ("Your crew's question today") and
-   * renders the 5-member status row that powers the "your brothers are waiting
+   * renders the 5-member status row that powers the "your men are waiting
    * on you" feeling.
    */
   private async buildCrewBlock(params: { userId: string; dayKey: string; publicBaseUrl: string | null }) {

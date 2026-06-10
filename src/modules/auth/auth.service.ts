@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, Logger, ServiceUnavailableExce
 import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
+import { AFFILIATE_RATES_CENTS, AFFILIATE_CAP_CENTS } from '../billing/affiliate.service';
 import {
   AUTH_COOKIE_NAME,
   OTP_RESEND_SECONDS,
@@ -21,6 +22,7 @@ import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
 import { PresenceService } from '../presence/presence.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 /** TTL for the full session cache (auth guards). Short enough to pick up bans/revocations quickly. */
 const SESSION_FULL_CACHE_TTL_MS = 30_000;
@@ -85,6 +87,7 @@ export class AuthService {
     private readonly slack: SlackService,
     private readonly requestCache: RequestCacheService,
     private readonly presence: PresenceService,
+    private readonly presenceRealtime: PresenceRealtimeService,
   ) {}
 
   private maskPhone(phone: string) {
@@ -265,6 +268,57 @@ export class AuthService {
         });
       } catch {
         // Idempotent — ignore duplicates or any transient error; never block signup.
+      }
+
+      // Record affiliate cash earning for the signup milestone (best-effort; idempotent).
+      // Qualification: recruit signed up after affiliateAt (inherently true here — this is signup itself).
+      try {
+        const recruiter = await this.prisma.user.findUnique({
+          where: { id: recruitedById },
+          select: { affiliateAt: true },
+        });
+        if (recruiter?.affiliateAt) {
+          // Cap check: skip if adding signup earning would exceed per-member cap.
+          const capCheck = await this.prisma.affiliateEarning.aggregate({
+            where: { affiliateUserId: recruitedById },
+            _sum: { amountCents: true },
+          });
+          const currentTotal = capCheck._sum.amountCents ?? 0;
+          if (currentTotal + AFFILIATE_RATES_CENTS.signup <= AFFILIATE_CAP_CENTS) {
+            await this.prisma.affiliateEarning.create({
+              data: {
+                affiliateUserId: recruitedById,
+                recruitUserId: user.id,
+                type: 'signup',
+                amountCents: AFFILIATE_RATES_CENTS.signup,
+              },
+            });
+            this.presenceRealtime.emitReferralRecruitUpdated(recruitedById, {
+              recruit: {
+                id: user.id,
+                username: user.username ?? null,
+                name: user.name ?? null,
+                premium: false,
+                premiumPlus: false,
+                isOrganization: false,
+                stewardBadgeEnabled: false,
+                verifiedStatus: 'none',
+                avatarUrl: null,
+                orgAffiliations: [],
+                recruitedAt: user.createdAt.toISOString(),
+                isVerified: false,
+                isPremium: false,
+                bonusGranted: false,
+              },
+            });
+          } else {
+            this.logger.log(`[affiliate] Cap reached for affiliate=${recruitedById}: skipping signup earning`);
+          }
+        }
+      } catch (err: unknown) {
+        if ((err as any)?.code !== 'P2002') {
+          this.logger.warn(`[affiliate] Failed to record signup earning for recruit=${user.id}: ${err}`);
+        }
       }
     }
 

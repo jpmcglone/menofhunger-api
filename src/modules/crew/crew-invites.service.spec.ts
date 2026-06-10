@@ -100,6 +100,7 @@ function makeService(prismaOverrides?: Partial<AnyPrisma>) {
   const crew = {
     assertVerified: jest.fn(async () => undefined),
     disbandCrewTx: jest.fn(async () => undefined),
+    clearOpenToCrewStatus: jest.fn(async () => undefined),
   } as any;
 
   const svc = new CrewInvitesService(

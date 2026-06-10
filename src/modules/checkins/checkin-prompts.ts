@@ -146,10 +146,10 @@ const CORE_CHECKIN_PROMPTS: string[] = [
   "What’s one recovery habit you’ll take seriously this week (sleep, steps, food, stretching)?",
   "What’s one physical standard you want to hold the line on?",
 
-  // Brotherhood / service / leadership
+  // Community / service / leadership
   "Who did you encourage today — specifically?",
   "Who can you help this week without getting anything back?",
-  "What’s one relationship you need to invest in (mentorship, friendship, brotherhood)?",
+  "What’s one relationship you need to invest in (mentorship, friendship, community)?",
   "Where do you need to be more direct instead of passive?",
 ];
 
@@ -162,13 +162,13 @@ const CONVERSATION_STARTER_PROMPTS: string[] = [
   "What's one belief you changed your mind about as you got older?",
   "What's a moment when you realized you needed to grow up?",
 
-  // Brotherhood / honest conversation
+  // Honest conversation
   "What's something men talk about too little?",
   "What's one thing a good friend has challenged you on lately?",
   "What's the difference between encouragement and flattery?",
   "What's one sign a man is trustworthy?",
   "What's one quality you respect immediately in another man?",
-  "What's one conversation you've been putting off with a brother?",
+  "What's one conversation you've been putting off with a man in your life?",
 
   // Convictions / opinions worth discussing
   "What's one unpopular opinion you hold about discipline?",

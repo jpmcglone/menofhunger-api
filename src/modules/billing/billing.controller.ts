@@ -3,9 +3,10 @@ import { z } from 'zod';
 import type { Request } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUserId } from '../users/users.decorator';
-import type { BillingCheckoutSessionDto, BillingMeDto, BillingPortalSessionDto, BillingTier, ReferralMeDto, RecruitDto } from '../../common/dto';
+import type { AffiliateSummaryDto, BillingCheckoutSessionDto, BillingMeDto, BillingPortalSessionDto, BillingTier, ReferralMeDto, RecruitDto } from '../../common/dto';
 import { BillingService } from './billing.service';
 import { ReferralService } from './referral.service';
+import { AffiliateService } from './affiliate.service';
 
 const checkoutSchema = z.object({
   tier: z.enum(['premium', 'premiumPlus']),
@@ -24,6 +25,7 @@ export class BillingController {
   constructor(
     private readonly billing: BillingService,
     private readonly referral: ReferralService,
+    private readonly affiliate: AffiliateService,
   ) {}
 
   @UseGuards(AuthGuard)
@@ -77,6 +79,14 @@ export class BillingController {
   ): Promise<{ data: { recruiter: { username: string | null; name: string | null } } }> {
     const parsed = setRecruiterSchema.parse(body);
     return { data: await this.referral.setRecruiter(userId, parsed.code) };
+  }
+
+  // ─── Affiliate endpoints ──────────────────────────────────────────────────
+
+  @UseGuards(AuthGuard)
+  @Get('affiliate')
+  async getAffiliate(@CurrentUserId() userId: string): Promise<{ data: AffiliateSummaryDto }> {
+    return { data: await this.affiliate.getAffiliateSummary(userId) };
   }
 
   @UseGuards(AuthGuard)

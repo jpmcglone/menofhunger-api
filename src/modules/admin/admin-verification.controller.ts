@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { toVerificationRequestAdminDto } from '../../common/dto';
 import { VerificationService } from '../verification/verification.service';
 import { BillingService } from '../billing/billing.service';
+import { AffiliateService } from '../billing/affiliate.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CoinsService } from '../coins/coins.service';
 import { AdminGuard } from './admin.guard';
@@ -32,6 +33,7 @@ export class AdminVerificationController {
   constructor(
     private readonly verification: VerificationService,
     private readonly billing: BillingService,
+    private readonly affiliate: AffiliateService,
     private readonly prisma: PrismaService,
     private readonly coins: CoinsService,
   ) {}
@@ -84,6 +86,13 @@ export class AdminVerificationController {
       await this.coins.giftVerificationCoins(updated.userId, 5);
     } catch (err) {
       this.logger.warn(`Failed to gift verification coins for user ${updated.userId}: ${err}`);
+    }
+
+    // Record affiliate cash earning for the verified milestone (best-effort; idempotent).
+    try {
+      await this.affiliate.maybeRecordEarning(updated.userId, 'verified');
+    } catch (err) {
+      this.logger.warn(`[affiliate] Failed to record verified earning for user ${updated.userId}: ${err}`);
     }
 
     return { data: toVerificationRequestAdminDto(updated) };
