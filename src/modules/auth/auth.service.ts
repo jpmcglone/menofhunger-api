@@ -554,6 +554,32 @@ export class AuthService {
     return userObj;
   }
 
+  /**
+   * Bust the Redis session cache for every active session belonging to this user.
+   * Does NOT revoke the sessions — the user stays logged in; auth guards will
+   * simply re-read the DB on the next request and re-populate the cache with
+   * fresh user data. Call this whenever a mutation changes fields that /auth/me
+   * returns (e.g. onboarding completion, profile changes).
+   */
+  async bustSessionCachesForUser(userId: string): Promise<void> {
+    const id = String(userId ?? '').trim();
+    if (!id) return;
+    try {
+      const sessions = await this.prisma.session.findMany({
+        where: { userId: id, revokedAt: null },
+        select: { tokenHash: true },
+      });
+      await Promise.allSettled(
+        sessions.map((s) => {
+          const th = String(s.tokenHash ?? '').trim();
+          return th ? this.cacheInvalidation.deleteSessionFull(th) : Promise.resolve();
+        }),
+      );
+    } catch {
+      // Best-effort — a cache miss just means the next request re-fetches from DB.
+    }
+  }
+
   async revokeAllSessionsForUser(userId: string): Promise<void> {
     const id = String(userId ?? '').trim();
     if (!id) return;

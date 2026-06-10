@@ -1,9 +1,10 @@
-import { Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
+import { Controller, Delete, Get, Query, Res, UseGuards } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { OptionalCurrentUserId } from '../users/users.decorator';
+import { OptionalCurrentUserId, CurrentUserId } from '../users/users.decorator';
 import { z } from 'zod';
 import type { Response } from 'express';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { AuthGuard } from '../auth/auth.guard';
 import { AppConfigService } from '../app/app-config.service';
 import type { PostWithAuthorAndMedia } from '../../common/dto/post.dto';
 import type { ArticleWithAuthor } from '../../common/dto/article.dto';
@@ -21,7 +22,7 @@ import { TaxonomyService } from '../taxonomy/taxonomy.service';
 
 const searchSchema = z.object({
   q: z.string().trim().max(200).optional(),
-  type: z.enum(['posts', 'users', 'bookmarks', 'all', 'hashtags', 'taxonomy']).optional(),
+  type: z.enum(['posts', 'users', 'bookmarks', 'all', 'articles', 'hashtags', 'taxonomy']).optional(),
   // Source hint for analytics/search-history recording.
   source: z.enum(['explore', 'external']).optional(),
   // Posts-only: filter by kind (e.g. allow "check-ins only" in search UI)
@@ -97,92 +98,128 @@ export class SearchController {
       const remainder = Math.max(0, limit - userLimit - groupLimit);
       const articleLimit = Math.min(10, Math.max(Math.floor(remainder / 2), 1));
       const postLimit = Math.min(20, Math.max(remainder - articleLimit, 1));
-      const res = await this.search.searchMixed({
-        viewerUserId,
-        q,
-        userLimit,
-        postLimit,
-        articleLimit,
-        groupLimit,
-        userCursor,
-        postCursor,
-        articleCursor,
-        kind,
-      });
-      const users = res.users.map((u) =>
-        toUserListDto(u, publicBaseUrl, {
-          relationship: {
-            viewerFollowsUser: u.relationship.viewerFollowsUser,
-            userFollowsViewer: u.relationship.userFollowsViewer,
-            viewerPostNotificationsEnabled: (u.relationship as any).viewerPostNotificationsEnabled ?? false,
-          },
-          createdAt: u.createdAt,
-        }),
-      );
-      const postIds = (res.posts ?? []).map((p) => p.id);
-      const boosted = viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds }) : new Set<string>();
-      const bookmarksByPostId = viewerUserId
-        ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
-        : new Map<string, { collectionIds: string[] }>();
-      const viewer = await this.posts.viewerContext(viewerUserId);
-      const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-      const internalByPostId = viewerHasAdmin && postIds.length > 0
-        ? await this.posts.ensureBoostScoresFresh(postIds)
+
+      // Cache anonymous mixed search results to avoid 5 parallel sub-searches on every
+      // unauthenticated explore page load. Versioned key is bumped on every post write.
+      // Pagination cursors bypass the cache since they're viewer-session specific.
+      const anonMixedCache = viewerUserId == null && !userCursor && !postCursor && !articleCursor;
+      const mixedSearchVer = anonMixedCache ? await this.cacheInvalidation.searchGlobalVersion() : null;
+      const mixedParamsHash = anonMixedCache
+        ? stableJsonHash({ endpoint: 'search:all', q, limit, kind })
         : null;
-      const scoreByPostId = viewerHasAdmin && postIds.length > 0
-        ? await this.posts.computeScoresForPostIds(postIds)
-        : undefined;
-      const groupIds = [
-        ...new Set(
-          (res.posts ?? [])
-            .map((p) => String((p as { communityGroupId?: string | null }).communityGroupId ?? '').trim())
-            .filter(Boolean),
-        ),
-      ];
-      const groupPreviewById = await this.posts.communityGroupPreviewMapForFeed(viewerUserId, groupIds);
-      const posts = (res.posts ?? []).map((p) => {
-        const base = internalByPostId?.get(p.id);
-        const score = scoreByPostId?.get(p.id);
-        const gid = String((p as { communityGroupId?: string | null }).communityGroupId ?? '').trim();
-        const gp = gid ? groupPreviewById.get(gid) : undefined;
-        return toPostDto(p as PostWithAuthorAndMedia, publicBaseUrl, {
-          viewerHasBoosted: boosted.has(p.id),
-          viewerHasBookmarked: bookmarksByPostId.has(p.id),
-          viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
-          includeInternal: viewerHasAdmin,
-          internalOverride:
-            base || (typeof score === 'number' ? { score } : undefined)
-              ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
-              : undefined,
-          ...(gp ? { groupPreview: gp } : {}),
+      const mixedCacheKey =
+        anonMixedCache && mixedSearchVer ? RedisKeys.anonSearch(mixedParamsHash!, mixedSearchVer) : null;
+
+      const buildMixedResponse = async () => {
+        const res = await this.search.searchMixed({
+          viewerUserId,
+          q,
+          userLimit,
+          postLimit,
+          articleLimit,
+          groupLimit,
+          userCursor,
+          postCursor,
+          articleCursor,
+          kind,
         });
+        const users = res.users.map((u) =>
+          toUserListDto(u, publicBaseUrl, {
+            relationship: {
+              viewerFollowsUser: u.relationship.viewerFollowsUser,
+              userFollowsViewer: u.relationship.userFollowsViewer,
+              viewerPostNotificationsEnabled: (u.relationship as any).viewerPostNotificationsEnabled ?? false,
+            },
+            createdAt: u.createdAt,
+          }),
+        );
+        const postIds = (res.posts ?? []).map((p) => p.id);
+        const boosted = viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds }) : new Set<string>();
+        const bookmarksByPostId = viewerUserId
+          ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
+          : new Map<string, { collectionIds: string[] }>();
+        const viewerCtx = await this.posts.viewerContext(viewerUserId);
+        const viewerHasAdmin = Boolean(viewerCtx?.siteAdmin);
+        const internalByPostId = viewerHasAdmin && postIds.length > 0
+          ? await this.posts.ensureBoostScoresFresh(postIds)
+          : null;
+        const scoreByPostId = viewerHasAdmin && postIds.length > 0
+          ? await this.posts.computeScoresForPostIds(postIds)
+          : undefined;
+        const groupIds = [
+          ...new Set(
+            (res.posts ?? [])
+              .map((p) => String((p as { communityGroupId?: string | null }).communityGroupId ?? '').trim())
+              .filter(Boolean),
+          ),
+        ];
+        const groupPreviewById = await this.posts.communityGroupPreviewMapForFeed(viewerUserId, groupIds);
+        const posts = (res.posts ?? []).map((p) => {
+          const base = internalByPostId?.get(p.id);
+          const score = scoreByPostId?.get(p.id);
+          const gid = String((p as { communityGroupId?: string | null }).communityGroupId ?? '').trim();
+          const gp = gid ? groupPreviewById.get(gid) : undefined;
+          return toPostDto(p as PostWithAuthorAndMedia, publicBaseUrl, {
+            viewerHasBoosted: boosted.has(p.id),
+            viewerHasBookmarked: bookmarksByPostId.has(p.id),
+            viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
+            includeInternal: viewerHasAdmin,
+            internalOverride:
+              base || (typeof score === 'number' ? { score } : undefined)
+                ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
+                : undefined,
+            ...(gp ? { groupPreview: gp } : {}),
+          });
+        });
+        const articles = (res.articles ?? []).map((a) =>
+          toArticleDto(a as unknown as ArticleWithAuthor, publicBaseUrl, {
+            viewerUserId,
+            viewerCanAccess: a.viewerCanAccess,
+          }),
+        );
+        const groups = res.groups ?? [];
+        const taxonomyMatches = q.length >= 2
+          ? await this.taxonomy.search({ q, limit: Math.min(8, limit) })
+          : [];
+        return {
+          data: { users, posts, articles, groups, taxonomyMatches, gatedResultCount: res.gatedResultCount },
+          pagination: {
+            nextUserCursor: res.nextUserCursor,
+            nextPostCursor: res.nextPostCursor,
+            nextArticleCursor: res.nextArticleCursor,
+          },
+        };
+      };
+
+      const mixedOut = await this.cache.getOrSetJson<{ data: any; pagination: any }>({
+        enabled: anonMixedCache && Boolean(mixedCacheKey),
+        key: mixedCacheKey ?? '',
+        ttlSeconds: CacheTtl.anonSearchPostsSeconds,
+        compute: buildMixedResponse,
       });
+
+      if (viewerUserId && q.length >= 2 && (parsed.source === 'explore' || parsed.source === 'external')) {
+        void this.search.recordUserSearch({ userId: viewerUserId, query: q }).catch(() => {});
+        this.posthog.capture(viewerUserId, 'search_performed', {
+          query: q.toLowerCase(),
+          result_count: (mixedOut.data.users?.length ?? 0) + (mixedOut.data.posts?.length ?? 0) +
+            (mixedOut.data.articles?.length ?? 0) + (mixedOut.data.groups?.length ?? 0),
+          type,
+          source: parsed.source,
+        });
+      }
+      return mixedOut;
+    }
+
+    if (type === 'articles') {
+      const res = await this.search.searchArticles({ viewerUserId, q, limit, cursor });
       const articles = (res.articles ?? []).map((a) =>
         toArticleDto(a as unknown as ArticleWithAuthor, publicBaseUrl, {
           viewerUserId,
           viewerCanAccess: a.viewerCanAccess,
         }),
       );
-      const groups = res.groups ?? [];
-      const taxonomyMatches = q.length >= 2
-        ? await this.taxonomy.search({ q, limit: Math.min(8, limit) })
-        : [];
-      if (viewerUserId && q.length >= 2 && parsed.source === 'explore') {
-        void this.search.recordUserSearch({ userId: viewerUserId, query: q }).catch(() => {});
-        this.posthog.capture(viewerUserId, 'search_performed', {
-          query: q.toLowerCase(),
-          result_count: users.length + posts.length + articles.length + groups.length + taxonomyMatches.length,
-          type,
-        });
-      }
-      return {
-        data: { users, posts, articles, groups, taxonomyMatches },
-        pagination: {
-          nextUserCursor: res.nextUserCursor,
-          nextPostCursor: res.nextPostCursor,
-          nextArticleCursor: res.nextArticleCursor,
-        },
-      };
+      return { data: articles, pagination: { nextCursor: res.nextCursor } };
     }
 
     if (type === 'users') {
@@ -339,6 +376,45 @@ export class SearchController {
       },
     });
     return out;
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('search', 60),
+      ttl: rateLimitTtl('search', 60),
+    },
+  })
+  @Get('recent')
+  async getRecentSearches(@CurrentUserId() userId: string) {
+    const rows = await this.prisma.userSearch.findMany({
+      where: { userId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 10,
+      select: { id: true, query: true, createdAt: true },
+    });
+    // Dedupe by normalized query, keeping the most recent occurrence.
+    const seen = new Set<string>();
+    const unique = rows.filter((r) => {
+      const key = r.query.toLowerCase().replace(/\s+/g, ' ').trim();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return { data: unique.map((r) => ({ id: r.id, query: r.query, createdAt: r.createdAt.toISOString() })) };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 30),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Delete('recent')
+  async clearRecentSearches(@CurrentUserId() userId: string) {
+    await this.prisma.userSearch.deleteMany({ where: { userId } });
+    return { data: { cleared: true } };
   }
 }
 

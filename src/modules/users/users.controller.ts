@@ -6,6 +6,7 @@ import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { AuthService } from '../auth/auth.service';
 import { AppConfigService } from '../app/app-config.service';
 import { FollowsService } from '../follows/follows.service';
 import { CurrentUserId, OptionalCurrentUserId } from './users.decorator';
@@ -217,6 +218,8 @@ type UserPreviewPayload = {
   viewerHasBlockedUser?: boolean;
   userHasBlockedViewer?: boolean;
   isBot?: boolean;
+  locationDisplay: string | null;
+  locationState: string | null;
 };
 
 @ApiTags('Profiles & Social')
@@ -234,6 +237,7 @@ export class UsersController {
     private readonly posthog: PosthogService,
     private readonly slack: SlackService,
     private readonly presence: PresenceService,
+    private readonly auth: AuthService,
   ) {}
 
   private async viewerCanSeeLastOnline(viewerUserId: string | null): Promise<boolean> {
@@ -1077,6 +1081,8 @@ export class UsersController {
       viewerHasBlockedUser,
       userHasBlockedViewer,
       isBot: Boolean((profile as any).isBot),
+      locationDisplay: (profile as any).locationDisplay ?? null,
+      locationState: (profile as any).locationState ?? null,
     };
 
     // Preview includes viewer-specific relationship when authenticated.
@@ -1457,6 +1463,9 @@ export class UsersController {
       }
 
       await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+      // Bust the Redis session cache so the next /auth/me SSR call reads fresh user data
+      // instead of the 30-second stale cache (which would re-show the onboarding gate on refresh).
+      void this.auth.bustSessionCachesForUser(userId);
       await this.emitUserSelfUpdated(updated.id);
       this.usersMeRealtime.emitMeUpdatedFromUser(updated, emailChanged ? 'email_changed' : 'onboarding_changed');
       this.presence.markSeenFromHttp(userId);

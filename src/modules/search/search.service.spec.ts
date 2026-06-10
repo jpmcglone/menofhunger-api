@@ -101,3 +101,69 @@ describe('SearchService.searchPosts — community group visibility', () => {
     expect(sql).not.toContain('onlyMe');
   });
 });
+
+describe('SearchService.searchCommunityGroups — group visibility', () => {
+  function makeGroupService(viewerUserId: string | null = null) {
+    const openGroup = { id: 'g-open', name: 'Open Group', slug: 'open-group', joinPolicy: 'open', createdAt: new Date(), memberCount: 1, description: null, rules: null, coverImageUrl: null, avatarImageUrl: null, isFeatured: false, featuredOrder: null };
+    const privateGroup = { id: 'g-private', name: 'Private Group', slug: 'private-group', joinPolicy: 'approval', createdAt: new Date(), memberCount: 1, description: null, rules: null, coverImageUrl: null, avatarImageUrl: null, isFeatured: false, featuredOrder: null };
+
+    const prisma: any = {
+      communityGroup: {
+        findMany: jest.fn(async () => [openGroup]),
+      },
+      communityGroupMember: {
+        findMany: jest.fn(async () => []),
+      },
+    };
+
+    const service = new SearchService(prisma, {} as any, {} as any, {
+      getViewer: jest.fn(async () => null),
+      isVerified: jest.fn(() => true),
+      allowedPostVisibilities: jest.fn(() => ['public']),
+    } as any);
+
+    return { service, prisma, openGroup, privateGroup };
+  }
+
+  it('limits anonymous viewers to open-joinPolicy groups only', async () => {
+    const { service, prisma } = makeGroupService(null);
+
+    await service.searchCommunityGroups({ viewerUserId: null, q: 'group', limit: 10 });
+
+    const call = prisma.communityGroup.findMany.mock.calls[0]?.[0];
+    const andClauses = call?.where?.AND ?? [];
+
+    // The visibility clause must be a simple `{ joinPolicy: 'open' }` (no OR, no member check).
+    const visClause = andClauses.find((c: any) => c?.joinPolicy === 'open');
+    expect(visClause).toBeDefined();
+
+    // Must NOT have a visibility OR that includes a members-based branch.
+    const orWithMembers = andClauses
+      .filter((c: any) => Array.isArray(c?.OR))
+      .flatMap((c: any) => c.OR as any[])
+      .find((o: any) => o?.members !== undefined);
+    expect(orWithMembers).toBeUndefined();
+  });
+
+  it('lets authenticated users see open groups OR groups they belong to', async () => {
+    const { service, prisma } = makeGroupService('u1');
+
+    await service.searchCommunityGroups({ viewerUserId: 'u1', q: 'group', limit: 10 });
+
+    const call = prisma.communityGroup.findMany.mock.calls[0]?.[0];
+    const andClauses = call?.where?.AND ?? [];
+
+    // Must have an OR visibility clause that includes both open-groups and member check.
+    const visClause = andClauses.find(
+      (c: any) => Array.isArray(c?.OR) && c.OR.some((o: any) => o?.joinPolicy === 'open') && c.OR.some((o: any) => o?.members),
+    );
+    expect(visClause).toBeDefined();
+
+    const or = visClause.OR as any[];
+    expect(or).toContainEqual({ joinPolicy: 'open' });
+    const memberBranch = or.find((o: any) => o?.members);
+    expect(memberBranch).toBeDefined();
+    expect(memberBranch.members.some.userId).toBe('u1');
+    expect(memberBranch.members.some.status).toBe('active');
+  });
+});

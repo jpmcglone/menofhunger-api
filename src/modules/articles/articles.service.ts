@@ -666,6 +666,9 @@ export class ArticlesService {
 
     void this.cacheInvalidation.bumpFeedGlobal().catch(() => undefined);
 
+    // Notify the WebSub hub so subscribers get real-time feed updates.
+    void this.pingWebsubHub(updated.author?.username ?? null).catch(() => undefined);
+
     // Enqueue follower article emails on first publish.
     if (isFirstPublish) {
       this.jobs
@@ -687,6 +690,9 @@ export class ArticlesService {
     if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
     if (article.authorId !== userId) throw new ForbiddenException('Not your article.');
 
+    // Fetch username before update for hub ping.
+    const authorUser = await this.prisma.user.findUnique({ where: { id: userId }, select: { username: true } });
+
     const updated = await this.prisma.article.update({
       where: { id: articleId },
       data: { isDraft: true },
@@ -695,7 +701,57 @@ export class ArticlesService {
 
     void this.cacheInvalidation.bumpFeedGlobal().catch(() => undefined);
 
+    // Notify hub — feed content changed (article removed from public feed).
+    void this.pingWebsubHub(authorUser?.username ?? null).catch(() => undefined);
+
     return toArticleDto(updated, this.r2BaseUrl);
+  }
+
+  // ─── WebSub ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Fire-and-forget WebSub hub notification so feed subscribers get real-time updates.
+   * Pings the global articles feeds and (when username is known) the per-author feeds.
+   * Failures are logged as warnings — never throw, never block the response.
+   *
+   * Hub: https://pubsubhubbub.appspot.com
+   * Spec: https://www.w3.org/TR/websub/
+   */
+  private async pingWebsubHub(authorUsername: string | null): Promise<void> {
+    const siteUrl = this.appConfig.frontendBaseUrl()?.replace(/\/$/, '') ?? 'https://menofhunger.com';
+    const hubUrl = 'https://pubsubhubbub.appspot.com/publish';
+
+    const feedUrls = [
+      `${siteUrl}/articles/feed.xml`,
+      `${siteUrl}/articles/feed.atom`,
+      `${siteUrl}/articles/feed.json`,
+      ...(authorUsername
+        ? [
+            `${siteUrl}/u/${encodeURIComponent(authorUsername)}/articles/feed.xml`,
+            `${siteUrl}/u/${encodeURIComponent(authorUsername)}/articles/feed.atom`,
+            `${siteUrl}/u/${encodeURIComponent(authorUsername)}/articles/feed.json`,
+          ]
+        : []),
+    ];
+
+    for (const feedUrl of feedUrls) {
+      try {
+        const body = new URLSearchParams({ 'hub.mode': 'publish', 'hub.url': feedUrl }).toString();
+        const res = await fetch(hubUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body,
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (!res.ok) {
+          this.logger.warn(`[websub] Hub ping failed for ${feedUrl}: HTTP ${res.status}`);
+        }
+      } catch (err) {
+        this.logger.warn(
+          `[websub] Hub ping error for ${feedUrl}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   // ─── Delete ───────────────────────────────────────────────────────────────────

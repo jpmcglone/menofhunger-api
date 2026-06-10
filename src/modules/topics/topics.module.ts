@@ -9,6 +9,7 @@ import { TopicsService } from './topics.service';
   imports: [AuthModule, PostsModule, SearchModule],
   controllers: [TopicsController],
   providers: [TopicsService],
+  exports: [TopicsService],
 })
 export class TopicsModule {}
 

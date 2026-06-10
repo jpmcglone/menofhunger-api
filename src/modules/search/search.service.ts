@@ -559,16 +559,41 @@ export class SearchService {
     const q = raw.startsWith('#') ? raw.slice(1) : raw;
     const qLower = q.toLowerCase();
 
-    // Cursor not used yet (autocomplete doesn't paginate); keep contract for forward-compat.
-    void params.cursor;
+    // Decode keyset cursor: base64-encoded JSON `{ usageCount: number; tag: string }`.
+    let cursorUsageCount: number | null = null;
+    let cursorTag: string | null = null;
+    if (params.cursor) {
+      try {
+        const decoded = JSON.parse(Buffer.from(params.cursor, 'base64').toString('utf8')) as {
+          usageCount: number;
+          tag: string;
+        };
+        cursorUsageCount = decoded.usageCount;
+        cursorTag = decoded.tag;
+      } catch {
+        // Ignore malformed cursor.
+      }
+    }
+
+    const cursorWhere: Prisma.HashtagWhereInput =
+      cursorUsageCount !== null && cursorTag !== null
+        ? {
+            OR: [
+              { usageCount: { lt: cursorUsageCount } },
+              { AND: [{ usageCount: cursorUsageCount }, { tag: { gt: cursorTag } }] },
+            ],
+          }
+        : {};
 
     const rows = await this.prisma.hashtag.findMany({
-      where: qLower ? { tag: { startsWith: qLower } } : {},
+      where: qLower
+        ? { AND: [{ tag: { startsWith: qLower } }, cursorWhere] }
+        : cursorWhere,
       orderBy: [
         { usageCount: 'desc' },
         { tag: 'asc' },
       ],
-      take: limit,
+      take: limit + 1,
       select: { tag: true, usageCount: true },
     });
 
@@ -592,13 +617,21 @@ export class SearchService {
       }
     }
 
+    const slice = rows.slice(0, limit);
+    const hasMore = rows.length > limit;
+    const lastRow = slice[slice.length - 1];
+    const nextCursor =
+      hasMore && lastRow
+        ? Buffer.from(JSON.stringify({ usageCount: lastRow.usageCount ?? 0, tag: lastRow.tag })).toString('base64')
+        : null;
+
     return {
-      hashtags: rows.map((r) => ({
+      hashtags: slice.map((r) => ({
         value: r.tag,
         label: labelByTag.get(r.tag) ?? r.tag,
         usageCount: r.usageCount ?? 0,
       })),
-      nextCursor: null,
+      nextCursor,
     };
   }
 
@@ -1245,13 +1278,29 @@ export class SearchService {
     const lim = Math.min(20, Math.max(1, params.limit));
     const needle = q.slice(0, 200);
 
+    // Visibility: anonymous can only see open groups.
+    // Authenticated users can see open groups OR groups they actively belong to.
+    const visibilityWhere: Prisma.CommunityGroupWhereInput = params.viewerUserId
+      ? {
+          OR: [
+            { joinPolicy: 'open' },
+            { members: { some: { userId: params.viewerUserId, status: 'active' } } },
+          ],
+        }
+      : { joinPolicy: 'open' };
+
     const rows = await this.prisma.communityGroup.findMany({
       where: {
-        deletedAt: null,
-        OR: [
-          { name: { contains: needle, mode: 'insensitive' } },
-          { slug: { contains: needle, mode: 'insensitive' } },
-          { description: { contains: needle, mode: 'insensitive' } },
+        AND: [
+          { deletedAt: null },
+          visibilityWhere,
+          {
+            OR: [
+              { name: { contains: needle, mode: 'insensitive' } },
+              { slug: { contains: needle, mode: 'insensitive' } },
+              { description: { contains: needle, mode: 'insensitive' } },
+            ],
+          },
         ],
       },
       orderBy: [{ memberCount: 'desc' }, { createdAt: 'desc' }],
@@ -1295,6 +1344,7 @@ export class SearchService {
     nextUserCursor: string | null;
     nextPostCursor: string | null;
     nextArticleCursor: string | null;
+    gatedResultCount: number;
   }> {
     const q = (params.q ?? '').trim();
     if (q.length < 2) {
@@ -1306,8 +1356,16 @@ export class SearchService {
         nextUserCursor: null,
         nextPostCursor: null,
         nextArticleCursor: null,
+        gatedResultCount: 0,
       };
     }
+
+    const viewer = params.viewerUserId
+      ? await this.viewerContext.getViewer(params.viewerUserId)
+      : null;
+
+    // Only compute gated count for anonymous or unverified users (the upsell audience).
+    const shouldCountGated = !params.viewerUserId || (viewer && !this.viewerContext.isVerified(viewer as any));
 
     const [userResult, postResult, articleResult, groupResult] = await Promise.all([
       this.searchUsers({
@@ -1336,6 +1394,35 @@ export class SearchService {
       }),
     ]);
 
+    // Count gated (verifiedOnly + premiumOnly) posts and articles excluded for anonymous/unverified viewers.
+    // Cheap approximate count from the already-fetched article rows plus a dedicated post count.
+    let gatedResultCount = 0;
+    if (shouldCountGated && q.length >= 2) {
+      const words = queryToWords(q);
+      const matchWhere = this.articleSearchMatchWhere(q, words) as Prisma.ArticleWhereInput;
+      const [gatedArticleCount, gatedPostCount] = await Promise.all([
+        this.prisma.article.count({
+          where: {
+            AND: [
+              { deletedAt: null, isDraft: false, publishedAt: { not: null } },
+              { visibility: { in: ['verifiedOnly', 'premiumOnly'] } },
+              matchWhere,
+            ],
+          },
+        }),
+        this.prisma.post.count({
+          where: {
+            AND: [
+              { deletedAt: null },
+              { visibility: { in: ['verifiedOnly', 'premiumOnly'] } },
+              this.postSearchMatchWhere(q, words) as Prisma.PostWhereInput,
+            ],
+          },
+        }),
+      ]);
+      gatedResultCount = gatedArticleCount + gatedPostCount;
+    }
+
     return {
       users: userResult.users,
       posts: postResult.posts,
@@ -1344,6 +1431,7 @@ export class SearchService {
       nextUserCursor: userResult.nextCursor,
       nextPostCursor: postResult.nextCursor,
       nextArticleCursor: articleResult.nextCursor,
+      gatedResultCount,
     };
   }
 

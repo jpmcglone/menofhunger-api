@@ -231,6 +231,8 @@ export type UserPreviewDto = {
   nudge: NudgeStateDto | null;
   followerCount: number | null;
   followingCount: number | null;
+  locationDisplay: string | null;
+  locationState: string | null;
 };
 
 export type UserDtoRow = {

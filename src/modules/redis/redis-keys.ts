@@ -94,6 +94,9 @@ export const RedisKeys = {
   anonSearch(paramsHash: string, searchVer: number): string {
     return `cache:search:v${searchVer}:${clean(paramsHash)}`;
   },
+  anonExplore(feedVer: number): string {
+    return `cache:explore:anon:v${feedVer}`;
+  },
   anonTopics(paramsHash: string, feedVer: number): string {
     return `cache:topics:v${feedVer}:${clean(paramsHash)}`;
   },
