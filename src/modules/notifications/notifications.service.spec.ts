@@ -1,6 +1,7 @@
 import { NotificationsService } from './notifications.service';
 import { NotificationPreferencesService } from './notification-preferences.service';
 import { NotificationPushService } from './notification-push.service';
+import { ApnsPushService } from './apns-push.service';
 import { NotificationReadStateService } from './notification-read-state.service';
 import { NotificationQueryService } from './notification-query.service';
 import { NotificationWriterService } from './notification-writer.service';
@@ -18,13 +19,14 @@ type FacadeDeps = {
 
 function buildFacade(deps: FacadeDeps) {
   const preferences = new NotificationPreferencesService(deps.prisma);
-  const push = new NotificationPushService(deps.prisma, deps.appConfig, deps.presence, preferences);
+  const apnsPush = new ApnsPushService(deps.prisma, deps.appConfig);
+  const push = new NotificationPushService(deps.prisma, deps.appConfig, deps.presence, preferences, apnsPush);
   const readState = new NotificationReadStateService(deps.prisma, deps.presenceRealtime, deps.posthog);
   const postVisibility = new PostVisibilityReadService(deps.prisma, deps.appConfig, deps.viewerContextService);
   const query = new NotificationQueryService(deps.prisma, deps.appConfig, postVisibility, readState);
   const writer = new NotificationWriterService(deps.prisma, deps.presenceRealtime, deps.jobs, push, query, readState);
-  const svc = new NotificationsService(preferences, push, readState, query, writer);
-  return { svc, preferences, push, readState, query, writer };
+  const svc = new NotificationsService(preferences, push, apnsPush, readState, query, writer);
+  return { svc, preferences, push, apnsPush, readState, query, writer };
 }
 
 function makeService(overrides?: { prisma?: any }) {

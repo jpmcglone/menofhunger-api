@@ -48,6 +48,28 @@ export class BillingService {
     return { stripe, cfg };
   }
 
+  /**
+   * Immediately cancels the user's Stripe subscription (if any) as part of
+   * self-service account deletion. Best-effort: failures are logged, never thrown,
+   * so a Stripe outage can't block the user's right to delete their account.
+   */
+  async cancelSubscriptionForAccountDeletion(userId: string): Promise<void> {
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { stripeSubscriptionId: true },
+      });
+      if (!user?.stripeSubscriptionId) return;
+      const { stripe } = this.getStripe();
+      await stripe.subscriptions.cancel(user.stripeSubscriptionId, {
+        prorate: false,
+      });
+      this.logger.log(`[billing] Cancelled Stripe subscription on account deletion for user ${userId}`);
+    } catch (err) {
+      this.logger.warn(`[billing] Could not cancel Stripe subscription on account deletion for user ${userId}: ${err}`);
+    }
+  }
+
   async getMe(userId: string): Promise<BillingMeDto> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },

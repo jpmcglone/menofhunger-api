@@ -103,7 +103,7 @@ describe('SearchService.searchPosts — community group visibility', () => {
 });
 
 describe('SearchService.searchCommunityGroups — group visibility', () => {
-  function makeGroupService(viewerUserId: string | null = null) {
+  function makeGroupService(_viewerUserId: string | null = null) {
     const openGroup = { id: 'g-open', name: 'Open Group', slug: 'open-group', joinPolicy: 'open', createdAt: new Date(), memberCount: 1, description: null, rules: null, coverImageUrl: null, avatarImageUrl: null, isFeatured: false, featuredOrder: null };
     const privateGroup = { id: 'g-private', name: 'Private Group', slug: 'private-group', joinPolicy: 'approval', createdAt: new Date(), memberCount: 1, description: null, rules: null, coverImageUrl: null, avatarImageUrl: null, isFeatured: false, featuredOrder: null };
 

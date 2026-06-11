@@ -47,6 +47,7 @@
     "@nestjs/websockets": "^11.1.14",
     "@prisma/client": "^6.19.2",
     "@scalar/nestjs-api-reference": "^1.1.19",
+    "apns2": "^12.2.0",
     "bullmq": "^5.70.0",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",

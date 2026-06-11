@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { AccountDeletionService } from './account-deletion.service';
 import { AuthGuard } from './auth.guard';
 import { OTP_PROVIDER } from './otp/otp-provider.token';
 import { TwilioVerifyOtpProvider } from './otp/twilio-verify-otp.provider';
@@ -13,6 +14,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
   controllers: [AuthController],
   providers: [
     AuthService,
+    AccountDeletionService,
     AuthGuard,
     TwilioVerifyOtpProvider,
     NoopOtpProvider,

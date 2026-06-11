@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { ModuleRef } from '@nestjs/core';
@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { getSessionCookie } from '../../common/session-cookie';
 import { AuthService } from './auth.service';
+import { AccountDeletionService } from './account-deletion.service';
 import { OTP_CODE_LENGTH } from './auth.constants';
 import { normalizePhone } from './auth.utils';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
@@ -19,6 +20,11 @@ const startSchema = z.object({
 
 const existsQuerySchema = z.object({
   phone: z.string().min(1),
+});
+
+const deleteAccountSchema = z.object({
+  reason: z.string().max(100).optional().nullable(),
+  details: z.string().max(2000).optional().nullable(),
 });
 
 const verifySchema = z.object({
@@ -36,6 +42,7 @@ const verifySchema = z.object({
 export class AuthController {
   constructor(
     private readonly auth: AuthService,
+    private readonly accountDeletion: AccountDeletionService,
     private readonly moduleRef: ModuleRef,
   ) {}
 
@@ -149,6 +156,31 @@ export class AuthController {
         messageUnreadCounts,
       },
     };
+  }
+
+  @ApiOperation({ summary: 'Permanently delete the authenticated account (self-service, App Store 5.1.1v)' })
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('authStart', 4),
+      ttl: rateLimitTtl('authStart', 60),
+    },
+  })
+  @Post('account/delete')
+  async deleteAccount(@Req() req: Request, @Res({ passthrough: true }) res: Response, @Body() body: unknown) {
+    const token = getSessionCookie(req);
+    const sessionResult = await this.auth.meFromSessionToken(token);
+    const userId = sessionResult?.user?.id;
+    if (!userId) throw new UnauthorizedException('You must be signed in to delete your account.');
+
+    const parsed = deleteAccountSchema.parse(body ?? {});
+    const result = await this.accountDeletion.deleteAccount(userId, {
+      reason: parsed.reason ?? null,
+      details: parsed.details ?? null,
+    });
+
+    // Sessions are already revoked server-side; also clear this client's cookie.
+    await this.auth.logout(token, res);
+    return { data: result };
   }
 
   @ApiOperation({ summary: 'Logout current session, clear cookie, and disconnect realtime sockets' })

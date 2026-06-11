@@ -408,6 +408,7 @@ model User {
   notificationsAsActor         Notification[]             @relation("Notification_actor")
   notificationsAsSubjectUser   Notification[]             @relation("Notification_subjectUser")
   pushSubscriptions            PushSubscription[]
+  apnsDeviceTokens             ApnsDeviceToken[]
   notificationPreferences      NotificationPreferences?
   articleTagPreferences        UserArticleTagPreference[]
   taxonomyPreferences          UserTaxonomyPreference[]
@@ -657,6 +658,25 @@ model PushSubscription {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, endpoint])
+  @@index([userId])
+}
+
+/**
+ * Native iOS push (APNs) device tokens. One row per device token; a user may have
+ * several (multiple devices). `environment` distinguishes sandbox (dev builds) from
+ * production so each token is sent to the matching APNs host.
+ */
+model ApnsDeviceToken {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  userId      String
+  token       String @unique @db.Text
+  environment String @default("production")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId])
 }
 

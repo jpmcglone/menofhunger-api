@@ -65,6 +65,15 @@ const pushUnsubscribeBodySchema = z.object({
   endpoint: z.string().trim().min(1),
 });
 
+const apnsRegisterBodySchema = z.object({
+  token: z.string().trim().min(1),
+  environment: z.enum(['production', 'sandbox']).optional(),
+});
+
+const apnsUnregisterBodySchema = z.object({
+  token: z.string().trim().min(1),
+});
+
 const preferencesPatchSchema = z
   .object({
     pushComment: z.boolean().optional(),
@@ -214,6 +223,43 @@ export class NotificationsController {
   ) {
     const parsed = pushUnsubscribeBodySchema.parse(body);
     await this.notifications.pushUnsubscribe(userId, parsed.endpoint);
+    return { data: {} };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('apns/register')
+  async apnsRegister(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = apnsRegisterBodySchema.parse(body);
+    await this.notifications.apnsRegister(userId, {
+      token: parsed.token,
+      environment: parsed.environment ?? 'production',
+    });
+    return { data: {} };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('apns/unregister')
+  async apnsUnregister(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = apnsUnregisterBodySchema.parse(body);
+    await this.notifications.apnsUnregister(userId, parsed.token);
     return { data: {} };
   }
 

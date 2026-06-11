@@ -380,6 +380,27 @@ export class AppConfigService {
     return Boolean(this.vapidPublicKey() && this.vapidPrivateKey());
   }
 
+  /**
+   * APNs (native iOS push) configuration. Token-based auth with a .p8 key from the
+   * Apple Developer portal. APNS_PRIVATE_KEY may contain literal "\n" sequences
+   * (common in env-var storage) — they are normalized to real newlines here.
+   * If any value is missing, APNs is disabled and device tokens are stored but unused.
+   */
+  apns(): { keyId: string; teamId: string; privateKey: string; bundleId: string } | null {
+    const keyId = this.config.get<string>('APNS_KEY_ID')?.trim() ?? '';
+    const teamId = this.config.get<string>('APNS_TEAM_ID')?.trim() ?? '';
+    const rawKey = this.config.get<string>('APNS_PRIVATE_KEY') ?? '';
+    const privateKey = rawKey.replace(/\\n/g, '\n').trim();
+    const bundleId = this.config.get<string>('APNS_BUNDLE_ID')?.trim() ?? '';
+    if (!keyId || !teamId || !privateKey || !bundleId) return null;
+    return { keyId, teamId, privateKey, bundleId };
+  }
+
+  /** True if all APNS_* env vars are set (native iOS push can be sent). */
+  apnsConfigured(): boolean {
+    return this.apns() !== null;
+  }
+
   /** Base URL for push notification click-through (canonical frontend). If unset, first ALLOWED_ORIGINS entry is used. */
   pushFrontendBaseUrl(): string | null {
     const v = this.config.get<string>('PUSH_FRONTEND_BASE_URL')?.trim() ?? '';

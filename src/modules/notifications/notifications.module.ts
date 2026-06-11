@@ -13,6 +13,7 @@ import { NotificationsReplyNudgeCron } from './notifications-reply-nudge.cron';
 import { NotificationsService } from './notifications.service';
 import { NotificationPreferencesService } from './notification-preferences.service';
 import { NotificationPushService } from './notification-push.service';
+import { ApnsPushService } from './apns-push.service';
 import { NotificationReadStateService } from './notification-read-state.service';
 import { NotificationQueryService } from './notification-query.service';
 import { NotificationWriterService } from './notification-writer.service';
@@ -26,6 +27,7 @@ import { MessageInstantEmailEventsHandler } from './message-instant-email-events
     NotificationsService,
     NotificationPreferencesService,
     NotificationPushService,
+    ApnsPushService,
     NotificationReadStateService,
     NotificationQueryService,
     NotificationWriterService,

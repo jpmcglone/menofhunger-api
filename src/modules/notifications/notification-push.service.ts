@@ -7,6 +7,7 @@ import { PresenceService } from '../presence/presence.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import type { NotificationPreferencesDto } from '../../common/dto';
 import { NotificationPreferencesService } from './notification-preferences.service';
+import { ApnsPushService } from './apns-push.service';
 
 export type PushActorContext = {
   id: string;
@@ -50,7 +51,13 @@ export class NotificationPushService {
     private readonly appConfig: AppConfigService,
     private readonly presence: PresenceService,
     private readonly preferences: NotificationPreferencesService,
+    private readonly apnsPush: ApnsPushService,
   ) {}
+
+  /** True if at least one push channel (Web Push VAPID or native APNs) can send. */
+  private pushChannelConfigured(): boolean {
+    return this.appConfig.vapidConfigured() || this.apnsPush.configured();
+  }
 
   shouldSendPushForKind(
     prefs: Pick<
@@ -412,17 +419,15 @@ export class NotificationPushService {
     });
   }
 
-  /** Send a single test Web Push to the user (for "Send test notification" in settings). */
+  /** Send a single test push (Web Push and/or APNs) to the user (for "Send test notification" in settings). */
   async sendTestPush(userId: string): Promise<{ sent: boolean; message?: string }> {
-    if (!this.appConfig.vapidConfigured()) {
-      return { sent: false, message: 'Browser push (Web Push) is not configured (VAPID).' };
+    if (!this.pushChannelConfigured()) {
+      return { sent: false, message: 'Push notifications are not configured on this server.' };
     }
-    const subs = await this.prisma.pushSubscription.findMany({
-      where: { userId },
-      select: { id: true, endpoint: true, p256dh: true, auth: true },
-    });
-    if (subs.length === 0) {
-      return { sent: false, message: 'No push subscription for this account. Enable browser notifications first.' };
+    const subCount = await this.prisma.pushSubscription.count({ where: { userId } });
+    const hasApnsTokens = await this.apnsPush.hasTokens(userId);
+    if (subCount === 0 && !hasApnsTokens) {
+      return { sent: false, message: 'No push subscription for this account. Enable notifications first.' };
     }
     await this.sendWebPushToRecipient(userId, {
       title: 'Test notification',
@@ -452,7 +457,11 @@ export class NotificationPushService {
     });
   }
 
-  /** Send Web Push to all of a user's subscriptions; prune expired (410/404). */
+  /**
+   * Send a push to all of the user's registered channels: Web Push subscriptions
+   * (pruning expired 410/404) and native APNs device tokens. Coalescing is shared
+   * across both channels so a user never gets the same kind twice in the window.
+   */
   async sendWebPushToRecipient(
     recipientUserId: string,
     params: {
@@ -471,19 +480,11 @@ export class NotificationPushService {
       sourceLabel?: string;
     },
   ): Promise<void> {
-    if (!this.appConfig.vapidConfigured()) return;
+    if (!this.pushChannelConfigured()) return;
     const kind = params.kind ?? 'generic';
     if (!params.test && (await this.isPushCoalesced(recipientUserId, kind))) {
       this.logger.debug(`[push] Coalesced ${kind} for user ${recipientUserId}`);
       return;
-    }
-    if (!this.vapidConfigured) {
-      const publicKey = this.appConfig.vapidPublicKey();
-      const privateKey = this.appConfig.vapidPrivateKey();
-      if (publicKey && privateKey) {
-        webpush.setVapidDetails('mailto:support@menofhunger.com', publicKey, privateKey);
-        this.vapidConfigured = true;
-      } else return;
     }
 
     const baseUrl =
@@ -513,18 +514,57 @@ export class NotificationPushService {
     if (params.sourceLabel) {
       body = body ? `${body} · ${params.sourceLabel}` : params.sourceLabel;
     }
-    const payload = JSON.stringify({
-      title: params.title,
-      body,
-      notificationId: params.notificationId ?? undefined,
-      url,
-      tag,
-      kind,
-      icon: params.icon ?? undefined,
-      badge: params.badge ?? '/android-chrome-192x192.png',
-      renotify: Boolean(params.renotify),
-      test: params.test === true,
+
+    // Native iOS push (APNs) mirror — fire-and-forget, same copy and coalescing.
+    if (this.apnsPush.configured()) {
+      this.apnsPush
+        .sendToUser(recipientUserId, {
+          title: params.title,
+          body,
+          url,
+          notificationId: params.notificationId ?? null,
+          kind,
+          collapseId: tag,
+        })
+        .catch((err) => {
+          this.logger.warn(`[apns] Failed to send push (${kind}): ${err instanceof Error ? err.message : String(err)}`);
+        });
+    }
+
+    await this.sendWebPushOnly(recipientUserId, {
+      payload: JSON.stringify({
+        title: params.title,
+        body,
+        notificationId: params.notificationId ?? undefined,
+        url,
+        tag,
+        kind,
+        icon: params.icon ?? undefined,
+        badge: params.badge ?? '/android-chrome-192x192.png',
+        renotify: Boolean(params.renotify),
+        test: params.test === true,
+      }),
     });
+
+    if (!params.test) {
+      await this.recordPushSent(recipientUserId, kind).catch(() => {});
+    }
+  }
+
+  /** Web Push delivery to all browser subscriptions; prunes expired (410/404). */
+  private async sendWebPushOnly(
+    recipientUserId: string,
+    params: { payload: string },
+  ): Promise<void> {
+    if (!this.appConfig.vapidConfigured()) return;
+    if (!this.vapidConfigured) {
+      const publicKey = this.appConfig.vapidPublicKey();
+      const privateKey = this.appConfig.vapidPrivateKey();
+      if (publicKey && privateKey) {
+        webpush.setVapidDetails('mailto:support@menofhunger.com', publicKey, privateKey);
+        this.vapidConfigured = true;
+      } else return;
+    }
 
     const subs = await this.prisma.pushSubscription.findMany({
       where: { userId: recipientUserId },
@@ -544,7 +584,7 @@ export class NotificationPushService {
             endpoint: sub.endpoint,
             keys: { p256dh: sub.p256dh, auth: sub.auth },
           },
-          payload,
+          params.payload,
           { TTL: 60 * 60 * 24 },
         );
       } catch (err: unknown) {
@@ -556,9 +596,6 @@ export class NotificationPushService {
     }
     if (expiredIds.length > 0) {
       await this.prisma.pushSubscription.deleteMany({ where: { id: { in: expiredIds } } }).catch(() => {});
-    }
-    if (!params.test) {
-      await this.recordPushSent(recipientUserId, kind).catch(() => {});
     }
   }
 
@@ -577,7 +614,7 @@ export class NotificationPushService {
     /** Optional snippet of the original reply, stored on Notification.body. */
     bodySnippet?: string | null;
   }): Promise<void> {
-    if (!this.appConfig.vapidConfigured()) return;
+    if (!this.pushChannelConfigured()) return;
     try {
       const prefs = await this.preferences.getPreferencesInternal(params.recipientUserId);
       if (!prefs.pushReplyNudge) return;
@@ -627,7 +664,7 @@ export class NotificationPushService {
     streakDays: number;
     url: string;
   }): Promise<void> {
-    if (!this.appConfig.vapidConfigured()) return;
+    if (!this.pushChannelConfigured()) return;
     const { streakDays } = params;
     const title = `${streakDays}-day streak at risk`;
     const body = `Post today before midnight ET — or your streak resets.`;
@@ -654,7 +691,7 @@ export class NotificationPushService {
     currentStreakDays: number;
     memberCount: number;
   }): Promise<void> {
-    if (!this.appConfig.vapidConfigured()) return;
+    if (!this.pushChannelConfigured()) return;
     const { currentStreakDays, memberCount } = params;
     if (currentStreakDays <= 0 || params.recipientUserIds.length === 0) return;
 
@@ -701,7 +738,7 @@ export class NotificationPushService {
     crewName: string | null;
     missedMembers: Array<{ id: string; displayName: string | null; username: string | null }>;
   }): Promise<void> {
-    if (!this.appConfig.vapidConfigured()) return;
+    if (!this.pushChannelConfigured()) return;
     if (params.recipientUserIds.length === 0) return;
 
     const url = params.crewSlug ? `/c/${encodeURIComponent(params.crewSlug)}` : '/crew';

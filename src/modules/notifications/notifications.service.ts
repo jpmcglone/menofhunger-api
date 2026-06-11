@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { NotificationPreferencesService } from './notification-preferences.service';
 import { NotificationPushService } from './notification-push.service';
+import { ApnsPushService } from './apns-push.service';
 import { NotificationReadStateService } from './notification-read-state.service';
 import { NotificationQueryService } from './notification-query.service';
 import { NotificationWriterService } from './notification-writer.service';
@@ -23,6 +24,7 @@ export class NotificationsService {
   constructor(
     private readonly preferences: NotificationPreferencesService,
     private readonly push: NotificationPushService,
+    private readonly apnsPush: ApnsPushService,
     private readonly readState: NotificationReadStateService,
     private readonly query: NotificationQueryService,
     private readonly writer: NotificationWriterService,
@@ -206,6 +208,14 @@ export class NotificationsService {
 
   pushUnsubscribe(...args: Parameters<NotificationPushService['pushUnsubscribe']>) {
     return this.push.pushUnsubscribe(...args);
+  }
+
+  apnsRegister(...args: Parameters<ApnsPushService['registerToken']>) {
+    return this.apnsPush.registerToken(...args);
+  }
+
+  apnsUnregister(...args: Parameters<ApnsPushService['unregisterToken']>) {
+    return this.apnsPush.unregisterToken(...args);
   }
 
   sendTestPush(...args: Parameters<NotificationPushService['sendTestPush']>) {
