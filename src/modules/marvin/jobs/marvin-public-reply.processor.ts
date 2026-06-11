@@ -17,9 +17,11 @@ import { MARV_ERROR_CODES, buildMarvIdempotencyKey } from '../marvin.constants';
 import { JobsService } from '../../jobs/jobs.service';
 import { JOBS } from '../../jobs/jobs.constants';
 import { MarvinThreadSummaryService } from '../services/marvin-thread-summary.service';
+import {
+  MarvinThreadContextService,
+  type MarvThreadContextPost,
+} from '../services/marvin-thread-context.service';
 import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
-import { publicAssetUrl } from '../../../common/assets/public-asset-url';
-
 /**
  * How often to re-emit `posts:typing` while the AI call is in flight.
  * The web client expires the indicator after 7 000ms (`usePostTyping.TYPING_TTL_MS`),
@@ -71,6 +73,7 @@ export class MarvinPublicReplyProcessor {
     private readonly canned: MarvinCannedRepliesService,
     private readonly jobs: JobsService,
     private readonly threadSummary: MarvinThreadSummaryService,
+    private readonly threadContext: MarvinThreadContextService,
     private readonly linkMetadata: LinkMetadataService,
     private readonly presenceRealtime: PresenceRealtimeService,
   ) {}
@@ -378,14 +381,17 @@ export class MarvinPublicReplyProcessor {
       .filter((u) => u && u.toLowerCase() !== this.identity.marvUsernameLower());
     const requesterRow = post.user;
 
-    // Pre-fetch thread context so the model always sees the full conversation without
-    // needing a tool call. Mirrors the get_post_thread_recent_messages tool query.
-    const { threadContext, imageUrls, hasGifAttached } = await this.fetchThreadContext(rootPostId, post.id, openAICfg);
+    // Pre-fetch BIDIRECTIONAL thread context (ancestors above + replies below the
+    // triggering post) so the model reasons about the whole conversation — not just a
+    // flat recent-replies list. The rolling summary covers older posts beyond the window.
+    const { ancestors, triggeringPost, descendants, imageUrls, hasGifAttached } =
+      await this.fetchBidirectionalContext(post.id, openAICfg);
+    const rollingSummary = await this.threadSummary.getSummaryText(rootPostId).catch(() => null);
 
-    // Collect link previews from triggering post + last 3 thread posts (read-only, no fetch).
+    // Collect link previews from triggering post + last 3 replies below it (read-only, no fetch).
     const recentBodies = [
       post.body ?? '',
-      ...threadContext.slice(-3).map((p) => p.body),
+      ...descendants.slice(-3).map((p) => p.body),
     ].join('\n');
     const linkPreviews = await this.linkMetadata.previewLinks(recentBodies);
 
@@ -399,7 +405,10 @@ export class MarvinPublicReplyProcessor {
       currentQuestion: post.body ?? '',
       triggeringPostId: post.id,
       rootPostId,
-      threadContext,
+      ancestors,
+      triggeringPost,
+      descendants,
+      rollingSummary,
       referencedUsernames: [...new Set(referenced)],
       crisisDetected: routed.crisisDetected,
       webSearchDemanded: routed.webSearchDemanded,
@@ -706,121 +715,66 @@ export class MarvinPublicReplyProcessor {
   }
 
   /**
-   * Fetch the root post + recent replies for a thread, format as MarvThreadPost[]
-   * (oldest → newest), and apply the first-then-tail image selection rule.
+   * Collect the bidirectional conversation around the triggering post (ancestors above +
+   * reply subtree below) via {@link MarvinThreadContextService}, map it into the prompt
+   * builder's {@link MarvThreadPost} shape, and apply the first-then-tail image selection
+   * rule across all collected posts.
    *
    * Returns:
-   *  - `threadContext`: post rows with poll + body for the developer note.
-   *  - `imageUrls`: up to `visionMaxImagesPerTurn` image/GIF URLs selected from
-   *    the thread (first chronologically, then tail), or [] when vision is off.
+   *  - `ancestors`: posts above the triggering post (root-most → parent).
+   *  - `triggeringPost`: the post that mentioned Marv (undefined if it couldn't be loaded).
+   *  - `descendants`: replies below the triggering post (reading order).
+   *  - `imageUrls`: up to `visionMaxImagesPerTurn` image/GIF URLs (first, then tail), or [].
    *  - `hasGifAttached`: true when at least one selected URL came from a GIF.
    */
-  private async fetchThreadContext(
-    rootPostId: string,
+  private async fetchBidirectionalContext(
     triggeringPostId: string,
     openAICfg: ReturnType<AppConfigService['marvOpenAI']>,
-  ): Promise<{ threadContext: MarvThreadPost[]; imageUrls: string[]; hasGifAttached: boolean }> {
-    const mediaSelect = {
-      where: { kind: { not: 'video' as const } },
-      select: { id: true, kind: true, source: true, r2Key: true, url: true, position: true },
-      orderBy: { position: 'asc' as const },
-    };
-    const pollSelect = {
-      select: {
-        totalVoteCount: true,
-        endsAt: true,
-        options: {
-          select: { text: true, voteCount: true },
-          orderBy: { position: 'asc' as const },
-        },
-      },
+  ): Promise<{
+    ancestors: MarvThreadPost[];
+    triggeringPost: MarvThreadPost | undefined;
+    descendants: MarvThreadPost[];
+    imageUrls: string[];
+    hasGifAttached: boolean;
+  }> {
+    const emptyResult = {
+      ancestors: [] as MarvThreadPost[],
+      triggeringPost: undefined as MarvThreadPost | undefined,
+      descendants: [] as MarvThreadPost[],
+      imageUrls: [] as string[],
+      hasGifAttached: false,
     };
     try {
-      const marvUserId = await this.identity.getMarvUserId();
-      const [root, replies] = await Promise.all([
-        this.prisma.post.findFirst({
-          where: { id: rootPostId, deletedAt: null, visibility: { not: 'onlyMe' } },
-          select: {
-            id: true,
-            body: true,
-            createdAt: true,
-            checkinPrompt: true,
-            userId: true,
-            user: { select: { username: true, name: true } },
-            media: mediaSelect,
-            poll: pollSelect,
-          },
-        }),
-        this.prisma.post.findMany({
-          where: { rootId: rootPostId, deletedAt: null, visibility: { not: 'onlyMe' } },
-          select: {
-            id: true,
-            body: true,
-            createdAt: true,
-            checkinPrompt: true,
-            userId: true,
-            user: { select: { username: true, name: true } },
-            media: mediaSelect,
-            poll: pollSelect,
-          },
-          orderBy: { createdAt: 'desc' },
-          take: 19, // room for root as the 20th
-        }),
-      ]);
-      if (!root) return { threadContext: [], imageUrls: [], hasGifAttached: false };
-      const orderedReplies: typeof replies = replies.slice().reverse();
-      const allPosts = [root, ...orderedReplies];
-      const publicBase = this.appConfig.r2()?.publicBaseUrl ?? null;
+      const context = await this.threadContext.collect({ focalPostId: triggeringPostId });
 
-      // Build MarvThreadPost array (used for developer note).
-      const threadContext: MarvThreadPost[] = allPosts.map((p) => ({
+      const toThreadPost = (p: MarvThreadContextPost): MarvThreadPost => ({
         id: p.id,
-        authorUsername: p.user.username,
-        authorDisplayName: p.user.name,
-        body: (p.body ?? '').slice(0, 500),
+        authorUsername: p.authorUsername,
+        authorDisplayName: p.authorDisplayName,
+        body: p.body,
         createdAt: p.createdAt.toISOString(),
-        isTriggeringPost: p.id === triggeringPostId,
-        isMarv: marvUserId !== null && p.userId === marvUserId,
+        isMarv: p.isMarv,
         checkinPrompt: p.checkinPrompt,
         poll: p.poll ?? null,
-      }));
+      });
 
-      // Build image URL list using first-then-tail rule.
-      if (!openAICfg.visionEnabled) return { threadContext, imageUrls: [], hasGifAttached: false };
+      const ancestors = context.ancestors.map(toThreadPost);
+      const triggeringPost = context.focal ? toThreadPost(context.focal) : undefined;
+      const descendants = context.descendants.map(toThreadPost);
 
-      type MediaEntry = { resolvedUrl: string; kind: string };
-      const allEntries: MediaEntry[] = [];
-      for (const p of allPosts) {
-        for (const m of p.media ?? []) {
-          const resolved =
-            m.source === 'upload' && m.r2Key
-              ? publicAssetUrl({ publicBaseUrl: publicBase, key: m.r2Key })
-              : (m.url ?? null);
-          if (resolved) allEntries.push({ resolvedUrl: resolved, kind: m.kind });
-        }
-      }
+      // Image selection across the whole collected conversation (shared with "Catch me up").
+      const { imageUrls, hasGifAttached } = this.threadContext.selectImageMedia(context, {
+        visionEnabled: openAICfg.visionEnabled,
+        visionMaxImagesPerTurn: openAICfg.visionMaxImagesPerTurn,
+        publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
+      });
 
-      const maxImages = openAICfg.visionMaxImagesPerTurn;
-      const selected: MediaEntry[] = [];
-      if (allEntries.length > 0) {
-        selected.push(allEntries[0]); // first chronologically
-        for (let j = allEntries.length - 1; j >= 1 && selected.length < maxImages; j--) {
-          if (allEntries[j].resolvedUrl !== allEntries[0].resolvedUrl) {
-            selected.push(allEntries[j]);
-          }
-        }
-      }
-
-      return {
-        threadContext,
-        imageUrls: selected.map((e) => e.resolvedUrl),
-        hasGifAttached: selected.some((e) => e.kind === 'gif'),
-      };
+      return { ancestors, triggeringPost, descendants, imageUrls, hasGifAttached };
     } catch (err) {
       this.logger.warn(
-        `[marv] fetchThreadContext failed for root=${rootPostId}: ${err instanceof Error ? err.message : String(err)}`,
+        `[marv] fetchBidirectionalContext failed for focal=${triggeringPostId}: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return { threadContext: [], imageUrls: [], hasGifAttached: false };
+      return emptyResult;
     }
   }
 

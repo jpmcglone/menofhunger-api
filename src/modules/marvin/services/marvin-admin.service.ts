@@ -236,7 +236,7 @@ export class MarvinAdminService {
     take?: number;
     cursorEventId?: string | null;
     userId?: string | null;
-    source?: 'public_thread' | 'private_session' | null;
+    source?: 'public_thread' | 'private_session' | 'catch_up' | null;
   }): Promise<{ rows: Array<Prisma.MarvinUsageEventGetPayload<object>>; nextCursor: string | null }> {
     const take = Math.min(100, Math.max(1, args.take ?? 50));
     const where: Prisma.MarvinUsageEventWhereInput = {};

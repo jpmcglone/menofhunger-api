@@ -2,6 +2,22 @@ import type { MarvinCreditSummaryDto } from './marvin-credit-summary.dto';
 import type { MarvinModeDto } from './marvin-mode.dto';
 
 /**
+ * Per-mode credit costs — allows the UI to show "Fast: 1 credit / Regular: 2 credits" etc.
+ * Values come from config so they stay accurate when an operator changes the knobs.
+ */
+export type MarvinCostsDto = {
+  fast: number;
+  regular: number;
+  smart: number;
+  /** Extra credits charged per web-search call the model makes. */
+  webSearchSurcharge: number;
+  /** Extra credits charged per image passed to a vision-capable model. */
+  visionPerImage: number;
+  /** Extra credits charged per URL the model fetches via the url-fetch tool. */
+  urlFetchSurcharge: number;
+};
+
+/**
  * Combined "everything the chat page / settings need" envelope for the requesting user.
  * Backed by `GET /marvin/me`.
  */
@@ -14,6 +30,8 @@ export type MarvinMeDto = {
   preferredMode: MarvinModeDto;
   /** Latest credit-bucket snapshot. */
   credits: MarvinCreditSummaryDto;
+  /** Per-mode base costs + surcharges. Used by the UI to preview spend before hitting "Catch me up". */
+  costs: MarvinCostsDto;
   /** Marv bot user reference for the chat-page pinned row. */
   marv: {
     userId: string;

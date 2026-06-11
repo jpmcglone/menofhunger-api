@@ -177,4 +177,71 @@ describe('MarvinPromptBuilderService', () => {
       expect(built.userMessage.length).toBe(4000);
     });
   });
+
+  describe('bidirectional context rendering', () => {
+    const ancestor: MarvThreadPost = {
+      id: 'a-1',
+      authorUsername: 'rootguy',
+      authorDisplayName: 'Root Guy',
+      body: 'The original post.',
+      createdAt: new Date().toISOString(),
+      poll: null,
+    };
+    const trigger: MarvThreadPost = {
+      id: 'p-1',
+      authorUsername: 'alice',
+      authorDisplayName: 'Alice',
+      body: 'hey @marv what about this',
+      createdAt: new Date().toISOString(),
+      poll: null,
+    };
+    const descendant: MarvThreadPost = {
+      id: 'd-1',
+      authorUsername: 'bob',
+      authorDisplayName: 'Bob',
+      body: 'a reply that came after.',
+      createdAt: new Date().toISOString(),
+      poll: null,
+    };
+
+    it('renders the path above, the mention, and replies below as sections', () => {
+      const svc = makeService();
+      const built = svc.build({
+        ...baseInput,
+        ancestors: [ancestor],
+        triggeringPost: trigger,
+        descendants: [descendant],
+      });
+      expect(built.developerNote).toContain('Path above the message that mentions you');
+      expect(built.developerNote).toContain('The message that mentions you:');
+      expect(built.developerNote).toContain('Replies under it');
+      expect(built.developerNote).toContain('The original post.');
+      expect(built.developerNote).toContain('a reply that came after.');
+      // The triggering post is tagged.
+      expect(built.developerNote).toContain('[← this message mentions you]');
+    });
+
+    it('includes the rolling summary when provided', () => {
+      const svc = makeService();
+      const built = svc.build({
+        ...baseInput,
+        triggeringPost: trigger,
+        rollingSummary: 'Earlier, the group debated fasting cadence.',
+      });
+      expect(built.developerNote).toContain('Thread summary so far');
+      expect(built.developerNote).toContain('Earlier, the group debated fasting cadence.');
+    });
+
+    it('prefers bidirectional fields over legacy threadContext', () => {
+      const svc = makeService();
+      const built = svc.build({
+        ...baseInput,
+        triggeringPost: trigger,
+        threadContext: [ancestor],
+      });
+      // The sectioned header is used, not the flat "Thread (oldest → newest)" header.
+      expect(built.developerNote).toContain('The message that mentions you:');
+      expect(built.developerNote).not.toContain('Thread (oldest → newest)');
+    });
+  });
 });

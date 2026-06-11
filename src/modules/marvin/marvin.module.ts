@@ -21,6 +21,8 @@ import { MarvinPrivateCannedRepliesService } from './services/marvin-private-can
 import { MarvinAdminService } from './services/marvin-admin.service';
 import { MarvinContextCardService } from './services/marvin-context-card.service';
 import { MarvinThreadSummaryService } from './services/marvin-thread-summary.service';
+import { MarvinThreadContextService } from './services/marvin-thread-context.service';
+import { MarvinCatchUpService } from './services/marvin-catch-up.service';
 import { MarvinPublicReplyProcessor } from './jobs/marvin-public-reply.processor';
 import { MarvinPrivateReplyProcessor } from './jobs/marvin-private-reply.processor';
 import { MarvinContextCardsCron } from './jobs/marvin-context-cards.cron';
@@ -49,6 +51,8 @@ import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
   controllers: [MarvinController],
   providers: [
     AdminGuard,
+    MarvinThreadContextService,
+    MarvinCatchUpService,
     MarvinMentionDetectorService,
     MarvinCreditService,
     MarvinRoutingService,

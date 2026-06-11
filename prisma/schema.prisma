@@ -2400,6 +2400,7 @@ model CoinTransfer {
 enum MarvinSource {
   public_thread
   private_session
+  catch_up
 }
 
 enum MarvinMode {

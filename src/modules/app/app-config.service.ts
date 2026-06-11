@@ -502,7 +502,11 @@ export class AppConfigService {
     // concern only applies to web search (see webSearchModes).
     const visionModesRaw = this.config.get<string>('MARV_VISION_MODES')?.trim() || 'fast,regular,smart';
     const visionModes = visionModesRaw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-    const visionMaxImagesPerTurn = this.readPositiveInt('MARV_VISION_MAX_IMAGES_PER_TURN', 4);
+    // Per-turn image budget. Catch-me-up and mentions include EVERY image in the conversation
+    // (multiple per post, throughout the thread) up to this cap. Each attached image bills the
+    // per-image vision surcharge, so cost scales with count — raise via env if a deployment
+    // wants even more. 8 comfortably covers a multi-image post or a few image-bearing replies.
+    const visionMaxImagesPerTurn = this.readPositiveInt('MARV_VISION_MAX_IMAGES_PER_TURN', 8);
     return { apiKey, promptId, fastModel, regularModel, smartModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens, visionEnabled, visionModes, visionMaxImagesPerTurn };
   }
 

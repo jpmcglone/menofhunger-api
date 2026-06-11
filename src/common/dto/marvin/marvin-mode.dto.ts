@@ -6,4 +6,4 @@
 export type MarvinModeDto = 'fast' | 'regular' | 'smart';
 
 /** Source channel the request originated from. */
-export type MarvinSourceDto = 'public_thread' | 'private_session';
+export type MarvinSourceDto = 'public_thread' | 'private_session' | 'catch_up';

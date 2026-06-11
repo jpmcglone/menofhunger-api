@@ -29,6 +29,16 @@ export class MarvinThreadSummaryService {
     private readonly ai: MarvinAIService,
   ) {}
 
+  /** Returns the current rolling summary text for a thread, or null when none exists yet. */
+  async getSummaryText(rootPostId: string): Promise<string | null> {
+    if (!rootPostId) return null;
+    const row = await this.prisma.marvinThreadSummary.findUnique({
+      where: { rootPostId },
+      select: { summary: true },
+    });
+    return row?.summary ?? null;
+  }
+
   /** Returns true if the thread currently meets the size threshold for summarization. */
   async shouldSummarize(rootPostId: string): Promise<boolean> {
     if (!rootPostId) return false;

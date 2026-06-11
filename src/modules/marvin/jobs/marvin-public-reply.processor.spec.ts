@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { MarvinPublicReplyProcessor } from './marvin-public-reply.processor';
+import { MarvinThreadContextService } from '../services/marvin-thread-context.service';
 import {
   MARV_DEFAULT_FAST_MODEL,
   MARV_DEFAULT_REGULAR_MODEL,
@@ -184,7 +185,36 @@ function makeProcessor(opts?: {
   };
 
   const jobs: any = { enqueue: jest.fn(async () => undefined) };
-  const threadSummary: any = { shouldSummarize: jest.fn(async () => false) };
+  const threadSummary: any = {
+    shouldSummarize: jest.fn(async () => false),
+    getSummaryText: jest.fn(async () => null),
+  };
+  const threadContext: any = {
+    collect: jest.fn(async () => ({
+      focal: {
+        id: 'post-1',
+        parentId: null,
+        rootId: 'root-1',
+        depth: 0,
+        authorUserId: 'user-1',
+        authorUsername: 'asker',
+        authorDisplayName: 'Asker',
+        body: 'hey @marv',
+        createdAt: new Date(),
+        checkinPrompt: null,
+        isMarv: false,
+        media: [],
+        poll: null,
+      },
+      ancestors: [],
+      descendants: [],
+      totalDescendants: 0,
+      rootId: 'root-1',
+    })),
+    // Delegate to the real (pure) selection so vision tests exercise the shared code path.
+    selectImageMedia: (ctx: any, opts: any) =>
+      new MarvinThreadContextService({} as any, {} as any).selectImageMedia(ctx, opts),
+  };
   const linkMetadata: any = { previewLinks: jest.fn(async () => []) };
   const presenceRealtime: any = { emitPostsTyping: jest.fn() };
 
@@ -202,6 +232,7 @@ function makeProcessor(opts?: {
     canned,
     jobs,
     threadSummary,
+    threadContext,
     linkMetadata,
     presenceRealtime,
   );
@@ -219,6 +250,7 @@ function makeProcessor(opts?: {
     identity,
     jobs,
     threadSummary,
+    threadContext,
     linkMetadata,
   };
 }
@@ -504,15 +536,21 @@ describe('MarvinPublicReplyProcessor', () => {
         media: [{ id: 'med-1', kind: 'image', source: 'upload', r2Key: 'images/photo.jpg', url: null, position: 0 }],
         poll: null,
       });
-      // root + reply for fetchThreadContext
-      m.prisma.post.findFirst
-        .mockResolvedValueOnce({ // root post fetch inside fetchThreadContext
-          id: 'r-1', body: 'root', createdAt: new Date('2025-01-01'),
-          checkinPrompt: null, userId: 'u-1', user: { username: 'alice', name: 'Alice' },
-          media: [{ id: 'med-r1', kind: 'image', source: 'upload', r2Key: 'images/root.jpg', url: null, position: 0 }],
+      // Bidirectional context: focal post carries an upload image for vision selection.
+      m.threadContext.collect.mockResolvedValueOnce({
+        focal: {
+          id: 'p-1', parentId: null, rootId: 'r-1', depth: 0,
+          authorUserId: 'u-requester', authorUsername: 'alice', authorDisplayName: 'Alice',
+          body: 'Check this photo', createdAt: new Date('2025-01-01'), editedAt: null,
+          checkinPrompt: null, isMarv: false,
+          media: [{ kind: 'image', source: 'upload', r2Key: 'images/photo.jpg', url: null }],
           poll: null,
-        });
-      m.prisma.post.findMany.mockResolvedValueOnce([]); // no replies
+        },
+        ancestors: [],
+        descendants: [],
+        totalDescendants: 0,
+        rootId: 'r-1',
+      });
       await m.processor.process({ postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' });
       // Should call AI with imageUrls populated
       const aiCall = m.ai.respond.mock.calls[0]?.[0];

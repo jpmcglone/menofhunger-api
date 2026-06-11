@@ -74,8 +74,29 @@ export type MarvPromptInput = {
    * Public-thread context only: recent posts from the thread (root + replies), already
    * fetched by the processor and injected here so the model never needs a tool call to
    * see basic thread context. Oldest → newest order. Capped at ~15 posts.
+   *
+   * Legacy flat rendering — used as a fallback when the bidirectional fields below
+   * (`ancestors` / `descendants` / `triggeringPost`) are not supplied.
    */
   threadContext?: MarvThreadPost[];
+  /**
+   * Public-thread context: the path ABOVE the message that mentions Marv, ordered
+   * root-most → immediate parent. When provided (with `triggeringPost`), the builder
+   * renders a sectioned, bidirectional view instead of the flat `threadContext`.
+   */
+  ancestors?: MarvThreadPost[];
+  /** Public-thread context: the post that actually mentions Marv. */
+  triggeringPost?: MarvThreadPost;
+  /**
+   * Public-thread context: replies UNDER the message that mentions Marv, in reading
+   * order. Lets Marv see how the conversation continued below him.
+   */
+  descendants?: MarvThreadPost[];
+  /**
+   * Public-thread context: the rolling thread summary (when the thread is long enough
+   * to have one), so Marv has the gist of older posts beyond the collected window.
+   */
+  rollingSummary?: string | null;
   /** Private-session context only: the conversation Marv ↔ user. */
   conversationId?: string;
   /**
@@ -144,24 +165,39 @@ export class MarvinPromptBuilderService {
       if (input.triggeringPostId) lines.push(`Triggering post id: ${input.triggeringPostId}.`);
       if (input.rootPostId) lines.push(`Thread root post id: ${input.rootPostId}.`);
 
-      // Inline thread context so the model always sees it — no tool call required.
-      if (input.threadContext && input.threadContext.length > 0) {
-        lines.push('Thread (oldest → newest):');
-        for (const p of input.threadContext) {
-          const handle = p.isMarv
-            ? '[YOU previously said]'
-            : p.authorUsername
-              ? `@${p.authorUsername}`
-              : (p.authorDisplayName ?? 'unknown');
-          const tag = p.isTriggeringPost ? ' [← this message mentions you]' : '';
-          if (p.checkinPrompt) {
-            lines.push(`  [Daily check-in prompt]: "${p.checkinPrompt.slice(0, 300)}"`);
-          }
-          lines.push(`  ${handle}${tag}: "${p.body.slice(0, 500)}"`);
-          if (p.poll) {
-            lines.push(MarvinPromptBuilderService.renderPoll(p.poll));
-          }
+      const hasBidirectional =
+        Boolean(input.triggeringPost) ||
+        (input.ancestors?.length ?? 0) > 0 ||
+        (input.descendants?.length ?? 0) > 0;
+
+      if (hasBidirectional) {
+        // Sectioned, bidirectional view: what's above the mention, the mention itself,
+        // and what came after it — so Marv reasons about the whole conversation.
+        if (input.rollingSummary && input.rollingSummary.trim()) {
+          lines.push('Thread summary so far (older posts beyond the window below):');
+          lines.push(`  ${input.rollingSummary.trim().slice(0, 1500)}`);
         }
+        if (input.ancestors && input.ancestors.length > 0) {
+          lines.push('Path above the message that mentions you (oldest → newest):');
+          for (const p of input.ancestors) lines.push(...this.renderThreadPostLines(p));
+        }
+        if (input.triggeringPost) {
+          lines.push('The message that mentions you:');
+          lines.push(...this.renderThreadPostLines({ ...input.triggeringPost, isTriggeringPost: true }));
+        }
+        if (input.descendants && input.descendants.length > 0) {
+          lines.push('Replies under it (posted after the message that mentions you):');
+          for (const p of input.descendants) lines.push(...this.renderThreadPostLines(p));
+        }
+        lines.push(
+          'Do not repeat or paraphrase what YOU previously said. Build on it or answer the new question.',
+        );
+        lines.push(MARV_THREAD_TOOL_OPTIONAL + MARV_CONCISENESS);
+      } else if (input.threadContext && input.threadContext.length > 0) {
+        // Legacy flat rendering (oldest → newest), kept for callers that haven't moved
+        // to the bidirectional fields.
+        lines.push('Thread (oldest → newest):');
+        for (const p of input.threadContext) lines.push(...this.renderThreadPostLines(p));
         lines.push(
           'Do not repeat or paraphrase what YOU previously said. Build on it or answer the new question.',
         );
@@ -212,6 +248,25 @@ export class MarvinPromptBuilderService {
       developerNote: lines.join('\n'),
       userMessage: (input.currentQuestion ?? '').trim().slice(0, 4000),
     };
+  }
+
+  /** Renders one thread post (author line + optional check-in prompt + optional poll). */
+  private renderThreadPostLines(p: MarvThreadPost): string[] {
+    const handle = p.isMarv
+      ? '[YOU previously said]'
+      : p.authorUsername
+        ? `@${p.authorUsername}`
+        : (p.authorDisplayName ?? 'unknown');
+    const tag = p.isTriggeringPost ? ' [← this message mentions you]' : '';
+    const out: string[] = [];
+    if (p.checkinPrompt) {
+      out.push(`  [Daily check-in prompt]: "${p.checkinPrompt.slice(0, 300)}"`);
+    }
+    out.push(`  ${handle}${tag}: "${p.body.slice(0, 500)}"`);
+    if (p.poll) {
+      out.push(MarvinPromptBuilderService.renderPoll(p.poll));
+    }
+    return out;
   }
 
   /** Renders a poll as a compact inline text block for the developer note. */

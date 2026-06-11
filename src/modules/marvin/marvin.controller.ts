@@ -17,6 +17,7 @@ import { CurrentUserId } from '../users/users.decorator';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type {
+  MarvinCatchUpDto,
   MarvinCreditSummaryDto,
   MarvinMeDto,
   MarvinModeDto,
@@ -25,10 +26,18 @@ import type {
 import { MarvinCreditService, type MarvCreditSummary } from './services/marvin-credit.service';
 import { MarvinBotIdentityService } from './services/marvin-bot-identity.service';
 import { MarvinAdminService } from './services/marvin-admin.service';
+import { MarvinCatchUpService } from './services/marvin-catch-up.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 
 const updatePreferencesSchema = z.object({
   preferredMode: z.enum(['auto', 'fast', 'regular', 'smart']).optional(),
+});
+
+const catchUpBodySchema = z.object({
+  mode: z.enum(['auto', 'fast', 'regular', 'smart']).optional(),
+  refresh: z.boolean().optional(),
+  /** Peek mode: return the cached summary if one exists, else null. Never spends credits. */
+  cacheOnly: z.boolean().optional(),
 });
 
 const adminUsersQuerySchema = z.object({
@@ -44,7 +53,7 @@ const myUsageQuerySchema = z.object({
 
 const adminUsageQuerySchema = z.object({
   userId: z.string().trim().max(64).optional(),
-  source: z.enum(['public_thread', 'private_session']).optional(),
+  source: z.enum(['public_thread', 'private_session', 'catch_up']).optional(),
   cursor: z.string().trim().max(64).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
@@ -83,6 +92,7 @@ export class MarvinController {
     private readonly credits: MarvinCreditService,
     private readonly identity: MarvinBotIdentityService,
     private readonly admin: MarvinAdminService,
+    private readonly catchUpService: MarvinCatchUpService,
   ) {}
 
   @UseGuards(AuthGuard)
@@ -133,6 +143,38 @@ export class MarvinController {
       data: result.rows.map(usageRowToDto),
       pagination: { nextCursor: result.nextCursor },
     };
+  }
+
+  /**
+   * "Catch me up" — summarize the conversation above AND below a post. Premium-only,
+   * mode-routed, spends credits (cache hits are free). Visibility is enforced through
+   * `PostsService.getById`, so gated/private posts return the same 403/404 as the
+   * permalink endpoint.
+   */
+  @UseGuards(AuthGuard)
+  @Post('marvin/catch-up/:postId')
+  async catchUp(
+    @CurrentUserId() userId: string,
+    @Param('postId') postId: string,
+    @Body() body: unknown,
+  ): Promise<{ data: MarvinCatchUpDto | null }> {
+    const parsed = catchUpBodySchema.parse(body ?? {});
+    // Peek: return the free cached summary if present, else null. No AI call, no credits.
+    if (parsed.cacheOnly) {
+      const data = await this.catchUpService.peekCached({
+        userId,
+        postId,
+        requestedMode: parsed.mode ?? null,
+      });
+      return { data };
+    }
+    const data = await this.catchUpService.catchUp({
+      userId,
+      postId,
+      requestedMode: parsed.mode ?? null,
+      forceRefresh: parsed.refresh ?? false,
+    });
+    return { data };
   }
 
   // ─── Admin ─────────────────────────────────────────────────────────────────
@@ -302,11 +344,21 @@ export class MarvinController {
       });
     }
 
+    const creditCfg = this.appConfig.marvCredits();
+
     return {
       enabled: cfg.enabled && !disabled,
       isPremium,
       preferredMode: (settings?.preferredMode ?? 'auto') as MarvinModeDto,
       credits: creditSummaryToDto(summary),
+      costs: {
+        fast: creditCfg.fastCost,
+        regular: creditCfg.regularCost,
+        smart: creditCfg.smartCost,
+        webSearchSurcharge: creditCfg.webSearchCreditCost,
+        visionPerImage: creditCfg.visionCreditCostPerImage,
+        urlFetchSurcharge: creditCfg.urlFetchCreditCost,
+      },
       marv: marvUserId
         ? {
             userId: marvUserId,
