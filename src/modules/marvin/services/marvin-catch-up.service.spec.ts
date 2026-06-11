@@ -361,6 +361,106 @@ describe('MarvinCatchUpService', () => {
     expect(result.included).toEqual({ ancestors: 0, descendants: 0, totalDescendants: 0 });
     expect(result.summary).toBeTruthy();
   });
+
+  // ── Grounding guardrail ────────────────────────────────────────────────────
+
+  it('includes explicit anti-fabrication grounding in every prompt', async () => {
+    const { service, ai } = makeService();
+    await service.catchUp({ userId: 'u-1', postId: 'focal', requestedMode: 'regular' });
+    const note: string = ai.respond.mock.calls[0][0].developerNote;
+    expect(note).toContain('GROUNDING:');
+    expect(note).toContain('Never invent names, quotes, numbers');
+    expect(note).toContain('omit it rather than guess');
+    expect(note).toContain('background context, never as something said in the thread');
+  });
+
+  // ── Sections ──────────────────────────────────────────────────────────────
+
+  it('requests two-section FORMAT when there are replies', async () => {
+    const { service, ai } = makeService();
+    await service.catchUp({ userId: 'u-1', postId: 'focal', requestedMode: 'regular' });
+    const note: string = ai.respond.mock.calls[0][0].developerNote;
+    expect(note).toContain('FORMAT:');
+    expect(note).toContain('POST:');
+    expect(note).toContain('REPLIES:');
+  });
+
+  it('does NOT request sections format when there are no replies', async () => {
+    const loneContext = { ...makeContext(), descendants: [], totalDescendants: 0 };
+    const { service, ai } = makeService({ context: loneContext });
+    await service.catchUp({ userId: 'u-1', postId: 'focal', requestedMode: 'regular' });
+    const note: string = ai.respond.mock.calls[0][0].developerNote;
+    expect(note).not.toContain('FORMAT:');
+  });
+
+  it('parses POST:/REPLIES: markers into sections when the model follows the format', async () => {
+    const { service } = makeService({
+      aiText: 'POST: The post is about testing.\nREPLIES: People agreed it works.',
+    });
+    const result = await service.catchUp({ userId: 'u-1', postId: 'focal', requestedMode: 'regular' });
+    expect(result.sections).toEqual({ post: 'The post is about testing.', replies: 'People agreed it works.' });
+    expect(result.summary).toContain('The post is about testing.');
+    expect(result.summary).toContain('People agreed it works.');
+  });
+
+  it('falls back to single-blob summary when the model does not follow the sections format', async () => {
+    const { service } = makeService({ aiText: 'Some unformatted summary without markers.' });
+    const result = await service.catchUp({ userId: 'u-1', postId: 'focal', requestedMode: 'regular' });
+    expect(result.sections).toBeNull();
+    expect(result.summary).toBe('Some unformatted summary without markers.');
+  });
+
+  it('returns sections=null and single-blob for lone posts (no replies)', async () => {
+    const loneContext = { ...makeContext(), descendants: [], totalDescendants: 0 };
+    const { service } = makeService({ context: loneContext, aiText: 'POST: just a post.' });
+    const result = await service.catchUp({ userId: 'u-1', postId: 'focal', requestedMode: 'regular' });
+    // No FORMAT instruction was given, so the model output is treated as a single blob.
+    expect(result.sections).toBeNull();
+  });
+
+  // ── Image opt-in flag ─────────────────────────────────────────────────────
+
+  it('skips image selection and vision costs when includeImages=false', async () => {
+    const withMedia = makeContext();
+    withMedia.focal.media = [{ kind: 'image', source: 'upload', r2Key: 'posts/a.jpg', url: null }] as any;
+    const { service, ai, credits } = makeService({ context: withMedia, cost: 2 });
+    const result = await service.catchUp({ userId: 'u-1', postId: 'focal', includeImages: false });
+    expect(ai.respond.mock.calls[0][0].imageUrls).toBeUndefined();
+    // No vision surcharge reserved or spent.
+    expect(credits.refill).toHaveBeenCalledTimes(1);
+    expect(result.costBreakdown.vision).toBe(0);
+  });
+
+  it('uses a distinct cache key for includeImages=false vs true', async () => {
+    const { service, cache } = makeService({ cached: null });
+    await service.catchUp({ userId: 'u-1', postId: 'focal', includeImages: true });
+    const keyWithImg: string = cache.getJson.mock.calls[0][0];
+    cache.getJson.mockClear();
+    cache.setJson.mockClear();
+    await service.catchUp({ userId: 'u-1', postId: 'focal', includeImages: false });
+    const keyNoImg: string = cache.getJson.mock.calls[0][0];
+    expect(keyWithImg).toContain(':img:');
+    expect(keyNoImg).toContain(':noimg:');
+    expect(keyWithImg).not.toBe(keyNoImg);
+  });
+
+  it('peekCached honors the includeImages flag in the cache key', async () => {
+    const cached: MarvinCatchUpDto = {
+      postId: 'focal',
+      rootPostId: 'root',
+      summary: 'peeked',
+      effectiveMode: 'regular',
+      creditsSpent: 2,
+      costBreakdown: { mode: 2, vision: 0, webSearch: 0, urlFetch: 0 },
+      cached: false,
+      included: { ancestors: 1, descendants: 1, totalDescendants: 1 },
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const { service, cache } = makeService({ cached });
+    await service.peekCached({ userId: 'u-1', postId: 'focal', includeImages: false });
+    const key: string = cache.getJson.mock.calls[0][0];
+    expect(key).toContain(':noimg:');
+  });
 });
 
 describe('MarvinCatchUpService.peekCached', () => {

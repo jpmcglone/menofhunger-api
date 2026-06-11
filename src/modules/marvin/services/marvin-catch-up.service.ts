@@ -58,9 +58,12 @@ export class MarvinCatchUpService {
     requestedMode?: MarvinMode | null;
     /** When true, skip the cache read and regenerate a fresh summary (still spends credits). */
     forceRefresh?: boolean;
+    /** When false, skip vision entirely: no images attached, no vision surcharge. Default true. */
+    includeImages?: boolean;
   }): Promise<MarvinCatchUpDto> {
     const startedAt = Date.now();
     const { userId, postId } = params;
+    const includeImages = params.includeImages !== false;
 
     // 1. Marv enabled (globally + for this user)?
     const cfg = this.appConfig.marvBot();
@@ -112,7 +115,8 @@ export class MarvinCatchUpService {
     //    a freshness marker (descendant count + latest updatedAt/createdAt across all posts).
     //    A forced refresh (the "Regenerate" button) skips the read and recomputes.
     const marker = this.freshnessMarker(context);
-    const cacheKey = `marv:catchup:${postId}:${requestedMode}:${marker}`;
+    const imgToken = includeImages ? 'img' : 'noimg';
+    const cacheKey = `marv:catchup:${postId}:${requestedMode}:${imgToken}:${marker}`;
     if (!params.forceRefresh) {
       const cached = await this.cache.getJson<MarvinCatchUpDto>(cacheKey);
       if (cached) {
@@ -151,33 +155,35 @@ export class MarvinCatchUpService {
 
     // Vision: select images from across the conversation (shared with the @marv reply path)
     // so Marv can summarize what's actually shown, not just captions.
-    const {
-      imageUrls: selectedImageUrls,
-      hasGifAttached,
-      totalImages,
-    } = this.context.selectImageMedia(context, {
-      visionEnabled: openAICfg.visionEnabled,
-      visionMaxImagesPerTurn: openAICfg.visionMaxImagesPerTurn,
-      publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
-    });
-    if (totalImages > selectedImageUrls.length) {
-      this.logger.log(
-        `[marv] catch-up image cap hit post=${postId}: ${totalImages} found, sending ${selectedImageUrls.length} (cap=${openAICfg.visionMaxImagesPerTurn})`,
-      );
+    // Skipped entirely when the caller set includeImages=false (opt-out → no surcharge).
+    let imageUrls: string[] = [];
+    let hasGifAttached = false;
+    if (includeImages) {
+      const selected = this.context.selectImageMedia(context, {
+        visionEnabled: openAICfg.visionEnabled,
+        visionMaxImagesPerTurn: openAICfg.visionMaxImagesPerTurn,
+        publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
+      });
+      hasGifAttached = selected.hasGifAttached;
+      if (selected.totalImages > selected.imageUrls.length) {
+        this.logger.log(
+          `[marv] catch-up image cap hit post=${postId}: ${selected.totalImages} found, sending ${selected.imageUrls.length} (cap=${openAICfg.visionMaxImagesPerTurn})`,
+        );
+      }
+      // An attached image is itself a routing signal: a "testing" post with a photo IS the photo.
+      // If the routed tier can't see images, upgrade to the cheapest vision-capable tier so the
+      // image is never silently dropped (mirrors how sensitive topics force Smart).
+      if (
+        selected.imageUrls.length > 0 &&
+        openAICfg.visionEnabled &&
+        !openAICfg.visionModes.includes(effectiveMode as string)
+      ) {
+        const visionTier = (['regular', 'smart', 'fast'] as const).find((m) => openAICfg.visionModes.includes(m));
+        if (visionTier) effectiveMode = visionTier;
+      }
+      const visionActive = openAICfg.visionEnabled && openAICfg.visionModes.includes(effectiveMode as string);
+      imageUrls = visionActive ? selected.imageUrls : [];
     }
-    // An attached image is itself a routing signal: a "testing" post with a photo IS the photo.
-    // If the routed tier can't see images, upgrade to the cheapest vision-capable tier so the
-    // image is never silently dropped (mirrors how sensitive topics force Smart).
-    if (
-      selectedImageUrls.length > 0 &&
-      openAICfg.visionEnabled &&
-      !openAICfg.visionModes.includes(effectiveMode as string)
-    ) {
-      const visionTier = (['regular', 'smart', 'fast'] as const).find((m) => openAICfg.visionModes.includes(m));
-      if (visionTier) effectiveMode = visionTier;
-    }
-    const visionActive = openAICfg.visionEnabled && openAICfg.visionModes.includes(effectiveMode as string);
-    const imageUrls = visionActive ? selectedImageUrls : [];
 
     // 7. Credit gate — reserve base + vision (per image) + worst-case one web search, mirroring
     //    the @marv reply path so the spend can't fail after a successful, billable call.
@@ -243,7 +249,8 @@ export class MarvinCatchUpService {
       );
     }
 
-    const summary = (aiResult.text ?? '').trim();
+    const rawText = (aiResult.text ?? '').trim();
+    const { summary, sections } = this.parseSections(rawText, context.descendants.length > 0);
     if (!summary) {
       await this.usage.recordEvent({
         userId,
@@ -306,6 +313,7 @@ export class MarvinCatchUpService {
       postId,
       rootPostId,
       summary,
+      sections,
       effectiveMode,
       creditsSpent: totalCost,
       costBreakdown: {
@@ -348,8 +356,10 @@ export class MarvinCatchUpService {
     userId: string;
     postId: string;
     requestedMode?: MarvinMode | null;
+    includeImages?: boolean;
   }): Promise<MarvinCatchUpDto | null> {
     const { userId, postId } = params;
+    const includeImages = params.includeImages !== false;
     try {
       const cfg = this.appConfig.marvBot();
       const [viewer, settings] = await Promise.all([
@@ -370,7 +380,8 @@ export class MarvinCatchUpService {
 
       const context = await this.context.collect({ focalPostId: postId });
       const marker = this.freshnessMarker(context);
-      const cacheKey = `marv:catchup:${postId}:${requestedMode}:${marker}`;
+      const imgToken = includeImages ? 'img' : 'noimg';
+      const cacheKey = `marv:catchup:${postId}:${requestedMode}:${imgToken}:${marker}`;
       const cached = await this.cache.getJson<MarvinCatchUpDto>(cacheKey);
       if (!cached) return null;
 
@@ -385,6 +396,35 @@ export class MarvinCatchUpService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Parse the AI's two-section output into structured fields.
+   * Expected format (when hasReplies):
+   *   POST: <text>
+   *   REPLIES: <text>
+   * Falls back gracefully when the model doesn't follow the format exactly.
+   */
+  private parseSections(
+    text: string,
+    hasReplies: boolean,
+  ): { summary: string; sections: MarvinCatchUpDto['sections'] } {
+    if (!hasReplies) {
+      return { summary: text, sections: null };
+    }
+    const postMatch = /^POST:\s*(.+?)(?=\nREPLIES:|$)/ms.exec(text);
+    const repliesMatch = /^REPLIES:\s*([\s\S]+?)$/ms.exec(text);
+    if (postMatch && repliesMatch) {
+      const post = postMatch[1].trim();
+      const replies = repliesMatch[1].trim();
+      return {
+        summary: replies ? `${post}\n\n${replies}` : post,
+        sections: { post, replies: replies || null },
+      };
+    }
+    // AI didn't follow the format — strip any partial markers and return as a single blob.
+    const stripped = text.replace(/^(POST|REPLIES):\s*/gm, '').trim();
+    return { summary: stripped || text, sections: null };
   }
 
   /**
@@ -431,7 +471,10 @@ export class MarvinCatchUpService {
     const { imageCount, hasGifAttached, rollingSummary, linkPreviews } = opts;
     const hasImages = imageCount > 0;
     const hasThread = context.ancestors.length > 0 || context.descendants.length > 0;
+    const hasReplies = context.descendants.length > 0;
     const lines: string[] = [];
+
+    // Core task + grounding
     lines.push(
       (hasThread
         ? 'TASK: Summarize what this conversation is ABOUT and where it landed — the throughline, ' +
@@ -439,11 +482,12 @@ export class MarvinCatchUpService {
           'SYNTHESIZE; do NOT narrate it post-by-post ("@a said X, then @b said Y"). ' +
           'Name people only when who-holds-which-position actually matters, not as a transcript. '
         : 'TASK: Summarize the point of the highlighted post in one sentence. ') +
-        'Stay in your voice — brief and stoic, plain prose, no headings or bullets, no preamble. ' +
+        'Stay in your voice — brief and stoic, plain prose, no preamble. ' +
         'Length scales with substance: a thin or trivial post gets ONE sentence; only a genuinely ' +
         'busy thread earns a short paragraph. ' +
         'You may use web search or general knowledge for a quick factual gloss on a referenced ' +
-        'event, person, or term — one clause, not a lecture. ' +
+        'event, person, or term — one clause, not a lecture. Any such gloss must read as background ' +
+        'context, never as something said in the thread. ' +
         'Do NOT speculate about messages that might be posted later or about what you would "need." ' +
         'Stay neutral; no opinions or advice. ' +
         'Never say "nothing to summarize."' +
@@ -455,6 +499,24 @@ export class MarvinCatchUpService {
           : '') +
         (hasGifAttached ? ' One attached image is an animated GIF; treat it as a moving reaction, not a still.' : ''),
     );
+
+    // Anti-fabrication guardrail
+    lines.push('');
+    lines.push(
+      'GROUNDING: Summarize ONLY what is actually written in this thread. ' +
+        'Never invent names, quotes, numbers, claims, or details not present in the posts below. ' +
+        'If something is unclear or ambiguous, omit it rather than guess.',
+    );
+
+    // Sections format (only when there are replies)
+    if (hasReplies) {
+      lines.push('');
+      lines.push(
+        'FORMAT: Output EXACTLY two labeled paragraphs with no other text:\n' +
+          'POST: [one-sentence summary of the highlighted post itself]\n' +
+          'REPLIES: [synthesis of the replies below — throughline, key points, any conclusion]',
+      );
+    }
 
     // Rolling summary covers posts beyond the context window (mirrors prompt-builder line 176-179).
     if (rollingSummary?.trim()) {

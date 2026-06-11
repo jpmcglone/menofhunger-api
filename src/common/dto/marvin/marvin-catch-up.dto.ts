@@ -8,6 +8,13 @@ export type MarvinCatchUpBodyDto = {
   mode?: MarvinModeDto | 'auto';
   /** Skip the cache and regenerate a fresh summary (the "Regenerate" button). Spends credits. */
   refresh?: boolean;
+  /** Peek mode: return the cached summary if one exists, else null. Never spends credits. */
+  cacheOnly?: boolean;
+  /**
+   * When true (default), pass images from across the thread to vision-capable models.
+   * When false, skip vision entirely — no images attached, no vision surcharge, cheaper.
+   */
+  includeImages?: boolean;
 };
 
 /**
@@ -17,8 +24,14 @@ export type MarvinCatchUpBodyDto = {
 export type MarvinCatchUpDto = {
   postId: string;
   rootPostId: string | null;
-  /** The generated summary text. */
+  /** The generated summary text (markers stripped; always present for backwards compat). */
   summary: string;
+  /**
+   * Structured summary sections, present when the thread has replies.
+   * `post` summarises the focal post; `replies` synthesises the replies below.
+   * Null when the AI didn't output the expected markers (single-blob fallback).
+   */
+  sections?: { post: string; replies: string | null } | null;
   /** The model tier that actually ran (after routing/auto-upgrades). */
   effectiveMode: MarvinModeDto;
   /** Credits spent on this request (0 on a cache hit). */

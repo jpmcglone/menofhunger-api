@@ -36,8 +36,8 @@ const updatePreferencesSchema = z.object({
 const catchUpBodySchema = z.object({
   mode: z.enum(['auto', 'fast', 'regular', 'smart']).optional(),
   refresh: z.boolean().optional(),
-  /** Peek mode: return the cached summary if one exists, else null. Never spends credits. */
   cacheOnly: z.boolean().optional(),
+  includeImages: z.boolean().optional(),
 });
 
 const adminUsersQuerySchema = z.object({
@@ -165,6 +165,7 @@ export class MarvinController {
         userId,
         postId,
         requestedMode: parsed.mode ?? null,
+        includeImages: parsed.includeImages ?? true,
       });
       return { data };
     }
@@ -173,6 +174,7 @@ export class MarvinController {
       postId,
       requestedMode: parsed.mode ?? null,
       forceRefresh: parsed.refresh ?? false,
+      includeImages: parsed.includeImages ?? true,
     });
     return { data };
   }

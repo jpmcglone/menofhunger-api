@@ -356,7 +356,9 @@ export class BillingService {
     const remainingMs = latestGrantEnd ? latestGrantEnd.getTime() - now.getTime() : 0;
     const trialDays = remainingMs > 0 ? Math.ceil(remainingMs / (24 * 60 * 60 * 1000)) : 0;
 
-    const successUrl = `${cfg.frontendBaseUrl}/settings/billing?checkout=success`;
+    // {CHECKOUT_SESSION_ID} is a Stripe template literal — Stripe substitutes the real session ID
+    // in the redirect URL so the client can call the sync endpoint without polling.
+    const successUrl = `${cfg.frontendBaseUrl}/settings/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`;
     const cancelUrl = `${cfg.frontendBaseUrl}/settings/billing?checkout=cancel`;
 
     const session = await stripe.checkout.sessions.create({
@@ -385,6 +387,50 @@ export class BillingService {
     const url = (session as any)?.url as string | null | undefined;
     if (!url) throw new BadRequestException('Stripe did not return a checkout URL.');
     return { url };
+  }
+
+  /**
+   * Idempotent sync triggered by the client when Stripe redirects back with a session ID.
+   * Works whether or not the webhook already ran — if premium is already set the call is a no-op.
+   * Returns the caller's updated billing summary so the UI can update immediately.
+   */
+  async syncCheckoutSession(params: { userId: string; sessionId: string }): Promise<BillingMeDto> {
+    const { stripe } = this.getStripe();
+
+    // Retrieve with subscription expanded so we don't need a second Stripe round-trip.
+    const session = await stripe.checkout.sessions.retrieve(params.sessionId, {
+      expand: ['subscription'],
+    });
+
+    // Ownership check: ensure the session belongs to this user.
+    if (session.client_reference_id !== params.userId) {
+      throw new NotFoundException('Checkout session not found.');
+    }
+
+    // Also cross-check the Stripe customer matches what we have on file, guarding against
+    // an attacker who somehow knows someone else's session ID.
+    const user = await this.prisma.user.findUnique({
+      where: { id: params.userId },
+      select: { stripeCustomerId: true },
+    });
+    if (!user) throw new NotFoundException('User not found.');
+    const sessionCustomerId = typeof session.customer === 'string' ? session.customer : session.customer?.id ?? null;
+    if (user.stripeCustomerId && sessionCustomerId && user.stripeCustomerId !== sessionCustomerId) {
+      throw new NotFoundException('Checkout session not found.');
+    }
+
+    // Sync the subscription if one exists (may not if the session status is still 'open' / 'expired').
+    const sub = session.subscription;
+    if (sub) {
+      const customerId = sessionCustomerId;
+      const subscriptionId = typeof sub === 'string' ? sub : sub.id;
+      if (customerId && subscriptionId) {
+        const subscription = typeof sub === 'string' ? undefined : (sub as Stripe.Subscription);
+        await this.syncSubscriptionToUser({ customerId, subscriptionId, subscription });
+      }
+    }
+
+    return this.getMe(params.userId);
   }
 
   async createPortalSession(params: { userId: string }): Promise<BillingPortalSessionDto> {

@@ -8,7 +8,7 @@ import { BillingService } from './billing.service';
 // `global.__stripeMock__`, so each test can swap the behavior.
 
 type StripeMock = {
-  checkout: { sessions: { create: jest.Mock } };
+  checkout: { sessions: { create: jest.Mock; retrieve?: jest.Mock } };
   billingPortal: { sessions: { create: jest.Mock } };
   customers: { create: jest.Mock };
   subscriptions: { retrieve: jest.Mock; update: jest.Mock };
@@ -422,5 +422,162 @@ describe('BillingService.handleWebhook', () => {
 
     expect(deps.prisma.user.findFirst).not.toHaveBeenCalled();
     expect(deps.entitlement.recomputeAndApply).not.toHaveBeenCalled();
+  });
+});
+
+// ─── BillingService.syncCheckoutSession ──────────────────────────────────────
+
+describe('BillingService.syncCheckoutSession', () => {
+  function makeSessionMock(overrides: {
+    clientReferenceId?: string | null;
+    customerId?: string;
+    subscriptionId?: string | null;
+    subscriptionStatus?: string;
+  } = {}) {
+    const {
+      clientReferenceId = 'u1',
+      customerId = 'cus_1',
+      subscriptionId = 'sub_1',
+      subscriptionStatus = 'active',
+    } = overrides;
+    return {
+      id: 'cs_test_1',
+      client_reference_id: clientReferenceId,
+      customer: customerId,
+      subscription: subscriptionId
+        ? {
+            id: subscriptionId,
+            status: subscriptionStatus,
+            items: { data: [{ price: { id: 'price_premium' } }] },
+            cancel_at_period_end: false,
+            current_period_start: 1700000000,
+            current_period_end: 1730000000,
+          }
+        : null,
+    };
+  }
+
+  it('syncs subscription and returns updated billing when session belongs to caller', async () => {
+    const { service, deps } = makeService();
+    global.__stripeMock__!.checkout = {
+      sessions: {
+        retrieve: jest.fn(async () => makeSessionMock()),
+      },
+    } as any;
+
+    // The ownership check looks up user by userId for stripeCustomerId.
+    deps.prisma.user.findUnique
+      .mockResolvedValueOnce({ stripeCustomerId: 'cus_1' }) // ownership check
+      .mockResolvedValueOnce({                               // getMe call
+        premium: true,
+        premiumPlus: false,
+        verifiedStatus: 'identity',
+        stripeSubscriptionStatus: 'active',
+        stripeCancelAtPeriodEnd: false,
+        stripeCurrentPeriodEnd: new Date('2024-10-27T09:53:20.000Z'),
+        referralCode: null,
+        referralBonusGrantedAt: null,
+        recruitedBy: null,
+        _count: { recruits: 0 },
+      });
+
+    // syncSubscriptionToUser looks up user by stripeCustomerId.
+    deps.prisma.user.findFirst.mockResolvedValue({
+      id: 'u1',
+      username: 'testuser',
+      name: 'Test',
+      verifiedStatus: 'identity',
+      premium: false,
+      premiumPlus: false,
+      recruitedById: null,
+      referralBonusGrantedAt: null,
+    });
+
+    const result = await service.syncCheckoutSession({ userId: 'u1', sessionId: 'cs_test_1' });
+
+    expect(deps.prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'u1' }, data: expect.objectContaining({ stripeSubscriptionId: 'sub_1' }) }),
+    );
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u1');
+    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith('u1', 'billing_tier_changed');
+    expect(result.premium).toBe(true);
+  });
+
+  it('throws NotFoundException when client_reference_id does not match caller', async () => {
+    const { service, deps } = makeService();
+    global.__stripeMock__!.checkout = {
+      sessions: { retrieve: jest.fn(async () => makeSessionMock({ clientReferenceId: 'other-user' })) },
+    } as any;
+    deps.prisma.user.findUnique.mockResolvedValue({ stripeCustomerId: 'cus_1' });
+
+    await expect(service.syncCheckoutSession({ userId: 'u1', sessionId: 'cs_test_1' })).rejects.toThrow('Checkout session not found.');
+    expect(deps.entitlement.recomputeAndApply).not.toHaveBeenCalled();
+  });
+
+  it('throws NotFoundException when Stripe customer does not match the user on file', async () => {
+    const { service, deps } = makeService();
+    global.__stripeMock__!.checkout = {
+      sessions: { retrieve: jest.fn(async () => makeSessionMock({ customerId: 'cus_foreign' })) },
+    } as any;
+    // User has a different customer ID on file.
+    deps.prisma.user.findUnique.mockResolvedValue({ stripeCustomerId: 'cus_mine' });
+
+    await expect(service.syncCheckoutSession({ userId: 'u1', sessionId: 'cs_test_1' })).rejects.toThrow('Checkout session not found.');
+    expect(deps.entitlement.recomputeAndApply).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent: calling after webhook already set premium still succeeds and returns updated billing', async () => {
+    const { service, deps } = makeService();
+    global.__stripeMock__!.checkout = {
+      sessions: { retrieve: jest.fn(async () => makeSessionMock()) },
+    } as any;
+    deps.prisma.user.findUnique
+      .mockResolvedValueOnce({ stripeCustomerId: 'cus_1' })
+      .mockResolvedValueOnce({
+        premium: true,
+        premiumPlus: false,
+        verifiedStatus: 'identity',
+        stripeSubscriptionStatus: 'active',
+        stripeCancelAtPeriodEnd: false,
+        stripeCurrentPeriodEnd: null,
+        referralCode: null,
+        referralBonusGrantedAt: null,
+        recruitedBy: null,
+        _count: { recruits: 0 },
+      });
+    deps.prisma.user.findFirst.mockResolvedValue({
+      id: 'u1', username: 'testuser', name: 'Test', verifiedStatus: 'identity',
+      premium: true, premiumPlus: false, recruitedById: null, referralBonusGrantedAt: null,
+    });
+
+    const result = await service.syncCheckoutSession({ userId: 'u1', sessionId: 'cs_test_1' });
+    expect(result.premium).toBe(true);
+    // recomputeAndApply still runs (idempotent — it just confirms the existing state)
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips sync when session has no subscription (e.g. still open/expired)', async () => {
+    const { service, deps } = makeService();
+    global.__stripeMock__!.checkout = {
+      sessions: { retrieve: jest.fn(async () => makeSessionMock({ subscriptionId: null })) },
+    } as any;
+    deps.prisma.user.findUnique
+      .mockResolvedValueOnce({ stripeCustomerId: 'cus_1' })
+      .mockResolvedValueOnce({
+        premium: false,
+        premiumPlus: false,
+        verifiedStatus: 'identity',
+        stripeSubscriptionStatus: null,
+        stripeCancelAtPeriodEnd: false,
+        stripeCurrentPeriodEnd: null,
+        referralCode: null,
+        referralBonusGrantedAt: null,
+        recruitedBy: null,
+        _count: { recruits: 0 },
+      });
+
+    const result = await service.syncCheckoutSession({ userId: 'u1', sessionId: 'cs_test_1' });
+    expect(deps.entitlement.recomputeAndApply).not.toHaveBeenCalled();
+    expect(result.premium).toBe(false);
   });
 });

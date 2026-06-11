@@ -12,6 +12,10 @@ const checkoutSchema = z.object({
   tier: z.enum(['premium', 'premiumPlus']),
 });
 
+const checkoutSyncSchema = z.object({
+  sessionId: z.string().min(1),
+});
+
 const setReferralCodeSchema = z.object({
   code: z.string().min(1),
 });
@@ -39,6 +43,18 @@ export class BillingController {
   async checkoutSession(@CurrentUserId() userId: string, @Body() body: unknown): Promise<{ data: BillingCheckoutSessionDto }> {
     const parsed = checkoutSchema.parse(body);
     return { data: await this.billing.createCheckoutSession({ userId, tier: parsed.tier as BillingTier }) };
+  }
+
+  /**
+   * Syncs the Stripe checkout session with our DB on return from Checkout.
+   * Idempotent — safe to call even if the webhook already ran.
+   * Returns the caller's updated billing summary.
+   */
+  @UseGuards(AuthGuard)
+  @Post('checkout-session/sync')
+  async syncCheckoutSession(@CurrentUserId() userId: string, @Body() body: unknown): Promise<{ data: BillingMeDto }> {
+    const parsed = checkoutSyncSchema.parse(body);
+    return { data: await this.billing.syncCheckoutSession({ userId, sessionId: parsed.sessionId }) };
   }
 
   @UseGuards(AuthGuard)
