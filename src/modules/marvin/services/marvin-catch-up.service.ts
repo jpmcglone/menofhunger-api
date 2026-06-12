@@ -513,8 +513,9 @@ export class MarvinCatchUpService {
       lines.push('');
       lines.push(
         'FORMAT: Output EXACTLY two labeled paragraphs with no other text:\n' +
-          'POST: [one-sentence summary of the highlighted post itself]\n' +
-          'REPLIES: [synthesis of the replies below — throughline, key points, any conclusion]',
+          'POST: [the highlighted post\'s point, read IN CONTEXT of the path above it. ' +
+          'If it is a reply, make clear what it is responding to. One or two sentences.]\n' +
+          'REPLIES: [synthesis of the replies BELOW the highlighted post — throughline, key points, any conclusion]',
       );
     }
 
