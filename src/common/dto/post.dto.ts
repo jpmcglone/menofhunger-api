@@ -94,6 +94,8 @@ export type PostDto = {
   topics: string[];
   /** User-created hashtags parsed from body text (lowercase, without '#'). */
   hashtags: string[];
+  /** Validated cashtag symbols parsed from body text (uppercase, without '$', e.g. "SPY"). */
+  cashtags: string[];
   boostCount: number;
   bookmarkCount: number;
   commentCount: number;
@@ -366,6 +368,7 @@ export function toPostDto(
       isDraft: Boolean(post.isDraft),
       topics: [],
       hashtags: [],
+      cashtags: [],
       boostCount: post.boostCount,
       bookmarkCount: post.bookmarkCount ?? 0,
       commentCount: post.commentCount ?? 0,
@@ -410,6 +413,7 @@ export function toPostDto(
       isDraft: Boolean(post.isDraft),
       topics: [],
       hashtags: [],
+      cashtags: [],
       boostCount: post.boostCount,
       bookmarkCount: post.bookmarkCount ?? 0,
       commentCount: post.commentCount ?? 0,
@@ -465,6 +469,7 @@ export function toPostDto(
     isDraft: Boolean(post.isDraft),
     topics: Array.isArray(post.topics) ? post.topics : [],
     hashtags: isPostDeleted ? [] : (Array.isArray(post.hashtags) ? post.hashtags : []),
+    cashtags: isPostDeleted ? [] : (Array.isArray((post as any).cashtags) ? (post as any).cashtags : []),
     boostCount: post.boostCount,
     bookmarkCount: post.bookmarkCount ?? 0,
     commentCount: post.commentCount ?? 0,

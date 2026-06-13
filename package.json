@@ -18,6 +18,8 @@
     "build:typecheck": "tsc --noEmit",
     "postinstall": "prisma generate",
     "seed:prod": "node scripts/seed-prod.js",
+    "seed:tickers": "node scripts/seed-tickers.mjs",
+    "backfill:cashtags": "node scripts/backfill-cashtags.mjs",
     "seed:dev": "node scripts/seed-dev.js",
     "emit:contracts": "node scripts/emit-contracts.mjs",
     "lint": "eslint src --ext .ts",

@@ -551,6 +551,31 @@ export class AppConfigService {
     };
   }
 
+  // ─── SEC ticker ingest ───────────────────────────────────────────────────
+
+  /**
+   * URL for the SEC company tickers JSON (default: public SEC endpoint).
+   * Override via SEC_TICKERS_URL if needed (e.g. for testing or caching proxy).
+   */
+  secTickersIngestUrl(): string {
+    return (
+      this.config.get<string>('SEC_TICKERS_URL')?.trim() ||
+      'https://www.sec.gov/files/company_tickers.json'
+    ).trim();
+  }
+
+  /**
+   * User-Agent header for SEC requests.
+   * SEC policy requires a descriptive User-Agent with a contact email.
+   * Override via SEC_TICKERS_USER_AGENT.
+   */
+  secTickersUserAgent(): string {
+    return (
+      this.config.get<string>('SEC_TICKERS_USER_AGENT')?.trim() ||
+      'MenOfHunger/1.0 (contact@menofhunger.com)'
+    ).trim();
+  }
+
   // Optional: typed access to full validated env object if needed later.
   envSnapshot(): Partial<Env> {
     return {

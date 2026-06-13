@@ -10,6 +10,8 @@ import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { parseMentionsFromBody as parseMentionsFromBodyText } from '../../common/mentions/mention-regex';
 import { parseHashtagTokensFromText, type HashtagToken } from '../../common/hashtags/hashtag-regex';
+import { parseCashtagCandidatesFromText } from '../../common/cashtags/cashtag-regex';
+import { TickerService } from '../cashtags/ticker.service';
 import { inferTopicsFromText } from '../../common/topics/topic-utils';
 import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
@@ -54,6 +56,7 @@ export class PostsMutationService {
     private readonly viewerContextService: ViewerContextService,
     private readonly enrichment: PostsViewerEnrichmentService,
     private readonly ranking: PostsRankingService,
+    private readonly ticker: TickerService,
   ) {}
 
   private async recomputeStreakFromPostsTx(tx: Prisma.TransactionClient, userId: string, now: Date): Promise<void> {
@@ -130,6 +133,7 @@ export class PostsMutationService {
         deletedAt: true,
         hashtags: true,
         hashtagCasings: true,
+        cashtags: true,
         topics: true,
         kind: true,
         parentId: true,
@@ -340,6 +344,7 @@ export class PostsMutationService {
     hashtagTokens.sort((a, b) => a.tag.localeCompare(b.tag) || a.variant.localeCompare(b.variant));
     const hashtags = hashtagTokens.map((t) => t.tag);
     const hashtagCasings = hashtagTokens.map((t) => t.variant);
+    const cashtags = this.parseCashtagsFromBody(nextBody);
 
     const fromBodyMentions = this.parseMentionsFromBody(nextBody);
     const bodyMentionIds = await this.resolveMentionUsernames(fromBodyMentions);
@@ -356,6 +361,7 @@ export class PostsMutationService {
           topics: post.topics ?? [],
           hashtags: post.hashtags ?? [],
           hashtagCasings: post.hashtagCasings ?? [],
+          cashtags: (post as any).cashtags ?? [],
           visibility: post.visibility,
         },
       });
@@ -370,6 +376,7 @@ export class PostsMutationService {
           topics,
           hashtags,
           hashtagCasings,
+          cashtags,
           editedAt: new Date(),
           editCount: { increment: 1 },
         },
@@ -629,6 +636,12 @@ export class PostsMutationService {
   /** Parse #hashtag tokens from body: letter then [A-Za-z0-9_], stored lowercase without '#'. */
   private parseHashtagsFromBody(body: string): HashtagToken[] {
     return parseHashtagTokensFromText(body);
+  }
+
+  /** Parse $SYMBOL candidates from body and return only those present in the ticker universe. */
+  private parseCashtagsFromBody(body: string): string[] {
+    const candidates = parseCashtagCandidatesFromText(body);
+    return candidates.filter((s) => this.ticker.isValid(s));
   }
 
   /** Thread participant role for reply notifications. */
@@ -1109,6 +1122,7 @@ export class PostsMutationService {
     hashtagTokens.sort((a, b) => a.tag.localeCompare(b.tag) || a.variant.localeCompare(b.variant));
     const hashtags = hashtagTokens.map((t) => t.tag);
     const hashtagCasings = hashtagTokens.map((t) => t.variant);
+    const cashtags = this.parseCashtagsFromBody(body);
 
     let parentCommentCount: number | null = null;
     let didAwardStreak = false;
@@ -1136,6 +1150,7 @@ export class PostsMutationService {
             topics,
             hashtags,
             hashtagCasings,
+            cashtags,
             visibility,
             userId,
             kind,

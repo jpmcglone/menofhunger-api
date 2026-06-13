@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/co
 import { z } from 'zod';
 import { AdminGuard } from './admin.guard';
 import { AdminHashtagsService } from './admin-hashtags.service';
+import { TickerIngestCron } from '../cashtags/ticker-ingest.cron';
 import { canonicalizeTopicValue } from '../../common/topics/topic-utils';
 import { PrismaService } from '../prisma/prisma.service';
 import { JobsService } from '../jobs/jobs.service';
@@ -48,7 +49,14 @@ export class AdminJobsController {
     private readonly jobs: JobsService,
     private readonly jobsStatus: JobsStatusService,
     private readonly entitlement: EntitlementService,
+    private readonly tickerIngest: TickerIngestCron,
   ) {}
+
+  @Post('tickers/ingest')
+  async runTickerIngest() {
+    const result = await this.tickerIngest.runIngest();
+    return { data: { ok: true, ...result } };
+  }
 
   @Get('hashtags/backfill')
   async hashtagBackfillStatus() {

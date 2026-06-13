@@ -9,6 +9,7 @@ export * from './radio.dto';
 export * from './spaces.dto';
 export * from './topic.dto';
 export * from './hashtag.dto';
+export * from './cashtag.dto';
 export * from './notification-feed.dto';
 export * from './realtime.dto';
 export * from './metrics.dto';

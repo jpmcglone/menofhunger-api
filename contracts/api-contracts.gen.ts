@@ -511,6 +511,15 @@ export type AdminGrantSummaryDto = {
   premiumPlusMonthsRemaining: number;
 };
 
+// ─── src/common/dto/cashtag.dto.ts ─────────────────────────────────────────────
+
+export type CashtagResultDto = {
+  /** Uppercase ticker symbol (no '$'), e.g. "SPY". */
+  symbol: string;
+  /** Full company or ETF name, e.g. "SPDR S&P 500 ETF Trust". */
+  name: string;
+};
+
 // ─── src/common/dto/coin-transfer.dto.ts ───────────────────────────────────────
 
 export type CoinTransferCounterpartyDto = {
@@ -1171,6 +1180,8 @@ export type PostDto = {
   topics: string[];
   /** User-created hashtags parsed from body text (lowercase, without '#'). */
   hashtags: string[];
+  /** Validated cashtag symbols parsed from body text (uppercase, without '$', e.g. "SPY"). */
+  cashtags: string[];
   boostCount: number;
   bookmarkCount: number;
   commentCount: number;

@@ -34,6 +34,7 @@ import { RadioModule } from '../radio/radio.module';
 import { SpacesModule } from '../spaces/spaces.module';
 import { TopicsModule } from '../topics/topics.module';
 import { HashtagsModule } from '../hashtags/hashtags.module';
+import { CashtagsModule } from '../cashtags/cashtags.module';
 import { MetricsModule } from '../metrics/metrics.module';
 import { BillingModule } from '../billing/billing.module';
 import { JobsModule } from '../jobs/jobs.module';
@@ -115,6 +116,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     SpacesModule,
     TopicsModule,
     HashtagsModule,
+    CashtagsModule,
     MetricsModule,
     BillingModule,
     DailyContentModule,

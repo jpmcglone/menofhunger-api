@@ -8,6 +8,9 @@ import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cu
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { queryToTopicValues } from '../../common/topics/topic-utils';
 import { HASHTAG_IN_TEXT_DISPLAY_RE, parseHashtagsFromText } from '../../common/hashtags/hashtag-regex';
+import { CASHTAG_IN_TEXT_DISPLAY_RE, parseCashtagCandidatesFromText } from '../../common/cashtags/cashtag-regex';
+import { TickerService } from '../cashtags/ticker.service';
+import type { CashtagResultDto } from '../../common/dto';
 import { POST_BASE_INCLUDE } from '../../common/prisma-includes/post.include';
 import { articleAuthorInclude } from '../../common/dto/article.dto';
 import { toCommunityGroupShellDto, type CommunityGroupShellDto } from '../../common/dto/community-group.dto';
@@ -133,12 +136,16 @@ function buildPrefixTsQuery(ws: string[]): string | null {
   return safe.map((w) => `${w}:*`).join(' & ');
 }
 
-function splitSearchQuery(q: string): { hashtags: string[]; text: string } {
+function splitSearchQuery(q: string): { hashtags: string[]; cashtags: string[]; text: string } {
   const raw = (q ?? '').toString();
   const hashtags = parseHashtagsFromText(raw);
-  if (!hashtags.length) return { hashtags: [], text: raw.trim() };
-  const text = raw.replace(new RegExp(HASHTAG_IN_TEXT_DISPLAY_RE.source, 'g'), ' ').replace(/\s+/g, ' ').trim();
-  return { hashtags, text };
+  const cashtags = parseCashtagCandidatesFromText(raw);
+  if (!hashtags.length && !cashtags.length) return { hashtags: [], cashtags: [], text: raw.trim() };
+  let text = raw;
+  if (hashtags.length) text = text.replace(new RegExp(HASHTAG_IN_TEXT_DISPLAY_RE.source, 'g'), ' ');
+  if (cashtags.length) text = text.replace(new RegExp(CASHTAG_IN_TEXT_DISPLAY_RE.source, 'g'), ' ');
+  text = text.replace(/\s+/g, ' ').trim();
+  return { hashtags, cashtags, text };
 }
 
 function extractQuotedPhrases(q: string): string[] {
@@ -161,6 +168,7 @@ export class SearchService {
     private readonly follows: FollowsService,
     private readonly posts: PostsService,
     private readonly viewerContext: ViewerContextService,
+    private readonly ticker: TickerService,
   ) {}
 
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
@@ -635,6 +643,17 @@ export class SearchService {
     };
   }
 
+  async searchCashtags(params: {
+    q: string;
+    limit: number;
+  }): Promise<{ cashtags: CashtagResultDto[]; nextCursor: null }> {
+    const raw = (params.q ?? '').trim();
+    const q = raw.startsWith('$') ? raw.slice(1) : raw;
+    const limit = Math.max(1, Math.min(50, params.limit || 10));
+    const cashtags = await this.ticker.searchPrefix(q, limit);
+    return { cashtags, nextCursor: null };
+  }
+
   /** Broad match: body or author username/name (phrase + each word) so "john steve" matches @john, @steve, or body. */
   private postSearchMatchWhere(q: string, words: string[]): object {
     const trimmed = (q ?? '').trim();
@@ -978,12 +997,12 @@ export class SearchService {
     const limit = Math.max(1, Math.min(50, params.limit || 30));
     const cursor = params.cursor ?? null;
     const kind = params.kind ?? null;
-    const { hashtags, text: qText } = splitSearchQuery(rawQ);
+    const { hashtags, cashtags: cashtagCandidates, text: qText } = splitSearchQuery(rawQ);
     const tagsText = hashtags.join(' ').trim();
     const qFtsExpanded = (qText ? `${qText} ${tagsText}` : tagsText).trim(); // preserve quotes for websearch_to_tsquery
     const qMatchBase = qText.replace(/"/g, ' ').replace(/\s+/g, ' ').trim();
     const qMatchExpanded = (qMatchBase ? `${qMatchBase} ${tagsText}` : tagsText).trim();
-    if (!qMatchExpanded && hashtags.length === 0) return { posts: [], nextCursor: null };
+    if (!qMatchExpanded && hashtags.length === 0 && cashtagCandidates.length === 0) return { posts: [], nextCursor: null };
     const phrases = extractQuotedPhrases(qText);
     const phraseLowers = phrases.map((p) => p.toLowerCase());
     const words = queryToWords(qMatchExpanded);
@@ -1012,6 +1031,40 @@ export class SearchService {
 
     const hashtagWhere: Prisma.PostWhereInput =
       hashtags.length > 0 ? ({ hashtags: { hasSome: hashtags } } as Prisma.PostWhereInput) : {};
+
+    const cashtagWhere: Prisma.PostWhereInput =
+      cashtagCandidates.length > 0 ? ({ cashtags: { hasSome: cashtagCandidates } } as Prisma.PostWhereInput) : {};
+
+    // Fast path: cashtag-only search (e.g. "$SPY").
+    const isCashtagOnly = cashtagCandidates.length > 0 && hashtags.length === 0 && !qMatchBase;
+    if (isCashtagOnly) {
+      const cursorWhere = await createdAtIdCursorWhere({
+        cursor: (cursor ?? '').trim() || null,
+        lookup: async (id) =>
+          await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+      });
+
+      const rows = await this.prisma.post.findMany({
+        where: {
+          AND: [
+            { deletedAt: null },
+            readableGroupPostWhere,
+            visibilityWhere,
+            kindWhere,
+            cashtagWhere,
+            ...(cursorWhere ? [cursorWhere] : []),
+          ],
+        },
+        include: SEARCH_POST_INCLUDE,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+      });
+
+      const slice = rows.slice(0, limit);
+      const next = slice[slice.length - 1]?.id ?? null;
+      const nextCursor = rows.length > limit && next ? `p:${next}` : null;
+      return { posts: slice, nextCursor };
+    }
 
     // Fast path: hashtag-only search should be cheap and index-backed.
     const isHashtagOnly = hashtags.length > 0 && !qMatchBase;

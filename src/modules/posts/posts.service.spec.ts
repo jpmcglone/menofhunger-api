@@ -143,6 +143,7 @@ function makeService(
     deps.viewerContext,
     enrichment,
     ranking,
+    { isValid: () => false } as any,
   );
 
   const service = new PostsService(

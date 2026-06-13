@@ -1139,6 +1139,11 @@ model Post {
    * Hashtag casing variants used in this post (one per entry in `hashtags`, without '#').
    */
   hashtagCasings         String[]       @default([])
+  /**
+   * Validated cashtag symbols parsed from body (uppercase, without '$', e.g. "SPY").
+   * Only symbols present in the Ticker reference table are stored.
+   */
+  cashtags               String[]       @default([])
   kind                   PostKind       @default(regular)
   /**
    * ET day key (YYYY-MM-DD) for check-ins (null for non-check-ins).
@@ -1230,6 +1235,7 @@ model Post {
   @@index([articleId])
   @@index([topics], type: Gin)
   @@index([hashtags], type: Gin)
+  @@index([cashtags], type: Gin)
   // Feed/trending hot paths (parentId IS NULL + deletedAt IS NULL) benefit from composite indexes matching sort+filters.
   @@index([parentId, deletedAt, createdAt(sort: Desc), id(sort: Desc)])
   @@index([parentId, deletedAt, boostCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
@@ -1332,9 +1338,22 @@ model PostVersion {
   topics         String[]       @default([])
   hashtags       String[]       @default([])
   hashtagCasings String[]       @default([])
+  cashtags       String[]       @default([])
   visibility     PostVisibility
 
   @@index([postId, createdAt])
+}
+
+model Ticker {
+  /** Uppercase symbol, e.g. "SPY". Primary key. */
+  symbol    String   @id
+  /** Full company/ETF name from SEC, e.g. "SPDR S&P 500 ETF Trust". */
+  name      String
+  /** Data source identifier, e.g. "sec". */
+  source    String   @default("sec")
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
 }
 
 model Hashtag {

@@ -28,6 +28,7 @@ function makeService(viewer: any = null) {
     {} as any,
     posts,
     viewerContext,
+    { isValid: () => false, searchPrefix: async () => [] } as any,
   );
 
   return { service, prisma, posts, viewerContext };
@@ -120,7 +121,7 @@ describe('SearchService.searchCommunityGroups — group visibility', () => {
       getViewer: jest.fn(async () => null),
       isVerified: jest.fn(() => true),
       allowedPostVisibilities: jest.fn(() => ['public']),
-    } as any);
+    } as any, { isValid: () => false, searchPrefix: async () => [] } as any);
 
     return { service, prisma, openGroup, privateGroup };
   }

@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { PostViewsModule } from '../post-views/post-views.module';
+import { CashtagsModule } from '../cashtags/cashtags.module';
 import { DraftsController } from './drafts.controller';
 import { PollsService } from './polls.service';
 import { PostsController } from './posts.controller';
@@ -18,7 +19,7 @@ import { PostsFeedQueryService } from './posts-feed-query.service';
 import { PostsMutationService } from './posts-mutation.service';
 
 @Module({
-  imports: [AuthModule, NotificationsModule, RealtimeModule, PostViewsModule],
+  imports: [AuthModule, NotificationsModule, RealtimeModule, PostViewsModule, CashtagsModule],
   controllers: [PostsController, DraftsController],
   providers: [
     PostsService,

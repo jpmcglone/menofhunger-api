@@ -17,6 +17,7 @@ import { VerificationModule } from '../verification/verification.module';
 import { ReportsModule } from '../reports/reports.module';
 import { AdminReportsController } from './admin-reports.controller';
 import { HashtagsModule } from '../hashtags/hashtags.module';
+import { CashtagsModule } from '../cashtags/cashtags.module';
 import { SearchModule } from '../search/search.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
@@ -48,6 +49,7 @@ import { UploadsModule } from '../uploads/uploads.module';
     PostsModule,
     VerificationModule,
     HashtagsModule,
+    CashtagsModule,
     SearchModule,
     NotificationsModule,
     LinkMetadataModule,

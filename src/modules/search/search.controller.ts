@@ -22,7 +22,7 @@ import { TaxonomyService } from '../taxonomy/taxonomy.service';
 
 const searchSchema = z.object({
   q: z.string().trim().max(200).optional(),
-  type: z.enum(['posts', 'users', 'bookmarks', 'all', 'articles', 'hashtags', 'taxonomy']).optional(),
+  type: z.enum(['posts', 'users', 'bookmarks', 'all', 'articles', 'hashtags', 'taxonomy', 'cashtags']).optional(),
   // Source hint for analytics/search-history recording.
   source: z.enum(['explore', 'external']).optional(),
   // Posts-only: filter by kind (e.g. allow "check-ins only" in search UI)
@@ -86,6 +86,10 @@ export class SearchController {
     if (type === 'hashtags') {
       const res = await this.search.searchHashtags({ q, limit, cursor });
       return { data: res.hashtags, pagination: { nextCursor: res.nextCursor } };
+    }
+    if (type === 'cashtags') {
+      const res = await this.search.searchCashtags({ q, limit });
+      return { data: res.cashtags, pagination: { nextCursor: res.nextCursor } };
     }
     if (type === 'taxonomy') {
       const data = await this.taxonomy.search({ q, limit });
