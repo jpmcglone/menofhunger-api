@@ -10,6 +10,7 @@ import { JOBS } from '../jobs/jobs.constants';
 import { EntitlementService } from '../billing/entitlement.service';
 import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
 import { computeCheckinStreakStats } from '../checkins/checkin-streaks';
+import { queryBoolean } from '../../common/validation/query-boolean';
 
 const hashtagBackfillSchema = z.object({
   /** Existing run id. If omitted, a new run is started. */
@@ -19,12 +20,12 @@ const hashtagBackfillSchema = z.object({
   /** Batch size (posts per request). */
   batchSize: z.coerce.number().int().min(10).max(5_000).optional(),
   /** When true and starting a new run, reset hashtag tables before scanning. */
-  reset: z.coerce.boolean().optional(),
+  reset: queryBoolean().optional(),
 });
 
 const postsTopicsBackfillSchema = z.object({
   /** When true, recompute topics even if already set. */
-  wipeExisting: z.coerce.boolean().optional(),
+  wipeExisting: queryBoolean().optional(),
   /** Batch size (posts per run). */
   batchSize: z.coerce.number().int().min(10).max(5_000).optional(),
   /** How far back to scan for posts. */
@@ -33,9 +34,9 @@ const postsTopicsBackfillSchema = z.object({
 
 const normalizeTopicsSchema = z.object({
   /** When true, normalize users' interests arrays. */
-  users: z.coerce.boolean().optional(),
+  users: queryBoolean().optional(),
   /** When true, normalize TopicFollow.topic values. */
-  follows: z.coerce.boolean().optional(),
+  follows: queryBoolean().optional(),
 });
 
 @UseGuards(AdminGuard)

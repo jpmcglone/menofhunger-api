@@ -18,6 +18,19 @@ export class CacheService {
   }
 
   /**
+   * Acquire a distributed Redis lock and run `fn` while holding it.
+   * Returns the result of `fn` on success, or `null` if the lock couldn't be
+   * acquired within `waitMs`. Delegates to `RedisService.withLock`.
+   */
+  async withLock<T>(
+    lockKey: string,
+    opts: { ttlMs: number; waitMs: number; retryDelayMs?: number },
+    fn: () => Promise<T>,
+  ): Promise<T | null> {
+    return this.redis.withLock(lockKey, opts, fn);
+  }
+
+  /**
    * Read-through cache for JSON values.
    * If `enabled` is false, it bypasses cache but still computes the value.
    */

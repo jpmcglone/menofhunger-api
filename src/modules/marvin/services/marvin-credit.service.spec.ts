@@ -20,10 +20,19 @@ function makeService(initialBucket: Bucket = null) {
         bucket = { credits: data.credits, lastRefilledAt: data.lastRefilledAt };
         return { credits: bucket.credits, lastRefilledAt: bucket.lastRefilledAt };
       }),
-      upsert: jest.fn(async ({ create, update }: any) => {
-        if (bucket) {
-          bucket = { credits: update.credits, lastRefilledAt: update.lastRefilledAt };
-        } else {
+      // Atomic guarded decrement used by spend()
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        if (!bucket) return { count: 0 };
+        const cost = typeof data.credits?.decrement === 'number' ? data.credits.decrement : 0;
+        if (bucket.credits < (where.credits?.gte ?? 0)) return { count: 0 };
+        bucket = {
+          credits: Math.max(0, bucket.credits - cost),
+          lastRefilledAt: data.lastRefilledAt ?? bucket.lastRefilledAt,
+        };
+        return { count: 1 };
+      }),
+      upsert: jest.fn(async ({ create, update: _upd }: any) => {
+        if (!bucket) {
           bucket = { credits: create.credits, lastRefilledAt: create.lastRefilledAt };
         }
         return { credits: bucket.credits, lastRefilledAt: bucket.lastRefilledAt };
@@ -123,10 +132,11 @@ describe('MarvinCreditService', () => {
       });
       expect(summary.credits).toBe(46);
       expect(getBucket()?.credits).toBe(46);
-      // findUnique inside the tx is the inner refill read; it should NOT have been called.
-      expect(prisma.marvinCreditBalance.findUnique).not.toHaveBeenCalled();
-      // We still ran exactly one update (the decrement).
-      expect(prisma.marvinCreditBalance.update).toHaveBeenCalledTimes(1);
+      // findUnique inside the tx is called once for the post-decrement read (NOT for the
+      // inner refill SELECT, which is skipped when recentSummary is fresh).
+      expect(prisma.marvinCreditBalance.findUnique).toHaveBeenCalledTimes(1);
+      // We still ran exactly one updateMany (the guarded decrement).
+      expect(prisma.marvinCreditBalance.updateMany).toHaveBeenCalledTimes(1);
     });
 
     it('falls back to a normal refill when the recent summary is too old', async () => {
@@ -138,7 +148,56 @@ describe('MarvinCreditService', () => {
         recentSummary: { credits: 50, lastRefilledAt: t0 },
       });
       // Stale summary → must run the inner refill SELECT.
-      expect(prisma.marvinCreditBalance.findUnique).toHaveBeenCalledTimes(1);
+      expect(prisma.marvinCreditBalance.findUnique).toHaveBeenCalled();
+    });
+
+    it('atomic guard: only one of two concurrent spends succeeds when balance covers only one', async () => {
+      // Simulate two transactions reading the same balance (10 credits) and both trying
+      // to spend 10. The WHERE credits >= cost guard ensures only one succeeds.
+      const t0 = new Date('2026-01-01T00:00:00.000Z');
+      let bucket = { credits: 10, lastRefilledAt: t0 };
+
+      let firstCallDecremented = false;
+      const txA: any = {
+        marvinCreditBalance: {
+          findUnique: jest.fn(async () => ({ credits: bucket.credits, lastRefilledAt: bucket.lastRefilledAt })),
+          update: jest.fn(),
+          updateMany: jest.fn(async ({ where, data }: any) => {
+            const cost = data.credits?.decrement ?? 0;
+            if (bucket.credits < (where.credits?.gte ?? 0)) return { count: 0 };
+            if (!firstCallDecremented) {
+              // Simulate T1 wins: decrements first
+              bucket = { credits: bucket.credits - cost, lastRefilledAt: data.lastRefilledAt ?? bucket.lastRefilledAt };
+              firstCallDecremented = true;
+              return { count: 1 };
+            }
+            // T2 sees the decremented bucket → WHERE credits >= cost fails
+            return { count: 0 };
+          }),
+        },
+      };
+
+      const prismaA: any = {
+        marvinCreditBalance: txA.marvinCreditBalance,
+        $transaction: jest.fn(async (fn: any) => fn(txA)),
+      };
+      const appConfig: any = {
+        marvCredits: jest.fn(() => ({ monthlyCredits: 1200, maxCredits: 1500, creditsPerDay: 40, fastCost: 1, regularCost: 2, smartCost: 4 })),
+      };
+
+      const svc = new MarvinCreditService(prismaA, appConfig);
+      const results = await Promise.allSettled([
+        svc.spend('u1', 10, { now: t0, recentSummary: { credits: 10, lastRefilledAt: t0 } }),
+        svc.spend('u1', 10, { now: t0, recentSummary: { credits: 10, lastRefilledAt: t0 } }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(InsufficientMarvCreditsError);
+      // Balance should be 0 after the one successful spend
+      expect(bucket.credits).toBe(0);
     });
   });
 

@@ -121,6 +121,7 @@ function makeService(opts?: {
   const cache: any = {
     getJson: jest.fn(async () => opts?.cached ?? null),
     setJson: jest.fn(async () => undefined),
+    withLock: jest.fn(async (_key: string, _opts: any, fn: () => Promise<any>) => fn()),
   };
   const posts: any = {
     getById: jest.fn(async () => ({ id: 'focal', rootId: 'root', createdAt: new Date('2026-01-01T00:00:00Z') })),

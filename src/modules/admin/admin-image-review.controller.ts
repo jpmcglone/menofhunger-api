@@ -3,14 +3,15 @@ import type { Request } from 'express';
 import { z } from 'zod';
 import { AdminGuard, type AdminRequest } from './admin.guard';
 import { AdminImageReviewService } from './admin-image-review.service';
+import { queryBoolean } from '../../common/validation/query-boolean';
 
 const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
   cursor: z.string().optional(),
   q: z.string().optional(),
-  showDeleted: z.coerce.boolean().optional(),
-  onlyOrphans: z.coerce.boolean().optional(),
-  sync: z.coerce.boolean().optional(),
+  showDeleted: queryBoolean().optional(),
+  onlyOrphans: queryBoolean().optional(),
+  sync: queryBoolean().optional(),
   kind: z.enum(['all', 'image', 'video']).optional(),
 });
 

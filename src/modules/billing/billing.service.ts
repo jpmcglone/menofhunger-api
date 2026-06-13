@@ -463,14 +463,26 @@ export class BillingService {
       throw new BadRequestException('Invalid Stripe signature.');
     }
 
-    // Deduplicate (Stripe may retry).
-    try {
-      await this.prisma.stripeWebhookEvent.create({ data: { id: event.id } });
-    } catch (e: unknown) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        return;
+    // Two-phase dedup: only skip when processedAt is set (handler completed successfully).
+    // A row with processedAt=null means a previous attempt claimed the event but crashed
+    // before finishing — that retry is safe to re-run because syncSubscriptionToUser is idempotent.
+    const existing = await this.prisma.stripeWebhookEvent.findUnique({
+      where: { id: event.id },
+      select: { processedAt: true },
+    });
+    if (existing?.processedAt) return; // fully handled on a prior attempt — skip
+    if (!existing) {
+      try {
+        await this.prisma.stripeWebhookEvent.create({ data: { id: event.id } });
+      } catch (e: unknown) {
+        if (!(e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')) throw e;
+        // Concurrent request raced us to the insert — re-check processedAt before proceeding.
+        const concurrent = await this.prisma.stripeWebhookEvent.findUnique({
+          where: { id: event.id },
+          select: { processedAt: true },
+        });
+        if (concurrent?.processedAt) return;
       }
-      throw e;
     }
 
     // Only process the events we care about.
@@ -478,8 +490,12 @@ export class BillingService {
       const session = event.data.object as Stripe.Checkout.Session;
       const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id ?? null;
       const subscriptionId = typeof session.subscription === 'string' ? session.subscription : session.subscription?.id ?? null;
-      if (!customerId || !subscriptionId) return;
+      if (!customerId || !subscriptionId) {
+        await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
+        return;
+      }
       await this.syncSubscriptionToUser({ customerId, subscriptionId });
+      await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
       return;
     }
 
@@ -490,8 +506,12 @@ export class BillingService {
     ) {
       const sub = event.data.object as Stripe.Subscription;
       const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id ?? null;
-      if (!customerId) return;
+      if (!customerId) {
+        await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
+        return;
+      }
       await this.syncSubscriptionToUser({ customerId, subscriptionId: sub.id, subscription: sub });
+      await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
       return;
     }
 
@@ -503,10 +523,17 @@ export class BillingService {
         typeof (invoice as any).subscription === 'string'
           ? (invoice as any).subscription
           : (invoice as any).subscription?.id ?? null;
-      if (!customerId || !subscriptionId) return;
+      if (!customerId || !subscriptionId) {
+        await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
+        return;
+      }
       await this.syncSubscriptionToUser({ customerId, subscriptionId });
+      await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
       return;
     }
+
+    // Unrecognised event type — mark processed so we don't log it repeatedly on retry.
+    await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
   }
 
   private async syncSubscriptionToUser(params: { customerId: string; subscriptionId: string; subscription?: Stripe.Subscription }) {

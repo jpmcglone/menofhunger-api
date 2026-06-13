@@ -7,7 +7,7 @@ import { PostsService } from '../../posts/posts.service';
 import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
 import type { MarvinCatchUpDto } from '../../../common/dto/marvin';
 import { MarvinAIService } from './marvin-ai.service';
-import { MarvinCreditService } from './marvin-credit.service';
+import { MarvinCreditService, InsufficientMarvCreditsError } from './marvin-credit.service';
 import { MarvinRoutingService, type ResolvedMarvinMode } from './marvin-routing.service';
 import { MarvinUsageService } from './marvin-usage.service';
 import { MarvinThreadSummaryService } from './marvin-thread-summary.service';
@@ -137,99 +137,195 @@ export class MarvinCatchUpService {
       );
     }
 
-    // 6. Routing — honor the requested/preferred mode, auto-upgrade for length/sensitivity.
-    //    Web search is ENABLED so a post that references current events or unfamiliar
-    //    terms can be summarized with real-world context (e.g. a thin single post).
-    const openAICfg = this.appConfig.marvOpenAI();
-    const creditCfg = this.appConfig.marvCredits();
-    const contextText = this.contextPlainText(context);
-    const routed = this.routing.resolve({
-      requested: requestedMode,
-      source: 'catch_up',
-      estimatedInputTokens: this.routing.estimateTokens(contextText),
-      text: contextText,
-      distinctAuthors: this.distinctAuthorCount(context),
-      webSearchEnabled: openAICfg.webSearchEnabled,
-    });
-    let effectiveMode: ResolvedMarvinMode = routed.mode;
-
-    // Vision: select images from across the conversation (shared with the @marv reply path)
-    // so Marv can summarize what's actually shown, not just captions.
-    // Skipped entirely when the caller set includeImages=false (opt-out → no surcharge).
-    let imageUrls: string[] = [];
-    let hasGifAttached = false;
-    if (includeImages) {
-      const selected = this.context.selectImageMedia(context, {
-        visionEnabled: openAICfg.visionEnabled,
-        visionMaxImagesPerTurn: openAICfg.visionMaxImagesPerTurn,
-        publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
+    // Single-flight anti-stampede: acquire a per-cache-key distributed lock so only one
+    // concurrent request for the same (post, mode, freshness marker) runs the model and
+    // spends credits. The lock callback does the full generate + cache write. Other waiters
+    // re-check the cache when the lock releases and get the free cached copy. On lock-wait
+    // timeout, fall through to generate independently (preserves availability; a rare
+    // double-spend is far better than an unbounded concurrent stampede).
+    const generateFn = async (): Promise<MarvinCatchUpDto> => {
+      // 6. Routing — honor the requested/preferred mode, auto-upgrade for length/sensitivity.
+      //    Web search is ENABLED so a post that references current events or unfamiliar
+      //    terms can be summarized with real-world context (e.g. a thin single post).
+      const openAICfg = this.appConfig.marvOpenAI();
+      const creditCfg = this.appConfig.marvCredits();
+      const contextText = this.contextPlainText(context);
+      const routed = this.routing.resolve({
+        requested: requestedMode,
+        source: 'catch_up',
+        estimatedInputTokens: this.routing.estimateTokens(contextText),
+        text: contextText,
+        distinctAuthors: this.distinctAuthorCount(context),
+        webSearchEnabled: openAICfg.webSearchEnabled,
       });
-      hasGifAttached = selected.hasGifAttached;
-      if (selected.totalImages > selected.imageUrls.length) {
-        this.logger.log(
-          `[marv] catch-up image cap hit post=${postId}: ${selected.totalImages} found, sending ${selected.imageUrls.length} (cap=${openAICfg.visionMaxImagesPerTurn})`,
+      let effectiveMode: ResolvedMarvinMode = routed.mode;
+
+      // Vision: select images from across the conversation (shared with the @marv reply path)
+      // so Marv can summarize what's actually shown, not just captions.
+      // Skipped entirely when the caller set includeImages=false (opt-out → no surcharge).
+      let imageUrls: string[] = [];
+      let hasGifAttached = false;
+      if (includeImages) {
+        const selected = this.context.selectImageMedia(context, {
+          visionEnabled: openAICfg.visionEnabled,
+          visionMaxImagesPerTurn: openAICfg.visionMaxImagesPerTurn,
+          publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
+        });
+        hasGifAttached = selected.hasGifAttached;
+        if (selected.totalImages > selected.imageUrls.length) {
+          this.logger.log(
+            `[marv] catch-up image cap hit post=${postId}: ${selected.totalImages} found, sending ${selected.imageUrls.length} (cap=${openAICfg.visionMaxImagesPerTurn})`,
+          );
+        }
+        // An attached image is itself a routing signal: a "testing" post with a photo IS the photo.
+        // If the routed tier can't see images, upgrade to the cheapest vision-capable tier so the
+        // image is never silently dropped (mirrors how sensitive topics force Smart).
+        if (
+          selected.imageUrls.length > 0 &&
+          openAICfg.visionEnabled &&
+          !openAICfg.visionModes.includes(effectiveMode as string)
+        ) {
+          const visionTier = (['regular', 'smart', 'fast'] as const).find((m) => openAICfg.visionModes.includes(m));
+          if (visionTier) effectiveMode = visionTier;
+        }
+        const visionActive = openAICfg.visionEnabled && openAICfg.visionModes.includes(effectiveMode as string);
+        imageUrls = visionActive ? selected.imageUrls : [];
+      }
+
+      // 7. Credit gate — reserve base + vision (per image) + worst-case one web search, mirroring
+      //    the @marv reply path so the spend can't fail after a successful, billable call.
+      const cost = this.credits.costForMode(effectiveMode);
+      const estimatedVisionCost = imageUrls.length * creditCfg.visionCreditCostPerImage;
+      const webSearchBuffer =
+        openAICfg.webSearchEnabled && openAICfg.webSearchModes.includes(effectiveMode as string)
+          ? creditCfg.webSearchCreditCost
+          : 0;
+      const reservedCost = cost + estimatedVisionCost + webSearchBuffer;
+      const balance = await this.credits.refill(userId);
+      if (balance.credits < reservedCost) {
+        throw new HttpException(
+          {
+            message: `You're out of Marv credits. You have ${Math.floor(balance.credits)}, this needs ${reservedCost}.`,
+            error: MARV_ERROR_CODES.noCredits,
+          },
+          HttpStatus.PAYMENT_REQUIRED,
         );
       }
-      // An attached image is itself a routing signal: a "testing" post with a photo IS the photo.
-      // If the routed tier can't see images, upgrade to the cheapest vision-capable tier so the
-      // image is never silently dropped (mirrors how sensitive topics force Smart).
-      if (
-        selected.imageUrls.length > 0 &&
-        openAICfg.visionEnabled &&
-        !openAICfg.visionModes.includes(effectiveMode as string)
-      ) {
-        const visionTier = (['regular', 'smart', 'fast'] as const).find((m) => openAICfg.visionModes.includes(m));
-        if (visionTier) effectiveMode = visionTier;
+
+      // 8. Build the summarizer prompt + call the model. Real tools are available (same as
+      //    mentions/chat) so Marv can look up user context cards, post details, etc.
+      //    Native web search may engage for real-world context.
+      const { developerNote, userMessage } = this.buildPrompt(context, {
+        imageCount: imageUrls.length,
+        hasGifAttached: hasGifAttached && imageUrls.length > 0,
+        rollingSummary: rollingSummary ?? undefined,
+        linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,
+      });
+      let aiResult: Awaited<ReturnType<MarvinAIService['respond']>>;
+      try {
+        aiResult = await this.ai.respond({
+          source: 'catch_up',
+          mode: effectiveMode,
+          developerNote,
+          userMessage,
+          imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+          dispatchTool: (name, args, ctx) => this.tools.dispatch(name, args, ctx),
+          toolContext: { requesterUserId: userId, rootPostId, triggeringPostId: postId },
+          cacheKey: `marv:catchup:${rootPostId}`,
+        });
+      } catch (err) {
+        this.logger.error(
+          `[marv] catch-up AI call THREW post=${postId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        await this.usage.recordEvent({
+          userId,
+          source: 'catch_up',
+          sourceId: postId,
+          rootPostId,
+          requestedMode,
+          effectiveMode,
+          creditsSpent: 0,
+          modelUsed: this.ai.modelForMode(effectiveMode),
+          routingReason: routed.reason,
+          errorCode: MARV_ERROR_CODES.aiError,
+          latencyMs: Date.now() - startedAt,
+        });
+        throw new HttpException(
+          { message: 'Marv could not summarize this thread right now. Please try again.', error: MARV_ERROR_CODES.aiError },
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
       }
-      const visionActive = openAICfg.visionEnabled && openAICfg.visionModes.includes(effectiveMode as string);
-      imageUrls = visionActive ? selected.imageUrls : [];
-    }
 
-    // 7. Credit gate — reserve base + vision (per image) + worst-case one web search, mirroring
-    //    the @marv reply path so the spend can't fail after a successful, billable call.
-    const cost = this.credits.costForMode(effectiveMode);
-    const estimatedVisionCost = imageUrls.length * creditCfg.visionCreditCostPerImage;
-    const webSearchBuffer =
-      openAICfg.webSearchEnabled && openAICfg.webSearchModes.includes(effectiveMode as string)
-        ? creditCfg.webSearchCreditCost
-        : 0;
-    const reservedCost = cost + estimatedVisionCost + webSearchBuffer;
-    const balance = await this.credits.refill(userId);
-    if (balance.credits < reservedCost) {
-      throw new HttpException(
-        {
-          message: `You're out of Marv credits. You have ${Math.floor(balance.credits)}, this needs ${reservedCost}.`,
-          error: MARV_ERROR_CODES.noCredits,
-        },
-        HttpStatus.PAYMENT_REQUIRED,
-      );
-    }
+      const rawText = (aiResult.text ?? '').trim();
+      const { summary, sections } = this.parseSections(rawText, context.descendants.length > 0);
+      if (!summary) {
+        await this.usage.recordEvent({
+          userId,
+          source: 'catch_up',
+          sourceId: postId,
+          rootPostId,
+          requestedMode,
+          effectiveMode,
+          creditsSpent: 0,
+          modelUsed: aiResult.modelUsed,
+          routingReason: routed.reason,
+          responseId: aiResult.responseId,
+          errorCode: MARV_ERROR_CODES.aiNoText,
+          latencyMs: Date.now() - startedAt,
+        });
+        throw new HttpException(
+          { message: 'Marv could not summarize this thread right now. Please try again.', error: MARV_ERROR_CODES.aiNoText },
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
 
-    // 8. Build the summarizer prompt + call the model. Real tools are available (same as
-    //    mentions/chat) so Marv can look up user context cards, post details, etc.
-    //    Native web search may engage for real-world context.
-    const { developerNote, userMessage } = this.buildPrompt(context, {
-      imageCount: imageUrls.length,
-      hasGifAttached: hasGifAttached && imageUrls.length > 0,
-      rollingSummary: rollingSummary ?? undefined,
-      linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,
-    });
-    let aiResult: Awaited<ReturnType<MarvinAIService['respond']>>;
-    try {
-      aiResult = await this.ai.respond({
-        source: 'catch_up',
-        mode: effectiveMode,
-        developerNote,
-        userMessage,
-        imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
-        dispatchTool: (name, args, ctx) => this.tools.dispatch(name, args, ctx),
-        toolContext: { requesterUserId: userId, rootPostId, triggeringPostId: postId },
-        cacheKey: `marv:catchup:${rootPostId}`,
-      });
-    } catch (err) {
-      this.logger.error(
-        `[marv] catch-up AI call THREW post=${postId}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      // 9. Spend credits + record usage (emits marv:credits-updated via postSpendSummary).
+      //    Charge the ACTUAL images the AI service confirmed it sent, plus web-search/url-fetch usage.
+      const actualVisionCost = (aiResult.imagesAttached ?? 0) * creditCfg.visionCreditCostPerImage;
+      const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * creditCfg.webSearchCreditCost;
+      const urlFetchSurcharge = (aiResult.urlFetchCount ?? 0) * creditCfg.urlFetchCreditCost;
+      const totalCost = cost + actualVisionCost + webSearchSurcharge + urlFetchSurcharge;
+
+      let postSpend: Awaited<ReturnType<MarvinCreditService['spend']>>;
+      try {
+        postSpend = await this.credits.spend(userId, totalCost, {
+          recentSummary: { credits: balance.credits, lastRefilledAt: balance.lastRefilledAt },
+        });
+      } catch (err) {
+        // Credits drained between the pre-check (step 7) and the spend — treat the same
+        // as the pre-check rejection: 402, no cache, honest usage event.
+        const isInsufficient = err instanceof InsufficientMarvCreditsError;
+        await this.usage.recordEvent({
+          userId,
+          source: 'catch_up',
+          sourceId: postId,
+          rootPostId,
+          requestedMode,
+          effectiveMode,
+          creditsSpent: 0,
+          modelUsed: aiResult.modelUsed,
+          routingReason: routed.reason,
+          responseId: aiResult.responseId,
+          inputTokens: aiResult.inputTokens,
+          outputTokens: aiResult.outputTokens,
+          cachedInputTokens: aiResult.cachedInputTokens,
+          estimatedCostUsd: aiResult.estimatedCostUsd,
+          latencyMs: Date.now() - startedAt,
+          errorCode: isInsufficient ? MARV_ERROR_CODES.noCredits : MARV_ERROR_CODES.aiError,
+        });
+        if (isInsufficient) {
+          const cur = (err as InsufficientMarvCreditsError).currentCredits;
+          throw new HttpException(
+            {
+              message: `You're out of Marv credits. You have ${Math.floor(cur)}, this needs ${totalCost}.`,
+              error: MARV_ERROR_CODES.noCredits,
+            },
+            HttpStatus.PAYMENT_REQUIRED,
+          );
+        }
+        throw err;
+      }
+
       await this.usage.recordEvent({
         userId,
         source: 'catch_up',
@@ -237,109 +333,94 @@ export class MarvinCatchUpService {
         rootPostId,
         requestedMode,
         effectiveMode,
-        creditsSpent: 0,
-        modelUsed: this.ai.modelForMode(effectiveMode),
-        routingReason: routed.reason,
-        errorCode: MARV_ERROR_CODES.aiError,
-        latencyMs: Date.now() - startedAt,
-      });
-      throw new HttpException(
-        { message: 'Marv could not summarize this thread right now. Please try again.', error: MARV_ERROR_CODES.aiError },
-        HttpStatus.SERVICE_UNAVAILABLE,
-      );
-    }
-
-    const rawText = (aiResult.text ?? '').trim();
-    const { summary, sections } = this.parseSections(rawText, context.descendants.length > 0);
-    if (!summary) {
-      await this.usage.recordEvent({
-        userId,
-        source: 'catch_up',
-        sourceId: postId,
-        rootPostId,
-        requestedMode,
-        effectiveMode,
-        creditsSpent: 0,
+        creditsSpent: totalCost,
         modelUsed: aiResult.modelUsed,
         routingReason: routed.reason,
         responseId: aiResult.responseId,
-        errorCode: MARV_ERROR_CODES.aiNoText,
+        inputTokens: aiResult.inputTokens,
+        outputTokens: aiResult.outputTokens,
+        cachedInputTokens: aiResult.cachedInputTokens,
+        estimatedCostUsd: aiResult.estimatedCostUsd,
         latencyMs: Date.now() - startedAt,
+        postSpendSummary: postSpend,
       });
-      throw new HttpException(
-        { message: 'Marv could not summarize this thread right now. Please try again.', error: MARV_ERROR_CODES.aiNoText },
-        HttpStatus.SERVICE_UNAVAILABLE,
+
+      const dto: MarvinCatchUpDto = {
+        postId,
+        rootPostId,
+        summary,
+        sections,
+        effectiveMode,
+        creditsSpent: totalCost,
+        costBreakdown: {
+          mode: cost,
+          vision: actualVisionCost,
+          webSearch: webSearchSurcharge,
+          urlFetch: urlFetchSurcharge,
+        },
+        cached: false,
+        included: {
+          ancestors: context.ancestors.length,
+          descendants: context.descendants.length,
+          totalDescendants: context.totalDescendants,
+        },
+        generatedAt: new Date().toISOString(),
+      };
+
+      this.logger.log(
+        `[marv] catch-up ok post=${postId} mode=${effectiveMode} cost=${totalCost} (mode=${cost} + vision=${actualVisionCost} + webSearch=${webSearchSurcharge} + urlFetch=${urlFetchSurcharge}) images=${aiResult.imagesAttached ?? 0} ancestors=${dto.included.ancestors} descendants=${dto.included.descendants}/${dto.included.totalDescendants}`,
       );
-    }
-
-    // 9. Spend credits + record usage (emits marv:credits-updated via postSpendSummary).
-    //    Charge the ACTUAL images the AI service confirmed it sent, plus web-search/url-fetch usage.
-    const actualVisionCost = (aiResult.imagesAttached ?? 0) * creditCfg.visionCreditCostPerImage;
-    const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * creditCfg.webSearchCreditCost;
-    const urlFetchSurcharge = (aiResult.urlFetchCount ?? 0) * creditCfg.urlFetchCreditCost;
-    const totalCost = cost + actualVisionCost + webSearchSurcharge + urlFetchSurcharge;
-
-    let postSpend: Awaited<ReturnType<MarvinCreditService['spend']>> | null = null;
-    try {
-      postSpend = await this.credits.spend(userId, totalCost, {
-        recentSummary: { credits: balance.credits, lastRefilledAt: balance.lastRefilledAt },
-      });
-    } catch (err) {
-      this.logger.warn(
-        `[marv] catch-up credit spend failed after success: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    await this.usage.recordEvent({
-      userId,
-      source: 'catch_up',
-      sourceId: postId,
-      rootPostId,
-      requestedMode,
-      effectiveMode,
-      creditsSpent: totalCost,
-      modelUsed: aiResult.modelUsed,
-      routingReason: routed.reason,
-      responseId: aiResult.responseId,
-      inputTokens: aiResult.inputTokens,
-      outputTokens: aiResult.outputTokens,
-      cachedInputTokens: aiResult.cachedInputTokens,
-      estimatedCostUsd: aiResult.estimatedCostUsd,
-      latencyMs: Date.now() - startedAt,
-      postSpendSummary: postSpend,
-    });
-
-    const dto: MarvinCatchUpDto = {
-      postId,
-      rootPostId,
-      summary,
-      sections,
-      effectiveMode,
-      creditsSpent: totalCost,
-      costBreakdown: {
-        mode: cost,
-        vision: actualVisionCost,
-        webSearch: webSearchSurcharge,
-        urlFetch: urlFetchSurcharge,
-      },
-      cached: false,
-      included: {
-        ancestors: context.ancestors.length,
-        descendants: context.descendants.length,
-        totalDescendants: context.totalDescendants,
-      },
-      generatedAt: new Date().toISOString(),
+      return dto;
     };
 
-    // Cache for the next viewer of this unchanged thread.
-    void this.cache
-      .setJson(cacheKey, dto, { ttlSeconds: SUMMARY_CACHE_TTL_SECONDS })
-      .catch(() => undefined);
-
-    this.logger.log(
-      `[marv] catch-up ok post=${postId} mode=${effectiveMode} cost=${totalCost} (mode=${cost} + vision=${actualVisionCost} + webSearch=${webSearchSurcharge} + urlFetch=${urlFetchSurcharge}) images=${aiResult.imagesAttached ?? 0} ancestors=${dto.included.ancestors} descendants=${dto.included.descendants}/${dto.included.totalDescendants}`,
+    type LockOutcome = { fromCache: boolean; dto: MarvinCatchUpDto };
+    const lockResult = await this.cache.withLock<LockOutcome>(
+      `marv:catchup:gen:${cacheKey}`,
+      { ttlMs: 120_000, waitMs: 10_000, retryDelayMs: 200 },
+      async () => {
+        // Double-check cache inside the lock — the previous holder may have just written it.
+        // Skip this second check if forceRefresh was requested (user wants a fresh result).
+        if (!params.forceRefresh) {
+          const fresh = await this.cache.getJson<MarvinCatchUpDto>(cacheKey);
+          if (fresh) {
+            this.logger.log(`[marv] catch-up CACHE HIT (inside lock) post=${postId} mode=${requestedMode} marker=${marker}`);
+            return { fromCache: true, dto: fresh };
+          }
+        }
+        // We are the lock holder — generate, spend, and write the normalized DTO to cache.
+        const freshDto = await generateFn();
+        // Cache the normalized (free) version so all subsequent readers pay nothing.
+        const normalized: MarvinCatchUpDto = {
+          ...freshDto,
+          creditsSpent: 0,
+          costBreakdown: { mode: 0, vision: 0, webSearch: 0, urlFetch: 0 },
+          cached: true,
+        };
+        await this.cache.setJson(cacheKey, normalized, { ttlSeconds: SUMMARY_CACHE_TTL_SECONDS });
+        return { fromCache: false, dto: freshDto };
+      },
     );
-    return dto;
+
+    if (lockResult !== null) {
+      const { fromCache, dto } = lockResult;
+      if (fromCache) {
+        return { ...dto, creditsSpent: 0, costBreakdown: { mode: 0, vision: 0, webSearch: 0, urlFetch: 0 }, cached: true };
+      }
+      return dto; // fresh — creditsSpent and cached are already set correctly
+    }
+
+    // Lock timed out (very rare) — generate independently, same as before this fix.
+    this.logger.warn(`[marv] catch-up lock timeout for post=${postId}, generating independently`);
+    const fallbackDto = await generateFn();
+    // Also write to cache so future requests benefit (the lock is no longer held).
+    const fallbackNormalized: MarvinCatchUpDto = {
+      ...fallbackDto,
+      creditsSpent: 0,
+      costBreakdown: { mode: 0, vision: 0, webSearch: 0, urlFetch: 0 },
+      cached: true,
+    };
+    void this.cache.setJson(cacheKey, fallbackNormalized, { ttlSeconds: SUMMARY_CACHE_TTL_SECONDS }).catch(() => undefined);
+    return fallbackDto;
   }
 
   /**
@@ -376,7 +457,7 @@ export class MarvinCatchUpService {
 
       // Visibility: resolve through PostsService so we never peek a cache key for a post the
       // viewer can't see. Any access error → treat as "nothing cached".
-      const post = await this.posts.getById({ viewerUserId: userId, id: postId });
+      const _post = await this.posts.getById({ viewerUserId: userId, id: postId });
 
       const context = await this.context.collect({ focalPostId: postId });
       const marker = this.freshnessMarker(context);
@@ -386,14 +467,14 @@ export class MarvinCatchUpService {
       if (!cached) return null;
 
       this.logger.log(`[marv] catch-up PEEK hit post=${postId} mode=${requestedMode} marker=${marker}`);
-      void post;
       return {
         ...cached,
         creditsSpent: 0,
         costBreakdown: { mode: 0, vision: 0, webSearch: 0, urlFetch: 0 },
         cached: true,
       };
-    } catch {
+    } catch (err) {
+      this.logger.debug(`[marv] catch-up PEEK error post=${postId}: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
   }

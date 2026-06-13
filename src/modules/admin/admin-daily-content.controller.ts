@@ -3,10 +3,11 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { AdminGuard } from './admin.guard';
 import { DailyContentService } from '../daily-content/daily-content.service';
+import { queryBoolean } from '../../common/validation/query-boolean';
 
 const refreshSchema = z.object({
-  quote: z.coerce.boolean().optional(),
-  websters1828: z.coerce.boolean().optional(),
+  quote: queryBoolean().optional(),
+  websters1828: queryBoolean().optional(),
 });
 
 @UseGuards(AdminGuard)

@@ -18,6 +18,7 @@ import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
 import { collapseFeedByRoot } from '../../common/feed-collapse/collapse-by-root';
 import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
+import { queryBoolean } from '../../common/validation/query-boolean';
 
 const readThrottle = {
   default: {
@@ -41,36 +42,36 @@ const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
-  followingOnly: z.coerce.boolean().optional(),
-  mediaOnly: z.coerce.boolean().optional(),
+  followingOnly: queryBoolean().optional(),
+  mediaOnly: queryBoolean().optional(),
   kind: z.enum(['regular', 'checkin']).optional(),
   /** Filter check-ins to a specific ET day (YYYY-MM-DD). Forces kind=checkin when present. */
   checkinDayKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   /** When true, include the viewer's own posts in results (overrides home-feed self-exclusion). */
-  includeSelf: z.coerce.boolean().optional(),
+  includeSelf: queryBoolean().optional(),
   // Optional author filter (comma-separated user IDs). Used by Explore to show trending by recommended users.
   authorIds: z.string().optional(),
   // "trending" is the UI-friendly name for our half-life boost scoring feed.
   // Keep "popular" for backwards compatibility / internal naming.
   // "forYou" is a personalized re-rank of trending using the viewer's follow graph + view history.
   sort: z.enum(['new', 'popular', 'trending', 'featured', 'forYou']).optional(),
-  collapseByRoot: z.coerce.boolean().optional(),
+  collapseByRoot: queryBoolean().optional(),
   collapseMode: z.enum(['root', 'parent']).optional(),
   prefer: z.enum(['reply', 'root']).optional(),
   collapseMaxPerRoot: z.coerce.number().int().min(1).max(5).optional(),
   /** All groups the viewer is in (members-only). Mutually exclusive with `communityGroupId` in practice. */
-  groupsHub: z.coerce.boolean().optional(),
+  groupsHub: queryBoolean().optional(),
   /** Single community group feed (members-only). */
   communityGroupId: z.string().trim().min(1).max(40).optional(),
   /** When true, return only top-level (non-reply) posts. */
-  topLevelOnly: z.coerce.boolean().optional(),
+  topLevelOnly: queryBoolean().optional(),
 });
 
 const userListSchema = listSchema.extend({
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
-  includeCounts: z.coerce.boolean().optional(),
-  topLevelOnly: z.coerce.boolean().optional(),
-  includeRestricted: z.coerce.boolean().optional(),
+  includeCounts: queryBoolean().optional(),
+  topLevelOnly: queryBoolean().optional(),
+  includeRestricted: queryBoolean().optional(),
 });
 
 const userMediaListSchema = z.object({
@@ -78,7 +79,7 @@ const userMediaListSchema = z.object({
   cursor: z.string().optional(),
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
   sort: z.enum(['new', 'trending']).optional(),
-  includeRestricted: z.coerce.boolean().optional(),
+  includeRestricted: queryBoolean().optional(),
 });
 
 const createUploadMediaItemSchema = z.object({

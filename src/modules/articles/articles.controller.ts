@@ -17,6 +17,7 @@ import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { ArticlesService } from './articles.service';
+import { queryBoolean } from '../../common/validation/query-boolean';
 
 const visibilitySchema = z.enum(['public', 'verifiedOnly', 'premiumOnly']);
 
@@ -45,9 +46,9 @@ const listSchema = z.object({
   authorUsername: z.string().optional(),
   sort: z.enum(['new', 'trending']).optional(),
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
-  mine: z.coerce.boolean().optional(),
-  followingOnly: z.coerce.boolean().optional(),
-  includeRestricted: z.coerce.boolean().optional(),
+  mine: queryBoolean().optional(),
+  followingOnly: queryBoolean().optional(),
+  includeRestricted: queryBoolean().optional(),
   tag: z.string().trim().max(60).optional(),
 });
 

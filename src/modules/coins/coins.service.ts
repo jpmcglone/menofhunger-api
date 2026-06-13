@@ -65,24 +65,22 @@ export class CoinsService {
     if (recipient.id === senderUserId) throw new BadRequestException('You cannot send coins to yourself.');
 
     const { senderAfter, transfer } = await this.prisma.$transaction(async (tx) => {
-      const sender = await tx.user.findUnique({
-        where: { id: senderUserId },
-        select: { id: true, coins: true },
+      // Guarded atomic decrement: WHERE coins >= amount serializes concurrent sends and
+      // prevents the balance from going negative (no DB-level non-negative constraint exists).
+      const dec = await tx.user.updateMany({
+        where: { id: senderUserId, coins: { gte: amount } },
+        data: { coins: { decrement: amount } },
       });
-      if (!sender) throw new NotFoundException('Sender not found.');
-      if (sender.coins < amount) throw new BadRequestException('Insufficient coins.');
+      if (dec.count === 0) throw new BadRequestException('Insufficient coins.');
 
       const [senderAfter] = await Promise.all([
-        tx.user.update({
-          where: { id: senderUserId },
-          data: { coins: { decrement: amount } },
-          select: { coins: true },
-        }),
+        tx.user.findUnique({ where: { id: senderUserId }, select: { coins: true } }),
         tx.user.update({
           where: { id: recipient.id },
           data: { coins: { increment: amount } },
         }),
       ]);
+      if (!senderAfter) throw new NotFoundException('Sender not found after transfer.');
 
       const transfer = await tx.coinTransfer.create({
         data: {

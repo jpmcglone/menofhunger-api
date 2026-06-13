@@ -558,10 +558,12 @@ model DailyContentSnapshot {
  * Use the Stripe event id as the primary key.
  */
 model StripeWebhookEvent {
-  id        String   @id
-  createdAt DateTime @default(now())
+  id          String    @id
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
 
   @@index([createdAt])
+  @@index([processedAt])
 }
 
 /**

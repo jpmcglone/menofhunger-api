@@ -3,7 +3,7 @@ import type { MessageDto } from '../../modules/messages/message.dto';
 import type { NotificationDto } from '../../modules/notifications/notification.dto';
 import type { UserDto } from './user.dto';
 import type { ArticleCommentDto, ArticleReactionSummaryDto } from './article.dto';
-import type { PostDto } from './post.dto';
+import type { PostDto, PostPollDto } from './post.dto';
 import type { UserStatusDto } from './presence.dto';
 
 /**
@@ -108,7 +108,8 @@ export type UsersSelfUpdatedPayloadDto = {
  * Canonical payload matches `/auth/me` user shape.
  */
 export type UsersMeUpdatedPayloadDto = {
-  user: UserDto;
+  /** Full user snapshot for profile/auth state updates. Optional for hint-only emits. */
+  user?: UserDto;
   /** Optional hint for debugging/UI refresh decisions. */
   reason?: string;
 };
@@ -209,6 +210,8 @@ export type PostsLiveUpdatedPayloadDto = {
     boostCount: number;
     bookmarkCount: number;
     repostCount: number;
+    /** Updated poll state (vote counts + viewer flags) after a vote is cast. */
+    poll: PostPollDto | null;
   }>;
 };
 

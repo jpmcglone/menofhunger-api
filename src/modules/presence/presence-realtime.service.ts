@@ -197,6 +197,15 @@ export class PresenceRealtimeService {
     this.emitToUser(userId, WsEventNames.usersMeUpdated, payload);
   }
 
+  /**
+   * Emit a lightweight "something about you changed — re-fetch" hint to all of a
+   * user's connected sockets. Use when the change (e.g. block/unblock) doesn't touch
+   * the `User` record itself and building a full `UserDto` would be wasteful.
+   */
+  emitUsersMeRefresh(userId: string, reason: string): void {
+    this.emitToUser(userId, WsEventNames.usersMeUpdated, { reason });
+  }
+
   emitPresenceStatusUpdated(userId: string, payload: PresenceStatusUpdatedPayloadDto): void {
     const uid = (userId ?? '').trim();
     if (!uid) return;

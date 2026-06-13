@@ -3,12 +3,15 @@ import { Prisma } from '@prisma/client';
 import type { VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { toPostPollDto } from '../../common/dto/post.dto';
 
 @Injectable()
 export class PollsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly viewerContext: ViewerContextService,
+    private readonly realtime: PresenceRealtimeService,
   ) {}
 
   private allowedVisibilitiesForViewer(viewer: { verifiedStatus: VerifiedStatus; premium: boolean; premiumPlus?: boolean; siteAdmin?: boolean } | null) {
@@ -102,6 +105,16 @@ export class PollsService {
       });
     });
 
+    const pollDto = toPostPollDto(updated, null, { viewerVotedOptionId: optId, viewerSkipped: false });
+    if (pollDto) {
+      this.realtime.emitPostsLiveUpdated(id, {
+        postId: id,
+        version: new Date().toISOString(),
+        reason: 'poll_vote',
+        patch: { poll: pollDto },
+      });
+    }
+
     return { poll: updated, viewerVotedOptionId: optId };
   }
 
@@ -116,29 +129,32 @@ export class PollsService {
     if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be voted on.');
     if (post.userId !== userId) throw new ForbiddenException('Only the poll creator can skip voting.');
 
-    const poll = await this.prisma.postPoll.findUnique({
-      where: { postId: id },
-      include: { options: { orderBy: { position: 'asc' } } },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const poll = await tx.postPoll.findUnique({
+        where: { postId: id },
+        include: { options: { orderBy: { position: 'asc' } } },
+      });
+      if (!poll) throw new NotFoundException('Poll not found.');
+      if (poll.endsAt <= new Date()) throw new BadRequestException('This poll has ended.');
+
+      const existingVote = await tx.postPollVote.findUnique({
+        where: { pollId_userId: { pollId: poll.id, userId } },
+      });
+      if (existingVote) throw new ForbiddenException('You have already voted on this poll.');
+
+      if (poll.creatorSkippedAt) {
+        return { poll, viewerSkipped: true };
+      }
+
+      const updatedPoll = await tx.postPoll.update({
+        where: { id: poll.id },
+        data: { creatorSkippedAt: new Date() },
+        include: { options: { orderBy: { position: 'asc' } } },
+      });
+      return { poll: updatedPoll, viewerSkipped: true };
     });
-    if (!poll) throw new NotFoundException('Poll not found.');
-    if (poll.endsAt <= new Date()) throw new BadRequestException('This poll has ended.');
 
-    const existingVote = await this.prisma.postPollVote.findUnique({
-      where: { pollId_userId: { pollId: poll.id, userId } },
-    });
-    if (existingVote) throw new ForbiddenException('You have already voted on this poll.');
-
-    if (poll.creatorSkippedAt) {
-      return { poll, viewerSkipped: true };
-    }
-
-    const updated = await this.prisma.postPoll.update({
-      where: { id: poll.id },
-      data: { creatorSkippedAt: new Date() },
-      include: { options: { orderBy: { position: 'asc' } } },
-    });
-
-    return { poll: updated, viewerSkipped: true };
+    return updated;
   }
 }
 

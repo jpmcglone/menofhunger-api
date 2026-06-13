@@ -1201,6 +1201,8 @@ export class PostsMutationService {
 
         // Streak rewards: daily check + coins (transactional with post creation).
         // Product rule: any non-onlyMe post counts (incl. replies & check-ins). Award once per ET day.
+        // CAS guard: updateMany with WHERE lastCheckinDayKey = prevKey prevents a double-award when two
+        // concurrent posts run the check at the same time. Only the first writer wins count === 1.
         const streakOp = visibility !== 'onlyMe'
           ? (async () => {
               const todayKey = easternDayKey(now);
@@ -1210,35 +1212,36 @@ export class PostsMutationService {
                 select: { coins: true, checkinStreakDays: true, lastCheckinDayKey: true, longestStreakDays: true },
               });
               if (!u) throw new NotFoundException('User not found.');
-              if ((u.lastCheckinDayKey ?? null) === todayKey) return; // already awarded today
+              const prevKey = u.lastCheckinDayKey ?? null;
+              if (prevKey === todayKey) return; // already awarded today
               const out = computeCheckinRewards({
                 todayKey,
                 yesterdayKey,
-                lastCheckinDayKey: u.lastCheckinDayKey ?? null,
+                lastCheckinDayKey: prevKey,
                 currentStreakDays: u.checkinStreakDays ?? 0,
               });
               const nextLongest = Math.max(u.longestStreakDays ?? 0, out.nextStreakDays);
-              // user.update + coinTransfer.create are independent → run in parallel.
-              await Promise.all([
-                tx.user.update({
-                  where: { id: userId },
-                  data: {
-                    lastCheckinDayKey: todayKey,
-                    checkinStreakDays: out.nextStreakDays,
-                    longestStreakDays: nextLongest,
-                    coins: { increment: out.coinsAdd },
-                  },
-                }),
-                tx.coinTransfer.create({
-                  data: {
-                    senderId: userId,
-                    recipientId: userId,
-                    kind: 'streak_reward',
-                    amount: out.coinsAdd,
-                    note: `Day ${out.nextStreakDays} streak (${out.multiplier}x)`,
-                  },
-                }),
-              ]);
+              // Atomic compare-and-swap: only apply when lastCheckinDayKey hasn't changed.
+              // If another concurrent post already set it to todayKey, count === 0 and we bail.
+              const claim = await tx.user.updateMany({
+                where: { id: userId, lastCheckinDayKey: prevKey },
+                data: {
+                  lastCheckinDayKey: todayKey,
+                  checkinStreakDays: out.nextStreakDays,
+                  longestStreakDays: nextLongest,
+                  coins: { increment: out.coinsAdd },
+                },
+              });
+              if (claim.count === 0) return; // concurrent post already awarded today — skip
+              await tx.coinTransfer.create({
+                data: {
+                  senderId: userId,
+                  recipientId: userId,
+                  kind: 'streak_reward',
+                  amount: out.coinsAdd,
+                  note: `Day ${out.nextStreakDays} streak (${out.multiplier}x)`,
+                },
+              });
               didAwardStreak = true;
               streakRewardOut = { coinsEarned: out.coinsAdd, streakDays: out.nextStreakDays, multiplier: out.multiplier };
             })()

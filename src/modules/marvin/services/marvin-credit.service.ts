@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppConfigService } from '../../app/app-config.service';
 import type { ResolvedMarvinMode } from './marvin-routing.service';
@@ -33,8 +33,9 @@ export type MarvCreditSummary = MarvCreditState & {
  * - The bucket caps at `maxCredits` (default 1500); excess refill is dropped.
  * - `refill()` is idempotent: it computes elapsed time since `lastRefilledAt` and
  *   adds the proportional refill, capped to the bucket max.
- * - `spend()` checks + decrements inside a single Prisma transaction so two parallel
- *   requests can never spend the same credit twice.
+ * - `spend()` uses an atomic guarded decrement (`UPDATE … SET credits = credits - cost
+ *   WHERE credits >= cost`) so concurrent transactions serialize on the row lock and
+ *   can never both succeed when there are only enough credits for one.
  *
  * The service does NOT decide who can use Marv — that's `MarvinPublicReplyProcessor`'s
  * job. We just account for the credits.
@@ -84,11 +85,11 @@ export class MarvinCreditService {
    * Returns the post-spend bucket state so the caller can include it in the
    * realtime "credits updated" emit.
    *
-   * Hot-path optimization: callers that just ran {@link refill} can pass `recentSummary`.
-   * If `lastRefilledAt` is within {@link RECENT_REFILL_WINDOW_MS}, we skip the inner
-   * refill SELECT and just decrement — saving one Postgres round-trip per successful
-   * Marv reply. The 60s `noWriteNeeded` skip in `refillTx` already covers the slow
-   * path; this is for the very common "we just refilled milliseconds ago" case.
+   * The decrement is issued as `UPDATE … SET credits = credits - cost WHERE credits >= cost`,
+   * which takes a row-level exclusive lock and prevents two concurrent transactions from
+   * both succeeding on the same balance. The optional `recentSummary` fast path skips the
+   * inner refill SELECT when the caller refilled within {@link RECENT_REFILL_WINDOW_MS}
+   * (saves one Postgres round-trip); correctness is preserved by the WHERE guard.
    */
   async spend(
     userId: string,
@@ -101,19 +102,36 @@ export class MarvinCreditService {
     const now = options?.now ?? new Date();
     const cfg = this.appConfig.marvCredits();
     return await this.prisma.$transaction(async (tx) => {
+      // Refill accrues any elapsed credits (or reuses a very-recent snapshot for the
+      // fast path). This also serves as the early-rejection check.
       const refilled = await this.refillOrReuseTx(tx, userId, now, cfg, options?.recentSummary);
       if (refilled.credits < cost) {
         throw new InsufficientMarvCreditsError(refilled.credits, cost);
       }
-      const next = Math.max(0, refilled.credits - cost);
-      const updated = await tx.marvinCreditBalance.update({
+      // Atomic guarded decrement: the WHERE guard ensures a negative balance is
+      // impossible even if two transactions read the same pre-refill value concurrently.
+      // Postgres acquires a row-level exclusive lock for the duration of this statement,
+      // serializing concurrent spend calls on the same user row.
+      const affected = await tx.marvinCreditBalance.updateMany({
+        where: { userId, credits: { gte: cost } },
+        data: { credits: { decrement: cost }, lastRefilledAt: now },
+      });
+      if (affected.count === 0) {
+        // Another concurrent transaction drained the credits between our refill check
+        // and the decrement — re-read the committed balance for the error message.
+        const fresh = await tx.marvinCreditBalance.findUnique({
+          where: { userId },
+          select: { credits: true },
+        });
+        throw new InsufficientMarvCreditsError(fresh?.credits ?? 0, cost);
+      }
+      const updated = await tx.marvinCreditBalance.findUnique({
         where: { userId },
-        data: { credits: next, lastRefilledAt: now },
         select: { credits: true, lastRefilledAt: true },
       });
       return {
-        credits: updated.credits,
-        lastRefilledAt: updated.lastRefilledAt,
+        credits: updated!.credits,
+        lastRefilledAt: updated!.lastRefilledAt,
         maxCredits: cfg.maxCredits,
         creditsPerDay: cfg.creditsPerDay,
       };
@@ -211,8 +229,12 @@ export class MarvinCreditService {
 
     if (!existing) {
       const initial = Math.min(cfg.maxCredits, cfg.monthlyCredits);
-      const created = await tx.marvinCreditBalance.create({
-        data: { userId, credits: initial, lastRefilledAt: now },
+      // Use upsert instead of create to handle the race where two concurrent requests
+      // both see no row and both attempt to create the bucket simultaneously.
+      const created = await tx.marvinCreditBalance.upsert({
+        where: { userId },
+        create: { userId, credits: initial, lastRefilledAt: now },
+        update: {},
         select: { credits: true, lastRefilledAt: true },
       });
       return {

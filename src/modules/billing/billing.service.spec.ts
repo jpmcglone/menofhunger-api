@@ -1,5 +1,4 @@
 import { BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import { BillingService } from './billing.service';
 
 // ─── Stripe mock ─────────────────────────────────────────────────────────────
@@ -60,7 +59,11 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
         update: jest.fn(async () => ({})),
         findUniqueOrThrow: jest.fn(async () => ({ id: 'u1', username: 'u' })),
       },
-      stripeWebhookEvent: { create: jest.fn(async () => ({})) },
+      stripeWebhookEvent: {
+        findUnique: jest.fn(async () => null),
+        create: jest.fn(async () => ({})),
+        update: jest.fn(async () => ({})),
+      },
       subscriptionGrant: { deleteMany: jest.fn(async () => ({ count: 0 })) },
     },
     appConfig: {
@@ -323,24 +326,99 @@ describe('BillingService.handleWebhook', () => {
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('is a no-op on duplicate event (P2002)', async () => {
+  it('is a no-op on already-processed event (processedAt set)', async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
       id: 'evt_dup',
       type: 'checkout.session.completed',
       data: { object: { customer: 'cus_1', subscription: 'sub_1' } },
     });
-    deps.prisma.stripeWebhookEvent.create.mockRejectedValue(
-      new Prisma.PrismaClientKnownRequestError('duplicate', {
-        code: 'P2002',
-        clientVersion: 'test',
-      } as any),
-    );
+    // findUnique returns a row that is already fully processed
+    deps.prisma.stripeWebhookEvent.findUnique.mockResolvedValue({ processedAt: new Date() });
 
     await expect(
       service.handleWebhook({ rawBody, stripeSignature: sig }),
     ).resolves.toBeUndefined();
     expect(deps.prisma.user.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('retries (re-processes) when event row exists but processedAt is null', async () => {
+    // Simulates a previous attempt that crashed after claiming but before marking processed.
+    const { service, deps } = makeService();
+    global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
+      id: 'evt_crash',
+      type: 'checkout.session.completed',
+      data: { object: { customer: 'cus_retry', subscription: 'sub_retry' } },
+    });
+    // Row exists but processedAt is null -> retry should proceed
+    deps.prisma.stripeWebhookEvent.findUnique.mockResolvedValue({ processedAt: null });
+    deps.prisma.user.findFirst.mockResolvedValue({
+      id: 'u2',
+      username: 'bob',
+      name: 'Bob',
+      verifiedStatus: 'identity',
+      premium: false,
+      premiumPlus: false,
+      recruitedById: null,
+      referralBonusGrantedAt: null,
+    });
+    global.__stripeMock__!.subscriptions.retrieve.mockResolvedValue({
+      id: 'sub_retry',
+      status: 'active',
+      cancel_at_period_end: false,
+      current_period_start: 1_000_000,
+      current_period_end: 2_000_000,
+      items: { data: [{ price: { id: 'price_premium' } }] },
+    });
+
+    await service.handleWebhook({ rawBody, stripeSignature: sig });
+
+    // Must have re-processed
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u2');
+    // Must have marked as processed
+    expect(deps.prisma.stripeWebhookEvent.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'evt_crash' }, data: expect.objectContaining({ processedAt: expect.any(Date) }) }),
+    );
+  });
+
+  it('marks processedAt after successful handler (success path)', async () => {
+    const { service, deps } = makeService();
+    global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
+      id: 'evt_success',
+      type: 'customer.subscription.updated',
+      data: {
+        object: {
+          id: 'sub_2',
+          customer: 'cus_2',
+          status: 'active',
+          items: { data: [{ price: { id: 'price_premium' } }] },
+        },
+      },
+    });
+    deps.prisma.user.findFirst.mockResolvedValue({
+      id: 'u3',
+      username: 'carol',
+      name: 'Carol',
+      verifiedStatus: 'identity',
+      premium: false,
+      premiumPlus: false,
+      recruitedById: null,
+      referralBonusGrantedAt: null,
+    });
+    global.__stripeMock__!.subscriptions.retrieve.mockResolvedValue({
+      id: 'sub_2',
+      status: 'active',
+      cancel_at_period_end: false,
+      current_period_start: 1_000_000,
+      current_period_end: 2_000_000,
+      items: { data: [{ price: { id: 'price_premium' } }] },
+    });
+
+    await service.handleWebhook({ rawBody, stripeSignature: sig });
+
+    expect(deps.prisma.stripeWebhookEvent.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'evt_success' }, data: expect.objectContaining({ processedAt: expect.any(Date) }) }),
+    );
   });
 
   it('syncs subscription on checkout.session.completed', async () => {

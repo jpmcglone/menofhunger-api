@@ -222,3 +222,42 @@ describe('MessagesService unread count batching', () => {
   });
 });
 
+describe('MessagesService – block/unblock emit', () => {
+  it('emits users:me-updated with reason block_changed on blockUser', async () => {
+    const emitUsersMeRefresh = jest.fn();
+    const { svc } = makeService({
+      prisma: {
+        userBlock: {
+          upsert: jest.fn(async () => ({})),
+        },
+        follow: { deleteMany: jest.fn(async () => ({})) },
+      } as any,
+      presenceRealtime: {
+        emitMessagesUpdated: jest.fn(),
+        emitUnreadCounts: jest.fn(),
+        emitUsersMeRefresh,
+      } as any,
+    });
+
+    await svc.blockUser({ userId: 'u1', targetUserId: 'u2' });
+    expect(emitUsersMeRefresh).toHaveBeenCalledWith('u1', 'block_changed');
+  });
+
+  it('emits users:me-updated with reason block_changed on unblockUser', async () => {
+    const emitUsersMeRefresh = jest.fn();
+    const { svc } = makeService({
+      prisma: {
+        userBlock: { deleteMany: jest.fn(async () => ({})) },
+      } as any,
+      presenceRealtime: {
+        emitMessagesUpdated: jest.fn(),
+        emitUnreadCounts: jest.fn(),
+        emitUsersMeRefresh,
+      } as any,
+    });
+
+    await svc.unblockUser({ userId: 'u1', targetUserId: 'u2' });
+    expect(emitUsersMeRefresh).toHaveBeenCalledWith('u1', 'block_changed');
+  });
+});
+

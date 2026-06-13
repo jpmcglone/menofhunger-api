@@ -1617,6 +1617,8 @@ export class MessagesService {
     this.emitUnreadCounts(userId);
     // Bust cached block sets so feed filtering reflects the new block immediately.
     void this.redis.del(RedisKeys.viewerBlockSets(userId), RedisKeys.viewerBlockSets(targetUserId)).catch(() => undefined);
+    // Notify other tabs/devices of the blocker that their block/follow/filter state changed.
+    this.presenceRealtime.emitUsersMeRefresh(userId, 'block_changed');
   }
 
   /** Returns blocked user IDs visible to other services (bidirectional). */
@@ -1644,6 +1646,8 @@ export class MessagesService {
     });
     this.emitUnreadCounts(userId);
     void this.redis.del(RedisKeys.viewerBlockSets(userId), RedisKeys.viewerBlockSets(targetUserId)).catch(() => undefined);
+    // Notify other tabs/devices of the unblocker that their block/follow/filter state changed.
+    this.presenceRealtime.emitUsersMeRefresh(userId, 'block_changed');
   }
 
   async listBlocks(params: { userId: string }) {

@@ -102,6 +102,12 @@ export class MarvinPublicReplyProcessor {
       return;
     }
 
+    // Track whether the AI reply was delivered so the idempotency key is only released
+    // on pre-delivery failures (allowing BullMQ retries), never after delivery (which
+    // would risk a duplicate post on retry).
+    let delivered = false;
+    try {
+
     // 2. Marv globally enabled? Disabled for user?
     const cfg = this.appConfig.marvBot();
     if (!cfg.enabled) {
@@ -527,25 +533,83 @@ export class MarvinPublicReplyProcessor {
       return;
     }
 
+    // 9. Compute actual credit cost now that the AI turn is complete, then charge
+    // before delivering. Charging first ensures we never give away a free reply.
+    const actualVisionCost = (aiResult.imagesAttached ?? 0) * creditCfg.visionCreditCostPerImage;
+    const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * creditCfg.webSearchCreditCost;
+    const urlFetchSurcharge = (aiResult.urlFetchCount ?? 0) * creditCfg.urlFetchCreditCost;
+    const totalCost = cost + actualVisionCost + webSearchSurcharge + urlFetchSurcharge;
+    if (actualVisionCost > 0) {
+      this.logger.log(
+        `[marv] public-reply vision surcharge: ${aiResult.imagesAttached} image(s) × ${creditCfg.visionCreditCostPerImage} = ${actualVisionCost} extra credits`,
+      );
+    }
+    if (webSearchSurcharge > 0) {
+      this.logger.log(
+        `[marv] public-reply web-search surcharge: ${aiResult.webSearchCount} search(es) × ${creditCfg.webSearchCreditCost} = ${webSearchSurcharge} extra credits (total=${totalCost})`,
+      );
+    }
+    if (urlFetchSurcharge > 0) {
+      this.logger.log(
+        `[marv] public-reply url-fetch surcharge: ${aiResult.urlFetchCount} fetch(es) × ${creditCfg.urlFetchCreditCost} = ${urlFetchSurcharge} extra credits (total=${totalCost})`,
+      );
+    }
+
+    let postSpend: Awaited<ReturnType<typeof this.credits.spend>> | null = null;
+    try {
+      postSpend = await this.credits.spend(requestingUserId, totalCost, {
+        recentSummary: { credits: summary.credits, lastRefilledAt: summary.lastRefilledAt },
+      });
+    } catch (err) {
+      stopTyping();
+      if (err instanceof InsufficientMarvCreditsError) {
+        this.logger.warn(
+          `[marv] public-reply EXIT reason=no_credits_at_spend balance=${err.currentCredits} needed=${totalCost}`,
+        );
+        await this.usage.recordEvent({
+          userId: requestingUserId,
+          source: 'public_thread',
+          sourceId: postId,
+          rootPostId,
+          requestedMode,
+          effectiveMode,
+          creditsSpent: 0,
+          modelUsed: aiResult.modelUsed,
+          routingReason: routed.reason,
+          responseId: aiResult.responseId,
+          errorCode: MARV_ERROR_CODES.noCredits,
+          latencyMs: Date.now() - startedAt,
+        });
+        return;
+      }
+      // Unexpected spend error — rethrow so the outer catch can release the
+      // idempotency key (delivered is still false) and let BullMQ retry.
+      throw err;
+    }
+
     // Post the reply as Marv. createPost will mirror parent visibility automatically.
     const marvId = await this.identity.getMarvUserId();
     if (!marvId) {
       stopTyping();
       this.logger.error('[marv] Cannot post AI reply — Marv user not resolved.');
+      // Credits already spent; record the failure honestly. Mark as delivered to
+      // prevent key deletion — we do not want a double-charge on a BullMQ retry.
+      delivered = true;
       await this.usage.recordEvent({
         userId: requestingUserId,
         source: 'public_thread',
         sourceId: postId,
         rootPostId,
         requestedMode,
-        effectiveMode: effectiveMode,
-        creditsSpent: 0,
+        effectiveMode,
+        creditsSpent: totalCost,
         modelUsed: aiResult.modelUsed,
         routingReason: routed.reason,
         responseId: aiResult.responseId,
         errorCode: MARV_ERROR_CODES.botUserMissing,
+        postSpendSummary: postSpend,
         latencyMs: Date.now() - startedAt,
-      });
+      }).catch(() => undefined);
       return;
     }
 
@@ -574,6 +638,33 @@ export class MarvinPublicReplyProcessor {
         `[marv] public-reply POST CREATE FAILED parent=${postId}: ${err instanceof Error ? err.message : String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
+      // Credits already spent but delivery failed. Mark as delivered to prevent key
+      // deletion — we don't want a BullMQ retry that charges a second time for a post
+      // that will never land.
+      delivered = true;
+      await this.usage.recordEvent({
+        userId: requestingUserId,
+        source: 'public_thread',
+        sourceId: postId,
+        rootPostId,
+        requestedMode,
+        effectiveMode,
+        creditsSpent: totalCost,
+        modelUsed: aiResult.modelUsed,
+        routingReason: routed.reason,
+        responseId: aiResult.responseId,
+        errorCode: MARV_ERROR_CODES.postFailed,
+        postSpendSummary: postSpend,
+        latencyMs: Date.now() - startedAt,
+      }).catch(() => undefined);
+      return;
+    }
+
+    // Delivery successful.
+    delivered = true;
+
+    // Post-delivery steps are best-effort — must not propagate and block the job.
+    try {
       await this.usage.recordEvent({
         userId: requestingUserId,
         source: 'public_thread',
@@ -581,70 +672,20 @@ export class MarvinPublicReplyProcessor {
         rootPostId,
         requestedMode,
         effectiveMode: effectiveMode,
-        creditsSpent: 0,
+        creditsSpent: totalCost,
         modelUsed: aiResult.modelUsed,
         routingReason: routed.reason,
         responseId: aiResult.responseId,
-        errorCode: MARV_ERROR_CODES.postFailed,
+        inputTokens: aiResult.inputTokens,
+        outputTokens: aiResult.outputTokens,
+        cachedInputTokens: aiResult.cachedInputTokens,
+        estimatedCostUsd: aiResult.estimatedCostUsd,
         latencyMs: Date.now() - startedAt,
+        postSpendSummary: postSpend,
       });
-      return;
+    } catch (e) {
+      this.logger.warn(`[marv] public-reply usage.recordEvent failed: ${String(e)}`);
     }
-
-    // 9. Spend credits + record success. Pass the pre-check refill summary so spend
-    // can skip its own inner refill SELECT — saves one Postgres round-trip on the
-    // hot path (the pre-check ran milliseconds ago).
-    // Actual vision cost from images the AI service confirmed were sent.
-    const actualVisionCost = (aiResult.imagesAttached ?? 0) * creditCfg.visionCreditCostPerImage;
-    const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * creditCfg.webSearchCreditCost;
-    const urlFetchSurcharge = (aiResult.urlFetchCount ?? 0) * creditCfg.urlFetchCreditCost;
-    const totalCost = cost + actualVisionCost + webSearchSurcharge + urlFetchSurcharge;
-    if (actualVisionCost > 0) {
-      this.logger.log(
-        `[marv] public-reply vision surcharge: ${aiResult.imagesAttached} image(s) × ${creditCfg.visionCreditCostPerImage} = ${actualVisionCost} extra credits`,
-      );
-    }
-    if (webSearchSurcharge > 0) {
-      this.logger.log(
-        `[marv] public-reply web-search surcharge: ${aiResult.webSearchCount} search(es) × ${creditCfg.webSearchCreditCost} = ${webSearchSurcharge} extra credits (total=${totalCost})`,
-      );
-    }
-    if (urlFetchSurcharge > 0) {
-      this.logger.log(
-        `[marv] public-reply url-fetch surcharge: ${aiResult.urlFetchCount} fetch(es) × ${creditCfg.urlFetchCreditCost} = ${urlFetchSurcharge} extra credits (total=${totalCost})`,
-      );
-    }
-    let postSpend: Awaited<ReturnType<typeof this.credits.spend>> | null = null;
-    try {
-      postSpend = await this.credits.spend(requestingUserId, totalCost, {
-        recentSummary: { credits: summary.credits, lastRefilledAt: summary.lastRefilledAt },
-      });
-    } catch (err) {
-      // Should never happen — we just refilled and checked credits — but log + continue.
-      this.logger.warn(
-        `[marv] credit spend failed after success: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      if (!(err instanceof InsufficientMarvCreditsError)) throw err;
-    }
-
-    await this.usage.recordEvent({
-      userId: requestingUserId,
-      source: 'public_thread',
-      sourceId: postId,
-      rootPostId,
-      requestedMode,
-      effectiveMode: effectiveMode,
-      creditsSpent: totalCost,
-      modelUsed: aiResult.modelUsed,
-      routingReason: routed.reason,
-      responseId: aiResult.responseId,
-      inputTokens: aiResult.inputTokens,
-      outputTokens: aiResult.outputTokens,
-      cachedInputTokens: aiResult.cachedInputTokens,
-      estimatedCostUsd: aiResult.estimatedCostUsd,
-      latencyMs: Date.now() - startedAt,
-      postSpendSummary: postSpend,
-    });
 
     this.logger.log(
       `[marv] public-reply ok user=${requestingUserId} post=${postId} reply=${createdPostId} cost=${totalCost} (mode=${cost} + vision=${actualVisionCost} + webSearch=${webSearchSurcharge} + urlFetch=${urlFetchSurcharge})`,
@@ -661,6 +702,16 @@ export class MarvinPublicReplyProcessor {
       this.logger.warn(
         `[marv] failed to enqueue summarize-thread for root=${rootPostId}: ${(err as Error).message}`,
       );
+    }
+
+    } catch (err) {
+      // Unexpected error before delivery — release the idempotency key so BullMQ can retry.
+      if (!delivered) {
+        await this.prisma.marvinIdempotencyKey
+          .delete({ where: { key: idempotencyKey } })
+          .catch((e: unknown) => this.logger.warn(`[marv] public-reply failed to release idempotency key: ${String(e)}`));
+      }
+      throw err;
     }
   }
 

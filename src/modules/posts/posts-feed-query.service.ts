@@ -3165,7 +3165,7 @@ export class PostsFeedQueryService {
     const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
 
     const post = await this.prisma.post.findFirst({
-      where: { id: postId },
+      where: { id: postId, ...(viewer?.siteAdmin ? {} : notDeletedWhere()) },
       include: {
         user: { select: USER_LIST_SELECT },
         media: { orderBy: { position: 'asc' } },

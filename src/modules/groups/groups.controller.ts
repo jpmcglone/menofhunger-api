@@ -9,12 +9,13 @@ import { GroupsService } from './groups.service';
 import { GroupInvitesService } from './group-invites.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
+import { queryBoolean } from '../../common/validation/query-boolean';
 
 const feedQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
   sort: z.enum(['new', 'trending']).optional(),
-  topLevelOnly: z.coerce.boolean().optional(),
+  topLevelOnly: queryBoolean().optional(),
 });
 
 const mediaQuerySchema = z.object({

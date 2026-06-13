@@ -182,3 +182,74 @@ describe('CoinsService access rules', () => {
   });
 });
 
+describe('CoinsService.transfer – overdraw guard', () => {
+  const recipientRow = {
+    id: 'recipient-1',
+    username: 'john',
+    name: 'John',
+    avatarKey: null,
+    avatarUpdatedAt: null,
+    bannedAt: null,
+    verifiedStatus: 'identity',
+  };
+
+  it('throws BadRequestException when the guarded updateMany finds insufficient balance', async () => {
+    const { svc } = makeService({
+      prisma: {
+        user: {
+          findUnique: jest.fn(async () => ({ id: 'sender-1', verifiedStatus: 'identity' })),
+          findFirst: jest.fn(async () => recipientRow),
+        },
+        $transaction: jest.fn(async (fn: any) =>
+          fn({
+            // Simulates another concurrent transfer draining the balance first.
+            user: {
+              updateMany: jest.fn(async () => ({ count: 0 })),
+              findUnique: jest.fn(),
+              update: jest.fn(),
+            },
+            coinTransfer: { create: jest.fn() },
+          }),
+        ),
+        coinTransfer: { findMany: jest.fn() },
+      },
+    });
+
+    await expect(
+      svc.transfer({ senderUserId: 'sender-1', recipientUsername: 'john', amount: 50, note: null }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('succeeds and decrements only once when the guarded updateMany wins', async () => {
+    const txUpdateMany = jest.fn(async () => ({ count: 1 }));
+    const txFindUnique = jest.fn(async () => ({ coins: 50 }));
+    const txUpdate = jest.fn(async () => ({}));
+    const txCreate = jest.fn(async () => ({ id: 'transfer-ok' }));
+
+    const { svc } = makeService({
+      prisma: {
+        user: {
+          findUnique: jest.fn(async () => ({ id: 'sender-1', verifiedStatus: 'identity' })),
+          findFirst: jest.fn(async () => recipientRow),
+        },
+        $transaction: jest.fn(async (fn: any) =>
+          fn({
+            user: { updateMany: txUpdateMany, findUnique: txFindUnique, update: txUpdate },
+            coinTransfer: { create: txCreate },
+          }),
+        ),
+        coinTransfer: { findMany: jest.fn() },
+      },
+    });
+
+    const result = await svc.transfer({ senderUserId: 'sender-1', recipientUsername: 'john', amount: 50, note: null });
+
+    expect(txUpdateMany).toHaveBeenCalledTimes(1);
+    expect(txUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ coins: { gte: 50 } }) }),
+    );
+    expect(result.senderBalanceAfter).toBe(50);
+    expect(result.transferId).toBe('transfer-ok');
+  });
+});
+
