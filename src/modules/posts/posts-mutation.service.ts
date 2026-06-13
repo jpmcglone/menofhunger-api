@@ -329,10 +329,10 @@ export class PostsMutationService {
 
     // Length rules align with createPost.
     const isAuthorPremium = Boolean(post.user?.premium || post.user?.premiumPlus);
-    const maxLen = isAuthorPremium ? 2000 : 500;
+    const maxLen = isAuthorPremium ? 1000 : 500;
     if (nextBody.length > maxLen) {
       throw new BadRequestException(
-        isAuthorPremium ? 'Posts are limited to 2000 characters.' : 'Posts are limited to 500 characters.',
+        isAuthorPremium ? 'Posts are limited to 1000 characters.' : 'Posts are limited to 500 characters.',
       );
     }
 
@@ -893,10 +893,10 @@ export class PostsMutationService {
     }
 
     const viewerIsPremium = Boolean(user.premium || user.premiumPlus);
-    const maxLen = viewerIsPremium ? 2000 : 500;
+    const maxLen = viewerIsPremium ? 1000 : 500;
     if (body.length > maxLen) {
       throw new BadRequestException(
-        viewerIsPremium ? 'Posts are limited to 2000 characters.' : 'Posts are limited to 500 characters.',
+        viewerIsPremium ? 'Posts are limited to 1000 characters.' : 'Posts are limited to 500 characters.',
       );
     }
 

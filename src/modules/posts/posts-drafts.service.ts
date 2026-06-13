@@ -112,10 +112,10 @@ export class PostsDraftsService {
       throw new ForbiddenException('Video posts are for premium members only.');
     }
 
-    const maxLen = userIsPremium ? 2000 : 500;
+    const maxLen = userIsPremium ? 1000 : 500;
     if (body.length > maxLen) {
       throw new BadRequestException(
-        userIsPremium ? 'Posts are limited to 2000 characters.' : 'Posts are limited to 500 characters.',
+        userIsPremium ? 'Posts are limited to 1000 characters.' : 'Posts are limited to 500 characters.',
       );
     }
 
@@ -185,10 +185,10 @@ export class PostsDraftsService {
     const updateUserIsPremium = Boolean(user.premium || user.premiumPlus);
 
     const nextBody = typeof params.body === 'string' ? params.body.trim() : post.body;
-    const maxLen = updateUserIsPremium ? 2000 : 500;
+    const maxLen = updateUserIsPremium ? 1000 : 500;
     if (nextBody.length > maxLen) {
       throw new BadRequestException(
-        updateUserIsPremium ? 'Posts are limited to 2000 characters.' : 'Posts are limited to 500 characters.',
+        updateUserIsPremium ? 'Posts are limited to 1000 characters.' : 'Posts are limited to 500 characters.',
       );
     }
 

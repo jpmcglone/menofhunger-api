@@ -1010,7 +1010,7 @@ export class ArticlesService {
     }
 
     const normalizedBody = normalizeCommentBody(data.body);
-    const maxCommentLength = this.viewer.isPremium(viewerCtx) ? 2000 : 500;
+    const maxCommentLength = this.viewer.isPremium(viewerCtx) ? 1000 : 500;
     if (normalizedBody.length > maxCommentLength) {
       throw new BadRequestException(`Comment must be ${maxCommentLength} characters or fewer.`);
     }
@@ -1126,7 +1126,7 @@ export class ArticlesService {
 
     const viewerCtx = await this.viewer.getViewerOrThrow(userId);
     const normalizedBody = normalizeCommentBody(body);
-    const maxCommentLength = this.viewer.isPremium(viewerCtx) ? 2000 : 500;
+    const maxCommentLength = this.viewer.isPremium(viewerCtx) ? 1000 : 500;
     if (normalizedBody.length > maxCommentLength) {
       throw new BadRequestException(`Comment must be ${maxCommentLength} characters or fewer.`);
     }

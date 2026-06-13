@@ -137,14 +137,14 @@ describe('PostsDraftsService.createDraft — media/character-limit gates', () =>
     await expect(service.createDraft({ userId: 'u1', body: 'x'.repeat(500), media: null })).resolves.toBeDefined();
   });
 
-  it('allows 2000-char body for premium users', async () => {
+  it('allows 1000-char body for premium users', async () => {
     const { service } = makeService(premiumUser);
-    await expect(service.createDraft({ userId: 'u1', body: 'x'.repeat(2000), media: null })).resolves.toBeDefined();
+    await expect(service.createDraft({ userId: 'u1', body: 'x'.repeat(1000), media: null })).resolves.toBeDefined();
   });
 
-  it('blocks premium user from 2001-char body', async () => {
+  it('blocks premium user from 1001-char body', async () => {
     const { service } = makeService(premiumUser);
-    await expect(service.createDraft({ userId: 'u1', body: 'x'.repeat(2001), media: null })).rejects.toThrow(
+    await expect(service.createDraft({ userId: 'u1', body: 'x'.repeat(1001), media: null })).rejects.toThrow(
       BadRequestException,
     );
   });
