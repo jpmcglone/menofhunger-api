@@ -807,6 +807,67 @@ export type LandingSnapshotDto = {
   asOf: string;
 };
 
+// ─── src/common/dto/marvin/marvin-catch-up.dto.ts ──────────────────────────────
+
+/**
+ * Body for `POST /marvin/catch-up/:postId`. The mode mirrors the user's Marv mode
+ * selector; omit (or pass `auto`) to let the routing service pick the tier.
+ */
+export type MarvinCatchUpBodyDto = {
+  mode?: MarvinModeDto | 'auto';
+  /** Skip the cache and regenerate a fresh summary (the "Regenerate" button). Spends credits. */
+  refresh?: boolean;
+  /** Peek mode: return the cached summary if one exists, else null. Never spends credits. */
+  cacheOnly?: boolean;
+  /**
+   * When true (default), pass images from across the thread to vision-capable models.
+   * When false, skip vision entirely — no images attached, no vision surcharge, cheaper.
+   */
+  includeImages?: boolean;
+};
+
+/**
+ * Result of a "Catch me up" request — an AI summary of the conversation above AND
+ * below a focal post. Returned by `POST /marvin/catch-up/:postId`.
+ */
+export type MarvinCatchUpDto = {
+  postId: string;
+  rootPostId: string | null;
+  /** The generated summary text (markers stripped; always present for backwards compat). */
+  summary: string;
+  /**
+   * Structured summary sections, present when the thread has replies.
+   * `post` summarises the focal post; `replies` synthesises the replies below.
+   * Null when the AI didn't output the expected markers (single-blob fallback).
+   */
+  sections?: { post: string; replies: string | null } | null;
+  /** The model tier that actually ran (after routing/auto-upgrades). */
+  effectiveMode: MarvinModeDto;
+  /** Credits spent on this request (0 on a cache hit). */
+  creditsSpent: number;
+  /**
+   * Breakdown of what drove the total spend (all 0 on a cache hit).
+   * Lets the UI render e.g. "5 credits: 2 model + 2 image + 1 web search".
+   */
+  costBreakdown: {
+    mode: number;
+    vision: number;
+    webSearch: number;
+    urlFetch: number;
+  };
+  /** True when this summary was served from cache (no new credits spent). */
+  cached: boolean;
+  /** How much of the thread the summary was built from. */
+  included: {
+    ancestors: number;
+    descendants: number;
+    /** Total descendants discovered within traversal depth (may exceed `descendants`). */
+    totalDescendants: number;
+  };
+  /** ISO timestamp of when the underlying summary was generated. */
+  generatedAt: string;
+};
+
 // ─── src/common/dto/marvin/marvin-credit-summary.dto.ts ────────────────────────
 
 /**
@@ -827,6 +888,22 @@ export type MarvinCreditSummaryDto = {
 // ─── src/common/dto/marvin/marvin-me.dto.ts ────────────────────────────────────
 
 /**
+ * Per-mode credit costs — allows the UI to show "Fast: 1 credit / Regular: 2 credits" etc.
+ * Values come from config so they stay accurate when an operator changes the knobs.
+ */
+export type MarvinCostsDto = {
+  fast: number;
+  regular: number;
+  smart: number;
+  /** Extra credits charged per web-search call the model makes. */
+  webSearchSurcharge: number;
+  /** Extra credits charged per image passed to a vision-capable model. */
+  visionPerImage: number;
+  /** Extra credits charged per URL the model fetches via the url-fetch tool. */
+  urlFetchSurcharge: number;
+};
+
+/**
  * Combined "everything the chat page / settings need" envelope for the requesting user.
  * Backed by `GET /marvin/me`.
  */
@@ -839,6 +916,8 @@ export type MarvinMeDto = {
   preferredMode: MarvinModeDto;
   /** Latest credit-bucket snapshot. */
   credits: MarvinCreditSummaryDto;
+  /** Per-mode base costs + surcharges. Used by the UI to preview spend before hitting "Catch me up". */
+  costs: MarvinCostsDto;
   /** Marv bot user reference for the chat-page pinned row. */
   marv: {
     userId: string;
@@ -869,7 +948,7 @@ export type MarvinUpdatePreferencesBodyDto = {
 export type MarvinModeDto = 'fast' | 'regular' | 'smart';
 
 /** Source channel the request originated from. */
-export type MarvinSourceDto = 'public_thread' | 'private_session';
+export type MarvinSourceDto = 'public_thread' | 'private_session' | 'catch_up';
 
 // ─── src/common/dto/marvin/marvin-usage-event.dto.ts ───────────────────────────
 
@@ -1342,7 +1421,8 @@ export type UsersSelfUpdatedPayloadDto = {
  * Canonical payload matches `/auth/me` user shape.
  */
 export type UsersMeUpdatedPayloadDto = {
-  user: UserDto;
+  /** Full user snapshot for profile/auth state updates. Optional for hint-only emits. */
+  user?: UserDto;
   /** Optional hint for debugging/UI refresh decisions. */
   reason?: string;
 };
@@ -1404,6 +1484,8 @@ export type PostsLiveUpdatedPayloadDto = {
     boostCount: number;
     bookmarkCount: number;
     repostCount: number;
+    /** Updated poll state (vote counts + viewer flags) after a vote is cast. */
+    poll: PostPollDto | null;
   }>;
 };
 
@@ -1972,6 +2054,8 @@ export type UserPreviewDto = {
   nudge: NudgeStateDto | null;
   followerCount: number | null;
   followingCount: number | null;
+  locationDisplay: string | null;
+  locationState: string | null;
 };
 
 // ─── src/common/dto/verification-request.dto.ts ────────────────────────────────
