@@ -1032,12 +1032,20 @@ export class SearchService {
     const hashtagWhere: Prisma.PostWhereInput =
       hashtags.length > 0 ? ({ hashtags: { hasSome: hashtags } } as Prisma.PostWhereInput) : {};
 
-    const cashtagWhere: Prisma.PostWhereInput =
-      cashtagCandidates.length > 0 ? ({ cashtags: { hasSome: cashtagCandidates } } as Prisma.PostWhereInput) : {};
-
     // Fast path: cashtag-only search (e.g. "$SPY").
+    // Match both the cashtags[] array column AND the literal $SYMBOL in body so
+    // posts created before the ticker set was warm (empty cashtags[]) still surface.
     const isCashtagOnly = cashtagCandidates.length > 0 && hashtags.length === 0 && !qMatchBase;
     if (isCashtagOnly) {
+      const cashtagBodyOr: Prisma.PostWhereInput = {
+        OR: [
+          { cashtags: { hasSome: cashtagCandidates } } as Prisma.PostWhereInput,
+          ...cashtagCandidates.map((sym) => ({
+            body: { contains: `$${sym}`, mode: 'insensitive' as const },
+          })),
+        ],
+      };
+
       const cursorWhere = await createdAtIdCursorWhere({
         cursor: (cursor ?? '').trim() || null,
         lookup: async (id) =>
@@ -1051,7 +1059,7 @@ export class SearchService {
             readableGroupPostWhere,
             visibilityWhere,
             kindWhere,
-            cashtagWhere,
+            cashtagBodyOr,
             ...(cursorWhere ? [cursorWhere] : []),
           ],
         },

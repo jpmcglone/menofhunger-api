@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -19,7 +19,7 @@ function chunks<T>(arr: T[], size: number): T[][] {
 }
 
 @Injectable()
-export class TickerIngestCron {
+export class TickerIngestCron implements OnModuleInit {
   private readonly logger = new Logger(TickerIngestCron.name);
   private running = false;
 
@@ -28,6 +28,19 @@ export class TickerIngestCron {
     private readonly appConfig: AppConfigService,
     private readonly ticker: TickerService,
   ) {}
+
+  /**
+   * Auto-seed on first boot when the Ticker table is empty.
+   * Runs regardless of RUN_SCHEDULERS so the feature works out of the box
+   * on a fresh deploy. The daily cron handles ongoing refresh.
+   */
+  async onModuleInit() {
+    const count = await this.prisma.ticker.count();
+    if (count > 0) return;
+    void this.runIngest()
+      .then(() => this.logger.log('Initial ticker seed complete'))
+      .catch((err) => this.logger.warn(`Initial ticker seed failed: ${(err as Error).message}`));
+  }
 
   /** Daily refresh at 6 AM UTC. */
   @Cron('0 6 * * *')
