@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { BookmarksService } from './bookmarks.service';
 
 // Locks in the realtime fan-out contract for bookmarks: every change to the
@@ -183,5 +184,65 @@ describe('BookmarksService.removeBookmark — realtime fan-out', () => {
       'p1',
       expect.objectContaining({ patch: { bookmarkCount: 0 } }),
     );
+  });
+});
+
+describe('BookmarksService.setBookmark — folder verified gate', () => {
+  it('blocks unverified user from assigning a folder', async () => {
+    const { service, deps } = makeService({
+      viewerContext: {
+        getViewer: jest.fn(async () => ({ id: 'u1', verifiedStatus: 'none', premium: false })),
+        allowedPostVisibilities: jest.fn(() => ['public']),
+      },
+    });
+    deps.prisma.post.findFirst.mockResolvedValueOnce({
+      id: 'p1',
+      userId: 'author',
+      visibility: 'public',
+      communityGroupId: null,
+    });
+
+    await expect(
+      service.setBookmark({ userId: 'u1', postId: 'p1', collectionIds: ['col-1'] }),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('allows verified user to assign a folder', async () => {
+    const { service, deps } = makeService({
+      viewerContext: {
+        getViewer: jest.fn(async () => ({ id: 'u1', verifiedStatus: 'identity', premium: false })),
+        allowedPostVisibilities: jest.fn(() => ['public']),
+      },
+    });
+    deps.prisma.post.findFirst.mockResolvedValueOnce({
+      id: 'p1',
+      userId: 'author',
+      visibility: 'public',
+      communityGroupId: null,
+    });
+    deps.prisma.bookmarkCollection.findMany.mockResolvedValueOnce([{ id: 'col-1' }]);
+    deps.prisma.post.findUnique.mockResolvedValueOnce({ bookmarkCount: 1 });
+
+    await expect(
+      service.setBookmark({ userId: 'u1', postId: 'p1', collectionIds: ['col-1'] }),
+    ).resolves.toBeDefined();
+  });
+
+  it('allows unverified user to plain-bookmark (no folder) a post', async () => {
+    const { service, deps } = makeService({
+      viewerContext: {
+        getViewer: jest.fn(async () => ({ id: 'u1', verifiedStatus: 'none', premium: false })),
+        allowedPostVisibilities: jest.fn(() => ['public']),
+      },
+    });
+    deps.prisma.post.findFirst.mockResolvedValueOnce({
+      id: 'p1',
+      userId: 'author',
+      visibility: 'public',
+      communityGroupId: null,
+    });
+    deps.prisma.post.findUnique.mockResolvedValueOnce({ bookmarkCount: 1 });
+
+    await expect(service.setBookmark({ userId: 'u1', postId: 'p1' })).resolves.toBeDefined();
   });
 });

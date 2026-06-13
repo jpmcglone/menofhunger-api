@@ -66,14 +66,14 @@ export class GiphyController {
     private readonly cache: CacheService,
   ) {}
 
-  private async assertPremium(userId: string) {
+  private async assertVerified(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { premium: true, premiumPlus: true },
+      select: { verifiedStatus: true },
     });
     if (!user) throw new ForbiddenException('Not allowed.');
-    if (!user.premium && !user.premiumPlus) {
-      throw new ForbiddenException('Upgrade to premium to use GIF search.');
+    if (!user.verifiedStatus || user.verifiedStatus === 'none') {
+      throw new ForbiddenException('Verify your account to use GIF search.');
     }
   }
 
@@ -85,7 +85,7 @@ export class GiphyController {
   })
   @Get('search')
   async search(@CurrentUserId() userId: string, @Query() query: unknown) {
-    await this.assertPremium(userId);
+    await this.assertVerified(userId);
     const parsed = searchSchema.parse(query);
     const cacheKey = RedisKeys.giphySearch(parsed.q, parsed.limit ?? 24);
     return await this.cache.getOrSetJson<{ data: ReturnType<typeof mapGiphyItems> }>({
@@ -125,7 +125,7 @@ export class GiphyController {
   })
   @Get('trending')
   async trending(@CurrentUserId() userId: string, @Query() query: unknown) {
-    await this.assertPremium(userId);
+    await this.assertVerified(userId);
     const parsed = trendingSchema.parse(query);
     const cacheKey = RedisKeys.giphyTrending(parsed.limit ?? 24);
     return await this.cache.getOrSetJson<{ data: ReturnType<typeof mapGiphyItems> }>({

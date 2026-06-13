@@ -1109,10 +1109,9 @@ export class MessagesService {
     if (uniqueRecipients.length === 0) throw new BadRequestException('At least one recipient is required.');
 
     // Tier rule:
-    // - Verified members can chat in conversations they are already part of.
-    // - Only Premium members can start NEW chats.
-    // This endpoint is used for "send first message", so allow it only when it resolves to an existing conversation,
-    // unless the sender is Premium (who can create a new conversation).
+    // - Verified members can start new chats only with mutuals (both follow each other).
+    // - Premium members can start new chats with any verified member.
+    // If a direct thread already exists (any tier), the message is routed to sendMessage directly.
     const sender = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { premium: true, premiumPlus: true, verifiedStatus: true, bannedAt: true },
@@ -1159,7 +1158,8 @@ export class MessagesService {
 
     // From this point on, we are creating a new conversation (no existing direct thread matched).
     // Rules:
-    //   - Any verified (or premium) sender can start a chat with any other verified user.
+    //   - Verified senders can start a new chat only with mutuals (both follow each other).
+    //   - Premium senders can start a new chat with any verified member.
     //   - Unverified users cannot be messaged.
 
     const users = await this.prisma.user.findMany({
@@ -1176,6 +1176,31 @@ export class MessagesService {
       }
     }
 
+    // For verified-only (non-premium) senders, all recipients must be mutuals.
+    if (!senderIsPremium) {
+      const [senderFollowing, senderFollowers] = await Promise.all([
+        this.prisma.follow.findMany({
+          where: { followerId: userId, followingId: { in: uniqueRecipients } },
+          select: { followingId: true },
+        }),
+        this.prisma.follow.findMany({
+          where: { followingId: userId, followerId: { in: uniqueRecipients } },
+          select: { followerId: true },
+        }),
+      ]);
+      const senderFollowingSet = new Set(senderFollowing.map((f) => f.followingId));
+      const senderFollowerSet = new Set(senderFollowers.map((f) => f.followerId));
+      const nonMutualRecipients = uniqueRecipients.filter(
+        (id) => !senderFollowingSet.has(id) || !senderFollowerSet.has(id),
+      );
+      if (nonMutualRecipients.length > 0) {
+        throw new ForbiddenException(
+          'You can only message people who follow you back. Upgrade to Premium to message any member.',
+        );
+      }
+    }
+
+    // followerSet is used to determine conversation status (accepted vs pending) for premium senders.
     const followers = await this.prisma.follow.findMany({
       where: {
         followingId: userId,

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { VerifiedGuard } from '../auth/verified.guard';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { PostViewsModule } from '../post-views/post-views.module';
 import { RedisModule } from '../redis/redis.module';
@@ -9,7 +10,7 @@ import { BookmarksService } from './bookmarks.service';
 @Module({
   imports: [AuthModule, RealtimeModule, PostViewsModule, RedisModule],
   controllers: [BookmarksController],
-  providers: [BookmarksService],
+  providers: [BookmarksService, VerifiedGuard],
 })
 export class BookmarksModule {}
 

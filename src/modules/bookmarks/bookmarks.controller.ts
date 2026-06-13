@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@n
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
+import { VerifiedGuard } from '../auth/verified.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { BookmarksService } from './bookmarks.service';
@@ -30,14 +31,14 @@ const setBookmarkSchema = z.object({
 export class BookmarksController {
   constructor(private readonly bookmarks: BookmarksService) {}
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, VerifiedGuard)
   @Get('collections')
   async listCollections(@CurrentUserId() userId: string) {
     const result = await this.bookmarks.listCollections({ userId });
     return { data: result };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, VerifiedGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('interact', 180),
@@ -51,7 +52,7 @@ export class BookmarksController {
     return { data: result };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, VerifiedGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('interact', 180),
@@ -65,7 +66,7 @@ export class BookmarksController {
     return { data: result };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, VerifiedGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('interact', 180),

@@ -99,17 +99,23 @@ export class PostsDraftsService {
     const media = (params.media ?? []).filter(Boolean);
     if (media.length > 4) throw new BadRequestException('You can attach up to 4 images, GIFs, or videos.');
 
-    // Media drafts are Premium/Premium+ only (align with post media rule).
-    if (media.length > 0 && !user.premium) {
-      throw new ForbiddenException('Upgrade to premium to post media.');
+    const userIsVerified = Boolean(user.verifiedStatus && user.verifiedStatus !== 'none');
+    const userIsPremium = Boolean(user.premium || user.premiumPlus);
+
+    // Images/GIFs require verified; video requires premium.
+    const hasDraftVideo = media.some((m) => m.kind === 'video');
+    const hasDraftImageOrGif = media.some((m) => m.kind !== 'video');
+    if (hasDraftImageOrGif && !userIsVerified) {
+      throw new ForbiddenException('Verify your account to post images and GIFs.');
+    }
+    if (hasDraftVideo && !userIsPremium) {
+      throw new ForbiddenException('Video posts are for premium members only.');
     }
 
-    const maxLen = user.premium ? 1000 : 200;
+    const maxLen = userIsPremium ? 2000 : 500;
     if (body.length > maxLen) {
       throw new BadRequestException(
-        user.premium
-          ? 'Posts are limited to 1000 characters.'
-          : 'Posts are limited to 200 characters for non-premium members.',
+        userIsPremium ? 'Posts are limited to 2000 characters.' : 'Posts are limited to 500 characters.',
       );
     }
 
@@ -171,23 +177,33 @@ export class PostsDraftsService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: params.userId },
-      select: { premium: true },
+      select: { premium: true, premiumPlus: true, verifiedStatus: true },
     });
     if (!user) throw new NotFoundException('User not found.');
 
+    const updateUserIsVerified = Boolean(user.verifiedStatus && user.verifiedStatus !== 'none');
+    const updateUserIsPremium = Boolean(user.premium || user.premiumPlus);
+
     const nextBody = typeof params.body === 'string' ? params.body.trim() : post.body;
-    const maxLen = user.premium ? 1000 : 200;
+    const maxLen = updateUserIsPremium ? 2000 : 500;
     if (nextBody.length > maxLen) {
       throw new BadRequestException(
-        user.premium
-          ? 'Posts are limited to 1000 characters.'
-          : 'Posts are limited to 200 characters for non-premium members.',
+        updateUserIsPremium ? 'Posts are limited to 2000 characters.' : 'Posts are limited to 500 characters.',
       );
     }
 
     const media = params.media === null ? null : (params.media ?? null);
     if (media && media.length > 4) throw new BadRequestException('You can attach up to 4 images, GIFs, or videos.');
-    if ((media?.length ?? 0) > 0 && !user.premium) throw new ForbiddenException('Upgrade to premium to post media.');
+    if ((media?.length ?? 0) > 0) {
+      const hasUpdateVideo = media!.some((m) => m.kind === 'video');
+      const hasUpdateImageOrGif = media!.some((m) => m.kind !== 'video');
+      if (hasUpdateImageOrGif && !updateUserIsVerified) {
+        throw new ForbiddenException('Verify your account to post images and GIFs.');
+      }
+      if (hasUpdateVideo && !updateUserIsPremium) {
+        throw new ForbiddenException('Video posts are for premium members only.');
+      }
+    }
 
     // If media is provided, validate/clean; otherwise leave unchanged.
     const cleanedMedia = media ? await this.cleanMediaItems(params.userId, media) : null;

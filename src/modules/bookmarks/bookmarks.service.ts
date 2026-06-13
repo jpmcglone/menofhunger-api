@@ -276,6 +276,17 @@ export class BookmarksService {
 
     const { postUserId } = await this.assertViewerCanBookmarkPost({ viewerUserId: userId, postId });
 
+    // Defense-in-depth: folder/collection assignment requires verified membership.
+    // The VerifiedGuard on the collection endpoints is the primary gate; this catches
+    // any caller that bypasses those endpoints (e.g. future batch APIs, tests).
+    const hasCollectionIds = Array.isArray(params.collectionIds) && params.collectionIds.length > 0;
+    if (hasCollectionIds) {
+      const viewerForFolders = await this.viewer(userId);
+      if (!viewerForFolders.verifiedStatus || viewerForFolders.verifiedStatus === 'none') {
+        throw new ForbiddenException('Verify your account to use bookmark folders.');
+      }
+    }
+
     // Invariant: a bookmark is either "unorganized" (no folder memberships) or in one or more
     // folders — never both. `null` means "keep the existing folder state"; an explicit array
     // (including `[]`) performs a full replace of folder memberships. Sending `[]` is the only

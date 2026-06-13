@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PostsDraftsService } from './posts-drafts.service';
 import { PostsRankingService } from './posts-ranking.service';
 import { notDeletedWhere, excludeCommunityGroupPostsWhere, mediaOnlyWhere, userNotBannedWhere } from './posts-query-builders';
@@ -43,6 +43,110 @@ describe('PostsRankingService', () => {
 
     expect(out.size).toBe(0);
     expect(prisma.post.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('PostsDraftsService.createDraft — media/character-limit gates', () => {
+  const verifiedUser = { verifiedStatus: 'identity', premium: false, premiumPlus: false };
+  const unverifiedUser = { verifiedStatus: 'none', premium: false, premiumPlus: false };
+  const premiumUser = { verifiedStatus: 'identity', premium: true, premiumPlus: false };
+
+  const stubPost = (user: typeof verifiedUser) => ({
+    id: 'draft-1',
+    body: '',
+    visibility: 'onlyMe',
+    isDraft: true,
+    userId: 'u1',
+    media: [],
+    mentions: [],
+    user,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    topics: [],
+    hashtags: [],
+    hashtagCasings: [],
+  });
+
+  function makeService(user: typeof verifiedUser) {
+    const prisma: any = {
+      post: {
+        findUnique: jest.fn(async () => null),
+        create: jest.fn(async () => stubPost(user)),
+      },
+      user: { findUnique: jest.fn(async () => ({ ...user, id: 'u1' })) },
+      // cleanMediaItems calls this to detect reused content-hash keys.
+      mediaContentHash: { findMany: jest.fn(async () => []) },
+    };
+    return { service: new PostsDraftsService(prisma) };
+  }
+
+  const image = { source: 'upload' as const, kind: 'image' as const, r2Key: 'uploads/u1/images/x.jpg' };
+  const gif = { source: 'giphy' as const, kind: 'gif' as const, url: 'https://media.giphy.com/x.gif' };
+  const video = { source: 'upload' as const, kind: 'video' as const, r2Key: 'uploads/u1/videos/x.mp4' };
+
+  it('allows verified user to create a draft with an image', async () => {
+    const { service } = makeService(verifiedUser);
+    await expect(service.createDraft({ userId: 'u1', body: 'hello', media: [image] })).resolves.toBeDefined();
+  });
+
+  it('allows verified user to create a draft with a GIF', async () => {
+    const { service } = makeService(verifiedUser);
+    await expect(service.createDraft({ userId: 'u1', body: 'hello', media: [gif] })).resolves.toBeDefined();
+  });
+
+  it('blocks unverified user from creating a draft with an image', async () => {
+    const { service } = makeService(unverifiedUser);
+    await expect(service.createDraft({ userId: 'u1', body: 'hello', media: [image] })).rejects.toThrow(
+      new ForbiddenException('Verify your account to post images and GIFs.'),
+    );
+  });
+
+  it('blocks verified (non-premium) user from creating a draft with video', async () => {
+    const { service } = makeService(verifiedUser);
+    await expect(service.createDraft({ userId: 'u1', body: 'hello', media: [video] })).rejects.toThrow(
+      new ForbiddenException('Video posts are for premium members only.'),
+    );
+  });
+
+  it('allows premium user to create a draft with video', async () => {
+    const { service } = makeService(premiumUser);
+    await expect(service.createDraft({ userId: 'u1', body: 'hello', media: [video] })).resolves.toBeDefined();
+  });
+
+  it('enforces 500-char body limit for verified (non-premium) users', async () => {
+    const { service } = makeService(verifiedUser);
+    await expect(service.createDraft({ userId: 'u1', body: 'x'.repeat(501), media: null })).rejects.toThrow(
+      BadRequestException,
+    );
+  });
+
+  it('allows 500-char body for verified (non-premium) users', async () => {
+    const { service } = makeService(verifiedUser);
+    await expect(service.createDraft({ userId: 'u1', body: 'x'.repeat(500), media: null })).resolves.toBeDefined();
+  });
+
+  it('enforces 500-char body limit for unverified users', async () => {
+    const { service } = makeService(unverifiedUser);
+    await expect(service.createDraft({ userId: 'u1', body: 'x'.repeat(501), media: null })).rejects.toThrow(
+      BadRequestException,
+    );
+  });
+
+  it('allows 500-char body for unverified users', async () => {
+    const { service } = makeService(unverifiedUser);
+    await expect(service.createDraft({ userId: 'u1', body: 'x'.repeat(500), media: null })).resolves.toBeDefined();
+  });
+
+  it('allows 2000-char body for premium users', async () => {
+    const { service } = makeService(premiumUser);
+    await expect(service.createDraft({ userId: 'u1', body: 'x'.repeat(2000), media: null })).resolves.toBeDefined();
+  });
+
+  it('blocks premium user from 2001-char body', async () => {
+    const { service } = makeService(premiumUser);
+    await expect(service.createDraft({ userId: 'u1', body: 'x'.repeat(2001), media: null })).rejects.toThrow(
+      BadRequestException,
+    );
   });
 });
 

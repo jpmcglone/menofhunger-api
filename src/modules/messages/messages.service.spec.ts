@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { MessagesService } from './messages.service';
 
 function makeService(overrides?: {
@@ -258,6 +259,108 @@ describe('MessagesService – block/unblock emit', () => {
 
     await svc.unblockUser({ userId: 'u1', targetUserId: 'u2' });
     expect(emitUsersMeRefresh).toHaveBeenCalledWith('u1', 'block_changed');
+  });
+});
+
+describe('MessagesService.createConversation — mutual-follow DM gate', () => {
+  const MUTUAL_FOLLOW_ERROR = 'You can only message people who follow you back. Upgrade to Premium to message any member.';
+
+  function makeForDm(opts: {
+    senderPremium: boolean;
+    senderFollowingRecipient: boolean;
+    senderFollowedByRecipient: boolean;
+  }) {
+    const sender = {
+      premium: opts.senderPremium,
+      premiumPlus: false,
+      verifiedStatus: 'identity',
+      bannedAt: null,
+    };
+    const recipient = { id: 'u2', verifiedStatus: 'identity', bannedAt: null };
+
+    // follow.findMany is called up to 3 times:
+    //   1. senderFollowing: { followerId: 'u1', followingId: { in: ['u2'] } }
+    //   2. senderFollowers: { followingId: 'u1', followerId: { in: ['u2'] } }  (in Promise.all with 1)
+    //   3. followerSet: { followingId: 'u1', followerId: { in: ['u2'] } }       (premium path only)
+    const followFindMany = jest.fn(async (q: any) => {
+      if (q.where?.followerId === 'u1') {
+        return opts.senderFollowingRecipient ? [{ followingId: 'u2' }] : [];
+      }
+      if (q.where?.followingId === 'u1') {
+        return opts.senderFollowedByRecipient ? [{ followerId: 'u2' }] : [];
+      }
+      return [];
+    });
+
+    const prisma: any = {
+      userBlock: { findMany: jest.fn(async () => []) },
+      user: {
+        findUnique: jest.fn(async () => sender),
+        findMany: jest.fn(async () => [recipient]),
+      },
+      messageConversation: {
+        findFirst: jest.fn(async () => null),
+        create: jest.fn(async () => ({ id: 'conv-1' })),
+      },
+      messageParticipant: {
+        createMany: jest.fn(async () => ({ count: 2 })),
+        findMany: jest.fn(async () => [
+          { userId: 'u1', role: 'owner', status: 'accepted', acceptedAt: new Date(), lastReadAt: null },
+        ]),
+      },
+      message: {
+        create: jest.fn(async () => ({
+          id: 'msg-1',
+          body: 'hi',
+          conversationId: 'conv-1',
+          senderId: 'u1',
+          createdAt: new Date(),
+          media: [],
+          sender: {
+            id: 'u1', username: 'alice', name: 'Alice', premium: opts.senderPremium, premiumPlus: false,
+            isOrganization: false, stewardBadgeEnabled: false, verifiedStatus: 'identity',
+            avatarKey: null, avatarUpdatedAt: null,
+          },
+        })),
+        count: jest.fn(async () => 0),
+      },
+      follow: { findMany: followFindMany },
+      $transaction: jest.fn(async (fn: any) => fn({
+        messageConversation: { create: jest.fn(async () => ({ id: 'conv-1' })) },
+        messageParticipant: { createMany: jest.fn(async () => ({ count: 2 })) },
+      })),
+    };
+
+    const { svc } = makeService({ prisma });
+    return { svc, prisma };
+  }
+
+  it('blocks verified non-mutual from starting a DM', async () => {
+    const { svc } = makeForDm({ senderPremium: false, senderFollowingRecipient: false, senderFollowedByRecipient: false });
+    await expect(
+      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
+    ).rejects.toThrow(MUTUAL_FOLLOW_ERROR);
+  });
+
+  it('blocks verified one-way-follower (sender follows but is not followed back)', async () => {
+    const { svc } = makeForDm({ senderPremium: false, senderFollowingRecipient: true, senderFollowedByRecipient: false });
+    await expect(
+      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
+    ).rejects.toThrow(MUTUAL_FOLLOW_ERROR);
+  });
+
+  it('allows verified mutual to start a DM (does not throw mutual-follow gate error)', async () => {
+    const { svc } = makeForDm({ senderPremium: false, senderFollowingRecipient: true, senderFollowedByRecipient: true });
+    await expect(
+      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
+    ).rejects.not.toThrow(MUTUAL_FOLLOW_ERROR);
+  });
+
+  it('allows premium sender to DM a non-mutual verified user (does not throw mutual-follow gate error)', async () => {
+    const { svc } = makeForDm({ senderPremium: true, senderFollowingRecipient: false, senderFollowedByRecipient: false });
+    await expect(
+      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
+    ).rejects.not.toThrow(MUTUAL_FOLLOW_ERROR);
   });
 });
 

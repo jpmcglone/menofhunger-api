@@ -328,12 +328,11 @@ export class PostsMutationService {
     }
 
     // Length rules align with createPost.
-    const maxLen = post.user?.premium ? 1000 : 200;
+    const isAuthorPremium = Boolean(post.user?.premium || post.user?.premiumPlus);
+    const maxLen = isAuthorPremium ? 2000 : 500;
     if (nextBody.length > maxLen) {
       throw new BadRequestException(
-        post.user?.premium
-          ? 'Posts are limited to 1000 characters.'
-          : 'Posts are limited to 200 characters for non-premium members.',
+        isAuthorPremium ? 'Posts are limited to 2000 characters.' : 'Posts are limited to 500 characters.',
       );
     }
 
@@ -886,19 +885,18 @@ export class PostsMutationService {
     let rateLimitParams: { postsPerWindow: number; windowSeconds: number; windowStart: Date } | null = null;
     if (viewerIsVerified) {
       const cfg = await this.getSiteConfig(); // in-memory cached; near-free
-      const isPremium = Boolean(user.premium);
+      const isPremium = Boolean(user.premium || user.premiumPlus);
       const postsPerWindow = isPremium ? cfg.premiumPostsPerWindow : cfg.verifiedPostsPerWindow;
       const windowSeconds = isPremium ? cfg.premiumWindowSeconds : cfg.verifiedWindowSeconds;
       const windowStart = new Date(Date.now() - windowSeconds * 1000);
       rateLimitParams = { postsPerWindow, windowSeconds, windowStart };
     }
 
-    const maxLen = user.premium ? 1000 : 200;
+    const viewerIsPremium = Boolean(user.premium || user.premiumPlus);
+    const maxLen = viewerIsPremium ? 2000 : 500;
     if (body.length > maxLen) {
       throw new BadRequestException(
-        user.premium
-          ? 'Posts are limited to 1000 characters.'
-          : 'Posts are limited to 200 characters for non-premium members.',
+        viewerIsPremium ? 'Posts are limited to 2000 characters.' : 'Posts are limited to 500 characters.',
       );
     }
 
@@ -915,9 +913,9 @@ export class PostsMutationService {
     if (poll && media.length > 0) {
       throw new BadRequestException('You cannot attach media to a poll post.');
     }
-    // Product rule: polls are Premium/Premium+ only.
-    if (poll && !user.premium) {
-      throw new ForbiddenException('Upgrade to premium to create polls.');
+    // Product rule: polls require verified membership.
+    if (poll && !viewerIsVerified) {
+      throw new ForbiddenException('Verify your account to create polls.');
     }
     if (poll) {
       const endsAtMs =
@@ -932,13 +930,13 @@ export class PostsMutationService {
       if (opts.length < 2 || opts.length > 5) throw new BadRequestException('Poll must include 2 to 5 options.');
     }
 
-    // Product rule: media posts are Premium/Premium+ only (images, GIFs/Giphy, video).
-    if (media.length > 0 && !user.premium) {
-      throw new ForbiddenException('Upgrade to premium to post media.');
-    }
-
+    // Images/GIFs require verified; video requires premium.
     const hasVideo = media.some((m) => m.kind === 'video');
-    if (hasVideo && !user.premium) {
+    const hasImageOrGif = media.some((m) => m.kind !== 'video');
+    if (hasImageOrGif && !viewerIsVerified) {
+      throw new ForbiddenException('Verify your account to post images and GIFs.');
+    }
+    if (hasVideo && !viewerIsPremium) {
       throw new ForbiddenException('Video posts are for premium members only.');
     }
 
