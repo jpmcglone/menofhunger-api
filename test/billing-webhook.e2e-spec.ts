@@ -13,11 +13,11 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import * as express from 'express';
 import * as request from 'supertest';
-import { Prisma } from '@prisma/client';
 import { BillingController } from '../src/modules/billing/billing.controller';
 import { BillingService } from '../src/modules/billing/billing.service';
 import { EntitlementService } from '../src/modules/billing/entitlement.service';
 import { ReferralService } from '../src/modules/billing/referral.service';
+import { AffiliateService } from '../src/modules/billing/affiliate.service';
 import { PrismaService } from '../src/modules/prisma/prisma.service';
 import { AppConfigService } from '../src/modules/app/app-config.service';
 import { PublicProfileCacheService } from '../src/modules/users/public-profile-cache.service';
@@ -48,7 +48,9 @@ function makePrismaMock() {
       update: jest.fn(async () => ({})),
     },
     stripeWebhookEvent: {
+      findUnique: jest.fn(async (): Promise<{ processedAt: Date | null } | null> => null),
       create: jest.fn(async () => ({})),
+      update: jest.fn(async () => ({})),
     },
   };
 }
@@ -90,6 +92,7 @@ describe('POST /billing/webhook (e2e)', () => {
         { provide: PosthogService, useValue: posthog },
         { provide: SlackService, useValue: slack },
         { provide: ReferralService, useValue: { maybeGrantReferralBonus: jest.fn(async () => undefined) } },
+        { provide: AffiliateService, useValue: { getAffiliateSummary: jest.fn(async () => undefined) } },
       ],
     })
       // The webhook route is unauthenticated; other routes on this controller use
@@ -221,14 +224,9 @@ describe('POST /billing/webhook (e2e)', () => {
     );
   });
 
-  it('deduplicates retried events (P2002) without reprocessing', async () => {
+  it('skips already-processed events (processedAt set) without reprocessing', async () => {
     const payload = subscriptionUpdatedPayload();
-    prisma.stripeWebhookEvent.create.mockRejectedValue(
-      new Prisma.PrismaClientKnownRequestError('duplicate', {
-        code: 'P2002',
-        clientVersion: 'test',
-      } as any),
-    );
+    prisma.stripeWebhookEvent.findUnique.mockResolvedValue({ processedAt: new Date() });
 
     const res = await request(app.getHttpServer())
       .post('/billing/webhook')
@@ -238,6 +236,7 @@ describe('POST /billing/webhook (e2e)', () => {
       .expect(201);
 
     expect(res.body).toEqual({ data: { received: true } });
+    expect(prisma.stripeWebhookEvent.create).not.toHaveBeenCalled();
     expect(prisma.user.findFirst).not.toHaveBeenCalled();
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
