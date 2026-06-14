@@ -39,6 +39,7 @@ const listQuerySchema = z.object({
     'crew_owner_transferred',
     'crew_owner_transfer_vote',
     'crew_wall_mention',
+    'other',
   ]).optional(),
 });
 

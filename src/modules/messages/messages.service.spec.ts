@@ -1,4 +1,3 @@
-import { ForbiddenException } from '@nestjs/common';
 import { MessagesService } from './messages.service';
 
 function makeService(overrides?: {

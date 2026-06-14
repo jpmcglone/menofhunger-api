@@ -17,6 +17,12 @@ import type { PostDto } from '../../common/dto/post.dto';
 import { collapseFeedByRoot, type FeedCollapseMode, type FeedCollapsePrefer } from '../../common/feed-collapse/collapse-by-root';
 
 /**
+ * Kinds that have dedicated filter chips on the notifications page.
+ * "Other" = every kind that is NOT in this set and NOT 'message'.
+ */
+const PRIMARY_NOTIFICATION_KINDS = ['comment', 'mention', 'followed_post', 'follow', 'boost'] as const satisfies NotificationKind[];
+
+/**
  * Notification feed reads: the bell list (with grouping + rollups), the
  * new-posts feed, and per-row DTO composition (also used by the writer for
  * realtime `notifications:new` payloads).
@@ -44,7 +50,7 @@ export class NotificationQueryService {
     recipientUserId: string;
     limit: number;
     cursor: string | null;
-    kind?: NotificationKind;
+    kind?: NotificationKind | 'other';
   }) {
     const { recipientUserId, limit, cursor, kind } = params;
     const desiredItemLimit = Math.max(1, Math.min(limit, 50));
@@ -86,7 +92,11 @@ export class NotificationQueryService {
     const notifications = await this.prisma.notification.findMany({
       where: {
         recipientUserId,
-        ...(kind ? { kind } : { kind: { not: 'message' as const } }),
+        ...(kind === 'other'
+          ? { kind: { notIn: [...PRIMARY_NOTIFICATION_KINDS, 'message' as const] } }
+          : kind
+            ? { kind }
+            : { kind: { not: 'message' as const } }),
         ...(blockedActorIds.length > 0 ? { NOT: { actorUserId: { in: blockedActorIds } } } : {}),
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },

@@ -487,6 +487,66 @@ describe('NotificationsService.list batching', () => {
     expect(res).toEqual({ items: [], nextCursor: null, undeliveredCount: 0, unreadByKind: { all: 0 } });
     expect(prisma.notification.findMany).not.toHaveBeenCalled();
   });
+
+  it('filters with notIn primary kinds when kind is "other"', async () => {
+    const { svc, prisma } = makeService({
+      prisma: {
+        notification: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => [
+            {
+              id: 'n_coin',
+              createdAt: new Date('2026-03-01T00:00:00.000Z'),
+              kind: 'coin_transfer',
+              deliveredAt: null,
+              readAt: null,
+              ignoredAt: null,
+              nudgedBackAt: null,
+              actorUserId: 'a1',
+              actorPostId: null,
+              subjectPostId: null,
+              subjectUserId: null,
+              title: null,
+              body: null,
+              actor: {
+                id: 'a1',
+                username: 'sender',
+                name: 'Sender',
+                avatarKey: null,
+                avatarUpdatedAt: null,
+                premium: false,
+                isOrganization: false,
+                verifiedStatus: 'none',
+              },
+            },
+          ]),
+          count: jest.fn(async () => 0),
+          groupBy: jest.fn(async () => []),
+        },
+        post: { findUnique: jest.fn(), findMany: jest.fn(async () => []) },
+        user: { findUnique: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+        follow: { findMany: jest.fn(async () => []) },
+        userBlock: { findMany: jest.fn(async () => []) },
+      } as any,
+    });
+
+    const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null, kind: 'other' as any });
+
+    // Verify findMany was called with notIn the primary kinds
+    expect(prisma.notification.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          kind: expect.objectContaining({ notIn: expect.arrayContaining(['comment', 'mention', 'followed_post', 'follow', 'boost', 'message']) }),
+        }),
+      }),
+    );
+
+    // Results are returned ungrouped (each item is type 'single')
+    expect(res.items.length).toBe(1);
+    expect(res.items[0]?.type).toBe('single');
+    if (res.items[0]?.type !== 'single') throw new Error('Expected single');
+    expect(res.items[0].notification.kind).toBe('coin_transfer');
+  });
 });
 
 describe('NotificationsService.getUndeliveredCount', () => {
