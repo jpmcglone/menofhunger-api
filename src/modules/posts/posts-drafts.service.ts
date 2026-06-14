@@ -63,6 +63,7 @@ export class PostsDraftsService {
           { visibility: 'onlyMe' },
           { isDraft: true },
           { parentId: null },
+          { scheduledAt: null },
           ...(cursorWhere ? [cursorWhere as Prisma.PostWhereInput] : []),
         ],
       },

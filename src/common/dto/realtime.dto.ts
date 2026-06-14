@@ -5,6 +5,7 @@ import type { UserDto } from './user.dto';
 import type { ArticleCommentDto, ArticleReactionSummaryDto } from './article.dto';
 import type { PostDto, PostPollDto } from './post.dto';
 import type { UserStatusDto } from './presence.dto';
+import type { ScheduledPostDto } from './scheduled-post.dto';
 
 /**
  * Websocket (Socket.IO) payload DTOs.
@@ -147,6 +148,8 @@ export type PresenceStatusClearedPayloadDto = {
 };
 
 export const WsEventNames = {
+  scheduledPostPublished: 'scheduled:published',
+  scheduledPostFailed: 'scheduled:failed',
   usersMeUpdated: 'users:meUpdated',
   usersSelfUpdated: 'users:selfUpdated',
   usersSpaceChanged: 'users:spaceChanged',
@@ -377,4 +380,27 @@ export type CheckinAnsweredTodayPayloadDto = {
 export type ReferralRecruitUpdatedPayloadDto = {
   recruit: import('./referral.dto').RecruitDto;
 };
+
+/**
+ * Emitted to the post owner when a scheduled post is auto-published by the cron sweep.
+ * Allows the /scheduled page to remove the holding row and optionally prepend the live post.
+ */
+export type ScheduledPostPublishedPayloadDto = {
+  /** The id of the holding row that was published (now deleted). */
+  scheduledId: string;
+  /** The new live post. */
+  post: PostDto;
+};
+
+/**
+ * Emitted to the post owner when a scheduled post fails to publish.
+ * The /scheduled page should refresh to show the error state.
+ */
+export type ScheduledPostFailedPayloadDto = {
+  scheduledId: string;
+  error: string;
+};
+
+// Re-export for convenience.
+export type { ScheduledPostDto };
 

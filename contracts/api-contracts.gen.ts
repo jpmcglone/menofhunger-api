@@ -1663,6 +1663,26 @@ export type ReferralRecruitUpdatedPayloadDto = {
   recruit: RecruitDto;
 };
 
+/**
+ * Emitted to the post owner when a scheduled post is auto-published by the cron sweep.
+ * Allows the /scheduled page to remove the holding row and optionally prepend the live post.
+ */
+export type ScheduledPostPublishedPayloadDto = {
+  /** The id of the holding row that was published (now deleted). */
+  scheduledId: string;
+  /** The new live post. */
+  post: PostDto;
+};
+
+/**
+ * Emitted to the post owner when a scheduled post fails to publish.
+ * The /scheduled page should refresh to show the error state.
+ */
+export type ScheduledPostFailedPayloadDto = {
+  scheduledId: string;
+  error: string;
+};
+
 // ─── src/common/dto/referral.dto.ts ────────────────────────────────────────────
 
 export type RecruitDto = {
@@ -1752,6 +1772,48 @@ export type ReportAdminDto = ReportDto & {
     username: string | null;
     name: string | null;
   } | null;
+};
+
+// ─── src/common/dto/scheduled-post.dto.ts ──────────────────────────────────────
+
+export type ScheduledPollOptionPreviewDto = {
+  text: string;
+};
+
+export type ScheduledPollPreviewDto = {
+  options: ScheduledPollOptionPreviewDto[];
+  durationHours: number;
+};
+
+export type ScheduledCommunityGroupDto = {
+  id: string;
+  slug: string;
+  name: string;
+};
+
+/**
+ * Holding-row DTO returned by the scheduled-posts endpoints.
+ * Carries the intended publish settings alongside the composed body/media/poll preview.
+ */
+export type ScheduledPostDto = {
+  id: string;
+  createdAt: string;
+  body: string;
+  /** Intended visibility when the post publishes. */
+  scheduledVisibility: PostVisibility;
+  /** UTC ISO string — when the post will be auto-published. */
+  scheduledAt: string;
+  /** Intended community group id (null for global posts). */
+  scheduledCommunityGroupId: string | null;
+  /** Minimal group preview — present when this post is destined for a group. */
+  scheduledCommunityGroup: ScheduledCommunityGroupDto | null;
+  media: PostMediaDto[];
+  /** Poll preview (options + duration) as entered — not yet a live poll. */
+  poll: ScheduledPollPreviewDto | null;
+  /** Set when the last publish attempt failed. */
+  scheduledError: string | null;
+  /** ISO timestamp of the last failed attempt. */
+  scheduledFailedAt: string | null;
 };
 
 // ─── src/common/dto/spaces.dto.ts ──────────────────────────────────────────────

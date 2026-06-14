@@ -755,10 +755,11 @@ model CommunityGroup {
    */
   memberCount   Int     @default(0)
 
-  members       CommunityGroupMember[]
-  invites       CommunityGroupInvite[]
-  posts         Post[]
-  notifications Notification[]         @relation("Notification_subjectGroup")
+  members           CommunityGroupMember[]
+  invites           CommunityGroupInvite[]
+  posts             Post[]
+  scheduledPosts    Post[]                 @relation("Post_scheduledCommunityGroup")
+  notifications     Notification[]         @relation("Notification_subjectGroup")
 
   @@index([deletedAt, isFeatured, featuredOrder])
   @@index([createdAt])
@@ -1128,6 +1129,32 @@ model Post {
    */
   isDraft                Boolean        @default(false)
   /**
+   * Scheduled publish time (UTC). When set the post is a "holding row":
+   * isDraft=true, visibility=onlyMe, invisible to all feeds. A cron sweep
+   * claims due rows and replays createPost at this time, then removes this row.
+   */
+  scheduledAt              DateTime?
+  /**
+   * Intended visibility when the scheduled post publishes (e.g. 'public', 'verifiedOnly').
+   * Not the same as the holding row's visibility (which is always 'onlyMe').
+   */
+  scheduledVisibility      PostVisibility?
+  /**
+   * Intended community group id for the scheduled post. Kept off communityGroupId
+   * so the holding row never leaks into group feeds.
+   */
+  scheduledCommunityGroupId String?
+  scheduledCommunityGroup    CommunityGroup? @relation("Post_scheduledCommunityGroup", fields: [scheduledCommunityGroupId], references: [id], onDelete: SetNull)
+  /**
+   * Serialised poll payload: { options: [{text, image?}][], durationHours: number }.
+   * endsAt is recomputed from durationHours at publish time.
+   */
+  scheduledPollJson         Json?
+  /** Human-readable error if the scheduled publish failed. */
+  scheduledError            String?
+  /** Timestamp of the last failed publish attempt. */
+  scheduledFailedAt         DateTime?
+  /**
    * Inferred topics (from allowlist) used for search/discovery.
    */
   topics                 String[]       @default([])
@@ -1254,6 +1281,8 @@ model Post {
   @@index([communityGroupId, deletedAt, createdAt(sort: Desc), id(sort: Desc)])
   @@index([communityGroupId, parentId, deletedAt, createdAt(sort: Desc), id(sort: Desc)])
   @@index([communityGroupId, pinnedInGroupAt])
+  // Scheduled-post sweep: find all due holding rows efficiently.
+  @@index([scheduledAt])
 }
 
 model PostPoll {

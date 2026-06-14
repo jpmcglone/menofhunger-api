@@ -15,6 +15,7 @@ export const JOBS = {
   postsTopicsBackfill: 'posts.topicsBackfill',
   postsPopularScoreRefresh: 'posts.popularScoreRefresh',
   postsRefreshSinglePostScore: 'posts.refreshSinglePostScore',
+  postsScheduledPublishSweep: 'posts.scheduledPublishSweep',
 
   // Hashtags
   hashtagsTrendingScoreRefresh: 'hashtags.trendingScoreRefresh',

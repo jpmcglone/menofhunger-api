@@ -29,6 +29,8 @@ import type {
   PresenceStatusUpdatedPayloadDto,
   ReferralRecruitUpdatedPayloadDto,
   UsersSelfUpdatedPayloadDto,
+  ScheduledPostPublishedPayloadDto,
+  ScheduledPostFailedPayloadDto,
 } from '../../common/dto';
 
 @Injectable()
@@ -436,6 +438,16 @@ export class PresenceRealtimeService {
   /** Notify a recruiter that one of their recruits reached a new milestone (signup / verified / premium). */
   emitReferralRecruitUpdated(recruiterId: string, payload: ReferralRecruitUpdatedPayloadDto): void {
     this.emitToUser(recruiterId, 'referrals:recruit-updated', payload);
+  }
+
+  /** Notify the post owner that a scheduled post was successfully auto-published. */
+  emitScheduledPostPublished(userId: string, payload: ScheduledPostPublishedPayloadDto): void {
+    this.emitToUser(userId, 'scheduled:published', payload);
+  }
+
+  /** Notify the post owner that a scheduled post failed to publish. */
+  emitScheduledPostFailed(userId: string, payload: ScheduledPostFailedPayloadDto): void {
+    this.emitToUser(userId, 'scheduled:failed', payload);
   }
 }
 

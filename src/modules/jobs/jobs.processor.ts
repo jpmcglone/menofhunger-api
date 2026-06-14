@@ -20,6 +20,7 @@ import { CheckinsStreakResetCron } from '../checkins/checkins-streak-reset.cron'
 import { PostsService } from '../posts/posts.service';
 import { ArticlesTrendingScoreCron } from '../articles/articles-trending-score.cron';
 import { CrewJobsCron } from '../crew/crew-jobs.cron';
+import { ScheduledPostsPublishCron } from '../posts/scheduled-posts-publish.cron';
 
 @Processor(MOH_BACKGROUND_QUEUE)
 export class JobsProcessor extends WorkerHost {
@@ -44,6 +45,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly postsService: PostsService,
     private readonly articlesTrendingScore: ArticlesTrendingScoreCron,
     private readonly crewJobs: CrewJobsCron,
+    private readonly scheduledPostsPublish: ScheduledPostsPublishCron,
   ) {
     super();
   }
@@ -133,6 +135,9 @@ export class JobsProcessor extends WorkerHost {
           return { ok: true };
         case JOBS.crewInactiveOwnerAutoTransfer:
           await this.crewJobs.runInactiveOwnerAutoTransfer();
+          return { ok: true };
+        case JOBS.postsScheduledPublishSweep:
+          await this.scheduledPostsPublish.runPublishDue();
           return { ok: true };
         default:
           // Marv jobs (`marvin.*`) run on a separate queue handled by `MarvinProcessor`;

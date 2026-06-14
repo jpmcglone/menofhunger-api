@@ -17,10 +17,16 @@ import { PostsRankingService } from './posts-ranking.service';
 import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
 import { PostsFeedQueryService } from './posts-feed-query.service';
 import { PostsMutationService } from './posts-mutation.service';
+import { ScheduledPostsService } from './scheduled-posts.service';
+import { ScheduledPostsController } from './scheduled-posts.controller';
+import { ScheduledPostsPublishCron } from './scheduled-posts-publish.cron';
 
 @Module({
   imports: [AuthModule, NotificationsModule, RealtimeModule, PostViewsModule, CashtagsModule],
-  controllers: [PostsController, DraftsController],
+  // ScheduledPostsController must precede PostsController so the static
+  // `/posts/scheduled` routes register before PostsController's `/posts/:id`
+  // catch-all (otherwise GET /posts/scheduled resolves as id="scheduled" → 404).
+  controllers: [ScheduledPostsController, PostsController, DraftsController],
   providers: [
     PostsService,
     PostsDraftsService,
@@ -33,8 +39,10 @@ import { PostsMutationService } from './posts-mutation.service';
     PostsPopularScoreCron,
     PostsTopicsBackfillCron,
     PostsPollResultsReadyCron,
+    ScheduledPostsService,
+    ScheduledPostsPublishCron,
   ],
-  exports: [PostsService, PollsService, PostsPopularScoreCron, PostsTopicsBackfillCron, PostsPollResultsReadyCron],
+  exports: [PostsService, PollsService, PostsPopularScoreCron, PostsTopicsBackfillCron, PostsPollResultsReadyCron, ScheduledPostsPublishCron],
 })
 export class PostsModule {}
 
