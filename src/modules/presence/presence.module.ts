@@ -7,6 +7,7 @@ import { RadioModule } from '../radio/radio.module';
 import { SpacesModule } from '../spaces/spaces.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { RedisModule } from '../redis/redis.module';
+import { VerifiedGuard } from '../auth/verified.guard';
 import { PresenceController } from './presence.controller';
 import { PresenceGateway } from './presence.gateway';
 import { GatewayContextService } from './gateway/gateway-context.service';
@@ -33,6 +34,7 @@ import { MessagingGatewayHandler } from './gateway/gateway-messaging.handler';
   ],
   controllers: [PresenceController],
   providers: [
+    VerifiedGuard,
     PresenceGateway,
     GatewayContextService,
     GatewayThrottleService,

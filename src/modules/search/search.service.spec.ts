@@ -27,6 +27,7 @@ function makeService(viewer: any = null) {
     prisma,
     {} as any,
     posts,
+    { ensureArticleBoostScoresFresh: async () => {} } as any,
     viewerContext,
     { isValid: () => false, searchPrefix: async () => [] } as any,
   );
@@ -117,7 +118,7 @@ describe('SearchService.searchCommunityGroups — group visibility', () => {
       },
     };
 
-    const service = new SearchService(prisma, {} as any, {} as any, {
+    const service = new SearchService(prisma, {} as any, {} as any, { ensureArticleBoostScoresFresh: async () => {} } as any, {
       getViewer: jest.fn(async () => null),
       isVerified: jest.fn(() => true),
       allowedPostVisibilities: jest.fn(() => ['public']),

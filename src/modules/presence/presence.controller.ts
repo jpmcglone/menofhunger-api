@@ -4,6 +4,7 @@ import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { Throttle } from '@nestjs/throttler';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AuthGuard } from '../auth/auth.guard';
+import { VerifiedGuard } from '../auth/verified.guard';
 import { AppConfigService } from '../app/app-config.service';
 import { FollowsService } from '../follows/follows.service';
 import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
@@ -137,7 +138,9 @@ export class PresenceController {
     return { data };
   }
 
-  @UseGuards(AuthGuard)
+  // Setting your own status is a verified-only engagement feature. Everyone can
+  // still read other users' statuses via GET /presence/statuses.
+  @UseGuards(AuthGuard, VerifiedGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('interact', 20),
@@ -152,7 +155,7 @@ export class PresenceController {
     return { data: status };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, VerifiedGuard)
   @Throttle({
     default: {
       limit: rateLimitLimit('interact', 20),

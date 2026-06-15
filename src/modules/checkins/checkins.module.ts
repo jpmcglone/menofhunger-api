@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { VerifiedGuard } from '../auth/verified.guard';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PostsModule } from '../posts/posts.module';
 import { UsersModule } from '../users/users.module';
@@ -13,7 +14,7 @@ import { CheckinsStreakResetCron } from './checkins-streak-reset.cron';
 @Module({
   imports: [AuthModule, PrismaModule, PostsModule, UsersModule, ViewerContextModule, RealtimeModule, NotificationsModule],
   controllers: [CheckinsController],
-  providers: [CheckinsService, CheckinsStreakResetCron],
+  providers: [CheckinsService, CheckinsStreakResetCron, VerifiedGuard],
   exports: [CheckinsStreakResetCron, CheckinsService],
 })
 export class CheckinsModule {}

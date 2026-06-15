@@ -19,7 +19,7 @@ export class VerifiedGuard implements CanActivate {
     const isVerified = (user.verifiedStatus ?? 'none') !== 'none';
     const isPremium = Boolean(user.premium || user.premiumPlus);
     if (!isVerified && !isPremium) {
-      throw new ForbiddenException('Verify to use chat.');
+      throw new ForbiddenException('Verify your account to access this.');
     }
     return true;
   }

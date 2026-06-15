@@ -6,6 +6,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ArticlesRankingService } from './articles-ranking.service';
 
 const VIEW_MILESTONES = [50, 100, 500, 1000] as const;
 
@@ -28,12 +29,14 @@ export class ArticlesTrendingScoreCron {
     private readonly appConfig: AppConfigService,
     private readonly jobs: JobsService,
     private readonly notifications: NotificationsService,
+    private readonly ranking: ArticlesRankingService,
   ) {}
 
   /**
    * Compute trending scores for articles every 10 minutes.
    * Score formula uses a 36-hour half-life (articles trend longer than posts).
-   * Components: boostCount * decay + commentCount * 0.8 * decay + shareCount * 0.5 * decay + ln(1+weightedViewCount) * 0.35 * decay
+   * Components: weightedBoost * decay + commentCount * 0.8 * decay + shareCount * 0.5 * decay + ln(1+weightedViewCount) * 0.35 * decay
+   * where weightedBoost is the tier-weighted boost total (premium 3 / verified 2 / unverified 1).
    * We use a logarithmic view term so views inform ranking without overpowering stronger engagement signals.
    */
   @Cron('*/10 * * * *')
@@ -47,6 +50,18 @@ export class ArticlesTrendingScoreCron {
       const asOf = new Date();
       const lookbackDays = 14;
       const minPublishedAt = new Date(asOf.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
+
+      // Refresh tier-weighted boost scores for the candidate set so the boost term
+      // below reads a fresh `boostScore` (premium 3 / verified 2 / unverified 1).
+      const candidates = await this.prisma.article.findMany({
+        where: {
+          isDraft: false,
+          deletedAt: null,
+          publishedAt: { not: null, gte: minPublishedAt },
+        },
+        select: { id: true },
+      });
+      await this.ranking.ensureArticleBoostScoresFresh(candidates.map((c) => c.id));
 
       const rows = await this.prisma.$queryRaw<Array<{ id: string; score: number }>>(Prisma.sql`
         WITH share_counts AS (
@@ -65,7 +80,7 @@ export class ArticlesTrendingScoreCron {
           SELECT
             a."id",
             (
-              a."boostCount" * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${asOf}::timestamptz - a."publishedAt")) / (36 * 60 * 60)))
+              COALESCE(a."boostScore", a."boostCount") * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${asOf}::timestamptz - a."publishedAt")) / (36 * 60 * 60)))
               + a."commentCount" * 0.8 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${asOf}::timestamptz - a."publishedAt")) / (36 * 60 * 60)))
               + COALESCE(sc."shareCount", 0) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${asOf}::timestamptz - a."publishedAt")) / (36 * 60 * 60)))
               + LN(1 + COALESCE(a."weightedViewCount", 0)::double precision) * 0.35 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${asOf}::timestamptz - a."publishedAt")) / (36 * 60 * 60)))

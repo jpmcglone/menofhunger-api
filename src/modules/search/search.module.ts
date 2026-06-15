@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { FollowsModule } from '../follows/follows.module';
 import { PostsModule } from '../posts/posts.module';
+import { ArticlesModule } from '../articles/articles.module';
 import { TaxonomyModule } from '../taxonomy/taxonomy.module';
 import { CashtagsModule } from '../cashtags/cashtags.module';
 import { SearchController } from './search.controller';
@@ -9,7 +10,7 @@ import { SearchCleanupCron } from './search-cleanup.cron';
 import { SearchService } from './search.service';
 
 @Module({
-  imports: [AuthModule, FollowsModule, PostsModule, TaxonomyModule, CashtagsModule],
+  imports: [AuthModule, FollowsModule, PostsModule, ArticlesModule, TaxonomyModule, CashtagsModule],
   controllers: [SearchController],
   providers: [SearchService, SearchCleanupCron],
   exports: [SearchService, SearchCleanupCron],

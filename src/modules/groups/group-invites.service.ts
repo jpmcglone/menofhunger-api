@@ -486,6 +486,15 @@ export class GroupInvitesService {
     viewerUserId: string;
     inviteId: string;
   }): Promise<{ groupId: string; groupSlug: string }> {
+    const viewer = await this.prisma.user.findUnique({
+      where: { id: params.viewerUserId },
+      select: { verifiedStatus: true },
+    });
+    if (!viewer) throw new NotFoundException('User not found.');
+    if (!viewer.verifiedStatus || viewer.verifiedStatus === 'none') {
+      throw new ForbiddenException('Verify your account to join groups.');
+    }
+
     const invite = await this.prisma.communityGroupInvite.findUnique({
       where: { id: params.inviteId },
     });

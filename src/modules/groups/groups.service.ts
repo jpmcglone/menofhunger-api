@@ -361,6 +361,15 @@ export class GroupsService {
   }
 
   async join(params: { viewerUserId: string; groupId: string }) {
+    const viewer = await this.prisma.user.findUnique({
+      where: { id: params.viewerUserId },
+      select: { verifiedStatus: true },
+    });
+    if (!viewer) throw new NotFoundException('User not found.');
+    if (!viewer.verifiedStatus || viewer.verifiedStatus === 'none') {
+      throw new ForbiddenException('Verify your account to join groups.');
+    }
+
     const g = await this.prisma.communityGroup.findFirst({
       where: { id: params.groupId, deletedAt: null },
     });

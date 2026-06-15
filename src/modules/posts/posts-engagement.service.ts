@@ -38,10 +38,9 @@ export class PostsEngagementService {
     });
     if (!user) throw new NotFoundException('User not found.');
     if (!user.usernameIsSet) throw new ForbiddenException('Set a username to boost posts.');
-    // Tier rule: Unverified users are read-only (no meaningful reactions).
-    if (!user.verifiedStatus || user.verifiedStatus === 'none') {
-      throw new ForbiddenException('Verify your account to boost posts.');
-    }
+    // Unverified users may boost public posts (their boost counts less in ranking via
+    // the tier-weighted boostScore). Visibility scope is enforced by the caller.
+    return user;
   }
 
   async boostPost(params: { userId: string; postId: string }) {
@@ -49,11 +48,18 @@ export class PostsEngagementService {
     const id = (postId ?? '').trim();
     if (!id) throw new NotFoundException('Post not found.');
 
-    await this.ensureUserCanBoost(userId);
+    const booster = await this.ensureUserCanBoost(userId);
 
     const post = await this.feedQuery.getById({ viewerUserId: userId, id });
     if (post.deletedAt) throw new BadRequestException('Deleted posts cannot be boosted.');
     if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be boosted.');
+
+    // Unverified users may only boost public posts (defense-in-depth; getById already
+    // blocks unverified viewers from verified-only / premium-only posts).
+    const boosterIsVerified = Boolean(booster.verifiedStatus && booster.verifiedStatus !== 'none');
+    if (!boosterIsVerified && post.visibility !== 'public') {
+      throw new ForbiddenException('Verify to boost verified-only posts.');
+    }
 
     // Block check: neither direction may boost across a block.
     if (post.user?.id && post.user.id !== userId) {

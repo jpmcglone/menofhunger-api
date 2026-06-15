@@ -2,9 +2,9 @@ import { Body, Controller, Get, Header, Post, UseGuards, Query } from '@nestjs/c
 import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { VerifiedGuard } from '../auth/verified.guard';
 import { AppConfigService } from '../app/app-config.service';
-import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
+import { CurrentUserId } from '../users/users.decorator';
 import { toPostDto } from '../posts/post.dto';
 import { CheckinsService } from './checkins.service';
 
@@ -20,16 +20,19 @@ const leaderboardQuerySchema = z.object({
 
 @ApiTags('Check-ins & Streaks')
 @Controller('checkins')
+// The entire check-ins experience (feed, streaks, leaderboard, social proof) is
+// verified-only. Unverified/anonymous users are locked out at the API boundary;
+// the web/iOS clients render a "Verify to check in" CTA instead of calling these.
+@UseGuards(AuthGuard, VerifiedGuard)
 export class CheckinsController {
   constructor(
     private readonly checkins: CheckinsService,
     private readonly appConfig: AppConfigService,
   ) {}
 
-  @UseGuards(OptionalAuthGuard)
   @Get('leaderboard')
   async getLeaderboard(
-    @OptionalCurrentUserId() viewerUserId: string | undefined,
+    @CurrentUserId() viewerUserId: string,
     @Query() query: unknown,
   ) {
     const { limit, scope } = leaderboardQuerySchema.parse(query);
@@ -39,7 +42,7 @@ export class CheckinsController {
       const { users, viewerRank, weekStart } = await this.checkins.getWeeklyLeaderboard({
         publicBaseUrl,
         limit,
-        viewerUserId: viewerUserId ?? null,
+        viewerUserId,
       });
       return { data: { users, viewerRank: viewerRank ?? null, weekStart: weekStart.toISOString(), generatedAt: new Date().toISOString() } };
     }
@@ -48,7 +51,7 @@ export class CheckinsController {
       const { users, viewerRank } = await this.checkins.getBestStreakLeaderboard({
         publicBaseUrl,
         limit,
-        viewerUserId: viewerUserId ?? null,
+        viewerUserId,
       });
       return { data: { users, viewerRank: viewerRank ?? null, generatedAt: new Date().toISOString() } };
     }
@@ -56,12 +59,11 @@ export class CheckinsController {
     const { users, viewerRank } = await this.checkins.getLeaderboard({
       publicBaseUrl,
       limit,
-      viewerUserId: viewerUserId ?? null,
+      viewerUserId,
     });
     return { data: { users, viewerRank: viewerRank ?? null, generatedAt: new Date().toISOString() } };
   }
 
-  @UseGuards(AuthGuard)
   @Get('today')
   async getToday(@CurrentUserId() userId: string) {
     const data = await this.checkins.getTodayState({
@@ -71,18 +73,16 @@ export class CheckinsController {
     return { data };
   }
 
-  @UseGuards(OptionalAuthGuard)
   @Get('today/answered')
   @Header('Cache-Control', 'private, max-age=30')
-  async getTodayAnswered(@OptionalCurrentUserId() viewerUserId: string | undefined) {
+  async getTodayAnswered(@CurrentUserId() viewerUserId: string) {
     const data = await this.checkins.getTodayAnswered({
-      viewerUserId: viewerUserId ?? null,
+      viewerUserId,
       publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
     });
     return { data };
   }
 
-  @UseGuards(AuthGuard)
   @Post()
   async create(@CurrentUserId() userId: string, @Body() body: unknown) {
     const parsed = createSchema.parse(body);

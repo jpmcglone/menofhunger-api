@@ -49,6 +49,33 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
   return { service, prisma };
 }
 
+describe('GroupsService.join — verification gate', () => {
+  it('rejects an unverified user before any group lookup', async () => {
+    const userFindUnique = jest.fn(async () => ({ verifiedStatus: 'none' }));
+    const groupFindFirst = jest.fn();
+    const { service } = makeService({
+      user: { findUnique: userFindUnique },
+      communityGroup: { findFirst: groupFindFirst },
+    });
+
+    await expect(service.join({ viewerUserId: 'u1', groupId: 'g1' })).rejects.toThrow(ForbiddenException);
+    await expect(service.join({ viewerUserId: 'u1', groupId: 'g1' })).rejects.toThrow(/verify/i);
+    expect(groupFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('lets a verified user past the gate (then resolves the group)', async () => {
+    const userFindUnique = jest.fn(async () => ({ verifiedStatus: 'manual' }));
+    const groupFindFirst = jest.fn(async () => null); // group missing -> NotFound proves we passed the gate
+    const { service } = makeService({
+      user: { findUnique: userFindUnique },
+      communityGroup: { findFirst: groupFindFirst },
+    });
+
+    await expect(service.join({ viewerUserId: 'u1', groupId: 'g1' })).rejects.toThrow(NotFoundException);
+    expect(groupFindFirst).toHaveBeenCalled();
+  });
+});
+
 describe('GroupsService.updateGroup — privacy transitions', () => {
   it('blocks private -> open transition with a BadRequestException', async () => {
     const { service, prisma } = makeService();

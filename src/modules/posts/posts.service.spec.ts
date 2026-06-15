@@ -2974,3 +2974,58 @@ describe('PostsService.listForYouFeed', () => {
     }
   });
 });
+
+// ─── unverified boost gating ─────────────────────────────────────────────────
+// Unverified users may boost PUBLIC posts (their boost counts less in ranking
+// via the tier-weighted boostScore), but not verified-only/premium-only posts,
+// and reposts remain verified-only.
+
+describe('PostsService — unverified boost gating', () => {
+  function mockBooster(deps: any, verifiedStatus: 'none' | 'verified') {
+    deps.prisma.user.findUnique = jest.fn(async () => ({ id: 'u1', usernameIsSet: true, verifiedStatus }));
+    deps.prisma.userBlock = { count: jest.fn(async () => 0) };
+    deps.prisma.$transaction = jest.fn(async (fn: any) => {
+      if (typeof fn === 'function') {
+        return fn({
+          boost: { createMany: jest.fn(async () => ({ count: 1 })), deleteMany: jest.fn(async () => ({ count: 1 })) },
+          post: { update: jest.fn(async () => ({})), findUnique: jest.fn(async () => ({ boostCount: 1 })) },
+        });
+      }
+      return Promise.all(fn);
+    });
+    deps.cacheInvalidation.bumpFeedGlobal = jest.fn(async () => undefined);
+    deps.notifications.upsertBoostNotification = jest.fn(async () => undefined);
+    deps.postViews.markViewed = jest.fn(async () => undefined);
+  }
+
+  it('lets an unverified user boost a public post', async () => {
+    const { service, deps } = makeService();
+    mockBooster(deps, 'none');
+    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
+      id: 'p1', userId: 'author', deletedAt: null, visibility: 'public', user: { id: 'author' }, body: 'hi',
+    });
+
+    await expect(service.boostPost({ userId: 'u1', postId: 'p1' })).resolves.toEqual(
+      expect.objectContaining({ success: true, viewerHasBoosted: true }),
+    );
+  });
+
+  it('blocks an unverified user from boosting a verified-only post', async () => {
+    const { service, deps } = makeService();
+    mockBooster(deps, 'none');
+    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
+      id: 'p1', userId: 'author', deletedAt: null, visibility: 'verifiedOnly', user: { id: 'author' }, body: 'hi',
+    });
+
+    await expect(service.boostPost({ userId: 'u1', postId: 'p1' })).rejects.toThrow(ForbiddenException);
+    await expect(service.boostPost({ userId: 'u1', postId: 'p1' })).rejects.toThrow(/verified-only/i);
+  });
+
+  it('still blocks an unverified user from reposting', async () => {
+    const { service, deps } = makeService();
+    mockBooster(deps, 'none');
+
+    await expect(service.repostPost({ userId: 'u1', postId: 'p1' })).rejects.toThrow(ForbiddenException);
+    await expect(service.repostPost({ userId: 'u1', postId: 'p1' })).rejects.toThrow(/verify/i);
+  });
+});

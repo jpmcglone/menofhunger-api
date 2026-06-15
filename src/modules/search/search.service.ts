@@ -4,6 +4,7 @@ import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FollowsService } from '../follows/follows.service';
 import { PostsService } from '../posts/posts.service';
+import { ArticlesRankingService } from '../articles/articles-ranking.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { queryToTopicValues } from '../../common/topics/topic-utils';
@@ -167,6 +168,7 @@ export class SearchService {
     private readonly prisma: PrismaService,
     private readonly follows: FollowsService,
     private readonly posts: PostsService,
+    private readonly articlesRanking: ArticlesRankingService,
     private readonly viewerContext: ViewerContextService,
     private readonly ticker: TickerService,
   ) {}
@@ -856,11 +858,27 @@ export class SearchService {
       return score;
     };
 
+    // Refresh tier-weighted boost scores so popularity discounts unverified boosters
+    // (premium 3 / verified 2 / unverified 1); falls back to raw boostCount when not yet computed.
+    await this.articlesRanking.ensureArticleBoostScoresFresh(raw.map((a) => a.id));
+    const refreshedBoostScore = raw.length
+      ? new Map(
+          (
+            await this.prisma.article.findMany({
+              where: { id: { in: raw.map((a) => a.id) } },
+              select: { id: true, boostScore: true },
+            })
+          ).map((a) => [a.id, a.boostScore] as const),
+        )
+      : new Map<string, number | null>();
+    const boostWeight = (a: SearchArticleBaseRow): number =>
+      refreshedBoostScore.get(a.id) ?? a.boostScore ?? a.boostCount ?? 0;
+
     const sorted = [...raw].sort((a, b) => {
       const relA = articleScore(a);
       const relB = articleScore(b);
-      const popA = (a.boostCount ?? 0) * 3 + (a.commentCount ?? 0) * 2 + (a.viewCount ?? 0);
-      const popB = (b.boostCount ?? 0) * 3 + (b.commentCount ?? 0) * 2 + (b.viewCount ?? 0);
+      const popA = boostWeight(a) * 3 + (a.commentCount ?? 0) * 2 + (a.viewCount ?? 0);
+      const popB = boostWeight(b) * 3 + (b.commentCount ?? 0) * 2 + (b.viewCount ?? 0);
       const scoreA = relA * 10 + Math.log10(1 + popA);
       const scoreB = relB * 10 + Math.log10(1 + popB);
       if (scoreA !== scoreB) return scoreB - scoreA;

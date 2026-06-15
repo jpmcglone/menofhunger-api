@@ -772,7 +772,10 @@ export class ArticlesService {
     try {
       await this.prisma.$transaction([
         this.prisma.articleBoost.create({ data: { articleId, userId } }),
-        this.prisma.article.update({ where: { id: articleId }, data: { boostCount: { increment: 1 } } }),
+        this.prisma.article.update({
+          where: { id: articleId },
+          data: { boostCount: { increment: 1 }, boostScore: null, boostScoreUpdatedAt: null },
+        }),
       ]);
     } catch (e: any) {
       if (e?.code === 'P2002') throw new ConflictException('Already boosted.');
@@ -820,7 +823,7 @@ export class ArticlesService {
       this.prisma.articleBoost.delete({ where: { articleId_userId: { articleId, userId } } }),
       this.prisma.article.update({
         where: { id: articleId },
-        data: { boostCount: { decrement: 1 } },
+        data: { boostCount: { decrement: 1 }, boostScore: null, boostScoreUpdatedAt: null },
       }),
     ]);
     const afterUnboost = await this.prisma.article.findUnique({ where: { id: articleId }, select: { boostCount: true } });

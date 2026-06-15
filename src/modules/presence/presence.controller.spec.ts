@@ -1,4 +1,5 @@
 import { PresenceController } from './presence.controller';
+import { VerifiedGuard } from '../auth/verified.guard';
 
 /**
  * Lightweight tests for the Marv "always online" injection in /presence/online and
@@ -138,6 +139,26 @@ describe('PresenceController — Marv pin injection', () => {
       expect(res.data.online.find((u: any) => u.id === 'marv-id')).toBeUndefined();
       expect(res.pagination.totalOnline).toBe(2);
     });
+  });
+});
+
+describe('PresenceController — setting your own status is verified-gated', () => {
+  // Reads guard metadata applied by @UseGuards so the verified-only contract is
+  // encoded as a test (guards aren't exercised by calling handlers directly).
+  function guardsFor(handler: (...args: never[]) => unknown): unknown[] {
+    return (Reflect.getMetadata('__guards__', handler) as unknown[] | undefined) ?? [];
+  }
+
+  it('PUT /presence/status (setStatus) requires VerifiedGuard', () => {
+    expect(guardsFor(PresenceController.prototype.setStatus)).toContain(VerifiedGuard);
+  });
+
+  it('DELETE /presence/status (clearStatus) requires VerifiedGuard', () => {
+    expect(guardsFor(PresenceController.prototype.clearStatus)).toContain(VerifiedGuard);
+  });
+
+  it('GET /presence/statuses (statuses) does NOT require VerifiedGuard — everyone can read statuses', () => {
+    expect(guardsFor(PresenceController.prototype.statuses)).not.toContain(VerifiedGuard);
   });
 });
 
