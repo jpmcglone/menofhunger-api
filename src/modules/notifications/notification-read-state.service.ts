@@ -25,13 +25,14 @@ export class NotificationReadStateService {
     return {
       recipientUserId,
       deliveredAt: null,
-      kind: { not: 'message' },
+      kind: { notIn: ['message', 'community_group_post'] },
     };
   }
 
   async getUndeliveredCount(recipientUserId: string): Promise<number> {
     // Chat unread state has its own messages badge; the bell count only includes
-    // notification feed rows, and deliberately excludes legacy `message` rows.
+    // notification feed rows, and deliberately excludes legacy `message` rows
+    // and `community_group_post` badge-only rows (those drive the Groups badge instead).
     return this.prisma.notification.count({
       where: this.undeliveredBellWhere(recipientUserId),
     });
@@ -43,7 +44,7 @@ export class NotificationReadStateService {
       where: {
         recipientUserId,
         readAt: null,
-        kind: { not: 'message' },
+        kind: { notIn: ['message', 'community_group_post'] },
       },
       _count: { _all: true },
     });
@@ -80,6 +81,62 @@ export class NotificationReadStateService {
     }
   }
 
+  /**
+   * Count of undelivered (unseen) `community_group_post` badge rows, grouped by
+   * subjectGroupId. Drives the Groups nav badge total and per-group card badges.
+   */
+  async getGroupsUnread(recipientUserId: string): Promise<{ total: number; byGroupId: Record<string, number> }> {
+    const rows = await this.prisma.notification.groupBy({
+      by: ['subjectGroupId'],
+      where: {
+        recipientUserId,
+        kind: 'community_group_post',
+        deliveredAt: null,
+      },
+      _count: { _all: true },
+    });
+    const byGroupId: Record<string, number> = {};
+    let total = 0;
+    for (const row of rows) {
+      if (!row.subjectGroupId) continue;
+      const count = row._count._all;
+      byGroupId[row.subjectGroupId] = count;
+      total += count;
+    }
+    return { total, byGroupId };
+  }
+
+  /**
+   * Recompute the groups unread counts and emit a `groups:unreadChanged` event.
+   * Best-effort: never throws.
+   */
+  async emitGroupsUnreadForUser(recipientUserId: string): Promise<void> {
+    try {
+      const { total, byGroupId } = await this.getGroupsUnread(recipientUserId);
+      this.presenceRealtime.emitGroupsUnreadChanged(recipientUserId, { total, byGroupId });
+    } catch (err) {
+      this.logger.debug(`[notifications] Failed to emit groups unread: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * Mark `community_group_post` rows for a specific group as seen (deliveredAt set)
+   * but NOT read (readAt left null). Called when the user opens a group page.
+   * Read is set separately when the post is actually viewed on screen via `markReadBySubject({ postId })`.
+   */
+  async markGroupPostsDelivered(recipientUserId: string, groupId: string): Promise<void> {
+    await this.prisma.notification.updateMany({
+      where: {
+        recipientUserId,
+        kind: 'community_group_post',
+        subjectGroupId: groupId,
+        deliveredAt: null,
+      },
+      data: { deliveredAt: new Date() },
+    });
+    void this.emitGroupsUnreadForUser(recipientUserId);
+  }
+
   async markDelivered(recipientUserId: string): Promise<void> {
     const undeliveredCount = await this.prisma.$transaction(async (tx) => {
       const res = await tx.notification.updateMany({
@@ -94,12 +151,19 @@ export class NotificationReadStateService {
           WHERE id = ${recipientUserId}
         `;
       }
+      // Also mark group-post badge rows as delivered (opening notifications clears all badges).
+      await tx.notification.updateMany({
+        where: { recipientUserId, kind: 'community_group_post', deliveredAt: null },
+        data: { deliveredAt: new Date() },
+      });
       // Return accurate count from actual rows (handles drifted counters).
       return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
     });
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
     });
+    // Groups badges also clear when the user opens the notifications page.
+    void this.emitGroupsUnreadForUser(recipientUserId);
   }
 
   async markNewPostsRead(recipientUserId: string): Promise<{ undeliveredCount: number }> {
@@ -175,8 +239,10 @@ export class NotificationReadStateService {
     }
     if (groupId) {
       // Visiting a group page (or the pending-members page) surfaces join requests and
-      // any other group-scoped notifications. Clear them all by group id.
-      or.push({ subjectGroupId: groupId });
+      // any other group-scoped notifications. Clear them all by group id — but NOT
+      // community_group_post badge rows, which are only "seen" (deliveredAt) on group
+      // open via markGroupPostsDelivered, and "read" only when the post is actually viewed.
+      or.push({ subjectGroupId: groupId, kind: { not: 'community_group_post' as const } });
     }
     const where = {
       recipientUserId,
@@ -213,6 +279,8 @@ export class NotificationReadStateService {
     });
     // markReadBySubject can clear comment notifications (e.g. opening the post via tap).
     void this.emitWaitingCountForUser(recipientUserId);
+    // Viewing a post also marks any community_group_post badge row for that post as read.
+    if (postId) void this.emitGroupsUnreadForUser(recipientUserId);
   }
 
   /**
@@ -554,6 +622,8 @@ export class NotificationReadStateService {
     });
     // markAllRead clears every comment notification too.
     void this.emitWaitingCountForUser(recipientUserId);
+    // Also clear groups badges.
+    void this.emitGroupsUnreadForUser(recipientUserId);
   }
 
   /**

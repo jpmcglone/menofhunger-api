@@ -570,7 +570,7 @@ describe('NotificationsService.getUndeliveredCount', () => {
       where: {
         recipientUserId: 'u_recipient',
         deliveredAt: null,
-        kind: { not: 'message' },
+        kind: { notIn: ['message', 'community_group_post'] },
       },
     });
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
@@ -808,6 +808,228 @@ describe('NotificationsService.markConversationMessageNotificationRead', () => {
       expect.objectContaining({ data: { undeliveredNotificationCount: { decrement: 1 } } }),
     );
     expect(presenceRealtime.emitNotificationsDeleted).toHaveBeenCalledWith('r1', { notificationIds: ['msg-notif'] });
+  });
+});
+
+// ─── Groups unread badge: markGroupPostsDelivered ─────────────────────────────
+
+describe('NotificationReadStateService.markGroupPostsDelivered', () => {
+  it('sets deliveredAt for community_group_post rows in the given group and emits groups:unreadChanged', async () => {
+    const groupBy = jest.fn(async () => [{ subjectGroupId: 'g1', _count: { _all: 2 } }]);
+    const updateMany = jest.fn(async () => ({ count: 2 }));
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitGroupsUnreadChanged: jest.fn(),
+    } as any;
+    const prisma = {
+      notification: { updateMany, groupBy },
+      user: { findUnique: jest.fn() },
+      $transaction: jest.fn(),
+    } as any;
+    const { readState } = buildFacade({
+      prisma,
+      appConfig: { r2: jest.fn(() => null) } as any,
+      presenceRealtime,
+      presence: { isUserViewingConversation: jest.fn(() => false) } as any,
+      jobs: { enqueueCron: jest.fn() } as any,
+      posthog: { capture: jest.fn() } as any,
+      viewerContextService: { getViewer: jest.fn(async () => null) } as any,
+    });
+
+    await readState.markGroupPostsDelivered('u1', 'g1');
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        recipientUserId: 'u1',
+        kind: 'community_group_post',
+        subjectGroupId: 'g1',
+        deliveredAt: null,
+      },
+      data: { deliveredAt: expect.any(Date) },
+    });
+    // Verify groups:unreadChanged is eventually emitted (emitGroupsUnreadForUser is best-effort/async)
+    // Wait a tick for the void promise to resolve
+    await new Promise((r) => setImmediate(r));
+    expect(presenceRealtime.emitGroupsUnreadChanged).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ total: expect.any(Number), byGroupId: expect.any(Object) }),
+    );
+  });
+
+  it('does NOT set readAt (seen-only, not read)', async () => {
+    const updateMany = jest.fn(async () => ({ count: 1 }));
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitGroupsUnreadChanged: jest.fn(),
+    } as any;
+    const prisma = {
+      notification: { updateMany, groupBy: jest.fn(async () => []) },
+      user: { findUnique: jest.fn() },
+      $transaction: jest.fn(),
+    } as any;
+    const { readState } = buildFacade({
+      prisma,
+      appConfig: { r2: jest.fn(() => null) } as any,
+      presenceRealtime,
+      presence: { isUserViewingConversation: jest.fn(() => false) } as any,
+      jobs: { enqueueCron: jest.fn() } as any,
+      posthog: { capture: jest.fn() } as any,
+      viewerContextService: { getViewer: jest.fn(async () => null) } as any,
+    });
+
+    await readState.markGroupPostsDelivered('u1', 'g1');
+
+    const calls = updateMany.mock.calls as any[][];
+    const callArg = calls[0]?.[0];
+    expect(callArg?.data?.readAt).toBeUndefined();
+    expect(callArg?.data?.deliveredAt).toBeInstanceOf(Date);
+  });
+});
+
+// ─── Groups unread badge: markReadBySubject does NOT read community_group_post on groupId ──
+
+describe('NotificationReadStateService.markReadBySubject — community_group_post exclusion', () => {
+  it('does NOT mark community_group_post as read when called with groupId only', async () => {
+    const updateMany = jest.fn(async () => ({ count: 0 }));
+    const executeRaw = jest.fn(async () => []);
+    const count = jest.fn(async () => 0);
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitNotificationsWaitingChanged: jest.fn(),
+      emitGroupsUnreadChanged: jest.fn(),
+    } as any;
+    const prisma = {
+      notification: { updateMany, count },
+      user: { findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 0 })) },
+      $transaction: jest.fn(async (fn: any) => fn({
+        notification: { updateMany, count },
+        user: { update: jest.fn(async () => ({})) },
+        $executeRaw: executeRaw,
+      })),
+      $executeRaw: executeRaw,
+    } as any;
+    const { readState } = buildFacade({
+      prisma,
+      appConfig: { r2: jest.fn(() => null) } as any,
+      presenceRealtime,
+      presence: { isUserViewingConversation: jest.fn(() => false) } as any,
+      jobs: { enqueueCron: jest.fn() } as any,
+      posthog: { capture: jest.fn() } as any,
+      viewerContextService: { getViewer: jest.fn(async () => null) } as any,
+    });
+
+    await readState.markReadBySubject('u1', { groupId: 'g1' });
+
+    // The OR clause for groupId must exclude community_group_post.
+    const txCalls = updateMany.mock.calls as any[][];
+    const txUpdateCall = txCalls[0]?.[0];
+    const groupClause = txUpdateCall?.where?.OR?.find((c: any) => c.subjectGroupId === 'g1');
+    expect(groupClause).toBeDefined();
+    expect(groupClause?.kind?.not).toBe('community_group_post');
+  });
+});
+
+// ─── NotificationWriterService.createGroupPostBadgeNotifications ─────────────
+
+describe('NotificationWriterService.createGroupPostBadgeNotifications', () => {
+  it('bulk-inserts badge rows for recipients (excluding actor) and emits groups:unreadChanged per recipient', async () => {
+    const createMany = jest.fn(async () => ({ count: 2 }));
+    const groupBy = jest.fn(async () => []);
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitGroupsUnreadChanged: jest.fn(),
+    } as any;
+    const prisma = {
+      notification: { createMany, groupBy },
+      user: { findUnique: jest.fn() },
+    } as any;
+    const { writer } = buildFacade({
+      prisma,
+      appConfig: { r2: jest.fn(() => null) } as any,
+      presenceRealtime,
+      presence: { isUserViewingConversation: jest.fn(() => false) } as any,
+      jobs: { enqueueCron: jest.fn() } as any,
+      posthog: { capture: jest.fn() } as any,
+      viewerContextService: { getViewer: jest.fn(async () => null) } as any,
+    });
+
+    await writer.createGroupPostBadgeNotifications({
+      actorUserId: 'author',
+      postId: 'post-1',
+      groupId: 'g1',
+      recipientUserIds: ['m1', 'm2', 'author'],
+    });
+
+    expect(createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({ recipientUserId: 'm1', kind: 'community_group_post', subjectGroupId: 'g1' }),
+        expect.objectContaining({ recipientUserId: 'm2', kind: 'community_group_post', subjectGroupId: 'g1' }),
+      ]),
+      skipDuplicates: true,
+    });
+    // Actor should be excluded
+    const createCalls = createMany.mock.calls as any[][];
+    const insertedIds = (createCalls[0]?.[0] as any)?.data?.map((d: any) => d.recipientUserId) ?? [];
+    expect(insertedIds).not.toContain('author');
+    // Wait for emitGroupsUnreadForUser void promises
+    await new Promise((r) => setImmediate(r));
+    expect(presenceRealtime.emitGroupsUnreadChanged).toHaveBeenCalledWith('m1', expect.any(Object));
+    expect(presenceRealtime.emitGroupsUnreadChanged).toHaveBeenCalledWith('m2', expect.any(Object));
+    expect(presenceRealtime.emitGroupsUnreadChanged).not.toHaveBeenCalledWith('author', expect.any(Object));
+  });
+});
+
+// ─── deleteBySubjectPostId: group post badge rows don't drift the bell counter ──
+
+describe('NotificationWriterService.deleteBySubjectPostId — community_group_post handling', () => {
+  it('does NOT decrement the bell counter for community_group_post rows, and emits groups:unreadChanged', async () => {
+    const deletedRows = [
+      { id: 'n1', recipientUserId: 'm1', deliveredAt: null, kind: 'community_group_post' },
+      { id: 'n2', recipientUserId: 'm2', deliveredAt: null, kind: 'boost' },
+    ];
+    const userUpdate = jest.fn(async () => ({ undeliveredNotificationCount: 0 }));
+    const deleteMany = jest.fn(async () => ({ count: 2 }));
+    const groupBy = jest.fn(async () => []);
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitNotificationsDeleted: jest.fn(),
+      emitNotificationsWaitingChanged: jest.fn(),
+      emitGroupsUnreadChanged: jest.fn(),
+    } as any;
+    const prisma = {
+      notification: {
+        findMany: jest.fn(async () => deletedRows),
+        deleteMany,
+        count: jest.fn(async () => 0),
+        groupBy,
+      },
+      user: { update: userUpdate, findUnique: jest.fn() },
+      $transaction: jest.fn(async (fn: any) => fn({
+        notification: { deleteMany },
+        user: { update: userUpdate },
+      })),
+    } as any;
+    const { writer } = buildFacade({
+      prisma,
+      appConfig: { r2: jest.fn(() => null) } as any,
+      presenceRealtime,
+      presence: { isUserViewingConversation: jest.fn(() => false) } as any,
+      jobs: { enqueueCron: jest.fn() } as any,
+      posthog: { capture: jest.fn() } as any,
+      viewerContextService: { getViewer: jest.fn(async () => null) } as any,
+    });
+
+    await writer.deleteBySubjectPostId('post-1');
+
+    // The bell counter must only be decremented for the non-group-post row (m2), never m1.
+    const decrementedUsers = userUpdate.mock.calls.map((c: any) => c[0]?.where?.id);
+    expect(decrementedUsers).toContain('m2');
+    expect(decrementedUsers).not.toContain('m1');
+
+    // The group badge for m1 must be refreshed.
+    await new Promise((r) => setImmediate(r));
+    expect(presenceRealtime.emitGroupsUnreadChanged).toHaveBeenCalledWith('m1', expect.any(Object));
+    expect(presenceRealtime.emitGroupsUnreadChanged).not.toHaveBeenCalledWith('m2', expect.any(Object));
   });
 });
 

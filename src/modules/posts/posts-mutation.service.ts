@@ -1689,6 +1689,33 @@ export class PostsMutationService {
           });
       }
 
+      // Badge-only notifications for all active group members when a top-level post is created in a group.
+      if (!parentId && postCommunityGroupId) {
+        try {
+          const groupMembers = await this.prisma.communityGroupMember.findMany({
+            where: { groupId: postCommunityGroupId, status: 'active', userId: { not: userId } },
+            select: { userId: true },
+          });
+          const memberIds = groupMembers.map((m) => m.userId);
+          if (memberIds.length > 0) {
+            this.notifications.createGroupPostBadgeNotifications({
+              actorUserId: userId,
+              postId: post.id,
+              groupId: postCommunityGroupId,
+              recipientUserIds: memberIds,
+            }).catch((err) => {
+              this.logger.warn(
+                `[notifications] Failed to create group-post badge notifications: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+          }
+        } catch (err) {
+          this.logger.warn(
+            `[notifications] Failed to fan out group-post badge notifications: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
       // Follower notifications + feed:newPost realtime emit (top-level only).
       const feedFollowerIds: string[] = [];
       if (visibility !== 'onlyMe') {

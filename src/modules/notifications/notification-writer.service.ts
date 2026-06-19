@@ -496,15 +496,23 @@ export class NotificationWriterService {
   }
 
   private async deleteNotificationRowsAndEmit(
-    rows: Array<{ id: string; recipientUserId: string; deliveredAt: Date | null }>,
+    rows: Array<{ id: string; recipientUserId: string; deliveredAt: Date | null; kind?: NotificationKind }>,
   ): Promise<number> {
     const ids = rows.map((r) => r.id).filter(Boolean);
     if (ids.length === 0) return 0;
 
+    // `community_group_post` rows are bell-excluded: they never incremented
+    // `undeliveredNotificationCount`, so deleting them must NOT decrement it
+    // (that would drift the bell badge). They drive the Groups badge instead.
     const undeliveredDeletedByRecipient = new Map<string, number>();
+    const groupBadgeRecipients = new Set<string>();
     for (const r of rows) {
       const uid = (r.recipientUserId ?? '').trim();
       if (!uid) continue;
+      if (r.kind === 'community_group_post') {
+        groupBadgeRecipients.add(uid);
+        continue;
+      }
       if (r.deliveredAt != null) continue;
       undeliveredDeletedByRecipient.set(uid, (undeliveredDeletedByRecipient.get(uid) ?? 0) + 1);
     }
@@ -548,6 +556,12 @@ export class NotificationWriterService {
       void this.readState.emitWaitingCountForUser(uid);
     }
 
+    // Deleting a group post drops its `community_group_post` badge rows — refresh the
+    // Groups badge for each affected recipient so a stale count doesn't linger.
+    for (const uid of groupBadgeRecipients) {
+      void this.readState.emitGroupsUnreadForUser(uid);
+    }
+
     return ids.length;
   }
 
@@ -557,7 +571,7 @@ export class NotificationWriterService {
     if (!id) return 0;
     const rows = await this.prisma.notification.findMany({
       where: { subjectPostId: id },
-      select: { id: true, recipientUserId: true, deliveredAt: true },
+      select: { id: true, recipientUserId: true, deliveredAt: true, kind: true },
     });
     return await this.deleteNotificationRowsAndEmit(rows);
   }
@@ -568,7 +582,7 @@ export class NotificationWriterService {
     if (!id) return 0;
     const rows = await this.prisma.notification.findMany({
       where: { actorPostId: id },
-      select: { id: true, recipientUserId: true, deliveredAt: true },
+      select: { id: true, recipientUserId: true, deliveredAt: true, kind: true },
     });
     return await this.deleteNotificationRowsAndEmit(rows);
   }
@@ -1111,5 +1125,43 @@ export class NotificationWriterService {
       title: 'Your crew was disbanded',
     });
     await this.emitCrewNotification(recipientUserId, result.notificationId, result.undeliveredCount);
+  }
+
+  /**
+   * Bulk-create badge-only `community_group_post` notification rows for a new top-level
+   * group post. These rows drive the Groups nav badge and per-group card badges — they are
+   * intentionally excluded from the main notification bell + feed.
+   *
+   * Does NOT increment `undeliveredNotificationCount` (those are bell-only) and does NOT
+   * emit `notifications:new` or `notifications:updated`. Emits `groups:unreadChanged`
+   * per recipient so badges update in real time.
+   */
+  async createGroupPostBadgeNotifications(params: {
+    actorUserId: string;
+    postId: string;
+    groupId: string;
+    recipientUserIds: string[];
+  }): Promise<void> {
+    const { actorUserId, postId, groupId, recipientUserIds } = params;
+    const now = new Date();
+    const toCreate = recipientUserIds.filter((id) => id && id !== actorUserId);
+    if (toCreate.length === 0) return;
+
+    await this.prisma.notification.createMany({
+      data: toCreate.map((recipientUserId) => ({
+        recipientUserId,
+        kind: 'community_group_post' as const,
+        actorUserId,
+        subjectPostId: postId,
+        subjectGroupId: groupId,
+        createdAt: now,
+      })),
+      skipDuplicates: true,
+    });
+
+    // Emit groups:unreadChanged per recipient (best-effort, fire-and-forget).
+    for (const recipientUserId of toCreate) {
+      void this.readState.emitGroupsUnreadForUser(recipientUserId);
+    }
   }
 }

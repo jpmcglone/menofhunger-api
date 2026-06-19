@@ -1242,7 +1242,11 @@ describe('PostsService.runPostCreateSideEffects — mention privacy gating', () 
     expect(deps.prisma.communityGroup.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'g1' } }),
     );
-    expect(deps.prisma.communityGroupMember.findMany).not.toHaveBeenCalled();
+    // For open groups, findMany must NOT be called for mention-gating (userId.in check).
+    // The badge fan-out may call findMany with a different shape (userId.not).
+    const mentionGatingCalls = (deps.prisma.communityGroupMember.findMany as jest.Mock).mock.calls
+      .filter((c: any[]) => Array.isArray(c[0]?.where?.userId?.in));
+    expect(mentionGatingCalls).toHaveLength(0);
     const mentionCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
       (c) => c[0]?.kind === 'mention',
     );
@@ -1445,7 +1449,11 @@ describe('PostsService.runPostCreateSideEffects — group notification gating', 
       (c) => c[0]?.kind === 'mention',
     );
     expect(mentionCalls.map((c) => c[0].recipientUserId)).toEqual(['outside-mentioned']);
-    expect(deps.prisma.communityGroupMember.findMany).not.toHaveBeenCalled();
+    // For open groups, findMany must NOT be called for mention-gating (userId.in check).
+    // The badge fan-out may call findMany with a different shape (userId.not).
+    const mentionGatingCalls = (deps.prisma.communityGroupMember.findMany as jest.Mock).mock.calls
+      .filter((c: any[]) => Array.isArray(c[0]?.where?.userId?.in));
+    expect(mentionGatingCalls).toHaveLength(0);
   });
 
   it('suppresses non-member mentions in open groups when the post is not public', async () => {

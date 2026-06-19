@@ -124,6 +124,10 @@ export class PresenceRealtimeService {
     this.emitToUser(userId, 'notifications:waitingCountChanged', payload);
   }
 
+  emitGroupsUnreadChanged(userId: string, payload: { total: number; byGroupId: Record<string, number> }): void {
+    this.emitToUser(userId, 'groups:unreadChanged', payload);
+  }
+
   emitNotificationNew(userId: string, payload: NotificationsNewPayloadDto): void {
     this.emitToUser(userId, 'notifications:new', payload);
   }

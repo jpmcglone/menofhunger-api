@@ -190,6 +190,18 @@ export class NotificationsService {
     return this.readState.markConversationMessageNotificationRead(...args);
   }
 
+  getGroupsUnread(...args: Parameters<NotificationReadStateService['getGroupsUnread']>) {
+    return this.readState.getGroupsUnread(...args);
+  }
+
+  markGroupPostsDelivered(...args: Parameters<NotificationReadStateService['markGroupPostsDelivered']>) {
+    return this.readState.markGroupPostsDelivered(...args);
+  }
+
+  createGroupPostBadgeNotifications(...args: Parameters<NotificationWriterService['createGroupPostBadgeNotifications']>) {
+    return this.writer.createGroupPostBadgeNotifications(...args);
+  }
+
   // ── Preferences ────────────────────────────────────────────────────────────
 
   getPreferences(...args: Parameters<NotificationPreferencesService['getPreferences']>) {

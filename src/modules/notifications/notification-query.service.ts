@@ -93,10 +93,10 @@ export class NotificationQueryService {
       where: {
         recipientUserId,
         ...(kind === 'other'
-          ? { kind: { notIn: [...PRIMARY_NOTIFICATION_KINDS, 'message' as const] } }
+          ? { kind: { notIn: [...PRIMARY_NOTIFICATION_KINDS, 'message' as const, 'community_group_post' as const] } }
           : kind
             ? { kind }
-            : { kind: { not: 'message' as const } }),
+            : { kind: { notIn: ['message' as const, 'community_group_post' as const] } }),
         ...(blockedActorIds.length > 0 ? { NOT: { actorUserId: { in: blockedActorIds } } } : {}),
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },

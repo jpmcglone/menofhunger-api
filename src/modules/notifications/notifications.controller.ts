@@ -358,6 +358,37 @@ export class NotificationsController {
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
+      limit: rateLimitLimit('publicRead', 240),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @Get('groups-unread')
+  async groupsUnread(@CurrentUserId() userId: string) {
+    const data = await this.notifications.getGroupsUnread(userId);
+    return { data };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('groups/:groupId/mark-delivered')
+  async markGroupPostsDelivered(
+    @CurrentUserId() userId: string,
+    @Param('groupId') groupId: string,
+  ) {
+    const gid = (groupId ?? '').trim();
+    if (!gid) return { data: {} };
+    await this.notifications.markGroupPostsDelivered(userId, gid);
+    return { data: {} };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
       limit: rateLimitLimit('interact', 180),
       ttl: rateLimitTtl('interact', 60),
     },
