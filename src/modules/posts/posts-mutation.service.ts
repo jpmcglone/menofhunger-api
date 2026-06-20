@@ -1717,8 +1717,10 @@ export class PostsMutationService {
       }
 
       // Follower notifications + feed:newPost realtime emit (top-level only).
+      // Group posts are excluded from home feeds; the Groups badge (community_group_post
+      // notification row) is the only signal for new group activity on followers' home surfaces.
       const feedFollowerIds: string[] = [];
-      if (visibility !== 'onlyMe') {
+      if (!postCommunityGroupId && visibility !== 'onlyMe') {
         try {
           const follows = await this.prisma.follow.findMany({
             where: { followingId: userId },

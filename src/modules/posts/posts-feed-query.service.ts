@@ -267,19 +267,9 @@ export class PostsFeedQueryService {
       return { posts: [], nextCursor: null };
     }
 
-    // Home chronological feeds should include the viewer's member-group posts:
-    // - All: any post in a group the viewer is actively in.
-    // - Following: posts by followed authors/self, including inside those groups.
-    // Keep author-filtered feeds (profile/crew/explore shapes) on the global-only
-    // contract so group posts do not leak into unrelated surfaces.
-    const canIncludeMemberGroupPosts = Boolean(viewerUserId && !authorUserIds?.length);
-    const memberGroupIds = canIncludeMemberGroupPosts
-      ? await this.listActiveCommunityGroupIdsForUser(viewerUserId!)
-      : [];
-    const communityScopeWhere: Prisma.PostWhereInput =
-      memberGroupIds.length > 0
-        ? { OR: [excludeCommunityGroupPostsWhere(), { communityGroupId: { in: memberGroupIds } }] }
-        : excludeCommunityGroupPostsWhere();
+    // Group posts are excluded from all home feeds; they appear only on the group wall
+    // and permalink (/p/:id). The Groups badge is the primary signal for new group activity.
+    const communityScopeWhere: Prisma.PostWhereInput = excludeCommunityGroupPostsWhere();
 
     // Exclude the viewer's own posts from home feeds (Following + All) unless the feed
     // is explicitly scoped to a set of author IDs (e.g. profile view, crew feed),
@@ -1038,8 +1028,11 @@ export class PostsFeedQueryService {
     const groupSince = new Date(Date.now() - POSTS_RANKING.forYouGroupWindowHours * 60 * 60 * 1000);
     const engagedWithSince = new Date(Date.now() - POSTS_RANKING.forYouEngagedWithWindowDays * 24 * 60 * 60 * 1000);
     const directNetworkExcludedIds = [...new Set([...(viewerUserId ? [viewerUserId] : []), ...viewerFollowingIds, ...blockedAuthorIds])];
-    const memberGroupIds = viewerUserId ? await this.listActiveCommunityGroupIdsForUser(viewerUserId) : [];
-    const viewerCanReadOpenGroups = this.viewerContextService.isVerified(viewer);
+    // Group posts are excluded from home feeds. These lanes are intentionally dormant:
+    // memberGroupIds and viewerCanReadOpenGroups are forced to empty/false so the
+    // member-group and open-follow-group candidate queries (below) always resolve to [].
+    const memberGroupIds: string[] = [];
+    const viewerCanReadOpenGroups = false;
     const secondDegreePathCountByAuthor = new Map<string, number>();
     if (viewerFollowingIds.length > 0) {
       const secondDegreeRows = await this.prisma.follow.findMany({
@@ -2065,10 +2058,9 @@ export class PostsFeedQueryService {
       return { posts: [], nextCursor: null, scoreByPostId: new Map() };
     }
 
-    const canIncludeMemberGroupPosts = Boolean(viewerUserId && !requestedAuthorUserIds?.length);
-    const memberGroupIds = canIncludeMemberGroupPosts
-      ? await this.listActiveCommunityGroupIdsForUser(viewerUserId!)
-      : [];
+    // Group posts are excluded from all home feeds. Pass an empty array so
+    // listPopularFeedFromScore always resolves communityScopeWhere to excludeCommunityGroupPostsWhere().
+    const memberGroupIds: string[] = [];
 
     const visibilityWhere =
       visibility === 'all'

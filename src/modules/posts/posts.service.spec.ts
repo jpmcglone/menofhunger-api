@@ -212,61 +212,35 @@ describe('PostsService.listFeed', () => {
     });
   }
 
-  function findCommunityScope(where: any): any {
-    const ands: any[] = where?.AND ?? [];
-    return ands.find((part) =>
-      Array.isArray(part?.OR) &&
-      part.OR.some((item: any) => item?.communityGroupId === null) &&
-      part.OR.some((item: any) => Array.isArray(item?.communityGroupId?.in)),
-    );
-  }
-
-  function isCommunityScope(part: any): boolean {
-    return Array.isArray(part?.OR) &&
-      part.OR.some((item: any) => item?.communityGroupId === null) &&
-      part.OR.some((item: any) => Array.isArray(item?.communityGroupId?.in));
-  }
-
-  it('includes active member-group posts in the home All chronological feed', async () => {
+  it('excludes group posts from the home All chronological feed', async () => {
     const { service, post, communityGroupMember } = setup(['group-1', 'group-2']);
 
     await listHomeFeed(service);
 
-    expect(communityGroupMember.findMany).toHaveBeenCalledWith({
-      where: { userId: 'viewer', status: 'active' },
-      select: { groupId: true },
-    });
+    expect(communityGroupMember.findMany).not.toHaveBeenCalled();
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
-    expect(findCommunityScope(where)).toEqual({
-      OR: [
-        { communityGroupId: null },
-        { communityGroupId: { in: ['group-1', 'group-2'] } },
-      ],
-    });
+    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+    // Must NOT include an OR-clause that lets member-group posts through.
+    expect((where?.AND ?? []).some((part: any) =>
+      Array.isArray(part?.OR) && part.OR.some((item: any) => Array.isArray(item?.communityGroupId?.in)),
+    )).toBe(false);
   });
 
-  it('includes followed authors inside active member groups in the home Following chronological feed', async () => {
+  it('excludes group posts from the home Following chronological feed', async () => {
     const { service, post } = setup(['group-1']);
 
     await listHomeFeed(service, { followingOnly: true });
 
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
-    expect(findCommunityScope(where)).toEqual({
-      OR: [
-        { communityGroupId: null },
-        { communityGroupId: { in: ['group-1'] } },
-      ],
-    });
+    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+    // Must NOT include an OR-clause that lets member-group posts through.
+    expect((where?.AND ?? []).some((part: any) =>
+      Array.isArray(part?.OR) && part.OR.some((item: any) => Array.isArray(item?.communityGroupId?.in)),
+    )).toBe(false);
     // Viewer is excluded from results; only followed authors' posts appear.
     expect((where?.AND ?? [])).toContainEqual({ NOT: { userId: 'viewer' } });
     expect((where?.AND ?? [])).toContainEqual({
       user: { followers: { some: { followerId: 'viewer' } } },
-    });
-    expect((where?.AND ?? [])).not.toContainEqual({
-      OR: [
-        { userId: 'viewer' },
-        { user: { followers: { some: { followerId: 'viewer' } } } },
-      ],
     });
   });
 
@@ -280,7 +254,7 @@ describe('PostsService.listFeed', () => {
     expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
   });
 
-  it('includes active member-group posts in the home All trending feed', async () => {
+  it('excludes group posts from the home All trending feed', async () => {
     const { service, post, communityGroupMember } = setup(['group-1', 'group-2']);
 
     await service.listPopularFeed({
@@ -291,17 +265,15 @@ describe('PostsService.listFeed', () => {
       followingOnly: false,
     });
 
-    expect(communityGroupMember.findMany).toHaveBeenCalledWith({
-      where: { userId: 'viewer', status: 'active' },
-      select: { groupId: true },
-    });
+    expect(communityGroupMember.findMany).not.toHaveBeenCalled();
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
-    const communityScope = (where?.AND ?? []).find(isCommunityScope);
-    expect(communityScope).toBeTruthy();
-    expect(communityScope.OR[1]).toEqual({ communityGroupId: { in: ['group-1', 'group-2'] } });
+    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+    expect((where?.AND ?? []).some((part: any) =>
+      Array.isArray(part?.OR) && part.OR.some((item: any) => Array.isArray(item?.communityGroupId?.in)),
+    )).toBe(false);
   });
 
-  it('includes followed authors inside active member groups in the home Following trending feed', async () => {
+  it('excludes group posts from the home Following trending feed', async () => {
     const { service, post } = setup(['group-1']);
 
     await service.listPopularFeed({
@@ -313,7 +285,7 @@ describe('PostsService.listFeed', () => {
     });
 
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
-    expect((where?.AND ?? []).some(isCommunityScope)).toBe(true);
+    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
     // Viewer is excluded from the author scope — only followed authors' posts appear.
     expect(where?.AND ?? []).toContainEqual({ userId: { in: ['followed-author'] } });
     expect(where?.AND ?? []).not.toContainEqual({ userId: { in: ['viewer', 'followed-author'] } });
@@ -1380,7 +1352,7 @@ describe('PostsService.runPostCreateSideEffects — group notification gating', 
     });
   }
 
-  it('creates followed_post notifications and feed inserts only for active members of the post group', async () => {
+  it('skips followed_post notifications and emitFeedNewPost for top-level group posts', async () => {
     const { service, deps } = setup(['member-follower']);
     deps.prisma.follow.findMany.mockResolvedValue([
       { followerId: 'member-follower', follower: { verifiedStatus: 'identity', premium: false, premiumPlus: false } },
@@ -1394,11 +1366,9 @@ describe('PostsService.runPostCreateSideEffects — group notification gating', 
     const followedPostCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
       (c) => c[0]?.kind === 'followed_post',
     );
-    expect(followedPostCalls.map((c) => c[0].recipientUserId)).toEqual(['member-follower']);
-    expect(deps.presenceRealtime.emitFeedNewPost).toHaveBeenCalledWith(
-      ['member-follower'],
-      expect.objectContaining({ post: expect.objectContaining({ id: 'post-1' }) }),
-    );
+    // Group posts no longer send followed_post notifications or home-feed pushes.
+    expect(followedPostCalls).toHaveLength(0);
+    expect(deps.presenceRealtime.emitFeedNewPost).not.toHaveBeenCalled();
   });
 
   it('suppresses reply notifications for non-members of the post group', async () => {
@@ -2386,92 +2356,29 @@ describe('PostsService.listForYouFeed', () => {
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-direct-follow', 'p-second-degree', 'p-stranger']);
   });
 
-  it('mixes readable member-group posts into For You using relationship scoring', async () => {
-    const memberGroupPost = cand('p-member-group', 'u-group-follow', 10, 1);
-    memberGroupPost.communityGroupId = 'g-member';
+  it('excludes group posts from For You even when memberGroupIds would have matched', async () => {
+    // All candidates belong to groups — none should surface in the For You feed.
+    const memberPost = cand('p-member-group', 'u-group-follow', 10, 1);
+    memberPost.communityGroupId = 'g-member';
+    const openPost = cand('p-open-group', 'u-open-follow', 10, 1);
+    openPost.communityGroupId = 'g-open';
     const { service } = setupForYou({
       candidates: [
         cand('p-direct-follow', 'u-direct-follow', 10, 1),
-        memberGroupPost,
+        memberPost,
+        openPost,
         cand('p-stranger', 'u-stranger', 10, 1),
       ],
-      youFollowAuthorIds: ['u-direct-follow', 'u-group-follow'],
+      youFollowAuthorIds: ['u-direct-follow', 'u-group-follow', 'u-open-follow'],
       memberGroupIds: ['g-member'],
     });
 
     const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
-    expect(out.posts.map((p: any) => p.id)).toEqual(['p-direct-follow', 'p-member-group', 'p-stranger']);
-  });
-
-  it('orders member-group posts by mutual, following, follower, then stranger relationship', async () => {
-    const mutual = cand('p-group-mutual', 'u-mutual', 10, 1);
-    const following = cand('p-group-following', 'u-following', 10, 1);
-    const follower = cand('p-group-follower', 'u-follower', 10, 1);
-    const stranger = cand('p-group-stranger', 'u-stranger', 10, 1);
-    for (const post of [mutual, following, follower, stranger]) {
-      post.communityGroupId = 'g-member';
-    }
-    const { service } = setupForYou({
-      candidates: [stranger, mutual, follower, following],
-      youFollowAuthorIds: ['u-mutual', 'u-following'],
-      followsYouAuthorIds: ['u-mutual', 'u-follower'],
-      memberGroupIds: ['g-member'],
-    });
-
-    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
-    expect(out.posts.map((p: any) => p.id)).toEqual([
-      'p-group-mutual',
-      'p-group-following',
-      'p-group-follower',
-      'p-group-stranger',
-    ]);
-  });
-
-  it('mixes open-group posts by followed authors only for verified viewers', async () => {
-    const openGroupPost = cand('p-open-group-follow', 'u-follow', 10, 1);
-    openGroupPost.communityGroupId = 'g-open';
-    const { service } = setupForYou({
-      candidates: [
-        openGroupPost,
-        cand('p-stranger', 'u-stranger', 10, 1),
-      ],
-      youFollowAuthorIds: ['u-follow'],
-    });
-
-    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
-    expect(out.posts.map((p: any) => p.id)).toEqual(['p-open-group-follow', 'p-stranger']);
-  });
-
-  it('downranks open-group followed-author posts below comparable non-group direct follows', async () => {
-    const openGroupPost = cand('p-open-group-follow', 'u-group-follow', 10, 1);
-    openGroupPost.communityGroupId = 'g-open';
-    const { service } = setupForYou({
-      candidates: [
-        cand('p-direct-follow', 'u-direct-follow', 10, 1),
-        openGroupPost,
-        cand('p-stranger', 'u-stranger', 10, 1),
-      ],
-      youFollowAuthorIds: ['u-direct-follow', 'u-group-follow'],
-    });
-
-    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
-    expect(out.posts.map((p: any) => p.id)).toEqual(['p-direct-follow', 'p-open-group-follow', 'p-stranger']);
-  });
-
-  it('does not include open-group followed-author posts for unverified viewers', async () => {
-    const openGroupPost = cand('p-open-group-follow', 'u-follow', 10, 1);
-    openGroupPost.communityGroupId = 'g-open';
-    const { service } = setupForYou({
-      candidates: [
-        openGroupPost,
-        cand('p-stranger', 'u-stranger', 10, 1),
-      ],
-      youFollowAuthorIds: ['u-follow'],
-      viewerVerified: false,
-    });
-
-    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
-    expect(out.posts.map((p: any) => p.id)).toEqual(['p-stranger']);
+    // Group posts are excluded; only non-group posts appear.
+    expect(out.posts.map((p: any) => p.id)).not.toContain('p-member-group');
+    expect(out.posts.map((p: any) => p.id)).not.toContain('p-open-group');
+    expect(out.posts.map((p: any) => p.id)).toContain('p-direct-follow');
+    expect(out.posts.map((p: any) => p.id)).toContain('p-stranger');
   });
 
   it('excludes blocked authors before ranking so they do not consume For You slots', async () => {
