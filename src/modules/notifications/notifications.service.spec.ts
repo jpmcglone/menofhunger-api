@@ -1033,3 +1033,68 @@ describe('NotificationWriterService.deleteBySubjectPostId — community_group_po
   });
 });
 
+// ─── upsertMarvNotInGroupNotification — rate-limit ──────────────────────────
+
+describe('NotificationWriterService.upsertMarvNotInGroupNotification', () => {
+  function makeMarvService(opts: { recentExists: boolean }) {
+    const notificationFindFirst = jest.fn(async () => opts.recentExists ? { id: 'existing' } : null);
+    const notificationCreate = jest.fn(async () => ({ id: 'new-notif' }));
+    const userUpdate = jest.fn(async () => ({ undeliveredNotificationCount: 1 }));
+    const notificationCount = jest.fn(async () => 1);
+    const presenceRealtime: any = {
+      emitNotificationsUpdated: jest.fn(),
+      emitNotificationNew: jest.fn(),
+      emitWaitingChangedForUser: jest.fn(),
+    };
+    const prisma = {
+      notification: { findFirst: notificationFindFirst, create: notificationCreate, count: notificationCount },
+      user: { update: userUpdate },
+      $transaction: jest.fn(async (cb: any) =>
+        cb({
+          notification: { create: notificationCreate, count: notificationCount },
+          user: { update: userUpdate },
+        })
+      ),
+    } as any;
+    const appConfig: any = { r2: jest.fn(() => null) };
+    const jobs: any = { enqueueCron: jest.fn() };
+    const posthog: any = { capture: jest.fn() };
+    const viewerContextService: any = {};
+    const presence: any = {};
+    const { svc, writer } = buildFacade({ prisma, appConfig, presenceRealtime, presence, jobs, posthog, viewerContextService });
+    return { svc, writer, notificationFindFirst, notificationCreate, presenceRealtime };
+  }
+
+  it('skips notification when a recent one already exists (rate limit)', async () => {
+    const { svc, notificationCreate } = makeMarvService({ recentExists: true });
+    await svc.upsertMarvNotInGroupNotification({
+      recipientUserId: 'user-1',
+      marvUserId: 'marv-1',
+      postId: 'post-1',
+      groupId: 'group-1',
+    });
+    expect(notificationCreate).not.toHaveBeenCalled();
+  });
+
+  it('creates notification when no recent one exists', async () => {
+    const { svc, notificationCreate, presenceRealtime } = makeMarvService({ recentExists: false });
+    await svc.upsertMarvNotInGroupNotification({
+      recipientUserId: 'user-1',
+      marvUserId: 'marv-1',
+      postId: 'post-1',
+      groupId: 'group-1',
+    });
+    expect(notificationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          kind: 'marv_not_in_group',
+          actorUserId: 'marv-1',
+          actorPostId: 'post-1',
+          subjectGroupId: 'group-1',
+        }),
+      }),
+    );
+    expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalled();
+  });
+});
+

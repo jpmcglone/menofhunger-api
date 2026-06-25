@@ -1920,6 +1920,34 @@ export class PostsMutationService {
             this.logger.log(`[marv] mention-detect post=${post.id} skip reason=actor_is_marv`);
           } else {
             const rootPostId = (post as { rootId?: string | null }).rootId ?? post.id;
+            const postGroupId = (post as { communityGroupId?: string | null }).communityGroupId ?? null;
+
+            // If this post is inside a community group, check whether Marv is an active member.
+            // If he isn't, send a one-time informational notification instead of a reply.
+            if (postGroupId) {
+              const marvId = resolvedMarvId ?? await this.marvIdentity.getMarvUserId();
+              if (marvId) {
+                const marvMembership = await this.prisma.communityGroupMember.findUnique({
+                  where: { groupId_userId: { groupId: postGroupId, userId: marvId } },
+                  select: { status: true },
+                });
+                const marvIsGroupMember = marvMembership?.status === 'active';
+
+                if (!marvIsGroupMember) {
+                  this.logger.log(
+                    `[marv] mention-detect post=${post.id} skip reason=marv_not_in_group groupId=${postGroupId}`,
+                  );
+                  void this.notifications.upsertMarvNotInGroupNotification({
+                    recipientUserId: actorUserId,
+                    marvUserId: marvId,
+                    postId: post.id,
+                    groupId: postGroupId,
+                  });
+                  return;
+                }
+              }
+            }
+
             this.logger.log(
               `[marv] mention-detect post=${post.id} HIT enqueueing root=${rootPostId} actor=${actorUserId} requestedMode=${requestedMarvMode ?? 'null'}`,
             );

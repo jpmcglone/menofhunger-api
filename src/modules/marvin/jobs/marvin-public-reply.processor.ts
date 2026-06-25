@@ -143,6 +143,7 @@ export class MarvinPublicReplyProcessor {
         visibility: true,
         rootId: true,
         userId: true,
+        communityGroupId: true,
         user: {
           select: { id: true, username: true, name: true, premium: true, premiumPlus: true, bannedAt: true },
         },
@@ -200,6 +201,24 @@ export class MarvinPublicReplyProcessor {
         latencyMs: Date.now() - startedAt,
       });
       return;
+    }
+
+    // Group posts: Marv only replies when he is an active member (gate also runs at enqueue time).
+    const postGroupId = (post.communityGroupId ?? '').trim() || null;
+    if (postGroupId) {
+      const marvId = this.identity.cachedMarvUserId() ?? (await this.identity.getMarvUserId());
+      if (marvId) {
+        const marvMembership = await this.prisma.communityGroupMember.findUnique({
+          where: { groupId_userId: { groupId: postGroupId, userId: marvId } },
+          select: { status: true },
+        });
+        if (marvMembership?.status !== 'active') {
+          this.logger.log(
+            `[marv] public-reply EXIT reason=marv_not_in_group post=${postId} groupId=${postGroupId}`,
+          );
+          return;
+        }
+      }
     }
 
     const requesterIsPremium = Boolean(post.user.premium || post.user.premiumPlus);
@@ -432,7 +451,7 @@ export class MarvinPublicReplyProcessor {
       ? this.startTypingHeartbeat({ postId, marvUserId: marvUserIdForTyping })
       : { stop: () => {} };
 
-    let aiResult: Awaited<ReturnType<typeof this.ai.respond>> | null = null;
+    let aiResult: Awaited<ReturnType<MarvinAIService['respond']>> | null = null;
     try {
       aiResult = await this.ai.respond({
         source: 'public_thread',
@@ -555,7 +574,7 @@ export class MarvinPublicReplyProcessor {
       );
     }
 
-    let postSpend: Awaited<ReturnType<typeof this.credits.spend>> | null = null;
+    let postSpend: Awaited<ReturnType<MarvinCreditService['spend']>> | null = null;
     try {
       postSpend = await this.credits.spend(requestingUserId, totalCost, {
         recentSummary: { credits: summary.credits, lastRefilledAt: summary.lastRefilledAt },

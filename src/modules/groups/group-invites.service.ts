@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { toUserListDto, type UserListRow } from '../../common/dto/user.dto';
 import {
@@ -40,6 +41,7 @@ export class GroupInvitesService {
     private readonly appConfig: AppConfigService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly notifications: NotificationsService,
+    private readonly marvIdentity: MarvinBotIdentityService,
   ) {}
 
   // ---------- internals ----------
@@ -294,6 +296,55 @@ export class GroupInvitesService {
       throw new ConflictException(
         'That person already has a pending join request — approve them instead.',
       );
+    }
+
+    // If the invitee is Marv, auto-accept: add him as an active member immediately
+    // and return a synthetic accepted invite DTO instead of creating a pending invite.
+    const marvId = this.marvIdentity.cachedMarvUserId() ?? await this.marvIdentity.getMarvUserId();
+    if (marvId && inviteeId === marvId) {
+      const now = new Date();
+      // Upsert active member row and resolve any existing invite row.
+      const inviteRow = await this.prisma.$transaction(async (tx) => {
+        if (existingMember) {
+          await tx.communityGroupMember.update({
+            where: { groupId_userId: { groupId: params.groupId, userId: marvId } },
+            data: { status: 'active', role: 'member' },
+          });
+        } else {
+          await tx.communityGroupMember.create({
+            data: { groupId: params.groupId, userId: marvId, role: 'member', status: 'active' },
+          });
+          await tx.communityGroup.update({
+            where: { id: params.groupId },
+            data: { memberCount: { increment: 1 } },
+          });
+        }
+        // Resolve any pre-existing invite row, or create a synthetic accepted one.
+        const existingInvite = await tx.communityGroupInvite.findUnique({
+          where: { groupId_inviteeUserId: { groupId: params.groupId, inviteeUserId: marvId } },
+        });
+        if (existingInvite) {
+          return tx.communityGroupInvite.update({
+            where: { id: existingInvite.id },
+            data: { status: 'accepted', respondedAt: now },
+            include: INVITE_INCLUDE,
+          });
+        }
+        return tx.communityGroupInvite.create({
+          data: {
+            groupId: params.groupId,
+            invitedByUserId: params.viewerUserId,
+            inviteeUserId: marvId,
+            message: null,
+            status: 'accepted',
+            expiresAt: this.expiryDate(),
+            respondedAt: now,
+          },
+          include: INVITE_INCLUDE,
+        });
+      });
+      const dto = this.toDto(inviteRow);
+      return { invite: dto, resent: false, notified: false };
     }
 
     const trimmedNote = (params.message ?? '').trim().slice(0, 500) || null;

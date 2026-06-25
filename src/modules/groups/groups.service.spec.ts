@@ -45,8 +45,10 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
   const notifications: any = {};
   const redis: any = {};
 
-  const service = new GroupsService(prisma, posts, appConfig, notifications, redis);
-  return { service, prisma };
+  const marvIdentity: any = { cachedMarvUserId: jest.fn(() => null), getMarvUserId: jest.fn(async () => null) };
+  const presenceRealtime: any = { emitGroupMarvChanged: jest.fn() };
+  const service = new GroupsService(prisma, posts, appConfig, notifications, redis, marvIdentity, presenceRealtime);
+  return { service, prisma, presenceRealtime };
 }
 
 describe('GroupsService.join — verification gate', () => {
@@ -905,5 +907,175 @@ describe('GroupsService.listExploreSpotlight', () => {
       { memberCount: { lt: 10 } },
       { memberCount: 10, id: { lt: 'p3' } },
     ]);
+  });
+});
+
+// ─── addMarvToGroup ───────────────────────────────────────────────────────────
+
+describe('GroupsService.addMarvToGroup', () => {
+  function setup(opts: {
+    viewerRole?: string;
+    groupExists?: boolean;
+    marvId?: string | null;
+    marvMemberStatus?: string | null;
+  }) {
+    const viewerRole = opts.viewerRole ?? 'owner';
+    const groupExists = opts.groupExists ?? true;
+    const marvId = opts.marvId ?? 'marv-1';
+    const marvMemberStatus = opts.marvMemberStatus ?? null;
+
+    const marvMemberFindUnique = jest.fn(async ({ where }: any) => {
+      if (where.groupId_userId.userId === marvId) {
+        return marvMemberStatus ? { status: marvMemberStatus } : null;
+      }
+      return null;
+    });
+
+    const memberFindUniqueSpy = jest.fn(async ({ where }: any) => {
+      // assertModOrOwner query
+      if (where.groupId_userId.userId === 'actor-1') {
+        return { role: viewerRole, status: 'active' };
+      }
+      // marv query
+      return marvMemberFindUniqueSpy({ where });
+    });
+    const marvMemberFindUniqueSpy = marvMemberFindUnique;
+
+    const memberCreate = jest.fn();
+    const memberUpdate = jest.fn();
+    const groupUpdate = jest.fn(async () => FAKE_GROUP);
+    const inviteUpdateMany = jest.fn();
+
+    const transactionFn = jest.fn(async (cb: any) =>
+      cb({
+        communityGroupMember: {
+          findUnique: jest.fn(async () => marvMemberStatus ? { status: marvMemberStatus } : null),
+          create: memberCreate,
+          update: memberUpdate,
+        },
+        communityGroup: { update: groupUpdate },
+        communityGroupInvite: { updateMany: inviteUpdateMany },
+      })
+    );
+
+    const marvIdentityLocal: any = {
+      cachedMarvUserId: jest.fn(() => marvId),
+      getMarvUserId: jest.fn(async () => marvId),
+    };
+
+    const prisma: any = {
+      communityGroup: {
+        findFirst: jest.fn(async () => groupExists ? { ...FAKE_GROUP } : null),
+      },
+      communityGroupMember: { findUnique: memberFindUniqueSpy },
+      $queryRaw: jest.fn(async () => []),
+      $transaction: transactionFn,
+    };
+    const posts: any = {};
+    const appConfig: any = { r2: jest.fn(() => null), marvBot: jest.fn(() => ({ enabled: true })) };
+    const notifications: any = {};
+    const redis: any = {};
+    const presenceRealtime: any = { emitGroupMarvChanged: jest.fn() };
+    const service = new GroupsService(prisma, posts, appConfig, notifications, redis, marvIdentityLocal, presenceRealtime);
+    return { service, memberCreate, memberUpdate, groupUpdate, inviteUpdateMany, transactionFn, presenceRealtime };
+  }
+
+  it('returns ok when Marv is already an active member (idempotent)', async () => {
+    const { service } = setup({ marvMemberStatus: 'active' });
+    const result = await service.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' });
+    expect(result).toEqual({ data: { ok: true } });
+  });
+
+  it('throws ForbiddenException when actor is not owner/mod', async () => {
+    const { service } = setup({ viewerRole: 'member' });
+    await expect(
+      service.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' }),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('creates a new active member row when Marv is not a member', async () => {
+    const { service, memberCreate, groupUpdate } = setup({ marvMemberStatus: null });
+    const result = await service.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' });
+    expect(result).toEqual({ data: { ok: true } });
+    expect(memberCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'active', role: 'member' }),
+      }),
+    );
+    expect(groupUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { memberCount: { increment: 1 } } }),
+    );
+  });
+
+  it('emits groups:marv-changed with isMember=true after adding Marv', async () => {
+    const { service, presenceRealtime } = setup({ marvMemberStatus: null });
+    await service.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' });
+    expect(presenceRealtime.emitGroupMarvChanged).toHaveBeenCalledWith('g1', { groupId: 'g1', isMember: true });
+  });
+
+  it('does NOT emit groups:marv-changed when Marv is already active (early return)', async () => {
+    const { service, presenceRealtime } = setup({ marvMemberStatus: 'active' });
+    await service.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' });
+    expect(presenceRealtime.emitGroupMarvChanged).not.toHaveBeenCalled();
+  });
+});
+
+// ─── removeMember — Marv realtime ─────────────────────────────────────────────
+
+describe('GroupsService.removeMember — Marv realtime', () => {
+  const MARV_ID = 'marv-user-1';
+  const MEMBER_ID = 'regular-member-1';
+
+  function setupRemove(_opts: { targetUserId: string }) {
+    const marvIdentityLocal: any = {
+      cachedMarvUserId: jest.fn(() => MARV_ID),
+      getMarvUserId: jest.fn(async () => MARV_ID),
+    };
+    const presenceRealtime: any = { emitGroupMarvChanged: jest.fn() };
+    const notifications: any = { upsertGroupMemberRemovedNotification: jest.fn(async () => undefined) };
+
+    const memberFindUnique = jest.fn(async ({ where }: any) => {
+      const uid = where.groupId_userId.userId;
+      if (uid === 'actor-1') return { role: 'owner', status: 'active' };
+      return { role: 'member', status: 'active' };
+    });
+    const memberDelete = jest.fn(async () => undefined);
+    const groupUpdate = jest.fn(async () => FAKE_GROUP);
+
+    const prisma: any = {
+      communityGroup: { findFirst: jest.fn(async () => FAKE_GROUP), update: groupUpdate },
+      communityGroupMember: { findUnique: memberFindUnique, delete: memberDelete },
+      $transaction: jest.fn(async (cb: any) =>
+        cb({
+          communityGroupMember: { delete: memberDelete },
+          communityGroup: { update: groupUpdate },
+        }),
+      ),
+      $queryRaw: jest.fn(async () => []),
+    };
+
+    const posts: any = {};
+    const appConfig: any = { r2: jest.fn(() => null) };
+    const redis: any = {};
+    const service = new GroupsService(prisma, posts, appConfig, notifications, redis, marvIdentityLocal, presenceRealtime);
+    return { service, presenceRealtime, notifications };
+  }
+
+  it('emits groups:marv-changed with isMember=false when Marv is removed', async () => {
+    const { service, presenceRealtime } = setupRemove({ targetUserId: MARV_ID });
+    await service.removeMember({ viewerUserId: 'actor-1', groupId: 'g1', userId: MARV_ID });
+    expect(presenceRealtime.emitGroupMarvChanged).toHaveBeenCalledWith('g1', { groupId: 'g1', isMember: false });
+  });
+
+  it('does NOT emit groups:marv-changed when a regular member is removed', async () => {
+    const { service, presenceRealtime } = setupRemove({ targetUserId: MEMBER_ID });
+    await service.removeMember({ viewerUserId: 'actor-1', groupId: 'g1', userId: MEMBER_ID });
+    expect(presenceRealtime.emitGroupMarvChanged).not.toHaveBeenCalled();
+  });
+
+  it('does NOT send a removal notification when Marv is removed', async () => {
+    const { service, notifications } = setupRemove({ targetUserId: MARV_ID });
+    await service.removeMember({ viewerUserId: 'actor-1', groupId: 'g1', userId: MARV_ID });
+    expect(notifications.upsertGroupMemberRemovedNotification).not.toHaveBeenCalled();
   });
 });

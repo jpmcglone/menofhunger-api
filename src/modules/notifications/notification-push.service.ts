@@ -95,6 +95,9 @@ export class NotificationPushService {
       kind === 'community_group_invite_declined' ||
       kind === 'community_group_invite_cancelled'
     ) return Boolean(prefs.pushGroupActivity);
+    // marv_not_in_group is an informational notice, not an action the user needs to
+    // act on urgently — skip push to avoid noise.
+    if (kind === 'marv_not_in_group') return false;
     // Non-mapped kinds pass through default (allow).
     return true;
   }

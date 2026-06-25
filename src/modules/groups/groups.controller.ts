@@ -369,6 +369,12 @@ export class GroupsController {
   }
 
   @UseGuards(AuthGuard)
+  @Post(':groupId/marv')
+  async addMarv(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string) {
+    return await this.groups.addMarvToGroup({ viewerUserId, groupId });
+  }
+
+  @UseGuards(AuthGuard)
   @Post(':groupId/members/:userId/promote-moderator')
   async promote(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
     const u = await this.prisma.user.findUnique({

@@ -13,7 +13,8 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
   const appConfig: any = { r2: jest.fn(() => null) };
   const presenceRealtime: any = {};
   const notifications: any = {};
-  const service = new GroupInvitesService(prisma, appConfig, presenceRealtime, notifications);
+  const marvIdentity: any = { cachedMarvUserId: jest.fn(() => null), getMarvUserId: jest.fn(async () => null) };
+  const service = new GroupInvitesService(prisma, appConfig, presenceRealtime, notifications, marvIdentity);
   return { service, prisma };
 }
 

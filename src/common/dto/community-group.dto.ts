@@ -49,6 +49,11 @@ export type CommunityGroupShellDto = {
   pendingMemberCount?: number;
   /** Number of pending outbound invites issued for this group. Only populated for owners and moderators. */
   pendingInviteCount?: number;
+  /**
+   * Marv bot membership status for this group. Only populated on the full shell
+   * (getShellBySlug); null when Marv is not configured on this server.
+   */
+  marv?: { userId: string; username: string | null; isMember: boolean } | null;
 };
 
 export type CommunityGroupMemberUserDto = {

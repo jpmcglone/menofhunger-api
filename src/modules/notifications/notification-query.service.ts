@@ -43,6 +43,7 @@ export class NotificationQueryService {
     if (n.kind === 'comment') return (n.actorPostId ?? '').trim() || null;
     if (n.kind === 'mention') return (n.actorPostId ?? '').trim() || null;
     if (n.kind === 'repost') return (n.actorPostId ?? n.subjectPostId ?? '').trim() || null;
+    // marv_not_in_group navigates via actorPostId on the DTO; no embedded post row.
     return null;
   }
 

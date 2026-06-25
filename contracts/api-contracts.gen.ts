@@ -23,7 +23,7 @@ export type FeedbackStatus = 'new' | 'triaged' | 'resolved'
 export type FollowVisibility = 'none' | 'all' | 'verified' | 'premium'
 export type MessageParticipantRole = 'owner' | 'member'
 export type MessageParticipantStatus = 'pending' | 'accepted'
-export type NotificationKind = 'comment' | 'boost' | 'repost' | 'follow' | 'followed_post' | 'followed_article' | 'mention' | 'nudge' | 'poll_results_ready' | 'generic' | 'coin_transfer' | 'message' | 'group_join_request' | 'community_group_member_joined' | 'community_group_join_approved' | 'community_group_join_rejected' | 'community_group_member_removed' | 'community_group_disbanded' | 'crew_invite_received' | 'crew_invite_accepted' | 'crew_invite_declined' | 'crew_invite_cancelled' | 'crew_member_joined' | 'crew_member_left' | 'crew_member_kicked' | 'crew_owner_transferred' | 'crew_owner_transfer_vote' | 'crew_wall_mention' | 'crew_disbanded' | 'community_group_invite_received' | 'community_group_invite_accepted' | 'community_group_invite_declined' | 'community_group_invite_cancelled'
+export type NotificationKind = 'comment' | 'boost' | 'repost' | 'follow' | 'followed_post' | 'followed_article' | 'mention' | 'nudge' | 'poll_results_ready' | 'generic' | 'coin_transfer' | 'message' | 'group_join_request' | 'community_group_member_joined' | 'community_group_join_approved' | 'community_group_join_rejected' | 'community_group_member_removed' | 'community_group_disbanded' | 'crew_invite_received' | 'crew_invite_accepted' | 'crew_invite_declined' | 'crew_invite_cancelled' | 'crew_member_joined' | 'crew_member_left' | 'crew_member_kicked' | 'crew_owner_transferred' | 'crew_owner_transfer_vote' | 'crew_wall_mention' | 'crew_disbanded' | 'community_group_invite_received' | 'community_group_invite_accepted' | 'community_group_invite_declined' | 'community_group_invite_cancelled' | 'marv_not_in_group'
 export type PostMediaKind = 'image' | 'gif' | 'video'
 export type PostMediaSource = 'upload' | 'giphy'
 export type PostVisibility = 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe'
@@ -610,6 +610,8 @@ export type CommunityGroupShellDto = {
   pendingMemberCount?: number;
   /** Number of pending outbound invites issued for this group. Only populated for owners and moderators. */
   pendingInviteCount?: number;
+  /** Marv bot membership status. Only populated on getShellBySlug; null when Marv is not configured. */
+  marv?: { userId: string; username: string | null; isMember: boolean } | null;
 };
 
 export type CommunityGroupMemberUserDto = {

@@ -116,6 +116,10 @@ export class NotificationsService {
     return this.writer.upsertCrewDisbandedNotification(...args);
   }
 
+  upsertMarvNotInGroupNotification(...args: Parameters<NotificationWriterService['upsertMarvNotInGroupNotification']>) {
+    return this.writer.upsertMarvNotInGroupNotification(...args);
+  }
+
   // ── Queries ────────────────────────────────────────────────────────────────
 
   list(...args: Parameters<NotificationQueryService['list']>) {

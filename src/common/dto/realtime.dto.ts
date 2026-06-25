@@ -170,6 +170,8 @@ export const WsEventNames = {
   groupsSubscribed: 'groups:subscribed',
   /** New top-level post (or repost) in a community group; pushed to the `group:{id}` room. */
   groupsNewPost: 'groups:newPost',
+  /** @marv membership changed (added/removed) in a group; pushed to the `group:{id}` room. */
+  groupsMarvChanged: 'groups:marv-changed',
   articlesSubscribe: 'articles:subscribe',
   articlesUnsubscribe: 'articles:unsubscribe',
   articlesSubscribed: 'articles:subscribed',
@@ -237,6 +239,11 @@ export type GroupsSubscribedPayloadDto = {
 export type GroupNewPostPayloadDto = {
   groupId: string;
   post: PostDto;
+};
+
+export type GroupMarvChangedPayloadDto = {
+  groupId: string;
+  isMember: boolean;
 };
 
 export type ArticlesSubscribePayloadDto = {

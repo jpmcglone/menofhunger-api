@@ -118,6 +118,7 @@ export class NotificationWriterService {
         community_group_invite_accepted: 'accepted your group invite',
         community_group_invite_declined: 'declined your group invite',
         community_group_invite_cancelled: 'cancelled their group invite',
+        marv_not_in_group: '@marv is not in this group',
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
@@ -1163,5 +1164,45 @@ export class NotificationWriterService {
     for (const recipientUserId of toCreate) {
       void this.readState.emitGroupsUnreadForUser(recipientUserId);
     }
+  }
+
+  /**
+   * Notify a user that they mentioned @marv in a group where he is not a member,
+   * so he will not respond. Rate-limited to once per hour per (user, group) pair
+   * to avoid spam if someone mentions @marv repeatedly.
+   *
+   * - actorUserId = Marv (drives his avatar on the notification row)
+   * - actorPostId = the post that triggered the mention (tap target)
+   * - subjectGroupId = the group
+   */
+  async upsertMarvNotInGroupNotification(params: {
+    recipientUserId: string;
+    marvUserId: string;
+    postId: string;
+    groupId: string;
+  }): Promise<void> {
+    const { recipientUserId, marvUserId, postId, groupId } = params;
+
+    // Rate-limit: skip if we already sent this notification for this user + group within the last hour.
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const recent = await this.prisma.notification.findFirst({
+      where: {
+        recipientUserId,
+        kind: 'marv_not_in_group',
+        subjectGroupId: groupId,
+        createdAt: { gte: oneHourAgo },
+      },
+      select: { id: true },
+    });
+    if (recent) return;
+
+    await this.create({
+      recipientUserId,
+      kind: 'marv_not_in_group',
+      actorUserId: marvUserId,
+      actorPostId: postId,
+      subjectGroupId: groupId,
+      body: "@marv is not in this group, so he won't respond. Ask an owner to add him!",
+    });
   }
 }

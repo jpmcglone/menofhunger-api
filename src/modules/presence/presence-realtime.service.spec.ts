@@ -102,3 +102,36 @@ describe('PresenceRealtimeService.emitGroupNewPost', () => {
     expect(server.to).not.toHaveBeenCalled();
   });
 });
+
+describe('PresenceRealtimeService.emitGroupMarvChanged', () => {
+  function makeRoomService() {
+    const roomEmit = jest.fn();
+    const server = { to: jest.fn().mockReturnValue({ emit: roomEmit }) };
+    const presence = {} as any;
+    const presenceRedis = { publishEmitToRoom: jest.fn().mockResolvedValue(undefined) };
+    const service = new PresenceRealtimeService(presence, presenceRedis as any);
+    service.setServer(server as any);
+    return { service, server, roomEmit, presenceRedis };
+  }
+
+  it('emits groups:marv-changed to the group room', () => {
+    const { service, server, roomEmit, presenceRedis } = makeRoomService();
+    const payload = { groupId: 'group-1', isMember: true };
+
+    service.emitGroupMarvChanged('group-1', payload);
+
+    expect(server.to).toHaveBeenCalledWith('group:group-1');
+    expect(roomEmit).toHaveBeenCalledWith('groups:marv-changed', payload);
+    expect(presenceRedis.publishEmitToRoom).toHaveBeenCalledWith({
+      room: 'group:group-1',
+      event: 'groups:marv-changed',
+      payload,
+    });
+  });
+
+  it('ignores a blank group id', () => {
+    const { service, server } = makeRoomService();
+    service.emitGroupMarvChanged('  ', { groupId: '', isMember: false });
+    expect(server.to).not.toHaveBeenCalled();
+  });
+});

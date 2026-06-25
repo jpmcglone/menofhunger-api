@@ -15,6 +15,7 @@ import type {
   CrewStreakBrokenPayloadDto,
   FeedNewPostPayloadDto,
   FollowsChangedPayloadDto,
+  GroupMarvChangedPayloadDto,
   GroupNewPostPayloadDto,
   MessagesReadPayloadDto,
   PostsLiveUpdatedPayloadDto,
@@ -283,6 +284,13 @@ export class PresenceRealtimeService {
     } else {
       this.emitToRoom(`group:${gid}`, WsEventNames.groupsNewPost, payload);
     }
+  }
+
+  /** @marv was added to or removed from a group; pushed to the `group:{id}` room. */
+  emitGroupMarvChanged(groupId: string, payload: GroupMarvChangedPayloadDto): void {
+    const gid = (groupId ?? '').trim();
+    if (!gid) return;
+    this.emitToRoom(`group:${gid}`, WsEventNames.groupsMarvChanged, payload);
   }
 
   /**

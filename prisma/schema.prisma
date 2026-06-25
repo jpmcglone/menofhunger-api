@@ -86,6 +86,7 @@ enum NotificationKind {
   community_group_invite_declined
   community_group_invite_cancelled
   community_group_post
+  marv_not_in_group
 }
 
 enum CoinTransferKind {

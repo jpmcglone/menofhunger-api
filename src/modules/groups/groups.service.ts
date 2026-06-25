@@ -18,6 +18,8 @@ import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
+import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 const FEATURED_CACHE_TTL_SECONDS = 120;
 
@@ -116,6 +118,8 @@ export class GroupsService {
     private readonly appConfig: AppConfigService,
     private readonly notifications: NotificationsService,
     private readonly redis: RedisService,
+    private readonly marvIdentity: MarvinBotIdentityService,
+    private readonly presenceRealtime: PresenceRealtimeService,
   ) {}
 
   private async ensureUniqueSlug(base: string): Promise<string> {
@@ -182,6 +186,27 @@ export class GroupsService {
       dto.pendingInviteCount = await this.prisma.communityGroupInvite.count({
         where: { groupId: g.id, status: 'pending', expiresAt: { gt: new Date() } },
       });
+    }
+
+    // Expose Marv's membership status so owner/mod UIs can render Add/Remove Marv CTAs.
+    const marvCfg = this.appConfig.marvBot();
+    if (marvCfg.enabled) {
+      const marvId = this.marvIdentity.cachedMarvUserId() ?? await this.marvIdentity.getMarvUserId();
+      if (marvId) {
+        const marvUser = await this.prisma.user.findUnique({
+          where: { id: marvId },
+          select: { username: true },
+        });
+        const marvMembership = await this.prisma.communityGroupMember.findUnique({
+          where: { groupId_userId: { groupId: g.id, userId: marvId } },
+          select: { status: true },
+        });
+        dto.marv = {
+          userId: marvId,
+          username: marvUser?.username ?? null,
+          isMember: marvMembership?.status === 'active',
+        };
+      }
     }
 
     return { data: dto };
@@ -643,12 +668,73 @@ export class GroupsService {
       });
     });
 
-    // Notify the removed user (best-effort).
-    void this.notifications.upsertGroupMemberRemovedNotification({
-      recipientUserId: params.userId,
-      groupId: params.groupId,
-      actorUserId: params.viewerUserId,
-    }).catch(() => undefined);
+    // Notify the removed user (best-effort). Skip if the removed user is the Marv
+    // bot — he's a machine; sending him a "you were removed" push is meaningless.
+    const marvId = this.marvIdentity.cachedMarvUserId();
+    if (params.userId !== marvId) {
+      void this.notifications.upsertGroupMemberRemovedNotification({
+        recipientUserId: params.userId,
+        groupId: params.groupId,
+        actorUserId: params.viewerUserId,
+      }).catch(() => undefined);
+    } else {
+      // Marv was removed — broadcast so other mods' settings pages update live.
+      this.presenceRealtime.emitGroupMarvChanged(params.groupId, { groupId: params.groupId, isMember: false });
+    }
+
+    return { data: { ok: true as const } };
+  }
+
+  /**
+   * Add Marv as an active member of a group, bypassing the normal invite flow.
+   * Owner/mod gated. Idempotent — if Marv is already an active member, returns ok.
+   * Any existing invite row for Marv in this group is transitioned to `accepted`.
+   */
+  async addMarvToGroup(params: { viewerUserId: string; groupId: string }) {
+    await this.assertModOrOwner(params.groupId, params.viewerUserId);
+
+    const group = await this.prisma.communityGroup.findFirst({
+      where: { id: params.groupId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!group) throw new NotFoundException('Group not found.');
+
+    const marvId = await this.marvIdentity.getMarvUserId();
+    if (!marvId) throw new NotFoundException('Marv is not configured on this server.');
+
+    // Upsert: create active member row; increment memberCount only when newly added.
+    const existing = await this.prisma.communityGroupMember.findUnique({
+      where: { groupId_userId: { groupId: group.id, userId: marvId } },
+      select: { status: true },
+    });
+
+    if (existing?.status === 'active') {
+      return { data: { ok: true as const } };
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (existing) {
+        await tx.communityGroupMember.update({
+          where: { groupId_userId: { groupId: group.id, userId: marvId } },
+          data: { status: 'active', role: 'member' },
+        });
+      } else {
+        await tx.communityGroupMember.create({
+          data: { groupId: group.id, userId: marvId, role: 'member', status: 'active' },
+        });
+        await tx.communityGroup.update({
+          where: { id: group.id },
+          data: { memberCount: { increment: 1 } },
+        });
+      }
+      // Resolve any outstanding invite row for Marv.
+      await tx.communityGroupInvite.updateMany({
+        where: { groupId: group.id, inviteeUserId: marvId, status: 'pending' },
+        data: { status: 'accepted', respondedAt: new Date() },
+      });
+    });
+
+    this.presenceRealtime.emitGroupMarvChanged(group.id, { groupId: group.id, isMember: true });
 
     return { data: { ok: true as const } };
   }
