@@ -5,7 +5,7 @@
 -- 1. Resolve the Marv user id from config (stored as username = 'marv').
 DO $$
 DECLARE
-  marv_id UUID;
+  marv_id TEXT;
 BEGIN
   SELECT id INTO marv_id FROM "User" WHERE username = 'marv' LIMIT 1;
   IF marv_id IS NULL THEN
