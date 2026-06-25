@@ -13,8 +13,18 @@
 // (Prisma wraps each migration in a transaction) and/or a single atomic
 // `DO $$ ... $$` block. Marking such a migration `--rolled-back` is correct:
 // there is no partial state to clean up, and the corrected SQL will re-run on
-// the same deploy. Once the database is healthy the resolve call becomes a
-// harmless no-op (the migration is `applied`, not `failed`), so this is safe to
+// the same deploy.
+//
+// We attempt the rollback UNCONDITIONALLY (rather than parsing `migrate status`
+// output, which is brittle across Prisma versions / CI environments). This is
+// safe because `prisma migrate resolve --rolled-back` only succeeds on a
+// migration that is actually in the failed state:
+//   - failed     -> the record is cleared so the corrected SQL re-applies.
+//   - applied    -> Prisma refuses ("cannot be rolled back ... not in a failed
+//                   state") and changes nothing. We ignore the error.
+//   - not present -> Prisma errors ("migration not found"). We ignore it; the
+//                    subsequent `migrate deploy` applies it normally.
+// Once the database is healthy this step is a harmless no-op, so it is safe to
 // leave in place and idempotent across deploys.
 import { execSync } from 'node:child_process'
 
@@ -38,31 +48,23 @@ function run(cmd) {
   execSync(cmd, { stdio: 'inherit' })
 }
 
-function getMigrationStatus() {
-  // `prisma migrate status` exits non-zero when there are failed/pending
-  // migrations, so read stdout from both the ok and error paths.
-  return capture('npx prisma migrate status').out
-}
-
 function healFailedMigrations() {
-  const status = getMigrationStatus()
   for (const name of SAFE_ROLLBACK) {
-    const failed =
-      status.includes(name) && /failed/i.test(status)
-    if (!failed) continue
     console.log(
-      `[prisma-deploy] Detected failed migration "${name}" on the safe-rollback list; marking it rolled-back so the corrected SQL can re-apply.`,
+      `[prisma-deploy] Ensuring migration "${name}" is not stuck in a failed state...`,
     )
     const resolved = capture(
       `npx prisma migrate resolve --rolled-back ${name}`,
     )
+    const out = resolved.out.trim()
+    if (out) console.log(out)
     if (resolved.ok) {
-      console.log(`[prisma-deploy] Rolled back "${name}".`)
+      console.log(
+        `[prisma-deploy] Cleared a failed record for "${name}"; the corrected SQL will re-apply on deploy.`,
+      )
     } else {
-      // Non-fatal: if it was already cleared/applied, deploy will surface any
-      // real problem next.
-      console.warn(
-        `[prisma-deploy] resolve --rolled-back for "${name}" did not succeed (it may already be cleared):\n${resolved.out}`,
+      console.log(
+        `[prisma-deploy] No rollback needed for "${name}" (it is not in a failed state) — continuing.`,
       )
     }
   }

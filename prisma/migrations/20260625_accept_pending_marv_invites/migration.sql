@@ -27,16 +27,16 @@ BEGIN
   SELECT DISTINCT
     cgi."groupId",
     marv_id,
-    'member',
-    'active',
+    'member'::"CommunityGroupMemberRole",
+    'active'::"CommunityGroupMemberStatus",
     NOW(),
     NOW()
   FROM   "CommunityGroupInvite" cgi
   WHERE  cgi."inviteeUserId" = marv_id
     AND  cgi.status         = 'accepted'
   ON CONFLICT ("groupId", "userId")
-  DO UPDATE SET status = 'active', "updatedAt" = NOW()
-    WHERE "CommunityGroupMember".status <> 'active';
+  DO UPDATE SET status = 'active'::"CommunityGroupMemberStatus", "updatedAt" = NOW()
+    WHERE "CommunityGroupMember".status <> 'active'::"CommunityGroupMemberStatus";
 
   -- 4. Sync memberCount for any group whose count changed.
   UPDATE "CommunityGroup" cg
