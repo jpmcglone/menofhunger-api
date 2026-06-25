@@ -4,6 +4,7 @@ import {
   MARV_CONCISENESS,
   MARV_CRISIS_SAFETY,
   MARV_DM_CONTEXT_HINT,
+  MARV_FIRST_PERSON,
   MARV_NO_PROACTIVE_OFFERS,
   MARV_THREAD_TOOL_FALLBACK,
   MARV_THREAD_TOOL_OPTIONAL,
@@ -54,6 +55,11 @@ export type MarvLinkPreview = {
   siteName?: string | null;
 };
 
+export type MarvGroupContext = {
+  name: string;
+  description: string | null;
+};
+
 export type MarvPromptInput = {
   source: MarvinSource;
   /** The user who triggered this Marv reply (mentioned @marv in a thread, or sent a DM). */
@@ -70,6 +76,12 @@ export type MarvPromptInput = {
   triggeringPostId?: string;
   /** Public-thread context only: the root post id (top of the thread). */
   rootPostId?: string;
+  /**
+   * Public-thread context only: when the thread lives inside a community group, the group's
+   * name + description. Gives Marv the venue's purpose so his reply fits the group, while he
+   * still primarily responds to what's in the thread.
+   */
+  group?: MarvGroupContext;
   /**
    * Public-thread context only: recent posts from the thread (root + replies), already
    * fetched by the processor and injected here so the model never needs a tool call to
@@ -160,10 +172,23 @@ export class MarvinPromptBuilderService {
       .filter(Boolean);
 
     const lines: string[] = [];
+    lines.push(MARV_FIRST_PERSON);
     if (input.source === 'public_thread') {
       lines.push('Source: public post thread.');
       if (input.triggeringPostId) lines.push(`Triggering post id: ${input.triggeringPostId}.`);
       if (input.rootPostId) lines.push(`Thread root post id: ${input.rootPostId}.`);
+
+      if (input.group) {
+        const groupName = input.group.name.trim();
+        const groupDescription = (input.group.description ?? '').trim();
+        lines.push(`This thread is inside the community group "${groupName}".`);
+        if (groupDescription) {
+          lines.push(`Group description: "${groupDescription.slice(0, 600)}"`);
+        }
+        lines.push(
+          'Keep your reply aligned with this group’s purpose, but still respond primarily to what is in the thread.',
+        );
+      }
 
       const hasBidirectional =
         Boolean(input.triggeringPost) ||

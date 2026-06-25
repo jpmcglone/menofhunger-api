@@ -144,6 +144,9 @@ export class MarvinPublicReplyProcessor {
         rootId: true,
         userId: true,
         communityGroupId: true,
+        communityGroup: {
+          select: { name: true, description: true, deletedAt: true },
+        },
         user: {
           select: { id: true, username: true, name: true, premium: true, premiumPlus: true, bannedAt: true },
         },
@@ -430,6 +433,10 @@ export class MarvinPublicReplyProcessor {
       currentQuestion: post.body ?? '',
       triggeringPostId: post.id,
       rootPostId,
+      group:
+        postGroupId && post.communityGroup && !post.communityGroup.deletedAt
+          ? { name: post.communityGroup.name, description: post.communityGroup.description }
+          : undefined,
       ancestors,
       triggeringPost,
       descendants,

@@ -169,6 +169,55 @@ describe('MarvinPromptBuilderService', () => {
     });
   });
 
+  describe('first-person identity instruction', () => {
+    it('tells Marv to speak in the first person on thread replies', () => {
+      const svc = makeService();
+      const built = svc.build({ ...baseInput });
+      expect(built.developerNote).toContain('first person');
+      expect(built.developerNote).toContain('M.A.R.V.');
+    });
+
+    it('tells Marv to speak in the first person on DM replies', () => {
+      const svc = makeService();
+      const built = svc.build({
+        source: 'private_session',
+        requester: { userId: 'u-1', username: 'alice', displayName: 'Alice' },
+        currentQuestion: 'hey',
+        conversationId: 'c-1',
+      });
+      expect(built.developerNote).toContain('first person');
+    });
+  });
+
+  describe('community group context rendering', () => {
+    it('includes the group name and description when the thread is in a group', () => {
+      const svc = makeService();
+      const built = svc.build({
+        ...baseInput,
+        group: { name: 'Morning Fasters', description: 'Men who fast together before sunrise.' },
+      });
+      expect(built.developerNote).toContain('community group "Morning Fasters"');
+      expect(built.developerNote).toContain('Men who fast together before sunrise.');
+      expect(built.developerNote).toContain('respond primarily to what is in the thread');
+    });
+
+    it('omits the description line when the group has no description', () => {
+      const svc = makeService();
+      const built = svc.build({
+        ...baseInput,
+        group: { name: 'Quiet Group', description: null },
+      });
+      expect(built.developerNote).toContain('community group "Quiet Group"');
+      expect(built.developerNote).not.toContain('Group description:');
+    });
+
+    it('does not mention any group when none is provided', () => {
+      const svc = makeService();
+      const built = svc.build({ ...baseInput });
+      expect(built.developerNote).not.toContain('community group');
+    });
+  });
+
   describe('userMessage passthrough', () => {
     it('trims and slices currentQuestion to 4000 chars', () => {
       const svc = makeService();
