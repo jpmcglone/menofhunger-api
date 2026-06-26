@@ -1,0 +1,16 @@
+---
+description: Delete safely by checking cross-platform callers and choosing delete, redirect, handoff, or deprecate
+alwaysApply: true
+---
+
+# Deletion and Deprecation
+
+Delete before simplifying, but do it deliberately:
+
+1. Search callers across `menofhunger-api`, `menofhunger-www`, and `menofhunger-ios`.
+2. Decide the path: delete now, redirect, web handoff, feature-flag/hide, or deprecate.
+3. Remove tests and docs only when the behavior is truly gone; otherwise update them to encode the new invariant.
+4. For API endpoints and realtime events, check web composables, iOS services/models, and socket handlers before removal.
+5. For crons/backfills, verify they do no current work before deleting the schedule and job constants.
+
+If you keep a legacy path, write why it still earns its place.

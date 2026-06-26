@@ -12,6 +12,7 @@ alwaysApply: true
 - Update `menofhunger-api/src/common/dto/**`
 - Update `menofhunger-www/types/api.ts`
 - Run `npx nuxi typecheck` + `node scripts/validate-api-types.mjs` (www)
+- If iOS consumes the response, update the matching `menofhunger-ios/MenOfHunger/**/Model` type and add/adjust a decoding test.
 
 ## Auth + admin
 - Cookie auth (HTTP-only cookies)

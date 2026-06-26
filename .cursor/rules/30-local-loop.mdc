@@ -1,0 +1,13 @@
+---
+description: Keep local and CI loops fast; add automation only after simplifying the surface
+alwaysApply: true
+---
+
+# Local Loop Discipline
+
+Do not add slow checks, watchers, prebuild hooks, generated churn, or source-mutating build steps unless they replace something or protect a proven high-risk invariant.
+
+- Prefer explicit commands for expensive checks; do not start dev servers/watchers.
+- If a check is duplicated in CI/build/prebuild, call it out and avoid adding another layer.
+- For small docs/rule/test-only changes, state which full gates are irrelevant and why.
+- Automate last: contracts, realtime events, and guardrails should preserve a simplified system, not freeze bloat in place.

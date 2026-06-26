@@ -51,6 +51,7 @@ When the same logical event happens repeatedly (re-invite, repeated boost, edite
 - Cron-driven cleanup that no UI watches (e.g. expiring old invites — covered by the next page load).
 - Internal metrics / audit logs.
 - Migrations / seed scripts.
+- Product-scoped secondary surfaces where fetch-on-open/activation is explicitly enough. If you choose this, state the product reason in the implementation/PR; don't skip emits silently.
 
 If you skip an emit because the change is "internal only", say so in the commit/PR — that's the contract that keeps the realtime surface honest.
 

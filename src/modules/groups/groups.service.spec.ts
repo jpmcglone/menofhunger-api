@@ -373,6 +373,61 @@ describe('GroupsService — owner-or-admin gates on pin / promote / demote', () 
   });
 });
 
+describe('GroupsService.listMine', () => {
+  function makeGroup(id: string, createdAt: string) {
+    return {
+      ...FAKE_GROUP,
+      id,
+      slug: id,
+      name: id,
+      createdAt: new Date(createdAt),
+    };
+  }
+
+  it('orders owned groups first, then active memberships by most recently joined', async () => {
+    const { service, prisma } = makeService();
+    prisma.communityGroupMember.findMany.mockResolvedValue([
+      {
+        groupId: 'member-new',
+        status: 'active',
+        role: 'member',
+        createdAt: new Date('2026-03-01T00:00:00Z'),
+        group: makeGroup('member-new', '2026-01-01T00:00:00Z'),
+      },
+      {
+        groupId: 'owner-old',
+        status: 'active',
+        role: 'owner',
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        group: makeGroup('owner-old', '2026-01-01T00:00:00Z'),
+      },
+      {
+        groupId: 'owner-new',
+        status: 'active',
+        role: 'owner',
+        createdAt: new Date('2026-04-01T00:00:00Z'),
+        group: makeGroup('owner-new', '2026-01-01T00:00:00Z'),
+      },
+      {
+        groupId: 'member-old',
+        status: 'active',
+        role: 'member',
+        createdAt: new Date('2026-02-01T00:00:00Z'),
+        group: makeGroup('member-old', '2026-01-01T00:00:00Z'),
+      },
+    ]);
+
+    const out = await service.listMine({ viewerUserId: 'u1' });
+
+    expect(out.data.map((g: any) => g.id)).toEqual([
+      'owner-new',
+      'owner-old',
+      'member-new',
+      'member-old',
+    ]);
+  });
+});
+
 describe('GroupsService.searchGroups', () => {
   function makeRow(over: Partial<typeof FAKE_GROUP> = {}) {
     return { ...FAKE_GROUP, ...over };
@@ -792,6 +847,64 @@ describe('GroupsService.listExploreSpotlight', () => {
 
     const out = await service.listExploreSpotlight(null);
     expect(out.data.map((g: any) => g.id)).toEqual(['r1', 'r2']);
+  });
+
+  it('orders authenticated explore rows by owner, joined recency, then group recency', async () => {
+    const findMany: any = jest.fn(async (args: any) => {
+      if (args?.where?.isFeatured) return [];
+      if (args?.orderBy?.[0]?.memberCount === 'desc') {
+        return [
+          makeRow({ id: 'nonmember-new', createdAt: new Date('2026-05-01T00:00:00Z') }),
+          makeRow({ id: 'member-new', createdAt: new Date('2026-01-01T00:00:00Z') }),
+          makeRow({ id: 'owner-old', createdAt: new Date('2026-01-01T00:00:00Z') }),
+          makeRow({ id: 'owner-new', createdAt: new Date('2026-01-01T00:00:00Z') }),
+          makeRow({ id: 'member-old', createdAt: new Date('2026-01-01T00:00:00Z') }),
+          makeRow({ id: 'nonmember-old', createdAt: new Date('2026-02-01T00:00:00Z') }),
+        ];
+      }
+      return [];
+    });
+    const memberFindMany: any = jest.fn(async () => [
+      {
+        groupId: 'owner-old',
+        status: 'active',
+        role: 'owner',
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+      },
+      {
+        groupId: 'owner-new',
+        status: 'active',
+        role: 'owner',
+        createdAt: new Date('2026-04-01T00:00:00Z'),
+      },
+      {
+        groupId: 'member-old',
+        status: 'active',
+        role: 'member',
+        createdAt: new Date('2026-02-01T00:00:00Z'),
+      },
+      {
+        groupId: 'member-new',
+        status: 'active',
+        role: 'member',
+        createdAt: new Date('2026-03-01T00:00:00Z'),
+      },
+    ]);
+    const { service } = setup({
+      communityGroup: { findFirst: jest.fn(), findMany, update: jest.fn() },
+      communityGroupMember: { findUnique: jest.fn(), findMany: memberFindMany },
+    });
+
+    const out = await service.listExploreSpotlight('viewer-1', { take: 6 });
+
+    expect(out.data.map((g: any) => g.id)).toEqual([
+      'owner-new',
+      'owner-old',
+      'member-new',
+      'member-old',
+      'nonmember-new',
+      'nonmember-old',
+    ]);
   });
 
   it('returns trending rows in heat order, not Prisma `in` order', async () => {

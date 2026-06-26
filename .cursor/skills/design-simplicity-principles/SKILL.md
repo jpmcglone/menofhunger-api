@@ -1,6 +1,6 @@
 ---
 name: design-simplicity-principles
-description: Core design and product principles for Men of Hunger — prioritize ruthlessly, ship simple, defend clarity. Use when designing or reviewing any user-facing feature, screen, component, API surface, or copy across web (Nuxt), iOS (SwiftUI), and API (NestJS). Triggers on UI design decisions, "should we add this", "feels cluttered", "feels overwhelming", "MVP scope", "feature creep", new screen/page/endpoint design, PRs that add buttons/options/fields/tabs/menus, review for polish, "what would Jobs do", grandma test, simplicity, less is more, and copy / microcopy choices.
+description: Core design and product principles for Men of Hunger — prioritize ruthlessly, ship simple, defend clarity. Use when designing or reviewing any user-facing feature, screen, component, API surface, or copy across web (Nuxt), iOS (SwiftUI), and API (NestJS). Triggers on UI design decisions, "should we add this", "feels cluttered", "feels overwhelming", "MVP scope", "feature creep", parity, completeness, product surface, core loop, Elon algorithm, new screen/page/endpoint design, PRs that add buttons/options/fields/tabs/menus, review for polish, "what would Jobs do", grandma test, simplicity, less is more, and copy / microcopy choices.
 ---
 
 # Design Simplicity Principles
@@ -11,6 +11,21 @@ Men of Hunger is an opinionated product. We win on clarity, not feature count. A
 
 1. **The 10-second rule.** A new user decides in roughly ten seconds whether the screen they just opened is worth their attention. Every screen has a primary purpose. Make it obvious in the first second; let everything else fade behind it.
 2. **What would we cut?** Before shipping, ask "what would I cut if I had to remove one thing?" — and then cut it. If you can't, the design isn't done yet.
+
+## Operating algorithm
+
+Use this before planning or coding:
+
+1. **Question every requirement.** Stop treating parity and completeness as defaults. Decide whether the feature is core, useful-but-secondary, or experimental/legacy.
+2. **Delete before simplifying.** If the current path is dead, duplicated, low-value, or migration-era, remove or demote it before polishing it.
+3. **Simplify what remains.** Collapse repeated concepts into one mental model; avoid new modes, toggles, endpoints, tabs, and settings unless they clearly replace something.
+4. **Accelerate cycle time.** Make the necessary path faster to build, test, and reason about after it is smaller.
+5. **Automate last.** Automate contracts, guardrails, and checks only after the surface area is stable enough to preserve.
+
+Default buckets:
+- **Core:** first-class across API, www, and iOS.
+- **Secondary:** available, but not top-level or not native everywhere.
+- **Experimental/legacy:** hide, hand off, or delete.
 
 ## Core principles
 

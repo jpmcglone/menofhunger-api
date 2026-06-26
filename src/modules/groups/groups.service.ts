@@ -245,10 +245,16 @@ export class GroupsService {
     const memberships = await this.prisma.communityGroupMember.findMany({
       where: { userId: params.viewerUserId, status: 'active' },
       include: { group: true },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ role: 'asc' }, { createdAt: 'desc' }],
     });
     const data = memberships
       .filter((m) => m.group.deletedAt == null)
+      .sort((a, b) => this.compareViewerGroupOrder(
+        { createdAt: a.group.createdAt },
+        { status: a.status, role: a.role, createdAt: a.createdAt },
+        { createdAt: b.group.createdAt },
+        { status: b.status, role: b.role, createdAt: b.createdAt },
+      ))
       .map((m) =>
         toCommunityGroupShellDto(m.group, { status: m.status, role: m.role }),
       );
@@ -1462,7 +1468,7 @@ export class GroupsService {
    * waterfall and cursor branches can share it.
    */
   private async attachExploreMembership(
-    rows: Array<{ id: string }>,
+    rows: Array<{ id: string; createdAt?: Date }>,
     viewerUserId: string | null,
   ): Promise<ReturnType<typeof toCommunityGroupShellDto>[]> {
     if (!viewerUserId || rows.length === 0) {
@@ -1470,13 +1476,34 @@ export class GroupsService {
     }
     const memberships = await this.prisma.communityGroupMember.findMany({
       where: { userId: viewerUserId, groupId: { in: rows.map((r) => r.id) } },
-      select: { groupId: true, status: true, role: true },
+      select: { groupId: true, status: true, role: true, createdAt: true },
     });
     const byGroup = new Map(memberships.map((m) => [m.groupId, m] as const));
-    return rows.map((g) => {
-      const m = byGroup.get(g.id);
-      const viewerMembership = m ? { status: m.status, role: m.role } : null;
-      return toCommunityGroupShellDto(g as never, viewerMembership);
-    });
+    return [...rows]
+      .sort((a, b) => this.compareViewerGroupOrder(a, byGroup.get(a.id), b, byGroup.get(b.id)))
+      .map((g) => {
+        const m = byGroup.get(g.id);
+        const viewerMembership = m ? { status: m.status, role: m.role } : null;
+        return toCommunityGroupShellDto(g as never, viewerMembership);
+      });
+  }
+
+  private compareViewerGroupOrder(
+    aGroup: { createdAt?: Date },
+    aMembership: { status: string; role: string; createdAt: Date } | null | undefined,
+    bGroup: { createdAt?: Date },
+    bMembership: { status: string; role: string; createdAt: Date } | null | undefined,
+  ): number {
+    const aOwner = aMembership?.status === 'active' && aMembership.role === 'owner';
+    const bOwner = bMembership?.status === 'active' && bMembership.role === 'owner';
+    if (aOwner !== bOwner) return aOwner ? -1 : 1;
+
+    const aJoined = aMembership?.status === 'active';
+    const bJoined = bMembership?.status === 'active';
+    if (aJoined !== bJoined) return aJoined ? -1 : 1;
+
+    const aDate = (aMembership?.createdAt ?? aGroup.createdAt)?.getTime() ?? 0;
+    const bDate = (bMembership?.createdAt ?? bGroup.createdAt)?.getTime() ?? 0;
+    return bDate - aDate;
   }
 }

@@ -1,0 +1,27 @@
+---
+description: Apply the Men of Hunger product simplification algorithm before adding or changing API behavior
+alwaysApply: true
+---
+
+# Product Simplification Algorithm
+
+Before adding API surface area, assume parity and completeness are not automatic goals. Apply this order:
+
+1. **Question the requirement**
+   - What core user loop does this serve: feed, groups, profile, notifications, auth, or payments?
+   - Who specifically needs it now? What does it replace?
+   - Is this core, secondary, or experimental/legacy?
+2. **Delete before simplifying**
+   - Prefer retiring completed backfills, low-value crons, stale redirect/support paths, unused env flags, and duplicate wrappers before refactoring them.
+   - Do not preserve compatibility with unshipped branch work.
+3. **Simplify what remains**
+   - Prefer fewer feed concepts: posts, replies, media, sort, visibility, cursor.
+   - Prefer extending an existing DTO/endpoint over multiplying endpoints.
+   - Keep realtime payloads minimal and patch-shaped.
+4. **Accelerate cycle time**
+   - Add targeted tests around risky feed/notification/payment behavior before splitting large services.
+   - Reduce process only after preserving correctness.
+5. **Automate last**
+   - Automate contracts, realtime event checks, and guardrails after the surface is smaller and stable.
+
+If an API change adds a new endpoint, cron, queue, env var, notification type, or DTO branch, explicitly state why it should exist instead of deleting, demoting, or folding it into an existing path.

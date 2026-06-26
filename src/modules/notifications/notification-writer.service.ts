@@ -900,13 +900,17 @@ export class NotificationWriterService {
     } catch { /* best-effort */ }
   }
 
-  private pushGroupNotification(params: {
+  private async pushGroupNotification(params: {
     recipientUserId: string;
     actorUserId: string | null;
     kind: NotificationKind;
     subjectGroupId: string;
-  }): void {
+  }): Promise<void> {
     const { recipientUserId, actorUserId, kind, subjectGroupId } = params;
+    const group = await this.prisma.communityGroup?.findUnique({
+      where: { id: subjectGroupId },
+      select: { slug: true },
+    });
     void this.push.sendKindPushForActor({
       recipientUserId,
       kind,
@@ -915,7 +919,7 @@ export class NotificationWriterService {
       body: null,
       subjectPostId: null,
       subjectUserId: null,
-      url: `/g/${subjectGroupId}`,
+      url: `/g/${group?.slug ?? subjectGroupId}`,
       sourceLabel: 'From notifications',
     });
   }
@@ -940,7 +944,12 @@ export class NotificationWriterService {
     });
     await this.emitGroupNotification(recipientUserId, result.notificationId, result.undeliveredCount);
     if (result.isNew) {
-      this.pushGroupNotification({ recipientUserId, actorUserId: joinerUserId, kind: 'community_group_member_joined', subjectGroupId: groupId });
+      void this.pushGroupNotification({
+        recipientUserId,
+        actorUserId: joinerUserId,
+        kind: 'community_group_member_joined',
+        subjectGroupId: groupId,
+      });
     }
   }
 
@@ -966,7 +975,7 @@ export class NotificationWriterService {
     });
     await this.emitGroupNotification(recipientUserId, result.notificationId, result.undeliveredCount);
     if (result.isNew) {
-      this.pushGroupNotification({ recipientUserId, actorUserId, kind, subjectGroupId: groupId });
+      void this.pushGroupNotification({ recipientUserId, actorUserId, kind, subjectGroupId: groupId });
     }
   }
 
@@ -989,7 +998,12 @@ export class NotificationWriterService {
     });
     await this.emitGroupNotification(recipientUserId, result.notificationId, result.undeliveredCount);
     if (result.isNew) {
-      this.pushGroupNotification({ recipientUserId, actorUserId, kind: 'community_group_member_removed', subjectGroupId: groupId });
+      void this.pushGroupNotification({
+        recipientUserId,
+        actorUserId,
+        kind: 'community_group_member_removed',
+        subjectGroupId: groupId,
+      });
     }
   }
 
@@ -1012,7 +1026,12 @@ export class NotificationWriterService {
     });
     await this.emitGroupNotification(recipientUserId, result.notificationId, result.undeliveredCount);
     if (result.isNew) {
-      this.pushGroupNotification({ recipientUserId, actorUserId, kind: 'community_group_disbanded', subjectGroupId: groupId });
+      void this.pushGroupNotification({
+        recipientUserId,
+        actorUserId,
+        kind: 'community_group_disbanded',
+        subjectGroupId: groupId,
+      });
     }
   }
 

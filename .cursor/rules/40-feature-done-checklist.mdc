@@ -32,8 +32,9 @@ When you add or change a response shape:
 
 1. Update the DTO under `src/common/dto/**`.
 2. Mirror the change in `menofhunger-www/types/api.ts`.
-3. From `menofhunger-www/`: `npx nuxi typecheck` and `node scripts/validate-api-types.mjs` must both pass.
-4. Honor the envelope: success is `{ data: T }` (or `{ data: T[], pagination }`); errors are handled by the global exception filter.
+3. If iOS consumes the response, update the matching model under `menofhunger-ios/MenOfHunger/**/Model` and add/adjust a decoding test.
+4. From `menofhunger-www/`: `npx nuxi typecheck` and `node scripts/validate-api-types.mjs` must both pass.
+5. Honor the envelope: success is `{ data: T }` (or `{ data: T[], pagination }`); errors are handled by the global exception filter.
 
 ## When something fails
 
@@ -43,4 +44,4 @@ When you add or change a response shape:
 
 ## Telling the user it's done
 
-Report which steps you ran and the outcome of each. Call out any DTO changes that require web-side follow-up.
+Report which steps you ran and the outcome of each. Call out any DTO changes that require web or iOS follow-up.
