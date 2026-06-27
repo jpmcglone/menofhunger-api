@@ -12,6 +12,7 @@ import { NotificationsOrphanCleanupCron } from '../notifications/notifications-o
 import { NotificationsEmailCron } from '../notifications/notifications-email.cron';
 import { NotificationsReplyNudgeCron } from '../notifications/notifications-reply-nudge.cron';
 import { AuthCleanupCron } from '../auth/auth-cleanup.cron';
+import { AccountDeletionFinalizeCron } from '../auth/account-deletion-finalize.cron';
 import { SearchCleanupCron } from '../search/search-cleanup.cron';
 import { LinkMetadataCron } from '../link-metadata/link-metadata.cron';
 import { DailyContentCron } from '../daily-content/daily-content.cron';
@@ -38,6 +39,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly notificationsReplyNudge: NotificationsReplyNudgeCron,
     private readonly dailyContent: DailyContentCron,
     private readonly authCleanup: AuthCleanupCron,
+    private readonly accountDeletionFinalize: AccountDeletionFinalizeCron,
     private readonly searchCleanup: SearchCleanupCron,
     private readonly linkMetadata: LinkMetadataCron,
     private readonly adminDailyDigest: AdminDailyDigestCron,
@@ -102,6 +104,9 @@ export class JobsProcessor extends WorkerHost {
           return { ok: true };
         case JOBS.authCleanup:
           await this.authCleanup.runCleanupExpiredAuthRecords();
+          return { ok: true };
+        case JOBS.accountDeletionFinalize:
+          await this.accountDeletionFinalize.runFinalizeDueAccountDeletions();
           return { ok: true };
         case JOBS.searchCleanup:
           await this.searchCleanup.runCleanupUserSearchHistory();

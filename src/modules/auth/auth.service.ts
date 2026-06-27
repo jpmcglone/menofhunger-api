@@ -26,6 +26,7 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 /** TTL for the full session cache (auth guards). Short enough to pick up bans/revocations quickly. */
 const SESSION_FULL_CACHE_TTL_MS = 30_000;
+const ACCOUNT_DELETION_PENDING_REASON = 'self_deleted_pending';
 
 /**
  * Translate a Twilio Verify API error into a user-facing message.
@@ -117,9 +118,13 @@ export class AuthService {
     const hasTwilioVerify = Boolean(this.appConfig.twilioVerify());
     const existing = await this.prisma.user.findUnique({
       where: { phone },
-      select: { bannedAt: true },
+      select: { bannedAt: true, bannedReason: true, deletionScheduledAt: true },
     });
-    const isBanned = Boolean(existing?.bannedAt);
+    const canRestorePendingDeletion = Boolean(
+      existing?.bannedReason === ACCOUNT_DELETION_PENDING_REASON &&
+        (!existing.deletionScheduledAt || existing.deletionScheduledAt > now),
+    );
+    const isBanned = Boolean(existing?.bannedAt && !canRestorePendingDeletion);
 
     this.logger.log(
       `startPhoneAuth phone=${this.maskPhone(phone)} env=${this.appConfig.nodeEnv()} twilio=${
@@ -185,7 +190,11 @@ export class AuthService {
     // Also: do this *before* OTP checks so banned accounts don't require a started OTP.
     const existing = await this.prisma.user.findUnique({ where: { phone } });
     const isNewUser = !existing;
-    if (existing?.bannedAt) {
+    const canRestorePendingDeletion = Boolean(
+      existing?.bannedReason === ACCOUNT_DELETION_PENDING_REASON &&
+        (!existing.deletionScheduledAt || existing.deletionScheduledAt > now),
+    );
+    if (existing?.bannedAt && !canRestorePendingDeletion) {
       throw new UnauthorizedException({
         message: 'This account was banned. Contact an admin if you think it’s a mistake.',
         error: 'account_banned',
@@ -245,8 +254,19 @@ export class AuthService {
       }
     }
 
+    const restoredPendingDeletion = canRestorePendingDeletion;
     const user = existing
-      ? existing
+      ? restoredPendingDeletion
+        ? await this.prisma.user.update({
+            where: { id: existing.id },
+            data: {
+              bannedAt: null,
+              bannedReason: null,
+              deletionRequestedAt: null,
+              deletionScheduledAt: null,
+            },
+          })
+        : existing
       : await this.prisma.user.create({
           data: {
             phone,
@@ -331,6 +351,8 @@ export class AuthService {
     if (isNewUser) {
       this.posthog.capture(user.id, 'user_signed_up', { phone_masked: this.maskPhone(phone) });
       this.slack.notifySignup({ userId: user.id });
+    } else if (restoredPendingDeletion) {
+      this.posthog.capture(user.id, 'account_deletion_cancelled');
     } else {
       this.posthog.capture(user.id, 'user_login');
     }

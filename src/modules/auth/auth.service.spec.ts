@@ -95,6 +95,8 @@ function makeService(overrides?: { prisma?: any }) {
     isProd: jest.fn(() => false),
     disableTwilioInDev: jest.fn(() => true),
     twilioVerify: jest.fn(() => null),
+    nodeEnv: jest.fn(() => 'test'),
+    otpHmacSecret: jest.fn(() => HMAC_SECRET),
     cookieDomain: jest.fn(() => undefined),
     r2: jest.fn(() => null),
   } as any;
@@ -117,7 +119,7 @@ function makeService(overrides?: { prisma?: any }) {
   const presenceRealtime = { emitReferralRecruitUpdated: jest.fn() } as any;
 
   const svc = new AuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack, requestCache, presence, presenceRealtime);
-  return { svc, prisma, token, tokenHash, presence };
+  return { svc, prisma, token, tokenHash, presence, posthog };
 }
 
 // ---------------------------------------------------------------------------
@@ -627,5 +629,116 @@ describe('AuthService.verifyPhoneCode — presence on signup', () => {
     await svc.verifyPhoneCode('+15550001234', '000000', makeResponse());
 
     expect(presence.markSeenFromHttp).toHaveBeenCalledWith(existingUser.id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('AuthService account deletion restore', () => {
+  function makeResponse() {
+    return { cookie: jest.fn(), clearCookie: jest.fn() } as any;
+  }
+
+  it('allows a pending-deletion account to start phone auth during the grace period', async () => {
+    const future = new Date(Date.now() + 24 * 60 * 60_000);
+    const phoneOtpCreate = jest.fn(async () => ({}));
+    const { svc } = makeService({
+      prisma: {
+        user: {
+          findUnique: jest.fn(async () => ({
+            bannedAt: new Date('2026-06-26T00:00:00.000Z'),
+            bannedReason: 'self_deleted_pending',
+            deletionScheduledAt: future,
+          })),
+        },
+        phoneOtp: {
+          findFirst: jest.fn(async () => null),
+          create: phoneOtpCreate,
+        },
+        session: { findFirst: jest.fn(), update: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
+        post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+      },
+    });
+
+    await expect(svc.startPhoneAuth('+15555555555')).resolves.toEqual({ retryAfterSeconds: expect.any(Number) });
+    expect(phoneOtpCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores a pending-deletion account when the user verifies within the grace period', async () => {
+    const pending = makeMinimalUser({
+      bannedAt: new Date('2026-06-26T00:00:00.000Z'),
+      bannedReason: 'self_deleted_pending',
+      deletionRequestedAt: new Date('2026-06-26T00:00:00.000Z'),
+      deletionScheduledAt: new Date(Date.now() + 24 * 60 * 60_000),
+    });
+    const restored = makeMinimalUser({
+      bannedAt: null,
+      bannedReason: null,
+      deletionRequestedAt: null,
+      deletionScheduledAt: null,
+    });
+    const userUpdate = jest.fn(async () => restored);
+    const sessionCreate = jest.fn(async () => ({
+      id: 'session-restored',
+      userId: restored.id,
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+    }));
+    const { svc, posthog } = makeService({
+      prisma: {
+        user: {
+          findUnique: jest.fn(async () => pending),
+          update: userUpdate,
+        },
+        phoneOtp: {
+          findFirst: jest.fn(async () => null),
+          update: jest.fn(),
+        },
+        session: {
+          findFirst: jest.fn(),
+          update: jest.fn(),
+          create: sessionCreate,
+          deleteMany: jest.fn(),
+        },
+        post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+      },
+    });
+
+    const result = await svc.verifyPhoneCode('+15555555555', '000000', makeResponse());
+
+    expect(result.isNewUser).toBe(false);
+    expect(result.sessionId).toBe('session-restored');
+    expect(userUpdate).toHaveBeenCalledWith({
+      where: { id: pending.id },
+      data: {
+        bannedAt: null,
+        bannedReason: null,
+        deletionRequestedAt: null,
+        deletionScheduledAt: null,
+      },
+    });
+    expect(posthog.capture).toHaveBeenCalledWith(restored.id, 'account_deletion_cancelled');
+  });
+
+  it('still rejects a real banned account during phone verification', async () => {
+    const banned = makeMinimalUser({
+      bannedAt: new Date('2026-06-26T00:00:00.000Z'),
+      bannedReason: 'admin_ban',
+    });
+    const { svc, prisma } = makeService({
+      prisma: {
+        user: {
+          findUnique: jest.fn(async () => banned),
+          update: jest.fn(),
+        },
+        phoneOtp: { findFirst: jest.fn(async () => null), update: jest.fn() },
+        session: { findFirst: jest.fn(), update: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
+        post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+      },
+    });
+
+    await expect(svc.verifyPhoneCode('+15555555555', '000000', makeResponse())).rejects.toMatchObject({
+      response: expect.objectContaining({ error: 'account_banned' }),
+    });
+    expect(prisma.user.update).not.toHaveBeenCalled();
   });
 });

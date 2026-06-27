@@ -307,6 +307,9 @@ model User {
   bannedAt                     DateTime?
   bannedReason                 String?
   bannedByAdminId              String?
+  // Self-service account deletion grace period. Pending rows are hidden via bannedAt, then anonymized after deletionScheduledAt.
+  deletionRequestedAt          DateTime?
+  deletionScheduledAt          DateTime?
   // Bot accounts (e.g. Marv, the AI helper). Real User rows so posts/DMs/notifications all "just work";
   // this flag drives a small "Bot" indicator in clients and lets the API short-circuit certain flows.
   isBot                        Boolean            @default(false)
@@ -499,6 +502,7 @@ model User {
   @@index([lastSeenAt])
   @@index([referralCode])
   @@index([recruitedById])
+  @@index([deletionScheduledAt])
   // Leaderboard queries: sort by active streak then longest streak, filter by bannedAt IS NULL.
   @@index([bannedAt, checkinStreakDays(sort: Desc), longestStreakDays(sort: Desc), createdAt(sort: Asc)])
 }

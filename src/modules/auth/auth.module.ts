@@ -7,6 +7,7 @@ import { OTP_PROVIDER } from './otp/otp-provider.token';
 import { TwilioVerifyOtpProvider } from './otp/twilio-verify-otp.provider';
 import { NoopOtpProvider } from './otp/noop-otp.provider';
 import { AuthCleanupCron } from './auth-cleanup.cron';
+import { AccountDeletionFinalizeCron } from './account-deletion-finalize.cron';
 import { RealtimeModule } from '../realtime/realtime.module';
 
 @Module({
@@ -19,10 +20,11 @@ import { RealtimeModule } from '../realtime/realtime.module';
     TwilioVerifyOtpProvider,
     NoopOtpProvider,
     AuthCleanupCron,
+    AccountDeletionFinalizeCron,
     // Default OTP provider: Twilio Verify. AuthService can choose not to use it in dev.
     { provide: OTP_PROVIDER, useExisting: TwilioVerifyOtpProvider },
   ],
-  exports: [AuthService, AuthGuard, AuthCleanupCron],
+  exports: [AuthService, AuthGuard, AuthCleanupCron, AccountDeletionFinalizeCron],
 })
 export class AuthModule {}
 

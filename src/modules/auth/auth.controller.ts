@@ -158,7 +158,7 @@ export class AuthController {
     };
   }
 
-  @ApiOperation({ summary: 'Permanently delete the authenticated account (self-service, App Store 5.1.1v)' })
+  @ApiOperation({ summary: 'Schedule account deletion with a 30-day grace period (self-service, App Store 5.1.1v)' })
   @Throttle({
     default: {
       limit: rateLimitLimit('authStart', 4),
@@ -173,7 +173,7 @@ export class AuthController {
     if (!userId) throw new UnauthorizedException('You must be signed in to delete your account.');
 
     const parsed = deleteAccountSchema.parse(body ?? {});
-    const result = await this.accountDeletion.deleteAccount(userId, {
+    const result = await this.accountDeletion.requestDeletion(userId, {
       reason: parsed.reason ?? null,
       details: parsed.details ?? null,
     });

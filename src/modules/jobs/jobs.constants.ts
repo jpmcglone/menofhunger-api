@@ -37,6 +37,7 @@ export const JOBS = {
 
   // Auth / search
   authCleanup: 'auth.cleanup',
+  accountDeletionFinalize: 'auth.accountDeletionFinalize',
   searchCleanup: 'search.cleanup',
 
   // Link metadata
