@@ -219,9 +219,12 @@ export class PostsFeedQueryService {
     mediaOnly?: boolean;
     topLevelOnly?: boolean;
     authorUserIds?: string[] | null;
-  }): Promise<FeedResult> {
+    /** Filter to posts whose author has a matching US state code (e.g. "VA"). */
+    authorLocationState?: string | null;
+  }  ): Promise<FeedResult> {
     const { viewerUserId, limit, cursor, visibility, followingOnly } = params;
     const authorUserIds = (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean) ?? null;
+    const authorLocationState = (params.authorLocationState ?? '').trim() || null;
     const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
     const checkinDayKey = (params.checkinDayKey ?? null)?.trim() || null;
 
@@ -279,6 +282,10 @@ export class PostsFeedQueryService {
         ? ([{ NOT: { userId: viewerUserId } }] as Prisma.PostWhereInput[])
         : [];
 
+    const locationStateWhere: Prisma.PostWhereInput[] = authorLocationState
+      ? ([{ user: { locationState: authorLocationState } }] as Prisma.PostWhereInput[])
+      : [];
+
     const where = followingOnly
       ? {
           AND: [
@@ -291,6 +298,7 @@ export class PostsFeedQueryService {
             ...(params.mediaOnly ? [mediaOnlyWhere()] : []),
             ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
+            ...locationStateWhere,
             ...excludeSelfWhere,
             { user: { followers: { some: { followerId: viewerUserId as string } } } },
           ],
@@ -306,6 +314,7 @@ export class PostsFeedQueryService {
             ...(params.mediaOnly ? [mediaOnlyWhere()] : []),
             ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
             ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
+            ...locationStateWhere,
             ...excludeSelfWhere,
           ],
         };
@@ -768,6 +777,8 @@ export class PostsFeedQueryService {
     topLevelOnly?: boolean;
     memberGroupIds?: string[];
     excludeAuthorUserId?: string | null;
+    /** Filter to posts whose author has a matching US state code (e.g. "VA"). */
+    authorLocationState?: string | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, decodedCursor, visibility, allowed, authorUserIds, kind } = params;
     const memberGroupIds = params.memberGroupIds ?? [];
@@ -813,6 +824,10 @@ export class PostsFeedQueryService {
         ? { OR: [excludeCommunityGroupPostsWhere(), { communityGroupId: { in: memberGroupIds } }] }
         : excludeCommunityGroupPostsWhere();
 
+    const locationStateFilter: Prisma.PostWhereInput[] = params.authorLocationState
+      ? ([{ user: { locationState: params.authorLocationState } }] as Prisma.PostWhereInput[])
+      : [];
+
     const posts = await this.prisma.post.findMany({
       where: {
         AND: [
@@ -828,6 +843,7 @@ export class PostsFeedQueryService {
           ...(params.excludeAuthorUserId ? ([{ NOT: { userId: params.excludeAuthorUserId } }] as Prisma.PostWhereInput[]) : []),
           ...(params.mediaOnly ? [mediaOnlyWhere()] : []),
           ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
+          ...locationStateFilter,
           visibilityWhere,
           cursorWhere,
         ],
@@ -883,6 +899,8 @@ export class PostsFeedQueryService {
     mediaOnly?: boolean;
     topLevelOnly?: boolean;
     authorUserIds?: string[] | null;
+    /** Filter to posts whose author has a matching US state code (e.g. "VA"). */
+    authorLocationState?: string | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, cursor, visibility } = params;
     const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
@@ -2018,6 +2036,8 @@ export class PostsFeedQueryService {
     mediaOnly?: boolean;
     topLevelOnly?: boolean;
     authorUserIds?: string[] | null;
+    /** Filter to posts whose author has a matching US state code (e.g. "VA"). */
+    authorLocationState?: string | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, cursor, visibility, followingOnly = false } = params;
     const requestedAuthorUserIds =
@@ -2099,6 +2119,7 @@ export class PostsFeedQueryService {
         topLevelOnly: params.topLevelOnly,
         memberGroupIds,
         excludeAuthorUserId: excludeViewerAuthor ? viewerUserId : null,
+        authorLocationState: params.authorLocationState ?? null,
       });
     }
 
@@ -2556,6 +2577,8 @@ export class PostsFeedQueryService {
     mediaOnly?: boolean;
     topLevelOnly?: boolean;
     authorUserIds?: string[] | null;
+    /** Filter to posts whose author has a matching US state code (e.g. "VA"). */
+    authorLocationState?: string | null;
   }): Promise<PopularFeedResult> {
     const { viewerUserId, limit, cursor, visibility, followingOnly = false } = params;
     const requestedAuthorUserIds =

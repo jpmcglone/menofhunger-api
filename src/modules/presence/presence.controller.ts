@@ -241,6 +241,7 @@ export class PresenceController {
       lastConnectAt: lastConnectAtById.get(u.id) ?? null,
       idle: idleById.get(u.id) ?? false,
       status: statusesById.get(u.id) ?? null,
+      platforms: this.presence.getClientsForUser(u.id),
     }));
 
     // Pin Marv to the front when enabled, and bump totalOnline so the right-rail
@@ -472,6 +473,7 @@ export class PresenceController {
       lastConnectAt: lastConnectAtById.get(u.id) ?? null,
       idle: idleById.get(u.id) ?? false,
       status: onlineStatusesById.get(u.id) ?? null,
+      platforms: this.presence.getClientsForUser(u.id),
     }));
 
     // Pin Marv to the top when enabled. Same rationale as in `online()`: the

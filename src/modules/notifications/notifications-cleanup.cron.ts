@@ -49,6 +49,10 @@ export class NotificationsCleanupCron {
           `Notifications cleanup: deleted=${deleted.count} retentionDays=${this.retentionDays} (${ms}ms)`,
         );
       }
+
+      // Prune stale push-coalesce records: max window is 15 min, so anything over 1 day is safe to drop.
+      const coalesceCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      await this.prisma.pushCoalesce.deleteMany({ where: { sentAt: { lt: coalesceCutoff } } });
     } catch (err) {
       this.logger.warn(`Notifications cleanup failed: ${(err as Error).message}`);
     } finally {

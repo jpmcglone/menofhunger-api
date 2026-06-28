@@ -1958,13 +1958,13 @@ model TaxonomyTermMetric {
  * Tracks last push sent per user+kind for rate limiting/coalescing.
  */
 model PushCoalesce {
-  userId String
-  kind   String
-  sentAt DateTime
-  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  coalesceKey String
+  sentAt      DateTime
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@id([userId, kind])
-  @@index([userId, kind])
+  @@id([userId, coalesceKey])
+  @@index([userId, coalesceKey])
 }
 
 model MessageConversation {

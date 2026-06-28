@@ -441,21 +441,24 @@ export class NotificationPushService {
     return { sent: true };
   }
 
-  /** Coalesce window (ms) for this kind. Returns false if within window (skip send). */
-  private async isPushCoalesced(recipientUserId: string, kind: string): Promise<boolean> {
+  /**
+   * Returns true if a push with this coalesceKey was already sent within the window for this kind.
+   * coalesceKey is the resolved push tag (subject-scoped), so distinct subjects each get their own window.
+   */
+  private async isPushCoalesced(recipientUserId: string, coalesceKey: string, kind: string): Promise<boolean> {
     const windowMs = PUSH_COALESCE_MS[kind] ?? DEFAULT_COALESCE_MS;
     const since = new Date(Date.now() - windowMs);
     const row = await this.prisma.pushCoalesce.findUnique({
-      where: { userId_kind: { userId: recipientUserId, kind } },
+      where: { userId_coalesceKey: { userId: recipientUserId, coalesceKey } },
       select: { sentAt: true },
     });
     return row ? row.sentAt >= since : false;
   }
 
-  private async recordPushSent(recipientUserId: string, kind: string): Promise<void> {
+  private async recordPushSent(recipientUserId: string, coalesceKey: string): Promise<void> {
     await this.prisma.pushCoalesce.upsert({
-      where: { userId_kind: { userId: recipientUserId, kind } },
-      create: { userId: recipientUserId, kind, sentAt: new Date() },
+      where: { userId_coalesceKey: { userId: recipientUserId, coalesceKey } },
+      create: { userId: recipientUserId, coalesceKey, sentAt: new Date() },
       update: { sentAt: new Date() },
     });
   }
@@ -463,7 +466,16 @@ export class NotificationPushService {
   /**
    * Send a push to all of the user's registered channels: Web Push subscriptions
    * (pruning expired 410/404) and native APNs device tokens. Coalescing is shared
-   * across both channels so a user never gets the same kind twice in the window.
+   * across both channels, keyed by the resolved push tag so distinct subjects each
+   * have their own window.
+   *
+   * When suppressActiveChannels is true (actor-driven notifications only):
+   *   - The iOS/APNs channel is skipped if the user is actively connected via the
+   *     iOS socket (they can see the realtime event in-app).
+   *   - The web channel is skipped if the user is actively connected via a web socket.
+   *   - If both are skipped, the coalesce record is NOT written (next event won't be blocked).
+   *   - If only one is skipped, the other still fires and coalesce is recorded normally.
+   * System-originated pushes (streak, reply-nudge, crew-streak) and DMs do NOT pass this flag.
    */
   async sendWebPushToRecipient(
     recipientUserId: string,
@@ -481,14 +493,11 @@ export class NotificationPushService {
       renotify?: boolean;
       kind?: string;
       sourceLabel?: string;
+      suppressActiveChannels?: boolean;
     },
   ): Promise<void> {
     if (!this.pushChannelConfigured()) return;
     const kind = params.kind ?? 'generic';
-    if (!params.test && (await this.isPushCoalesced(recipientUserId, kind))) {
-      this.logger.debug(`[push] Coalesced ${kind} for user ${recipientUserId}`);
-      return;
-    }
 
     const baseUrl =
       this.appConfig.pushFrontendBaseUrl() ??
@@ -509,8 +518,15 @@ export class NotificationPushService {
       }
     }
 
+    // Resolve tag before coalesce check so the key is subject-scoped, not kind-only.
     const defaultTag = params.test ? `notification-test-${Date.now()}` : `notification-${recipientUserId}`;
     const tag = params.tag?.trim() || defaultTag;
+
+    if (!params.test && (await this.isPushCoalesced(recipientUserId, tag, kind))) {
+      this.logger.debug(`[push] Coalesced ${kind} (tag=${tag}) for user ${recipientUserId}`);
+      return;
+    }
+
     // Distinguish "explicit empty body" (e.g. reply-nudge that's title-only) from "no body provided"
     // (legacy callers that want the friendly fallback).
     let body = params.body === undefined ? 'You have a new notification.' : params.body;
@@ -518,8 +534,21 @@ export class NotificationPushService {
       body = body ? `${body} · ${params.sourceLabel}` : params.sourceLabel;
     }
 
+    // Per-channel suppression: only active (non-idle) connections on that channel are suppressed.
+    const suppressIos =
+      params.suppressActiveChannels === true && this.presence.isUserActivelyOnChannel(recipientUserId, 'ios');
+    const suppressWeb =
+      params.suppressActiveChannels === true && this.presence.isUserActivelyOnChannel(recipientUserId, 'web');
+
+    if (suppressIos && suppressWeb) {
+      // Both channels have an active connection — the user sees realtime events on all devices.
+      // Skip without recording coalesce so the next event that lands while they're offline isn't blocked.
+      this.logger.debug(`[push] Suppressed all channels for ${kind} (user ${recipientUserId} is active on all)`);
+      return;
+    }
+
     // Native iOS push (APNs) mirror — fire-and-forget, same copy and coalescing.
-    if (this.apnsPush.configured()) {
+    if (!suppressIos && this.apnsPush.configured()) {
       this.apnsPush
         .sendToUser(recipientUserId, {
           title: params.title,
@@ -532,25 +561,31 @@ export class NotificationPushService {
         .catch((err) => {
           this.logger.warn(`[apns] Failed to send push (${kind}): ${err instanceof Error ? err.message : String(err)}`);
         });
+    } else if (suppressIos) {
+      this.logger.debug(`[push] Suppressed APNs for ${kind} — user ${recipientUserId} is active on iOS`);
     }
 
-    await this.sendWebPushOnly(recipientUserId, {
-      payload: JSON.stringify({
-        title: params.title,
-        body,
-        notificationId: params.notificationId ?? undefined,
-        url,
-        tag,
-        kind,
-        icon: params.icon ?? undefined,
-        badge: params.badge ?? '/android-chrome-192x192.png',
-        renotify: Boolean(params.renotify),
-        test: params.test === true,
-      }),
-    });
+    if (!suppressWeb) {
+      await this.sendWebPushOnly(recipientUserId, {
+        payload: JSON.stringify({
+          title: params.title,
+          body,
+          notificationId: params.notificationId ?? undefined,
+          url,
+          tag,
+          kind,
+          icon: params.icon ?? undefined,
+          badge: params.badge ?? '/android-chrome-192x192.png',
+          renotify: Boolean(params.renotify),
+          test: params.test === true,
+        }),
+      });
+    } else {
+      this.logger.debug(`[push] Suppressed web push for ${kind} — user ${recipientUserId} is active on web`);
+    }
 
     if (!params.test) {
-      await this.recordPushSent(recipientUserId, kind).catch(() => {});
+      await this.recordPushSent(recipientUserId, tag).catch(() => {});
     }
   }
 
@@ -914,6 +949,7 @@ export class NotificationPushService {
         badge: '/android-chrome-192x192.png',
         renotify: true,
         kind,
+        suppressActiveChannels: true,
         ...(params.sourceLabel ? { sourceLabel: params.sourceLabel } : {}),
       }).catch((err) => {
         this.logger.warn(`[push] Failed to send web push (${kind}): ${err instanceof Error ? err.message : String(err)}`);

@@ -490,6 +490,23 @@ export class PresenceService {
   }
 
   /**
+   * True if the user has at least one active (non-idle) socket on the given channel.
+   * channel='ios' matches client='ios'; channel='web' matches everything else (browser, PWA, etc.).
+   * Used for per-channel push suppression: a device that isn't actively connected still gets pushed.
+   */
+  isUserActivelyOnChannel(userId: string, channel: 'web' | 'ios'): boolean {
+    if (this.isUserIdle(userId)) return false;
+    const set = this.userSockets.get(userId);
+    if (!set) return false;
+    for (const socketId of set) {
+      const client = this.socketMeta.get(socketId)?.client ?? 'web';
+      const isIos = client === 'ios';
+      if (channel === 'ios' ? isIos : !isIos) return true;
+    }
+    return false;
+  }
+
+  /**
    * Returns true if any socket for the given user is currently viewing the given conversation.
    * Used to suppress web push when the recipient already has the chat open.
    */

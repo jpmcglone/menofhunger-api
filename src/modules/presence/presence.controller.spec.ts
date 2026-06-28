@@ -40,6 +40,7 @@ function makeController(opts?: {
 
   const presence: any = {
     getActiveStatuses: jest.fn(async () => []),
+    getClientsForUser: jest.fn((_userId: string) => [] as string[]),
   };
   const realtime: any = {};
   const follows: any = {

@@ -17,6 +17,12 @@ export type OnlineUserDto = UserListDto & {
    * the row with a small "bot" badge.
    */
   isBot?: boolean;
+  /**
+   * Deduped list of client platforms this user is currently connected from,
+   * ordered by most-recent connection (e.g. ['ios', 'web']). Empty when the user
+   * is tracked only via Redis and the in-memory service has no sockets on this instance.
+   */
+  platforms?: string[];
 };
 
 export type RecentlyOnlineUserDto = UserListDto & {

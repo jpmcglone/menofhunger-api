@@ -65,6 +65,8 @@ const listSchema = z.object({
   communityGroupId: z.string().trim().min(1).max(40).optional(),
   /** When true, return only top-level (non-reply) posts. */
   topLevelOnly: queryBoolean().optional(),
+  /** Filter to posts whose author has a matching location state (2-letter US state code, e.g. "VA"). */
+  authorLocationState: z.string().trim().min(2).max(2).optional(),
 });
 
 const userListSchema = listSchema.extend({
@@ -468,6 +470,7 @@ export class PostsController {
                 mediaOnly,
                 topLevelOnly: parsed.topLevelOnly ?? false,
                 authorUserIds: authorUserIds.length ? authorUserIds : null,
+                authorLocationState: parsed.authorLocationState ?? null,
               })
             : sortKind === 'featured' && !mediaChronological
               ? await this.posts.listFeaturedFeed({
@@ -482,6 +485,7 @@ export class PostsController {
                   mediaOnly,
                   topLevelOnly: parsed.topLevelOnly ?? false,
                   authorUserIds: authorUserIds.length ? authorUserIds : null,
+                  authorLocationState: parsed.authorLocationState ?? null,
                 })
               : sortKind === 'popular' && !mediaChronological
                 ? await this.posts.listPopularFeed({
@@ -496,6 +500,7 @@ export class PostsController {
                     mediaOnly,
                     topLevelOnly: parsed.topLevelOnly ?? false,
                     authorUserIds: authorUserIds.length ? authorUserIds : null,
+                    authorLocationState: parsed.authorLocationState ?? null,
                   })
                 : await this.posts.listFeed({
                     viewerUserId,
@@ -509,6 +514,7 @@ export class PostsController {
                     mediaOnly,
                     topLevelOnly: parsed.topLevelOnly ?? false,
                     authorUserIds: authorUserIds.length ? authorUserIds : null,
+                    authorLocationState: parsed.authorLocationState ?? null,
                   });
         stageMs.list = Date.now() - listStartMs;
 
