@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, type NotificationKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { NotificationPushService } from './notification-push.service';
@@ -38,11 +39,30 @@ export class NotificationWriterService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly presenceRedis: PresenceRedisStateService,
     private readonly jobs: JobsService,
     private readonly push: NotificationPushService,
     private readonly query: NotificationQueryService,
     private readonly readState: NotificationReadStateService,
   ) {}
+
+  /**
+   * Returns the current timestamp when the recipient is actively present
+   * (online and not idle, checked cross-instance via Redis), or null otherwise.
+   * Used to stamp `presentAt` on new notifications so email crons can skip them —
+   * the user already saw the realtime event live, so an email is redundant.
+   * Never throws; presence is best-effort and must never block notification creation.
+   */
+  private async presentAtForRecipient(userId: string): Promise<Date | null> {
+    try {
+      const online = await this.presenceRedis.isOnline(userId);
+      if (!online) return null;
+      const idle = await this.presenceRedis.isIdle(userId);
+      return idle ? null : new Date();
+    } catch {
+      return null;
+    }
+  }
 
   /** True if recipient already has a follow notification from actor within the last withinMs. Use to avoid spam when someone unfollows then follows again. */
   async hasRecentFollowNotification(
@@ -122,6 +142,9 @@ export class NotificationWriterService {
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
+    // Resolve presence before the transaction so the Redis call doesn't extend it.
+    const presentAt = await this.presentAtForRecipient(recipientUserId);
+
     const { notification, undeliveredCount } = await this.prisma.$transaction(async (tx) => {
       const notification = await tx.notification.create({
         data: {
@@ -140,6 +163,7 @@ export class NotificationWriterService {
           subjectConversationId: subjectConversationId ?? undefined,
           title: fallbackTitle ?? undefined,
           body: body ?? undefined,
+          presentAt: presentAt ?? undefined,
         },
       });
       // Increment the denormalized counter for bookkeeping, but compute the real undelivered
@@ -259,6 +283,8 @@ export class NotificationWriterService {
   }) {
     const { recipientUserId, actorUserId, subjectPostId, bodySnippet } = params;
     const maxAttempts = 3;
+    // Resolve presence before the transaction so the Redis call doesn't extend it.
+    const presentAt = await this.presentAtForRecipient(recipientUserId);
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const res = await this.prisma.$transaction(
@@ -289,6 +315,7 @@ export class NotificationWriterService {
                 subjectPostId,
                 title: 'boosted your post',
                 body: bodySnippet ?? undefined,
+                presentAt: presentAt ?? undefined,
               },
               select: { id: true },
             });
@@ -393,6 +420,8 @@ export class NotificationWriterService {
   }) {
     const { recipientUserId, actorUserId, subjectPostId, actorPostId, title = 'reposted your post' } = params;
     const maxAttempts = 3;
+    // Resolve presence before the transaction so the Redis call doesn't extend it.
+    const presentAt = await this.presentAtForRecipient(recipientUserId);
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const res = await this.prisma.$transaction(
@@ -418,6 +447,7 @@ export class NotificationWriterService {
                 subjectPostId,
                 ...(actorPostId ? { actorPostId } : {}),
                 title,
+                presentAt: presentAt ?? undefined,
               },
               select: { id: true },
             });
@@ -643,6 +673,9 @@ export class NotificationWriterService {
     const { inviteeUserId, inviterUserId, groupId, inviteId, bodySnippet } = params;
     if (inviteeUserId === inviterUserId) return { notified: false };
 
+    // Resolve presence before the transaction so the Redis call doesn't extend it.
+    const presentAt = await this.presentAtForRecipient(inviteeUserId);
+
     const result = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.notification.findFirst({
         where: {
@@ -665,6 +698,7 @@ export class NotificationWriterService {
             ignoredAt: null,
             actorUserId: inviterUserId,
             body: bodySnippet ?? undefined,
+            presentAt: presentAt ?? null,
           },
         });
         if (wasDelivered) {
@@ -688,6 +722,7 @@ export class NotificationWriterService {
           subjectCommunityGroupInviteId: inviteId,
           title: 'invited you to their group',
           body: bodySnippet ?? undefined,
+          presentAt: presentAt ?? undefined,
         },
         select: { id: true },
       });
@@ -750,6 +785,9 @@ export class NotificationWriterService {
         ? 'community_group_invite_accepted'
         : 'community_group_invite_declined';
 
+    // Resolve presence before the transaction so the Redis call doesn't extend it.
+    const presentAt = await this.presentAtForRecipient(inviterUserId);
+
     const result = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.notification.findFirst({
         where: {
@@ -765,7 +803,7 @@ export class NotificationWriterService {
         const wasDelivered = existing.deliveredAt != null;
         await tx.notification.update({
           where: { id: existing.id },
-          data: { createdAt: now, deliveredAt: null, readAt: null, ignoredAt: null },
+          data: { createdAt: now, deliveredAt: null, readAt: null, ignoredAt: null, presentAt: presentAt ?? null },
         });
         if (wasDelivered) {
           await tx.user.update({
@@ -789,6 +827,7 @@ export class NotificationWriterService {
             response === 'accepted'
               ? 'accepted your group invite'
               : 'declined your group invite',
+          presentAt: presentAt ?? undefined,
         },
         select: { id: true },
       });
@@ -848,6 +887,8 @@ export class NotificationWriterService {
     title: string;
   }): Promise<{ notificationId: string; undeliveredCount: number; isNew: boolean }> {
     const { recipientUserId, kind, actorUserId, subjectGroupId, title } = params;
+    // Resolve presence before the transaction so the Redis call doesn't extend it.
+    const presentAt = await this.presentAtForRecipient(recipientUserId);
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.notification.findFirst({
         where: {
@@ -863,7 +904,7 @@ export class NotificationWriterService {
         const wasDelivered = existing.deliveredAt != null;
         await tx.notification.update({
           where: { id: existing.id },
-          data: { createdAt: new Date(), deliveredAt: null, readAt: null, ignoredAt: null, title },
+          data: { createdAt: new Date(), deliveredAt: null, readAt: null, ignoredAt: null, title, presentAt: presentAt ?? null },
         });
         if (wasDelivered) {
           await tx.user.update({
@@ -878,7 +919,7 @@ export class NotificationWriterService {
       }
 
       const created = await tx.notification.create({
-        data: { recipientUserId, kind, actorUserId: actorUserId ?? undefined, subjectGroupId, title },
+        data: { recipientUserId, kind, actorUserId: actorUserId ?? undefined, subjectGroupId, title, presentAt: presentAt ?? undefined },
         select: { id: true },
       });
       await tx.user.update({
@@ -1050,6 +1091,8 @@ export class NotificationWriterService {
     title: string;
   }): Promise<{ notificationId: string; undeliveredCount: number; isNew: boolean }> {
     const { recipientUserId, kind, actorUserId, subjectCrewId, title } = params;
+    // Resolve presence before the transaction so the Redis call doesn't extend it.
+    const presentAt = await this.presentAtForRecipient(recipientUserId);
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.notification.findFirst({
         where: { recipientUserId, kind, actorUserId: actorUserId ?? undefined, subjectCrewId },
@@ -1060,7 +1103,7 @@ export class NotificationWriterService {
         const wasDelivered = existing.deliveredAt != null;
         await tx.notification.update({
           where: { id: existing.id },
-          data: { createdAt: new Date(), deliveredAt: null, readAt: null, ignoredAt: null, title },
+          data: { createdAt: new Date(), deliveredAt: null, readAt: null, ignoredAt: null, title, presentAt: presentAt ?? null },
         });
         if (wasDelivered) {
           await tx.user.update({
@@ -1073,7 +1116,7 @@ export class NotificationWriterService {
       }
 
       const created = await tx.notification.create({
-        data: { recipientUserId, kind, actorUserId: actorUserId ?? undefined, subjectCrewId, title },
+        data: { recipientUserId, kind, actorUserId: actorUserId ?? undefined, subjectCrewId, title, presentAt: presentAt ?? undefined },
         select: { id: true },
       });
       await tx.user.update({

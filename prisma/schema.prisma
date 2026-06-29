@@ -335,6 +335,13 @@ model User {
   stripeCurrentPeriodStart     DateTime?
   stripeCurrentPeriodEnd       DateTime?
   stripeCancelAtPeriodEnd      Boolean            @default(false)
+  // Apple IAP identifiers (optional; null when user has never purchased via Apple).
+  appleOriginalTransactionId   String?            @unique
+  appleProductId               String?
+  appleStatus                  String?
+  appleExpiresAt               DateTime?
+  appleAutoRenew               Boolean            @default(false)
+  appleEnvironment             String?
   // Follow list privacy (controls counts + follower/following lists).
   followVisibility             FollowVisibility   @default(all)
   // Birthday privacy/display preference for public profile.
@@ -1731,6 +1738,13 @@ model Notification {
   readAt       DateTime?
   ignoredAt    DateTime?
   nudgedBackAt DateTime?
+  /**
+   * Set at creation time when the recipient was actively present (online and
+   * not idle, per Redis cross-instance presence) when the notification arrived.
+   * Notifications with this set are excluded from throttled and instant emails —
+   * the user already saw the realtime event live. Does not affect the bell badge.
+   */
+  presentAt    DateTime?
 
   recipientUserId               String
   kind                          NotificationKind
@@ -1783,6 +1797,7 @@ model Notification {
   @@index([recipientUserId, readAt])
   @@index([recipientUserId, ignoredAt])
   @@index([recipientUserId, nudgedBackAt])
+  @@index([recipientUserId, presentAt])
   @@index([actorPostId])
   @@index([subjectPostId])
   @@index([subjectArticleId])

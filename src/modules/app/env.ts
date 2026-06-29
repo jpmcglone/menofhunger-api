@@ -76,6 +76,18 @@ export const envSchema = z.object({
     z.string().optional(),
   ),
 
+  // App Review: a single phone number that App Review can sign in with using a fixed code,
+  // bypassing Twilio even in production. Only active when both vars are set.
+  // Set these in your production env and supply them in App Store Connect Review Notes.
+  APP_REVIEW_PHONE: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  APP_REVIEW_CODE: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+
   // Twilio (production only)
   TWILIO_ACCOUNT_SID: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
@@ -242,6 +254,42 @@ export const envSchema = z.object({
   ),
   // Base URL for push notification click-through (canonical frontend). If unset, first ALLOWED_ORIGINS entry is used.
   PUSH_FRONTEND_BASE_URL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+
+  // Apple IAP (StoreKit 2 / App Store Server API)
+  APPLE_IAP_BUNDLE_ID: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  // Issuer ID from App Store Connect → Users and Access → Integrations → In-App Purchase
+  APPLE_IAP_ISSUER_ID: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  // Key ID from App Store Connect (the short ID shown under your subscription key)
+  APPLE_IAP_KEY_ID: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  // Contents of the .p8 key file. Literal "\n" sequences are normalized to newlines at read time.
+  APPLE_IAP_PRIVATE_KEY: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  // JSON map of productId -> tier, e.g. '{"com.menofhunger.premium":"premium","com.menofhunger.premiumplus":"premiumPlus"}'
+  APPLE_IAP_PRODUCT_TIER_MAP: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  // App Store environment to verify signed data against: 'sandbox' (default) or 'production'.
+  APPLE_IAP_ENVIRONMENT: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.enum(['sandbox', 'production']).optional(),
+  ),
+  // Numeric App Store app ID (App Store Connect → App Information → "Apple ID"). Required in production.
+  APPLE_IAP_APP_APPLE_ID: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
   ),

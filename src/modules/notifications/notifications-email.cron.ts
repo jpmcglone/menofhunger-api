@@ -164,6 +164,11 @@ export class NotificationsEmailCron {
     this.logger.debug(`[${params.logTag}] not sent to userId=${params.userId} reason=${sent.reason ?? 'unknown'}`);
   }
 
+  /**
+   * Returns the top 3 emailable notifications per recipient — those the user has not yet
+   * seen in any form (deliveredAt, readAt, and presentAt all null) and that belong to
+   * bell-visible kinds (excludes message and community_group_post).
+   */
   private async listRecentNotificationItemsByRecipientIds(
     recipientIdsRaw: string[],
   ): Promise<Map<string, Array<{ title: string | null; body: string | null; subjectPostId: string | null }>>> {
@@ -192,6 +197,11 @@ export class NotificationsEmailCron {
           ) as rn
         FROM "Notification" n
         INNER JOIN u ON u."userId" = n."recipientUserId"
+        WHERE
+          n."deliveredAt" IS NULL
+          AND n."readAt" IS NULL
+          AND n."presentAt" IS NULL
+          AND n."kind" NOT IN ('message', 'community_group_post')
       )
       SELECT "recipientUserId", "title", "body", "subjectPostId"
       FROM ranked
@@ -210,6 +220,45 @@ export class NotificationsEmailCron {
         subjectPostId: r?.subjectPostId ?? null,
       });
       out.set(uid, list);
+    }
+    return out;
+  }
+
+  /**
+   * Returns the count of truly "emailable" notifications per recipient: those with
+   * deliveredAt, readAt, and presentAt all null (user hasn't opened the bell, tapped
+   * through, or been actively present when it arrived) and bell-visible kinds only
+   * (excludes message and community_group_post to match bell badge semantics).
+   */
+  private async listEmailableNotificationCountsByRecipientIds(
+    recipientIdsRaw: string[],
+  ): Promise<Map<string, number>> {
+    const ids = Array.from(new Set((recipientIdsRaw ?? []).map((x) => String(x ?? '').trim()).filter(Boolean)));
+    if (ids.length === 0) return new Map();
+
+    const values = ids.map((id) => Prisma.sql`(${id})`);
+    const rows = await this.prisma.$queryRaw<Array<{ recipientUserId: string; count: number }>>(
+      Prisma.sql`
+        WITH u("userId") AS (VALUES ${Prisma.join(values)})
+        SELECT
+          n."recipientUserId" as "recipientUserId",
+          CAST(COUNT(n."id") AS INT) as "count"
+        FROM "Notification" n
+        INNER JOIN u ON u."userId" = n."recipientUserId"
+        WHERE
+          n."deliveredAt" IS NULL
+          AND n."readAt" IS NULL
+          AND n."presentAt" IS NULL
+          AND n."kind" NOT IN ('message', 'community_group_post')
+        GROUP BY n."recipientUserId"
+      `,
+    );
+
+    const out = new Map<string, number>();
+    for (const r of rows) {
+      const uid = String(r?.recipientUserId ?? '').trim();
+      if (!uid) continue;
+      out.set(uid, Math.max(0, Math.floor(r?.count ?? 0)));
     }
     return out;
   }
@@ -305,12 +354,18 @@ export class NotificationsEmailCron {
         },
       });
 
-      const recentByRecipientId = await this.listRecentNotificationItemsByRecipientIds(recipients.map((u) => u.id));
+      const [recentByRecipientId, emailableCountById] = await Promise.all([
+        this.listRecentNotificationItemsByRecipientIds(recipients.map((u) => u.id)),
+        this.listEmailableNotificationCountsByRecipientIds(recipients.map((u) => u.id)),
+      ]);
       for (const u of recipients) {
         const to = getRecipientEmail(u.email);
         if (!to) continue;
 
-        const undelivered = Math.max(0, Math.floor(u.undeliveredNotificationCount ?? 0));
+        // Use the precise emailable count (deliveredAt, readAt, presentAt all null).
+        // Notifications the user was present for when they arrived are excluded so we
+        // never email about something they already saw live.
+        const undelivered = emailableCountById.get(u.id) ?? 0;
         if (undelivered <= 0) continue;
 
         const recent = recentByRecipientId.get(u.id) ?? [];
@@ -1769,10 +1824,12 @@ export class NotificationsEmailCron {
         where: {
           recipientUserId: userId,
           kind: { in: ['mention', 'comment'] },
-          // Smart-cancel: if the user has opened the app and the notification was delivered,
-          // we should not send the bundled email for it.
+          // Smart-cancel: skip notifications the user already saw — either by opening
+          // the bell (deliveredAt), tapping through (readAt), or by being actively
+          // present in the app when the notification arrived (presentAt).
           deliveredAt: null,
           readAt: null,
+          presentAt: null,
           createdAt: { gt: since },
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],

@@ -7,6 +7,7 @@ import { ReferralService } from './referral.service';
 import { ReferralDigestEmailCron } from './referral-digest-email.cron';
 import { AffiliateService } from './affiliate.service';
 import { AffiliateRetentionCron } from './affiliate-retention.cron';
+import { AppleIapService } from './apple-iap.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AppConfigModule } from '../app/app-config.module';
 import { AuthModule } from '../auth/auth.module';
@@ -18,8 +19,8 @@ import { RealtimeModule } from '../realtime/realtime.module';
 @Module({
   imports: [PrismaModule, AppConfigModule, AuthModule, UsersModule, FollowsModule, EmailModule, RealtimeModule],
   controllers: [BillingController],
-  providers: [BillingService, EntitlementService, BillingGrantExpiryCron, ReferralService, ReferralDigestEmailCron, AffiliateService, AffiliateRetentionCron],
-  exports: [BillingService, EntitlementService, ReferralService, AffiliateService],
+  providers: [BillingService, EntitlementService, BillingGrantExpiryCron, ReferralService, ReferralDigestEmailCron, AffiliateService, AffiliateRetentionCron, AppleIapService],
+  exports: [BillingService, EntitlementService, ReferralService, AffiliateService, AppleIapService],
 })
 export class BillingModule {}
 

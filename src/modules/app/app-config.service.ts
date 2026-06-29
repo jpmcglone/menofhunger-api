@@ -38,6 +38,20 @@ export type StripeConfig = {
   frontendBaseUrl: string;
 };
 
+export type AppleIapConfig = {
+  bundleId: string;
+  issuerId: string;
+  keyId: string;
+  /** PEM-formatted .p8 private key (literal "\n" already expanded). */
+  privateKey: string;
+  /** Maps App Store productId → internal tier ('premium' | 'premiumPlus'). */
+  productTierMap: Record<string, 'premium' | 'premiumPlus'>;
+  /** Which App Store environment to verify signed data against. */
+  environment: 'sandbox' | 'production';
+  /** Numeric App Store app ID. Required by Apple's verifier in production; null in sandbox. */
+  appAppleId: number | null;
+};
+
 export type EmailConfig = {
   provider: 'resend';
   apiKey: string;
@@ -228,6 +242,18 @@ export class AppConfigService {
     return ['1', 'true', 'yes', 'on'].includes(v);
   }
 
+  /**
+   * Returns the App Review bypass credentials when both APP_REVIEW_PHONE and APP_REVIEW_CODE
+   * are set. When null, the bypass is disabled. Safe to call in any environment — the phone
+   * number is only matched when the credentials are explicitly configured.
+   */
+  appReviewCredentials(): { phone: string; code: string } | null {
+    const phone = this.config.get<string>('APP_REVIEW_PHONE')?.trim() ?? '';
+    const code = this.config.get<string>('APP_REVIEW_CODE')?.trim() ?? '';
+    if (!phone || !code) return null;
+    return { phone, code };
+  }
+
   twilioVerify(): TwilioVerifyConfig | null {
     const accountSid = this.config.get<string>('TWILIO_ACCOUNT_SID')?.trim() ?? '';
     const authToken = this.config.get<string>('TWILIO_AUTH_TOKEN')?.trim() ?? '';
@@ -413,6 +439,43 @@ export class AppConfigService {
     if (explicit) return explicit;
     const first = this.allowedOrigins()[0];
     return first ? first : null;
+  }
+
+  /**
+   * Returns the Apple IAP configuration when all required env vars are set.
+   * Returns null when any required value is missing (IAP endpoints will reject gracefully).
+   */
+  appleIap(): AppleIapConfig | null {
+    const bundleId = this.config.get<string>('APPLE_IAP_BUNDLE_ID')?.trim() ?? '';
+    const issuerId = this.config.get<string>('APPLE_IAP_ISSUER_ID')?.trim() ?? '';
+    const keyId = this.config.get<string>('APPLE_IAP_KEY_ID')?.trim() ?? '';
+    const rawKey = this.config.get<string>('APPLE_IAP_PRIVATE_KEY') ?? '';
+    const privateKey = rawKey.replace(/\\n/g, '\n').trim();
+    const productTierMapRaw = this.config.get<string>('APPLE_IAP_PRODUCT_TIER_MAP')?.trim() ?? '';
+
+    if (!bundleId || !issuerId || !keyId || !privateKey) return null;
+
+    let productTierMap: Record<string, 'premium' | 'premiumPlus'> = {};
+    if (productTierMapRaw) {
+      try {
+        productTierMap = JSON.parse(productTierMapRaw);
+      } catch {
+        this.logger.warn('APPLE_IAP_PRODUCT_TIER_MAP is not valid JSON; defaulting to empty map.');
+      }
+    }
+
+    const environment =
+      this.config.get<string>('APPLE_IAP_ENVIRONMENT')?.trim() === 'production' ? 'production' : 'sandbox';
+    const appAppleIdRaw = this.config.get<string>('APPLE_IAP_APP_APPLE_ID')?.trim() ?? '';
+    const appAppleId = appAppleIdRaw && /^\d+$/.test(appAppleIdRaw) ? Number(appAppleIdRaw) : null;
+
+    if (environment === 'production' && appAppleId === null) {
+      this.logger.warn(
+        'APPLE_IAP_ENVIRONMENT=production but APPLE_IAP_APP_APPLE_ID is missing; Apple signed-data verification will fail.',
+      );
+    }
+
+    return { bundleId, issuerId, keyId, privateKey, productTierMap, environment, appAppleId };
   }
 
   stripe(): StripeConfig | null {

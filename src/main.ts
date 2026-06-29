@@ -50,6 +50,12 @@ function isStripeWebhookPath(req: Request): boolean {
   return path === '/billing/webhook' || path.startsWith('/billing/webhook?');
 }
 
+function isAppleIapNotificationPath(req: Request): boolean {
+  let path = String(req.originalUrl || req.url || '');
+  path = stripVersionPrefix(path);
+  return path === '/billing/apple/notifications' || path.startsWith('/billing/apple/notifications?');
+}
+
 function installProcessStabilityHandlers(): void {
   const g = globalThis as any;
   if (g.__mohProcessHandlersInstalled) return;
@@ -242,6 +248,7 @@ async function bootstrap() {
     if (!isUnsafeMethod(req.method)) return next();
     // Allow third-party webhooks (no Origin/Referer).
     if (isStripeWebhookPath(req)) return next();
+    if (isAppleIapNotificationPath(req)) return next();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const requestId = String((req as any)?.requestId ?? '').trim() || null;

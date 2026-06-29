@@ -11,11 +11,14 @@ type FacadeDeps = {
   prisma: any;
   appConfig: any;
   presenceRealtime: any;
+  presenceRedis?: any;
   presence: any;
   jobs: any;
   posthog: any;
   viewerContextService: any;
 };
+
+const stubPresenceRedis = { isOnline: jest.fn(async () => false), isIdle: jest.fn(async () => false) };
 
 function buildFacade(deps: FacadeDeps) {
   const preferences = new NotificationPreferencesService(deps.prisma);
@@ -24,7 +27,7 @@ function buildFacade(deps: FacadeDeps) {
   const readState = new NotificationReadStateService(deps.prisma, deps.presenceRealtime, deps.posthog);
   const postVisibility = new PostVisibilityReadService(deps.prisma, deps.appConfig, deps.viewerContextService);
   const query = new NotificationQueryService(deps.prisma, deps.appConfig, postVisibility, readState);
-  const writer = new NotificationWriterService(deps.prisma, deps.presenceRealtime, deps.jobs, push, query, readState);
+  const writer = new NotificationWriterService(deps.prisma, deps.presenceRealtime, deps.presenceRedis ?? stubPresenceRedis, deps.jobs, push, query, readState);
   const svc = new NotificationsService(preferences, push, apnsPush, readState, query, writer);
   return { svc, preferences, push, apnsPush, readState, query, writer };
 }
@@ -65,6 +68,7 @@ function makeService(overrides?: { prisma?: any }) {
     emitNotificationsUpdated: jest.fn(),
     emitNotificationNew: jest.fn(),
   } as any;
+  const presenceRedis = { isOnline: jest.fn(async () => false), isIdle: jest.fn(async () => false) } as any;
   const presence = { isUserViewingConversation: jest.fn(() => false) } as any;
   const jobs = { enqueueCron: jest.fn(async () => undefined) } as any;
   const posthog = { capture: jest.fn() } as any;
@@ -73,7 +77,7 @@ function makeService(overrides?: { prisma?: any }) {
     allowedPostVisibilities: jest.fn(() => ['public', 'verifiedOnly', 'premiumOnly']),
   } as any;
 
-  const { svc, query } = buildFacade({ prisma, appConfig, presenceRealtime, presence, jobs, posthog, viewerContextService });
+  const { svc, query } = buildFacade({ prisma, appConfig, presenceRealtime, presenceRedis, presence, jobs, posthog, viewerContextService });
   return { svc, prisma, query };
 }
 

@@ -7,6 +7,7 @@ import type { AffiliateSummaryDto, BillingCheckoutSessionDto, BillingMeDto, Bill
 import { BillingService } from './billing.service';
 import { ReferralService } from './referral.service';
 import { AffiliateService } from './affiliate.service';
+import { AppleIapService } from './apple-iap.service';
 
 const checkoutSchema = z.object({
   tier: z.enum(['premium', 'premiumPlus']),
@@ -24,12 +25,21 @@ const setRecruiterSchema = z.object({
   code: z.string().min(1),
 });
 
+const appleVerifySchema = z.object({
+  signedTransaction: z.string().min(1),
+});
+
+const appleNotificationsSchema = z.object({
+  signedPayload: z.string().min(1),
+});
+
 @Controller('billing')
 export class BillingController {
   constructor(
     private readonly billing: BillingService,
     private readonly referral: ReferralService,
     private readonly affiliate: AffiliateService,
+    private readonly appleIap: AppleIapService,
   ) {}
 
   @UseGuards(AuthGuard)
@@ -127,6 +137,38 @@ export class BillingController {
     if (!rawBody || !(rawBody instanceof Buffer)) throw new BadRequestException('Missing raw request body.');
 
     await this.billing.handleWebhook({ rawBody, stripeSignature });
+    return { data: { received: true } };
+  }
+
+  // ─── Apple IAP endpoints ──────────────────────────────────────────────────
+
+  /**
+   * iOS client posts the signed StoreKit 2 transaction JWS after a successful purchase.
+   * Verifies the transaction, upserts the Apple sub, recomputes entitlement, and returns
+   * the updated BillingMe so the client can update its UI immediately.
+   *
+   * Requires a verified, authenticated user (mirrors the Stripe checkout guard).
+   */
+  @UseGuards(AuthGuard)
+  @Post('apple/verify')
+  async appleVerify(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ): Promise<{ data: BillingMeDto }> {
+    const { signedTransaction } = appleVerifySchema.parse(body);
+    return { data: await this.appleIap.verifyTransaction(userId, signedTransaction) };
+  }
+
+  /**
+   * App Store Server Notifications V2 webhook.
+   * Apple posts a JWS-signed notification for subscription lifecycle events.
+   * IMPORTANT: this route must be excluded from CSRF origin checks in `main.ts`
+   * (same as the Stripe webhook — add '/billing/apple/notifications' to the exclusion list).
+   */
+  @Post('apple/notifications')
+  async appleNotifications(@Body() body: unknown): Promise<{ data: { received: true } }> {
+    const { signedPayload } = appleNotificationsSchema.parse(body);
+    await this.appleIap.handleNotification(signedPayload);
     return { data: { received: true } };
   }
 }

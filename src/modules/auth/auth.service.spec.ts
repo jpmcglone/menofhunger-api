@@ -99,6 +99,7 @@ function makeService(overrides?: { prisma?: any }) {
     otpHmacSecret: jest.fn(() => HMAC_SECRET),
     cookieDomain: jest.fn(() => undefined),
     r2: jest.fn(() => null),
+    appReviewCredentials: jest.fn(() => null),
   } as any;
 
   const cacheInvalidation = {
@@ -740,5 +741,101 @@ describe('AuthService account deletion restore', () => {
       response: expect.objectContaining({ error: 'account_banned' }),
     });
     expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('AuthService.verifyPhoneCode — App Review bypass', () => {
+  const REVIEW_PHONE = '+15550000999';
+  const REVIEW_CODE = 'R3V1EW';
+
+  function makeResponse() {
+    const cookies: Record<string, string> = {};
+    return {
+      cookie: jest.fn((name: string, value: string) => {
+        cookies[name] = value;
+      }),
+      clearCookie: jest.fn(),
+      _cookies: cookies,
+    } as any;
+  }
+
+  function makeServiceWithReviewCreds(existingUser?: ReturnType<typeof makeMinimalUser> | null) {
+    const sessionCreate = jest.fn(async () => ({
+      id: 'session-review',
+      tokenHash: '',
+      userId: existingUser?.id ?? 'user-review',
+    }));
+    return makeService({
+      prisma: {
+        user: {
+          findUnique: jest.fn(async (args: any) => {
+            if (args?.where?.phone === REVIEW_PHONE) return existingUser ?? null;
+            return null;
+          }),
+          findFirst: jest.fn(async () => null),
+          create: jest.fn(async () =>
+            makeMinimalUser({ id: 'user-new-review', phone: REVIEW_PHONE }),
+          ),
+          update: jest.fn(async (args: any) => ({
+            ...makeMinimalUser({ phone: REVIEW_PHONE }),
+            ...args.data,
+          })),
+        },
+        phoneOtp: {
+          findFirst: jest.fn(async () => null),
+          update: jest.fn(),
+        },
+        session: {
+          findFirst: jest.fn(async () => null),
+          update: jest.fn(),
+          create: sessionCreate,
+          deleteMany: jest.fn(),
+        },
+        post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+        checkin: { findFirst: jest.fn(async () => null) },
+      },
+    });
+  }
+
+  it('signs in with reviewer credentials in prod (no OTP required)', async () => {
+    const existingUser = makeMinimalUser({ phone: REVIEW_PHONE });
+    const { svc } = makeServiceWithReviewCreds(existingUser);
+    // Override appConfig to simulate a production environment with review creds set.
+    (svc as any).appConfig.isProd.mockReturnValue(true);
+    (svc as any).appConfig.appReviewCredentials.mockReturnValue({
+      phone: REVIEW_PHONE,
+      code: REVIEW_CODE,
+    });
+
+    const result = await svc.verifyPhoneCode(REVIEW_PHONE, REVIEW_CODE, makeResponse());
+    expect(result.isNewUser).toBe(false);
+    expect(result.sessionId).toBeDefined();
+  });
+
+  it('does NOT bypass when the code is correct but the phone is wrong', async () => {
+    const existingUser = makeMinimalUser({ phone: '+15550000001' });
+    const { svc } = makeServiceWithReviewCreds(existingUser);
+    (svc as any).appConfig.isProd.mockReturnValue(true);
+    (svc as any).appConfig.appReviewCredentials.mockReturnValue({
+      phone: REVIEW_PHONE,
+      code: REVIEW_CODE,
+    });
+
+    await expect(
+      svc.verifyPhoneCode('+15550000001', REVIEW_CODE, makeResponse()),
+    ).rejects.toBeDefined();
+  });
+
+  it('does NOT bypass when review creds are not configured', async () => {
+    const existingUser = makeMinimalUser({ phone: REVIEW_PHONE });
+    const { svc } = makeServiceWithReviewCreds(existingUser);
+    (svc as any).appConfig.isProd.mockReturnValue(true);
+    (svc as any).appConfig.appReviewCredentials.mockReturnValue(null);
+
+    await expect(
+      svc.verifyPhoneCode(REVIEW_PHONE, REVIEW_CODE, makeResponse()),
+    ).rejects.toBeDefined();
   });
 });

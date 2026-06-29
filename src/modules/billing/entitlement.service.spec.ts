@@ -30,6 +30,7 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
     },
     appConfig: {
       stripe: jest.fn(() => STRIPE_CFG),
+      appleIap: jest.fn(() => null),
     },
     ...overrides,
   };
@@ -66,6 +67,9 @@ function userRow(overrides: Record<string, unknown> = {}) {
     stripeSubscriptionStatus: null,
     stripeSubscriptionPriceId: null,
     stripeCurrentPeriodEnd: null,
+    appleProductId: null,
+    appleStatus: null,
+    appleExpiresAt: null,
     subscriptionGrants: [],
     ...overrides,
   };

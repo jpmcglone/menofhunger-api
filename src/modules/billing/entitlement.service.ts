@@ -25,6 +25,7 @@ export type EntitlementResult = {
   effectiveTier: EffectiveTier;
   effectiveExpiresAt: Date | null;
   stripeExpiresAt: Date | null;
+  appleExpiresAt: Date | null;
   grantExpiresAt: Date | null;
   activeGrants: ActiveGrantInfo[];
 };
@@ -184,6 +185,7 @@ export class EntitlementService {
   async recomputeAndApply(userId: string): Promise<EntitlementResult> {
     const now = new Date();
     const cfg = this.appConfig.stripe();
+    const appleCfg = this.appConfig.appleIap();
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -192,6 +194,9 @@ export class EntitlementService {
         stripeSubscriptionStatus: true,
         stripeSubscriptionPriceId: true,
         stripeCurrentPeriodEnd: true,
+        appleProductId: true,
+        appleStatus: true,
+        appleExpiresAt: true,
         subscriptionGrants: {
           where: { revokedAt: null, endsAt: { gt: now } },
           orderBy: { endsAt: 'desc' },
@@ -201,29 +206,41 @@ export class EntitlementService {
     if (!user) throw new NotFoundException('User not found.');
 
     const verified = user.verifiedStatus !== 'none';
+
+    // ── Stripe entitlement ──────────────────────────────────────────────────
     const stripeStatus = user.stripeSubscriptionStatus ?? '';
     const stripeEntitled = verified && ENTITLED_STRIPE_STATUSES.has(stripeStatus);
-
     const stripeIsPlus =
       stripeEntitled && Boolean(cfg) && user.stripeSubscriptionPriceId === cfg!.pricePremiumPlusMonthly;
     const stripeIsPremium =
       stripeEntitled &&
       Boolean(cfg) &&
       (user.stripeSubscriptionPriceId === cfg!.pricePremiumMonthly || stripeIsPlus);
-
     const stripeTier: EffectiveTier = stripeIsPlus ? 'premiumPlus' : stripeIsPremium ? 'premium' : 'none';
     const stripeExpiresAt = stripeEntitled ? (user.stripeCurrentPeriodEnd ?? null) : null;
 
-    const allActiveGrants = user.subscriptionGrants.map(this.toGrantInfo);
+    // ── Apple IAP entitlement ───────────────────────────────────────────────
+    // 'grace' = DID_FAIL_TO_RENEW billing retry — Apple keeps the subscription
+    // active during its grace period, so we honour it the same as 'active'.
+    const appleActive =
+      verified &&
+      (user.appleStatus === 'active' || user.appleStatus === 'grace') &&
+      user.appleExpiresAt != null &&
+      user.appleExpiresAt > now;
+    const appleTierKey = appleCfg?.productTierMap?.[user.appleProductId ?? ''] ?? null;
+    const appleIsPlus = appleActive && appleTierKey === 'premiumPlus';
+    const appleIsPremium = appleActive && (appleTierKey === 'premium' || appleIsPlus);
+    const appleTier: EffectiveTier = appleIsPlus ? 'premiumPlus' : appleIsPremium ? 'premium' : 'none';
+    const appleExpiresAt = appleActive ? (user.appleExpiresAt ?? null) : null;
 
-    // Referral grants only count towards entitlement while the user has an active Stripe
-    // subscription. Admin grants always apply regardless of subscription status.
+    // ── Grant entitlement ───────────────────────────────────────────────────
+    const allActiveGrants = user.subscriptionGrants.map(this.toGrantInfo);
+    // Referral grants only count when the user has an active Stripe subscription.
+    // Admin grants always apply regardless of subscription status.
     const effectiveGrants = allActiveGrants.filter(
       (g) => !g.requiresActiveSubscription || stripeEntitled,
     );
-
     // Grants require verification — unverified users bank months but cannot use them.
-    // Priority when verified: Premium+ grant > Premium grant > Stripe > none.
     const grantTier: EffectiveTier =
       !verified || effectiveGrants.length === 0
         ? 'none'
@@ -232,12 +249,13 @@ export class EntitlementService {
           : 'premium';
     const grantExpiresAt = verified && effectiveGrants.length > 0 ? effectiveGrants[0]!.endsAt : null;
 
-    const effectiveTier = maxTier(grantTier, stripeTier);
+    // ── Effective tier = max(stripe, apple, grants) ─────────────────────────
+    const effectiveTier = maxTier(maxTier(grantTier, stripeTier), appleTier);
     const isPremiumPlus = effectiveTier === 'premiumPlus';
     const isPremium = effectiveTier !== 'none';
 
-    // effectiveExpiresAt: latest access window across Stripe + grant.
-    const effectiveExpiresAt = laterDate(stripeExpiresAt, grantExpiresAt);
+    // effectiveExpiresAt: latest access window across all three sources.
+    const effectiveExpiresAt = laterDate(laterDate(stripeExpiresAt, grantExpiresAt), appleExpiresAt);
 
     await this.prisma.user.update({
       where: { id: userId },
@@ -250,6 +268,7 @@ export class EntitlementService {
       effectiveTier,
       effectiveExpiresAt,
       stripeExpiresAt,
+      appleExpiresAt,
       grantExpiresAt,
       activeGrants: allActiveGrants,
     };

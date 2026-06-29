@@ -71,6 +71,7 @@ export class BillingService {
   }
 
   async getMe(userId: string): Promise<BillingMeDto> {
+    const now = new Date();
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -80,6 +81,9 @@ export class BillingService {
         stripeSubscriptionStatus: true,
         stripeCancelAtPeriodEnd: true,
         stripeCurrentPeriodEnd: true,
+        appleProductId: true,
+        appleStatus: true,
+        appleExpiresAt: true,
         referralCode: true,
         referralBonusGrantedAt: true,
         recruitedBy: {
@@ -102,15 +106,34 @@ export class BillingService {
     const activeGrants = await this.entitlement.getActiveGrants(userId);
     const grantExpiresAt = activeGrants.length > 0 ? activeGrants[0]!.endsAt : null;
     const stripeExpiresAt = user.stripeCurrentPeriodEnd ?? null;
-    const effectiveExpiresAt = laterDate(stripeExpiresAt, grantExpiresAt);
+    const appleExpiresAt =
+      user.appleStatus === 'active' && user.appleExpiresAt != null && user.appleExpiresAt > now
+        ? user.appleExpiresAt
+        : null;
+    const effectiveExpiresAt = laterDate(laterDate(stripeExpiresAt, grantExpiresAt), appleExpiresAt);
+
+    // Determine the primary billing source for cross-platform purchase guard.
+    const ENTITLED_STRIPE = new Set(['active', 'trialing', 'past_due']);
+    const stripeActive = ENTITLED_STRIPE.has(user.stripeSubscriptionStatus ?? '');
+    const source: import('../../common/dto').BillingSource = !user.premium
+      ? null
+      : stripeActive
+        ? 'stripe'
+        : appleExpiresAt
+          ? 'apple'
+          : activeGrants.length > 0
+            ? 'grant'
+            : null;
 
     return {
       premium: Boolean(user.premium),
       premiumPlus: Boolean(user.premiumPlus),
       verified: isVerified(user.verifiedStatus),
+      source,
       subscriptionStatus: user.stripeSubscriptionStatus ?? null,
       cancelAtPeriodEnd: Boolean(user.stripeCancelAtPeriodEnd),
       currentPeriodEnd: user.stripeCurrentPeriodEnd ? user.stripeCurrentPeriodEnd.toISOString() : null,
+      appleExpiresAt: appleExpiresAt ? appleExpiresAt.toISOString() : null,
       effectiveExpiresAt: effectiveExpiresAt ? effectiveExpiresAt.toISOString() : null,
       grants: activeGrants.map((g) => ({
         id: g.id,

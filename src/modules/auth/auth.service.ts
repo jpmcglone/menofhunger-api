@@ -186,6 +186,14 @@ export class AuthService {
 
     const isDevBypass = !isProd && code === '000000';
 
+    // App Review bypass: a single pre-configured phone+code pair that works in any environment.
+    // Allows App Review to sign in without a live Twilio SMS. Only active when both env vars are set.
+    const reviewCreds = this.appConfig.appReviewCredentials();
+    const isReviewBypass = Boolean(
+      reviewCreds && phone === reviewCreds.phone && code === reviewCreds.code,
+    );
+    const isBypass = isDevBypass || isReviewBypass;
+
     // Account state: reveal bans only after code submit (not during /start).
     // Also: do this *before* OTP checks so banned accounts don't require a started OTP.
     const existing = await this.prisma.user.findUnique({ where: { phone } });
@@ -212,11 +220,11 @@ export class AuthService {
       orderBy: { createdAt: 'desc' },
     });
 
-    if (!otp && !isDevBypass) {
+    if (!otp && !isBypass) {
       throw new BadRequestException('No active code found. Please resend.');
     }
 
-    if (!isDevBypass) {
+    if (!isBypass) {
       if (!disableTwilioInDev && hasTwilioVerify) {
         try {
           const ok = await this.otpProvider.check(phone, code);
