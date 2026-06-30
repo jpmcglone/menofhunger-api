@@ -273,6 +273,85 @@ describe('EntitlementService.recomputeAndApply', () => {
 
     expect(result.effectiveExpiresAt).toEqual(grantEnd);
   });
+
+  it('grants premium from an active Apple subscription', async () => {
+    const appleExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const { service, deps } = makeService({
+      appConfig: {
+        stripe: jest.fn(() => STRIPE_CFG),
+        appleIap: jest.fn(() => ({ productTierMap: { 'com.test.premium.monthly': 'premium' } })),
+      },
+    });
+    deps.prisma.user.findUnique.mockResolvedValue(
+      userRow({ appleStatus: 'active', appleProductId: 'com.test.premium.monthly', appleExpiresAt }),
+    );
+
+    const result = await service.recomputeAndApply('u1');
+
+    expect(result.isPremium).toBe(true);
+    expect(result.isPremiumPlus).toBe(false);
+    expect(result.effectiveTier).toBe('premium');
+    expect(result.appleExpiresAt).toEqual(appleExpiresAt);
+    expect(deps.prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'u1' },
+      data: { premium: true, premiumPlus: false },
+    });
+  });
+
+  it('grants premium when Apple subscription is in billing-retry grace period', async () => {
+    const appleExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const { service, deps } = makeService({
+      appConfig: {
+        stripe: jest.fn(() => STRIPE_CFG),
+        appleIap: jest.fn(() => ({ productTierMap: { 'com.test.premium.monthly': 'premium' } })),
+      },
+    });
+    deps.prisma.user.findUnique.mockResolvedValue(
+      userRow({ appleStatus: 'grace', appleProductId: 'com.test.premium.monthly', appleExpiresAt }),
+    );
+
+    const result = await service.recomputeAndApply('u1');
+
+    expect(result.isPremium).toBe(true);
+    expect(result.effectiveTier).toBe('premium');
+  });
+
+  it('does not entitle when the Apple subscription has expired', async () => {
+    const appleExpiresAt = new Date(Date.now() - 1000); // in the past
+    const { service, deps } = makeService({
+      appConfig: {
+        stripe: jest.fn(() => STRIPE_CFG),
+        appleIap: jest.fn(() => ({ productTierMap: { 'com.test.premium.monthly': 'premium' } })),
+      },
+    });
+    deps.prisma.user.findUnique.mockResolvedValue(
+      userRow({ appleStatus: 'active', appleProductId: 'com.test.premium.monthly', appleExpiresAt }),
+    );
+
+    const result = await service.recomputeAndApply('u1');
+
+    expect(result.isPremium).toBe(false);
+    expect(result.effectiveTier).toBe('none');
+    expect(result.appleExpiresAt).toBeNull();
+  });
+
+  it('does not entitle when the Apple subscription is lapsed', async () => {
+    const appleExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const { service, deps } = makeService({
+      appConfig: {
+        stripe: jest.fn(() => STRIPE_CFG),
+        appleIap: jest.fn(() => ({ productTierMap: { 'com.test.premium.monthly': 'premium' } })),
+      },
+    });
+    deps.prisma.user.findUnique.mockResolvedValue(
+      userRow({ appleStatus: 'lapsed', appleProductId: 'com.test.premium.monthly', appleExpiresAt }),
+    );
+
+    const result = await service.recomputeAndApply('u1');
+
+    expect(result.isPremium).toBe(false);
+    expect(result.effectiveTier).toBe('none');
+  });
 });
 
 describe('EntitlementService.setGrantMonths', () => {

@@ -1137,10 +1137,18 @@ export class PostsMutationService {
         const quotedExists = detectedQuotedPostId
           ? await tx.post.findFirst({
               where: { id: detectedQuotedPostId, deletedAt: null },
-              select: { id: true, userId: true },
+              select: { id: true, userId: true, visibility: true },
             })
           : null;
         const quotedPostIdToSet = quotedExists ? quotedExists.id : null;
+
+        // Quote floor: a quote cannot be more open (less restrictive) than the quoted post.
+        // Skipped for replies (visibility inherited from parent) and group posts (forced public).
+        if (quotedExists && !parentId && !requestedCommunityGroupId && kind !== 'checkin') {
+          if (this.visibilityRank(requestedVisibility) < this.visibilityRank(quotedExists.visibility)) {
+            throw new ForbiddenException("A quote can't be more public than the post it quotes.");
+          }
+        }
 
         const created = await tx.post.create({
           data: {
@@ -2024,6 +2032,17 @@ export class PostsMutationService {
       return id;
     } catch {
       return null;
+    }
+  }
+
+  /** Ascending exclusivity rank matching the shared contract: public < verifiedOnly < premiumOnly < onlyMe. */
+  private visibilityRank(vis: string): number {
+    switch (vis) {
+      case 'public': return 0;
+      case 'verifiedOnly': return 1;
+      case 'premiumOnly': return 2;
+      case 'onlyMe': return 3;
+      default: return 0;
     }
   }
 
