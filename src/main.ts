@@ -91,6 +91,15 @@ async function bootstrap() {
     const otpSecret = appConfig.otpHmacSecret();
     if (!sessionSecret || sessionSecret === devSession) missing.push('SESSION_HMAC_SECRET (must be set and not dev default in production)');
     if (!otpSecret || otpSecret === devOtp) missing.push('OTP_HMAC_SECRET (must be set and not dev default in production)');
+    // ALLOWED_ORIGINS gates both CORS and the auth cookie ever reaching the browser
+    // (cookie-based sessions silently fail — no token, no error the user can see —
+    // if the browser's origin isn't in this list). Defaulting to localhost in
+    // production has caused production login/logout incidents; require it explicitly.
+    const devOrigin = 'http://localhost:3000';
+    const origins = appConfig.allowedOrigins();
+    if (origins.length === 0 || (origins.length === 1 && origins[0] === devOrigin)) {
+      missing.push('ALLOWED_ORIGINS (must be set to the real browser origin(s), e.g. https://menofhunger.com, in production)');
+    }
   }
   if (missing.length > 0) {
     startup.error(`Missing or invalid required env: ${missing.join('; ')}. Exiting.`);
@@ -142,6 +151,15 @@ async function bootstrap() {
   app.setGlobalPrefix('v1', {
     exclude: [...UNVERSIONED_ROOT_PATHS],
   });
+
+  // Always log the handful of values that determine whether auth cookies/CORS work at all
+  // (allowedOrigins, cookieDomain, trustProxy). These have caused silent prod login/logout
+  // incidents before — cheap to log unconditionally, even in production.
+  startup.log(
+    `auth/cors config: nodeEnv=${appConfig.nodeEnv()} | trustProxy=${appConfig.trustProxy()} | ` +
+      `allowedOrigins=${appConfig.allowedOrigins().join(',') || '(none)'} | cookieDomain=${appConfig.cookieDomain() ?? '(default: .menofhunger.com in prod, host-only in dev)'} | ` +
+      `csrfRequireOriginInProd=${appConfig.requireCsrfOriginInProd()}`,
+  );
 
   if (!appConfig.isProd() && appConfig.logStartupInfo()) {
     startup.log(

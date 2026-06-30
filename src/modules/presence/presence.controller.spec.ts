@@ -48,7 +48,9 @@ function makeController(opts?: {
       userIds.map((id) => ({ id, username: id, name: id, premium: false })),
     ),
   };
-  const prisma: any = {};
+  const prisma: any = {
+    user: { count: jest.fn(async () => 0) },
+  };
   const redis: any = {
     getJson: jest.fn(async () => null),
     setJson: jest.fn(async () => undefined),
@@ -82,7 +84,7 @@ function makeController(opts?: {
     marvIdentity,
   );
 
-  return { controller, follows, redis, marvIdentity, appConfig, presenceRedis };
+  return { controller, follows, redis, marvIdentity, appConfig, presenceRedis, prisma };
 }
 
 describe('PresenceController — Marv pin injection', () => {
@@ -201,6 +203,33 @@ describe('PresenceController — online() output shape and per-call invariants',
     expect(m.presenceRedis.lastConnectAtMsByUserId).toHaveBeenCalledTimes(1);
     expect(m.follows.getFollowListUsersByIds).toHaveBeenCalledTimes(1);
     expect(m.presenceRedis.idleByUserIds).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports recentlyOnlineCount from a user count excluding everyone currently online', async () => {
+    const m = makeController({ marvEnabled: false, onlineUserIds: ['user-a', 'user-b'] });
+    m.prisma.user.count.mockResolvedValueOnce(5);
+
+    const res: any = await m.controller.online(undefined, undefined);
+
+    expect(res.pagination.recentlyOnlineCount).toBe(5);
+    expect(m.prisma.user.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          usernameIsSet: true,
+          bannedAt: null,
+          id: { notIn: ['user-a', 'user-b'] },
+        }),
+      }),
+    );
+  });
+
+  it('omits the id exclusion filter when nobody is currently online', async () => {
+    const m = makeController({ marvEnabled: false, onlineUserIds: [] });
+
+    await m.controller.online(undefined, undefined);
+
+    const call = m.prisma.user.count.mock.calls[0]?.[0];
+    expect(call.where.id).toBeUndefined();
   });
 
   it('runs lastConnectAt/follows/idle/statuses concurrently after onlineUserIds resolves', async () => {

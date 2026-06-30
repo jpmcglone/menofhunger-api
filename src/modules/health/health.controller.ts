@@ -62,6 +62,12 @@ export class HealthController {
         stripeConfigured: Boolean(this.appConfig.stripe()),
         emailConfigured: Boolean(this.appConfig.email()),
         browserPushConfigured: this.appConfig.vapidConfigured(),
+        // Auth/cookie/CORS config — none of these are secrets, but they're the first
+        // thing to check when a user reports "logged out" or "not getting a token"
+        // in production (cookie silently fails to set if the browser origin isn't here).
+        allowedOrigins: this.appConfig.allowedOrigins(),
+        cookieDomain: this.appConfig.cookieDomain() ?? null,
+        trustProxy: this.appConfig.trustProxy(),
       },
     };
   }

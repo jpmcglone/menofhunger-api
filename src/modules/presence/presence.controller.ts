@@ -12,12 +12,13 @@ import { PresenceService } from './presence.service';
 import { PresenceRealtimeService } from './presence-realtime.service';
 import { PresenceRedisStateService } from './presence-redis-state.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import type { OnlineUserDto, PresenceOnlinePageDto, RecentlyOnlineUserDto, UserStatusDto } from '../../common/dto';
+import type { OnlinePaginationDto, OnlineUserDto, PresenceOnlinePageDto, RecentlyOnlineUserDto, UserStatusDto } from '../../common/dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
 
 const ONLINE_LIST_CACHE_TTL_MS = 10_000;
+const RECENTLY_ONLINE_WINDOW_MS = 60 * 60_000;
 
 const recentSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -192,7 +193,7 @@ export class PresenceController {
     // 10s is acceptable staleness for a "who's online" list.
     const cacheKey = RedisKeys.presenceOnlineList(viewerUserId);
     try {
-      const cached = await this.redis.getJson<{ data: unknown[]; pagination: { totalOnline: number } }>(cacheKey);
+      const cached = await this.redis.getJson<{ data: unknown[]; pagination: OnlinePaginationDto }>(cacheKey);
       if (cached) return cached;
     } catch {
       // Redis unavailable — fall through to live fetch.
@@ -258,7 +259,18 @@ export class PresenceController {
       totalOnline += 1;
     }
 
-    const result = { data, pagination: { totalOnline } };
+    // "Recently online" = active within the last hour but not currently connected.
+    // Excludes everyone already counted in `totalOnline` so the two numbers never overlap.
+    const recentlyOnlineCount = await this.prisma.user.count({
+      where: {
+        usernameIsSet: true,
+        bannedAt: null,
+        lastOnlineAt: { gte: new Date(Date.now() - RECENTLY_ONLINE_WINDOW_MS) },
+        ...(userIds.length ? { id: { notIn: userIds } } : {}),
+      },
+    });
+
+    const result = { data, pagination: { totalOnline, recentlyOnlineCount } };
     void this.redis.setJson(cacheKey, result, { ttlMs: ONLINE_LIST_CACHE_TTL_MS }).catch(() => undefined);
     return result;
   }

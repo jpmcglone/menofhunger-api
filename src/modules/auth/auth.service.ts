@@ -1,5 +1,14 @@
-import { BadRequestException, Inject, Injectable, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import type { Response } from 'express';
+import { Prisma, type User } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { AFFILIATE_RATES_CENTS, AFFILIATE_CAP_CENTS } from '../billing/affiliate.service';
@@ -110,7 +119,11 @@ export class AuthService {
         1,
         Math.ceil((latest.resendAfterAt.getTime() - now.getTime()) / 1000),
       );
-      return { retryAfterSeconds };
+      // No new SMS goes out here — there's already an active code for this phone
+      // (e.g. the user just requested one from another device/tab/app a moment ago).
+      // `sent: false` lets the client tell the user to check for the code they
+      // already have instead of implying a fresh text is on its way.
+      return { sent: false, retryAfterSeconds };
     }
 
     const isProd = this.appConfig.isProd();
@@ -167,7 +180,7 @@ export class AuthService {
       },
     });
 
-    return { retryAfterSeconds: OTP_RESEND_SECONDS };
+    return { sent: true, retryAfterSeconds: OTP_RESEND_SECONDS };
   }
 
   async phoneExists(phone: string): Promise<boolean> {
@@ -263,30 +276,7 @@ export class AuthService {
     }
 
     const restoredPendingDeletion = canRestorePendingDeletion;
-    const user = existing
-      ? restoredPendingDeletion
-        ? await this.prisma.user.update({
-            where: { id: existing.id },
-            data: {
-              bannedAt: null,
-              bannedReason: null,
-              deletionRequestedAt: null,
-              deletionScheduledAt: null,
-            },
-          })
-        : existing
-      : await this.prisma.user.create({
-          data: {
-            phone,
-            username: null,
-            usernameIsSet: false,
-            // Seed presence timestamps so a brand-new user appears in "recently around"
-            // immediately, even before they connect a WebSocket.
-            lastSeenAt: now,
-            lastOnlineAt: now,
-            ...(recruitedById ? { recruitedById } : {}),
-          },
-        });
+    const user = await this.resolveVerifiedUser({ phone, existing, restoredPendingDeletion, now, recruitedById });
 
     // Auto-follow the recruiter on signup so the new user's feed is populated immediately.
     if (isNewUser && recruitedById) {
@@ -372,6 +362,74 @@ export class AuthService {
       user: toUserDto(user, publicBaseUrl),
       sessionId: session.id,
     };
+  }
+
+  /**
+   * Creates, restores, or reuses the User row for a verified phone number.
+   *
+   * Wrapped separately (rather than inline in `verifyPhoneCode`) so we can give
+   * a clear diagnostic log + a typed error instead of letting a raw Prisma
+   * exception bubble up as an opaque 500. Also self-heals the `existing: null`
+   * + concurrent-signup race (two verify calls for the same number landing at
+   * once — e.g. a double-tap or app + web both mid-signup) by treating a
+   * unique-constraint violation on `phone` as "someone else just created this
+   * user a moment ago" and re-reading it instead of failing the request.
+   */
+  private async resolveVerifiedUser(params: {
+    phone: string;
+    existing: User | null;
+    restoredPendingDeletion: boolean;
+    now: Date;
+    recruitedById: string | null;
+  }): Promise<User> {
+    const { phone, existing, restoredPendingDeletion, now, recruitedById } = params;
+
+    if (existing) {
+      if (!restoredPendingDeletion) return existing;
+      try {
+        return await this.prisma.user.update({
+          where: { id: existing.id },
+          data: {
+            bannedAt: null,
+            bannedReason: null,
+            deletionRequestedAt: null,
+            deletionScheduledAt: null,
+          },
+        });
+      } catch (err) {
+        this.logger.error(
+          `Failed to restore pending-deletion account for phone=${this.maskPhone(phone)}: ${(err as Error)?.message}`,
+          (err as Error)?.stack,
+        );
+        throw new InternalServerErrorException('Could not restore your account. Please try again or contact support.');
+      }
+    }
+
+    try {
+      return await this.prisma.user.create({
+        data: {
+          phone,
+          username: null,
+          usernameIsSet: false,
+          // Seed presence timestamps so a brand-new user appears in "recently around"
+          // immediately, even before they connect a WebSocket.
+          lastSeenAt: now,
+          lastOnlineAt: now,
+          ...(recruitedById ? { recruitedById } : {}),
+        },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        // Lost a race to create this phone number — fetch and treat as login.
+        const racedUser = await this.prisma.user.findUnique({ where: { phone } });
+        if (racedUser) return racedUser;
+      }
+      this.logger.error(
+        `Failed to create user for phone=${this.maskPhone(phone)}: ${(err as Error)?.message}`,
+        (err as Error)?.stack,
+      );
+      throw new InternalServerErrorException('Could not finish signing you in. Please try again.');
+    }
   }
 
   async meFromSessionToken(token: string | undefined): Promise<SessionResult | null> {

@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { AuthService } from './auth.service';
 import { SESSION_RENEWAL_THRESHOLD_DAYS, SESSION_TTL_DAYS } from './auth.constants';
 import { hmacSha256Hex, randomSessionToken } from './auth.utils';
@@ -587,6 +588,111 @@ describe('AuthService.verifyPhoneCode — referral signup linking', () => {
 
 // ---------------------------------------------------------------------------
 
+describe('AuthService.verifyPhoneCode — signup race + Prisma error hardening', () => {
+  function makeResponse() {
+    return { cookie: jest.fn(), clearCookie: jest.fn() } as any;
+  }
+
+  function makeP2002Error() {
+    return new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`phone`)', {
+      code: 'P2002',
+      clientVersion: 'test',
+    } as any);
+  }
+
+  it('self-heals a concurrent signup race: re-fetches the user instead of 500ing when create hits a unique-constraint violation', async () => {
+    const racedUser = makeMinimalUser({ id: 'raced-user', phone: '+15555550000' });
+    const prisma = {
+      user: {
+        // First lookup (before OTP check) finds nothing — this request believes it's a new signup.
+        findUnique: jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(racedUser),
+        findFirst: jest.fn(),
+        create: jest.fn(async () => {
+          throw makeP2002Error();
+        }),
+      },
+      phoneOtp: {
+        findFirst: jest.fn(async () => null),
+        update: jest.fn(),
+      },
+      session: {
+        create: jest.fn(async () => ({ id: 'session-1' })),
+      },
+      post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    };
+    const { svc } = makeService({ prisma });
+
+    const result = await svc.verifyPhoneCode('+15555550000', '000000', makeResponse());
+
+    expect(prisma.user.create).toHaveBeenCalled();
+    expect(prisma.user.findUnique).toHaveBeenCalledTimes(2);
+    expect(result.user.id).toBe('raced-user');
+    expect(result.sessionId).toBe('session-1');
+  });
+
+  it('surfaces a clean 500 (not an opaque crash) when user creation fails for a non-race reason', async () => {
+    const prisma = {
+      user: {
+        findUnique: jest.fn(async () => null),
+        findFirst: jest.fn(),
+        create: jest.fn(async () => {
+          throw new Error('connection terminated unexpectedly');
+        }),
+      },
+      phoneOtp: {
+        findFirst: jest.fn(async () => null),
+        update: jest.fn(),
+      },
+      session: {
+        create: jest.fn(),
+      },
+      post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    };
+    const { svc } = makeService({ prisma });
+
+    await expect(svc.verifyPhoneCode('+15555550000', '000000', makeResponse())).rejects.toMatchObject({
+      status: 500,
+      response: expect.objectContaining({ message: expect.stringContaining('try again') }),
+    });
+    expect(prisma.session.create).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a clean 500 when restoring a pending-deletion account fails', async () => {
+    const pendingDeletionUser = makeMinimalUser({
+      id: 'pending-user',
+      phone: '+15555550000',
+      bannedAt: new Date(),
+      bannedReason: 'self_deleted_pending',
+      deletionScheduledAt: new Date(Date.now() + 24 * 60 * 60_000),
+    });
+    const prisma = {
+      user: {
+        findUnique: jest.fn(async () => pendingDeletionUser),
+        findFirst: jest.fn(),
+        update: jest.fn(async () => {
+          throw new Error('connection terminated unexpectedly');
+        }),
+      },
+      phoneOtp: {
+        findFirst: jest.fn(async () => null),
+        update: jest.fn(),
+      },
+      session: {
+        create: jest.fn(),
+      },
+      post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    };
+    const { svc } = makeService({ prisma });
+
+    await expect(svc.verifyPhoneCode('+15555550000', '000000', makeResponse())).rejects.toMatchObject({
+      status: 500,
+    });
+    expect(prisma.session.create).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
 describe('AuthService.verifyPhoneCode — presence on signup', () => {
   function makeResponse() {
     return { cookie: jest.fn(), clearCookie: jest.fn() } as any;
@@ -635,6 +741,38 @@ describe('AuthService.verifyPhoneCode — presence on signup', () => {
 
 // ---------------------------------------------------------------------------
 
+describe('AuthService.startPhoneAuth — resend cooldown is shared across clients', () => {
+  it('does not trigger a fresh send and reports sent:false when a code is already pending for this phone', async () => {
+    // Simulates the user having just requested a code from a *different* client
+    // (e.g. web) moments ago for the same phone number — the cooldown is keyed
+    // by phone, not by platform/session.
+    const resendAfterAt = new Date(Date.now() + 22_000);
+    const phoneOtpCreate = jest.fn();
+    const userFindUnique = jest.fn(async () => null);
+    const { svc } = makeService({
+      prisma: {
+        user: { findUnique: userFindUnique },
+        phoneOtp: {
+          findFirst: jest.fn(async () => ({ resendAfterAt })),
+          create: phoneOtpCreate,
+        },
+        session: { findFirst: jest.fn(), update: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
+        post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+      },
+    });
+
+    const result = await svc.startPhoneAuth('+15555555555');
+
+    expect(result.sent).toBe(false);
+    expect(result.retryAfterSeconds).toBeGreaterThan(0);
+    expect(phoneOtpCreate).not.toHaveBeenCalled();
+    // The early-return short-circuits before any user lookup or Twilio call.
+    expect(userFindUnique).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
 describe('AuthService account deletion restore', () => {
   function makeResponse() {
     return { cookie: jest.fn(), clearCookie: jest.fn() } as any;
@@ -661,7 +799,10 @@ describe('AuthService account deletion restore', () => {
       },
     });
 
-    await expect(svc.startPhoneAuth('+15555555555')).resolves.toEqual({ retryAfterSeconds: expect.any(Number) });
+    await expect(svc.startPhoneAuth('+15555555555')).resolves.toEqual({
+      sent: true,
+      retryAfterSeconds: expect.any(Number),
+    });
     expect(phoneOtpCreate).toHaveBeenCalledTimes(1);
   });
 

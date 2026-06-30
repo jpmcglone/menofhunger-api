@@ -1291,6 +1291,16 @@ export type RecentlyOnlinePaginationDto = {
   nextCursor: string | null;
 };
 
+export type OnlinePaginationDto = {
+  totalOnline: number;
+  /**
+   * Count of users who were online within the last hour but are not currently
+   * online (excludes everyone already counted in `totalOnline`). Powers the
+   * "(N more recently)" hint next to the online count in the right rail.
+   */
+  recentlyOnlineCount: number;
+};
+
 export type PresenceOnlinePageDto = {
   online: OnlineUserDto[];
   recent: RecentlyOnlineUserDto[];

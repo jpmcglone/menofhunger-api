@@ -65,7 +65,7 @@ function makePollsService() {
   };
 
   const svc = new PollsService(prisma, viewerContext, realtime);
-  return { svc, emitPostsLiveUpdated, prisma };
+  return { svc, emitPostsLiveUpdated, prisma, viewerContext };
 }
 
 describe('PollsService', () => {
@@ -80,6 +80,27 @@ describe('PollsService', () => {
       expect(postId).toBe('post-1');
       expect(payload.reason).toBe('poll_vote');
       expect(payload.patch?.poll).toBeDefined();
+    });
+
+    it('throws ForbiddenException for unverified, non-premium viewers — even on a public poll', async () => {
+      const { svc, prisma, viewerContext } = makePollsService();
+      viewerContext.getViewer.mockResolvedValueOnce({ id: 'user-2', verifiedStatus: 'none', premium: false, premiumPlus: false });
+
+      await expect(svc.voteOnPoll({ userId: 'user-2', postId: 'post-1', optionId: 'opt-1' })).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      // Never reaches the post lookup or the vote write — rejected purely on viewer status.
+      expect(prisma.post.findFirst).not.toHaveBeenCalled();
+      expect(prisma.postPollVote.create).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException for a premium-but-unverified viewer — polls require actual verification, not just premium', async () => {
+      const { svc, viewerContext } = makePollsService();
+      viewerContext.getViewer.mockResolvedValueOnce({ id: 'user-2', verifiedStatus: 'none', premium: true, premiumPlus: false });
+
+      await expect(svc.voteOnPoll({ userId: 'user-2', postId: 'post-1', optionId: 'opt-1' })).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
     });
 
     it('throws ForbiddenException if user has already voted (P2002)', async () => {
