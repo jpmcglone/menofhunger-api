@@ -2357,14 +2357,16 @@ describe('PostsService.listForYouFeed', () => {
 
   it('penalizes posts seen recently and recovers as the seen age grows', async () => {
     const justNow = new Date();
-    const aWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    // Use 48 h (not 7 days) so seenMult ≈ 0.67 — a large-enough gap vs p-fresh (seenMult=1.0)
+    // that the saturation-based jitter (≈±15%) cannot flip the ordering.
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
     const { service } = setupForYou({
       candidates: [
         cand('p-fresh',    'u1', 10, 1),
         cand('p-seen-old', 'u2', 10, 1),
         cand('p-seen-new', 'u3', 10, 1),
       ],
-      seenAtByPostId: { 'p-seen-new': justNow, 'p-seen-old': aWeekAgo },
+      seenAtByPostId: { 'p-seen-new': justNow, 'p-seen-old': twoDaysAgo },
     });
 
     const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
