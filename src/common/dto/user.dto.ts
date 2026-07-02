@@ -14,7 +14,7 @@ export type OrgAffiliationDto = {
 export type UserListRelationship = {
   viewerFollowsUser: boolean;
   userFollowsViewer: boolean;
-  /** True when the viewer has enabled “every post” notifications (bell icon) for this follow. */
+  /** True when the viewer has enabled reply notifications (bell icon) for this follow. */
   viewerPostNotificationsEnabled: boolean;
 };
 

@@ -1275,6 +1275,125 @@ describe('PostsService.runPostCreateSideEffects — mention privacy gating', () 
   });
 });
 
+// ─── runPostCreateSideEffects: followed-post bell semantics ──────────────────
+
+describe('PostsService.runPostCreateSideEffects — followed-post bell semantics', () => {
+  function setup() {
+    const { service, deps } = makeService();
+    deps.prisma.communityGroup = { findUnique: jest.fn() };
+    deps.prisma.communityGroupMember = { findMany: jest.fn(async () => []) };
+    deps.prisma.follow = {
+      findMany: jest.fn(async () => [
+        {
+          followerId: 'normal-follower',
+          postNotificationsEnabled: false,
+          follower: { verifiedStatus: 'identity', premium: false, premiumPlus: false },
+        },
+        {
+          followerId: 'bell-follower',
+          postNotificationsEnabled: true,
+          follower: { verifiedStatus: 'identity', premium: false, premiumPlus: false },
+        },
+      ]),
+    };
+    return { service, deps };
+  }
+
+  function basePost(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      id: 'post-1',
+      userId: 'author',
+      body: 'hello',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      editedAt: null,
+      editCount: 0,
+      deletedAt: null,
+      kind: 'regular',
+      checkinDayKey: null,
+      checkinPrompt: null,
+      visibility: 'public',
+      isDraft: false,
+      topics: [],
+      hashtags: [],
+      boostCount: 0,
+      bookmarkCount: 0,
+      commentCount: 0,
+      repostCount: 0,
+      viewerCount: 0,
+      parentId: null,
+      communityGroupId: null,
+      pinnedInGroupAt: null,
+      media: [],
+      mentions: [],
+      poll: null,
+      user: {
+        id: 'author',
+        username: 'author',
+        name: 'Author',
+        premium: false,
+        premiumPlus: false,
+        isOrganization: false,
+        stewardBadgeEnabled: false,
+        verifiedStatus: 'identity',
+        avatarKey: null,
+        avatarUpdatedAt: null,
+        orgMemberships: [],
+        bannedAt: null,
+      },
+      ...overrides,
+    } as any;
+  }
+
+  async function callSideEffects(service: PostsService, args: any): Promise<void> {
+    await ((service as any).mutation).runPostCreateSideEffects({
+      actorUserId: 'author',
+      post: basePost(args.postOverrides),
+      parentId: args.parentId ?? null,
+      parentAuthorUserId: args.parentAuthorUserId ?? null,
+      threadPostsForRoles: args.threadPostsForRoles ?? [],
+      bodyMentionIds: args.bodyMentionIds ?? [],
+      bodyMentionSet: new Set(args.bodyMentionSet ?? args.bodyMentionIds ?? []),
+      bodySnippet: '',
+      visibility: args.visibility ?? 'public',
+      quotedInfo: args.quotedInfo ?? null,
+      didAwardStreak: false,
+    });
+  }
+
+  it('notifies all eligible followers for top-level posts', async () => {
+    const { service, deps } = setup();
+
+    await callSideEffects(service, {});
+
+    const followedPostCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
+      (c) => c[0]?.kind === 'followed_post',
+    );
+    expect(followedPostCalls.map((c) => c[0].recipientUserId).sort()).toEqual([
+      'bell-follower',
+      'normal-follower',
+    ]);
+    expect(deps.presenceRealtime.emitFeedNewPost).toHaveBeenCalledWith(
+      ['normal-follower', 'bell-follower'],
+      expect.any(Object),
+    );
+  });
+
+  it('only notifies bell-enabled followers for replies they are not already involved in', async () => {
+    const { service, deps } = setup();
+
+    await callSideEffects(service, {
+      parentId: 'parent-1',
+      parentAuthorUserId: 'parent-author',
+    });
+
+    const followedPostCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
+      (c) => c[0]?.kind === 'followed_post',
+    );
+    expect(followedPostCalls.map((c) => c[0].recipientUserId)).toEqual(['bell-follower']);
+    expect(deps.presenceRealtime.emitFeedNewPost).not.toHaveBeenCalled();
+  });
+});
+
 // ─── runPostCreateSideEffects: group post notification membership gating ─────
 
 describe('PostsService.runPostCreateSideEffects — group notification gating', () => {

@@ -212,6 +212,8 @@ export class NotificationWriterService {
         ? `/p/${actorPostId}`
         : kind === 'mention' && actorPostId
           ? `/p/${actorPostId}`
+          : kind === 'followed_post' && subjectPostId
+            ? `/p/${subjectPostId}`
           : kind === 'boost' && subjectPostId
             ? `/p/${subjectPostId}`
             : kind === 'coin_transfer'

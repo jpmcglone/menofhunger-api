@@ -1734,6 +1734,7 @@ export class PostsMutationService {
             where: { followingId: userId },
             select: {
               followerId: true,
+              postNotificationsEnabled: true,
               follower: { select: { verifiedStatus: true, premium: true, premiumPlus: true } },
             },
           });
@@ -1743,6 +1744,7 @@ export class PostsMutationService {
             if (!recipientUserId || recipientUserId === userId) continue;
             if (bodyMentionSet.has(recipientUserId)) continue;
             if (parentId && (recipientUserId === parentAuthorUserId || threadRoles?.has(recipientUserId))) continue;
+            if (parentId && !f.postNotificationsEnabled) continue;
             if (!await canNotifyForGroupPost(recipientUserId)) continue;
 
             if (visibility === 'verifiedOnly') {

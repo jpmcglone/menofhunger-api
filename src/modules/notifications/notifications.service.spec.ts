@@ -295,7 +295,7 @@ describe('NotificationsService.list batching', () => {
     expect(item.notification.post?.id).toBe('p_quote');
   });
 
-  it('attaches full post payloads for followed posts, replies, and post mentions', async () => {
+  it('attaches full post payloads for bell followed posts, replies, and post mentions', async () => {
     const { svc } = makeService({
       prisma: {
         notification: {
@@ -393,6 +393,9 @@ describe('NotificationsService.list batching', () => {
           findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 3 })),
           findMany: jest.fn(async () => []),
         },
+        follow: {
+          findMany: jest.fn(async () => [{ followingId: 'a1' }]),
+        },
       } as any,
     });
 
@@ -408,6 +411,66 @@ describe('NotificationsService.list batching', () => {
     expect(res.items[0].notification.post?.id).toBe('p_followed');
     expect(res.items[1].notification.post?.id).toBe('p_reply');
     expect(res.items[2].notification.post?.id).toBe('p_mention');
+  });
+
+  it('rolls up non-bell followed posts instead of rendering full post rows', async () => {
+    const { svc } = makeService({
+      prisma: {
+        notification: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => [
+            {
+              id: 'n_followed',
+              createdAt: new Date('2026-02-03T00:00:00.000Z'),
+              kind: 'followed_post',
+              deliveredAt: null,
+              readAt: null,
+              ignoredAt: null,
+              nudgedBackAt: null,
+              actorUserId: 'a1',
+              actorPostId: null,
+              subjectPostId: 'p_followed',
+              subjectUserId: null,
+              title: null,
+              body: null,
+              actor: {
+                id: 'a1',
+                username: 'actor',
+                name: 'Actor',
+                avatarKey: null,
+                avatarUpdatedAt: null,
+                premium: false,
+                isOrganization: false,
+                verifiedStatus: 'none',
+              },
+            },
+          ]),
+          count: jest.fn(async () => 1),
+          groupBy: jest.fn(async () => []),
+        },
+        post: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => [
+            makePost('p_followed', { body: 'New post from someone you follow.' }),
+          ]),
+        },
+        user: {
+          findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 1 })),
+          findMany: jest.fn(async () => []),
+        },
+        follow: { findMany: jest.fn(async () => []) },
+      } as any,
+    });
+
+    const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null });
+
+    expect(res.items).toHaveLength(1);
+    expect(res.items[0]?.type).toBe('followed_posts_rollup');
+    if (res.items[0]?.type !== 'followed_posts_rollup') {
+      throw new Error('Expected followed posts rollup');
+    }
+    expect(res.items[0].rollup.count).toBe(1);
+    expect(res.items[0].rollup.actors[0]?.id).toBe('a1');
   });
 
   it('falls back to the original post preview for plain repost notifications', async () => {

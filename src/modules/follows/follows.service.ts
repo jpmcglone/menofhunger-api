@@ -40,7 +40,7 @@ type RecommendationRow = {
 export type FollowRelationship = {
   viewerFollowsUser: boolean;
   userFollowsViewer: boolean;
-  /** True when viewer enabled “every post” notifications for this follow (bell icon). */
+  /** True when viewer enabled reply notifications for this follow (bell icon). */
   viewerPostNotificationsEnabled: boolean;
 };
 

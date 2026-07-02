@@ -39,8 +39,8 @@ export type NotificationGroupDto = {
 };
 
 /**
- * Collapsed “new posts” row for followed-post notifications when bell is NOT enabled.
- * This is a UI affordance only; underlying notifications still exist for counts and read semantics.
+ * Collapsed “new posts” row for normal followed-post notifications.
+ * Bell-enabled follows stay standalone because they mean “include this person's replies too.”
  */
 export type FollowedPostsRollupDto = {
   /** The newest underlying notification id (stable-ish render key). */

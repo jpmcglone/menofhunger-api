@@ -475,7 +475,7 @@ export class UsersController {
     if (usernameLower !== MENOFHUNGER_USERNAME) {
       try {
         await this.followsService.follow({ viewerUserId: userId, username: MENOFHUNGER_USERNAME });
-        // New users: enable “every post” notifications for starter follows.
+        // New users: enable reply notifications for starter follows.
         await this.followsService.setPostNotificationsEnabled({
           viewerUserId: userId,
           username: MENOFHUNGER_USERNAME,
@@ -499,7 +499,7 @@ export class UsersController {
 
     try {
       await this.followsService.follow({ viewerUserId: userId, username: JOHN_USERNAME });
-      // New users: enable “every post” notifications for starter follows.
+      // New users: enable reply notifications for starter follows.
       await this.followsService.setPostNotificationsEnabled({
         viewerUserId: userId,
         username: JOHN_USERNAME,

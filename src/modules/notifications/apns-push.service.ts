@@ -7,6 +7,8 @@ export type ApnsEnvironment = 'production' | 'sandbox';
 
 /** APNs error reasons that mean the device token is permanently dead and must be pruned. */
 const PRUNE_REASONS = new Set(['BadDeviceToken', 'Unregistered', 'DeviceTokenNotForTopic']);
+const NOTIFICATION_PUSH_SOUND = 'notification.caf';
+const MESSAGE_PUSH_SOUND = 'new-message.caf';
 
 /**
  * Native iOS push (APNs) delivery via HTTP/2 token-based auth (.p8 key).
@@ -108,7 +110,7 @@ export class ApnsPushService {
       const client = this.clientFor(environment, cfg);
       const notification = new ApnsNotification(row.token, {
         alert: { title: params.title, body: (params.body ?? '').trim() || ' ' },
-        sound: 'default',
+        sound: this.soundForKind(params.kind),
         badge: Math.max(0, Math.floor(badge || 0)),
         ...(collapseId ? { collapseId } : {}),
         data,
@@ -149,5 +151,9 @@ export class ApnsPushService {
     });
     this.clients[environment] = client;
     return client;
+  }
+
+  private soundForKind(kind?: string): string {
+    return kind === 'message' ? MESSAGE_PUSH_SOUND : NOTIFICATION_PUSH_SOUND;
   }
 }

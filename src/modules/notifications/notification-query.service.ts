@@ -366,7 +366,7 @@ export class NotificationQueryService {
       );
     });
 
-    // Follow bell settings: which followed_post actors have “every post” enabled.
+    // Follow bell settings: actors whose replies should stay as high-priority rows.
     const followedPostActorUserIds = [
       ...new Set(raw.filter((n) => n.kind === 'followed_post' && n.actorUserId).map((n) => n.actorUserId as string)),
     ];
@@ -501,11 +501,6 @@ export class NotificationQueryService {
     ) {
       const n = dtos[i]!;
 
-      if (n.post && (n.kind === 'followed_post' || n.kind === 'comment' || n.kind === 'mention' || n.kind === 'repost')) {
-        items.push({ type: 'single', notification: n });
-        i += 1;
-        continue;
-      }
       // Collapse followed_post notifications when bell is not enabled.
       if (n.kind === 'followed_post' && !isBellEnabledFollowedPost(n)) {
         if (rollupInsertIndex === null) rollupInsertIndex = items.length;
@@ -513,9 +508,15 @@ export class NotificationQueryService {
         i += 1;
         continue;
       }
-      // Bell-enabled followed_post notifications should always be standalone.
-      // This guarantees "every post" delivery semantics in the feed UI.
+      // Bell-enabled followed_post notifications stay standalone.
+      // Normal follows collapse into the quieter “new posts” rollup.
       if (n.kind === 'followed_post' && isBellEnabledFollowedPost(n)) {
+        items.push({ type: 'single', notification: n });
+        i += 1;
+        continue;
+      }
+
+      if (n.post && (n.kind === 'comment' || n.kind === 'mention' || n.kind === 'repost')) {
         items.push({ type: 'single', notification: n });
         i += 1;
         continue;
