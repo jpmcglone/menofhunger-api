@@ -148,9 +148,26 @@ export const POSTS_RANKING = {
   /**
    * Logged-out viewers have no last-seen signal, so jitter the adjusted score +/- this
    * fraction to vary ordering between refreshes while keeping recent/relevant posts near
-   * the top. Authed paths are unaffected (jitter is 1.0 when viewerUserId is set).
+   * the top.
    */
   forYouAnonJitterStrength: 0.35,
+  /**
+   * Authed viewers start with no jitter (0) while the candidate pool still has fresh/unseen
+   * content — the ranking already surfaces that well and shouldn't be perturbed.
+   */
+  forYouSeenJitterBase: 0,
+  /**
+   * As the candidate pool saturates with already-seen posts, jitter strength ramps from
+   * forYouSeenJitterBase up to this ceiling so a "seen everything" refresh visibly reshuffles
+   * instead of returning the exact same order every time.
+   */
+  forYouSeenSaturationJitterMax: 0.9,
+  /**
+   * Saturation (fraction of candidates the viewer has already seen) below which jitter stays
+   * at forYouSeenJitterBase. Above this, jitter ramps linearly toward forYouSeenSaturationJitterMax
+   * as saturation approaches 1.
+   */
+  forYouSeenSaturationJitterThreshold: 0.6,
   /**
    * Width of the recency tier used when ordering the followed-unseen quota. Within the same tier
    * we prefer engaged-with > mutuals > one-way follows; across tiers, the newer tier always wins.

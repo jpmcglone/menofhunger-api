@@ -3007,6 +3007,81 @@ describe('PostsService.listForYouFeed', () => {
       expect(ids).toEqual(results[0]);
     }
   });
+
+  it('authed: below the saturation threshold, ordering stays deterministic even with some seen posts', async () => {
+    // 10 candidates, only 3 seen (saturation 0.3 — below the 0.6 jitter threshold), so
+    // jitterStrength stays at forYouSeenJitterBase (0) and ordering must not vary.
+    const candidates = Array.from({ length: 10 }, (_, i) => cand(`p${i}`, `u${i}`, 100 - i, 1));
+    const seenAtByPostId = Object.fromEntries(candidates.slice(0, 3).map((c) => [c.id, new Date()]));
+    const { service } = setupForYou({ candidates, seenAtByPostId });
+
+    const results: string[][] = [];
+    for (let i = 0; i < 4; i++) {
+      const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+      results.push(out.posts.map((p: any) => p.id));
+    }
+    for (const ids of results) {
+      expect(ids).toEqual(results[0]);
+    }
+  });
+
+  it('authed: high seen-saturation reshuffles ordering across refreshes', async () => {
+    // 10 candidates, 8 seen (saturation 0.8 — above the 0.6 threshold), so jitter ramps up
+    // and independent refreshes (fresh page-1 calls, each minting a new seed) should reorder.
+    const candidates = Array.from({ length: 10 }, (_, i) => cand(`p${i}`, `u${i}`, 100 - i, 1));
+    const seenAtByPostId = Object.fromEntries(candidates.slice(0, 8).map((c) => [c.id, new Date()]));
+    const { service } = setupForYou({ candidates, seenAtByPostId });
+
+    let sawDifferentOrder = false;
+    // Run up to 5 pairs of calls; the probability all 5 pairs collide is negligible.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const a = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+      const b = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+      const aIds = a.posts.map((p: any) => p.id);
+      const bIds = b.posts.map((p: any) => p.id);
+      if (aIds.join(',') !== bIds.join(',')) {
+        sawDifferentOrder = true;
+        break;
+      }
+    }
+    expect(sawDifferentOrder).toBe(true);
+  });
+
+  it('authed: pagination reuses the refresh seed; a fresh refresh mints a new one', async () => {
+    // Fully saturated pool so jitter is active enough to make the seed observable/meaningful.
+    const candidates = Array.from({ length: 12 }, (_, i) => cand(`p${i}`, `u${i}`, 100 - i, 1));
+    const seenAtByPostId = Object.fromEntries(candidates.map((c) => [c.id, new Date()]));
+    const { service } = setupForYou({ candidates, seenAtByPostId });
+
+    const decodeSeed = (token: string) =>
+      (JSON.parse(Buffer.from(token, 'base64url').toString('utf8')) as { seed?: string }).seed;
+
+    const page1 = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 5, cursor: null, visibility: 'all' });
+    expect(page1.nextCursor).not.toBeNull();
+    const seedAfterPage1 = decodeSeed(page1.nextCursor as string);
+    expect(seedAfterPage1).toBeTruthy();
+
+    const page2 = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 5,
+      cursor: page1.nextCursor,
+      visibility: 'all',
+    });
+    expect(page2.nextCursor).not.toBeNull();
+    const seedAfterPage2 = decodeSeed(page2.nextCursor as string);
+    // Paginating within the same session (cursor carried forward) reuses the seed —
+    // no reordering of already-ranked candidates as the user scrolls.
+    expect(seedAfterPage2).toBe(seedAfterPage1);
+    // No post should repeat across pages.
+    const page1Ids = new Set(page1.posts.map((p: any) => p.id));
+    expect(page2.posts.some((p: any) => page1Ids.has(p.id))).toBe(false);
+
+    // A brand-new refresh (cursor: null) mints a fresh seed, independent of the prior session.
+    const refreshed = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 5, cursor: null, visibility: 'all' });
+    expect(refreshed.nextCursor).not.toBeNull();
+    const seedAfterRefresh = decodeSeed(refreshed.nextCursor as string);
+    expect(seedAfterRefresh).not.toBe(seedAfterPage1);
+  });
 });
 
 // ─── unverified boost gating ─────────────────────────────────────────────────

@@ -14,6 +14,7 @@ import { collapseFeedByRoot } from '../../common/feed-collapse/collapse-by-root'
 import { toPostDto, type PostDto } from '../../common/dto/post.dto';
 import { buildAttachParentChain } from './posts.utils';
 import { POSTS_RANKING } from './posts-ranking.config';
+import { generateRandomSeed, seededUnitInterval } from '../../common/random/seeded-random';
 import {
   excludeCommunityGroupPostsWhere,
   mediaOnlyWhere,
@@ -153,32 +154,39 @@ export class PostsFeedQueryService {
     }
   }
 
-  private encodeForYouCursor(servedIds: string[]) {
+  private encodeForYouCursor(servedIds: string[], seed: string) {
     const ids = [...new Set((servedIds ?? []).map((id) => (id ?? '').trim()).filter(Boolean))]
       .slice(-POSTS_RANKING.forYouCursorServedIdMax);
     if (ids.length === 0) return null;
-    return Buffer.from(JSON.stringify({ v: 2, s: ids }), 'utf8').toString('base64url');
+    return Buffer.from(JSON.stringify({ v: 3, s: ids, seed }), 'utf8').toString('base64url');
   }
 
-  private decodeForYouCursor(token: string | null): { servedIds: string[]; legacyPopular: { score: number; createdAt: string; id: string } | null } {
+  private decodeForYouCursor(
+    token: string | null,
+  ): { servedIds: string[]; seed: string | null; legacyPopular: { score: number; createdAt: string; id: string } | null } {
     const t = (token ?? '').trim();
-    if (!t) return { servedIds: [], legacyPopular: null };
+    if (!t) return { servedIds: [], seed: null, legacyPopular: null };
     try {
       const raw = Buffer.from(t, 'base64url').toString('utf8');
-      const parsed = JSON.parse(raw) as Partial<{ v: number; s: unknown }>;
-      if (parsed.v === 2 && Array.isArray(parsed.s)) {
+      const parsed = JSON.parse(raw) as Partial<{ v: number; s: unknown; seed: unknown }>;
+      // v3 carries a jitter seed so pagination re-uses the same shuffle within a session
+      // while a fresh page-1 request (refresh) mints a new one. v2 (pre-seed) cursors
+      // decode with seed: null, which listForYouFeed treats as "generate a new seed" —
+      // acceptable for the rare in-flight session spanning the deploy.
+      if ((parsed.v === 3 || parsed.v === 2) && Array.isArray(parsed.s)) {
         return {
           servedIds: parsed.s
             .map((id) => (typeof id === 'string' ? id.trim() : ''))
             .filter(Boolean)
             .slice(-POSTS_RANKING.forYouCursorServedIdMax),
+          seed: parsed.v === 3 && typeof parsed.seed === 'string' && parsed.seed ? parsed.seed : null,
           legacyPopular: null,
         };
       }
     } catch {
       // Fall through to legacy cursor handling below.
     }
-    return { servedIds: [], legacyPopular: this.decodePopularCursor(token) };
+    return { servedIds: [], seed: null, legacyPopular: this.decodePopularCursor(token) };
   }
 
   async listOnlyMe(params: { userId: string; limit: number; cursor: string | null }) {
@@ -974,6 +982,10 @@ export class PostsFeedQueryService {
     const servedIds = decodedForYouCursor.servedIds;
     const servedWhere: Prisma.PostWhereInput[] =
       servedIds.length > 0 ? [{ id: { notIn: servedIds } }] : [];
+    // Page 1 (refresh, cursor === null) always mints a fresh seed so the jitter below
+    // reshuffles the feed. Deeper pages reuse the seed carried in the cursor so the
+    // per-post jitter stays stable while paginating (no reordering mid-scroll).
+    const jitterSeed = decodedForYouCursor.seed ?? generateRandomSeed();
 
     const fetchChronologicalMediaFallback = async (
       take: number,
@@ -1304,7 +1316,7 @@ export class PostsFeedQueryService {
         const fallbackIds = fallback.posts.map((p) => p.id);
         return {
           posts: fallback.posts,
-          nextCursor: fallback.overflow ? this.encodeForYouCursor([...servedIds, ...fallbackIds]) : null,
+          nextCursor: fallback.overflow ? this.encodeForYouCursor([...servedIds, ...fallbackIds], jitterSeed) : null,
           scoreByPostId: new Map(fallbackIds.map((id) => [id, 0])),
         };
       }
@@ -1423,6 +1435,19 @@ export class PostsFeedQueryService {
       }
     }
 
+    // Saturation: how much of the current candidate pool the viewer has already seen.
+    // Drives the jitter strength below — a fresh pool (low saturation) stays close to
+    // deterministic (the existing ranking already surfaces recent/unseen content well),
+    // while a saturated pool ("I've seen everything") gets a real reshuffle so refresh
+    // stops returning the same order every time.
+    const seenCandidateCount = candidates.reduce((count, c) => (seenById.has(c.id) ? count + 1 : count), 0);
+    const saturation = candidates.length > 0 ? seenCandidateCount / candidates.length : 0;
+    const saturationRamp = Math.max(
+      0,
+      (saturation - POSTS_RANKING.forYouSeenSaturationJitterThreshold) /
+        (1 - POSTS_RANKING.forYouSeenSaturationJitterThreshold),
+    );
+
     const now = Date.now();
     const ranked = candidates.map((c) => {
       const youFollowThem = youFollow.has(c.userId);
@@ -1514,10 +1539,17 @@ export class PostsFeedQueryService {
         rawBase = rawTrending;
       }
       const base = c.friendEngaged ? Math.max(rawBase, POSTS_RANKING.forYouFriendEngagementBaseFloor) : rawBase;
-      const jitter =
-        viewerUserId == null
-          ? 1 + (Math.random() * 2 - 1) * POSTS_RANKING.forYouAnonJitterStrength
-          : 1;
+      // Jitter strength: anon viewers always get a baseline jitter (no seen-history signal
+      // to lean on); authed viewers start at 0 (fully deterministic while there's unseen/fresh
+      // content) and ramp up toward forYouSeenSaturationJitterMax as the candidate pool
+      // saturates with already-seen posts. Seeded per-request so it's stable across
+      // pagination within one refresh but different on the next refresh (new seed).
+      const jitterStrengthBase = viewerUserId == null ? POSTS_RANKING.forYouAnonJitterStrength : POSTS_RANKING.forYouSeenJitterBase;
+      const jitterStrength = Math.min(
+        1,
+        jitterStrengthBase + (POSTS_RANKING.forYouSeenSaturationJitterMax - jitterStrengthBase) * saturationRamp,
+      );
+      const jitter = 1 + (seededUnitInterval(jitterSeed, c.id) * 2 - 1) * jitterStrength;
       const adjusted = base * recencyMult * relMult * seenMult * friendMult * followedUnseenMult * secondDegreeMult * groupMult * jitter;
       return { candidate: c, adjusted };
     });
@@ -1635,7 +1667,7 @@ export class PostsFeedQueryService {
       openFollowGroupOverflow ||
       discoveryOverflow ||
       fallback.overflow;
-    const nextCursor = moreAvailable ? this.encodeForYouCursor([...servedIds, ...orderedIds]) : null;
+    const nextCursor = moreAvailable ? this.encodeForYouCursor([...servedIds, ...orderedIds], jitterSeed) : null;
 
     const scoreByPostId = new Map<string, number>(picked.map((p) => [p.candidate.id, p.adjusted]));
     for (const post of fallback.posts) scoreByPostId.set(post.id, 0);
