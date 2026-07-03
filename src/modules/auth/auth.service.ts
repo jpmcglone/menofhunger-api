@@ -672,7 +672,7 @@ export class AuthService {
     const id = String(userId ?? '').trim();
     if (!id) return;
     const sessions = await this.prisma.session.findMany({
-      where: { userId: id },
+      where: { userId: id, revokedAt: null },
       select: { tokenHash: true },
     });
     // Drop cached session->user lookups immediately (best-effort).
@@ -684,7 +684,10 @@ export class AuthService {
         this.cacheInvalidation.deleteSessionFull(th),
       ]);
     }
-    await this.prisma.session.deleteMany({ where: { userId: id } });
+    await this.prisma.session.updateMany({
+      where: { userId: id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
   }
 
   async logout(token: string | undefined, res: Response) {
@@ -695,7 +698,9 @@ export class AuthService {
   }
 
   /**
-   * Revoke (delete) a session token server-side without touching cookies.
+   * Soft-revoke a session token server-side without touching cookies.
+   * Sets `revokedAt` instead of deleting so the row remains as an audit trail
+   * until the cleanup cron removes it after the retention window.
    * Useful for non-HTTP contexts like WebSocket logout.
    */
   async revokeSessionToken(token: string | undefined): Promise<void> {
@@ -706,8 +711,9 @@ export class AuthService {
       this.cacheInvalidation.deleteSessionUser(tokenHash),
       this.cacheInvalidation.deleteSessionFull(tokenHash),
     ]);
-    await this.prisma.session.deleteMany({
-      where: { tokenHash },
+    await this.prisma.session.updateMany({
+      where: { tokenHash, revokedAt: null },
+      data: { revokedAt: new Date() },
     });
   }
 
@@ -728,7 +734,7 @@ export class AuthService {
     res.cookie(AUTH_COOKIE_NAME, token, this.cookieOptions(expires));
   }
 
-  private clearAuthCookie(res: Response) {
+  clearAuthCookie(res: Response) {
     const isProd = this.appConfig.isProd();
     const domain = isProd ? this.appConfig.cookieDomain() ?? '.menofhunger.com' : undefined;
     res.clearCookie(AUTH_COOKIE_NAME, { path: '/', domain });

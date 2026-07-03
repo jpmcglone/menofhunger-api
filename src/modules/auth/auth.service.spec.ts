@@ -85,6 +85,7 @@ function makeService(overrides?: { prisma?: any }) {
         update: jest.fn(async () => defaultSession),
         create: jest.fn(),
         deleteMany: jest.fn(),
+        updateMany: jest.fn(),
       },
       post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
       user: { update: jest.fn() },
@@ -756,7 +757,7 @@ describe('AuthService.startPhoneAuth — resend cooldown is shared across client
           findFirst: jest.fn(async () => ({ resendAfterAt })),
           create: phoneOtpCreate,
         },
-        session: { findFirst: jest.fn(), update: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
+        session: { findFirst: jest.fn(), update: jest.fn(), create: jest.fn(), deleteMany: jest.fn(), updateMany: jest.fn() },
         post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
       },
     });
@@ -794,7 +795,7 @@ describe('AuthService account deletion restore', () => {
           findFirst: jest.fn(async () => null),
           create: phoneOtpCreate,
         },
-        session: { findFirst: jest.fn(), update: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
+        session: { findFirst: jest.fn(), update: jest.fn(), create: jest.fn(), deleteMany: jest.fn(), updateMany: jest.fn() },
         post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
       },
     });
@@ -840,6 +841,7 @@ describe('AuthService account deletion restore', () => {
           update: jest.fn(),
           create: sessionCreate,
           deleteMany: jest.fn(),
+          updateMany: jest.fn(),
         },
         post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
       },
@@ -873,7 +875,7 @@ describe('AuthService account deletion restore', () => {
           update: jest.fn(),
         },
         phoneOtp: { findFirst: jest.fn(async () => null), update: jest.fn() },
-        session: { findFirst: jest.fn(), update: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
+        session: { findFirst: jest.fn(), update: jest.fn(), create: jest.fn(), deleteMany: jest.fn(), updateMany: jest.fn() },
         post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
       },
     });
@@ -933,6 +935,7 @@ describe('AuthService.verifyPhoneCode — App Review bypass', () => {
           update: jest.fn(),
           create: sessionCreate,
           deleteMany: jest.fn(),
+          updateMany: jest.fn(),
         },
         post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
         checkin: { findFirst: jest.fn(async () => null) },
@@ -978,5 +981,105 @@ describe('AuthService.verifyPhoneCode — App Review bypass', () => {
     await expect(
       svc.verifyPhoneCode(REVIEW_PHONE, REVIEW_CODE, makeResponse()),
     ).rejects.toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// revokeSessionToken + revokeAllSessionsForUser — soft-revoke
+// ---------------------------------------------------------------------------
+
+describe('revokeSessionToken', () => {
+  it('soft-revokes the session by setting revokedAt instead of deleting', async () => {
+    const token = randomSessionToken();
+    const tokenHash = hmacSha256Hex(HMAC_SECRET, token);
+    const updateMany = jest.fn(async () => ({ count: 1 }));
+    const cacheInvalidation = {
+      deleteSessionUser: jest.fn(async () => undefined),
+      deleteSessionFull: jest.fn(async () => undefined),
+    };
+    const { svc } = makeService({
+      prisma: {
+        session: {
+          findFirst: jest.fn(),
+          findMany: jest.fn(async () => []),
+          update: jest.fn(),
+          create: jest.fn(),
+          deleteMany: jest.fn(),
+          updateMany,
+        },
+        post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+        user: { update: jest.fn() },
+        phoneOtp: { findFirst: jest.fn(async () => null) },
+      } as any,
+    });
+    (svc as any).cacheInvalidation = cacheInvalidation;
+
+    await svc.revokeSessionToken(token);
+
+    expect(cacheInvalidation.deleteSessionFull).toHaveBeenCalledWith(tokenHash);
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { tokenHash, revokedAt: null },
+      data: expect.objectContaining({ revokedAt: expect.any(Date) }),
+    });
+  });
+
+  it('is a no-op when token is undefined', async () => {
+    const updateMany = jest.fn();
+    const { svc } = makeService({
+      prisma: {
+        session: {
+          findFirst: jest.fn(),
+          update: jest.fn(),
+          create: jest.fn(),
+          deleteMany: jest.fn(),
+          updateMany,
+        },
+        post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+        user: { update: jest.fn() },
+        phoneOtp: { findFirst: jest.fn(async () => null) },
+      } as any,
+    });
+
+    await svc.revokeSessionToken(undefined);
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('revokeAllSessionsForUser', () => {
+  it('soft-revokes all active sessions for the user', async () => {
+    const token1 = randomSessionToken();
+    const hash1 = hmacSha256Hex(HMAC_SECRET, token1);
+    const updateMany = jest.fn(async () => ({ count: 2 }));
+    const findMany = jest.fn(async () => [{ tokenHash: hash1 }]);
+    const cacheInvalidation = {
+      deleteSessionUser: jest.fn(async () => undefined),
+      deleteSessionFull: jest.fn(async () => undefined),
+    };
+    const { svc } = makeService({
+      prisma: {
+        session: {
+          findFirst: jest.fn(),
+          findMany,
+          update: jest.fn(),
+          create: jest.fn(),
+          deleteMany: jest.fn(),
+          updateMany,
+        },
+        post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+        user: { update: jest.fn() },
+        phoneOtp: { findFirst: jest.fn(async () => null) },
+      } as any,
+    });
+    (svc as any).cacheInvalidation = cacheInvalidation;
+
+    await svc.revokeAllSessionsForUser('user-1');
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ userId: 'user-1', revokedAt: null }) }),
+    );
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', revokedAt: null },
+      data: expect.objectContaining({ revokedAt: expect.any(Date) }),
+    });
   });
 });

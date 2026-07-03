@@ -197,5 +197,27 @@ export class AuthController {
     }
     return { data: result };
   }
+
+  @ApiOperation({ summary: 'Revoke all sessions for this user on every device, clear cookie, and disconnect all sockets' })
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('authStart', 4),
+      ttl: rateLimitTtl('authStart', 60),
+    },
+  })
+  @Post('sessions/revoke-all')
+  async revokeAllSessions(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const token = getSessionCookie(req);
+    const sessionResult = await this.auth.meFromSessionToken(token);
+    if (!sessionResult?.user?.id) throw new UnauthorizedException('You must be signed in.');
+
+    await this.auth.revokeAllSessionsForUser(sessionResult.user.id);
+    this.auth.clearAuthCookie(res);
+
+    const presenceRealtime = this.moduleRef.get(PresenceRealtimeService, { strict: false });
+    presenceRealtime?.disconnectUserSockets(sessionResult.user.id);
+
+    return { data: { success: true } };
+  }
 }
 
