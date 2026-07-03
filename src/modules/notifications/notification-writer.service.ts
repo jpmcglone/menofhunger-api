@@ -284,6 +284,8 @@ export class NotificationWriterService {
     bodySnippet?: string | null;
   }) {
     const { recipientUserId, actorUserId, subjectPostId, bodySnippet } = params;
+    // Never notify a user about their own boost.
+    if (actorUserId && actorUserId === recipientUserId) return;
     const maxAttempts = 3;
     // Resolve presence before the transaction so the Redis call doesn't extend it.
     const presentAt = await this.presentAtForRecipient(recipientUserId);
@@ -421,6 +423,8 @@ export class NotificationWriterService {
     title?: string;
   }) {
     const { recipientUserId, actorUserId, subjectPostId, actorPostId, title = 'reposted your post' } = params;
+    // Never notify a user about their own repost/quote.
+    if (actorUserId && actorUserId === recipientUserId) return;
     const maxAttempts = 3;
     // Resolve presence before the transaction so the Redis call doesn't extend it.
     const presentAt = await this.presentAtForRecipient(recipientUserId);
