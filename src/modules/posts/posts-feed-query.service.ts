@@ -11,7 +11,7 @@ import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.
 import { ARTICLE_SHARE_INCLUDE, QUOTED_POST_INCLUDE } from '../../common/prisma-includes/post.include';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { collapseFeedByRoot } from '../../common/feed-collapse/collapse-by-root';
-import { toPostDto, type PostDto } from '../../common/dto/post.dto';
+import { toPostDto, toPostAuthorDtoFromFeedRow, type PostAuthorDto, type PostDto } from '../../common/dto/post.dto';
 import { buildAttachParentChain } from './posts.utils';
 import { POSTS_RANKING } from './posts-ranking.config';
 import { generateRandomSeed, seededUnitInterval } from '../../common/random/seeded-random';
@@ -608,9 +608,10 @@ export class PostsFeedQueryService {
     viewerUserId: string | null;
     filteredPosts: FeedPost[];
     collapsedCountByItemId: Map<string, number>;
+    collapsedAuthorsByItemId?: Map<string, PostAuthorDto[]>;
     scoreByPostId?: Map<string, number>;
   }): Promise<PostDto[]> {
-    const { viewerUserId, filteredPosts, collapsedCountByItemId } = params;
+    const { viewerUserId, filteredPosts, collapsedCountByItemId, collapsedAuthorsByItemId } = params;
     const repostedPostIds = filteredPosts
       .filter((p) => (p as { kind?: string }).kind === 'repost' && (p as { repostedPostId?: string }).repostedPostId)
       .map((p) => (p as { repostedPostId: string }).repostedPostId);
@@ -694,6 +695,8 @@ export class PostsFeedQueryService {
       const dto = attachParentChain(p);
       const collapsed = collapsedCountByItemId.get(p.id);
       if (collapsed && collapsed > 0) (dto as { threadCollapsedCount?: number }).threadCollapsedCount = collapsed;
+      const authors = collapsedAuthorsByItemId?.get(p.id);
+      if (authors?.length) (dto as { threadCollapsedAuthors?: PostAuthorDto[] }).threadCollapsedAuthors = authors;
       return dto;
     });
   }
@@ -722,18 +725,24 @@ export class PostsFeedQueryService {
       topLevelOnly: params.topLevelOnly,
       allowedVisibilities,
     });
-    const { items: filteredPosts, collapsedCountByItemId } = collapseFeedByRoot(raw.posts, {
+    const { items: filteredPosts, collapsedCountByItemId, collapsedAuthorsByItemId } = collapseFeedByRoot(
+      raw.posts,
+      {
       collapseByRoot: params.collapseByRoot,
       collapseMode: params.collapseMode,
       prefer: params.prefer,
       maxPerRoot: params.collapseMaxPerRoot,
       getId: (p) => p.id,
       getParentId: (p) => p.parentId ?? null,
-    });
+      getAuthorPreview: (p) =>
+        toPostAuthorDtoFromFeedRow(p, this.appConfig.r2()?.publicBaseUrl ?? null),
+    },
+    );
     const data = await this.composeFeedPostDtos({
       viewerUserId: params.viewerUserId,
       filteredPosts,
       collapsedCountByItemId,
+      collapsedAuthorsByItemId,
     });
     return { data, pagination: { nextCursor: raw.nextCursor } };
   }

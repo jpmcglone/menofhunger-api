@@ -1251,6 +1251,8 @@ export type PostDto = {
    * render an accurate "View N more trending replies" footer.
    */
   threadCollapsedCount?: number;
+  /** Unique authors of collapsed sibling replies (feed order). */
+  threadCollapsedAuthors?: PostAuthorDto[];
 };
 
 // ─── src/common/dto/presence.dto.ts ────────────────────────────────────────────

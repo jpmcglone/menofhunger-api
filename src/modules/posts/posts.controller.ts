@@ -8,7 +8,7 @@ import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { PostsService } from './posts.service';
-import { toPostDto, toPostPollDto } from './post.dto';
+import { toPostDto, toPostPollDto, toPostAuthorDtoFromFeedRow } from './post.dto';
 import { buildAttachParentChain } from './posts.utils';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { setReadCache } from '../../common/http-cache';
@@ -535,13 +535,16 @@ export class PostsController {
         })();
 
         const dedupeStartMs = Date.now();
-        const { items: filteredPosts, collapsedCountByItemId } = collapseFeedByRoot(dedupedPosts, {
+        const feedAuthorBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+        const { items: filteredPosts, collapsedCountByItemId, collapsedAuthorsByItemId } =
+          collapseFeedByRoot(dedupedPosts, {
           collapseByRoot: parsed.collapseByRoot ?? false,
           collapseMode: parsed.collapseMode ?? 'root',
           prefer: parsed.prefer ?? 'reply',
           maxPerRoot: parsed.collapseMaxPerRoot ?? 1,
           getId: (post) => post.id,
           getParentId: (post) => post.parentId ?? null,
+          getAuthorPreview: (post) => toPostAuthorDtoFromFeedRow(post, feedAuthorBaseUrl),
         });
         stageMs.dedupe = Date.now() - dedupeStartMs;
         const dtoStartMs = Date.now();
@@ -550,6 +553,7 @@ export class PostsController {
           viewerUserId,
           filteredPosts,
           collapsedCountByItemId,
+          collapsedAuthorsByItemId,
           scoreByPostId: popResult.scoreByPostId,
         });
         const payload = {
@@ -630,13 +634,19 @@ export class PostsController {
           includeRestricted: parsed.includeRestricted ?? false,
         });
 
-        const { items: filteredPostsUser, collapsedCountByItemId: collapsedCountByItemIdUser } = collapseFeedByRoot(result.posts, {
+        const profileAuthorBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+        const {
+          items: filteredPostsUser,
+          collapsedCountByItemId: collapsedCountByItemIdUser,
+          collapsedAuthorsByItemId: collapsedAuthorsByItemIdUser,
+        } = collapseFeedByRoot(result.posts, {
           collapseByRoot: parsed.collapseByRoot ?? false,
           collapseMode: parsed.collapseMode ?? 'root',
           prefer: parsed.prefer ?? 'reply',
           maxPerRoot: parsed.collapseMaxPerRoot ?? 1,
           getId: (post) => post.id,
           getParentId: (post) => post.parentId ?? null,
+          getAuthorPreview: (post) => toPostAuthorDtoFromFeedRow(post, profileAuthorBaseUrl),
         });
         // Fetch repost data for flat reposts.
         const repostedPostIdsUser = filteredPostsUser
@@ -730,6 +740,8 @@ export class PostsController {
             const dto = attachParentChain(p);
             const collapsed = collapsedCountByItemIdUser.get(p.id);
             if (collapsed && collapsed > 0) (dto as any).threadCollapsedCount = collapsed;
+            const authors = collapsedAuthorsByItemIdUser.get(p.id);
+            if (authors?.length) (dto as any).threadCollapsedAuthors = authors;
             return dto;
           }),
           pagination: { nextCursor: result.nextCursor, counts: result.counts ?? null },

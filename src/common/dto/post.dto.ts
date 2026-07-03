@@ -144,6 +144,11 @@ export type PostDto = {
    * render an accurate "View N more trending replies" footer.
    */
   threadCollapsedCount?: number;
+  /**
+   * Unique authors of collapsed sibling replies (feed order), for reply-count footers.
+   * Present when `threadCollapsedCount` is set.
+   */
+  threadCollapsedAuthors?: PostAuthorDto[];
 };
 
 /** Mention row with user included (from Prisma include). */
@@ -564,5 +569,54 @@ export function toPostDto(
       })),
       ...(post.user.isBot ? { isBot: true } : {}),
     },
+  };
+}
+
+/** Lightweight author mapping for feed collapse previews (facepile on reply footers). */
+export function toPostAuthorDtoFromFeedRow(
+  post: PostWithAuthorAndMedia,
+  publicAssetBaseUrl: string | null,
+): PostAuthorDto | null {
+  if (!post.user?.id) return null;
+  if (post.user.bannedAt) {
+    return {
+      id: '[banned]',
+      username: null,
+      name: 'User is banned',
+      premium: false,
+      premiumPlus: false,
+      isOrganization: false,
+      stewardBadgeEnabled: false,
+      verifiedStatus: 'none',
+      avatarUrl: null,
+      orgAffiliations: [],
+      authorBanned: true,
+    };
+  }
+  return {
+    id: post.user.id,
+    username: post.user.username,
+    name: post.user.name,
+    premium: post.user.premium,
+    premiumPlus: post.user.premiumPlus,
+    isOrganization: Boolean(post.user.isOrganization),
+    stewardBadgeEnabled: Boolean(post.user.stewardBadgeEnabled),
+    verifiedStatus: post.user.verifiedStatus,
+    avatarUrl: publicAssetUrl({
+      publicBaseUrl: publicAssetBaseUrl,
+      key: post.user.avatarKey ?? null,
+      updatedAt: post.user.avatarUpdatedAt ?? null,
+    }),
+    orgAffiliations: (post.user.orgMemberships ?? []).map((m) => ({
+      id: m.org.id,
+      username: m.org.username,
+      name: m.org.name,
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl: publicAssetBaseUrl,
+        key: m.org.avatarKey ?? null,
+        updatedAt: m.org.avatarUpdatedAt ?? null,
+      }),
+    })),
+    ...(post.user.isBot ? { isBot: true } : {}),
   };
 }

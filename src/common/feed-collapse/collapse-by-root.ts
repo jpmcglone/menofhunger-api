@@ -1,7 +1,7 @@
 export type FeedCollapseMode = 'root' | 'parent';
 export type FeedCollapsePrefer = 'reply' | 'root';
 
-export type FeedCollapseOptions<T> = {
+export type FeedCollapseOptions<T, A = never> = {
   collapseByRoot: boolean;
   collapseMode?: FeedCollapseMode;
   prefer?: FeedCollapsePrefer;
@@ -9,9 +9,11 @@ export type FeedCollapseOptions<T> = {
   maxPerRoot?: number;
   getId: (item: T) => string | null | undefined;
   getParentId: (item: T) => string | null | undefined;
+  /** When set, authors of collapsed items are collected in feed order (deduped by id). */
+  getAuthorPreview?: (item: T) => A | null;
 };
 
-export type FeedCollapseResult<T> = {
+export type FeedCollapseResult<T, A = never> = {
   items: T[];
   /** How many items were collapsed (not kept) per group key. Only populated for keys where at least 1 item was dropped. */
   collapsedCountByKey: Map<string, number>;
@@ -20,6 +22,8 @@ export type FeedCollapseResult<T> = {
    * root group were collapsed. 0 / absent means nothing was collapsed for that group.
    */
   collapsedCountByItemId: Map<string, number>;
+  /** Authors of collapsed items per kept item id (same keys as collapsedCountByItemId). */
+  collapsedAuthorsByItemId: Map<string, A[]>;
 };
 
 function normalizeId(value: string | null | undefined): string | null {
@@ -39,9 +43,17 @@ function normalizeId(value: string | null | undefined): string | null {
  *
  * Returns both the kept items and a map of how many were collapsed per group key.
  */
-export function collapseFeedByRoot<T>(items: T[], options: FeedCollapseOptions<T>): FeedCollapseResult<T> {
+export function collapseFeedByRoot<T, A = never>(
+  items: T[],
+  options: FeedCollapseOptions<T, A>,
+): FeedCollapseResult<T, A> {
   if (!options.collapseByRoot) {
-    return { items, collapsedCountByKey: new Map(), collapsedCountByItemId: new Map() };
+    return {
+      items,
+      collapsedCountByKey: new Map(),
+      collapsedCountByItemId: new Map(),
+      collapsedAuthorsByItemId: new Map(),
+    };
   }
 
   const collapseMode = options.collapseMode ?? 'root';
@@ -88,7 +100,19 @@ export function collapseFeedByRoot<T>(items: T[], options: FeedCollapseOptions<T
   // For maxN>1: keep first N in sort order (no prefer logic needed).
   const selectedByKey = new Map<string, T[]>();
   const totalByKey = new Map<string, number>();
+  const collapsedAuthorsByKey = new Map<string, A[]>();
   const order: string[] = [];
+
+  const appendCollapsedAuthor = (key: string, item: T) => {
+    const preview = options.getAuthorPreview?.(item);
+    if (!preview) return;
+    const authorId = (preview as { id?: string }).id?.trim();
+    if (!authorId) return;
+    const list = collapsedAuthorsByKey.get(key) ?? [];
+    if (list.some((a) => (a as { id?: string }).id === authorId)) return;
+    list.push(preview);
+    collapsedAuthorsByKey.set(key, list);
+  };
 
   for (const item of items) {
     const key = groupKeyFor(item);
@@ -107,9 +131,13 @@ export function collapseFeedByRoot<T>(items: T[], options: FeedCollapseOptions<T
       // Original single-winner logic: replace if shouldReplace says to.
       if (shouldReplace(existing[0]!, item)) {
         existing[0] = item;
+      } else {
+        appendCollapsedAuthor(key, item);
       }
     } else if (existing.length < maxN) {
       existing.push(item);
+    } else {
+      appendCollapsedAuthor(key, item);
     }
   }
 
@@ -123,15 +151,20 @@ export function collapseFeedByRoot<T>(items: T[], options: FeedCollapseOptions<T
 
   // Build per-item-id lookup for convenient controller use.
   const collapsedCountByItemId = new Map<string, number>();
+  const collapsedAuthorsByItemId = new Map<string, A[]>();
   for (const [key, keptGroup] of selectedByKey) {
     const collapsed = collapsedCountByKey.get(key);
     if (collapsed && collapsed > 0) {
+      const authors = collapsedAuthorsByKey.get(key) ?? [];
       for (const item of keptGroup) {
         const id = normalizeId(getId(item));
-        if (id) collapsedCountByItemId.set(id, collapsed);
+        if (id) {
+          collapsedCountByItemId.set(id, collapsed);
+          if (authors.length > 0) collapsedAuthorsByItemId.set(id, authors);
+        }
       }
     }
   }
 
-  return { items: keptItems, collapsedCountByKey, collapsedCountByItemId };
+  return { items: keptItems, collapsedCountByKey, collapsedCountByItemId, collapsedAuthorsByItemId };
 }
