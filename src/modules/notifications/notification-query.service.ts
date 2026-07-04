@@ -8,7 +8,6 @@ import { PostVisibilityReadService } from '../viewer/post-visibility-read.servic
 import { NotificationReadStateService } from './notification-read-state.service';
 import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectArticlePreviewDto, SubjectPostVisibility, SubjectTier } from './notification.dto';
 import type {
-  FollowedPostsRollupDto,
   NotificationFeedItemDto,
   NotificationGroupDto,
   NotificationGroupKind,
@@ -23,7 +22,7 @@ import { collapseFeedByRoot, type FeedCollapseMode, type FeedCollapsePrefer } fr
 const PRIMARY_NOTIFICATION_KINDS = ['comment', 'mention', 'followed_post', 'follow', 'boost'] as const satisfies NotificationKind[];
 
 /**
- * Notification feed reads: the bell list (with grouping + rollups), the
+ * Notification feed reads: the bell list (with grouping), the
  * new-posts feed, and per-row DTO composition (also used by the writer for
  * realtime `notifications:new` payloads).
  */
@@ -366,29 +365,9 @@ export class NotificationQueryService {
       );
     });
 
-    // Follow bell settings: actors whose replies should stay as high-priority rows.
-    const followedPostActorUserIds = [
-      ...new Set(raw.filter((n) => n.kind === 'followed_post' && n.actorUserId).map((n) => n.actorUserId as string)),
-    ];
-    const bellEnabledActorIds = new Set<string>();
-    if (followedPostActorUserIds.length > 0) {
-      const rows = await this.prisma.follow.findMany({
-        where: {
-          followerId: recipientUserId,
-          followingId: { in: followedPostActorUserIds },
-          postNotificationsEnabled: true,
-        },
-        select: { followingId: true },
-      });
-      for (const r of rows) bellEnabledActorIds.add(r.followingId);
-    }
-
-    function isBellEnabledFollowedPost(n: NotificationDto): boolean {
-      if (n.kind !== 'followed_post') return false;
-      const actorId = n.actor?.id ?? null;
-      if (!actorId) return false;
-      return bellEnabledActorIds.has(actorId);
-    }
+    // Follow bell settings are no longer used to collapse notifications.
+    // All followed_post notifications appear as standalone rows regardless of bell.
+    // (Bell-enabled follows still receive reply/comment notifications separately.)
 
     function groupKey(n: NotificationDto): string | null {
       if (n.kind === 'boost' && n.subjectPostId) return `boost:post:${n.subjectPostId}`;
@@ -397,7 +376,6 @@ export class NotificationQueryService {
       if (n.kind === 'crew_member_joined' && n.subjectCrewId) return `crew_member_joined:crew:${n.subjectCrewId}`;
       if (n.kind === 'crew_member_left' && n.subjectCrewId) return `crew_member_left:crew:${n.subjectCrewId}`;
       if (n.kind === 'follow') return 'follow';
-      if (n.kind === 'followed_post' && n.actor?.id) return `followed_post:actor:${n.actor.id}`;
       if (n.kind === 'nudge' && n.actor?.id) return `nudge:actor:${n.actor.id}`;
       return null;
     }
@@ -407,7 +385,6 @@ export class NotificationQueryService {
       if (key.startsWith('repost:')) return 'repost';
       if (key.startsWith('comment:')) return 'comment';
       if (key === 'follow') return 'follow';
-      if (key.startsWith('followed_post:')) return 'followed_post';
       if (key.startsWith('nudge:')) return 'nudge';
       return null;
     }
@@ -437,9 +414,7 @@ export class NotificationQueryService {
           ? (newest.actor?.id ?? newest.subjectUserId ?? null)
           : kind === 'nudge'
             ? (newest.actor?.id ?? newest.subjectUserId ?? null)
-          : kind === 'followed_post'
-            ? (newest.actor?.id ?? null)
-            : null;
+          : null;
 
       return {
         id: newest.id,
@@ -474,43 +449,13 @@ export class NotificationQueryService {
     }
 
     const items: NotificationFeedItemDto[] = [];
-    let rollupInsertIndex: number | null = null;
-    let rollupNewest: NotificationDto | null = null;
-    let rollupCount = 0;
-    let rollupAnyUndelivered = false;
-    let rollupAnyUnread = false;
-    const rollupActors: NotificationActorDto[] = [];
-    const rollupActorIds = new Set<string>();
-
-    function ingestRollup(n: NotificationDto) {
-      if (!rollupNewest) rollupNewest = n;
-      rollupCount += 1;
-      if (n.deliveredAt == null) rollupAnyUndelivered = true;
-      if (n.readAt == null) rollupAnyUnread = true;
-      const a = n.actor;
-      if (a?.id && !rollupActorIds.has(a.id)) {
-        rollupActorIds.add(a.id);
-        rollupActors.push(a);
-      }
-    }
-
     let i = 0;
-    while (
-      i < dtos.length &&
-      items.length + (rollupInsertIndex !== null ? 1 : 0) < desiredItemLimit
-    ) {
+    while (i < dtos.length && items.length < desiredItemLimit) {
       const n = dtos[i]!;
 
-      // Collapse followed_post notifications when bell is not enabled.
-      if (n.kind === 'followed_post' && !isBellEnabledFollowedPost(n)) {
-        if (rollupInsertIndex === null) rollupInsertIndex = items.length;
-        ingestRollup(n);
-        i += 1;
-        continue;
-      }
-      // Bell-enabled followed_post notifications stay standalone.
-      // Normal follows collapse into the quieter “new posts” rollup.
-      if (n.kind === 'followed_post' && isBellEnabledFollowedPost(n)) {
+      // followed_post notifications always appear as standalone items regardless of bell setting.
+      // The bell only controls whether reply notifications from followed users are delivered.
+      if (n.kind === 'followed_post') {
         items.push({ type: 'single', notification: n });
         i += 1;
         continue;
@@ -546,21 +491,7 @@ export class NotificationQueryService {
       i = j;
     }
 
-    if (rollupInsertIndex !== null && rollupNewest && rollupCount > 0) {
-      const newest = rollupNewest as NotificationDto;
-      const rollup: FollowedPostsRollupDto = {
-        id: newest.id,
-        createdAt: newest.createdAt,
-        deliveredAt: rollupAnyUndelivered ? null : newest.deliveredAt,
-        readAt: rollupAnyUnread ? null : newest.readAt,
-        actors: rollupActors,
-        actorCount: rollupActors.length,
-        count: rollupCount,
-      };
-      items.splice(rollupInsertIndex, 0, { type: 'followed_posts_rollup', rollup });
-    }
-
-    const lastConsumedId = i > 0 ? dtos[i - 1]?.id ?? null : null;
+        const lastConsumedId = i > 0 ? dtos[i - 1]?.id ?? null : null;
     const hasMore = i < dtos.length || hasMoreRaw;
     const nextCursor = hasMore ? lastConsumedId : null;
 

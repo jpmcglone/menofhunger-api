@@ -413,7 +413,7 @@ describe('NotificationsService.list batching', () => {
     expect(res.items[2].notification.post?.id).toBe('p_mention');
   });
 
-  it('rolls up non-bell followed posts instead of rendering full post rows', async () => {
+  it('shows followed_post notifications as standalone single items regardless of bell setting', async () => {
     const { svc } = makeService({
       prisma: {
         notification: {
@@ -465,12 +465,12 @@ describe('NotificationsService.list batching', () => {
     const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null });
 
     expect(res.items).toHaveLength(1);
-    expect(res.items[0]?.type).toBe('followed_posts_rollup');
-    if (res.items[0]?.type !== 'followed_posts_rollup') {
-      throw new Error('Expected followed posts rollup');
+    expect(res.items[0]?.type).toBe('single');
+    if (res.items[0]?.type !== 'single') {
+      throw new Error('Expected single notification item');
     }
-    expect(res.items[0].rollup.count).toBe(1);
-    expect(res.items[0].rollup.actors[0]?.id).toBe('a1');
+    expect(res.items[0].notification.kind).toBe('followed_post');
+    expect(res.items[0].notification.actor?.id).toBe('a1');
   });
 
   it('falls back to the original post preview for plain repost notifications', async () => {
