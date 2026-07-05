@@ -1199,7 +1199,8 @@ export class NotificationWriterService {
   /**
    * Bulk-create badge-only `community_group_post` notification rows for a new top-level
    * group post. These rows drive the Groups nav badge and per-group card badges — they are
-   * intentionally excluded from the main notification bell + feed.
+   * excluded from the main notification bell + feed but ARE included in email nudges so
+   * members who were offline when the post arrived still get notified.
    *
    * Does NOT increment `undeliveredNotificationCount` (those are bell-only) and does NOT
    * emit `notifications:new` or `notifications:updated`. Emits `groups:unreadChanged`
@@ -1210,8 +1211,11 @@ export class NotificationWriterService {
     postId: string;
     groupId: string;
     recipientUserIds: string[];
+    actorName: string;
+    groupName: string;
+    bodySnippet?: string;
   }): Promise<void> {
-    const { actorUserId, postId, groupId, recipientUserIds } = params;
+    const { actorUserId, postId, groupId, recipientUserIds, groupName, bodySnippet } = params;
     const now = new Date();
     const toCreate = recipientUserIds.filter((id) => id && id !== actorUserId);
     if (toCreate.length === 0) return;
@@ -1223,6 +1227,8 @@ export class NotificationWriterService {
         actorUserId,
         subjectPostId: postId,
         subjectGroupId: groupId,
+        title: `posted in ${groupName}`,
+        body: bodySnippet ?? null,
         createdAt: now,
       })),
       skipDuplicates: true,

@@ -1700,10 +1700,16 @@ export class PostsMutationService {
       // Badge-only notifications for all active group members when a top-level post is created in a group.
       if (!parentId && postCommunityGroupId) {
         try {
-          const groupMembers = await this.prisma.communityGroupMember.findMany({
-            where: { groupId: postCommunityGroupId, status: 'active', userId: { not: userId } },
-            select: { userId: true },
-          });
+          const [groupMembers, groupRecord] = await Promise.all([
+            this.prisma.communityGroupMember.findMany({
+              where: { groupId: postCommunityGroupId, status: 'active', userId: { not: userId } },
+              select: { userId: true },
+            }),
+            this.prisma.communityGroup.findUnique({
+              where: { id: postCommunityGroupId },
+              select: { name: true },
+            }),
+          ]);
           const memberIds = groupMembers.map((m) => m.userId);
           if (memberIds.length > 0) {
             this.notifications.createGroupPostBadgeNotifications({
@@ -1711,6 +1717,9 @@ export class PostsMutationService {
               postId: post.id,
               groupId: postCommunityGroupId,
               recipientUserIds: memberIds,
+              actorName: post.user.name ?? post.user.username ?? 'Someone',
+              groupName: groupRecord?.name ?? 'the group',
+              bodySnippet: bodySnippet || undefined,
             }).catch((err) => {
               this.logger.warn(
                 `[notifications] Failed to create group-post badge notifications: ${err instanceof Error ? err.message : String(err)}`,

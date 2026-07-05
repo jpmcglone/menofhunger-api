@@ -166,8 +166,8 @@ export class NotificationsEmailCron {
 
   /**
    * Returns the top 3 emailable notifications per recipient — those the user has not yet
-   * seen in any form (deliveredAt, readAt, and presentAt all null) and that belong to
-   * bell-visible kinds (excludes message and community_group_post).
+   * seen in any form (deliveredAt, readAt, and presentAt all null). Includes
+   * community_group_post rows so offline group members receive email nudges.
    */
   private async listRecentNotificationItemsByRecipientIds(
     recipientIdsRaw: string[],
@@ -201,7 +201,7 @@ export class NotificationsEmailCron {
           n."deliveredAt" IS NULL
           AND n."readAt" IS NULL
           AND n."presentAt" IS NULL
-          AND n."kind" NOT IN ('message', 'community_group_post')
+          AND n."kind" NOT IN ('message')
       )
       SELECT "recipientUserId", "title", "body", "subjectPostId"
       FROM ranked
@@ -227,8 +227,8 @@ export class NotificationsEmailCron {
   /**
    * Returns the count of truly "emailable" notifications per recipient: those with
    * deliveredAt, readAt, and presentAt all null (user hasn't opened the bell, tapped
-   * through, or been actively present when it arrived) and bell-visible kinds only
-   * (excludes message and community_group_post to match bell badge semantics).
+   * through, or been actively present when it arrived). Includes community_group_post
+   * so offline group members are counted toward the nudge threshold.
    */
   private async listEmailableNotificationCountsByRecipientIds(
     recipientIdsRaw: string[],
@@ -249,7 +249,7 @@ export class NotificationsEmailCron {
           n."deliveredAt" IS NULL
           AND n."readAt" IS NULL
           AND n."presentAt" IS NULL
-          AND n."kind" NOT IN ('message', 'community_group_post')
+          AND n."kind" NOT IN ('message')
         GROUP BY n."recipientUserId"
       `,
     );
@@ -324,23 +324,46 @@ export class NotificationsEmailCron {
 
       // Important: users may not have a NotificationPreferences row yet.
       // Treat "no row" as defaults-on, and upsert the timestamp after sending.
+      //
+      // Recipient gate: either the bell counter is > 0 (regular notifications)
+      // OR the user has unread community_group_post rows (badge-only, never counted
+      // by undeliveredNotificationCount but still eligible for email nudges).
+      const preferenceCondition = {
+        OR: [
+          // No preferences row yet → defaults apply → eligible.
+          { notificationPreferences: { is: null } },
+          // Preferences row exists → only if nudges enabled and not recently sent.
+          {
+            notificationPreferences: {
+              is: {
+                emailNewNotifications: true,
+                OR: [{ lastEmailNewNotificationsSentAt: null }, { lastEmailNewNotificationsSentAt: { lt: cutoff } }],
+              },
+            },
+          },
+        ],
+      };
       const recipients = await this.prisma.user.findMany({
         where: {
           email: { not: null },
           emailVerifiedAt: { not: null },
-          undeliveredNotificationCount: { gt: 0 },
-          OR: [
-            // No preferences row yet → defaults apply → eligible.
-            { notificationPreferences: { is: null } },
-            // Preferences row exists → only if nudges enabled and not recently sent.
+          AND: [
             {
-              notificationPreferences: {
-                is: {
-                  emailNewNotifications: true,
-                  OR: [{ lastEmailNewNotificationsSentAt: null }, { lastEmailNewNotificationsSentAt: { lt: cutoff } }],
+              OR: [
+                { undeliveredNotificationCount: { gt: 0 } },
+                {
+                  notificationsReceived: {
+                    some: {
+                      kind: 'community_group_post',
+                      deliveredAt: null,
+                      readAt: null,
+                      presentAt: null,
+                    },
+                  },
                 },
-              },
+              ],
             },
+            preferenceCondition,
           ],
         },
         orderBy: [{ id: 'asc' }],

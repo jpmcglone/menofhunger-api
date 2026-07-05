@@ -1031,6 +1031,8 @@ describe('NotificationWriterService.createGroupPostBadgeNotifications', () => {
       postId: 'post-1',
       groupId: 'g1',
       recipientUserIds: ['m1', 'm2', 'author'],
+      actorName: 'Test Author',
+      groupName: 'Test Group',
     });
 
     expect(createMany).toHaveBeenCalledWith({

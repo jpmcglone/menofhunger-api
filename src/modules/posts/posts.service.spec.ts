@@ -1169,6 +1169,7 @@ describe('PostsService.runPostCreateSideEffects — mention privacy gating', () 
       id: 'post-1',
       userId: 'author',
       communityGroupId: null,
+      user: { name: 'Test Author', username: 'testauthor' },
       ...overrides,
     } as any;
   }
@@ -1265,13 +1266,17 @@ describe('PostsService.runPostCreateSideEffects — mention privacy gating', () 
     expect(mentionCalls).toHaveLength(0);
   });
 
-  it('skips group lookup when there are no mentions', async () => {
+  it('does not call findUnique for join-policy when there are no mentions (only calls it for group name)', async () => {
     const { service, deps } = setup();
+    deps.prisma.communityGroup.findUnique.mockResolvedValue({ name: 'Test Group' });
     await callSideEffects(service, {
       bodyMentionIds: [],
       postOverrides: { communityGroupId: 'g1' },
     });
-    expect(deps.prisma.communityGroup.findUnique).not.toHaveBeenCalled();
+    // findUnique IS called — for the group name used in badge notification titles.
+    expect(deps.prisma.communityGroup.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ select: { name: true }, where: { id: 'g1' } }),
+    );
   });
 });
 
