@@ -267,6 +267,12 @@ async function bootstrap() {
     // Allow third-party webhooks (no Origin/Referer).
     if (isStripeWebhookPath(req)) return next();
     if (isAppleIapNotificationPath(req)) return next();
+    // Defense-in-depth: any request carrying a Stripe signature header is a
+    // server-to-server webhook call (browsers can't set this header), so bypass
+    // CSRF even if the path-based check above misses it (e.g. misconfigured URL
+    // in the Stripe dashboard). The signature is cryptographically verified
+    // downstream by billing.service → stripe.webhooks.constructEvent.
+    if (req.headers['stripe-signature']) return next();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const requestId = String((req as any)?.requestId ?? '').trim() || null;
