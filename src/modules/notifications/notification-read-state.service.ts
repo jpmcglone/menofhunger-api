@@ -189,7 +189,7 @@ export class NotificationReadStateService {
           WHERE id = ${recipientUserId}
         `;
       }
-      return tx.notification.count({ where: { recipientUserId, deliveredAt: null } });
+      return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
     });
 
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
@@ -272,7 +272,7 @@ export class NotificationReadStateService {
         `;
       }
       // Return accurate count from actual rows (handles drifted counters).
-      return tx.notification.count({ where: { recipientUserId, deliveredAt: null } });
+      return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
     });
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
       undeliveredCount,
@@ -320,7 +320,7 @@ export class NotificationReadStateService {
         return { changed: false as const, undeliveredCount: null as number | null };
       }
       const undeliveredCount = await tx.notification.count({
-        where: { recipientUserId, deliveredAt: null },
+        where: this.undeliveredBellWhere(recipientUserId),
       });
       return { changed: true as const, undeliveredCount };
     });
@@ -658,7 +658,7 @@ export class NotificationReadStateService {
 
     if (wasUndelivered) {
       const undeliveredCount = await this.prisma.notification.count({
-        where: { recipientUserId: userId, deliveredAt: null },
+        where: this.undeliveredBellWhere(userId),
       });
       this.presenceRealtime.emitNotificationsUpdated(userId, { undeliveredCount });
     }

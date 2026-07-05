@@ -173,7 +173,7 @@ export class NotificationWriterService {
         data: { undeliveredNotificationCount: { increment: 1 } },
       });
       const undeliveredCount = await tx.notification.count({
-        where: { recipientUserId, deliveredAt: null },
+        where: this.readState.undeliveredBellWhere(recipientUserId),
       });
       return { notification, undeliveredCount };
     });
@@ -328,7 +328,7 @@ export class NotificationWriterService {
               data: { undeliveredNotificationCount: { increment: 1 } },
             });
             const undeliveredCount = await tx.notification.count({
-              where: { recipientUserId, deliveredAt: null },
+              where: this.readState.undeliveredBellWhere(recipientUserId),
             });
             return {
               kind: 'created' as const,
@@ -462,7 +462,7 @@ export class NotificationWriterService {
               data: { undeliveredNotificationCount: { increment: 1 } },
             });
             const undeliveredCount = await tx.notification.count({
-              where: { recipientUserId, deliveredAt: null },
+              where: this.readState.undeliveredBellWhere(recipientUserId),
             });
             return { kind: 'created' as const, notificationId: notification.id, undeliveredCount };
           },
@@ -714,7 +714,7 @@ export class NotificationWriterService {
           });
         }
         const undeliveredCount = await tx.notification.count({
-          where: { recipientUserId: inviteeUserId, deliveredAt: null },
+          where: this.readState.undeliveredBellWhere(inviteeUserId),
         });
         return { kind: 'updated' as const, notificationId: existing.id, undeliveredCount };
       }
@@ -737,7 +737,7 @@ export class NotificationWriterService {
         data: { undeliveredNotificationCount: { increment: 1 } },
       });
       const undeliveredCount = await tx.notification.count({
-        where: { recipientUserId: inviteeUserId, deliveredAt: null },
+        where: this.readState.undeliveredBellWhere(inviteeUserId),
       });
       return { kind: 'created' as const, notificationId: created.id, undeliveredCount };
     });
@@ -818,7 +818,7 @@ export class NotificationWriterService {
           });
         }
         const undeliveredCount = await tx.notification.count({
-          where: { recipientUserId: inviterUserId, deliveredAt: null },
+          where: this.readState.undeliveredBellWhere(inviterUserId),
         });
         return { kind: 'updated' as const, notificationId: existing.id, undeliveredCount };
       }
@@ -842,7 +842,7 @@ export class NotificationWriterService {
         data: { undeliveredNotificationCount: { increment: 1 } },
       });
       const undeliveredCount = await tx.notification.count({
-        where: { recipientUserId: inviterUserId, deliveredAt: null },
+        where: this.readState.undeliveredBellWhere(inviterUserId),
       });
       return { kind: 'created' as const, notificationId: created.id, undeliveredCount };
     });
@@ -919,7 +919,7 @@ export class NotificationWriterService {
           });
         }
         const undeliveredCount = await tx.notification.count({
-          where: { recipientUserId, deliveredAt: null },
+          where: this.readState.undeliveredBellWhere(recipientUserId),
         });
         return { notificationId: existing.id, undeliveredCount, isNew: false };
       }
@@ -933,7 +933,7 @@ export class NotificationWriterService {
         data: { undeliveredNotificationCount: { increment: 1 } },
       });
       const undeliveredCount = await tx.notification.count({
-        where: { recipientUserId, deliveredAt: null },
+        where: this.readState.undeliveredBellWhere(recipientUserId),
       });
       return { notificationId: created.id, undeliveredCount, isNew: true };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -1117,7 +1117,7 @@ export class NotificationWriterService {
             data: { undeliveredNotificationCount: { increment: 1 } },
           });
         }
-        const undeliveredCount = await tx.notification.count({ where: { recipientUserId, deliveredAt: null } });
+        const undeliveredCount = await tx.notification.count({ where: this.readState.undeliveredBellWhere(recipientUserId) });
         return { notificationId: existing.id, undeliveredCount, isNew: false };
       }
 
@@ -1129,7 +1129,7 @@ export class NotificationWriterService {
         where: { id: recipientUserId },
         data: { undeliveredNotificationCount: { increment: 1 } },
       });
-      const undeliveredCount = await tx.notification.count({ where: { recipientUserId, deliveredAt: null } });
+      const undeliveredCount = await tx.notification.count({ where: this.readState.undeliveredBellWhere(recipientUserId) });
       return { notificationId: created.id, undeliveredCount, isNew: true };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }

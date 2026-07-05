@@ -23,7 +23,10 @@ type Deps = {
 function buildWriter(deps: Deps): NotificationWriterService {
   const push = { sendKindPushForActor: jest.fn() } as unknown as NotificationPushService;
   const query = { buildNotificationDtoForRecipient: jest.fn(async () => null) } as unknown as NotificationQueryService;
-  const readState = { emitWaitingCountForUser: jest.fn() } as unknown as NotificationReadStateService;
+  const readState = {
+    emitWaitingCountForUser: jest.fn(),
+    undeliveredBellWhere: (uid: string) => ({ recipientUserId: uid, deliveredAt: null, kind: { notIn: ['message', 'community_group_post'] } }),
+  } as unknown as NotificationReadStateService;
   return new NotificationWriterService(
     deps.prisma as any,
     deps.presenceRealtime as any,

@@ -699,7 +699,13 @@ describe('NotificationsService.markNewPostsRead', () => {
       data: { readAt: expect.any(Date), deliveredAt: expect.any(Date) },
     });
     expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
-    expect(notification.count).toHaveBeenCalledWith({ where: { recipientUserId: 'viewer-1', deliveredAt: null } });
+    expect(notification.count).toHaveBeenCalledWith({
+      where: {
+        recipientUserId: 'viewer-1',
+        deliveredAt: null,
+        kind: { notIn: ['message', 'community_group_post'] },
+      },
+    });
     expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalledWith('viewer-1', { undeliveredCount: 7 });
   });
 });
