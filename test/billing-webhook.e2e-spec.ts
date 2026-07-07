@@ -18,6 +18,7 @@ import { BillingService } from '../src/modules/billing/billing.service';
 import { EntitlementService } from '../src/modules/billing/entitlement.service';
 import { ReferralService } from '../src/modules/billing/referral.service';
 import { AffiliateService } from '../src/modules/billing/affiliate.service';
+import { AppleIapService } from '../src/modules/billing/apple-iap.service';
 import { PrismaService } from '../src/modules/prisma/prisma.service';
 import { AppConfigService } from '../src/modules/app/app-config.service';
 import { PublicProfileCacheService } from '../src/modules/users/public-profile-cache.service';
@@ -82,6 +83,7 @@ describe('POST /billing/webhook (e2e)', () => {
               pricePremiumMonthly: 'price_premium',
               pricePremiumPlusMonthly: 'price_premium_plus',
             }),
+            appleIap: () => null,
             r2: () => null,
             nodeEnv: () => 'test',
           },
@@ -93,6 +95,7 @@ describe('POST /billing/webhook (e2e)', () => {
         { provide: SlackService, useValue: slack },
         { provide: ReferralService, useValue: { maybeGrantReferralBonus: jest.fn(async () => undefined) } },
         { provide: AffiliateService, useValue: { getAffiliateSummary: jest.fn(async () => undefined) } },
+        { provide: AppleIapService, useValue: { handleNotification: jest.fn(async () => undefined), verifyTransaction: jest.fn(async () => undefined) } },
       ],
     })
       // The webhook route is unauthenticated; other routes on this controller use

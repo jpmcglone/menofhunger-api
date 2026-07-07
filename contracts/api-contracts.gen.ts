@@ -1062,8 +1062,8 @@ export type NotificationGroupDto = {
 };
 
 /**
- * Collapsed “new posts” row for followed-post notifications when bell is NOT enabled.
- * This is a UI affordance only; underlying notifications still exist for counts and read semantics.
+ * Collapsed “new posts” row for normal followed-post notifications.
+ * Bell-enabled follows stay standalone because they mean “include this person's replies too.”
  */
 export type FollowedPostsRollupDto = {
   /** The newest underlying notification id (stable-ish render key). */
@@ -1251,7 +1251,10 @@ export type PostDto = {
    * render an accurate "View N more trending replies" footer.
    */
   threadCollapsedCount?: number;
-  /** Unique authors of collapsed sibling replies (feed order). */
+  /**
+   * Unique authors of collapsed sibling replies (feed order), for reply-count footers.
+   * Present when `threadCollapsedCount` is set.
+   */
   threadCollapsedAuthors?: PostAuthorDto[];
 };
 
@@ -2021,7 +2024,7 @@ export type OrgAffiliationDto = {
 export type UserListRelationship = {
   viewerFollowsUser: boolean;
   userFollowsViewer: boolean;
-  /** True when the viewer has enabled “every post” notifications (bell icon) for this follow. */
+  /** True when the viewer has enabled reply notifications (bell icon) for this follow. */
   viewerPostNotificationsEnabled: boolean;
 };
 
