@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { AppConfigService } from '../app/app-config.service';
@@ -15,7 +14,6 @@ export class PostsPollResultsReadyCron {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
-    private readonly presenceRealtime: PresenceRealtimeService,
     private readonly jobs: JobsService,
     private readonly appConfig: AppConfigService,
   ) {}
@@ -27,6 +25,9 @@ export class PostsPollResultsReadyCron {
    *
    * We do NOT schedule one job per poll; instead we run a lightweight periodic sweep.
    * This keeps deploys/restarts simple and avoids managing a dynamic job registry.
+   *
+   * Delivery goes through NotificationsService.create so each recipient gets the full
+   * fan-out (in-app row, undelivered counter, notifications:new, push).
    */
   @Cron('*/1 * * * *')
   async notifyEndedPolls() {
@@ -71,16 +72,14 @@ export class PostsPollResultsReadyCron {
         const authorId = p.post.userId;
         const postBodySnippet = (p.post.body ?? '').trim().slice(0, 150) || null;
 
-        // Re-check in a transaction so multiple cron ticks (or instances) don't double-notify.
+        // Claim the poll in a transaction so concurrent sweeps don't double-notify.
+        // Notification rows are created outside via NotificationsService.create so each
+        // recipient gets push + notifications:new + undelivered counter increment.
         const recipientUserIds = await this.prisma.$transaction(async (tx) => {
           const livePost = await tx.post.findUnique({
             where: { id: postId },
             select: { deletedAt: true },
           });
-          if (livePost?.deletedAt) {
-            // Post was deleted after we queried polls; don't notify.
-            // (We still allow the lock below to prevent future notifications if restored.)
-          }
 
           const lock = await tx.postPoll.updateMany({
             where: { id: pollId, resultsNotifiedAt: null },
@@ -97,32 +96,26 @@ export class PostsPollResultsReadyCron {
           });
 
           const recipients = new Set<string>([authorId, ...voters.map((v) => v.userId)].filter(Boolean));
-          const list = [...recipients];
-          if (list.length === 0) return [];
-
-          // Create notifications (in-app). We intentionally keep this small and generic.
-          // Clicking the row routes to the poll post via subjectPostId.
-          await tx.notification.createMany({
-            data: list.map((uid) => ({
-              recipientUserId: uid,
-              kind: 'poll_results_ready',
-              actorUserId: authorId,
-              subjectPostId: postId,
-              title: uid === authorId ? 'Your poll is done' : 'Poll results are ready',
-              body: postBodySnippet ?? 'Tap to see the final results.',
-            })),
-          });
-
-          return list;
+          return [...recipients];
         });
 
-        // Best-effort realtime badge update (no per-notification payload).
         for (const uid of recipientUserIds) {
           try {
-            const undeliveredCount = await this.notifications.getUndeliveredCount(uid);
-            this.presenceRealtime.emitNotificationsUpdated(uid, { undeliveredCount });
-          } catch {
-            // best-effort
+            const isAuthor = uid === authorId;
+            // Author has no separate "actor" — omit actorUserId so create() does not
+            // self-skip (it returns early when actorUserId === recipientUserId).
+            await this.notifications.create({
+              recipientUserId: uid,
+              kind: 'poll_results_ready',
+              ...(isAuthor ? {} : { actorUserId: authorId }),
+              subjectPostId: postId,
+              title: isAuthor ? 'Your poll is done' : 'Poll results are ready',
+              body: postBodySnippet ?? 'Tap to see the final results.',
+            });
+          } catch (err) {
+            this.logger.warn(
+              `Poll results-ready notify failed pollId=${pollId} userId=${uid}: ${(err as Error).message}`,
+            );
           }
         }
       }
@@ -136,4 +129,3 @@ export class PostsPollResultsReadyCron {
     }
   }
 }
-

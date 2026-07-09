@@ -240,6 +240,10 @@ export class PostViewsService {
   /**
    * Batch version of markViewed. Silently ignores invalid/missing posts.
    * Caps at BATCH_MAX IDs to prevent abuse.
+   *
+   * When a post embeds another (flat repost via `repostedPostId`, or quote via
+   * `quotedPostId`), the embedded post is also marked viewed in the same batch
+   * so preview visibility counts toward both posts without an extra HTTP round-trip.
    */
   async markViewedBatch(
     userId: string | null | undefined,
@@ -254,8 +258,31 @@ export class PostViewsService {
     const ids = [...new Set(postIds.map((id) => (id ?? '').trim()).filter(Boolean))].slice(0, BATCH_MAX);
     if (ids.length === 0) return;
 
+    const expanded = await this.expandViewTargetIds(ids);
+
     // Fire-and-forget each; they handle their own error logging
-    await Promise.all(ids.map((pid) => this.markViewed(uid || null, pid, anonId, source)));
+    await Promise.all(expanded.map((pid) => this.markViewed(uid || null, pid, anonId, source)));
+  }
+
+  /**
+   * Expand a batch of post IDs to also include embedded preview targets
+   * (reposted original + quoted post). One query per batch; re-caps at BATCH_MAX.
+   */
+  async expandViewTargetIds(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
+
+    const rows = await this.prisma.post.findMany({
+      where: { id: { in: ids }, deletedAt: null },
+      select: { id: true, kind: true, repostedPostId: true, quotedPostId: true },
+    });
+
+    const out = new Set(ids);
+    for (const row of rows) {
+      if (row.kind === 'repost' && row.repostedPostId) out.add(row.repostedPostId);
+      if (row.quotedPostId) out.add(row.quotedPostId);
+    }
+
+    return [...out].slice(0, BATCH_MAX);
   }
 
   /**
