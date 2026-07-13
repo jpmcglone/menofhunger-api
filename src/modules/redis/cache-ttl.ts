@@ -3,6 +3,7 @@ export const CacheTtl = {
   anonFeedSeconds: 30,
   authFeedSeconds: 15,
   authCursorFeedSeconds: 8,
+  forYouRankedPage1Seconds: 15,
   anonTopicsListSeconds: 60,
   anonTopicPostsSeconds: 30,
   anonSearchPostsSeconds: 30,

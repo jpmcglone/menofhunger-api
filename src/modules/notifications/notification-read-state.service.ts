@@ -6,6 +6,12 @@ import { PosthogService } from '../../common/posthog/posthog.service';
 
 export type NotificationUnreadByKind = Partial<Record<NotificationKind | 'all', number>>;
 
+export const BELL_EXCLUDED_KINDS: NotificationKind[] = ['message', 'community_group_post'];
+
+export function isBellCountedNotificationKind(kind: NotificationKind): boolean {
+  return !BELL_EXCLUDED_KINDS.includes(kind);
+}
+
 /**
  * Read/delivered state: badge counts, mark-read/mark-delivered flows (by id,
  * by subject, bulk), nudge resolution, and the realtime badge emits that keep
@@ -25,17 +31,16 @@ export class NotificationReadStateService {
     return {
       recipientUserId,
       deliveredAt: null,
-      kind: { notIn: ['message', 'community_group_post'] },
+      kind: { notIn: BELL_EXCLUDED_KINDS },
     };
   }
 
   async getUndeliveredCount(recipientUserId: string): Promise<number> {
-    // Chat unread state has its own messages badge; the bell count only includes
-    // notification feed rows, and deliberately excludes legacy `message` rows
-    // and `community_group_post` badge-only rows (those drive the Groups badge instead).
-    return this.prisma.notification.count({
-      where: this.undeliveredBellWhere(recipientUserId),
+    const user = await this.prisma.user.findUnique({
+      where: { id: recipientUserId },
+      select: { undeliveredNotificationCount: true },
     });
+    return Math.max(0, Math.floor(Number(user?.undeliveredNotificationCount) || 0));
   }
 
   async getUnreadCountsByKind(recipientUserId: string): Promise<NotificationUnreadByKind> {
@@ -44,7 +49,7 @@ export class NotificationReadStateService {
       where: {
         recipientUserId,
         readAt: null,
-        kind: { notIn: ['message', 'community_group_post'] },
+        kind: { notIn: BELL_EXCLUDED_KINDS },
       },
       _count: { _all: true },
     });
@@ -628,7 +633,7 @@ export class NotificationReadStateService {
 
   /**
    * Mark the message notification for a conversation as read when the user opens it.
-   * Also decrements the undelivered counter if the row was undelivered.
+   * Message rows use the Messages badge and never affect the notification-bell counter.
    */
   async markConversationMessageNotificationRead(params: {
     userId: string;
@@ -641,27 +646,11 @@ export class NotificationReadStateService {
     });
     if (!existing) return;
 
-    const wasUndelivered = existing.deliveredAt == null;
-    await this.prisma.$transaction(async (tx) => {
-      const now = new Date();
-      await tx.notification.update({
-        where: { id: existing.id },
-        data: { readAt: now, deliveredAt: existing.deliveredAt ?? now },
-      });
-      if (wasUndelivered) {
-        await tx.user.update({
-          where: { id: userId },
-          data: { undeliveredNotificationCount: { decrement: 1 } },
-        });
-      }
+    const now = new Date();
+    await this.prisma.notification.update({
+      where: { id: existing.id },
+      data: { readAt: now, deliveredAt: existing.deliveredAt ?? now },
     });
-
-    if (wasUndelivered) {
-      const undeliveredCount = await this.prisma.notification.count({
-        where: this.undeliveredBellWhere(userId),
-      });
-      this.presenceRealtime.emitNotificationsUpdated(userId, { undeliveredCount });
-    }
     this.presenceRealtime.emitNotificationsDeleted(userId, { notificationIds: [existing.id] });
   }
 }

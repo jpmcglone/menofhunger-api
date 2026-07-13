@@ -7,7 +7,7 @@ import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { NotificationPushService } from './notification-push.service';
 import { NotificationQueryService } from './notification-query.service';
-import { NotificationReadStateService } from './notification-read-state.service';
+import { isBellCountedNotificationKind, NotificationReadStateService } from './notification-read-state.service';
 
 export type CreateNotificationParams = {
   recipientUserId: string;
@@ -166,12 +166,14 @@ export class NotificationWriterService {
           presentAt: presentAt ?? undefined,
         },
       });
-      // Increment the denormalized counter for bookkeeping, but compute the real undelivered
-      // count from actual rows to emit an accurate realtime badge (counter can drift over time).
-      await tx.user.update({
-        where: { id: recipientUserId },
-        data: { undeliveredNotificationCount: { increment: 1 } },
-      });
+      // Message and community-group-post rows have dedicated badges and must not
+      // affect the denormalized notification-bell counter.
+      if (isBellCountedNotificationKind(kind)) {
+        await tx.user.update({
+          where: { id: recipientUserId },
+          data: { undeliveredNotificationCount: { increment: 1 } },
+        });
+      }
       const undeliveredCount = await tx.notification.count({
         where: this.readState.undeliveredBellWhere(recipientUserId),
       });

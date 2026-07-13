@@ -25,6 +25,32 @@ import { feedPostInclude, mediaFeedPostInclude, type FeedPost, type FeedResult, 
 import { PostsRankingService } from './posts-ranking.service';
 import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
 import { CommunityGroupReadAccessService } from '../viewer/community-group-read-access.service';
+import { CacheService } from '../redis/cache.service';
+import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { CacheTtl } from '../redis/cache-ttl';
+import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
+
+type ForYouRankedShell = {
+  ids: string[];
+  nextCursor: string | null;
+  scores: Array<[string, number]>;
+};
+
+type ForYouFeedParams = {
+  viewerUserId: string | null;
+  limit: number;
+  cursor: string | null;
+  visibility: 'all' | PostVisibility;
+  kind?: 'regular' | 'checkin' | null;
+  checkinDayKey?: string | null;
+  /** When true, include the viewer's own posts (overrides home-feed self-exclusion). */
+  includeSelf?: boolean;
+  mediaOnly?: boolean;
+  topLevelOnly?: boolean;
+  authorUserIds?: string[] | null;
+  /** Filter to posts whose author has a matching US state code (e.g. "VA"). */
+  authorLocationState?: string | null;
+};
 
 /**
  * Post read paths: feeds (chrono, popular, featured, for-you), profile and
@@ -41,6 +67,8 @@ export class PostsFeedQueryService {
     private readonly enrichment: PostsViewerEnrichmentService,
     private readonly ranking: PostsRankingService,
     private readonly groupReadAccess: CommunityGroupReadAccessService,
+    private readonly cache: CacheService,
+    private readonly cacheInvalidation: CacheInvalidationService,
   ) {}
 
   /**
@@ -817,14 +845,77 @@ export class PostsFeedQueryService {
     const cursorCreatedAt = decodedCursor ? new Date(decodedCursor.createdAt) : null;
     const cursorId = decodedCursor?.id ?? null;
 
-    const cursorWhere: Prisma.PostWhereInput =
+    const communityScopeWhere: Prisma.PostWhereInput =
+      memberGroupIds.length > 0
+        ? { OR: [excludeCommunityGroupPostsWhere(), { communityGroupId: { in: memberGroupIds } }] }
+        : excludeCommunityGroupPostsWhere();
+
+    const locationStateFilter: Prisma.PostWhereInput[] = params.authorLocationState
+      ? ([{ user: { locationState: params.authorLocationState } }] as Prisma.PostWhereInput[])
+      : [];
+
+    const baseAnd: Prisma.PostWhereInput[] = [
+      { deletedAt: null },
+      { kind: { not: 'repost' } },
+      { user: { bannedAt: null } },
+      communityScopeWhere,
+      ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
+      ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
+      ...(params.excludeAuthorUserId ? ([{ NOT: { userId: params.excludeAuthorUserId } }] as Prisma.PostWhereInput[]) : []),
+      ...(params.mediaOnly ? [mediaOnlyWhere()] : []),
+      ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
+      ...locationStateFilter,
+      visibilityWhere,
+    ];
+    const include = params.mediaOnly ? mediaFeedPostInclude : feedPostInclude;
+    const chronologicalScoreWhere: Prisma.PostWhereInput = {
+      OR: [{ trendingScore: 0 }, { trendingScore: null }],
+    };
+    const chronologicalCursorWhere: Prisma.PostWhereInput =
+      cursorCreatedAt && cursorId
+        ? {
+            OR: [
+              { createdAt: { lt: cursorCreatedAt } },
+              { AND: [{ createdAt: cursorCreatedAt }, { id: { lt: cursorId } }] },
+            ],
+          }
+        : {};
+
+    const toResult = (posts: FeedPost[], hasMore: boolean): PopularFeedResult => {
+      const nextPost = hasMore ? posts[posts.length - 1] ?? null : null;
+      const nextCursor = nextPost
+        ? this.encodePopularCursor({
+            score: nextPost.trendingScore ?? 0,
+            createdAt: nextPost.createdAt.toISOString(),
+            id: nextPost.id,
+          })
+        : null;
+      const scoreByPostId = new Map<string, number>(
+        posts.map((post) => [post.id, post.trendingScore ?? 0]),
+      );
+      return { posts, nextCursor, scoreByPostId };
+    };
+
+    if (decodedCursor && (cursorScore == null || cursorScore <= 0)) {
+      const fallbackPosts = (await this.prisma.post.findMany({
+        where: {
+          AND: [...baseAnd, chronologicalScoreWhere, chronologicalCursorWhere],
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        include,
+      })) as FeedPost[];
+      return toResult(fallbackPosts.slice(0, limit), fallbackPosts.length > limit);
+    }
+
+    const trendingCursorWhere: Prisma.PostWhereInput =
       decodedCursor && cursorScore != null && cursorCreatedAt && cursorId
         ? {
             OR: [
-              { trendingScore: { lt: cursorScore } } as Prisma.PostWhereInput,
+              { trendingScore: { lt: cursorScore } },
               {
                 AND: [
-                  { trendingScore: cursorScore } as Prisma.PostWhereInput,
+                  { trendingScore: cursorScore },
                   {
                     OR: [
                       { createdAt: { lt: cursorCreatedAt } },
@@ -836,59 +927,36 @@ export class PostsFeedQueryService {
             ],
           }
         : {};
-    const communityScopeWhere: Prisma.PostWhereInput =
-      memberGroupIds.length > 0
-        ? { OR: [excludeCommunityGroupPostsWhere(), { communityGroupId: { in: memberGroupIds } }] }
-        : excludeCommunityGroupPostsWhere();
 
-    const locationStateFilter: Prisma.PostWhereInput[] = params.authorLocationState
-      ? ([{ user: { locationState: params.authorLocationState } }] as Prisma.PostWhereInput[])
-      : [];
-
-    const posts = await this.prisma.post.findMany({
+    const trendingPosts = (await this.prisma.post.findMany({
       where: {
         AND: [
-          { deletedAt: null },
-          params.mediaOnly
-            ? { OR: [{ trendingScore: { gte: 0 } }, { trendingScore: null }] }
-            : { trendingScore: { gt: 0 } },
-          { kind: { not: 'repost' } },
-          { user: { bannedAt: null } },
-          communityScopeWhere,
-          ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
-          ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
-          ...(params.excludeAuthorUserId ? ([{ NOT: { userId: params.excludeAuthorUserId } }] as Prisma.PostWhereInput[]) : []),
-          ...(params.mediaOnly ? [mediaOnlyWhere()] : []),
-          ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
-          ...locationStateFilter,
-          visibilityWhere,
-          cursorWhere,
+          ...baseAnd,
+          { trendingScore: { gt: 0 } },
+          trendingCursorWhere,
         ],
       },
       orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
-      include: params.mediaOnly ? mediaFeedPostInclude : feedPostInclude,
-    }) as FeedPost[];
+      include,
+    })) as FeedPost[];
 
-    const slicePosts = posts.slice(0, limit);
-    const nextPost = posts.length > limit ? slicePosts[slicePosts.length - 1] ?? null : null;
+    if (trendingPosts.length > limit) {
+      return toResult(trendingPosts.slice(0, limit), true);
+    }
 
-    const nextCursor =
-      nextPost && typeof nextPost.trendingScore === 'number'
-        ? this.encodePopularCursor({
-            score: nextPost.trendingScore,
-            createdAt: nextPost.createdAt.toISOString(),
-            id: nextPost.id,
-          })
-        : null;
-
-    const scoreByPostId = new Map<string, number>(
-      slicePosts
-        .filter((p): p is FeedPost & { trendingScore: number } => typeof p.trendingScore === 'number')
-        .map((p) => [p.id, p.trendingScore]),
-    );
-
-    return { posts: slicePosts, nextCursor, scoreByPostId };
+    const remaining = limit - trendingPosts.length;
+    const fallbackPosts = (await this.prisma.post.findMany({
+      where: {
+        AND: [...baseAnd, chronologicalScoreWhere],
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: Math.max(1, remaining + 1),
+      include,
+    })) as FeedPost[];
+    const fallbackSlice = remaining > 0 ? fallbackPosts.slice(0, remaining) : [];
+    const hasMoreFallback = fallbackPosts.length > remaining;
+    return toResult([...trendingPosts, ...fallbackSlice], hasMoreFallback);
   }
 
   /**
@@ -904,21 +972,73 @@ export class PostsFeedQueryService {
    * page recompute fresh rankings while excluding prior rows, avoiding the old scan-boundary skip
    * where lower-ranked candidates inside a scanned window could disappear forever.
    */
-  async listForYouFeed(params: {
-    viewerUserId: string | null;
-    limit: number;
-    cursor: string | null;
-    visibility: 'all' | PostVisibility;
-    kind?: 'regular' | 'checkin' | null;
-    checkinDayKey?: string | null;
-    /** When true, include the viewer's own posts (overrides home-feed self-exclusion). */
-    includeSelf?: boolean;
-    mediaOnly?: boolean;
-    topLevelOnly?: boolean;
-    authorUserIds?: string[] | null;
-    /** Filter to posts whose author has a matching US state code (e.g. "VA"). */
-    authorLocationState?: string | null;
-  }): Promise<PopularFeedResult> {
+  async listForYouFeed(params: ForYouFeedParams): Promise<PopularFeedResult> {
+    const viewerUserId = params.viewerUserId?.trim() || null;
+    const isPage1 = this.decodeForYouCursor(params.cursor).servedIds.length === 0;
+    const hasCursor = Boolean(params.cursor?.trim());
+    if (!viewerUserId || !isPage1 || hasCursor) {
+      return this.listForYouFeedUncached(params);
+    }
+
+    const feedVer = await this.cacheInvalidation.feedGlobalVersion();
+    const paramsHash = stableJsonHash({
+      endpoint: 'posts:forYou:ranked-page1',
+      limit: params.limit,
+      visibility: params.visibility,
+      kind: params.kind ?? null,
+      checkinDayKey: params.checkinDayKey?.trim() || null,
+      includeSelf: params.includeSelf ?? false,
+      mediaOnly: params.mediaOnly ?? false,
+      topLevelOnly: params.topLevelOnly ?? false,
+      authorUserIds: (params.authorUserIds ?? []).map((id) => id.trim()).filter(Boolean).sort(),
+      authorLocationState: params.authorLocationState?.trim().toUpperCase() || null,
+    });
+    const key = RedisKeys.forYouRankedPage1(viewerUserId, paramsHash, feedVer);
+    const lockKey = RedisKeys.forYouRankedPage1Lock(viewerUserId, paramsHash, feedVer);
+    let computed: PopularFeedResult | null = null;
+
+    const computeShell = async (): Promise<ForYouRankedShell> => {
+      computed = await this.listForYouFeedUncached(params);
+      return {
+        ids: computed.posts.map((post) => post.id),
+        nextCursor: computed.nextCursor,
+        scores: [...computed.scoreByPostId.entries()],
+      };
+    };
+
+    let shell: ForYouRankedShell;
+    try {
+      shell = await this.cache.getOrSetJsonWithLock<ForYouRankedShell>({
+        enabled: true,
+        key,
+        ttlSeconds: CacheTtl.forYouRankedPage1Seconds,
+        lockKey,
+        lockTtlMs: 10_000,
+        lockWaitMs: 750,
+        computeAndSet: computeShell,
+        fallback: computeShell,
+      });
+    } catch {
+      return this.listForYouFeedUncached(params);
+    }
+    if (computed) return computed;
+
+    const rows = shell.ids.length
+      ? ((await this.prisma.post.findMany({
+          where: { id: { in: shell.ids }, ...notDeletedWhere() },
+          include: params.mediaOnly ? mediaFeedPostInclude : feedPostInclude,
+        })) as FeedPost[])
+      : [];
+    const byId = new Map(rows.map((post) => [post.id, post] as const));
+    const ordered = shell.ids.map((id) => byId.get(id)).filter((post): post is FeedPost => Boolean(post));
+    return {
+      posts: ordered,
+      nextCursor: shell.nextCursor,
+      scoreByPostId: new Map(shell.scores),
+    };
+  }
+
+  private async listForYouFeedUncached(params: ForYouFeedParams): Promise<PopularFeedResult> {
     const { viewerUserId, limit, cursor, visibility } = params;
     const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
     const checkinDayKey = (params.checkinDayKey ?? null)?.trim() || null;
@@ -989,6 +1109,7 @@ export class PostsFeedQueryService {
 
     const decodedForYouCursor = this.decodeForYouCursor(cursor);
     const servedIds = decodedForYouCursor.servedIds;
+    const isPage1 = servedIds.length === 0;
     const servedWhere: Prisma.PostWhereInput[] =
       servedIds.length > 0 ? [{ id: { notIn: servedIds } }] : [];
     // Page 1 (refresh, cursor === null) always mints a fresh seed so the jitter below
@@ -1028,7 +1149,9 @@ export class PostsFeedQueryService {
       Boolean(cursorRow && cursorRow.trendingScore != null && cursorRow.trendingScore > 0);
     const fallbackOnly = Boolean(legacyCursor) && !inTrendingHead;
 
-    const scanTake = Math.min(POSTS_RANKING.forYouScanTakeMax, Math.max(limit + 10, limit * 4));
+    const scanTake = isPage1
+      ? Math.min(POSTS_RANKING.forYouPage1ScanTakeMax, Math.max(limit + 10, limit * 2))
+      : Math.min(POSTS_RANKING.forYouScanTakeMax, Math.max(limit + 10, limit * 4));
 
     type ScannedRow = {
       id: string;
@@ -1073,7 +1196,7 @@ export class PostsFeedQueryService {
     const memberGroupIds: string[] = [];
     const viewerCanReadOpenGroups = false;
     const secondDegreePathCountByAuthor = new Map<string, number>();
-    if (viewerFollowingIds.length > 0) {
+    if (!isPage1 && viewerFollowingIds.length > 0) {
       const secondDegreeRows = await this.prisma.follow.findMany({
         where: {
           followerId: { in: viewerFollowingIds },
@@ -1201,7 +1324,7 @@ export class PostsFeedQueryService {
             select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
           }) as Promise<ScannedRow[]>
         : Promise.resolve([] as ScannedRow[]),
-      viewerFollowingIds.length > 0
+      !isPage1 && viewerFollowingIds.length > 0
         ? this.prisma.post.findMany({
             where: {
               AND: [
@@ -1220,7 +1343,7 @@ export class PostsFeedQueryService {
             select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
           }) as Promise<ScannedRow[]>
         : Promise.resolve([] as ScannedRow[]),
-      secondDegreeAuthorIds.length > 0
+      !isPage1 && secondDegreeAuthorIds.length > 0
         ? this.prisma.post.findMany({
             where: {
               AND: [

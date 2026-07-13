@@ -72,6 +72,10 @@ function makeService(
   const viewerContext: any = {};
   const cacheInvalidation: any = {
     bumpForPostWrite: jest.fn(async () => undefined),
+    feedGlobalVersion: jest.fn(async () => 1),
+  };
+  const cache: any = {
+    getOrSetJsonWithLock: jest.fn(async (params: any) => params.computeAndSet()),
   };
   const appConfig: any = {
     r2: jest.fn(() => null),
@@ -93,6 +97,7 @@ function makeService(
     polls,
     viewerContext,
     cacheInvalidation,
+    cache,
     appConfig,
     postViews,
     jobs,
@@ -118,6 +123,8 @@ function makeService(
     enrichment,
     ranking,
     new CommunityGroupReadAccessService(deps.prisma, deps.viewerContext),
+    deps.cache,
+    deps.cacheInvalidation,
   );
   const engagement = new PostsEngagementService(
     deps.prisma,
@@ -306,6 +313,60 @@ describe('PostsService.listFeed', () => {
     expect(communityGroupMember.findMany).not.toHaveBeenCalled();
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
     expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+  });
+
+  it('falls back to recent posts when the All trending feed has no positive scores', async () => {
+    const { service, post } = setup();
+    const recent = [
+      { id: 'recent-2', createdAt: new Date('2026-07-13T12:00:00Z'), trendingScore: null },
+      { id: 'recent-1', createdAt: new Date('2026-07-13T11:00:00Z'), trendingScore: null },
+    ];
+    (post.findMany as jest.Mock).mockImplementation(async (args: any) => {
+      const clauses: any[] = args?.where?.AND ?? [];
+      const isTrending = clauses.some((clause) => clause?.trendingScore?.gt === 0);
+      return isTrending ? [] : recent;
+    });
+
+    const result = await service.listPopularFeed({
+      viewerUserId: 'viewer',
+      limit: 30,
+      cursor: null,
+      visibility: 'all',
+      followingOnly: false,
+    });
+
+    expect(result.posts.map((item: any) => item.id)).toEqual(['recent-2', 'recent-1']);
+    expect(result.scoreByPostId).toEqual(new Map([['recent-2', 0], ['recent-1', 0]]));
+  });
+
+  it('fills a sparse Following trending page with recent zero-score posts', async () => {
+    const { service, post } = setup();
+    const trending = [
+      { id: 'trending-1', createdAt: new Date('2026-07-13T10:00:00Z'), trendingScore: 5 },
+    ];
+    const recent = [
+      { id: 'recent-2', createdAt: new Date('2026-07-13T12:00:00Z'), trendingScore: null },
+      { id: 'recent-1', createdAt: new Date('2026-07-13T11:00:00Z'), trendingScore: 0 },
+    ];
+    (post.findMany as jest.Mock).mockImplementation(async (args: any) => {
+      const clauses: any[] = args?.where?.AND ?? [];
+      const isTrending = clauses.some((clause) => clause?.trendingScore?.gt === 0);
+      return isTrending ? trending : recent;
+    });
+
+    const result = await service.listPopularFeed({
+      viewerUserId: 'viewer',
+      limit: 3,
+      cursor: null,
+      visibility: 'all',
+      followingOnly: true,
+    });
+
+    expect(result.posts.map((item: any) => item.id)).toEqual([
+      'trending-1',
+      'recent-2',
+      'recent-1',
+    ]);
   });
 
   it('excludes the viewer from the home All chronological feed', async () => {
@@ -1941,6 +2002,7 @@ describe('PostsService.listForYouFeed', () => {
     blockedAuthorIds?: string[];
     memberGroupIds?: string[];
     viewerVerified?: boolean;
+    cache?: { getOrSetJsonWithLock: jest.Mock };
     /** Author IDs the viewer has recently boosted (A+ tier engagement history). */
     viewerBoostedAuthorIds?: string[];
     /** Author IDs of posts the viewer has recently replied to (A+ tier engagement history). */
@@ -2182,6 +2244,7 @@ describe('PostsService.listForYouFeed', () => {
           setJson: jest.fn(async () => undefined),
           del: jest.fn(async () => undefined),
         },
+        ...(opts.cache ? { cache: opts.cache } : {}),
       },
     );
 
@@ -2190,6 +2253,10 @@ describe('PostsService.listForYouFeed', () => {
 
   function cand(id: string, userId: string, score: number | null, ageHours = 1): ForYouCandidate {
     return { id, userId, parentId: null, communityGroupId: null, trendingScore: score, createdAt: new Date(Date.now() - ageHours * 60 * 60 * 1000) };
+  }
+
+  function deeperForYouCursor(servedIds: string[] = ['already-served']): string {
+    return Buffer.from(JSON.stringify({ v: 3, s: servedIds, seed: 'test-seed' }), 'utf8').toString('base64url');
   }
 
   it('excludes the viewer from candidate authors via the prisma where filter', async () => {
@@ -2260,7 +2327,12 @@ describe('PostsService.listForYouFeed', () => {
       friendBoostPostIds: ['p-e-friend'],
     });
 
-    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    const out = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 10,
+      cursor: deeperForYouCursor(),
+      visibility: 'all',
+    });
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-b-follow', 'p-e-friend', 'p-c-follower']);
   });
 
@@ -2276,6 +2348,110 @@ describe('PostsService.listForYouFeed', () => {
 
     const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 3, cursor: null, visibility: 'all' });
     expect(out.posts.map((p: any) => p.id)[0]).toBe('p-followed-new');
+  });
+
+  it('bounds page-one scans and skips friend-engaged and second-degree discovery work', async () => {
+    const { service, post, follow } = setupForYou({
+      candidates: [
+        cand('p-trending', 'u-stranger', 20),
+        cand('p-friend', 'u-friend-author', null),
+        cand('p-second', 'u-second', 10),
+      ],
+      youFollowAuthorIds: ['friend-1'],
+      friendBoostPostIds: ['p-friend'],
+      secondDegreeEdges: [{ followerId: 'friend-1', followingId: 'u-second' }],
+    });
+
+    await service.listForYouFeed({ viewerUserId: 'viewer', limit: 30, cursor: null, visibility: 'all' });
+
+    const selectCalls = (post.findMany as jest.Mock).mock.calls.map((call) => call[0]).filter((args) => args?.select);
+    const trendingCall = selectCalls.find(isTrendingScan);
+    expect(trendingCall?.take).toBe(61);
+    expect(selectCalls.some(isFriendEngagedScan)).toBe(false);
+    expect(selectCalls.some(isSecondDegreeScan)).toBe(false);
+    expect(
+      (follow.findMany as jest.Mock).mock.calls.some(
+        (call) => Array.isArray(call[0]?.where?.followerId?.in) && typeof call[0]?.where?.followingId !== 'string',
+      ),
+    ).toBe(false);
+  });
+
+  it('preserves wider friend-engaged and second-degree discovery on deeper pages', async () => {
+    const { service, post, follow } = setupForYou({
+      candidates: [
+        cand('p-trending', 'u-stranger', 20),
+        cand('p-friend', 'u-friend-author', null),
+        cand('p-second', 'u-second', 10),
+      ],
+      youFollowAuthorIds: ['friend-1'],
+      friendBoostPostIds: ['p-friend'],
+      secondDegreeEdges: [{ followerId: 'friend-1', followingId: 'u-second' }],
+    });
+
+    await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 30,
+      cursor: deeperForYouCursor(),
+      visibility: 'all',
+    });
+
+    const selectCalls = (post.findMany as jest.Mock).mock.calls.map((call) => call[0]).filter((args) => args?.select);
+    expect(selectCalls.find(isTrendingScan)?.take).toBe(121);
+    expect(selectCalls.some(isFriendEngagedScan)).toBe(true);
+    expect(selectCalls.some(isSecondDegreeScan)).toBe(true);
+    expect(
+      (follow.findMany as jest.Mock).mock.calls.some(
+        (call) => Array.isArray(call[0]?.where?.followerId?.in) && typeof call[0]?.where?.followingId !== 'string',
+      ),
+    ).toBe(true);
+  });
+
+  it('caches only the ranked page-one shell and hydrates cached ids in ranked order', async () => {
+    let cachedShell: unknown = null;
+    const cache = {
+      getOrSetJsonWithLock: jest.fn(async (params: any) => {
+        if (cachedShell) return cachedShell;
+        cachedShell = await params.computeAndSet();
+        return cachedShell;
+      }),
+    };
+    const { service, post } = setupForYou({
+      candidates: [cand('p-high', 'u-a', 20), cand('p-low', 'u-b', 10)],
+      cache,
+    });
+
+    const first = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 2, cursor: null, visibility: 'all' });
+    const rankingQueryCount = (post.findMany as jest.Mock).mock.calls.filter((call) => call[0]?.select).length;
+    const second = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 2, cursor: null, visibility: 'all' });
+
+    expect(first.posts.map((post: any) => post.id)).toEqual(['p-high', 'p-low']);
+    expect(second.posts.map((post: any) => post.id)).toEqual(['p-high', 'p-low']);
+    expect((post.findMany as jest.Mock).mock.calls.filter((call) => call[0]?.select)).toHaveLength(rankingQueryCount);
+    expect((post.findMany as jest.Mock).mock.calls.filter((call) => call[0]?.include)).toHaveLength(2);
+  });
+
+  it('does not cache anonymous or deeper For You pages', async () => {
+    const cache = { getOrSetJsonWithLock: jest.fn() };
+    const { service } = setupForYou({
+      candidates: [cand('p-one', 'u-a', 10)],
+      cache,
+    });
+
+    await service.listForYouFeed({ viewerUserId: null, limit: 10, cursor: null, visibility: 'all' });
+    await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 10,
+      cursor: deeperForYouCursor(),
+      visibility: 'all',
+    });
+    await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 10,
+      cursor: 'legacy-or-malformed-cursor',
+      visibility: 'all',
+    });
+
+    expect(cache.getOrSetJsonWithLock).not.toHaveBeenCalled();
   });
 
   it('puts a brand-new unseen mutual-follow post at the top, even when older followed posts have much higher trendingScore', async () => {
@@ -2342,7 +2518,12 @@ describe('PostsService.listForYouFeed', () => {
       friendBoostPostIds: ['p-friend-boosted-quiet'],
     });
 
-    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 5, cursor: null, visibility: 'all' });
+    const out = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 5,
+      cursor: deeperForYouCursor(),
+      visibility: 'all',
+    });
     expect(out.posts.map((p: any) => p.id)).toContain('p-friend-boosted-quiet');
   });
 
@@ -2356,7 +2537,12 @@ describe('PostsService.listForYouFeed', () => {
       friendBoostPostIds: ['p-friend-boosted-quiet'],
     });
 
-    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    const out = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 10,
+      cursor: deeperForYouCursor(),
+      visibility: 'all',
+    });
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-friend-boosted-quiet', 'p-generic-trending']);
   });
 
@@ -2441,7 +2627,12 @@ describe('PostsService.listForYouFeed', () => {
       friendEngagementAtByPostId: { 'p-old-friend-replied': twoHoursAgo },
     });
 
-    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    const out = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 10,
+      cursor: deeperForYouCursor(),
+      visibility: 'all',
+    });
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-old-friend-replied', 'p-fresh-stranger']);
   });
 
@@ -2478,7 +2669,12 @@ describe('PostsService.listForYouFeed', () => {
       secondDegreeEdges: [{ followerId: 'friend-1', followingId: 'u-second' }],
     });
 
-    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    const out = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 10,
+      cursor: deeperForYouCursor(),
+      visibility: 'all',
+    });
     expect(out.posts.map((p: any) => p.id)).toEqual(['p-direct-follow', 'p-second-degree', 'p-stranger']);
   });
 
@@ -2532,7 +2728,12 @@ describe('PostsService.listForYouFeed', () => {
       friendBoostPostIds: ['p-boost'],
     });
 
-    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    const out = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 10,
+      cursor: deeperForYouCursor(),
+      visibility: 'all',
+    });
     const ids = out.posts.map((p: any) => p.id);
     expect(ids[0] === 'p-reply' || ids[0] === 'p-boost').toBe(true);
     expect(ids[1] === 'p-reply' || ids[1] === 'p-boost').toBe(true);
@@ -2829,7 +3030,12 @@ describe('PostsService.listForYouFeed', () => {
       friendBoostPostIds: ['p-friend-boosted'],
     });
 
-    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    const out = await service.listForYouFeed({
+      viewerUserId: 'viewer',
+      limit: 10,
+      cursor: deeperForYouCursor(),
+      visibility: 'all',
+    });
     const ids = out.posts.map((p: any) => p.id);
     expect(ids.indexOf('p-friend-boosted')).toBeLessThan(ids.indexOf('p-viral-stranger'));
   });

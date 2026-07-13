@@ -88,6 +88,12 @@ export const RedisKeys = {
   authPostsList(userId: string, paramsHash: string, feedVer: number): string {
     return `cache:posts:list:user:${clean(userId)}:v${feedVer}:${clean(paramsHash)}`;
   },
+  forYouRankedPage1(userId: string, paramsHash: string, feedVer: number): string {
+    return `cache:posts:forYou:ranked:user:${clean(userId)}:v${feedVer}:${clean(paramsHash)}`;
+  },
+  forYouRankedPage1Lock(userId: string, paramsHash: string, feedVer: number): string {
+    return `lock:posts:forYou:ranked:user:${clean(userId)}:v${feedVer}:${clean(paramsHash)}`;
+  },
   anonPostsUser(username: string, paramsHash: string, feedVer: number): string {
     return `cache:posts:user:${encodeURIComponent(cleanLower(username))}:v${feedVer}:${clean(paramsHash)}`;
   },

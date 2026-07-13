@@ -65,6 +65,8 @@ export const POSTS_RANKING = {
 
   // For You: blends followed-unseen posts, friend-engaged discovery, and broader trending.
   forYouScanTakeMax: 240,
+  /** Keep the latency-sensitive first page bounded; deeper pages retain the wider discovery scan. */
+  forYouPage1ScanTakeMax: 80,
   forYouCursorServedIdMax: 300,
   forYouRecentFollowedWindowHours: 48,
   /**

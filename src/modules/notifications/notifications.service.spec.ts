@@ -617,7 +617,7 @@ describe('NotificationsService.list batching', () => {
 });
 
 describe('NotificationsService.getUndeliveredCount', () => {
-  it('excludes chat message notifications from the bell badge count', async () => {
+  it('reads the denormalized User counter without counting notification rows', async () => {
     const { svc, prisma } = makeService({
       prisma: {
         notification: {
@@ -632,15 +632,42 @@ describe('NotificationsService.getUndeliveredCount', () => {
       } as any,
     });
 
-    await expect(svc.getUndeliveredCount('u_recipient')).resolves.toBe(4);
-    expect(prisma.notification.count).toHaveBeenCalledWith({
-      where: {
-        recipientUserId: 'u_recipient',
-        deliveredAt: null,
-        kind: { notIn: ['message', 'community_group_post'] },
-      },
+    await expect(svc.getUndeliveredCount('u_recipient')).resolves.toBe(99);
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { id: 'u_recipient' },
+      select: { undeliveredNotificationCount: true },
     });
-    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    expect(prisma.notification.count).not.toHaveBeenCalled();
+  });
+});
+
+describe('NotificationWriterService bell-counter eligibility', () => {
+  it('does not increment the bell counter for message notifications', async () => {
+    const userUpdate = jest.fn();
+    const tx = {
+      notification: {
+        create: jest.fn(async () => ({ id: 'message-notification' })),
+        count: jest.fn(async () => 7),
+      },
+      user: { update: userUpdate },
+    };
+    const writer = new NotificationWriterService(
+      { $transaction: jest.fn(async (callback: any) => callback(tx)) } as any,
+      { emitNotificationsUpdated: jest.fn(), emitNotificationNew: jest.fn() } as any,
+      { isOnline: jest.fn(async () => false), isIdle: jest.fn(async () => false) } as any,
+      { enqueueCron: jest.fn() } as any,
+      { sendKindPushForActor: jest.fn(async () => undefined) } as any,
+      { buildNotificationDtoForRecipient: jest.fn(async () => null) } as any,
+      { undeliveredBellWhere: jest.fn(() => ({})), emitWaitingCountForUser: jest.fn() } as any,
+    );
+
+    await writer.create({
+      recipientUserId: 'u_recipient',
+      kind: 'message',
+      subjectConversationId: 'conversation-1',
+    });
+
+    expect(userUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -834,7 +861,7 @@ describe('NotificationsService.upsertGroupMemberJoinedNotification', () => {
 // ---------------------------------------------------------------------------
 
 describe('NotificationsService.markConversationMessageNotificationRead', () => {
-  it('marks notification read + decrements counter when conversation is opened', async () => {
+  it('marks notification read without touching the notification-bell counter', async () => {
     const notif = { id: 'msg-notif', deliveredAt: null, readAt: null };
     const notification = {
       findFirst: jest.fn(async () => notif),
@@ -876,10 +903,9 @@ describe('NotificationsService.markConversationMessageNotificationRead', () => {
         data: expect.objectContaining({ readAt: expect.any(Date) }),
       }),
     );
-    // undelivered → decrement
-    expect(user.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { undeliveredNotificationCount: { decrement: 1 } } }),
-    );
+    expect(user.update).not.toHaveBeenCalled();
+    expect(notification.count).not.toHaveBeenCalled();
+    expect(presenceRealtime.emitNotificationsUpdated).not.toHaveBeenCalled();
     expect(presenceRealtime.emitNotificationsDeleted).toHaveBeenCalledWith('r1', { notificationIds: ['msg-notif'] });
   });
 });

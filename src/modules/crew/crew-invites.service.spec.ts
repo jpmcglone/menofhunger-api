@@ -158,6 +158,18 @@ describe('CrewInvitesService.sendInvite — solo eligibility', () => {
   });
 });
 
+describe('CrewInvitesService.countInboxPending', () => {
+  it('counts only pending invites addressed to the viewer', async () => {
+    const { svc, prisma } = makeService();
+    prisma.crewInvite.count.mockResolvedValue(3);
+
+    await expect(svc.countInboxPending('viewer')).resolves.toBe(3);
+    expect(prisma.crewInvite.count).toHaveBeenCalledWith({
+      where: { inviteeUserId: 'viewer', status: 'pending' },
+    });
+  });
+});
+
 describe('CrewInvitesService.acceptInvite — solo auto-disband', () => {
   function pendingInvite(overrides: Partial<any> = {}) {
     return {

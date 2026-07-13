@@ -13,6 +13,8 @@ import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MessagesService } from '../messages/messages.service';
+import { CrewInvitesService } from '../crew/crew-invites.service';
+import type { AuthMeDto } from '../../common/dto/auth.dto';
 
 const startSchema = z.object({
   phone: z.string().min(1),
@@ -113,7 +115,10 @@ export class AuthController {
 
   @ApiOperation({ summary: 'Get the authenticated user (me) plus live notification/message counts' })
   @Get('me')
-  async me(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+  async me(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ data: AuthMeDto | null }> {
     const token = getSessionCookie(req);
     const sessionResult = await this.auth.meFromSessionToken(token);
     if (!sessionResult?.user?.id) return { data: null };
@@ -131,15 +136,50 @@ export class AuthController {
 
     const notifications = this.moduleRef.get(NotificationsService, { strict: false });
     const messages = this.moduleRef.get(MessagesService, { strict: false });
+    let crewInvites: CrewInvitesService | null = null;
+    try {
+      crewInvites = this.moduleRef.get(CrewInvitesService, { strict: false });
+    } catch {
+      // CrewModule can be absent in focused test/application contexts.
+    }
 
-    const [notificationCountRes, messageCountsRes] = await Promise.allSettled([
+    const [
+      notificationCountRes,
+      notificationUnreadCommentCountRes,
+      groupsUnreadRes,
+      crewInviteInboxCountRes,
+      messageCountsRes,
+    ] = await Promise.allSettled([
       notifications?.getUndeliveredCount(user.id) ?? Promise.resolve(0),
+      notifications?.getUnreadCommentCount(user.id) ?? Promise.resolve(0),
+      notifications?.getGroupsUnread(user.id) ?? Promise.resolve({ total: 0, byGroupId: {} }),
+      crewInvites?.countInboxPending(user.id) ?? Promise.resolve(0),
       messages?.getUnreadSummary(user.id) ?? Promise.resolve({ primary: 0, requests: 0 }),
     ]);
 
     const notificationUndeliveredCount =
       notificationCountRes.status === 'fulfilled'
         ? Math.max(0, Math.floor(Number(notificationCountRes.value) || 0))
+        : 0;
+    const notificationUnreadCommentCount =
+      notificationUnreadCommentCountRes.status === 'fulfilled'
+        ? Math.max(0, Math.floor(Number(notificationUnreadCommentCountRes.value) || 0))
+        : 0;
+    const groupsUnread =
+      groupsUnreadRes.status === 'fulfilled'
+        ? {
+            total: Math.max(0, Math.floor(Number(groupsUnreadRes.value?.total) || 0)),
+            byGroupId: Object.fromEntries(
+              Object.entries(groupsUnreadRes.value?.byGroupId ?? {}).map(([groupId, count]) => [
+                groupId,
+                Math.max(0, Math.floor(Number(count) || 0)),
+              ]),
+            ),
+          }
+        : { total: 0, byGroupId: {} };
+    const crewInviteInboxCount =
+      crewInviteInboxCountRes.status === 'fulfilled'
+        ? Math.max(0, Math.floor(Number(crewInviteInboxCountRes.value) || 0))
         : 0;
     const messageUnreadCounts =
       messageCountsRes.status === 'fulfilled'
@@ -153,6 +193,9 @@ export class AuthController {
       data: {
         ...user,
         notificationUndeliveredCount,
+        notificationUnreadCommentCount,
+        groupsUnread,
+        crewInviteInboxCount,
         messageUnreadCounts,
       },
     };

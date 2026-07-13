@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { AppConfigService } from '../app/app-config.service';
+import { BELL_EXCLUDED_KINDS } from './notification-read-state.service';
 
 @Injectable()
 export class NotificationsOrphanCleanupCron {
@@ -50,7 +51,11 @@ export class NotificationsOrphanCleanupCron {
       // Find undelivered orphans first so we can correct the denormalized counter.
       const undelivered = await this.prisma.notification.groupBy({
         by: ['recipientUserId'],
-        where: { OR: orphanOR, deliveredAt: null },
+        where: {
+          OR: orphanOR,
+          deliveredAt: null,
+          kind: { notIn: BELL_EXCLUDED_KINDS },
+        },
         _count: true,
       });
 

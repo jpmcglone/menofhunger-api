@@ -103,6 +103,12 @@ export class CrewInvitesService {
     return rows.map((r) => this.toDto(r));
   }
 
+  async countInboxPending(viewerUserId: string): Promise<number> {
+    return this.prisma.crewInvite.count({
+      where: { inviteeUserId: viewerUserId, status: 'pending' },
+    });
+  }
+
   async listOutbox(params: { viewerUserId: string }): Promise<CrewInviteDto[]> {
     const rows = await this.prisma.crewInvite.findMany({
       where: { invitedByUserId: params.viewerUserId, status: 'pending' },

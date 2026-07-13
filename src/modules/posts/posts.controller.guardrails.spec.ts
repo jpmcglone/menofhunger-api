@@ -17,8 +17,10 @@ describe('PostsController media feed guardrails', () => {
     expect(src).toContain('if (!params.mediaOnly || take <= 0) return { posts: [], overflow: false };');
   });
 
-  it('lets media trending include zero-score media instead of going empty', () => {
+  it('fills sparse trending feeds from the chronological zero-score tail', () => {
     const src = readFromRepo('src/modules/posts/posts-feed-query.service.ts');
-    expect(src).toContain("? { OR: [{ trendingScore: { gte: 0 } }, { trendingScore: null }] }");
+    expect(src).toContain("const chronologicalScoreWhere: Prisma.PostWhereInput = {");
+    expect(src).toContain("OR: [{ trendingScore: 0 }, { trendingScore: null }]");
+    expect(src).toContain("return toResult([...trendingPosts, ...fallbackSlice], hasMoreFallback);");
   });
 });
