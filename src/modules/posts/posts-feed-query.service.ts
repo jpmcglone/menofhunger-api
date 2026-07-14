@@ -857,7 +857,6 @@ export class PostsFeedQueryService {
 
     const baseAnd: Prisma.PostWhereInput[] = [
       { deletedAt: null },
-      { kind: { not: 'repost' } },
       { user: { bannedAt: null } },
       communityScopeWhere,
       ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
@@ -1095,7 +1094,7 @@ export class PostsFeedQueryService {
 
     const commonWhere: Prisma.PostWhereInput = {
       deletedAt: null,
-      kind: kind ? kind : { not: 'repost' },
+      ...(kind ? { kind } : {}),
       user: { bannedAt: null },
       ...(userIdWhere !== undefined ? { userId: userIdWhere } : {}),
       ...(checkinDayKey ? { checkinDayKey } : {}),
@@ -1849,7 +1848,6 @@ export class PostsFeedQueryService {
           deletedAt: null,
           communityGroupId: null,
           trendingScore: { gt: 0 },
-          kind: { not: 'repost' },
           parentId: null,
           createdAt: { gte: featuredMinCreatedAt },
           user: { bannedAt: null },
@@ -1917,7 +1915,6 @@ export class PostsFeedQueryService {
         deletedAt: null,
         communityGroupId: null,
         trendingScore: { gt: 0 },
-        kind: { not: 'repost' },
         parentId: null,
         createdAt: { gte: featuredMinCreatedAt },
         user: { bannedAt: null },
@@ -2493,7 +2490,6 @@ export class PostsFeedQueryService {
               AND p."parentId" IS NULL
               AND p."createdAt" >= ${snapshotMinCreatedAt}
               AND p."repostCount" > 0
-              AND p."kind"::text <> 'repost'
               ${visibilityFilterSql}
               ${authorFilterSql}
               ${excludeSelfSql}
@@ -2605,6 +2601,18 @@ export class PostsFeedQueryService {
             )
             +
             (
+              -- A flat-repost row is authored feed activity by the reposter.
+              CASE WHEN p."kind" = 'repost' THEN ${POSTS_RANKING.popularRepostScoreWeight} ELSE 0 END
+              * POWER(
+                0.5,
+                GREATEST(
+                  0,
+                  EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                ) / ${POSTS_RANKING.popularHalfLifeSeconds}
+              )
+            )
+            +
+            (
               (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${POSTS_RANKING.commentScoreWeight}
             )
             +
@@ -2674,8 +2682,6 @@ export class PostsFeedQueryService {
         LEFT JOIN comment_scores cs ON cs."postId" = p."id"
         CROSS JOIN hashtag_global hg
         LEFT JOIN post_hashtag_scores hs ON hs."postId" = p."id"
-        -- Flat reposts (kind='repost') are excluded: repostCount on the original already carries their signal.
-        WHERE p."kind"::text <> 'repost'
       )
       SELECT "id", "createdAt", "score"
       FROM scored
@@ -3009,6 +3015,18 @@ export class PostsFeedQueryService {
               )
               +
               (
+                -- A flat-repost row is authored feed activity by the reposter.
+                CASE WHEN p."kind" = 'repost' THEN ${POSTS_RANKING.popularRepostScoreWeight} ELSE 0 END
+                * POWER(
+                  0.5,
+                  GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                  ) / ${POSTS_RANKING.popularHalfLifeSeconds}
+                )
+              )
+              +
+              (
                 (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${POSTS_RANKING.commentScoreWeight}
               )
               +
@@ -3049,7 +3067,6 @@ export class PostsFeedQueryService {
             p."deletedAt" IS NULL
             AND p."communityGroupId" IS NULL
             ${params.topLevelOnly ? Prisma.sql`AND p."parentId" IS NULL` : Prisma.sql``}
-            AND p."kind"::text <> 'repost'
             AND p."createdAt" >= ${snapshotMinCreatedAt}
             AND p."userId" = ${user.id}
             AND (u."bannedAt" IS NULL)

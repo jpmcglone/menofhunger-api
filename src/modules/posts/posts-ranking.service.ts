@@ -155,6 +155,18 @@ export class PostsRankingService {
             )
             +
             (
+              -- A flat-repost row is authored feed activity by the reposter.
+              CASE WHEN p."kind" = 'repost' THEN ${POSTS_RANKING.popularRepostScoreWeight} ELSE 0 END
+              * POWER(
+                0.5,
+                GREATEST(
+                  0,
+                  EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
+                ) / ${POSTS_RANKING.popularHalfLifeSeconds}
+              )
+            )
+            +
+            (
               -- commentScore decayed by both comment recency AND post age (72h half-life for post age).
               (COALESCE(cs."commentScore", 0)::DOUBLE PRECISION) * ${POSTS_RANKING.commentScoreWeight}
               * POWER(

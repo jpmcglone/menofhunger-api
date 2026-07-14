@@ -518,10 +518,8 @@ export class PostsController {
                   });
         stageMs.list = Date.now() - listStartMs;
 
-        // For the chronological feed, suppress the original post when the viewer's own
-        // repost of it also appears in the same page — keeping only the repost (which
-        // is newer and already carries the original content inside repostedPost).
-        // Popular/featured feeds already exclude kind='repost' rows, so this is a no-op there.
+        // When a repost and its original appear in the same page, keep the repost activity
+        // row. It is authored by the reposter and already embeds the original content.
         const dedupedPosts = (() => {
           const repostedOriginalIds = new Set(
             result.posts

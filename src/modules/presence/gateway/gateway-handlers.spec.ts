@@ -423,6 +423,21 @@ describe('PresenceStatusHandler', () => {
       platforms: ['ios', 'web'],
     });
   });
+
+  it('uses the originating instance platform snapshot for cross-instance events', async () => {
+    const { server, presence, presenceRedis, handler } = makePresenceHandlerFixture();
+    const listener = new FakeSocket('s-feed');
+    server.register(listener);
+    presence.getOnlineFeedListeners.mockReturnValue(new Set(['s-feed']));
+
+    await handler.emitPlatformsChanged('u1', ['ios', 'web']);
+
+    expect(presenceRedis.platformsByUserIds).not.toHaveBeenCalled();
+    expect(listener.lastEmitted('presence:platforms-changed')).toEqual({
+      userId: 'u1',
+      platforms: ['ios', 'web'],
+    });
+  });
 });
 
 // ─── CommunityGroupReadAccessService ─────────────────────────────────────────

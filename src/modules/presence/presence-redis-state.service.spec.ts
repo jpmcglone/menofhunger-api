@@ -67,6 +67,36 @@ describe('PresenceRedisStateService.platformsByUserIds', () => {
   });
 });
 
+describe('PresenceRedisStateService.touchSocket', () => {
+  it('preserves connectedAtMs while refreshing socket metadata', async () => {
+    const rawRedis = { expire: jest.fn(async () => 1) };
+    const redis = {
+      duplicate: jest.fn(() => ({ subscribe: jest.fn(), on: jest.fn(), quit: jest.fn(), disconnect: jest.fn() })),
+      raw: jest.fn(() => rawRedis),
+      getJson: jest.fn(async () => ({ connectedAtMs: 123 })),
+      setJson: jest.fn(async () => undefined),
+    } as any;
+    const service = new PresenceRedisStateService(
+      redis,
+      { presenceIdleDisconnectMinutes: jest.fn(() => 10) } as any,
+      {} as any,
+    );
+
+    await service.touchSocket({ socketId: 'socket-1', userId: 'user-1', client: 'ios' });
+
+    expect(redis.setJson).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        userId: 'user-1',
+        client: 'ios',
+        connectedAtMs: 123,
+        lastSeenAtMs: expect.any(Number),
+      }),
+      { ttlSeconds: 660 },
+    );
+  });
+});
+
 describe('PresenceRedisStateService.sweepOfflineUsers', () => {
   it('calls persistLastOnlineAt for each user pruned from the online zset', async () => {
     const staleUserId = 'user-stale';

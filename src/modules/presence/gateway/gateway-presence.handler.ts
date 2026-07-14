@@ -231,13 +231,14 @@ export class PresenceStatusHandler {
     this.context.emitToSockets(allTargets, 'presence:online', payload);
   }
 
-  async emitPlatformsChanged(userId: string): Promise<void> {
+  async emitPlatformsChanged(userId: string, authoritativePlatforms?: string[]): Promise<void> {
     const targets = this.presence.getOnlineFeedListeners();
     if (targets.size === 0) return;
-    const platformsById = await this.presenceRedis.platformsByUserIds([userId]);
+    const platforms =
+      authoritativePlatforms ?? (await this.presenceRedis.platformsByUserIds([userId])).get(userId) ?? [];
     this.context.emitToSockets(targets, 'presence:platforms-changed', {
       userId,
-      platforms: platformsById.get(userId) ?? [],
+      platforms,
     });
   }
 

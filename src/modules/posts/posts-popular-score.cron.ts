@@ -112,7 +112,6 @@ export class PostsPopularScoreCron {
                 AND p."parentId" IS NULL
                 AND p."createdAt" >= ${minCreatedAt}
                 AND p."createdAt" >= ${new Date(asOf.getTime() - 72 * 60 * 60 * 1000)}
-                AND p."kind"::text <> 'repost'
               ORDER BY p."createdAt" DESC, p."id" DESC
               LIMIT 8000
             )
@@ -126,7 +125,6 @@ export class PostsPopularScoreCron {
                 AND p."parentId" IS NULL
                 AND p."createdAt" >= ${minCreatedAt}
                 AND p."boostCount" > 0
-                AND p."kind"::text <> 'repost'
               ORDER BY p."boostCount" DESC, p."createdAt" DESC, p."id" DESC
               LIMIT 1500
             )
@@ -140,7 +138,6 @@ export class PostsPopularScoreCron {
                 AND p."parentId" IS NULL
                 AND p."createdAt" >= ${minCreatedAt}
                 AND p."bookmarkCount" > 0
-                AND p."kind"::text <> 'repost'
               ORDER BY p."bookmarkCount" DESC, p."createdAt" DESC, p."id" DESC
               LIMIT 1500
             )
@@ -154,7 +151,6 @@ export class PostsPopularScoreCron {
                 AND p."parentId" IS NULL
                 AND p."createdAt" >= ${minCreatedAt}
                 AND p."commentCount" > 0
-                AND p."kind"::text <> 'repost'
               ORDER BY p."commentCount" DESC, p."createdAt" DESC, p."id" DESC
               LIMIT 1500
             )
@@ -169,7 +165,6 @@ export class PostsPopularScoreCron {
                 AND p."parentId" IS NULL
                 AND p."createdAt" >= ${minCreatedAt}
                 AND p."repostCount" > 0
-                AND p."kind"::text <> 'repost'
               ORDER BY p."repostCount" DESC, p."createdAt" DESC, p."id" DESC
               LIMIT 1500
             )
@@ -199,7 +194,6 @@ export class PostsPopularScoreCron {
                 AND p."parentId" IS NULL
                 AND p."communityGroupId" IS NOT NULL
                 AND p."createdAt" >= ${minCreatedAt}
-                AND p."kind"::text <> 'repost'
               ORDER BY p."createdAt" DESC, p."id" DESC
               LIMIT 4000
             )
@@ -296,6 +290,18 @@ export class PostsPopularScoreCron {
               (
                 -- Flat reposts (no commentary): same weight as bookmarks.
                 COALESCE(frc."count", 0) * 0.5 * POWER(
+                  0.5,
+                  GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (${asOf}::timestamptz - p."createdAt"))
+                  ) / (12 * 60 * 60)
+                )
+              )
+              +
+              (
+                -- A flat-repost row is authored feed activity by the reposter.
+                CASE WHEN p."kind" = 'repost' THEN 0.5 ELSE 0 END
+                * POWER(
                   0.5,
                   GREATEST(
                     0,

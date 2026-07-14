@@ -227,6 +227,7 @@ describe('PostsService.listFeed', () => {
     expect(communityGroupMember.findMany).not.toHaveBeenCalled();
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
     expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+    expect(where?.AND ?? []).not.toContainEqual({ kind: { not: 'repost' } });
     // Must NOT include an OR-clause that lets member-group posts through.
     expect((where?.AND ?? []).some((part: any) =>
       Array.isArray(part?.OR) && part.OR.some((item: any) => Array.isArray(item?.communityGroupId?.in)),
@@ -275,6 +276,7 @@ describe('PostsService.listFeed', () => {
     expect(communityGroupMember.findMany).not.toHaveBeenCalled();
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
     expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+    expect(where?.AND ?? []).not.toContainEqual({ kind: { not: 'repost' } });
     expect((where?.AND ?? []).some((part: any) =>
       Array.isArray(part?.OR) && part.OR.some((item: any) => Array.isArray(item?.communityGroupId?.in)),
     )).toBe(false);
@@ -1003,6 +1005,16 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
         reason: 'repost_changed',
         patch: { repostCount: 9 },
       }),
+    );
+    expect(deps.jobs.enqueue).toHaveBeenCalledWith(
+      expect.any(String),
+      { postId: 'canonical-1' },
+      expect.objectContaining({ jobId: 'score-canonical-1' }),
+    );
+    expect(deps.jobs.enqueue).toHaveBeenCalledWith(
+      expect.any(String),
+      { postId: 'repost-1' },
+      expect.objectContaining({ jobId: 'score-repost-1' }),
     );
   });
 
@@ -2271,6 +2283,7 @@ describe('PostsService.listForYouFeed', () => {
     // appended without spread-clobbering the exclude-self filter.
     const baseAnd = selectCall?.[0]?.where?.AND?.[0] ?? {};
     expect(baseAnd?.userId).toEqual({ not: 'viewer' });
+    expect(baseAnd?.kind).toBeUndefined();
     // We deliberately do NOT filter by parentId — engaged replies are first-class trending
     // candidates and get rolled up to their root by the controller's collapseFeedByRoot.
     expect(baseAnd?.parentId).toBeUndefined();

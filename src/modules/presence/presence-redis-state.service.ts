@@ -12,7 +12,7 @@ type PresenceEvent =
   | { type: 'offline'; userId: string; instanceId: string }
   | { type: 'idle'; userId: string; instanceId: string }
   | { type: 'active'; userId: string; instanceId: string }
-  | { type: 'platformsChanged'; userId: string; instanceId: string }
+  | { type: 'platformsChanged'; userId: string; instanceId: string; platforms: string[] }
   | { type: 'emitToUser'; userId: string; instanceId: string; event: string; payload: unknown }
   | { type: 'emitToRoom'; userId: string; instanceId: string; room: string; event: string; payload: unknown }
   | { type: 'userStatusChanged'; userId: string; instanceId: string; event: string; payload: unknown }
@@ -143,7 +143,8 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
     if (isNewlyOnline) {
       await this.publish({ type: 'online', userId, instanceId: this.instanceId });
     } else {
-      await this.publish({ type: 'platformsChanged', userId, instanceId: this.instanceId });
+      const platforms = (await this.platformsByUserIds([userId])).get(userId) ?? [];
+      await this.publish({ type: 'platformsChanged', userId, instanceId: this.instanceId, platforms });
     }
     return { isNewlyOnline };
   }
@@ -206,7 +207,8 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
     if (isNowOffline) {
       await this.publish({ type: 'offline', userId, instanceId: this.instanceId });
     } else {
-      await this.publish({ type: 'platformsChanged', userId, instanceId: this.instanceId });
+      const platforms = (await this.platformsByUserIds([userId])).get(userId) ?? [];
+      await this.publish({ type: 'platformsChanged', userId, instanceId: this.instanceId, platforms });
     }
     return { isNowOffline };
   }
@@ -218,11 +220,24 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
     const ttlSeconds = this.socketTtlSeconds();
     const socketKey = RedisKeys.presenceSocket(this.instanceId, socketId);
     const now = Date.now();
-    // Refresh heartbeat + TTL best-effort.
-    void this.redis
-      .setJson(socketKey, { userId, client: String(params.client ?? ''), lastSeenAtMs: now }, { ttlSeconds })
-      .catch(() => undefined);
-    void this.redis.raw().expire(RedisKeys.presenceUserSockets(userId), ttlSeconds).catch(() => undefined);
+    // Preserve the original connection time while refreshing heartbeat + TTL.
+    // Platform ordering must not change merely because one client heartbeats.
+    let connectedAtMs = now;
+    try {
+      const existing = await this.redis.getJson<{ connectedAtMs?: unknown }>(socketKey);
+      const existingConnectedAtMs = Number(existing?.connectedAtMs);
+      if (Number.isFinite(existingConnectedAtMs)) connectedAtMs = existingConnectedAtMs;
+    } catch {
+      // A missing/expired socket record is safely rebuilt from this heartbeat.
+    }
+    await Promise.allSettled([
+      this.redis.setJson(
+        socketKey,
+        { userId, client: String(params.client ?? ''), connectedAtMs, lastSeenAtMs: now },
+        { ttlSeconds },
+      ),
+      this.redis.raw().expire(RedisKeys.presenceUserSockets(userId), ttlSeconds),
+    ]);
   }
 
   async setIdle(userId: string): Promise<void> {

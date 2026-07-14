@@ -357,6 +357,7 @@ export class PostsEngagementService {
     void this.postViews.markViewed(userId, canonicalId);
     await this.cacheInvalidation.bumpFeedGlobal();
     this.ranking.enqueueScoreRefresh(canonicalId);
+    this.ranking.enqueueScoreRefresh(repostId);
 
     return { reposted: true as const, repostId, repostCount };
   }
