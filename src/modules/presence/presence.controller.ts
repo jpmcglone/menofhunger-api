@@ -337,7 +337,8 @@ export class PresenceController {
         nextCursor = encodeCursor({ tMs: aNext.lastOnlineAt!.getTime(), id: aNext.id });
         pageItems = aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null }));
       } else {
-        // Section A exhausted — fill remainder of page with section B (never-online users).
+        // Section A exhausted — fill the remainder with users who have no presence history.
+        // Their account creation time is the best available "last seen" fallback.
         const remaining = limit - aPage.length;
         const bItems = await this.prisma.user.findMany({
           where: {
@@ -361,7 +362,7 @@ export class PresenceController {
 
         pageItems = [
           ...aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null })),
-          ...bPage.map((r) => ({ id: r.id, lastOnlineAt: null as string | null })),
+          ...bPage.map((r) => ({ id: r.id, lastOnlineAt: r.createdAt.toISOString() })),
         ];
       }
     } else {
@@ -395,7 +396,7 @@ export class PresenceController {
         nextCursor = encodeNeverCursor({ cMs: bNext.createdAt.getTime(), id: bNext.id });
       }
 
-      pageItems = bPage.map((r) => ({ id: r.id, lastOnlineAt: null as string | null }));
+      pageItems = bPage.map((r) => ({ id: r.id, lastOnlineAt: r.createdAt.toISOString() }));
     }
 
     const userIds = pageItems.map((r) => r.id);
@@ -548,7 +549,8 @@ export class PresenceController {
             recentNextCursor = encodeCursor({ tMs: aNext.lastOnlineAt!.getTime(), id: aNext.id });
             pageItems = aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null }));
           } else {
-            // Section A exhausted — fill remainder of page with section B (never-online users).
+            // Section A exhausted — fill the remainder with users who have no presence history.
+            // Their account creation time is the best available "last seen" fallback.
             const remaining = limit - aPage.length;
             const bItems = await this.prisma.user.findMany({
               where: {
@@ -572,7 +574,7 @@ export class PresenceController {
 
             pageItems = [
               ...aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null })),
-              ...bPage.map((r) => ({ id: r.id, lastOnlineAt: null as string | null })),
+              ...bPage.map((r) => ({ id: r.id, lastOnlineAt: r.createdAt.toISOString() })),
             ];
           }
         } else {
@@ -606,7 +608,7 @@ export class PresenceController {
             recentNextCursor = encodeNeverCursor({ cMs: bNext.createdAt.getTime(), id: bNext.id });
           }
 
-          pageItems = bPage.map((r) => ({ id: r.id, lastOnlineAt: null as string | null }));
+          pageItems = bPage.map((r) => ({ id: r.id, lastOnlineAt: r.createdAt.toISOString() }));
         }
 
         const recentUserIds = pageItems.map((r) => r.id);

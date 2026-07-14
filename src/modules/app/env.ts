@@ -70,6 +70,13 @@ export const envSchema = z.object({
     z.string().optional(),
   ),
 
+  // Canonical public API base, including the version prefix, used for one-time
+  // native-to-browser handoff URLs (for example https://api.menofhunger.com/v1).
+  BROWSER_HANDOFF_BASE_URL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().url().optional(),
+  ),
+
   // Dev-only: if true, do not attempt to send SMS via Twilio (use 000000 bypass flow).
   DISABLE_TWILIO_IN_DEV: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),

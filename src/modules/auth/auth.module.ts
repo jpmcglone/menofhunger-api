@@ -9,12 +9,14 @@ import { NoopOtpProvider } from './otp/noop-otp.provider';
 import { AuthCleanupCron } from './auth-cleanup.cron';
 import { AccountDeletionFinalizeCron } from './account-deletion-finalize.cron';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { BrowserHandoffService } from './browser-handoff.service';
 
 @Module({
   imports: [RealtimeModule],
   controllers: [AuthController],
   providers: [
     AuthService,
+    BrowserHandoffService,
     AccountDeletionService,
     AuthGuard,
     TwilioVerifyOtpProvider,
@@ -27,4 +29,3 @@ import { RealtimeModule } from '../realtime/realtime.module';
   exports: [AuthService, AuthGuard, AuthCleanupCron, AccountDeletionFinalizeCron],
 })
 export class AuthModule {}
-

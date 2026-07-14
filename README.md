@@ -92,6 +92,7 @@ Before deploying, ensure these are set (API also validates at startup):
 - `OTP_HMAC_SECRET` — must be set and not the dev default
 - `TRUST_PROXY=true` when behind Render/Cloudflare
 - `ALLOWED_ORIGINS` — comma-separated origins (e.g. `https://menofhunger.com`)
+- `BROWSER_HANDOFF_BASE_URL` — public HTTPS API base including `/v1` (e.g. `https://api.menofhunger.com/v1`)
 - Optionally: `COOKIE_DOMAIN`, `REQUIRE_CSRF_ORIGIN_IN_PROD=true`
 
 To check required env without starting the server: `node scripts/check-env.mjs` (load `.env` first or set vars in the shell).

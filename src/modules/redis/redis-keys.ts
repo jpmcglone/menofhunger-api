@@ -54,6 +54,11 @@ export const RedisKeys = {
     return `sess:full:${clean(tokenHash)}`;
   },
 
+  // One-time native-to-browser auth handoff (SHA-256 code hash -> short-lived payload)
+  browserHandoff(codeHash: string): string {
+    return `auth:browser-handoff:${clean(codeHash)}`;
+  },
+
   // Message unread summary cache (userId -> { primary, requests })
   messageUnreadSummary(userId: string): string {
     return `msg:unread:${clean(userId)}`;
@@ -211,4 +216,3 @@ export const RedisKeys = {
     return `wp:state:${clean(spaceId)}`;
   },
 } as const;
-

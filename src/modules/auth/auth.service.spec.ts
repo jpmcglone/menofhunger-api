@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { AuthService } from './auth.service';
-import { SESSION_RENEWAL_THRESHOLD_DAYS, SESSION_TTL_DAYS } from './auth.constants';
+import { AUTH_COOKIE_NAME, SESSION_RENEWAL_THRESHOLD_DAYS, SESSION_TTL_DAYS } from './auth.constants';
 import { hmacSha256Hex, randomSessionToken } from './auth.utils';
 
 const HMAC_SECRET = 'test-secret';
@@ -126,6 +126,34 @@ function makeService(overrides?: { prisma?: any }) {
 }
 
 // ---------------------------------------------------------------------------
+
+describe('AuthService.createSessionForUser', () => {
+  it('creates a fresh durable session token and sets the normal HTTP-only cookie', async () => {
+    const { svc, prisma } = makeService();
+    prisma.session.create.mockResolvedValue({ id: 'browser-session' });
+    const response = { cookie: jest.fn() } as any;
+
+    await svc.createSessionForUser('user-1', response);
+
+    const createCall = prisma.session.create.mock.calls[0][0];
+    const cookieCall = response.cookie.mock.calls[0];
+    const browserToken = cookieCall[1] as string;
+    expect(createCall.data).toEqual({
+      userId: 'user-1',
+      tokenHash: hmacSha256Hex(HMAC_SECRET, browserToken),
+      expiresAt: expect.any(Date),
+    });
+    expect(cookieCall[0]).toBe(AUTH_COOKIE_NAME);
+    expect(cookieCall[2]).toEqual(
+      expect.objectContaining({
+        httpOnly: true,
+        sameSite: 'lax',
+        path: '/',
+        expires: createCall.data.expiresAt,
+      }),
+    );
+  });
+});
 
 describe('AuthService.meFromSessionToken — sliding window renewal', () => {
   it('renews a session that is within the renewal threshold', async () => {

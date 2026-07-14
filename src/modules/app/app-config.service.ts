@@ -236,6 +236,12 @@ export class AppConfigService {
     return v?.trim() ? v.trim() : undefined;
   }
 
+  browserHandoffBaseUrl(): string {
+    const configured = this.config.get<string>('BROWSER_HANDOFF_BASE_URL')?.trim() ?? '';
+    if (configured) return configured.replace(/\/+$/, '');
+    return `http://localhost:${this.port()}/v1`;
+  }
+
   disableTwilioInDev(): boolean {
     const raw = this.config.get<string>('DISABLE_TWILIO_IN_DEV') ?? '';
     const v = raw.trim().toLowerCase();

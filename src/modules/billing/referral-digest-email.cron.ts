@@ -91,7 +91,7 @@ export class ReferralDigestEmailCron {
       const contentHtml = `
 <p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:#111827;">${escapeHtml(greeting)}</p>
 <p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:#111827;">
-  <strong>${count} ${plural}</strong> signed up with your referral code today. Keep sharing it — when they go premium you both earn a free month.
+  <strong>${count} ${plural}</strong> signed up with your referral code today. After a recruit’s first Premium payment, his second month is free and you receive one free month too.
 </p>
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
        style="border-collapse:collapse;width:100%;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">

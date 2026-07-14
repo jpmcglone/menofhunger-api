@@ -142,6 +142,24 @@ describe('PresenceController — Marv pin injection', () => {
       expect(res.data.online.find((u: any) => u.id === 'marv-id')).toBeUndefined();
       expect(res.pagination.totalOnline).toBe(2);
     });
+
+    it('uses account creation as last seen when presence history is missing', async () => {
+      const m = makeController({ marvEnabled: false, onlineUserIds: [] });
+      const createdAt = new Date('2026-07-13T15:30:00.000Z');
+      m.prisma.user.findMany = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 'new-user', createdAt }]);
+
+      const res: any = await m.controller.onlinePage('viewer', {});
+
+      expect(res.data.recent).toContainEqual(
+        expect.objectContaining({
+          id: 'new-user',
+          lastOnlineAt: createdAt.toISOString(),
+        }),
+      );
+    });
   });
 });
 

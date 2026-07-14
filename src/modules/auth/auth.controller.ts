@@ -1,4 +1,15 @@
-import { BadRequestException, Body, Controller, Get, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Post,
+  Query,
+  Req,
+  Res,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { ModuleRef } from '@nestjs/core';
@@ -15,6 +26,9 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { MessagesService } from '../messages/messages.service';
 import { CrewInvitesService } from '../crew/crew-invites.service';
 import type { AuthMeDto } from '../../common/dto/auth.dto';
+import type { BrowserHandoffDto } from '../../common/dto';
+import { AuthGuard, type AuthedRequest } from './auth.guard';
+import { BrowserHandoffService } from './browser-handoff.service';
 
 const startSchema = z.object({
   phone: z.string().min(1),
@@ -27,6 +41,14 @@ const existsQuerySchema = z.object({
 const deleteAccountSchema = z.object({
   reason: z.string().max(100).optional().nullable(),
   details: z.string().max(2000).optional().nullable(),
+});
+
+const browserHandoffSchema = z.object({
+  destination: z.string().max(2048).optional(),
+});
+
+const browserHandoffRedeemSchema = z.object({
+  code: z.string().min(1).max(256),
 });
 
 const verifySchema = z.object({
@@ -46,6 +68,7 @@ export class AuthController {
     private readonly auth: AuthService,
     private readonly accountDeletion: AccountDeletionService,
     private readonly moduleRef: ModuleRef,
+    private readonly browserHandoff: BrowserHandoffService,
   ) {}
 
   @ApiOperation({ summary: 'Send 6-digit login code via SMS' })
@@ -111,6 +134,51 @@ export class AuthController {
     }
     const result = await this.auth.verifyPhoneCode(phone, parsed.code, res, parsed.referralCode);
     return { data: result };
+  }
+
+  @ApiOperation({ summary: 'Create a short-lived one-time external browser authentication handoff' })
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('authStart', 4),
+      ttl: rateLimitTtl('authStart', 60),
+    },
+  })
+  @UseGuards(AuthGuard)
+  @Post('browser-handoff')
+  async createBrowserHandoff(
+    @Req() req: AuthedRequest,
+    @Body() body: unknown,
+  ): Promise<{ data: BrowserHandoffDto }> {
+    const userId = req.user?.id;
+    if (!userId) throw new UnauthorizedException();
+    const parsed = browserHandoffSchema.parse(body ?? {});
+    const handoff = await this.browserHandoff.mint(userId, parsed.destination);
+    return { data: handoff };
+  }
+
+  @ApiOperation({ summary: 'Redeem a one-time browser authentication handoff' })
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('authVerify', 20),
+      ttl: rateLimitTtl('authVerify', 60),
+    },
+  })
+  @Get('browser-handoff/redeem')
+  async redeemBrowserHandoff(@Query() query: unknown, @Res() res: Response): Promise<void> {
+    let code: string;
+    try {
+      code = browserHandoffRedeemSchema.parse(query).code;
+    } catch {
+      res.redirect(302, this.browserHandoff.invalidRedirectUrl());
+      return;
+    }
+
+    try {
+      const redemption = await this.browserHandoff.redeem(code, res);
+      res.redirect(302, redemption?.destinationUrl ?? this.browserHandoff.invalidRedirectUrl());
+    } catch {
+      res.redirect(302, this.browserHandoff.invalidRedirectUrl());
+    }
   }
 
   @ApiOperation({ summary: 'Get the authenticated user (me) plus live notification/message counts' })

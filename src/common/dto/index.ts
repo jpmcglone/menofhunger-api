@@ -1,4 +1,5 @@
 export * from './user.dto';
+export * from './auth.dto';
 export * from './post.dto';
 export * from './feedback.dto';
 export * from './report.dto';

@@ -340,7 +340,7 @@ export class AuthService {
       }
     }
 
-    const session = await this.createSessionAndSetCookie(user.id, res);
+    const session = await this.createSessionForUser(user.id, res);
 
     // Fire-and-forget: update presence so the user appears in "recently around"
     // even if they never open a WebSocket (e.g. mobile sign-up, abandoned onboarding).
@@ -740,7 +740,7 @@ export class AuthService {
     res.clearCookie(AUTH_COOKIE_NAME, { path: '/', domain });
   }
 
-  private async createSessionAndSetCookie(userId: string, res: Response) {
+  async createSessionForUser(userId: string, res: Response) {
     const token = randomSessionToken();
     const tokenHash = hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
 

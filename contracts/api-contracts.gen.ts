@@ -450,6 +450,27 @@ export type ArticleDto = {
   viewerCanAccess: boolean;
 };
 
+// ─── src/common/dto/auth.dto.ts ────────────────────────────────────────────────
+
+export type BrowserHandoffDto = {
+  handoffUrl: string;
+  expiresAt: string;
+};
+
+export type AuthMeDto = UserDto & {
+  notificationUndeliveredCount: number;
+  notificationUnreadCommentCount: number;
+  groupsUnread: {
+    total: number;
+    byGroupId: Record<string, number>;
+  };
+  crewInviteInboxCount: number;
+  messageUnreadCounts: {
+    primary: number;
+    requests: number;
+  };
+};
+
 // ─── src/common/dto/billing.dto.ts ─────────────────────────────────────────────
 
 export type BillingTier = 'premium' | 'premiumPlus';

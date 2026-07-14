@@ -100,6 +100,9 @@ async function bootstrap() {
     if (origins.length === 0 || (origins.length === 1 && origins[0] === devOrigin)) {
       missing.push('ALLOWED_ORIGINS (must be set to the real browser origin(s), e.g. https://menofhunger.com, in production)');
     }
+    if (!appConfig.browserHandoffBaseUrl().startsWith('https://')) {
+      missing.push('BROWSER_HANDOFF_BASE_URL (must be an HTTPS public API URL including /v1 in production)');
+    }
   }
   if (missing.length > 0) {
     startup.error(`Missing or invalid required env: ${missing.join('; ')}. Exiting.`);
