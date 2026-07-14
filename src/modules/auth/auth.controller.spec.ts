@@ -4,6 +4,7 @@ import { CrewInvitesService } from '../crew/crew-invites.service';
 import { MessagesService } from '../messages/messages.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { UnauthorizedException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
 
 describe('AuthController.me', () => {
   it('returns all home-load badge counts in the auth payload', async () => {
@@ -24,11 +25,16 @@ describe('AuthController.me', () => {
     };
     const messages = { getUnreadSummary: jest.fn(async () => ({ primary: 6, requests: 1 })) };
     const crewInvites = { countInboxPending: jest.fn(async () => 3) };
+    const prisma = {
+      post: { count: jest.fn(async () => 978) },
+      article: { count: jest.fn(async () => 12) },
+    };
     const moduleRef = {
       get: jest.fn((token: unknown) => {
         if (token === NotificationsService) return notifications;
         if (token === MessagesService) return messages;
         if (token === CrewInvitesService) return crewInvites;
+        if (token === PrismaService) return prisma;
         return null;
       }),
     } as any;
@@ -46,8 +52,21 @@ describe('AuthController.me', () => {
       groupsUnread: { total: 4, byGroupId: { 'group-1': 3, 'group-2': 1 } },
       crewInviteInboxCount: 3,
       messageUnreadCounts: { primary: 6, requests: 1 },
+      postCount: 978,
+      articleCount: 12,
     });
     expect(crewInvites.countInboxPending).toHaveBeenCalledWith('user-1');
+    expect(prisma.post.count).toHaveBeenCalledWith({
+      where: { userId: 'user-1', deletedAt: null, isDraft: false },
+    });
+    expect(prisma.article.count).toHaveBeenCalledWith({
+      where: {
+        authorId: 'user-1',
+        deletedAt: null,
+        isDraft: false,
+        publishedAt: { not: null },
+      },
+    });
   });
 
   it('falls back to zero values when optional home-load count lookups fail', async () => {
@@ -93,6 +112,8 @@ describe('AuthController.me', () => {
       groupsUnread: { total: 0, byGroupId: {} },
       crewInviteInboxCount: 0,
       messageUnreadCounts: { primary: 0, requests: 0 },
+      postCount: null,
+      articleCount: null,
     });
   });
 });

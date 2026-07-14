@@ -29,6 +29,7 @@ import { CacheService } from '../redis/cache.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { CacheTtl } from '../redis/cache-ttl';
 import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
+import { totalPostCommentsWhere, totalUserPostsWhere } from '../../common/content-counts';
 
 type ForYouRankedShell = {
   ids: string[];
@@ -2846,12 +2847,7 @@ export class PostsFeedQueryService {
       ? await (async () => {
           const grouped = await this.prisma.post.groupBy({
             by: ['visibility'],
-            where: {
-              userId: user.id,
-              visibility: { not: 'onlyMe' },
-              ...notDeletedWhere(),
-              ...excludeCommunityGroupPostsWhere(),
-            },
+            where: totalUserPostsWhere(user.id),
             _count: { _all: true },
           });
 
@@ -3236,13 +3232,9 @@ export class PostsFeedQueryService {
               id: slice[slice.length - 1].id,
             })
           : null;
-      const countsWhere =
-        viewerUserId
-          ? { parentId: postId, ...notDeletedWhere(), OR: [{ visibility: { in: allowed } }, { userId: viewerUserId }] }
-          : { parentId: postId, ...notDeletedWhere(), visibility: { in: allowed } };
       const counts = await this.prisma.post.groupBy({
         by: ['visibility'],
-        where: countsWhere,
+        where: totalPostCommentsWhere(postId),
         _count: { _all: true },
       });
       const countMap = { all: 0, public: 0, verifiedOnly: 0, premiumOnly: 0 };
@@ -3275,13 +3267,9 @@ export class PostsFeedQueryService {
           })
         : null;
 
-    const countsWhereNonPopular =
-      viewerUserId
-        ? { parentId: postId, ...notDeletedWhere(), OR: [{ visibility: { in: allowed } }, { userId: viewerUserId }] }
-        : { parentId: postId, ...notDeletedWhere(), visibility: { in: allowed } };
     const counts = await this.prisma.post.groupBy({
       by: ['visibility'],
-      where: countsWhereNonPopular,
+      where: totalPostCommentsWhere(postId),
       _count: { _all: true },
     });
     const countMap = { all: 0, public: 0, verifiedOnly: 0, premiumOnly: 0 };

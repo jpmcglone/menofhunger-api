@@ -358,6 +358,7 @@ describe('PresenceStatusHandler', () => {
       setIdle: jest.fn().mockResolvedValue(undefined),
       setActive: jest.fn().mockResolvedValue(undefined),
       touchSocket: jest.fn().mockResolvedValue(undefined),
+      platformsByUserIds: jest.fn().mockResolvedValue(new Map([['u1', ['ios', 'web']]])),
     } as any;
     const handler = new PresenceStatusHandler(
       { isProd: jest.fn().mockReturnValue(true), marvBot: jest.fn().mockReturnValue({ enabled: false }) } as any,
@@ -407,6 +408,20 @@ describe('PresenceStatusHandler', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('emits platform changes to online-feed listeners', async () => {
+    const { server, presence, handler } = makePresenceHandlerFixture();
+    const listener = new FakeSocket('s-feed');
+    server.register(listener);
+    presence.getOnlineFeedListeners.mockReturnValue(new Set(['s-feed']));
+
+    await handler.emitPlatformsChanged('u1');
+
+    expect(listener.lastEmitted('presence:platforms-changed')).toEqual({
+      userId: 'u1',
+      platforms: ['ios', 'web'],
+    });
   });
 });
 

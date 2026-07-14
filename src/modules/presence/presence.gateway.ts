@@ -63,9 +63,10 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       if (!evt) return;
       if (evt.instanceId === myInstanceId) return;
       if (evt.type === 'online') void this.presenceHandler.emitOnline(evt.userId);
-      else if (evt.type === 'offline') this.presenceHandler.emitOffline(evt.userId);
+      else if (evt.type === 'offline') void this.presenceHandler.emitOffline(evt.userId);
       else if (evt.type === 'idle') this.presenceHandler.emitIdle(evt.userId);
       else if (evt.type === 'active') this.presenceHandler.emitActive(evt.userId);
+      else if (evt.type === 'platformsChanged') void this.presenceHandler.emitPlatformsChanged(evt.userId);
       else if (evt.type === 'emitToUser') {
         const e = evt.event.trim();
         if (!e) return;

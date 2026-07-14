@@ -29,6 +29,8 @@ import type { AuthMeDto } from '../../common/dto/auth.dto';
 import type { BrowserHandoffDto } from '../../common/dto';
 import { AuthGuard, type AuthedRequest } from './auth.guard';
 import { BrowserHandoffService } from './browser-handoff.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { totalUserArticlesWhere, totalUserPostsWhere } from '../../common/content-counts';
 
 const startSchema = z.object({
   phone: z.string().min(1),
@@ -205,10 +207,16 @@ export class AuthController {
     const notifications = this.moduleRef.get(NotificationsService, { strict: false });
     const messages = this.moduleRef.get(MessagesService, { strict: false });
     let crewInvites: CrewInvitesService | null = null;
+    let prisma: PrismaService | null = null;
     try {
       crewInvites = this.moduleRef.get(CrewInvitesService, { strict: false });
     } catch {
       // CrewModule can be absent in focused test/application contexts.
+    }
+    try {
+      prisma = this.moduleRef.get(PrismaService, { strict: false });
+    } catch {
+      // Prisma can be absent in focused test/application contexts.
     }
 
     const [
@@ -217,12 +225,16 @@ export class AuthController {
       groupsUnreadRes,
       crewInviteInboxCountRes,
       messageCountsRes,
+      postCountRes,
+      articleCountRes,
     ] = await Promise.allSettled([
       notifications?.getUndeliveredCount(user.id) ?? Promise.resolve(0),
       notifications?.getUnreadCommentCount(user.id) ?? Promise.resolve(0),
       notifications?.getGroupsUnread(user.id) ?? Promise.resolve({ total: 0, byGroupId: {} }),
       crewInvites?.countInboxPending(user.id) ?? Promise.resolve(0),
       messages?.getUnreadSummary(user.id) ?? Promise.resolve({ primary: 0, requests: 0 }),
+      prisma?.post.count({ where: totalUserPostsWhere(user.id) }) ?? Promise.resolve(null),
+      prisma?.article.count({ where: totalUserArticlesWhere(user.id) }) ?? Promise.resolve(null),
     ]);
 
     const notificationUndeliveredCount =
@@ -256,6 +268,14 @@ export class AuthController {
             requests: Math.max(0, Math.floor(Number(messageCountsRes.value?.requests) || 0)),
           }
         : { primary: 0, requests: 0 };
+    const postCount =
+      postCountRes.status === 'fulfilled' && typeof postCountRes.value === 'number'
+        ? Math.max(0, Math.floor(postCountRes.value))
+        : null;
+    const articleCount =
+      articleCountRes.status === 'fulfilled' && typeof articleCountRes.value === 'number'
+        ? Math.max(0, Math.floor(articleCountRes.value))
+        : null;
 
     return {
       data: {
@@ -265,6 +285,8 @@ export class AuthController {
         groupsUnread,
         crewInviteInboxCount,
         messageUnreadCounts,
+        postCount,
+        articleCount,
       },
     };
   }

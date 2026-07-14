@@ -32,6 +32,41 @@ describe('PresenceRedisStateService.onlineByUserIds', () => {
   });
 });
 
+describe('PresenceRedisStateService.platformsByUserIds', () => {
+  it('aggregates and deduplicates platforms across API instances', async () => {
+    const membersPipeline = {
+      smembers: jest.fn(),
+      exec: jest.fn(async () => [
+        [null, ['instance-a:socket-web', 'instance-b:socket-ios', 'instance-a:socket-web-2']],
+      ]),
+    };
+    const socketsPipeline = {
+      get: jest.fn(),
+      exec: jest.fn(async () => [
+        [null, JSON.stringify({ client: 'web', connectedAtMs: 100 })],
+        [null, JSON.stringify({ client: 'ios', connectedAtMs: 300 })],
+        [null, JSON.stringify({ client: 'web', connectedAtMs: 200 })],
+      ]),
+    };
+    const rawRedis = {
+      pipeline: jest.fn()
+        .mockReturnValueOnce(membersPipeline)
+        .mockReturnValueOnce(socketsPipeline),
+    };
+    const redis = {
+      duplicate: jest.fn(() => ({ subscribe: jest.fn(), on: jest.fn(), quit: jest.fn(), disconnect: jest.fn() })),
+      raw: jest.fn(() => rawRedis),
+    } as any;
+    const appConfig = { presenceIdleDisconnectMinutes: jest.fn(() => 10) } as any;
+    const presence = { getClientsForUser: jest.fn(() => ['web']) } as any;
+    const service = new PresenceRedisStateService(redis, appConfig, presence);
+
+    const platforms = await service.platformsByUserIds(['user-1']);
+
+    expect(platforms.get('user-1')).toEqual(['ios', 'web']);
+  });
+});
+
 describe('PresenceRedisStateService.sweepOfflineUsers', () => {
   it('calls persistLastOnlineAt for each user pruned from the online zset', async () => {
     const staleUserId = 'user-stale';

@@ -140,6 +140,8 @@ export class PresenceStatusHandler {
 
     if (userId && isNewlyOnline) {
       await this.emitOnline(userId);
+    } else if (userId) {
+      await this.emitPlatformsChanged(userId);
     }
     if (userId) {
       this.scheduleIdleMarkTimer(userId);
@@ -173,14 +175,17 @@ export class PresenceStatusHandler {
     this.throttle.clearTypingThrottleForUser(userId);
     void this.presenceRedis
       .unregisterSocket({ socketId, userId })
-      .then((r) => {
-        if (!r?.isNowOffline) return;
+      .then(async (r) => {
+        if (!r?.isNowOffline) {
+          await this.emitPlatformsChanged(userId);
+          return;
+        }
         const currentNonce = this.userPresenceNonce.get(userId) ?? 0;
         if (currentNonce !== nonceAtDisconnect && this.presence.isUserOnline(userId)) return;
         try {
           this.cancelUserTimers(userId);
           this.presence.persistLastOnlineAt(userId);
-          this.emitOffline(userId);
+          await this.emitOffline(userId);
         } catch {
           // best-effort
         }
@@ -211,13 +216,29 @@ export class PresenceStatusHandler {
       }
     }
 
-    const lastConnectAt = this.presence.getLastConnectAt(userId) ?? Date.now();
-    const idle = this.presence.isUserIdle(userId);
+    const [lastConnectAtById, idleById, platformsById] = await Promise.all([
+      this.presenceRedis.lastConnectAtMsByUserId([userId]),
+      this.presenceRedis.idleByUserIds([userId]),
+      this.presenceRedis.platformsByUserIds([userId]),
+    ]);
+    const lastConnectAt = lastConnectAtById.get(userId) ?? Date.now();
+    const idle = idleById.get(userId) ?? this.presence.isUserIdle(userId);
+    const platforms = platformsById.get(userId) ?? [];
     const status = userPayload ? await this.presence.getActiveStatusByUserId(userId) : null;
     const payload = userPayload
-      ? { userId, user: { ...userPayload, status }, lastConnectAt, idle }
-      : { userId, lastConnectAt, idle };
+      ? { userId, user: { ...userPayload, status, platforms }, lastConnectAt, idle, platforms }
+      : { userId, lastConnectAt, idle, platforms };
     this.context.emitToSockets(allTargets, 'presence:online', payload);
+  }
+
+  async emitPlatformsChanged(userId: string): Promise<void> {
+    const targets = this.presence.getOnlineFeedListeners();
+    if (targets.size === 0) return;
+    const platformsById = await this.presenceRedis.platformsByUserIds([userId]);
+    this.context.emitToSockets(targets, 'presence:platforms-changed', {
+      userId,
+      platforms: platformsById.get(userId) ?? [],
+    });
   }
 
   emitIdle(userId: string): void {
@@ -232,10 +253,21 @@ export class PresenceStatusHandler {
     this.context.emitToSockets(targets, 'presence:active', { userId });
   }
 
-  emitOffline(userId: string): void {
+  async emitOffline(userId: string): Promise<void> {
     const targets = this.context.getTargetsForUser(userId);
     if (targets.size === 0) return;
-    this.context.emitToSockets(targets, 'presence:offline', { userId });
+    let user: FollowListUser | undefined;
+    if (this.presence.getOnlineFeedListeners().size > 0) {
+      const users = await this.follows
+        .getFollowListUsersByIds({ viewerUserId: null, userIds: [userId] })
+        .catch(() => []);
+      user = users[0];
+    }
+    this.context.emitToSockets(targets, 'presence:offline', {
+      userId,
+      user,
+      lastOnlineAt: new Date().toISOString(),
+    });
   }
 
   // ─── Event handlers ─────────────────────────────────────────────────
@@ -298,8 +330,11 @@ export class PresenceStatusHandler {
             userIds,
           })
         : [];
-      const lastConnectAtById = await this.presenceRedis.lastConnectAtMsByUserId(userIds);
-      const idleById = await this.presenceRedis.idleByUserIds(userIds);
+      const [lastConnectAtById, idleById, platformsById] = await Promise.all([
+        this.presenceRedis.lastConnectAtMsByUserId(userIds),
+        this.presenceRedis.idleByUserIds(userIds),
+        this.presenceRedis.platformsByUserIds(userIds),
+      ]);
       const statusesById = new Map((await this.presence.getActiveStatuses(userIds)).map((status) => [status.userId, status]));
       const payload: Array<FollowListUser & { lastConnectAt: number | null; idle: boolean; status: unknown; isBot?: boolean }> =
         users.map((u) => ({
@@ -307,6 +342,7 @@ export class PresenceStatusHandler {
           lastConnectAt: lastConnectAtById.get(u.id) ?? null,
           idle: idleById.get(u.id) ?? false,
           status: statusesById.get(u.id) ?? null,
+          platforms: platformsById.get(u.id) ?? [],
         }));
 
       // Pin Marv to the front of the snapshot (consistent with REST). The
@@ -367,7 +403,9 @@ export class PresenceStatusHandler {
       if (r.isNowOffline) {
         this.cancelUserTimers(userId);
         this.presence.persistLastOnlineAt(userId);
-        this.emitOffline(userId);
+        await this.emitOffline(userId);
+      } else {
+        await this.emitPlatformsChanged(userId);
       }
     }
     try {

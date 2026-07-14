@@ -194,7 +194,17 @@ export class PresenceController {
     const cacheKey = RedisKeys.presenceOnlineList(viewerUserId);
     try {
       const cached = await this.redis.getJson<{ data: unknown[]; pagination: OnlinePaginationDto }>(cacheKey);
-      if (cached) return cached;
+      if (cached) {
+        const rows = cached.data as OnlineUserDto[];
+        const platformsById = await this.presenceRedis.platformsByUserIds(rows.map((row) => row.id));
+        return {
+          ...cached,
+          data: rows.map((row) => ({
+            ...row,
+            platforms: row.isBot ? [] : (platformsById.get(row.id) ?? row.platforms ?? []),
+          })),
+        };
+      }
     } catch {
       // Redis unavailable — fall through to live fetch.
     }
@@ -214,11 +224,12 @@ export class PresenceController {
     // and don't depend on each other, so we run them concurrently. This trades
     // 4 sequential round-trips (Redis + Postgres + Redis + Postgres) for 1
     // wall-clock wait on the slowest of them.
-    const [lastConnectAtById, users, idleById, activeStatuses] = await Promise.all([
+    const [lastConnectAtById, users, idleById, activeStatuses, platformsById] = await Promise.all([
       this.presenceRedis.lastConnectAtMsByUserId(userIds),
       this.follows.getFollowListUsersByIds({ viewerUserId, userIds }),
       this.presenceRedis.idleByUserIds(userIds),
       this.presence.getActiveStatuses(userIds),
+      this.presenceRedis.platformsByUserIds(userIds),
     ]);
     if (viewerUserId && includeSelf && !lastConnectAtById.has(viewerUserId)) {
       lastConnectAtById.set(viewerUserId, Date.now());
@@ -242,7 +253,7 @@ export class PresenceController {
       lastConnectAt: lastConnectAtById.get(u.id) ?? null,
       idle: idleById.get(u.id) ?? false,
       status: statusesById.get(u.id) ?? null,
-      platforms: this.presence.getClientsForUser(u.id),
+      platforms: platformsById.get(u.id) ?? [],
     }));
 
     // Pin Marv to the front when enabled, and bump totalOnline so the right-rail
@@ -457,11 +468,12 @@ export class PresenceController {
     // Same parallel-fan-out optimization as `/presence/online`: the four lookups
     // below all key off `onlineUserIds` and don't depend on each other, so we
     // run them concurrently to drop 3 round-trips of wall-clock wait.
-    const [lastConnectAtById, onlineUsers, idleById, onlineStatuses] = await Promise.all([
+    const [lastConnectAtById, onlineUsers, idleById, onlineStatuses, platformsById] = await Promise.all([
       this.presenceRedis.lastConnectAtMsByUserId(onlineUserIds),
       this.follows.getFollowListUsersByIds({ viewerUserId, userIds: onlineUserIds }),
       this.presenceRedis.idleByUserIds(onlineUserIds),
       this.presence.getActiveStatuses(onlineUserIds),
+      this.presenceRedis.platformsByUserIds(onlineUserIds),
     ]);
     if (viewerUserId && includeSelf && !lastConnectAtById.has(viewerUserId)) {
       lastConnectAtById.set(viewerUserId, Date.now());
@@ -486,7 +498,7 @@ export class PresenceController {
       lastConnectAt: lastConnectAtById.get(u.id) ?? null,
       idle: idleById.get(u.id) ?? false,
       status: onlineStatusesById.get(u.id) ?? null,
-      platforms: this.presence.getClientsForUser(u.id),
+      platforms: platformsById.get(u.id) ?? [],
     }));
 
     // Pin Marv to the top when enabled. Same rationale as in `online()`: the

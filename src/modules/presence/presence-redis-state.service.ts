@@ -12,6 +12,7 @@ type PresenceEvent =
   | { type: 'offline'; userId: string; instanceId: string }
   | { type: 'idle'; userId: string; instanceId: string }
   | { type: 'active'; userId: string; instanceId: string }
+  | { type: 'platformsChanged'; userId: string; instanceId: string }
   | { type: 'emitToUser'; userId: string; instanceId: string; event: string; payload: unknown }
   | { type: 'emitToRoom'; userId: string; instanceId: string; room: string; event: string; payload: unknown }
   | { type: 'userStatusChanged'; userId: string; instanceId: string; event: string; payload: unknown }
@@ -141,6 +142,8 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
 
     if (isNewlyOnline) {
       await this.publish({ type: 'online', userId, instanceId: this.instanceId });
+    } else {
+      await this.publish({ type: 'platformsChanged', userId, instanceId: this.instanceId });
     }
     return { isNewlyOnline };
   }
@@ -202,6 +205,8 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
 
     if (isNowOffline) {
       await this.publish({ type: 'offline', userId, instanceId: this.instanceId });
+    } else {
+      await this.publish({ type: 'platformsChanged', userId, instanceId: this.instanceId });
     }
     return { isNowOffline };
   }
@@ -405,6 +410,73 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
         }
       } catch {
         for (const id of ids) out.set(id, null);
+      }
+    }
+    return out;
+  }
+
+  async platformsByUserIds(userIds: string[]): Promise<Map<string, string[]>> {
+    const ids = Array.from(new Set((userIds ?? []).map((id) => String(id ?? '').trim()).filter(Boolean)));
+    const out = new Map<string, string[]>(ids.map((id) => [id, []]));
+    if (ids.length === 0) return out;
+
+    try {
+      const memberPipe = this.redis.raw().pipeline();
+      for (const id of ids) memberPipe.smembers(RedisKeys.presenceUserSockets(id));
+      const memberResults = await memberPipe.exec();
+      const socketRefs: Array<{ userId: string; instanceId: string; socketId: string }> = [];
+
+      for (let index = 0; index < ids.length; index++) {
+        const members = Array.isArray(memberResults?.[index]?.[1])
+          ? (memberResults?.[index]?.[1] as string[])
+          : [];
+        for (const member of members) {
+          const parsed = this.parseMember(member);
+          if (parsed) socketRefs.push({ userId: ids[index]!, ...parsed });
+        }
+      }
+
+      const socketPipe = this.redis.raw().pipeline();
+      for (const ref of socketRefs) {
+        socketPipe.get(RedisKeys.presenceSocket(ref.instanceId, ref.socketId));
+      }
+      const socketResults = socketRefs.length > 0 ? await socketPipe.exec() : [];
+      const metadataByUser = new Map<string, Array<{ client: string; connectedAtMs: number }>>();
+
+      for (let index = 0; index < socketRefs.length; index++) {
+        const raw = socketResults?.[index]?.[1];
+        if (typeof raw !== 'string') continue;
+        try {
+          const metadata = JSON.parse(raw) as {
+            client?: unknown;
+            connectedAtMs?: unknown;
+            lastSeenAtMs?: unknown;
+          };
+          const client = String(metadata.client ?? '').trim().toLowerCase();
+          if (!client) continue;
+          const connectedAtMs = Number(metadata.connectedAtMs ?? metadata.lastSeenAtMs);
+          const list = metadataByUser.get(socketRefs[index]!.userId) ?? [];
+          list.push({
+            client,
+            connectedAtMs: Number.isFinite(connectedAtMs) ? connectedAtMs : 0,
+          });
+          metadataByUser.set(socketRefs[index]!.userId, list);
+        } catch {
+          // Ignore an expired or malformed socket metadata entry.
+        }
+      }
+
+      for (const id of ids) {
+        const ordered = (metadataByUser.get(id) ?? [])
+          .sort((a, b) => b.connectedAtMs - a.connectedAtMs)
+          .map((entry) => entry.client);
+        const local = this.presence.getClientsForUser(id).map((client) => String(client).trim().toLowerCase());
+        out.set(id, Array.from(new Set([...ordered, ...local].filter(Boolean))));
+      }
+    } catch {
+      for (const id of ids) {
+        const local = this.presence.getClientsForUser(id).map((client) => String(client).trim().toLowerCase());
+        out.set(id, Array.from(new Set(local.filter(Boolean))));
       }
     }
     return out;

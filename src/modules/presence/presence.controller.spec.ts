@@ -36,6 +36,7 @@ function makeController(opts?: {
       return map;
     }),
     idleByUserIds: jest.fn(async (ids: string[]) => new Map(ids.map((id) => [id, false]))),
+    platformsByUserIds: jest.fn(async (ids: string[]) => new Map(ids.map((id) => [id, []]))),
   };
 
   const presence: any = {
@@ -221,6 +222,7 @@ describe('PresenceController — online() output shape and per-call invariants',
     expect(m.presenceRedis.lastConnectAtMsByUserId).toHaveBeenCalledTimes(1);
     expect(m.follows.getFollowListUsersByIds).toHaveBeenCalledTimes(1);
     expect(m.presenceRedis.idleByUserIds).toHaveBeenCalledTimes(1);
+    expect(m.presenceRedis.platformsByUserIds).toHaveBeenCalledTimes(1);
   });
 
   it('reports recentlyOnlineCount from a user count excluding everyone currently online', async () => {

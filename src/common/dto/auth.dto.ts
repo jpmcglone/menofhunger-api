@@ -6,6 +6,8 @@ export type BrowserHandoffDto = {
 };
 
 export type AuthMeDto = UserDto & {
+  postCount: number | null;
+  articleCount: number | null;
   notificationUndeliveredCount: number;
   notificationUnreadCommentCount: number;
   groupsUnread: {

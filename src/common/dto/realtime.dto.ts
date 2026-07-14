@@ -1,7 +1,7 @@
 import type { VerifiedStatus } from '@prisma/client';
 import type { MessageDto } from '../../modules/messages/message.dto';
 import type { NotificationDto } from '../../modules/notifications/notification.dto';
-import type { UserDto } from './user.dto';
+import type { UserDto, UserListDto } from './user.dto';
 import type { ArticleCommentDto, ArticleReactionSummaryDto } from './article.dto';
 import type { PostDto, PostPollDto } from './post.dto';
 import type { UserStatusDto } from './presence.dto';
@@ -91,6 +91,10 @@ export type PublicProfileDto = {
   lastOnlineAt: string | null;
   checkinStreakDays: number;
   longestStreakDays: number;
+  /** All published, non-deleted posts; present on full HTTP profiles. */
+  postCount?: number;
+  /** Published article total; present on full HTTP profiles and optional on realtime patches. */
+  articleCount?: number;
   /** True when this user is an active member of any Crew. */
   inCrew?: boolean;
   isBot?: boolean;
@@ -147,6 +151,35 @@ export type PresenceStatusClearedPayloadDto = {
   userId: string;
 };
 
+export type PresenceOnlinePayloadDto = {
+  userId: string;
+  user?: UserListDto & { status?: UserStatusDto | null; platforms?: string[] };
+  lastConnectAt?: number;
+  idle?: boolean;
+  platforms?: string[];
+};
+
+export type PresenceOfflinePayloadDto = {
+  userId: string;
+  user?: UserListDto;
+  lastOnlineAt?: string;
+};
+
+export type PresenceOnlineFeedSnapshotPayloadDto = {
+  users: Array<UserListDto & {
+    lastConnectAt?: number | null;
+    idle?: boolean;
+    status?: UserStatusDto | null;
+    platforms?: string[];
+  }>;
+  totalOnline?: number;
+};
+
+export type PresencePlatformsChangedPayloadDto = {
+  userId: string;
+  platforms: string[];
+};
+
 export const WsEventNames = {
   scheduledPostPublished: 'scheduled:published',
   scheduledPostFailed: 'scheduled:failed',
@@ -155,6 +188,7 @@ export const WsEventNames = {
   usersSpaceChanged: 'users:spaceChanged',
   presenceStatusUpdated: 'presence:status-updated',
   presenceStatusCleared: 'presence:status-cleared',
+  presencePlatformsChanged: 'presence:platforms-changed',
   postsSubscribe: 'posts:subscribe',
   postsUnsubscribe: 'posts:unsubscribe',
   postsSubscribed: 'posts:subscribed',
