@@ -94,9 +94,34 @@ export function parsePickaxAuthorFromJina(md: string): { avatarUrl: string | nul
 }
 
 /**
+ * Returns true when the Jina markdown is actually Pickax's signup/landing page
+ * rather than a real post. This happens when Pickax requires authentication and
+ * redirects unauthenticated Jina crawls to the marketing/registration page.
+ */
+export function isPickaxGatedMarkdown(md: string): boolean {
+  const text = (md ?? '').toString();
+  // Distinctive phrases that only appear on Pickax's signup/marketing page.
+  const gatedSignals = [
+    /Own your audience\.\s*Post without algorithms/i,
+    /Email\s*\*/,
+    /Password\s*\*/,
+    /Free to join\.\s*No algorithms/i,
+    /No algorithms or shadow bans/i,
+    /Anti-Robot check/i,
+  ];
+  let hits = 0;
+  for (const re of gatedSignals) {
+    if (re.test(text)) hits++;
+    if (hits >= 2) return true;
+  }
+  return false;
+}
+
+/**
  * Body text sits between the author avatar markdown and the next image / reply block.
  */
 export function parsePickaxBodyFromJina(md: string): string | null {
+  if (isPickaxGatedMarkdown(md)) return null;
   const text = (md ?? '').toString();
   const contentMarker = /Markdown Content:\s*/i.exec(text);
   const bodySection = contentMarker?.index != null

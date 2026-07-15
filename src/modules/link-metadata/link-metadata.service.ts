@@ -5,6 +5,7 @@ import { RedisKeys } from '../redis/redis-keys';
 import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
 import {
+  isPickaxGatedMarkdown,
   isPickaxPostUrl,
   isWeakPickaxImage,
   needsPickaxEnrichment,
@@ -385,6 +386,7 @@ export class LinkMetadataService {
       const res = await fetch(proxied, { method: 'GET', signal });
       if (!res.ok) return null;
       const md = await res.text();
+      if (isPickaxGatedMarkdown(md)) return null;
       const titleMatch = (md ?? '').toString().match(/^\s*Title:\s*(.+)\s*$/m);
       const titleFromJina = normalizeText(titleMatch?.[1] ?? null);
       const { avatarUrl, username } = parsePickaxAuthorFromJina(md);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 import {
+  isPickaxGatedMarkdown,
   isPickaxPostUrl,
   isWeakPickaxImage,
   needsPickaxEnrichment,
@@ -111,6 +112,41 @@ am i terrible? do yall just give sympathy likes?
         'am i terrible? do yall just give sympathy likes?',
       ].join('\n'),
     );
+  });
+
+  it('detects Pickax signup/auth-wall pages as gated', () => {
+    const gatedMd = `Title: PutinBotRPG posted
+
+URL Source: https://pickax.com/post/443346
+
+Markdown Content:
+Own your audience. Post without algorithms.
+
+Your audience. Your content. Your platform.
+
+* No algorithms or shadow bans
+* Monetize directly, no middlemen
+
+Email *
+
+Password *
+
+Free to join. No algorithms. No data selling.
+`;
+    expect(isPickaxGatedMarkdown(gatedMd)).toBe(true);
+    // parsePickaxBodyFromJina must return null for gated pages.
+    expect(parsePickaxBodyFromJina(gatedMd)).toBeNull();
+  });
+
+  it('does not flag real post content as gated', () => {
+    const realMd = `Title: Feral Housewife posted
+
+Markdown Content:
+[![Image 1](https://img.pickax.com/user-51607/a.jpeg)](https://pickax.com/FeralHousewife)
+
+are yall watching this? that Joker guy is soooooooo trained to be argumentative.
+`;
+    expect(isPickaxGatedMarkdown(realMd)).toBe(false);
   });
 
   it('parses body-only cached snapshots and cleans Pickax mention links', () => {
