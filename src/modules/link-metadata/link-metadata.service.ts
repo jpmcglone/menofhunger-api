@@ -4,6 +4,14 @@ import { AppConfigService } from '../app/app-config.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
+import {
+  isPickaxPostUrl,
+  isWeakPickaxImage,
+  needsPickaxEnrichment,
+  parsePickaxAuthorFromJina,
+  parsePickaxBodyFromJina,
+  pickaxAuthorFromTitle,
+} from './pickax-link-metadata';
 
 export type LinkMetadataDto = {
   url: string;
@@ -14,6 +22,8 @@ export type LinkMetadataDto = {
 };
 
 const FETCH_TIMEOUT_MS = 2000;
+/** Pickax post pages need a longer scrape window to recover avatar + @handle. */
+const PICKAX_ENRICH_TIMEOUT_MS = 8_000;
 const STALE_DAYS = 7;
 /** Keyset pagination page size when scanning recent posts during backfill. */
 const BACKFILL_POST_PAGE_SIZE = 500;
@@ -148,7 +158,12 @@ export class LinkMetadataService {
     const cacheKey = RedisKeys.linkMeta(normalized);
     const cached = await this.cache.getJson<{ meta: LinkMetadataDto | null }>(cacheKey);
     if (cached && Object.prototype.hasOwnProperty.call(cached, 'meta')) {
-      return cached.meta ?? null;
+      const cachedMeta = cached.meta ?? null;
+      const cachedNeedsPickaxEnrichment =
+        isPickaxPostUrl(normalized) && needsPickaxEnrichment(cachedMeta);
+      if (!cachedNeedsPickaxEnrichment) {
+        return cachedMeta;
+      }
     }
 
     const existing = await this.prisma.linkMetadata.findUnique({
@@ -156,7 +171,13 @@ export class LinkMetadataService {
     });
 
     const staleThreshold = new Date(Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000);
-    if (existing && existing.updatedAt >= staleThreshold) {
+    const existingIsFresh = Boolean(existing && existing.updatedAt >= staleThreshold);
+    const existingNeedsPickaxEnrichment =
+      Boolean(existing) &&
+      isPickaxPostUrl(normalized) &&
+      needsPickaxEnrichment(existing);
+
+    if (existingIsFresh && !existingNeedsPickaxEnrichment && existing) {
       const dto = this.toDto(existing);
       // Keep a short front-cache even when DB is fresh to reduce load.
       void this.cache.setJson(cacheKey, { meta: dto }, { ttlSeconds: CacheTtl.linkMetaFrontSeconds }).catch(() => undefined);
@@ -165,13 +186,14 @@ export class LinkMetadataService {
 
     // Stampede protection: one fetch per URL at a time.
     const lockKey = RedisKeys.linkMetaLock(normalized);
+    const pickax = isPickaxPostUrl(normalized);
     const wrapped = await this.cache.getOrSetJsonWithLock<{ meta: LinkMetadataDto | null }>({
       enabled: true,
       key: cacheKey,
       ttlSeconds: CacheTtl.linkMetaFrontSeconds,
       lockKey,
-      lockTtlMs: 4_000,
-      lockWaitMs: 250,
+      lockTtlMs: pickax ? 12_000 : 4_000,
+      lockWaitMs: pickax ? 500 : 250,
       computeAndSet: async () => {
         const fresh = await this.fetchAndUpsert(normalized);
         const dto = fresh ? this.toDto(fresh) : null;
@@ -265,11 +287,24 @@ export class LinkMetadataService {
 
   private async fetchFromExternal(url: string): Promise<LinkMetadataDto | null> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const timeoutMs = isPickaxPostUrl(url) ? PICKAX_ENRICH_TIMEOUT_MS : FETCH_TIMEOUT_MS;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const u = new URL(url);
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+
+      let base: LinkMetadataDto | null = null;
+      const pickaxPost = isPickaxPostUrl(u.toString());
+      let pickaxPartial: LinkMetadataDto | null = null;
+
+      // Jina is the only public source that provides the complete Pickax body and,
+      // when available, author avatar/handle. Give it the full timeout budget
+      // instead of spending most of that budget on weak OG metadata first.
+      if (pickaxPost) {
+        pickaxPartial = await this.enrichPickaxPost(u.toString(), null, controller.signal);
+        if (pickaxPartial?.description) return pickaxPartial;
+      }
 
       try {
         const microlinkUrl = `https://api.microlink.io/?url=${encodeURIComponent(u.toString())}&screenshot=false`;
@@ -279,17 +314,39 @@ export class LinkMetadataService {
           if (json?.status === 'success' && json.data) {
             const img =
               Array.isArray(json.data.image) ? json.data.image?.[0]?.url : (json.data.image as { url?: string } | undefined)?.url;
-            return {
+            base = {
               url: normalizeText(json.data.url ?? null) ?? u.toString(),
               title: normalizeText(json.data.title ?? null),
               description: normalizeText(json.data.description ?? null),
               siteName: normalizeText(json.data.publisher ?? null) ?? normalizeText(json.data.author ?? null),
               imageUrl: normalizeText(img ?? null),
-            } as LinkMetadataDto;
+            };
           }
         }
       } catch {
         // fall through to Jina
+      }
+
+      // Pickax OG tags only expose favicon + "Name posted". Scrape the readable page for
+      // the author avatar and @handle so clients can render a post-like card.
+      if (pickaxPost) {
+        if (pickaxPartial) {
+          return {
+            ...base,
+            ...pickaxPartial,
+            description: pickaxPartial.description ?? base?.description ?? null,
+          };
+        }
+        if (base) {
+          return {
+            ...base,
+            title: pickaxAuthorFromTitle(base.title) ?? base.title,
+            siteName: 'Pickax',
+            imageUrl: isWeakPickaxImage(base.imageUrl) ? null : base.imageUrl,
+          };
+        }
+      } else if (base) {
+        return base;
       }
 
       const proxied = `https://r.jina.ai/${u.toString()}`;
@@ -315,6 +372,39 @@ export class LinkMetadataService {
       throw err;
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  private async enrichPickaxPost(
+    url: string,
+    base: LinkMetadataDto | null,
+    signal: AbortSignal,
+  ): Promise<LinkMetadataDto | null> {
+    try {
+      const proxied = `https://r.jina.ai/${url}`;
+      const res = await fetch(proxied, { method: 'GET', signal });
+      if (!res.ok) return null;
+      const md = await res.text();
+      const titleMatch = (md ?? '').toString().match(/^\s*Title:\s*(.+)\s*$/m);
+      const titleFromJina = normalizeText(titleMatch?.[1] ?? null);
+      const { avatarUrl, username } = parsePickaxAuthorFromJina(md);
+      const authorName =
+        pickaxAuthorFromTitle(titleFromJina) ??
+        pickaxAuthorFromTitle(base?.title) ??
+        normalizeText(username);
+      const bodyFromJina = parsePickaxBodyFromJina(md);
+
+      return {
+        url,
+        title: authorName,
+        // Prefer the scraped body; OG/microlink descriptions are often truncated.
+        description: bodyFromJina ?? base?.description ?? null,
+        // Prefer @handle in siteName so clients can render a post-like subtitle.
+        siteName: username ? `@${username}` : 'Pickax',
+        imageUrl: avatarUrl ?? (isWeakPickaxImage(base?.imageUrl) ? null : (base?.imageUrl ?? null)),
+      };
+    } catch {
+      return null;
     }
   }
 

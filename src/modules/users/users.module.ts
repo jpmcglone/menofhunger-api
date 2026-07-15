@@ -10,6 +10,7 @@ import { UsersRealtimeService } from './users-realtime.service';
 import { UsersLocationService } from './users-location.service';
 import { UsersMeRealtimeService } from './users-me-realtime.service';
 import { UsersPublicRealtimeService } from './users-public-realtime.service';
+import { PublicProfilesService } from './public-profiles.service';
 
 @Module({
   imports: [AuthModule, FollowsModule, NotificationsModule, RealtimeModule, EmailModule],
@@ -20,6 +21,7 @@ import { UsersPublicRealtimeService } from './users-public-realtime.service';
     UsersLocationService,
     UsersMeRealtimeService,
     UsersPublicRealtimeService,
+    PublicProfilesService,
   ],
   exports: [
     PublicProfileCacheService,
@@ -27,6 +29,7 @@ import { UsersPublicRealtimeService } from './users-public-realtime.service';
     UsersLocationService,
     UsersMeRealtimeService,
     UsersPublicRealtimeService,
+    PublicProfilesService,
   ],
 })
 export class UsersModule {}

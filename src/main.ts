@@ -331,6 +331,20 @@ async function bootstrap() {
     return;
   }
 
+  // Public integration reads are intentionally callable from any browser origin.
+  // Keep this scoped: the rest of the API uses credentialed, allowlisted CORS.
+  app.use('/v1/public', (req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Accept, Content-Type');
+    res.setHeader('Access-Control-Max-Age', '86400');
+    if (req.method.toUpperCase() === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
   app.enableCors({
     credentials: true,
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {

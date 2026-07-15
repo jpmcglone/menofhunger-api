@@ -12,12 +12,12 @@ import { FollowsService } from '../follows/follows.service';
 import { CurrentUserId, OptionalCurrentUserId } from './users.decorator';
 import { validateUsername } from './users.utils';
 import { toUserDto } from './user.dto';
-import { toUserListDto, type NudgeStateDto, type OrgAffiliationDto } from '../../common/dto';
+import { toUserListDto, type NudgeStateDto } from '../../common/dto';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
-import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { Throttle } from '@nestjs/throttler';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { PublicProfileCacheService } from './public-profile-cache.service';
+import { PublicProfilesService, type PublicProfilePayload } from './public-profiles.service';
 import { UsersMeRealtimeService } from './users-me-realtime.service';
 import { UsersPublicRealtimeService } from './users-public-realtime.service';
 import { canonicalizeTopicValue } from '../../common/topics/topic-utils';
@@ -46,35 +46,6 @@ type PreviewBatchEntry = {
   stewardBadgeEnabled?: boolean;
   verifiedStatus?: string;
 };
-
-function formatBirthdayMonthDay(birthdate: Date): string {
-  // Use UTC to avoid timezone surprises.
-  const month = birthdate.getUTCMonth(); // 0-11
-  const day = birthdate.getUTCDate(); // 1-31
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const mm = months[month] ?? 'Jan';
-  return `${mm} ${day}`;
-}
-
-function formatBirthdayFull(birthdate: Date): string {
-  // Use UTC to avoid timezone surprises.
-  const month = birthdate.getUTCMonth(); // 0-11
-  const day = birthdate.getUTCDate(); // 1-31
-  const year = birthdate.getUTCFullYear();
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const mm = months[month] ?? 'Jan';
-  return `${mm} ${day}, ${year}`;
-}
-
-function formatBirthdayDisplay(
-  birthdate: Date | null,
-  visibility: 'none' | 'monthDay' | 'full' | null | undefined,
-): string | null {
-  if (!birthdate) return null;
-  if (visibility === 'none') return null;
-  if (visibility === 'full') return formatBirthdayFull(birthdate);
-  return formatBirthdayMonthDay(birthdate);
-}
 
 function normalizeWebsite(raw: string): string {
   const s = (raw ?? '').trim();
@@ -167,36 +138,6 @@ function isAtLeast18(birthdateUtcMidnight: Date): boolean {
 const JOHN_USERNAME = 'john';
 const MENOFHUNGER_USERNAME = 'menofhunger';
 
-type PublicProfilePayload = {
-  id: string;
-  createdAt: string;
-  username: string | null;
-  name: string | null;
-  bio: string | null;
-  website: string | null;
-  locationDisplay: string | null;
-  locationZip: string | null;
-  locationCity: string | null;
-  locationCounty: string | null;
-  locationState: string | null;
-  locationCountry: string | null;
-  birthdayDisplay: string | null;
-  birthdayMonthDay: string | null;
-  premium: boolean;
-  premiumPlus: boolean;
-  isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
-  verifiedStatus: string;
-  avatarUrl: string | null;
-  bannerUrl: string | null;
-  pinnedPostId: string | null;
-  lastOnlineAt: string | null;
-  checkinStreakDays: number;
-  longestStreakDays: number;
-  inCrew?: boolean;
-  isBot?: boolean;
-};
-
 type UserPreviewPayload = {
   id: string;
   username: string | null;
@@ -231,6 +172,7 @@ export class UsersController {
     private readonly appConfig: AppConfigService,
     private readonly followsService: FollowsService,
     private readonly publicProfileCache: PublicProfileCacheService<PublicProfilePayload>,
+    private readonly publicProfiles: PublicProfilesService,
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly usersLocation: UsersLocationService,
@@ -257,208 +199,6 @@ export class UsersController {
 
   private async emitUserSelfUpdated(userId: string): Promise<void> {
     await this.usersPublicRealtime.emitPublicProfileUpdated(userId);
-  }
-
-  /** Batch-fetch org affiliations for a set of user IDs. Returns a map of userId → OrgAffiliationDto[]. */
-  private async batchOrgAffiliations(userIds: string[]): Promise<Map<string, OrgAffiliationDto[]>> {
-    if (userIds.length === 0) return new Map();
-    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const memberships = await this.prisma.userOrgMembership.findMany({
-      where: { userId: { in: userIds } },
-      select: {
-        userId: true,
-        org: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } },
-      },
-      orderBy: { createdAt: 'asc' },
-    });
-    const map = new Map<string, OrgAffiliationDto[]>();
-    for (const m of memberships) {
-      const list = map.get(m.userId) ?? [];
-      list.push({
-        id: m.org.id,
-        username: m.org.username,
-        name: m.org.name,
-        avatarUrl: publicAssetUrl({ publicBaseUrl, key: m.org.avatarKey ?? null, updatedAt: m.org.avatarUpdatedAt ?? null }),
-      });
-      map.set(m.userId, list);
-    }
-    return map;
-  }
-
-  private async getPublicProfilePayloadByUsernameOrId(
-    rawUsernameOrId: string,
-  ): Promise<{ payload: PublicProfilePayload; cache: 'hit' | 'miss' }> {
-    const raw = (rawUsernameOrId ?? '').trim();
-    if (!raw) throw new NotFoundException('User not found');
-
-    const normalized = raw.toLowerCase();
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw);
-    const isCuid = /^c[a-z0-9]{24}$/i.test(raw);
-    const isUuidOrCuid = isUuid || isCuid;
-
-    const cacheKey = isUuidOrCuid ? `id:${raw}` : `username:${normalized}`;
-    const cached = await this.publicProfileCache.read(cacheKey);
-    if (cached) {
-      // Refresh the most volatile fields even when other fields are cached.
-      // (Premium/verified status can change via admin actions; lastOnlineAt changes frequently.)
-      try {
-        const fresh = await this.prisma.user.findUnique({
-          where: { id: cached.id },
-          select: { lastOnlineAt: true, premium: true, premiumPlus: true, isOrganization: true, verifiedStatus: true, pinnedPostId: true },
-        });
-        const lastOnlineAt = fresh?.lastOnlineAt ? fresh.lastOnlineAt.toISOString() : null;
-        const premium = fresh?.premium ?? cached.premium;
-        const premiumPlus = (fresh as any)?.premiumPlus ?? (cached as any).premiumPlus ?? false;
-        const isOrganization = (fresh as any)?.isOrganization ?? (cached as any).isOrganization ?? false;
-        const verifiedStatus = (fresh as any)?.verifiedStatus ?? (cached as any).verifiedStatus ?? 'none';
-        let pinnedPostId = fresh?.pinnedPostId ?? (cached as any).pinnedPostId ?? null;
-        if (pinnedPostId) {
-          const pinned = await this.prisma.post.findFirst({
-            where: { id: pinnedPostId, userId: cached.id, deletedAt: null },
-            select: { visibility: true },
-          });
-          if (!pinned || pinned.visibility === 'onlyMe') {
-            try {
-              await this.prisma.user.update({ where: { id: cached.id }, data: { pinnedPostId: null } });
-              await this.publicProfileCache.invalidateForUser({ id: cached.id, username: (cached as any).username ?? null });
-            } catch {
-              // Best-effort
-            }
-            pinnedPostId = null;
-          }
-        }
-
-        if (
-          lastOnlineAt !== (cached as any).lastOnlineAt ||
-          premium !== (cached as any).premium ||
-          premiumPlus !== (cached as any).premiumPlus ||
-          isOrganization !== (cached as any).isOrganization ||
-          verifiedStatus !== (cached as any).verifiedStatus ||
-          pinnedPostId !== (cached as any).pinnedPostId
-        ) {
-          const next: PublicProfilePayload = {
-            ...(cached as any),
-            lastOnlineAt,
-            premium,
-            premiumPlus,
-            isOrganization,
-            verifiedStatus,
-            pinnedPostId,
-          };
-          void this.publicProfileCache.write(cacheKey, next, 5 * 60 * 1000);
-          void this.publicProfileCache.write(`id:${next.id}`, next, 5 * 60 * 1000);
-          if (next.username) void this.publicProfileCache.write(`username:${next.username.toLowerCase()}`, next, 5 * 60 * 1000);
-          return { payload: next, cache: 'hit' };
-        }
-      } catch {
-        // If lastOnlineAt refresh fails, fall back to cached payload.
-      }
-      return { payload: cached, cache: 'hit' };
-    }
-
-    const user =
-      (
-        await this.prisma.$queryRaw<
-          Array<{
-            id: string;
-            createdAt: Date;
-            username: string | null;
-            name: string | null;
-            bio: string | null;
-            website: string | null;
-            locationDisplay: string | null;
-            locationZip: string | null;
-            locationCity: string | null;
-            locationCounty: string | null;
-            locationState: string | null;
-            locationCountry: string | null;
-            birthdate: Date | null;
-            birthdayVisibility: 'none' | 'monthDay' | 'full';
-            premium: boolean;
-            premiumPlus: boolean;
-            isOrganization: boolean;
-            stewardBadgeEnabled: boolean;
-            verifiedStatus: string;
-            avatarKey: string | null;
-            avatarUpdatedAt: Date | null;
-            bannerKey: string | null;
-            bannerUpdatedAt: Date | null;
-            pinnedPostId: string | null;
-            lastOnlineAt: Date | null;
-            bannedAt: Date | null;
-            checkinStreakDays: number;
-            longestStreakDays: number;
-            isBot: boolean;
-          }>
-        >`
-          SELECT "id", "createdAt", "username", "name", "bio", "website", "locationDisplay", "locationZip", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt", "bannedAt", "checkinStreakDays", "longestStreakDays", "isBot"
-          FROM "User"
-          WHERE (
-            (${isUuidOrCuid} = true AND "id" = ${raw})
-            OR
-            (${isUuidOrCuid} = false AND LOWER("username") = ${normalized})
-          )
-          AND "usernameIsSet" = true
-          LIMIT 1
-        `
-      )[0] ?? null;
-
-    if (!user) throw new NotFoundException('User not found');
-
-    if (user.bannedAt) {
-      return { payload: { banned: true } as any, cache: 'miss' };
-    }
-
-    // Safety: only-me posts should never be pinnable/show on profiles.
-    // If a user already pinned an only-me post (legacy bug), auto-unpin on read.
-    let pinnedPostId: string | null = user.pinnedPostId ?? null;
-    if (pinnedPostId) {
-      const pinned = await this.prisma.post.findFirst({
-        where: { id: pinnedPostId, userId: user.id, deletedAt: null },
-        select: { visibility: true },
-      });
-      if (!pinned || pinned.visibility === 'onlyMe') {
-        await this.prisma.user.update({ where: { id: user.id }, data: { pinnedPostId: null } });
-        pinnedPostId = null;
-      }
-    }
-
-    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const payload: PublicProfilePayload = {
-      id: user.id,
-      createdAt: user.createdAt.toISOString(),
-      username: user.username,
-      name: user.name,
-      bio: user.bio,
-      website: user.website ?? null,
-      locationDisplay: user.locationDisplay ?? null,
-      locationZip: user.locationZip ?? null,
-      locationCity: user.locationCity ?? null,
-      locationCounty: user.locationCounty ?? null,
-      locationState: user.locationState ?? null,
-      locationCountry: user.locationCountry ?? null,
-      birthdayDisplay: formatBirthdayDisplay(user.birthdate, (user as any).birthdayVisibility ?? 'monthDay'),
-      birthdayMonthDay: user.birthdate ? formatBirthdayMonthDay(user.birthdate) : null,
-      premium: user.premium,
-      premiumPlus: user.premiumPlus,
-      isOrganization: Boolean((user as any).isOrganization),
-      stewardBadgeEnabled: Boolean(user.stewardBadgeEnabled),
-      verifiedStatus: user.verifiedStatus,
-      avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
-      bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),
-      pinnedPostId,
-      lastOnlineAt: user.lastOnlineAt ? user.lastOnlineAt.toISOString() : null,
-      checkinStreakDays: Math.max(0, Math.floor(Number(user.checkinStreakDays) || 0)),
-      longestStreakDays: Math.max(0, Math.floor(Number(user.longestStreakDays) || 0)),
-      isBot: Boolean(user.isBot),
-    };
-
-    // Cache for subsequent reads (both by username and by id).
-    void this.publicProfileCache.write(cacheKey, payload, 5 * 60 * 1000);
-    void this.publicProfileCache.write(`id:${user.id}`, payload, 5 * 60 * 1000);
-    if (user.username) void this.publicProfileCache.write(`username:${user.username.toLowerCase()}`, payload, 5 * 60 * 1000);
-
-    return { payload, cache: 'miss' };
   }
 
   /**
@@ -1000,7 +740,7 @@ export class UsersController {
     const viewerUserId = userId ?? null;
     const canSeeLastOnline = await this.viewerCanSeeLastOnline(viewerUserId);
 
-    const profileResult = await this.getPublicProfilePayloadByUsernameOrId(username);
+    const profileResult = await this.publicProfiles.getByUsernameOrId(username);
     const profile = profileResult.payload;
     if (!this.appConfig.isProd()) {
       res.setHeader('x-moh-cache', `publicProfile=${profileResult.cache}`);
@@ -1094,7 +834,7 @@ export class UsersController {
     );
     res.setHeader('Vary', 'Cookie');
 
-    const orgMap = await this.batchOrgAffiliations([payload.id]);
+    const orgMap = await this.publicProfiles.batchOrgAffiliations([payload.id]);
     return { data: { ...payload, orgAffiliations: orgMap.get(payload.id) ?? [] } };
   }
 
@@ -1113,7 +853,7 @@ export class UsersController {
   ) {
     const viewerUserId = userId ?? null;
     const canSeeLastOnline = await this.viewerCanSeeLastOnline(viewerUserId);
-    const profileResult = await this.getPublicProfilePayloadByUsernameOrId(username);
+    const profileResult = await this.publicProfiles.getByUsernameOrId(username);
     const payload = profileResult.payload;
     if (!this.appConfig.isProd()) {
       res.setHeader('x-moh-cache', `publicProfile=${profileResult.cache}`);
@@ -1134,7 +874,7 @@ export class UsersController {
 
     const profileId = (payload as any).id as string | undefined;
     const [orgMap, crewMember, postCount, articleCount] = await Promise.all([
-      profileId ? this.batchOrgAffiliations([profileId]) : Promise.resolve(new Map()),
+      profileId ? this.publicProfiles.batchOrgAffiliations([profileId]) : Promise.resolve(new Map()),
       profileId
         ? this.prisma.crewMember.findFirst({
             where: { userId: profileId, crew: { deletedAt: null } },

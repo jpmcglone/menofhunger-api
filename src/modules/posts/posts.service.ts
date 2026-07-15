@@ -155,6 +155,10 @@ export class PostsService {
     return this.feedQuery.getById(...args);
   }
 
+  getPublicById(...args: Parameters<PostsFeedQueryService['getPublicById']>) {
+    return this.feedQuery.getPublicById(...args);
+  }
+
   getByIds(...args: Parameters<PostsFeedQueryService['getByIds']>) {
     return this.feedQuery.getByIds(...args);
   }
