@@ -358,6 +358,7 @@ export class NotificationQueryService {
         articlePreview,
         subjectGroup?.slug ?? null,
         subjectGroup?.name ?? null,
+        null, // subjectGroupAvatarUrl not fetched in batch path; fallback to null
         subjectCrewInviteStatus,
         subjectCrewName,
         subjectCommunityGroupInviteStatus,
@@ -678,6 +679,7 @@ export class NotificationQueryService {
     subjectArticlePreview?: SubjectArticlePreviewDto | null,
     subjectGroupSlug: string | null = null,
     subjectGroupName: string | null = null,
+    subjectGroupAvatarUrl: string | null = null,
     subjectCrewInviteStatus: NotificationDto['subjectCrewInviteStatus'] = null,
     subjectCrewName: string | null = null,
     subjectCommunityGroupInviteStatus: NotificationDto['subjectCommunityGroupInviteStatus'] = null,
@@ -716,6 +718,7 @@ export class NotificationQueryService {
       subjectGroupId: n.subjectGroupId ?? null,
       subjectGroupSlug,
       subjectGroupName,
+      subjectGroupAvatarUrl,
       subjectCrewId: n.subjectCrewId ?? null,
       subjectCrewInviteId: n.subjectCrewInviteId ?? null,
       subjectCrewInviteStatus: subjectCrewInviteStatus ?? null,
@@ -851,13 +854,15 @@ export class NotificationQueryService {
 
     let subjectGroupSlug: string | null = null;
     let subjectGroupName: string | null = null;
+    let subjectGroupAvatarUrl: string | null = null;
     if (n.subjectGroupId) {
       const g = await this.prisma.communityGroup.findUnique({
         where: { id: n.subjectGroupId },
-        select: { slug: true, name: true },
+        select: { slug: true, name: true, avatarImageUrl: true },
       });
       subjectGroupSlug = g?.slug ?? null;
       subjectGroupName = g?.name ?? null;
+      subjectGroupAvatarUrl = g?.avatarImageUrl ?? null;
     }
 
     let subjectCrewInviteStatus: NotificationDto['subjectCrewInviteStatus'] = null;
@@ -905,6 +910,7 @@ export class NotificationQueryService {
       undefined,
       subjectGroupSlug,
       subjectGroupName,
+      subjectGroupAvatarUrl,
       subjectCrewInviteStatus,
       subjectCrewName,
       subjectCommunityGroupInviteStatus,

@@ -8,6 +8,8 @@ import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit
 
 const getSchema = z.object({
   url: z.string().trim().url(),
+  // Response-shape cache key used by clients when rich metadata fields change.
+  v: z.coerce.number().int().positive().optional(),
 });
 
 @UseGuards(OptionalAuthGuard)

@@ -72,3 +72,10 @@ function healFailedMigrations() {
 
 healFailedMigrations()
 run('npx prisma migrate deploy')
+
+// ── Post-migration data backfills ────────────────────────────────────────────
+// These scripts are idempotent: rows that are already up-to-date are skipped.
+console.log('\n[prisma-deploy] Running post-migration backfills...')
+run('node scripts/backfill-marv-notification-bodies.mjs')
+run('node scripts/backfill-poll-notification-titles.mjs')
+console.log('[prisma-deploy] Backfills complete.')

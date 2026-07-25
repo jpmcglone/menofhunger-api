@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { RedisKeys } from '../redis/redis-keys';
@@ -13,6 +14,13 @@ import {
   parsePickaxBodyFromJina,
   pickaxAuthorFromTitle,
 } from './pickax-link-metadata';
+import {
+  isXPostUrl,
+  parseXSyndicationResponse,
+  parseXPostUrl,
+  type SocialPostMetadataDto,
+  xSyndicationToken,
+} from './x-link-metadata';
 
 export type LinkMetadataDto = {
   url: string;
@@ -20,11 +28,14 @@ export type LinkMetadataDto = {
   description: string | null;
   imageUrl: string | null;
   siteName: string | null;
+  socialPost: SocialPostMetadataDto | null;
 };
 
 const FETCH_TIMEOUT_MS = 2000;
 /** Pickax post pages need a longer scrape window to recover avatar + @handle. */
 const PICKAX_ENRICH_TIMEOUT_MS = 8_000;
+const X_ENRICH_TIMEOUT_MS = 6_000;
+const X_CONNECTOR_LAUNCHED_AT = new Date('2026-07-16T00:00:00.000Z');
 const STALE_DAYS = 7;
 /** Keyset pagination page size when scanning recent posts during backfill. */
 const BACKFILL_POST_PAGE_SIZE = 500;
@@ -83,9 +94,17 @@ function buildMohSyntheticMeta(url: string): LinkMetadataDto {
       description: null,
       imageUrl: null,
       siteName: 'Men of Hunger',
+      socialPost: null,
     };
   } catch {
-    return { url, title: 'Men of Hunger', description: null, imageUrl: null, siteName: 'Men of Hunger' };
+    return {
+      url,
+      title: 'Men of Hunger',
+      description: null,
+      imageUrl: null,
+      siteName: 'Men of Hunger',
+      socialPost: null,
+    };
   }
 }
 
@@ -162,7 +181,11 @@ export class LinkMetadataService {
       const cachedMeta = cached.meta ?? null;
       const cachedNeedsPickaxEnrichment =
         isPickaxPostUrl(normalized) && needsPickaxEnrichment(cachedMeta);
-      if (!cachedNeedsPickaxEnrichment) {
+      const cachedNeedsXEnrichment =
+        isXPostUrl(normalized) &&
+        cachedMeta != null &&
+        !Object.prototype.hasOwnProperty.call(cachedMeta, 'socialPost');
+      if (!cachedNeedsPickaxEnrichment && !cachedNeedsXEnrichment) {
         return cachedMeta;
       }
     }
@@ -177,8 +200,21 @@ export class LinkMetadataService {
       Boolean(existing) &&
       isPickaxPostUrl(normalized) &&
       needsPickaxEnrichment(existing);
+    const existingNeedsXEnrichment =
+      existing != null &&
+      isXPostUrl(normalized) &&
+      existing.updatedAt < X_CONNECTOR_LAUNCHED_AT &&
+      (!existing.socialPost ||
+        typeof existing.socialPost !== 'object' ||
+        Array.isArray(existing.socialPost) ||
+        existing.socialPost.platform !== 'x');
 
-    if (existingIsFresh && !existingNeedsPickaxEnrichment && existing) {
+    if (
+      existingIsFresh &&
+      !existingNeedsPickaxEnrichment &&
+      !existingNeedsXEnrichment &&
+      existing
+    ) {
       const dto = this.toDto(existing);
       // Keep a short front-cache even when DB is fresh to reduce load.
       void this.cache.setJson(cacheKey, { meta: dto }, { ttlSeconds: CacheTtl.linkMetaFrontSeconds }).catch(() => undefined);
@@ -188,13 +224,14 @@ export class LinkMetadataService {
     // Stampede protection: one fetch per URL at a time.
     const lockKey = RedisKeys.linkMetaLock(normalized);
     const pickax = isPickaxPostUrl(normalized);
+    const xPost = isXPostUrl(normalized);
     const wrapped = await this.cache.getOrSetJsonWithLock<{ meta: LinkMetadataDto | null }>({
       enabled: true,
       key: cacheKey,
       ttlSeconds: CacheTtl.linkMetaFrontSeconds,
       lockKey,
-      lockTtlMs: pickax ? 12_000 : 4_000,
-      lockWaitMs: pickax ? 500 : 250,
+      lockTtlMs: pickax ? 12_000 : xPost ? 10_000 : 4_000,
+      lockWaitMs: pickax || xPost ? 500 : 250,
       computeAndSet: async () => {
         const fresh = await this.fetchAndUpsert(normalized);
         const dto = fresh ? this.toDto(fresh) : null;
@@ -214,13 +251,24 @@ export class LinkMetadataService {
     return wrapped?.meta ?? null;
   }
 
-  private toDto(row: { url: string; title: string | null; description: string | null; imageUrl: string | null; siteName: string | null }): LinkMetadataDto {
+  private toDto(row: {
+    url: string;
+    title: string | null;
+    description: string | null;
+    imageUrl: string | null;
+    siteName: string | null;
+    socialPost: Prisma.JsonValue;
+  }): LinkMetadataDto {
     return {
       url: row.url,
       title: normalizeText(row.title),
       description: normalizeText(row.description),
       imageUrl: normalizeText(row.imageUrl),
       siteName: normalizeText(row.siteName),
+      socialPost:
+        row.socialPost && typeof row.socialPost === 'object' && !Array.isArray(row.socialPost)
+          ? (row.socialPost as unknown as SocialPostMetadataDto)
+          : null,
     };
   }
 
@@ -258,7 +306,7 @@ export class LinkMetadataService {
     }
   }
 
-  private async fetchAndUpsert(url: string): Promise<{ url: string; title: string | null; description: string | null; imageUrl: string | null; siteName: string | null } | null> {
+  private async fetchAndUpsert(url: string) {
     try {
       const meta = await this.fetchFromExternal(url);
       if (!meta) return null;
@@ -271,12 +319,18 @@ export class LinkMetadataService {
           description: meta.description,
           imageUrl: meta.imageUrl,
           siteName: meta.siteName,
+          socialPost: meta.socialPost
+            ? (meta.socialPost as unknown as Prisma.InputJsonValue)
+            : Prisma.JsonNull,
         },
         update: {
           title: meta.title,
           description: meta.description,
           imageUrl: meta.imageUrl,
           siteName: meta.siteName,
+          socialPost: meta.socialPost
+            ? (meta.socialPost as unknown as Prisma.InputJsonValue)
+            : Prisma.JsonNull,
         },
       });
       return upserted;
@@ -288,7 +342,11 @@ export class LinkMetadataService {
 
   private async fetchFromExternal(url: string): Promise<LinkMetadataDto | null> {
     const controller = new AbortController();
-    const timeoutMs = isPickaxPostUrl(url) ? PICKAX_ENRICH_TIMEOUT_MS : FETCH_TIMEOUT_MS;
+    const timeoutMs = isPickaxPostUrl(url)
+      ? PICKAX_ENRICH_TIMEOUT_MS
+      : isXPostUrl(url)
+        ? X_ENRICH_TIMEOUT_MS
+        : FETCH_TIMEOUT_MS;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
@@ -298,6 +356,11 @@ export class LinkMetadataService {
       let base: LinkMetadataDto | null = null;
       const pickaxPost = isPickaxPostUrl(u.toString());
       let pickaxPartial: LinkMetadataDto | null = null;
+
+      if (isXPostUrl(u.toString())) {
+        const xMetadata = await this.enrichXPost(u.toString(), controller.signal);
+        if (xMetadata) return xMetadata;
+      }
 
       // Jina is the only public source that provides the complete Pickax body and,
       // when available, author avatar/handle. Give it the full timeout budget
@@ -321,6 +384,7 @@ export class LinkMetadataService {
               description: normalizeText(json.data.description ?? null),
               siteName: normalizeText(json.data.publisher ?? null) ?? normalizeText(json.data.author ?? null),
               imageUrl: normalizeText(img ?? null),
+              socialPost: null,
             };
           }
         }
@@ -366,6 +430,7 @@ export class LinkMetadataService {
         description: null,
         siteName: normalizeText(u.hostname.replace(/^www\./, '')) ?? null,
         imageUrl,
+        socialPost: null,
       };
     } catch (err) {
       const name = (err as { name?: string })?.name;
@@ -373,6 +438,45 @@ export class LinkMetadataService {
       throw err;
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  private async enrichXPost(
+    url: string,
+    signal: AbortSignal,
+  ): Promise<LinkMetadataDto | null> {
+    try {
+      const parsed = parseXPostUrl(url);
+      if (!parsed) return null;
+      const token = xSyndicationToken(parsed.id);
+      const response = await fetch(
+        `https://cdn.syndication.twimg.com/tweet-result?id=${encodeURIComponent(parsed.id)}&lang=en&token=${encodeURIComponent(token)}`,
+        {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          signal,
+        },
+      );
+      if (!response.ok) return null;
+      const socialPost = parseXSyndicationResponse(await response.json(), url);
+      if (!socialPost) return null;
+      return {
+        url: parsed.canonicalUrl,
+        title: socialPost.author.name,
+        description: socialPost.text,
+        imageUrl: socialPost.author.avatarUrl,
+        siteName: 'X',
+        socialPost,
+      };
+    } catch (error) {
+      const name = (error as { name?: string })?.name;
+      if (name === 'AbortError' || name === 'TimeoutError') return null;
+      this.logger.warn(
+        `[link-metadata] X enrichment failed for ${url}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
     }
   }
 
@@ -404,6 +508,7 @@ export class LinkMetadataService {
         // Prefer @handle in siteName so clients can render a post-like subtitle.
         siteName: username ? `@${username}` : 'Pickax',
         imageUrl: avatarUrl ?? (isWeakPickaxImage(base?.imageUrl) ? null : (base?.imageUrl ?? null)),
+        socialPost: null,
       };
     } catch {
       return null;

@@ -2236,6 +2236,7 @@ model LinkMetadata {
   description String?
   imageUrl    String?
   siteName    String?
+  socialPost  Json?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

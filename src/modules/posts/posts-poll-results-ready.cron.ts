@@ -61,6 +61,7 @@ export class PostsPollResultsReadyCron {
           id: true,
           postId: true,
           post: { select: { userId: true, body: true } },
+          _count: { select: { votes: true } },
         },
       });
 
@@ -71,6 +72,30 @@ export class PostsPollResultsReadyCron {
         const postId = p.postId;
         const authorId = p.post.userId;
         const postBodySnippet = (p.post.body ?? '').trim().slice(0, 150) || null;
+        const totalVotes = p._count.votes;
+        const voteLabel =
+          totalVotes === 0 ? 'No votes' : totalVotes === 1 ? '1 vote' : `${totalVotes} votes`;
+
+        // Tiered copy — author gets engagement context, voters get a simple results ping.
+        let authorTitle: string;
+        if (totalVotes === 0) {
+          authorTitle = 'Your poll was a dud · No votes';
+        } else if (totalVotes < 10) {
+          authorTitle = `Your poll got a few votes · ${voteLabel}`;
+        } else if (totalVotes < 40) {
+          authorTitle = `Your poll got real traction · ${voteLabel}`;
+        } else {
+          authorTitle = `Your poll was a hit · ${voteLabel}`;
+        }
+
+        let voterTitle: string;
+        if (totalVotes < 10) {
+          voterTitle = `Poll results are in · ${voteLabel}`;
+        } else if (totalVotes < 40) {
+          voterTitle = `Poll results are in · ${voteLabel}`;
+        } else {
+          voterTitle = `Great poll — results are in · ${voteLabel}`;
+        }
 
         // Claim the poll in a transaction so concurrent sweeps don't double-notify.
         // Notification rows are created outside via NotificationsService.create so each
@@ -109,7 +134,9 @@ export class PostsPollResultsReadyCron {
               kind: 'poll_results_ready',
               ...(isAuthor ? {} : { actorUserId: authorId }),
               subjectPostId: postId,
-              title: isAuthor ? 'Your poll is done' : 'Poll results are ready',
+              title: isAuthor
+                ? authorTitle
+                : voterTitle,
               body: postBodySnippet ?? 'Tap to see the final results.',
             });
           } catch (err) {

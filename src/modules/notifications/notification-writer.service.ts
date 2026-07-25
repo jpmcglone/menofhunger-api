@@ -1272,13 +1272,20 @@ export class NotificationWriterService {
     });
     if (recent) return;
 
+    const group = await this.prisma.communityGroup.findUnique({
+      where: { id: groupId },
+      select: { name: true },
+    });
+    const groupName = group?.name?.trim() || null;
+    const groupLabel = groupName ? `**${groupName}**` : 'this group';
+
     await this.create({
       recipientUserId,
       kind: 'marv_not_in_group',
       actorUserId: marvUserId,
       actorPostId: postId,
       subjectGroupId: groupId,
-      body: "@marv is not in this group, so he won't respond. Ask an owner to add him!",
+      body: `@marv is not in ${groupLabel}, so he won't respond. Ask an owner to add him!`,
     });
   }
 }

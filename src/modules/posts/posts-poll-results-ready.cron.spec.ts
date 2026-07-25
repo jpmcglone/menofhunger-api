@@ -6,6 +6,7 @@ describe('PostsPollResultsReadyCron.runPollResultsReadySweep', () => {
       id: string;
       postId: string;
       post: { userId: string; body: string | null };
+      _count: { votes: number };
     }>;
     voters?: Array<{ userId: string }>;
     lockCount?: number;
@@ -16,6 +17,7 @@ describe('PostsPollResultsReadyCron.runPollResultsReadySweep', () => {
         id: 'poll-1',
         postId: 'post-1',
         post: { userId: 'author-1', body: 'Who wins?' },
+        _count: { votes: 2 },
       },
     ];
     const voters = opts?.voters ?? [{ userId: 'voter-1' }, { userId: 'voter-2' }];
@@ -68,7 +70,7 @@ describe('PostsPollResultsReadyCron.runPollResultsReadySweep', () => {
       recipientUserId: 'author-1',
       kind: 'poll_results_ready',
       subjectPostId: 'post-1',
-      title: 'Your poll is done',
+      title: 'Your poll got a few votes · 2 votes',
       body: 'Who wins?',
     });
 
@@ -77,7 +79,7 @@ describe('PostsPollResultsReadyCron.runPollResultsReadySweep', () => {
       kind: 'poll_results_ready',
       actorUserId: 'author-1',
       subjectPostId: 'post-1',
-      title: 'Poll results are ready',
+      title: 'Poll results are in · 2 votes',
       body: 'Who wins?',
     });
 
@@ -86,7 +88,7 @@ describe('PostsPollResultsReadyCron.runPollResultsReadySweep', () => {
       kind: 'poll_results_ready',
       actorUserId: 'author-1',
       subjectPostId: 'post-1',
-      title: 'Poll results are ready',
+      title: 'Poll results are in · 2 votes',
       body: 'Who wins?',
     });
   });
@@ -105,7 +107,7 @@ describe('PostsPollResultsReadyCron.runPollResultsReadySweep', () => {
     expect(authorCall).toEqual(
       expect.objectContaining({
         recipientUserId: 'author-1',
-        title: 'Your poll is done',
+        title: 'Your poll got a few votes · 2 votes',
       }),
     );
     expect(authorCall?.actorUserId).toBeUndefined();

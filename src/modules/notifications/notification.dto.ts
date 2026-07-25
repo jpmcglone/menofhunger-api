@@ -50,6 +50,8 @@ export type NotificationDto = {
   subjectGroupSlug: string | null;
   /** Display name of the subject group (only populated for group_join_request notifications). */
   subjectGroupName: string | null;
+  /** Avatar URL of the subject group (populated for marv_not_in_group and group_join_request). */
+  subjectGroupAvatarUrl: string | null;
   /** Crew this notification is about (set for any crew_* kind that has a real crew). */
   subjectCrewId: string | null;
   /**
