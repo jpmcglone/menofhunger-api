@@ -17,12 +17,16 @@ import { fileURLToPath } from 'url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const DRY_RUN = process.argv.includes('--dry-run')
 
-// ── Load .env ────────────────────────────────────────────────────────────────
+// ── Load .env (local only — Render injects env vars directly) ────────────────
 const envPath = resolve(__dirname, '../.env')
-const envLines = readFileSync(envPath, 'utf8').split('\n')
-for (const line of envLines) {
-  const [k, ...rest] = line.split('=')
-  if (k && rest.length) process.env[k.trim()] = rest.join('=').trim()
+try {
+  const envLines = readFileSync(envPath, 'utf8').split('\n')
+  for (const line of envLines) {
+    const [k, ...rest] = line.split('=')
+    if (k && rest.length) process.env[k.trim()] = rest.join('=').trim()
+  }
+} catch {
+  // no .env file — rely on process.env (production / CI)
 }
 
 // ── Prisma ───────────────────────────────────────────────────────────────────
