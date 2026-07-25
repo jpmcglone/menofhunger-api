@@ -1150,6 +1150,7 @@ describe('NotificationWriterService.upsertMarvNotInGroupNotification', () => {
     const prisma = {
       notification: { findFirst: notificationFindFirst, create: notificationCreate, count: notificationCount },
       user: { update: userUpdate },
+      communityGroup: { findUnique: jest.fn(async () => ({ name: 'Test Group' })) },
       $transaction: jest.fn(async (cb: any) =>
         cb({
           notification: { create: notificationCreate, count: notificationCount },
