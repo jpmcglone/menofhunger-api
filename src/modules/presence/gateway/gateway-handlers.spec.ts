@@ -604,28 +604,31 @@ describe('PresenceStatusHandler — impersonated connections', () => {
     expect(emitPlatformsChanged).not.toHaveBeenCalled();
   });
 
-  it('still registers the impersonated socket so per-user events reach the admin', async () => {
+  it('registers the impersonated socket in-memory only (not in Redis) so per-user events reach the admin', async () => {
     const { handler, presence, presenceRedis, socket } = makeConnectionFixture('admin-1');
 
     await handler.handleConnection(socket as any);
 
-    // `emitToUser` resolves sockets from this registry — without it the admin would see
-    // no live notifications or messages, defeating the point of impersonation.
+    // `emitToUser` resolves sockets from the in-memory registry — the admin must see
+    // live notifications and messages while impersonating.
     expect(presence.register).toHaveBeenCalledWith('s1', 'u1', 'web');
-    expect(presenceRedis.registerSocket).toHaveBeenCalled();
+    // Must NOT write to Redis: an impersonated socket must not make the target
+    // appear online to other users or other API instances.
+    expect(presenceRedis.registerSocket).not.toHaveBeenCalled();
     expect((socket.data as { impersonated?: boolean }).impersonated).toBe(true);
   });
 
-  it('an impersonated disconnect neither stamps lastOnlineAt nor announces offline', async () => {
+  it('an impersonated disconnect neither stamps lastOnlineAt nor announces offline, and skips Redis unregister', async () => {
     const { handler, presence, presenceRedis, socket, emitOffline } = makeConnectionFixture('admin-1');
     await handler.handleConnection(socket as any);
 
     handler.handleDisconnect(socket as any);
-    // Let the floating unregisterSocket promise chain settle.
+    // Let any floating promises settle.
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(presenceRedis.unregisterSocket).toHaveBeenCalled();
+    // No Redis call: the socket was never written there, nothing to clean up.
+    expect(presenceRedis.unregisterSocket).not.toHaveBeenCalled();
     expect(presence.persistLastOnlineAt).not.toHaveBeenCalled();
     expect(emitOffline).not.toHaveBeenCalled();
   });

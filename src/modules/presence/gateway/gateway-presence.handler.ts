@@ -94,14 +94,18 @@ export class PresenceStatusHandler {
       this.cancelUserTimers(userId);
       this.userPresenceNonce.set(userId, (this.userPresenceNonce.get(userId) ?? 0) + 1);
 
+      // Always register in-memory so emitToUser reaches this socket on this instance.
       this.presence.register(client.id, userId, String(clientType));
-      const registration = await this.presenceRedis.registerSocket({
-        socketId: client.id,
-        userId,
-        client: String(clientType),
-      });
-      isNewlyOnline = Boolean(registration?.isNewlyOnline);
       if (!impersonated) {
+        // Only write to Redis (online zset, socket set, pubsub) for real sessions.
+        // An impersonated socket must not make the target user appear online to
+        // other users or other API instances.
+        const registration = await this.presenceRedis.registerSocket({
+          socketId: client.id,
+          userId,
+          client: String(clientType),
+        });
+        isNewlyOnline = Boolean(registration?.isNewlyOnline);
         this.presence.persistLastSeenAt(userId);
         this.presence.persistDailyActivity(userId);
       }
@@ -182,26 +186,26 @@ export class PresenceStatusHandler {
 
     const userId = String(result?.userId ?? '').trim();
     if (!userId) return;
-    // Mirror of the connect path: an impersonated socket never announced the user as
-    // online, so it must not announce them going offline or stamp `lastOnlineAt`.
+    // Mirror of the connect path: an impersonated socket never wrote to Redis
+    // (online zset, socket set), so there is nothing to unregister there and
+    // no offline fan-out to emit.
     const impersonated = Boolean((client.data as { impersonated?: boolean }).impersonated);
     const nonceAtDisconnect = this.userPresenceNonce.get(userId) ?? 0;
     this.throttle.clearTypingThrottleForUser(userId);
+    if (impersonated) return;
     void this.presenceRedis
       .unregisterSocket({ socketId, userId })
       .then(async (r) => {
         if (!r?.isNowOffline) {
-          if (!impersonated) await this.emitPlatformsChanged(userId);
+          await this.emitPlatformsChanged(userId);
           return;
         }
         const currentNonce = this.userPresenceNonce.get(userId) ?? 0;
         if (currentNonce !== nonceAtDisconnect && this.presence.isUserOnline(userId)) return;
         try {
           this.cancelUserTimers(userId);
-          if (!impersonated) {
-            this.presence.persistLastOnlineAt(userId);
-            await this.emitOffline(userId);
-          }
+          this.presence.persistLastOnlineAt(userId);
+          await this.emitOffline(userId);
         } catch {
           // best-effort
         }
@@ -433,6 +437,9 @@ export class PresenceStatusHandler {
   }
 
   handleIdle(client: Socket): void {
+    // Impersonated sockets never wrote to Redis, so idle/active state changes
+    // for the target user must be ignored entirely.
+    if ((client.data as any).impersonated) return;
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
     this.presence.setUserIdle(userId);
@@ -442,6 +449,9 @@ export class PresenceStatusHandler {
   }
 
   handleActive(client: Socket): void {
+    // Impersonated sockets must not update the target's last-seen / daily-activity
+    // or flip their idle/active state — the admin's activity is not the user's.
+    if ((client.data as any).impersonated) return;
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
     this.presence.setLastActivity(userId);
