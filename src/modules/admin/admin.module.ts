@@ -36,6 +36,7 @@ import { BillingModule } from '../billing/billing.module';
 import { CoinsModule } from '../coins/coins.module';
 import { CrewModule } from '../crew/crew.module';
 import { AdminCrewsController } from './admin-crews.controller';
+import { AdminImpersonationController } from './admin-impersonation.controller';
 import { UploadsModule } from '../uploads/uploads.module';
 
 @Module({
@@ -76,6 +77,7 @@ import { UploadsModule } from '../uploads/uploads.module';
     AdminReferralController,
     AdminAffiliateController,
     AdminCrewsController,
+    AdminImpersonationController,
   ],
   providers: [AdminGuard, AdminImageReviewService, AdminHashtagsService, AdminDailyDigestCron],
   exports: [AdminDailyDigestCron],

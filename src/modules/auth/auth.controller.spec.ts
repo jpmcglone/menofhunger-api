@@ -38,7 +38,9 @@ describe('AuthController.me', () => {
         return null;
       }),
     } as any;
-    const controller = new AuthController(auth, {} as any, moduleRef, {} as any);
+    const controller = new AuthController(auth, {} as any, moduleRef, {} as any, {
+      describe: jest.fn(async () => null),
+    } as any);
 
     const result = await controller.me(
       { cookies: { [AUTH_COOKIE_NAME]: 'session-token' } } as any,
@@ -54,6 +56,7 @@ describe('AuthController.me', () => {
       messageUnreadCounts: { primary: 6, requests: 1 },
       postCount: 978,
       articleCount: 12,
+      impersonation: null,
     });
     expect(crewInvites.countInboxPending).toHaveBeenCalledWith('user-1');
     expect(prisma.post.count).toHaveBeenCalledWith({
@@ -98,7 +101,9 @@ describe('AuthController.me', () => {
         return null;
       }),
     } as any;
-    const controller = new AuthController(auth, {} as any, moduleRef, {} as any);
+    const controller = new AuthController(auth, {} as any, moduleRef, {} as any, {
+      describe: jest.fn(async () => null),
+    } as any);
 
     const result = await controller.me(
       { cookies: { [AUTH_COOKIE_NAME]: 'session-token' } } as any,
@@ -114,6 +119,43 @@ describe('AuthController.me', () => {
       messageUnreadCounts: { primary: 0, requests: 0 },
       postCount: null,
       articleCount: null,
+      impersonation: null,
+    });
+  });
+
+  it('surfaces the impersonating admin when the session is an impersonation session', async () => {
+    const user = { id: 'target-1', username: 'target', pinnedPostId: null };
+    const auth = {
+      meFromSessionToken: jest.fn(async () => ({
+        user,
+        renewed: false,
+        expiresAt: new Date('2026-08-01T00:00:00.000Z'),
+        impersonatedByUserId: 'admin-1',
+      })),
+      runMeChecks: jest.fn(async () => user),
+    } as any;
+    const impersonation = {
+      describe: jest.fn(async () => ({
+        adminUserId: 'admin-1',
+        adminUsername: 'boss',
+        adminName: 'The Boss',
+        adminAvatarUrl: null,
+      })),
+    } as any;
+    const moduleRef = { get: jest.fn(() => null) } as any;
+    const controller = new AuthController(auth, {} as any, moduleRef, {} as any, impersonation);
+
+    const result = await controller.me(
+      { cookies: { [AUTH_COOKIE_NAME]: 'session-token' } } as any,
+      {} as any,
+    );
+
+    expect(impersonation.describe).toHaveBeenCalledWith('admin-1');
+    expect(result.data?.impersonation).toEqual({
+      adminUserId: 'admin-1',
+      adminUsername: 'boss',
+      adminName: 'The Boss',
+      adminAvatarUrl: null,
     });
   });
 });
@@ -134,7 +176,13 @@ describe('AuthController browser handoff', () => {
         () => 'https://menofhunger.com/login?handoffError=invalid_or_expired',
       ),
     };
-    const controller = new AuthController({} as any, {} as any, {} as any, browserHandoff as any);
+    const controller = new AuthController(
+      {} as any,
+      {} as any,
+      {} as any,
+      browserHandoff as any,
+      {} as any,
+    );
     return { controller, browserHandoff };
   }
 

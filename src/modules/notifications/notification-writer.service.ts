@@ -139,6 +139,7 @@ export class NotificationWriterService {
         community_group_invite_declined: 'declined your group invite',
         community_group_invite_cancelled: 'cancelled their group invite',
         marv_not_in_group: '@marv is not in this group',
+        status_update: 'updated their status',
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
@@ -1287,5 +1288,179 @@ export class NotificationWriterService {
       subjectGroupId: groupId,
       body: `@marv is not in ${groupLabel}, so he won't respond. Ask an owner to add him!`,
     });
+  }
+
+  /**
+   * Fan-out a status_update notification to all followers of the actor.
+   * Fetches the actor's username once for the push URL, then spawns a
+   * fire-and-forget upsert per follower.
+   */
+  async fanOutStatusUpdateNotifications(params: { actorUserId: string; text: string }): Promise<void> {
+    const { actorUserId, text } = params;
+
+    const [actor, follows] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: actorUserId },
+        select: { username: true },
+      }),
+      this.prisma.follow.findMany({
+        where: { followingId: actorUserId },
+        select: { followerId: true },
+      }),
+    ]);
+
+    if (!actor || follows.length === 0) return;
+    const actorUsername = actor.username ?? '';
+
+    const tasks: Promise<void>[] = [];
+    for (const f of follows) {
+      if (!f.followerId || f.followerId === actorUserId) continue;
+      tasks.push(
+        this.upsertStatusUpdateNotification({
+          recipientUserId: f.followerId,
+          actorUserId,
+          actorUsername,
+          text,
+        }).catch((err) => {
+          this.logger.warn(
+            `[notifications] Failed to upsert status_update notification: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }),
+      );
+    }
+    await Promise.allSettled(tasks);
+  }
+
+  private static readonly STATUS_RENOTIFY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
+  /**
+   * Create-or-update a status_update notification for one recipient.
+   *
+   * - No existing row → create; increment bell; push.
+   * - Existing row older than 6h → update body/createdAt, reset unread state; increment bell; push.
+   * - Existing row within 6h → update body/createdAt only (live patch for open clients); no bell, no push.
+   */
+  async upsertStatusUpdateNotification(params: {
+    recipientUserId: string;
+    actorUserId: string;
+    actorUsername: string;
+    text: string;
+  }): Promise<void> {
+    const { recipientUserId, actorUserId, actorUsername, text } = params;
+    if (actorUserId === recipientUserId) return;
+
+    const maxAttempts = 3;
+    const presentAt = await this.presentAtForRecipient(recipientUserId);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const res = await this.prisma.$transaction(
+          async (tx) => {
+            const existing = await tx.notification.findFirst({
+              where: { recipientUserId, actorUserId, kind: 'status_update' },
+              select: { id: true, createdAt: true, deliveredAt: true, readAt: true },
+            });
+
+            const now = new Date();
+            const cooldown = NotificationWriterService.STATUS_RENOTIFY_COOLDOWN_MS;
+
+            if (existing) {
+              const msSinceCreated = now.getTime() - existing.createdAt.getTime();
+              const renotify = msSinceCreated >= cooldown;
+
+              await tx.notification.update({
+                where: { id: existing.id },
+                data: {
+                  body: text,
+                  createdAt: now,
+                  ...(renotify ? { deliveredAt: null, readAt: null, ignoredAt: null, presentAt: presentAt ?? undefined } : {}),
+                },
+              });
+
+              if (renotify) {
+                await tx.user.update({
+                  where: { id: recipientUserId },
+                  data: { undeliveredNotificationCount: { increment: 1 } },
+                });
+              }
+
+              const undeliveredCount = renotify
+                ? await tx.notification.count({ where: this.readState.undeliveredBellWhere(recipientUserId) })
+                : null;
+
+              return { kind: renotify ? ('renotify' as const) : ('silent' as const), notificationId: existing.id, undeliveredCount };
+            }
+
+            const notification = await tx.notification.create({
+              data: {
+                recipientUserId,
+                kind: 'status_update',
+                actorUserId,
+                subjectUserId: actorUserId,
+                title: 'updated their status',
+                body: text,
+                presentAt: presentAt ?? undefined,
+              },
+              select: { id: true },
+            });
+
+            await tx.user.update({
+              where: { id: recipientUserId },
+              data: { undeliveredNotificationCount: { increment: 1 } },
+            });
+
+            const undeliveredCount = await tx.notification.count({
+              where: this.readState.undeliveredBellWhere(recipientUserId),
+            });
+
+            return { kind: 'created' as const, notificationId: notification.id, undeliveredCount };
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+
+        // Badge update (created or renotify).
+        if ((res.kind === 'created' || res.kind === 'renotify') && typeof res.undeliveredCount === 'number') {
+          this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount: res.undeliveredCount });
+        }
+
+        // Always emit notifications:new so open clients patch the row in place.
+        try {
+          const dto = await this.query.buildNotificationDtoForRecipient({
+            recipientUserId,
+            notificationId: res.notificationId,
+          });
+          if (dto) {
+            this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
+          }
+        } catch {
+          // Best-effort
+        }
+
+        // Push only on created or renotify (not silent).
+        if (res.kind === 'created' || res.kind === 'renotify') {
+          void this.push.sendKindPushForActor({
+            recipientUserId,
+            kind: 'status_update',
+            actorUserId,
+            fallbackTitle: 'updated their status',
+            body: text,
+            subjectUserId: actorUserId,
+            url: `/u/${actorUsername}`,
+            notificationId: res.notificationId,
+          });
+        }
+
+        return;
+      } catch (err) {
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          (err.code === 'P2034' || err.code === 'P2002') &&
+          attempt < maxAttempts
+        ) {
+          continue;
+        }
+        throw err;
+      }
+    }
   }
 }

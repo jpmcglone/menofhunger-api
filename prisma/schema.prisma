@@ -87,6 +87,7 @@ enum NotificationKind {
   community_group_invite_cancelled
   community_group_post
   marv_not_in_group
+  status_update
 }
 
 enum CoinTransferKind {
@@ -368,11 +369,11 @@ model User {
   undeliveredNotificationCount Int                @default(0)
 
   // Private rewards / retention loops (self-only surfaces).
-  coins                    Int                  @default(0)
+  coins                    Int                     @default(0)
   /**
    * Current consecutive-day check-in streak (ET day key boundaries).
    */
-  checkinStreakDays        Int                  @default(0)
+  checkinStreakDays        Int                     @default(0)
   /**
    * Last ET day key the user checked in (YYYY-MM-DD).
    */
@@ -380,7 +381,7 @@ model User {
   /**
    * Longest streak achieved (private).
    */
-  longestStreakDays        Int                  @default(0)
+  longestStreakDays        Int                     @default(0)
   /**
    * When the user opted in to the crew-discovery directory ("Open to joining a crew").
    * Null means opted out. Cleared automatically when the user joins a crew.
@@ -396,14 +397,20 @@ model User {
   profileReminder7dSentAt  DateTime?
   dailyActivityDays        UserDailyActivity[]
   sessions                 Session[]
+  /**
+   * Sessions this user (a site admin) created by impersonating someone else.
+   */
+  impersonatedSessions     Session[]               @relation("SessionImpersonatedBy")
+  impersonationsPerformed  AdminImpersonationLog[] @relation("ImpersonationAdmin")
+  impersonationsReceived   AdminImpersonationLog[] @relation("ImpersonationTarget")
   posts                    Post[]
   boosts                   Boost[]
   pollVotes                PostPollVote[]
   bookmarks                Bookmark[]
   bookmarkCollections      BookmarkCollection[]
   // Pinned post on profile (one per user; must be own post).
-  pinnedPostId             String?              @unique
-  pinnedPost               Post?                @relation("PinnedPost", fields: [pinnedPostId], references: [id], onDelete: SetNull)
+  pinnedPostId             String?                 @unique
+  pinnedPost               Post?                   @relation("PinnedPost", fields: [pinnedPostId], references: [id], onDelete: SetNull)
 
   // Social graph (self-referential via Follow).
   // `following`: users this user follows (outgoing edges)
@@ -482,6 +489,7 @@ model User {
 
   // Referral / recruitment
   /**
+   * /**
    * /** Unique promo code set by this user (premium-only). Others use this to mark this user as their recruiter.
    */
   referralCode           String?   @unique
@@ -498,10 +506,11 @@ model User {
 
   // Affiliate program
   /**
+   * /**
    * When this user was enrolled in the affiliate program (null = not an affiliate).
    * Only admin-set. Affiliates earn cash per recruit milestone.
    */
-  affiliateAt               DateTime?
+  affiliateAt                  DateTime?
   affiliateEarningsAsAffiliate AffiliateEarning[] @relation("AffiliateEarning_affiliate")
   affiliateEarningsAsRecruit   AffiliateEarning[] @relation("AffiliateEarning_recruit")
 
@@ -768,11 +777,11 @@ model CommunityGroup {
    */
   memberCount   Int     @default(0)
 
-  members           CommunityGroupMember[]
-  invites           CommunityGroupInvite[]
-  posts             Post[]
-  scheduledPosts    Post[]                 @relation("Post_scheduledCommunityGroup")
-  notifications     Notification[]         @relation("Notification_subjectGroup")
+  members        CommunityGroupMember[]
+  invites        CommunityGroupInvite[]
+  posts          Post[]
+  scheduledPosts Post[]                 @relation("Post_scheduledCommunityGroup")
+  notifications  Notification[]         @relation("Notification_subjectGroup")
 
   @@index([deletedAt, isFeatured, featuredOrder])
   @@index([createdAt])
@@ -1131,85 +1140,89 @@ model Space {
 }
 
 model Post {
-  id                     String         @id @default(cuid())
-  createdAt              DateTime       @default(now())
-  editedAt               DateTime?
-  editCount              Int            @default(0)
-  deletedAt              DateTime?
-  body                   String
+  id                        String          @id @default(cuid())
+  createdAt                 DateTime        @default(now())
+  editedAt                  DateTime?
+  editCount                 Int             @default(0)
+  deletedAt                 DateTime?
+  body                      String
   /**
    * Drafts are only-me posts used for autosave / compose.
    */
-  isDraft                Boolean        @default(false)
+  isDraft                   Boolean         @default(false)
   /**
    * Scheduled publish time (UTC). When set the post is a "holding row":
    * isDraft=true, visibility=onlyMe, invisible to all feeds. A cron sweep
    * claims due rows and replays createPost at this time, then removes this row.
    */
-  scheduledAt              DateTime?
+  scheduledAt               DateTime?
   /**
    * Intended visibility when the scheduled post publishes (e.g. 'public', 'verifiedOnly').
    * Not the same as the holding row's visibility (which is always 'onlyMe').
    */
-  scheduledVisibility      PostVisibility?
+  scheduledVisibility       PostVisibility?
   /**
    * Intended community group id for the scheduled post. Kept off communityGroupId
    * so the holding row never leaks into group feeds.
    */
   scheduledCommunityGroupId String?
-  scheduledCommunityGroup    CommunityGroup? @relation("Post_scheduledCommunityGroup", fields: [scheduledCommunityGroupId], references: [id], onDelete: SetNull)
+  scheduledCommunityGroup   CommunityGroup? @relation("Post_scheduledCommunityGroup", fields: [scheduledCommunityGroupId], references: [id], onDelete: SetNull)
   /**
    * Serialised poll payload: { options: [{text, image?}][], durationHours: number }.
    * endsAt is recomputed from durationHours at publish time.
    */
   scheduledPollJson         Json?
-  /** Human-readable error if the scheduled publish failed. */
+  /**
+   * Human-readable error if the scheduled publish failed.
+   */
   scheduledError            String?
-  /** Timestamp of the last failed publish attempt. */
+  /**
+   * Timestamp of the last failed publish attempt.
+   */
   scheduledFailedAt         DateTime?
   /**
    * Inferred topics (from allowlist) used for search/discovery.
    */
-  topics                 String[]       @default([])
+  topics                    String[]        @default([])
   /**
    * User-created hashtags (parsed from body) used for search/autocomplete. Stored lowercase.
    */
-  hashtags               String[]       @default([])
+  hashtags                  String[]        @default([])
   /**
    * Hashtag casing variants used in this post (one per entry in `hashtags`, without '#').
    */
-  hashtagCasings         String[]       @default([])
+  hashtagCasings            String[]        @default([])
   /**
    * Validated cashtag symbols parsed from body (uppercase, without '$', e.g. "SPY").
    * Only symbols present in the Ticker reference table are stored.
    */
-  cashtags               String[]       @default([])
-  kind                   PostKind       @default(regular)
+  cashtags                  String[]        @default([])
+  kind                      PostKind        @default(regular)
   /**
    * ET day key (YYYY-MM-DD) for check-ins (null for non-check-ins).
    */
-  checkinDayKey          String?
+  checkinDayKey             String?
   /**
    * Prompt text used for this check-in day (stored to keep history stable).
    */
-  checkinPrompt          String?
-  visibility             PostVisibility @default(public)
-  boostCount             Int            @default(0)
-  bookmarkCount          Int            @default(0)
-  commentCount           Int            @default(0)
+  checkinPrompt             String?
+  visibility                PostVisibility  @default(public)
+  boostCount                Int             @default(0)
+  bookmarkCount             Int             @default(0)
+  commentCount              Int             @default(0)
   /**
    * Denormalized count of flat reposts + quote reposts referencing this post.
    */
-  repostCount            Int            @default(0)
-  viewerCount            Int            @default(0)
-  weightedViewCount      Float          @default(0)
-  boostScore             Float?
-  boostScoreUpdatedAt    DateTime?
+  repostCount               Int             @default(0)
+  viewerCount               Int             @default(0)
+  weightedViewCount         Float           @default(0)
+  boostScore                Float?
+  boostScoreUpdatedAt       DateTime?
   /**
    * Precomputed trending score, refreshed every ~10 min by the popular-score cron. NULL = not yet scored.
    */
-  trendingScore          Float?
-  trendingScoreUpdatedAt DateTime?
+  trendingScore             Float?
+  trendingScoreUpdatedAt    DateTime?
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1387,11 +1400,17 @@ model PostVersion {
 }
 
 model Ticker {
-  /** Uppercase symbol, e.g. "SPY". Primary key. */
+  /**
+   * Uppercase symbol, e.g. "SPY". Primary key.
+   */
   symbol    String   @id
-  /** Full company/ETF name from SEC, e.g. "SPDR S&P 500 ETF Trust". */
+  /**
+   * Full company/ETF name from SEC, e.g. "SPDR S&P 500 ETF Trust".
+   */
   name      String
-  /** Data source identifier, e.g. "sec". */
+  /**
+   * Data source identifier, e.g. "sec".
+   */
   source    String   @default("sec")
   updatedAt DateTime @updatedAt
 
@@ -1727,8 +1746,41 @@ model Session {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  /**
+   * Set when a site admin created this session via admin impersonation ("log in as user").
+   * The session's effective identity is `userId` (the target); this records who is really
+   * driving it so clients can show an exit affordance and destructive actions can be blocked.
+   */
+  impersonatedByUserId String?
+  impersonatedBy       User?   @relation("SessionImpersonatedBy", fields: [impersonatedByUserId], references: [id], onDelete: Cascade)
+
   @@index([userId])
   @@index([expiresAt])
+  @@index([impersonatedByUserId])
+}
+
+/**
+ * Permanent audit trail for admin impersonation. Session rows are pruned by the auth
+ * cleanup cron a week after revocation, so they cannot serve as the record of who
+ * acted as whom. This table is append-only and never pruned.
+ */
+model AdminImpersonationLog {
+  id        String    @id @default(cuid())
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  /**
+   * The impersonation Session row id. Null once the session row is pruned.
+   */
+  sessionId String?
+
+  adminUserId  String
+  admin        User   @relation("ImpersonationAdmin", fields: [adminUserId], references: [id], onDelete: Cascade)
+  targetUserId String
+  target       User   @relation("ImpersonationTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
+
+  @@index([adminUserId, startedAt])
+  @@index([targetUserId, startedAt])
+  @@index([sessionId])
 }
 
 model Notification {
@@ -2261,19 +2313,21 @@ model AdminEmailLog {
  * Amounts stored in cents (USD). settledAt null = pending payment.
  */
 model AffiliateEarning {
-  id              String               @id @default(cuid())
-  createdAt       DateTime             @default(now())
-  settledAt       DateTime?
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  settledAt DateTime?
 
   affiliateUserId String
-  affiliate       User                 @relation("AffiliateEarning_affiliate", fields: [affiliateUserId], references: [id], onDelete: Cascade)
+  affiliate       User   @relation("AffiliateEarning_affiliate", fields: [affiliateUserId], references: [id], onDelete: Cascade)
 
-  recruitUserId   String
-  recruit         User                 @relation("AffiliateEarning_recruit", fields: [recruitUserId], references: [id], onDelete: Cascade)
+  recruitUserId String
+  recruit       User   @relation("AffiliateEarning_recruit", fields: [recruitUserId], references: [id], onDelete: Cascade)
 
-  type            AffiliateEarningType
-  /** Amount in cents (USD). */
-  amountCents     Int
+  type        AffiliateEarningType
+  /**
+   * Amount in cents (USD).
+   */
+  amountCents Int
 
   @@unique([recruitUserId, type])
   @@index([affiliateUserId, settledAt, createdAt])
@@ -2314,8 +2368,8 @@ model Article {
 
   // Tier-weighted boost total (premium 3 / verified 2 / unverified 1), refreshed from
   // ArticleBoost JOIN User. NULL = stale/not yet computed; falls back to boostCount.
-  boostScore             Float?
-  boostScoreUpdatedAt    DateTime?
+  boostScore          Float?
+  boostScoreUpdatedAt DateTime?
 
   trendingScore          Float?
   trendingScoreUpdatedAt DateTime?
@@ -2625,7 +2679,6 @@ model UserContextCard {
  * "AI isn't configured" message (when a premium user mentions Marv but the
  * agent can't actually answer). Unique by (userId, rootPostId, reason) so each
  * reason fires at most once per user per thread tree.
- *
  * Naming kept as `MarvinNonPremiumThreadReply` for backwards compatibility —
  * the table now stores any canned thread reply Marv produces in lieu of an AI
  * response.

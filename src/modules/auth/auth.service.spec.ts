@@ -1,6 +1,11 @@
 import { Prisma } from '@prisma/client';
 import { AuthService } from './auth.service';
-import { AUTH_COOKIE_NAME, SESSION_RENEWAL_THRESHOLD_DAYS, SESSION_TTL_DAYS } from './auth.constants';
+import {
+  AUTH_COOKIE_NAME,
+  IMPERSONATION_SESSION_TTL_MINUTES,
+  SESSION_RENEWAL_THRESHOLD_DAYS,
+  SESSION_TTL_DAYS,
+} from './auth.constants';
 import { hmacSha256Hex, randomSessionToken } from './auth.utils';
 
 const HMAC_SECRET = 'test-secret';
@@ -55,7 +60,7 @@ function makeMinimalUser(overrides?: Record<string, unknown>) {
   };
 }
 
-function makeSession(overrides: { expiresAt: Date; user?: any }) {
+function makeSession(overrides: { expiresAt: Date; user?: any; impersonatedByUserId?: string | null }) {
   const user = overrides.user ?? makeMinimalUser();
   return {
     id: 'session-1',
@@ -65,6 +70,7 @@ function makeSession(overrides: { expiresAt: Date; user?: any }) {
     tokenHash: '',
     userId: user.id,
     user,
+    impersonatedByUserId: overrides.impersonatedByUserId ?? null,
   };
 }
 
@@ -142,6 +148,8 @@ describe('AuthService.createSessionForUser', () => {
       userId: 'user-1',
       tokenHash: hmacSha256Hex(HMAC_SECRET, browserToken),
       expiresAt: expect.any(Date),
+      // Ordinary logins are never impersonation sessions.
+      impersonatedByUserId: null,
     });
     expect(cookieCall[0]).toBe(AUTH_COOKIE_NAME);
     expect(cookieCall[2]).toEqual(
@@ -152,6 +160,33 @@ describe('AuthService.createSessionForUser', () => {
         expires: createCall.data.expiresAt,
       }),
     );
+  });
+
+  it('gives an ordinary login the full multi-day session lifetime', async () => {
+    const { svc, prisma } = makeService();
+    prisma.session.create.mockResolvedValue({ id: 'browser-session' });
+
+    await svc.createSessionForUser('user-1', { cookie: jest.fn() } as any);
+
+    const expiresAt: Date = prisma.session.create.mock.calls[0][0].data.expiresAt;
+    const daysOut = (expiresAt.getTime() - Date.now()) / (24 * 60 * 60_000);
+    expect(daysOut).toBeGreaterThan(SESSION_TTL_DAYS - 1);
+  });
+
+  it('gives an impersonation session a short lifetime and records the acting admin', async () => {
+    const { svc, prisma } = makeService();
+    prisma.session.create.mockResolvedValue({ id: 'imp-session' });
+
+    await svc.createSessionForUser('target-1', { cookie: jest.fn() } as any, {
+      impersonatedByUserId: 'admin-1',
+    });
+
+    const createCall = prisma.session.create.mock.calls[0][0];
+    expect(createCall.data.impersonatedByUserId).toBe('admin-1');
+
+    const minutesOut = (createCall.data.expiresAt.getTime() - Date.now()) / 60_000;
+    expect(minutesOut).toBeGreaterThan(IMPERSONATION_SESSION_TTL_MINUTES - 1);
+    expect(minutesOut).toBeLessThanOrEqual(IMPERSONATION_SESSION_TTL_MINUTES);
   });
 });
 
@@ -190,6 +225,33 @@ describe('AuthService.meFromSessionToken — sliding window renewal', () => {
     expect(result!.expiresAt).toEqual(updatedExpiry);
   });
 
+  it('does NOT renew an impersonation session, even close to expiry', async () => {
+    // An impersonation session must die at its short fixed expiry rather than extending
+    // itself for as long as the admin keeps a tab open.
+    const expiresAt = new Date(Date.now() + 5 * 60_000);
+    const session = makeSession({ expiresAt, impersonatedByUserId: 'admin-1' });
+    const token = randomSessionToken();
+    session.tokenHash = hmacSha256Hex(HMAC_SECRET, token);
+
+    const { svc, prisma } = makeService({
+      prisma: {
+        session: {
+          findFirst: jest.fn(async () => session),
+          update: jest.fn(async () => session),
+        },
+        post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+        user: { update: jest.fn() },
+      },
+    });
+
+    const result = await svc.meFromSessionToken(token);
+
+    expect(result!.renewed).toBe(false);
+    expect(result!.impersonatedByUserId).toBe('admin-1');
+    expect(prisma.session.update).not.toHaveBeenCalled();
+    expect(result!.expiresAt).toEqual(expiresAt);
+  });
+
   it('does NOT renew a session that still has plenty of time remaining', async () => {
     const daysUntilExpiry = SESSION_RENEWAL_THRESHOLD_DAYS + 5; // e.g. 12 days → above threshold
     const expiresAt = new Date(Date.now() + daysUntilExpiry * 24 * 60 * 60_000);
@@ -215,6 +277,30 @@ describe('AuthService.meFromSessionToken — sliding window renewal', () => {
     expect(prisma.session.update).not.toHaveBeenCalled();
     // expiresAt should be unchanged from the original session value.
     expect(result!.expiresAt).toEqual(expiresAt);
+  });
+
+  it('marks the user seen on an ordinary session but not on an impersonation session', async () => {
+    async function resolve(impersonatedByUserId: string | null) {
+      const session = makeSession({
+        expiresAt: new Date(Date.now() + 20 * 24 * 60 * 60_000),
+        impersonatedByUserId,
+      });
+      const token = randomSessionToken();
+      session.tokenHash = hmacSha256Hex(HMAC_SECRET, token);
+      const { svc, presence } = makeService({
+        prisma: {
+          session: { findFirst: jest.fn(async () => session), update: jest.fn(async () => session) },
+          post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+          user: { update: jest.fn() },
+        },
+      });
+      await svc.meFromSessionToken(token);
+      return presence;
+    }
+
+    expect((await resolve(null)).markSeenFromHttp).toHaveBeenCalledWith('user-1');
+    // An admin browsing someone's account must not make that account look active.
+    expect((await resolve('admin-1')).markSeenFromHttp).not.toHaveBeenCalled();
   });
 
   it('rejects an expired session and returns null', async () => {
@@ -1102,12 +1188,48 @@ describe('revokeAllSessionsForUser', () => {
 
     await svc.revokeAllSessionsForUser('user-1');
 
-    expect(findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ userId: 'user-1', revokedAt: null }) }),
-    );
+    // Matches sessions the user owns AND impersonation sessions they started as an admin:
+    // those rows are owned by the target, so `userId` alone would leave them alive.
+    const expectedWhere = {
+      revokedAt: null,
+      OR: [{ userId: 'user-1' }, { impersonatedByUserId: 'user-1' }],
+    };
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expectedWhere }));
     expect(updateMany).toHaveBeenCalledWith({
-      where: { userId: 'user-1', revokedAt: null },
+      where: expectedWhere,
       data: expect.objectContaining({ revokedAt: expect.any(Date) }),
     });
+  });
+
+  it('busts the session cache for impersonation sessions the admin started', async () => {
+    const targetToken = randomSessionToken();
+    const targetHash = hmacSha256Hex(HMAC_SECRET, targetToken);
+    // The row returned here is owned by the impersonated target, not by 'admin-1'.
+    const findMany = jest.fn(async () => [{ tokenHash: targetHash }]);
+    const cacheInvalidation = {
+      deleteSessionUser: jest.fn(async () => undefined),
+      deleteSessionFull: jest.fn(async () => undefined),
+    };
+    const { svc } = makeService({
+      prisma: {
+        session: {
+          findFirst: jest.fn(),
+          findMany,
+          update: jest.fn(),
+          create: jest.fn(),
+          deleteMany: jest.fn(),
+          updateMany: jest.fn(async () => ({ count: 1 })),
+        },
+        post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+        user: { update: jest.fn() },
+        phoneOtp: { findFirst: jest.fn(async () => null) },
+      } as any,
+    });
+    (svc as any).cacheInvalidation = cacheInvalidation;
+
+    await svc.revokeAllSessionsForUser('admin-1');
+
+    expect(cacheInvalidation.deleteSessionFull).toHaveBeenCalledWith(targetHash);
+    expect(cacheInvalidation.deleteSessionUser).toHaveBeenCalledWith(targetHash);
   });
 });

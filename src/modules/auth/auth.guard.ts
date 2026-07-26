@@ -3,7 +3,17 @@ import type { Request, Response } from 'express';
 import { getSessionCookie } from '../../common/session-cookie';
 import { AuthService } from './auth.service';
 
-export type AuthedRequest = Request & { user?: { id: string } };
+export type AuthedRequest = Request & {
+  user?: {
+    id: string;
+    /**
+     * Set when a site admin is driving this session via impersonation. The effective
+     * identity is still `id`; this is the admin really behind the request, so handlers
+     * can suppress side effects that would forge activity on the target's account.
+     */
+    impersonatedByUserId?: string | null;
+  };
+};
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -20,7 +30,7 @@ export class AuthGuard implements CanActivate {
       this.auth.setSessionCookie(token, result.expiresAt, res);
     }
 
-    req.user = { id: result.user.id };
+    req.user = { id: result.user.id, impersonatedByUserId: result.impersonatedByUserId };
     return true;
   }
 }

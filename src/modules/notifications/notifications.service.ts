@@ -120,6 +120,10 @@ export class NotificationsService {
     return this.writer.upsertMarvNotInGroupNotification(...args);
   }
 
+  fanOutStatusUpdateNotifications(...args: Parameters<NotificationWriterService['fanOutStatusUpdateNotifications']>) {
+    return this.writer.fanOutStatusUpdateNotifications(...args);
+  }
+
   // ── Queries ────────────────────────────────────────────────────────────────
 
   list(...args: Parameters<NotificationQueryService['list']>) {

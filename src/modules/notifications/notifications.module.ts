@@ -19,6 +19,7 @@ import { NotificationQueryService } from './notification-query.service';
 import { NotificationWriterService } from './notification-writer.service';
 import { MessagePushEventsHandler } from './message-push-events.handler';
 import { MessageInstantEmailEventsHandler } from './message-instant-email-events.handler';
+import { StatusNotificationEventsHandler } from './status-notification-events.handler';
 
 @Module({
   imports: [AuthModule, RealtimeModule, EmailModule, DailyContentModule, MessagesModule, ViewerContextModule],
@@ -33,6 +34,7 @@ import { MessageInstantEmailEventsHandler } from './message-instant-email-events
     NotificationWriterService,
     MessagePushEventsHandler,
     MessageInstantEmailEventsHandler,
+    StatusNotificationEventsHandler,
     NotificationsCleanupCron,
     NotificationsOrphanCleanupCron,
     NotificationsEmailCron,

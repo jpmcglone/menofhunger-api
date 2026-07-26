@@ -14,6 +14,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { AFFILIATE_RATES_CENTS, AFFILIATE_CAP_CENTS } from '../billing/affiliate.service';
 import {
   AUTH_COOKIE_NAME,
+  IMPERSONATION_SESSION_TTL_MINUTES,
   OTP_RESEND_SECONDS,
   SESSION_RENEWAL_THRESHOLD_DAYS,
   SESSION_TTL_DAYS,
@@ -78,6 +79,11 @@ export interface SessionResult {
   sessionId: string;
   expiresAt: Date;
   renewed: boolean;
+  /**
+   * Set when this session was created by a site admin impersonating `user`.
+   * The effective identity is still `user`; this is the admin really driving it.
+   */
+  impersonatedByUserId: string | null;
 }
 
 @Injectable()
@@ -467,7 +473,9 @@ export class AuthService {
       });
       // Keep presence timestamps fresh for HTTP-only sessions (e.g. mid-onboarding before socket
       // connects). Throttled to 1× per 2 min so it's safe to call on every authenticated request.
-      this.presence.markSeenFromHttp(result.user.id);
+      // Skipped under impersonation: an admin browsing someone's account must not make that
+      // account look active to everyone else.
+      if (!result.impersonatedByUserId) this.presence.markSeenFromHttp(result.user.id);
     }
 
     return result;
@@ -479,11 +487,20 @@ export class AuthService {
 
     // Fast path: check Redis cache before hitting the DB.
     try {
-      const cached = await this.redis.getJson<{ user: ReturnType<typeof toUserDto>; sessionId: string; expiresAt: string }>(
-        RedisKeys.sessionFull(tokenHash),
-      );
+      const cached = await this.redis.getJson<{
+        user: ReturnType<typeof toUserDto>;
+        sessionId: string;
+        expiresAt: string;
+        impersonatedByUserId?: string | null;
+      }>(RedisKeys.sessionFull(tokenHash));
       if (cached) {
-        return { user: cached.user, sessionId: cached.sessionId, expiresAt: new Date(cached.expiresAt), renewed: false };
+        return {
+          user: cached.user,
+          sessionId: cached.sessionId,
+          expiresAt: new Date(cached.expiresAt),
+          renewed: false,
+          impersonatedByUserId: cached.impersonatedByUserId ?? null,
+        };
       }
     } catch {
       // Redis unavailable — fall through to DB.
@@ -517,7 +534,9 @@ export class AuthService {
     let renewed = false;
     let effectiveExpiresAt = session.expiresAt;
 
-    if (timeUntilExpiryMs < renewalThresholdMs) {
+    // Impersonation sessions are deliberately excluded: they must die at their short fixed
+    // expiry instead of extending themselves for as long as the admin keeps a tab open.
+    if (!session.impersonatedByUserId && timeUntilExpiryMs < renewalThresholdMs) {
       effectiveExpiresAt = new Date(now.getTime() + SESSION_TTL_DAYS * 24 * 60 * 60_000);
       try {
         await this.prisma.session.update({
@@ -536,10 +555,25 @@ export class AuthService {
     // On cache hit we always return renewed: false (renewal already happened above).
     const ttlMs = Math.max(1, Math.min(SESSION_FULL_CACHE_TTL_MS, effectiveExpiresAt.getTime() - now.getTime()));
     void this.redis
-      .setJson(RedisKeys.sessionFull(tokenHash), { user, sessionId: session.id, expiresAt: effectiveExpiresAt.toISOString() }, { ttlMs })
+      .setJson(
+        RedisKeys.sessionFull(tokenHash),
+        {
+          user,
+          sessionId: session.id,
+          expiresAt: effectiveExpiresAt.toISOString(),
+          impersonatedByUserId: session.impersonatedByUserId,
+        },
+        { ttlMs },
+      )
       .catch(() => undefined);
 
-    return { user, sessionId: session.id, expiresAt: effectiveExpiresAt, renewed };
+    return {
+      user,
+      sessionId: session.id,
+      expiresAt: effectiveExpiresAt,
+      renewed,
+      impersonatedByUserId: session.impersonatedByUserId,
+    };
   }
 
   /**
@@ -671,8 +705,15 @@ export class AuthService {
   async revokeAllSessionsForUser(userId: string): Promise<void> {
     const id = String(userId ?? '').trim();
     if (!id) return;
+    // Also sweeps impersonation sessions this user started as a site admin. Those rows are
+    // owned by the *target*, so matching on `userId` alone would leave them alive — meaning
+    // "sign out everywhere" wouldn't cover a device left mid-impersonation.
+    const where: Prisma.SessionWhereInput = {
+      revokedAt: null,
+      OR: [{ userId: id }, { impersonatedByUserId: id }],
+    };
     const sessions = await this.prisma.session.findMany({
-      where: { userId: id, revokedAt: null },
+      where,
       select: { tokenHash: true },
     });
     // Drop cached session->user lookups immediately (best-effort).
@@ -685,7 +726,7 @@ export class AuthService {
       ]);
     }
     await this.prisma.session.updateMany({
-      where: { userId: id, revokedAt: null },
+      where,
       data: { revokedAt: new Date() },
     });
   }
@@ -740,15 +781,36 @@ export class AuthService {
     res.clearCookie(AUTH_COOKIE_NAME, { path: '/', domain });
   }
 
-  async createSessionForUser(userId: string, res: Response) {
+  async createSessionForUser(
+    userId: string,
+    res: Response,
+    opts?: {
+      /** Site admin id when this session is being minted for admin impersonation. */
+      impersonatedByUserId?: string | null;
+    },
+  ) {
     const token = randomSessionToken();
     const tokenHash = hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
 
+    const impersonatedByUserId = opts?.impersonatedByUserId ?? null;
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + SESSION_TTL_DAYS * 24 * 60 * 60_000);
+    // Impersonation sessions expire in an hour and are never renewed (see `_resolveSession`),
+    // so an admin who forgets to exit loses access on their own rather than holding a
+    // month-long key to someone else's account.
+    const expiresAt = new Date(
+      now.getTime() +
+        (impersonatedByUserId
+          ? IMPERSONATION_SESSION_TTL_MINUTES * 60_000
+          : SESSION_TTL_DAYS * 24 * 60 * 60_000),
+    );
 
     const session = await this.prisma.session.create({
-      data: { userId, tokenHash, expiresAt },
+      data: {
+        userId,
+        tokenHash,
+        expiresAt,
+        impersonatedByUserId,
+      },
     });
 
     this.setSessionCookie(token, expiresAt, res);

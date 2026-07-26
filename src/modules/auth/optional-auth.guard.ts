@@ -18,7 +18,10 @@ export class OptionalAuthGuard implements CanActivate {
         const res = context.switchToHttp().getResponse<Response>();
         this.auth.setSessionCookie(token, result.expiresAt, res);
       }
-      (req as AuthedRequest).user = { id: result.user.id };
+      (req as AuthedRequest).user = {
+        id: result.user.id,
+        impersonatedByUserId: result.impersonatedByUserId,
+      };
     } else {
       (req as AuthedRequest).user = undefined;
     }

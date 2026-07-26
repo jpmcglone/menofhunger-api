@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
 import { VerifiedGuard } from '../auth/verified.guard';
-import { CurrentUserId } from '../users/users.decorator';
+import { CurrentUserId, IsImpersonating } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { ALLOWED_REACTIONS } from '../../common/constants/reactions';
 import { MessagesService, type MessageMediaInput } from './messages.service';
@@ -261,7 +261,16 @@ export class MessagesController {
     },
   })
   @Post('conversations/:id/mark-read')
-  async markRead(@CurrentUserId() userId: string, @Param('id') id: string) {
+  async markRead(
+    @CurrentUserId() userId: string,
+    @IsImpersonating() isImpersonating: boolean,
+    @Param('id') id: string,
+  ) {
+    // Marking read stamps `lastReadAt` and emits `messages:read` to the other participant,
+    // so an admin opening someone's DMs would show the sender a read receipt that never
+    // happened. Only this passive signal is suppressed — sending a message or accepting a
+    // request still marks read, because those are deliberate actions the admin took.
+    if (isImpersonating) return { data: {} };
     await this.messages.markRead({ userId, conversationId: id });
     return { data: {} };
   }

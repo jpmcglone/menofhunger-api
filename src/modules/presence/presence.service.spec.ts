@@ -1,10 +1,12 @@
 import { PresenceService } from './presence.service';
 
+const stubDomainEvents = { emitUserStatusSet: jest.fn() } as any;
+
 describe('PresenceService user statuses', () => {
   function makeService(prismaUser: any) {
     return new PresenceService({ presenceIdleAfterMinutes: jest.fn(), presenceIdleDisconnectMinutes: jest.fn() } as any, {
       user: prismaUser,
-    } as any);
+    } as any, stubDomainEvents);
   }
 
   it('filters expired statuses from active status lookups', async () => {
@@ -101,6 +103,7 @@ describe('PresenceService.markSeenFromHttp', () => {
     const svc = new PresenceService(
       { presenceIdleAfterMinutes: jest.fn(), presenceIdleDisconnectMinutes: jest.fn() } as any,
       { user: prismaUser } as any,
+      stubDomainEvents,
     );
     return { svc, prismaUser };
   }

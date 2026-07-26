@@ -14,10 +14,16 @@ export type ConversationReadEvent = {
   conversationId: string;
 };
 
+export type UserStatusSetEvent = {
+  userId: string;
+  text: string;
+};
+
 @Injectable()
 export class DomainEventsService {
   private readonly messagePushRequested$ = new Subject<MessagePushRequestedEvent>();
   private readonly conversationRead$ = new Subject<ConversationReadEvent>();
+  private readonly userStatusSet$ = new Subject<UserStatusSetEvent>();
 
   emitMessagePushRequested(event: MessagePushRequestedEvent): void {
     this.messagePushRequested$.next(event);
@@ -33,6 +39,14 @@ export class DomainEventsService {
 
   onConversationRead(handler: (event: ConversationReadEvent) => void): Subscription {
     return this.conversationRead$.subscribe({ next: handler });
+  }
+
+  emitUserStatusSet(event: UserStatusSetEvent): void {
+    this.userStatusSet$.next(event);
+  }
+
+  onUserStatusSet(handler: (event: UserStatusSetEvent) => void): Subscription {
+    return this.userStatusSet$.subscribe({ next: handler });
   }
 }
 

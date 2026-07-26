@@ -21,6 +21,7 @@ export type PushActorContext = {
 const PUSH_COALESCE_MS: Partial<Record<string, number>> = {
   nudge: 15 * 60 * 1000,
   followed_post: 5 * 60 * 1000,
+  status_update: 5 * 60 * 1000,
   repost: 2 * 60 * 1000,
   message: 30 * 1000,
 };
@@ -82,6 +83,7 @@ export class NotificationPushService {
     if (kind === 'nudge') return Boolean(prefs.pushNudge);
     if (kind === 'followed_post') return Boolean(prefs.pushFollowedPost);
     if (kind === 'followed_article') return Boolean(prefs.pushFollowedPost);
+    if (kind === 'status_update') return Boolean(prefs.pushFollowedPost);
     if (kind === 'message') return Boolean(prefs.pushMessage);
     if (
       kind === 'community_group_member_joined' ||
@@ -209,6 +211,12 @@ export class NotificationPushService {
       return {
         title: `${actorName} shared a new post`,
         body: snippet ?? 'Open to read it.',
+      };
+    }
+    if (kind === 'status_update') {
+      return {
+        title: `${actorName} updated their status`,
+        body: snippet ?? 'Open their profile to see it.',
       };
     }
     if (kind === 'followed_article') {

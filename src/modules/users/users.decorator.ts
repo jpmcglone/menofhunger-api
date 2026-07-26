@@ -15,3 +15,13 @@ export const OptionalCurrentUserId = createParamDecorator((_data: unknown, ctx: 
   return req.user?.id;
 });
 
+/**
+ * True when a site admin is driving this session via impersonation ("log in as user").
+ * Use to suppress side effects that would forge activity on the impersonated account —
+ * presence, read receipts, push-device binding.
+ */
+export const IsImpersonating = createParamDecorator((_data: unknown, ctx: ExecutionContext) => {
+  const req = ctx.switchToHttp().getRequest<AuthedRequest>();
+  return Boolean(req.user?.impersonatedByUserId);
+});
+

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Post,
   Query,
@@ -16,7 +17,7 @@ import { ModuleRef } from '@nestjs/core';
 import { z } from 'zod';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { getSessionCookie } from '../../common/session-cookie';
-import { AuthService } from './auth.service';
+import { AuthService, type SessionResult } from './auth.service';
 import { AccountDeletionService } from './account-deletion.service';
 import { OTP_CODE_LENGTH } from './auth.constants';
 import { normalizePhone } from './auth.utils';
@@ -29,6 +30,7 @@ import type { AuthMeDto } from '../../common/dto/auth.dto';
 import type { BrowserHandoffDto } from '../../common/dto';
 import { AuthGuard, type AuthedRequest } from './auth.guard';
 import { BrowserHandoffService } from './browser-handoff.service';
+import { ImpersonationService } from './impersonation.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { totalUserArticlesWhere, totalUserPostsWhere } from '../../common/content-counts';
 
@@ -53,6 +55,19 @@ const browserHandoffRedeemSchema = z.object({
   code: z.string().min(1).max(256),
 });
 
+/**
+ * Irreversible account-level actions are refused while a site admin is impersonating.
+ * An admin debugging someone's account must never be able to delete it or sign them out
+ * of all their devices.
+ */
+function assertNotImpersonating(session: SessionResult | null, action: string): void {
+  if (!session?.impersonatedByUserId) return;
+  throw new ForbiddenException({
+    message: `You are signed in as another user. Exit impersonation before trying to ${action}.`,
+    error: 'impersonation_forbidden',
+  });
+}
+
 const verifySchema = z.object({
   phone: z.string().min(1),
   code: z
@@ -71,6 +86,7 @@ export class AuthController {
     private readonly accountDeletion: AccountDeletionService,
     private readonly moduleRef: ModuleRef,
     private readonly browserHandoff: BrowserHandoffService,
+    private readonly impersonation: ImpersonationService,
   ) {}
 
   @ApiOperation({ summary: 'Send 6-digit login code via SMS' })
@@ -227,6 +243,7 @@ export class AuthController {
       messageCountsRes,
       postCountRes,
       articleCountRes,
+      impersonationRes,
     ] = await Promise.allSettled([
       notifications?.getUndeliveredCount(user.id) ?? Promise.resolve(0),
       notifications?.getUnreadCommentCount(user.id) ?? Promise.resolve(0),
@@ -235,6 +252,7 @@ export class AuthController {
       messages?.getUnreadSummary(user.id) ?? Promise.resolve({ primary: 0, requests: 0 }),
       prisma?.post.count({ where: totalUserPostsWhere(user.id) }) ?? Promise.resolve(null),
       prisma?.article.count({ where: totalUserArticlesWhere(user.id) }) ?? Promise.resolve(null),
+      this.impersonation.describe(sessionResult.impersonatedByUserId),
     ]);
 
     const notificationUndeliveredCount =
@@ -277,6 +295,9 @@ export class AuthController {
         ? Math.max(0, Math.floor(articleCountRes.value))
         : null;
 
+    const impersonation =
+      impersonationRes.status === 'fulfilled' ? impersonationRes.value ?? null : null;
+
     return {
       data: {
         ...user,
@@ -287,8 +308,28 @@ export class AuthController {
         messageUnreadCounts,
         postCount,
         articleCount,
+        impersonation,
       },
     };
+  }
+
+  @ApiOperation({
+    summary: 'Stop admin impersonation and restore the admin’s own session',
+  })
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('authStart', 10),
+      ttl: rateLimitTtl('authStart', 60),
+    },
+  })
+  @Post('impersonate/stop')
+  async stopImpersonation(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const token = getSessionCookie(req);
+    // Deliberately no `disconnectUserSockets` here: that would also drop the real user's
+    // own devices. The client that started impersonation reconnects its own socket with
+    // the restored cookie (same contract as login).
+    const result = await this.impersonation.stop(token, res);
+    return { data: result };
   }
 
   @ApiOperation({ summary: 'Schedule account deletion with a 30-day grace period (self-service, App Store 5.1.1v)' })
@@ -304,6 +345,7 @@ export class AuthController {
     const sessionResult = await this.auth.meFromSessionToken(token);
     const userId = sessionResult?.user?.id;
     if (!userId) throw new UnauthorizedException('You must be signed in to delete your account.');
+    assertNotImpersonating(sessionResult, 'delete this account');
 
     const parsed = deleteAccountSchema.parse(body ?? {});
     const result = await this.accountDeletion.requestDeletion(userId, {
@@ -343,6 +385,7 @@ export class AuthController {
     const token = getSessionCookie(req);
     const sessionResult = await this.auth.meFromSessionToken(token);
     if (!sessionResult?.user?.id) throw new UnauthorizedException('You must be signed in.');
+    assertNotImpersonating(sessionResult, 'sign this account out everywhere');
 
     await this.auth.revokeAllSessionsForUser(sessionResult.user.id);
     this.auth.clearAuthCookie(res);

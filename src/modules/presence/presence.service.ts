@@ -3,6 +3,7 @@ import type { Server } from 'socket.io';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { UserStatusDto } from '../../common/dto';
+import { DomainEventsService } from '../events/domain-events.service';
 
 export type SocketMeta = { userId: string; client: string };
 
@@ -52,6 +53,7 @@ export class PresenceService {
   constructor(
     private readonly appConfig: AppConfigService,
     private readonly prisma: PrismaService,
+    private readonly domainEvents: DomainEventsService,
   ) {}
 
   /** Minutes of no activity before marking user idle. */
@@ -217,6 +219,7 @@ export class PresenceService {
         statusExpiresAt: true,
       },
     });
+    this.domainEvents.emitUserStatusSet({ userId: uid, text: cleanText });
     return this.toActiveStatusDto(user, now)!;
   }
 

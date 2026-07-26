@@ -518,3 +518,115 @@ describe('CommunityGroupReadAccessService', () => {
     ).resolves.toEqual(new Set());
   });
 });
+
+// ─── Connection lifecycle under admin impersonation ──────────────────────────
+
+describe('PresenceStatusHandler — impersonated connections', () => {
+  // Real timers would leave a 5-minute idle timer dangling per connect.
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  function makeConnectionFixture(impersonatedByUserId: string | null) {
+    const server = new FakeServer();
+    const presence = makePresence({
+      register: jest.fn().mockReturnValue({ isNewlyOnline: true }),
+      unregister: jest.fn().mockReturnValue({ userId: 'u1', isNowOffline: true }),
+      persistLastSeenAt: jest.fn(),
+      persistDailyActivity: jest.fn(),
+      persistLastOnlineAt: jest.fn(),
+      setLastActivity: jest.fn(),
+      isUserOnline: jest.fn().mockReturnValue(false),
+      isUserIdle: jest.fn().mockReturnValue(false),
+      getLastActivity: jest.fn().mockReturnValue(0),
+      presenceIdleAfterMinutes: jest.fn().mockReturnValue(5),
+      getActiveStatusByUserId: jest.fn().mockResolvedValue(null),
+    });
+    const presenceRedis = {
+      registerSocket: jest.fn().mockResolvedValue({ isNewlyOnline: true }),
+      unregisterSocket: jest.fn().mockResolvedValue({ isNowOffline: true }),
+      lastConnectAtMsByUserId: jest.fn().mockResolvedValue(new Map()),
+      idleByUserIds: jest.fn().mockResolvedValue(new Map()),
+      platformsByUserIds: jest.fn().mockResolvedValue(new Map()),
+    } as any;
+    const auth = {
+      meFromSessionToken: jest.fn().mockResolvedValue({
+        user: { id: 'u1', username: 'target', verifiedStatus: 'none' },
+        sessionId: 's1',
+        expiresAt: new Date(),
+        renewed: false,
+        impersonatedByUserId,
+      }),
+    } as any;
+    const handler = new PresenceStatusHandler(
+      { isProd: jest.fn().mockReturnValue(true), marvBot: jest.fn().mockReturnValue({ enabled: false }) } as any,
+      auth,
+      presence,
+      presenceRedis,
+      { getFollowListUsersByIds: jest.fn().mockResolvedValue([]) } as any,
+      { getJson: jest.fn().mockResolvedValue(null) } as any,
+      { getLobbyCountsBySpaceId: jest.fn().mockReturnValue({}) } as any,
+      {} as any,
+      new GatewayThrottleService(),
+      makeContext(presence, server),
+    );
+    const emitOnline = jest.spyOn(handler, 'emitOnline').mockResolvedValue(undefined);
+    const emitPlatformsChanged = jest.spyOn(handler, 'emitPlatformsChanged').mockResolvedValue(undefined);
+    const emitOffline = jest.spyOn(handler, 'emitOffline').mockResolvedValue(undefined);
+
+    const socket = new FakeSocket('s1');
+    (socket as any).handshake = { headers: { cookie: 'moh_session=tok' }, query: { client: 'web' } };
+
+    return { handler, presence, presenceRedis, socket, emitOnline, emitPlatformsChanged, emitOffline };
+  }
+
+  it('an ordinary connection persists activity and announces the user online', async () => {
+    const { handler, presence, socket, emitOnline } = makeConnectionFixture(null);
+
+    await handler.handleConnection(socket as any);
+
+    expect(presence.persistLastSeenAt).toHaveBeenCalledWith('u1');
+    expect(presence.persistDailyActivity).toHaveBeenCalledWith('u1');
+    expect(emitOnline).toHaveBeenCalledWith('u1');
+  });
+
+  it('an impersonated connection writes no activity and announces nothing', async () => {
+    const { handler, presence, socket, emitOnline, emitPlatformsChanged } =
+      makeConnectionFixture('admin-1');
+
+    await handler.handleConnection(socket as any);
+
+    // No durable writes: the target's lastSeenAt and daily-activity rows feed streaks
+    // and "recently around", so an admin looking at their account must not touch them.
+    expect(presence.persistLastSeenAt).not.toHaveBeenCalled();
+    expect(presence.persistDailyActivity).not.toHaveBeenCalled();
+    // No fan-out: followers must not see the target come online.
+    expect(emitOnline).not.toHaveBeenCalled();
+    expect(emitPlatformsChanged).not.toHaveBeenCalled();
+  });
+
+  it('still registers the impersonated socket so per-user events reach the admin', async () => {
+    const { handler, presence, presenceRedis, socket } = makeConnectionFixture('admin-1');
+
+    await handler.handleConnection(socket as any);
+
+    // `emitToUser` resolves sockets from this registry — without it the admin would see
+    // no live notifications or messages, defeating the point of impersonation.
+    expect(presence.register).toHaveBeenCalledWith('s1', 'u1', 'web');
+    expect(presenceRedis.registerSocket).toHaveBeenCalled();
+    expect((socket.data as { impersonated?: boolean }).impersonated).toBe(true);
+  });
+
+  it('an impersonated disconnect neither stamps lastOnlineAt nor announces offline', async () => {
+    const { handler, presence, presenceRedis, socket, emitOffline } = makeConnectionFixture('admin-1');
+    await handler.handleConnection(socket as any);
+
+    handler.handleDisconnect(socket as any);
+    // Let the floating unregisterSocket promise chain settle.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(presenceRedis.unregisterSocket).toHaveBeenCalled();
+    expect(presence.persistLastOnlineAt).not.toHaveBeenCalled();
+    expect(emitOffline).not.toHaveBeenCalled();
+  });
+});

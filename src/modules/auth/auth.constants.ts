@@ -10,3 +10,7 @@ export const SESSION_TTL_DAYS = 30;
 // this many days remain. Keeps active users permanently logged in.
 export const SESSION_RENEWAL_THRESHOLD_DAYS = 7;
 
+// Admin impersonation sessions are short-lived and never renewed, so a forgotten
+// "log in as user" cookie stops being a standing key to someone else's account.
+export const IMPERSONATION_SESSION_TTL_MINUTES = 60;
+

@@ -10,6 +10,7 @@ import { AuthCleanupCron } from './auth-cleanup.cron';
 import { AccountDeletionFinalizeCron } from './account-deletion-finalize.cron';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { BrowserHandoffService } from './browser-handoff.service';
+import { ImpersonationService } from './impersonation.service';
 
 @Module({
   imports: [RealtimeModule],
@@ -17,6 +18,7 @@ import { BrowserHandoffService } from './browser-handoff.service';
   providers: [
     AuthService,
     BrowserHandoffService,
+    ImpersonationService,
     AccountDeletionService,
     AuthGuard,
     TwilioVerifyOtpProvider,
@@ -26,6 +28,6 @@ import { BrowserHandoffService } from './browser-handoff.service';
     // Default OTP provider: Twilio Verify. AuthService can choose not to use it in dev.
     { provide: OTP_PROVIDER, useExisting: TwilioVerifyOtpProvider },
   ],
-  exports: [AuthService, AuthGuard, AuthCleanupCron, AccountDeletionFinalizeCron],
+  exports: [AuthService, AuthGuard, ImpersonationService, AuthCleanupCron, AccountDeletionFinalizeCron],
 })
 export class AuthModule {}

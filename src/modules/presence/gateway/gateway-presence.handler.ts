@@ -70,9 +70,15 @@ export class PresenceStatusHandler {
     const cookieHeader = client.handshake.headers.cookie as string | undefined;
     const token = parseSessionCookieFromHeader(cookieHeader);
     let user: any = null;
+    // True when a site admin is driving this socket via impersonation. Such a socket must
+    // still be registered (that's how `emitToUser` reaches it, so the admin sees live
+    // updates), but it must not write activity to the target's account or announce them
+    // as online — they are not actually here.
+    let impersonated = false;
     try {
       const result = await this.auth.meFromSessionToken(token);
       user = result?.user ?? null;
+      impersonated = Boolean(result?.impersonatedByUserId);
     } catch (err) {
       this.logger.warn(`[presence] Connection auth failed socket=${client.id}; continuing as anonymous: ${err}`);
     }
@@ -95,12 +101,15 @@ export class PresenceStatusHandler {
         client: String(clientType),
       });
       isNewlyOnline = Boolean(registration?.isNewlyOnline);
-      this.presence.persistLastSeenAt(userId);
-      this.presence.persistDailyActivity(userId);
+      if (!impersonated) {
+        this.presence.persistLastSeenAt(userId);
+        this.presence.persistDailyActivity(userId);
+      }
     }
 
     (client.data as { userId?: string; presenceClient?: string }).userId = userId ?? undefined;
     (client.data as { userId?: string; presenceClient?: string }).presenceClient = String(clientType);
+    (client.data as { impersonated?: boolean }).impersonated = impersonated;
     (client.data as any).viewer = {
       verified: Boolean(userId && user?.verifiedStatus && user.verifiedStatus !== 'none'),
       premium: Boolean(userId && user?.premium),
@@ -138,10 +147,12 @@ export class PresenceStatusHandler {
       }
     })();
 
-    if (userId && isNewlyOnline) {
-      await this.emitOnline(userId);
-    } else if (userId) {
-      await this.emitPlatformsChanged(userId);
+    if (userId && !impersonated) {
+      if (isNewlyOnline) {
+        await this.emitOnline(userId);
+      } else {
+        await this.emitPlatformsChanged(userId);
+      }
     }
     if (userId) {
       this.scheduleIdleMarkTimer(userId);
@@ -171,21 +182,26 @@ export class PresenceStatusHandler {
 
     const userId = String(result?.userId ?? '').trim();
     if (!userId) return;
+    // Mirror of the connect path: an impersonated socket never announced the user as
+    // online, so it must not announce them going offline or stamp `lastOnlineAt`.
+    const impersonated = Boolean((client.data as { impersonated?: boolean }).impersonated);
     const nonceAtDisconnect = this.userPresenceNonce.get(userId) ?? 0;
     this.throttle.clearTypingThrottleForUser(userId);
     void this.presenceRedis
       .unregisterSocket({ socketId, userId })
       .then(async (r) => {
         if (!r?.isNowOffline) {
-          await this.emitPlatformsChanged(userId);
+          if (!impersonated) await this.emitPlatformsChanged(userId);
           return;
         }
         const currentNonce = this.userPresenceNonce.get(userId) ?? 0;
         if (currentNonce !== nonceAtDisconnect && this.presence.isUserOnline(userId)) return;
         try {
           this.cancelUserTimers(userId);
-          this.presence.persistLastOnlineAt(userId);
-          await this.emitOffline(userId);
+          if (!impersonated) {
+            this.presence.persistLastOnlineAt(userId);
+            await this.emitOffline(userId);
+          }
         } catch {
           // best-effort
         }
