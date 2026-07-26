@@ -61,6 +61,8 @@ export const USER_DTO_SELECT = {
   name: true,
   bio: true,
   website: true,
+  xUsername: true,
+  pickaxUsername: true,
   locationInput: true,
   locationDisplay: true,
   locationZip: true,

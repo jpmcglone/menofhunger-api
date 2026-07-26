@@ -21,6 +21,7 @@ import { PublicProfilesService, type PublicProfilePayload } from './public-profi
 import { UsersMeRealtimeService } from './users-me-realtime.service';
 import { UsersPublicRealtimeService } from './users-public-realtime.service';
 import { canonicalizeTopicValue } from '../../common/topics/topic-utils';
+import { normalizeSocialHandle } from './social-handles';
 import { UsersLocationService, STATE_NAMES } from './users-location.service';
 import { EmailVerificationService } from '../email/email-verification.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
@@ -69,6 +70,9 @@ const profileSchema = z.object({
   email: z.union([z.string().trim().email(), z.literal('')]).optional(),
   interests: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
   website: z.union([z.string().trim().max(200), z.literal('')]).optional(),
+  // Generous max because we also accept pasted profile URLs; the real constraint is in normalizeSocialHandle.
+  xUsername: z.union([z.string().trim().max(200), z.literal('')]).optional(),
+  pickaxUsername: z.union([z.string().trim().max(200), z.literal('')]).optional(),
   locationQuery: z.union([z.string().trim().max(10), z.literal('')]).optional(),
 });
 
@@ -944,6 +948,16 @@ export class UsersController {
       if (parsed.website !== undefined) {
         const raw = (parsed.website ?? '').trim();
         update.website = raw ? normalizeWebsite(raw) : null;
+      }
+
+      if (parsed.xUsername !== undefined) {
+        const raw = (parsed.xUsername ?? '').trim();
+        update.xUsername = raw ? normalizeSocialHandle('x', raw) : null;
+      }
+
+      if (parsed.pickaxUsername !== undefined) {
+        const raw = (parsed.pickaxUsername ?? '').trim();
+        update.pickaxUsername = raw ? normalizeSocialHandle('pickax', raw) : null;
       }
 
       if (parsed.locationQuery !== undefined) {

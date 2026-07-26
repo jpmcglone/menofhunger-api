@@ -3402,6 +3402,28 @@ export class PostsFeedQueryService {
    * Integrator-safe lookup: only fully public, published, non-group posts.
    * A single 404 response deliberately hides whether a private/gated row exists.
    */
+  async getLatestPublic(): Promise<PostDto> {
+    const post = await this.prisma.post.findFirst({
+      where: {
+        deletedAt: null,
+        isDraft: false,
+        visibility: 'public',
+        communityGroupId: null,
+      },
+      orderBy: { createdAt: 'desc' },
+      include: feedPostInclude,
+    });
+    if (!post) throw new NotFoundException('Post not found.');
+
+    const [dto] = await this.composeFeedPostDtos({
+      viewerUserId: null,
+      filteredPosts: [post],
+      collapsedCountByItemId: new Map(),
+    });
+    if (!dto) throw new NotFoundException('Post not found.');
+    return dto;
+  }
+
   async getPublicById(id: string): Promise<PostDto> {
     const postId = (id ?? '').trim();
     if (!postId) throw new NotFoundException('Post not found.');

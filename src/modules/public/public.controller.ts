@@ -21,6 +21,25 @@ export class PublicController {
     },
   })
   @ApiOperation({
+    summary: 'Get the most recent public post',
+    description: 'No authentication required. Returns the newest published, non-group, public-visibility post.',
+  })
+  @ApiResponse({ status: 200, description: 'The post in the standard { data: PostDto } envelope.' })
+  @ApiResponse({ status: 404, description: 'No public posts exist yet.' })
+  @Get('posts/latest')
+  async getLatestPost(@Res({ passthrough: true }) res: Response) {
+    const post = await this.posts.getLatestPublic();
+    res.setHeader('Cache-Control', 'public, max-age=30, stale-while-revalidate=60');
+    return { data: post };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 600),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @ApiOperation({
     summary: 'Get a public post by ID',
     description:
       'No authentication required. Returns the standard PostDto only for published, non-group posts with public visibility; all other IDs return 404.',

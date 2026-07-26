@@ -133,6 +133,8 @@ export type UserDto = {
   name: string | null;
   bio: string | null;
   website: string | null;
+  xUsername: string | null;
+  pickaxUsername: string | null;
   locationInput: string | null;
   locationDisplay: string | null;
   locationZip: string | null;
@@ -247,6 +249,8 @@ export type UserDtoRow = {
   name: string | null;
   bio: string | null;
   website: string | null;
+  xUsername: string | null;
+  pickaxUsername: string | null;
   locationInput: string | null;
   locationDisplay: string | null;
   locationZip: string | null;
@@ -299,6 +303,8 @@ export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = 
     name: user.name,
     bio: user.bio,
     website: user.website ?? null,
+    xUsername: user.xUsername ?? null,
+    pickaxUsername: user.pickaxUsername ?? null,
     locationInput: user.locationInput ?? null,
     locationDisplay: user.locationDisplay ?? null,
     locationZip: user.locationZip ?? null,

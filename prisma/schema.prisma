@@ -268,6 +268,8 @@ model User {
   name                         String?
   bio                          String?
   website                      String?
+  xUsername                    String?
+  pickaxUsername               String?
   /**
    * Raw user-entered location query (zip/city/state text).
    */

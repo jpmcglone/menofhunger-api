@@ -23,7 +23,7 @@ export type FeedbackStatus = 'new' | 'triaged' | 'resolved'
 export type FollowVisibility = 'none' | 'all' | 'verified' | 'premium'
 export type MessageParticipantRole = 'owner' | 'member'
 export type MessageParticipantStatus = 'pending' | 'accepted'
-export type NotificationKind = 'comment' | 'boost' | 'repost' | 'follow' | 'followed_post' | 'followed_article' | 'mention' | 'nudge' | 'poll_results_ready' | 'generic' | 'coin_transfer' | 'message' | 'group_join_request' | 'community_group_member_joined' | 'community_group_join_approved' | 'community_group_join_rejected' | 'community_group_member_removed' | 'community_group_disbanded' | 'crew_invite_received' | 'crew_invite_accepted' | 'crew_invite_declined' | 'crew_invite_cancelled' | 'crew_member_joined' | 'crew_member_left' | 'crew_member_kicked' | 'crew_owner_transferred' | 'crew_owner_transfer_vote' | 'crew_wall_mention' | 'crew_disbanded' | 'community_group_invite_received' | 'community_group_invite_accepted' | 'community_group_invite_declined' | 'community_group_invite_cancelled' | 'community_group_post' | 'marv_not_in_group'
+export type NotificationKind = 'comment' | 'boost' | 'repost' | 'follow' | 'followed_post' | 'followed_article' | 'mention' | 'nudge' | 'poll_results_ready' | 'generic' | 'coin_transfer' | 'message' | 'group_join_request' | 'community_group_member_joined' | 'community_group_join_approved' | 'community_group_join_rejected' | 'community_group_member_removed' | 'community_group_disbanded' | 'crew_invite_received' | 'crew_invite_accepted' | 'crew_invite_declined' | 'crew_invite_cancelled' | 'crew_member_joined' | 'crew_member_left' | 'crew_member_kicked' | 'crew_owner_transferred' | 'crew_owner_transfer_vote' | 'crew_wall_mention' | 'crew_disbanded' | 'community_group_invite_received' | 'community_group_invite_accepted' | 'community_group_invite_declined' | 'community_group_invite_cancelled' | 'community_group_post' | 'marv_not_in_group' | 'status_update'
 export type PostMediaKind = 'image' | 'gif' | 'video'
 export type PostMediaSource = 'upload' | 'giphy'
 export type PostVisibility = 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe'
@@ -457,9 +457,23 @@ export type BrowserHandoffDto = {
   expiresAt: string;
 };
 
+/**
+ * Present on `GET /auth/me` when the current session was created by a site admin
+ * impersonating the signed-in user. Describes the admin really driving the session,
+ * so clients can show an exit affordance.
+ */
+export type ImpersonationDto = {
+  adminUserId: string;
+  adminUsername: string | null;
+  adminName: string | null;
+  adminAvatarUrl: string | null;
+};
+
 export type AuthMeDto = UserDto & {
   postCount: number | null;
   articleCount: number | null;
+  /** Non-null only while a site admin is impersonating this user. */
+  impersonation: ImpersonationDto | null;
   notificationUndeliveredCount: number;
   notificationUnreadCommentCount: number;
   groupsUnread: {
@@ -1458,6 +1472,8 @@ export type PublicProfileDto = {
   name: string | null;
   bio: string | null;
   website: string | null;
+  xUsername: string | null;
+  pickaxUsername: string | null;
   locationDisplay: string | null;
   locationZip: string | null;
   locationCity: string | null;
@@ -2132,6 +2148,8 @@ export type UserDto = {
   name: string | null;
   bio: string | null;
   website: string | null;
+  xUsername: string | null;
+  pickaxUsername: string | null;
   locationInput: string | null;
   locationDisplay: string | null;
   locationZip: string | null;
@@ -2424,6 +2442,8 @@ export type NotificationDto = {
   subjectGroupSlug: string | null;
   /** Display name of the subject group (only populated for group_join_request notifications). */
   subjectGroupName: string | null;
+  /** Avatar URL of the subject group (populated for marv_not_in_group and group_join_request). */
+  subjectGroupAvatarUrl: string | null;
   /** Crew this notification is about (set for any crew_* kind that has a real crew). */
   subjectCrewId: string | null;
   /**

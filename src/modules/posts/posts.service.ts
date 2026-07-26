@@ -155,6 +155,10 @@ export class PostsService {
     return this.feedQuery.getById(...args);
   }
 
+  getLatestPublic(...args: Parameters<PostsFeedQueryService['getLatestPublic']>) {
+    return this.feedQuery.getLatestPublic(...args);
+  }
+
   getPublicById(...args: Parameters<PostsFeedQueryService['getPublicById']>) {
     return this.feedQuery.getPublicById(...args);
   }

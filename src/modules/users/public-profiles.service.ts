@@ -13,6 +13,8 @@ export type PublicProfilePayload = {
   name: string | null;
   bio: string | null;
   website: string | null;
+  xUsername: string | null;
+  pickaxUsername: string | null;
   locationDisplay: string | null;
   locationZip: string | null;
   locationCity: string | null;
@@ -183,6 +185,8 @@ export class PublicProfilesService {
             name: string | null;
             bio: string | null;
             website: string | null;
+            xUsername: string | null;
+            pickaxUsername: string | null;
             locationDisplay: string | null;
             locationZip: string | null;
             locationCity: string | null;
@@ -208,7 +212,7 @@ export class PublicProfilesService {
             isBot: boolean;
           }>
         >`
-          SELECT "id", "createdAt", "username", "name", "bio", "website", "locationDisplay", "locationZip", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt", "bannedAt", "checkinStreakDays", "longestStreakDays", "isBot"
+          SELECT "id", "createdAt", "username", "name", "bio", "website", "xUsername", "pickaxUsername", "locationDisplay", "locationZip", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt", "bannedAt", "checkinStreakDays", "longestStreakDays", "isBot"
           FROM "User"
           WHERE (
             (${isUuidOrCuid} = true AND "id" = ${raw})
@@ -243,6 +247,8 @@ export class PublicProfilesService {
       name: user.name,
       bio: user.bio,
       website: user.website ?? null,
+      xUsername: user.xUsername ?? null,
+      pickaxUsername: user.pickaxUsername ?? null,
       locationDisplay: user.locationDisplay ?? null,
       locationZip: user.locationZip ?? null,
       locationCity: user.locationCity ?? null,

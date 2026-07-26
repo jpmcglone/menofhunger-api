@@ -22,6 +22,7 @@ import { toUserDto, type OrgAffiliationDto } from '../../common/dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { PrismaService } from '../prisma/prisma.service';
 import { validateUsername } from '../users/users.utils';
+import { normalizeSocialHandle } from '../users/social-handles';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 import { AdminGuard, type AdminRequest } from './admin.guard';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
@@ -57,6 +58,8 @@ const updateUserSchema = z.object({
   name: z.string().trim().max(50).nullable().optional(),
   bio: z.string().trim().max(160).nullable().optional(),
   website: z.union([z.string().trim().max(200), z.literal('')]).optional(),
+  xUsername: z.union([z.string().trim().max(200), z.literal('')]).optional(),
+  pickaxUsername: z.union([z.string().trim().max(200), z.literal('')]).optional(),
   locationQuery: z.union([z.string().trim().max(10), z.literal('')]).optional(),
   isOrganization: z.boolean().optional(),
   verifiedStatus: z.enum(['none', 'identity', 'manual']).optional(),
@@ -645,6 +648,16 @@ export class AdminUsersController {
           throw new BadRequestException('Website must be a valid URL.');
         }
       }
+    }
+
+    if (parsed.xUsername !== undefined) {
+      const raw = (parsed.xUsername ?? '').trim();
+      data.xUsername = raw ? normalizeSocialHandle('x', raw) : null;
+    }
+
+    if (parsed.pickaxUsername !== undefined) {
+      const raw = (parsed.pickaxUsername ?? '').trim();
+      data.pickaxUsername = raw ? normalizeSocialHandle('pickax', raw) : null;
     }
 
     if (parsed.locationQuery !== undefined) {
