@@ -8,6 +8,18 @@ export type NotificationUnreadByKind = Partial<Record<NotificationKind | 'all', 
 
 export const BELL_EXCLUDED_KINDS: NotificationKind[] = ['message', 'community_group_post'];
 
+/**
+ * Notification kinds that are counted in the bell badge but must never trigger
+ * nudge/instant emails. Daily content notifications are bell-counted so users
+ * can clear them, but they are not "missed social activity" that warrants an email.
+ */
+export const EMAIL_EXCLUDED_KINDS: NotificationKind[] = [
+  'message',
+  'community_group_post',
+  'word_of_the_day',
+  'quote_of_the_day',
+];
+
 export function isBellCountedNotificationKind(kind: NotificationKind): boolean {
   return !BELL_EXCLUDED_KINDS.includes(kind);
 }
@@ -286,6 +298,32 @@ export class NotificationReadStateService {
     void this.emitWaitingCountForUser(recipientUserId);
     // Viewing a post also marks any community_group_post badge row for that post as read.
     if (postId) void this.emitGroupsUnreadForUser(recipientUserId);
+  }
+
+  /**
+   * Mark all unread notifications of the given kind as read + delivered for the recipient.
+   * Used by daily-content pages (word / quote) to clear the badge when the user views them.
+   */
+  async markReadByKind(recipientUserId: string, kind: NotificationKind): Promise<void> {
+    const where = { recipientUserId, kind, readAt: null } as const;
+    const undeliveredCount = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      await tx.notification.updateMany({ where, data: { readAt: now } });
+      const deliveredWhere = { ...where, deliveredAt: null } as const;
+      const deliveredRes = await tx.notification.updateMany({
+        where: deliveredWhere,
+        data: { deliveredAt: now },
+      });
+      if (deliveredRes.count > 0) {
+        await tx.$executeRaw`
+          UPDATE "User"
+          SET "undeliveredNotificationCount" = GREATEST(0, "undeliveredNotificationCount" - ${deliveredRes.count})
+          WHERE id = ${recipientUserId}
+        `;
+      }
+      return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
+    });
+    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
   }
 
   /**

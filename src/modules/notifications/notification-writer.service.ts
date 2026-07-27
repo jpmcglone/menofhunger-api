@@ -1463,4 +1463,136 @@ export class NotificationWriterService {
       }
     }
   }
+
+  /**
+   * Fan-out word_of_the_day or quote_of_the_day notifications to all non-banned users.
+   * Cursor-paginated in chunks of 500. Persists fanoutCursor after each chunk so a
+   * mid-fan-out crash resumes without double-notifying (createMany skipDuplicates).
+   * Sets wordNotifiedAt / quoteNotifiedAt when the fan-out completes.
+   */
+  async fanOutDailyContentNotifications(params: {
+    item: 'word' | 'quote';
+    dayKey: string;
+  }): Promise<void> {
+    const { item, dayKey } = params;
+
+    const snap = await this.prisma.dailyContentSnapshot.findUnique({
+      where: { dayKey },
+      select: {
+        wordNotifiedAt: true,
+        quoteNotifiedAt: true,
+        wordFanoutCursor: true,
+        quoteFanoutCursor: true,
+        websters1828: true,
+        quote: true,
+      },
+    });
+
+    if (!snap) {
+      this.logger.warn(`[daily-content fan-out] No snapshot found for dayKey=${dayKey}`);
+      return;
+    }
+
+    const alreadyNotified = item === 'word' ? snap.wordNotifiedAt : snap.quoteNotifiedAt;
+    // A real timestamp (not the sentinel new Date(1)) means fan-out is done.
+    if (alreadyNotified && alreadyNotified.getTime() > 1) {
+      this.logger.debug(`[daily-content fan-out] ${item} already notified for ${dayKey}`);
+      return;
+    }
+
+    const kind: NotificationKind = item === 'word' ? 'word_of_the_day' : 'quote_of_the_day';
+    const url = item === 'word' ? '/daily/word' : '/daily/quote';
+
+    let title: string;
+    let body: string;
+    if (item === 'word') {
+      const wotd = snap.websters1828 as Record<string, unknown> | null;
+      const word = typeof wotd?.word === 'string' ? wotd.word : '';
+      title = 'Good morning';
+      body = word ? `Today\u2019s word: ${word}` : 'Check out today\u2019s word';
+    } else {
+      const q = snap.quote as Record<string, unknown> | null;
+      const author = typeof q?.author === 'string' ? q.author : '';
+      title = 'Quote of the day';
+      body = author ? `By ${author}` : 'Check out today\u2019s quote';
+    }
+
+    const CHUNK = 500;
+    let cursor: string | undefined =
+      (item === 'word' ? snap.wordFanoutCursor : snap.quoteFanoutCursor) ?? undefined;
+
+    while (true) {
+      const users = await this.prisma.user.findMany({
+        where: {
+          bannedAt: null,
+          ...(cursor ? { id: { gt: cursor } } : {}),
+        },
+        orderBy: { id: 'asc' },
+        take: CHUNK,
+        select: { id: true },
+      });
+
+      if (users.length === 0) break;
+
+      const userIds = users.map((u) => u.id);
+      const now = new Date();
+
+      await this.prisma.notification.createMany({
+        data: userIds.map((recipientUserId) => ({
+          recipientUserId,
+          kind,
+          title,
+          body,
+          createdAt: now,
+        })),
+        skipDuplicates: true,
+      });
+
+      // Increment undelivered bell counter for each recipient.
+      await this.prisma.$executeRaw`
+        UPDATE "User"
+        SET "undeliveredNotificationCount" = "undeliveredNotificationCount" + 1
+        WHERE id = ANY(${userIds}::text[])
+      `;
+
+      // Emit realtime badge update and push — best-effort, never block fan-out.
+      for (const userId of userIds) {
+        const undeliveredCount = await this.prisma.notification
+          .count({ where: this.readState.undeliveredBellWhere(userId) })
+          .catch(() => 0);
+        this.presenceRealtime.emitNotificationsUpdated(userId, { undeliveredCount });
+
+        void this.push.sendKindPushForActor({
+          recipientUserId: userId,
+          kind,
+          actorUserId: null,
+          fallbackTitle: title,
+          body,
+          url,
+          sourceLabel: kind,
+        });
+      }
+
+      // Persist cursor so a crash resumes from here.
+      cursor = userIds[userIds.length - 1];
+      await this.prisma.dailyContentSnapshot.update({
+        where: { dayKey },
+        data: item === 'word'
+          ? { wordFanoutCursor: cursor }
+          : { quoteFanoutCursor: cursor },
+      });
+
+      if (users.length < CHUNK) break;
+    }
+
+    // Mark fan-out complete.
+    await this.prisma.dailyContentSnapshot.update({
+      where: { dayKey },
+      data: item === 'word'
+        ? { wordNotifiedAt: new Date() }
+        : { quoteNotifiedAt: new Date() },
+    });
+
+    this.logger.log(`[daily-content fan-out] ${item} fan-out complete for ${dayKey}`);
+  }
 }

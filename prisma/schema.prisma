@@ -88,6 +88,8 @@ enum NotificationKind {
   community_group_post
   marv_not_in_group
   status_update
+  word_of_the_day
+  quote_of_the_day
 }
 
 enum CoinTransferKind {
@@ -567,12 +569,35 @@ model DailyContentSnapshot {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /**
+   * Quote of the day. Publishes at 09:30 ET.
+   */
   quote            Json?
   quoteRefreshedAt DateTime?
+  /**
+   * Set when the quote notification fan-out completes for this day.
+   * Null means the fan-out has not run or did not need to run.
+   */
+  quoteNotifiedAt  DateTime?
+  /**
+   * Cursor (last user id processed) for the resumable quote notification fan-out.
+   * Cleared when quoteNotifiedAt is set.
+   */
+  quoteFanoutCursor String?
 
+  /**
+   * Webster's 1828 word of the day. Publishes at 09:00 ET.
+   */
   websters1828            Json?
   websters1828RefreshedAt DateTime?
-  websters1828RecheckedAt DateTime?
+  /**
+   * Set when the word notification fan-out completes for this day.
+   */
+  wordNotifiedAt    DateTime?
+  /**
+   * Cursor (last user id processed) for the resumable word notification fan-out.
+   */
+  wordFanoutCursor  String?
 
   @@index([updatedAt])
 }
@@ -1885,9 +1910,12 @@ model NotificationPreferences {
    * Group activity: push for join, approve/reject, remove, disband events.
    */
   pushGroupActivity Boolean @default(true)
+  /**
+   * Daily word and quote of the day push notification (sent at 09:00 and 09:30 ET).
+   */
+  pushDailyContent  Boolean @default(true)
 
   // Email preferences (requires user.email).
-  emailDigestDaily       Boolean @default(true)
   emailDigestWeekly      Boolean @default(true)
   emailNewNotifications  Boolean @default(true)
   /**
@@ -1904,7 +1932,6 @@ model NotificationPreferences {
   emailFollowedArticle   Boolean @default(true)
 
   // Email send timestamps (rate limiting / dedupe).
-  lastEmailDigestDailySentAt       DateTime?
   lastEmailDigestWeeklySentAt      DateTime?
   lastEmailNewNotificationsSentAt  DateTime?
   lastEmailInstantHighSignalSentAt DateTime?
@@ -1914,7 +1941,6 @@ model NotificationPreferences {
 
   @@index([updatedAt])
   @@index([lastEmailNewNotificationsSentAt])
-  @@index([lastEmailDigestDailySentAt])
   @@index([lastEmailInstantHighSignalSentAt])
   @@index([lastEmailStreakReminderSentAt])
 }

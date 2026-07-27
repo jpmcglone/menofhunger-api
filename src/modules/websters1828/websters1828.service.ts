@@ -1,6 +1,6 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
-import { RedisKeys } from '../redis/redis-keys';
-import { CacheService } from '../redis/cache.service';
+import { Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { wordContentDayKey, nextPublishBoundaryUtcMs } from '../../common/time/eastern-day-key';
 
 export type Websters1828WordOfDay = {
   word: string;
@@ -14,9 +14,7 @@ export type Websters1828WordOfDay = {
   fetchedAt: string;
 };
 
-const ET_ZONE = 'America/New_York';
 const WEBSTERS_HEADERS = {
-  // Some pages appear to be sensitive to default Node fetch headers.
   'user-agent':
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
   accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -25,225 +23,194 @@ const WEBSTERS_HEADERS = {
 
 @Injectable()
 export class Websters1828Service {
-  constructor(private readonly cache: CacheService) {}
+  private readonly logger = new Logger(Websters1828Service.name);
 
-  // Simple in-memory cache (per API instance).
-  private memCache:
-    | {
-        value: Omit<Websters1828WordOfDay, 'definition' | 'definitionHtml'> & {
-          /** Undefined means “not fetched yet”. */
-          definition?: string | null;
-          /** Undefined means “not fetched yet”. */
-          definitionHtml?: string | null;
-          /** Parsed from the homepage WOTD block; used as a fallback. */
-          homepageDefinition?: string | null;
-          /** Parsed HTML from homepage WOTD block; used as a fallback. */
-          homepageDefinitionHtml?: string | null;
-        };
-        dayKey: string;
-        expiresAtMs: number;
-      }
-    | null = null;
+  constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Cache rolls over at midnight ET so it aligns with other daily content.
-   * Note: This is an in-memory cache (per API instance).
+   * Read the current word-of-the-day from the DailyContentSnapshot.
+   * Returns null if today's snapshot has not been published yet.
    */
-  async getWordOfDay(options?: { includeDefinition?: boolean; forceRefresh?: boolean }): Promise<Websters1828WordOfDay> {
-    const includeDefinition = options?.includeDefinition === true;
-    const forceRefresh = options?.forceRefresh === true;
-    const now = Date.now();
-    const dayKey = easternDateKey(new Date(now));
-    const expiresAtMs = nextEasternMidnightUtcMs(new Date(now));
-    const ttlSeconds = Math.max(1, Math.floor((expiresAtMs - now) / 1000));
-
-    if (!forceRefresh) {
-      // IMPORTANT:
-      // Keep `includeDefinition=0` and `includeDefinition=1` consistent by treating the "nodef" cache as authoritative base.
-      // This prevents the UI from ever mixing a cached word from one variant with a definition from the other.
-      const cachedNoDef = await this.cache.getJson<Websters1828WordOfDay>(RedisKeys.webstersWotd(dayKey, false));
-      if (!includeDefinition) {
-        if (cachedNoDef?.word && cachedNoDef.dictionaryUrl) return cachedNoDef;
-      } else {
-        const cachedDef = await this.cache.getJson<Websters1828WordOfDay>(RedisKeys.webstersWotd(dayKey, true));
-        if (cachedDef?.word && cachedDef.dictionaryUrl) {
-          // Heal/overwrite the nodef cache in the background so both stay aligned.
-          const healedNoDef: Websters1828WordOfDay = {
-            word: cachedDef.word,
-            dictionaryUrl: cachedDef.dictionaryUrl,
-            sourceUrl: cachedDef.sourceUrl,
-            fetchedAt: cachedDef.fetchedAt,
-            definition: null,
-            definitionHtml: null,
-          };
-          void this.cache.setJson(RedisKeys.webstersWotd(dayKey, false), healedNoDef, { ttlSeconds }).catch(() => undefined);
-          return cachedDef;
-        }
-        // If we have a base word cached but no definition yet, fetch definition for THAT word (no homepage re-parse).
-        if (cachedNoDef?.word && cachedNoDef.dictionaryUrl) {
-          const fetched = await this.fetchDefinitionBestEffort(cachedNoDef.dictionaryUrl).catch(() => null);
-          const defResult: Websters1828WordOfDay = {
-            word: cachedNoDef.word,
-            dictionaryUrl: cachedNoDef.dictionaryUrl,
-            sourceUrl: cachedNoDef.sourceUrl,
-            fetchedAt: cachedNoDef.fetchedAt,
-            definition: fetched?.text ?? null,
-            definitionHtml: fetched?.html ?? null,
-          };
-          // Cache both variants so they cannot drift.
-          void this.cache
-            .setJson(RedisKeys.webstersWotd(dayKey, true), defResult, { ttlSeconds })
-            .catch(() => undefined);
-          void this.cache
-            .setJson(RedisKeys.webstersWotd(dayKey, false), { ...defResult, definition: null, definitionHtml: null }, { ttlSeconds })
-            .catch(() => undefined);
-          return defResult;
-        }
-      }
+  async getWordOfDay(options?: { includeDefinition?: boolean }): Promise<Websters1828WordOfDay | null> {
+    const dayKey = wordContentDayKey(new Date());
+    const snap = await this.prisma.dailyContentSnapshot.findUnique({
+      where: { dayKey },
+      select: { websters1828: true },
+    });
+    const wotd = (snap?.websters1828 ?? null) as Websters1828WordOfDay | null;
+    if (!wotd) return null;
+    if (!options?.includeDefinition) {
+      return { ...wotd, definition: null, definitionHtml: null };
     }
-
-    if (forceRefresh) this.memCache = null;
-    if (!this.memCache || this.memCache.dayKey !== dayKey || this.memCache.expiresAtMs <= now) {
-      const next = await this.fetchWordOfDayBase();
-      this.memCache = { value: next, dayKey, expiresAtMs };
-    }
-
-    if (includeDefinition) {
-      // Populate definition lazily when requested.
-      if (this.memCache.value.definition === undefined || this.memCache.value.definitionHtml === undefined) {
-        if (this.memCache.value.homepageDefinition || this.memCache.value.homepageDefinitionHtml) {
-          this.memCache.value.definition = this.memCache.value.homepageDefinition ?? null;
-          this.memCache.value.definitionHtml = this.memCache.value.homepageDefinitionHtml ?? null;
-        } else {
-          const fetched = await this.fetchDefinitionBestEffort(this.memCache.value.dictionaryUrl).catch(() => null);
-          this.memCache.value.definition = fetched?.text ?? null;
-          this.memCache.value.definitionHtml = fetched?.html ?? null;
-        }
-      } else if (!this.memCache.value.definition && !this.memCache.value.definitionHtml) {
-        // Heal parse/network misses on subsequent requests the same day.
-        const fetched = await this.fetchDefinitionBestEffort(this.memCache.value.dictionaryUrl).catch(() => null);
-        if (fetched) {
-          this.memCache.value.definition = fetched.text;
-          this.memCache.value.definitionHtml = fetched.html;
-        }
-      }
-    }
-
-    const result: Websters1828WordOfDay = {
-      word: this.memCache.value.word,
-      dictionaryUrl: this.memCache.value.dictionaryUrl,
-      sourceUrl: this.memCache.value.sourceUrl,
-      fetchedAt: this.memCache.value.fetchedAt,
-      definition: includeDefinition ? (this.memCache.value.definition ?? null) : null,
-      definitionHtml: includeDefinition ? (this.memCache.value.definitionHtml ?? null) : null,
-    };
-
-    // Always write the "nodef" cache so it stays aligned with the definition-bearing variant.
-    const noDefResult: Websters1828WordOfDay = {
-      word: result.word,
-      dictionaryUrl: result.dictionaryUrl,
-      sourceUrl: result.sourceUrl,
-      fetchedAt: result.fetchedAt,
-      definition: null,
-      definitionHtml: null,
-    };
-    void this.cache.setJson(RedisKeys.webstersWotd(dayKey, false), noDefResult, { ttlSeconds }).catch(() => undefined);
-    if (includeDefinition) {
-      void this.cache.setJson(RedisKeys.webstersWotd(dayKey, true), result, { ttlSeconds }).catch(() => undefined);
-      return result;
-    }
-    return noDefResult;
+    return wotd;
   }
 
-  /** Cache-Control max-age in seconds (until next midnight ET). */
-  getCacheControlMaxAgeSeconds(now: Date = new Date()): number {
-    const expiresAtMs = nextEasternMidnightUtcMs(now);
-    const secondsUntilMidnight = Math.max(0, Math.floor((expiresAtMs - now.getTime()) / 1000));
-    // Webster's WOTD page can be flaky around midnight; we recheck daily content at 8am ET.
-    // Keep caches short in the early morning so the word can "heal" without users being stuck until midnight.
-    const et = easternYmdHms(now);
-    if (et.hh < 9) return Math.min(300, secondsUntilMidnight);
-    return secondsUntilMidnight;
-  }
+  /**
+   * Scrape webstersdictionary1828.com and return the current word of the day.
+   * Uses the dictionary page as the canonical definition source; homepage block is fallback.
+   * Throws if the fetch fails.
+   */
+  async fetchWordOfDay(): Promise<Websters1828WordOfDay> {
+    const homepageUrl = 'https://webstersdictionary1828.com/';
+    const html = await fetchWithTimeout(homepageUrl, 10_000);
 
-  private async fetchWordOfDayBase(): Promise<
-    Omit<Websters1828WordOfDay, 'definition' | 'definitionHtml'> & {
-      homepageDefinition: string | null;
-      homepageDefinitionHtml: string | null;
-    }
-  > {
-    const url = 'https://webstersdictionary1828.com/';
-    let html: string;
-    try {
-      const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), 10_000);
-      try {
-        const res = await fetch(url, { signal: controller.signal, headers: WEBSTERS_HEADERS });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        html = await res.text();
-      } finally {
-        clearTimeout(t);
-      }
-    } catch {
-      throw new ServiceUnavailableException('Word of the day is temporarily unavailable.');
-    }
+    // Depth-counting extraction of the WordOfTheDay block.
+    const blockHtml = extractWordOfTheDayBlock(html);
+    let word = extractWordFromBlock(blockHtml);
 
-    // Primary parse: <div id="WordOfTheDay" ...><h3>Word</h3>...</div>
-    const blockHtml = extractWordOfTheDayBlockHtml(html);
-    let word = extractWordFromWotdBlock(blockHtml);
-
-    // Fallback: older/alternate markup.
     if (!word) {
-      const m = html.match(/Word of the Day[\s\S]*?###\s+([^\n\r#]+)/i);
-      word = (m?.[1] ?? '').trim();
+      this.logger.warn('[websters1828] Could not extract word from WOTD block');
+      throw new Error('Word of the day is temporarily unavailable.');
     }
 
     word = decodeBasicEntities(word);
-    if (!word) throw new ServiceUnavailableException('Word of the day is temporarily unavailable.');
+    if (!word) throw new Error('Word of the day is temporarily unavailable.');
 
     const dictionaryUrl = `https://webstersdictionary1828.com/Dictionary/${encodeURIComponent(word)}`;
-    const homepageDefinition = extractDefinitionFromWotdBlock(blockHtml);
+
+    // Dictionary page is the canonical definition source.
+    let definition: string | null = null;
+    let definitionHtml: string | null = null;
+    try {
+      const dictHtml = await fetchWithTimeout(dictionaryUrl, 10_000);
+      const defResult = extractDictionaryDefinition(dictHtml);
+      definition = defResult?.text ?? null;
+      definitionHtml = defResult?.html ?? null;
+    } catch (err) {
+      this.logger.warn(`[websters1828] Dictionary page fetch failed for "${word}": ${String(err)}`);
+      // Fall back to homepage block definition.
+      const blockDef = extractDefinitionFromBlock(blockHtml);
+      definition = blockDef?.text ?? null;
+      definitionHtml = blockDef?.html ?? null;
+    }
 
     return {
       word,
       dictionaryUrl,
       sourceUrl: dictionaryUrl,
-      homepageDefinition: homepageDefinition.text,
-      homepageDefinitionHtml: homepageDefinition.html,
+      definition,
+      definitionHtml,
       fetchedAt: new Date().toISOString(),
     };
   }
 
-  private async fetchDefinitionBestEffort(dictionaryUrl: string): Promise<{ text: string; html: string } | null> {
-    const url = (dictionaryUrl ?? '').trim();
-    if (!url) return null;
-    let html: string;
-    try {
-      const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), 10_000);
-      try {
-        const res = await fetch(url, { signal: controller.signal, headers: WEBSTERS_HEADERS });
-        if (!res.ok) return null;
-        html = await res.text();
-      } finally {
-        clearTimeout(t);
-      }
-    } catch {
-      return null;
-    }
-
-    const defHtml = extractDefinitionHtml(html);
-    if (!defHtml) return null;
-    const text = htmlToText(defHtml);
-    const cleanText = text.trim();
-    if (!cleanText) return null;
-    const safeHtml = sanitizeDefinitionHtml(defHtml);
-    return {
-      text: cleanText,
-      html: safeHtml || `<p>${escapeHtml(cleanText)}</p>`,
-    };
+  /** Cache-Control max-age in seconds (until the next publish boundary). */
+  getCacheControlMaxAgeSeconds(now: Date = new Date()): number {
+    const nextBoundary = nextPublishBoundaryUtcMs(now);
+    return Math.max(60, Math.floor((nextBoundary - now.getTime()) / 1000));
   }
 }
+
+// ---------------------------------------------------------------------------
+// Scraping helpers
+// ---------------------------------------------------------------------------
+
+async function fetchWithTimeout(url: string, timeoutMs: number): Promise<string> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal, headers: WEBSTERS_HEADERS });
+    if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
+    return await res.text();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * Extract the HTML content of the `<div id="WordOfTheDay">` block using
+ * a depth-counting scan (div-open / div-close balance) to find the exact
+ * closing tag instead of relying on a regex that can over-capture.
+ */
+function extractWordOfTheDayBlock(html: string): string {
+  const tagRe = /<(\/?)div\b/gi;
+
+  // Find the opening <div id="WordOfTheDay"...>.
+  const startMatch = html.match(/<div[^>]+id=["']WordOfTheDay["'][^>]*>/i);
+  if (!startMatch?.index) return '';
+
+  const openTagEnd = startMatch.index + startMatch[0].length;
+  let depth = 1;
+  tagRe.lastIndex = openTagEnd;
+
+  let endIndex = -1;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(html)) !== null) {
+    if (m[1] === '/') {
+      depth--;
+      if (depth === 0) {
+        // Find the end of the closing </div> tag.
+        const closeTagEnd = html.indexOf('>', m.index + m[0].length);
+        endIndex = closeTagEnd === -1 ? m.index + m[0].length : closeTagEnd + 1;
+        break;
+      }
+    } else {
+      depth++;
+    }
+  }
+
+  if (endIndex === -1) return html.slice(openTagEnd);
+  return html.slice(openTagEnd, endIndex);
+}
+
+function extractWordFromBlock(blockHtml: string): string {
+  const h3Inner = blockHtml.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i)?.[1] ?? '';
+  return htmlToText(h3Inner).trim();
+}
+
+/**
+ * Extract a definition from the homepage WOTD block (fallback when the
+ * dictionary page is unavailable). Strips "First Occurrence in the Bible" trailer.
+ */
+function extractDefinitionFromBlock(blockHtml: string): { text: string; html: string } | null {
+  if (!blockHtml) return null;
+  // Everything after the closing </h3>.
+  const afterHeading = blockHtml.replace(/^[\s\S]*?<\/h3>/i, '');
+  if (!afterHeading || afterHeading === blockHtml) return null;
+  const cleaned = stripBibleOccurrence(afterHeading);
+  const text = htmlToText(cleaned).trim();
+  if (!text) return null;
+  const safeHtml = sanitizeDefinitionHtml(cleaned);
+  return { text, html: safeHtml || `<p>${escapeHtml(text)}</p>` };
+}
+
+/**
+ * Extract the definition from a full dictionary page.
+ * Tries multiple selector patterns in priority order.
+ */
+function extractDictionaryDefinition(pageHtml: string): { text: string; html: string } | null {
+  // Pattern 1: primary column — content between the dictionaryhead and the adjacent mobile column.
+  const m1 = pageHtml.match(
+    /<h3[^>]*class=["']dictionaryhead["'][^>]*>[\s\S]*?<\/h3>[\s\S]*?<div>([\s\S]*?)<\/div>\s*<div[^>]*class=["']d-md-none["']/i,
+  );
+  if (m1?.[1]) {
+    const cleaned = stripBibleOccurrence(m1[1]);
+    const text = htmlToText(cleaned).trim();
+    if (text) return { text, html: sanitizeDefinitionHtml(cleaned) || `<p>${escapeHtml(text)}</p>` };
+  }
+
+  // Pattern 2: fallback — grab the content column before the sidebar.
+  const m2 = pageHtml.match(
+    /<h3[^>]*class=["']dictionaryhead["'][^>]*>[\s\S]*?<\/h3>[\s\S]*?<div>([\s\S]*?)<\/div>\s*<\/div>\s*<div[^>]*class=["']col-md-3/i,
+  );
+  if (m2?.[1]) {
+    const cleaned = stripBibleOccurrence(m2[1]);
+    const text = htmlToText(cleaned).trim();
+    if (text) return { text, html: sanitizeDefinitionHtml(cleaned) || `<p>${escapeHtml(text)}</p>` };
+  }
+
+  return null;
+}
+
+/** Strip "First Occurrence in the Bible" section and anything after it. */
+function stripBibleOccurrence(html: string): string {
+  // Remove everything from "First Occurrence in the Bible" onward (case-insensitive).
+  return html.replace(/first\s+occurrence\s+in\s+the\s+bible[\s\S]*/gi, '').trim();
+}
+
+// ---------------------------------------------------------------------------
+// Text utilities
+// ---------------------------------------------------------------------------
 
 function decodeBasicEntities(s: string): string {
   return (s ?? '')
@@ -256,72 +223,17 @@ function decodeBasicEntities(s: string): string {
     .trim();
 }
 
-function extractDefinitionHtml(pageHtml: string): string | null {
-  const html = String(pageHtml ?? '');
-
-  // Common page shape includes:
-  // <h3 class="dictionaryhead">Word</h3> ... <div>...definition...</div> <div class="d-md-none">...
-  const m1 = html.match(
-    /<h3[^>]*class=["']dictionaryhead["'][^>]*>[\s\S]*?<\/h3>[\s\S]*?<div>([\s\S]*?)<\/div>\s*<div[^>]*class=["']d-md-none["']/i,
-  );
-  if (m1?.[1]) return m1[1];
-
-  // Fallback: grab the first <div> after the dictionaryhead, bounded by the next column or footer.
-  const m2 = html.match(
-    /<h3[^>]*class=["']dictionaryhead["'][^>]*>[\s\S]*?<\/h3>[\s\S]*?<div>([\s\S]*?)<\/div>\s*<\/div>\s*<div[^>]*class=["']col-md-3/i,
-  );
-  if (m2?.[1]) return m2[1];
-
-  return null;
-}
-
-function extractWordOfTheDayBlockHtml(homepageHtml: string): string {
-  const html = String(homepageHtml ?? '');
-  const block = html.match(/<div[^>]+id=["']WordOfTheDay["'][^>]*>([\s\S]*?)<\/div>\s*<\/div>/i)?.[1];
-  return block ?? '';
-}
-
-function extractWordFromWotdBlock(blockHtml: string): string {
-  const html = String(blockHtml ?? '');
-  const h3Inner = html.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i)?.[1] ?? '';
-  const cleaned = htmlToText(h3Inner);
-  return cleaned.trim();
-}
-
-function extractDefinitionFromWotdBlock(blockHtml: string): { text: string | null; html: string | null } {
-  const html = String(blockHtml ?? '');
-  if (!html) return { text: null, html: null };
-  const afterHeading = html.replace(/^[\s\S]*?<\/h3>/i, '');
-  if (!afterHeading || afterHeading === html) return { text: null, html: null };
-  const text = htmlToText(afterHeading);
-  const cleanText = text.trim();
-  if (!cleanText) return { text: null, html: null };
-  const safeHtml = sanitizeDefinitionHtml(afterHeading);
-  return {
-    text: cleanText,
-    html: safeHtml || `<p>${escapeHtml(cleanText)}</p>`,
-  };
-}
-
 function htmlToText(fragmentHtml: string): string {
   let s = String(fragmentHtml ?? '');
 
-  // Remove scripts/styles just in case.
   s = s.replace(/<script[\s\S]*?<\/script>/gi, '');
   s = s.replace(/<style[\s\S]*?<\/style>/gi, '');
 
-  // Line breaks / paragraphing.
   s = s.replace(/<\s*br\s*\/?>/gi, '\n');
   s = s.replace(/<\/p\s*>/gi, '\n\n');
   s = s.replace(/<p[^>]*>/gi, '');
-
-  // Strip remaining tags.
   s = s.replace(/<[^>]+>/g, '');
-
-  // Decode basic entities.
   s = decodeBasicEntities(s);
-
-  // Normalize whitespace.
   s = s.replace(/\r\n/g, '\n');
   s = s.replace(/[ \t]+\n/g, '\n');
   s = s.replace(/\n{3,}/g, '\n\n');
@@ -332,25 +244,19 @@ function sanitizeDefinitionHtml(fragmentHtml: string): string {
   let s = String(fragmentHtml ?? '');
   if (!s.trim()) return '';
 
-  // Strip active content and comments.
   s = s.replace(/<script[\s\S]*?<\/script>/gi, '');
   s = s.replace(/<style[\s\S]*?<\/style>/gi, '');
   s = s.replace(/<!--[\s\S]*?-->/g, '');
 
-  // Normalize common block wrappers to paragraphs.
   s = s.replace(/<\s*(div|section|article|header|footer|ul|ol)\b[^>]*>/gi, '<p>');
   s = s.replace(/<\s*\/\s*(div|section|article|header|footer|ul|ol)\s*>/gi, '</p>');
   s = s.replace(/<\s*li\b[^>]*>/gi, '<p>');
   s = s.replace(/<\s*\/\s*li\s*>/gi, '</p>');
 
-  // Keep only a minimal, safe subset used by the source styling.
   s = s.replace(/<(?!\/?(?:p|br|strong|b|em|i)\b)[^>]*>/gi, '');
-
-  // Remove all attributes from allowed tags.
   s = s.replace(/<(p|strong|b|em|i)\b[^>]*>/gi, '<$1>');
   s = s.replace(/<br\b[^>]*\/?>/gi, '<br />');
 
-  // Tighten spacing.
   s = s.replace(/\s*\n+\s*/g, ' ');
   s = s.replace(/<p>\s*<\/p>/gi, '');
   s = s.replace(/(?:\s*<br \/>\s*){3,}/gi, '<br /><br />');
@@ -368,64 +274,3 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function easternDateKey(d: Date): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: ET_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(d);
-  const year = parts.find((p) => p.type === 'year')?.value ?? '0000';
-  const month = parts.find((p) => p.type === 'month')?.value ?? '01';
-  const day = parts.find((p) => p.type === 'day')?.value ?? '01';
-  return `${year}-${month}-${day}`;
-}function easternYmd(d: Date): { y: number; m: number; d: number } {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: ET_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(d);
-  const y = Number(parts.find((p) => p.type === 'year')?.value ?? 0);
-  const m = Number(parts.find((p) => p.type === 'month')?.value ?? 1);
-  const dd = Number(parts.find((p) => p.type === 'day')?.value ?? 1);
-  return { y, m, d: dd };
-}
-
-function easternYmdHms(d: Date): { y: number; m: number; d: number; hh: number; mm: number; ss: number } {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: ET_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).formatToParts(d);
-  const y = Number(parts.find((p) => p.type === 'year')?.value ?? 0);
-  const m = Number(parts.find((p) => p.type === 'month')?.value ?? 1);
-  const dd = Number(parts.find((p) => p.type === 'day')?.value ?? 1);
-  const hh = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
-  const mm = Number(parts.find((p) => p.type === 'minute')?.value ?? 0);
-  const ss = Number(parts.find((p) => p.type === 'second')?.value ?? 0);
-  return { y, m, d: dd, hh, mm, ss };
-}
-
-/**
- * UTC timestamp for the next midnight in Eastern Time.
- *
- * We avoid extra deps by searching a small UTC hour window (ET is UTC-4/UTC-5).
- */
-function nextEasternMidnightUtcMs(now: Date): number {
-  const tomorrowEt = easternYmd(new Date(now.getTime() + 36 * 60 * 60 * 1000));
-  for (let utcHour = 0; utcHour <= 12; utcHour++) {
-    const cand = new Date(Date.UTC(tomorrowEt.y, tomorrowEt.m - 1, tomorrowEt.d, utcHour, 0, 0));
-    const p = easternYmdHms(cand);
-    if (p.y === tomorrowEt.y && p.m === tomorrowEt.m && p.d === tomorrowEt.d && p.hh === 0 && p.mm === 0) {
-      return cand.getTime();
-    }
-  }
-  // Fallback: ~24h from now (should never happen).
-  return now.getTime() + 24 * 60 * 60 * 1000;
-}

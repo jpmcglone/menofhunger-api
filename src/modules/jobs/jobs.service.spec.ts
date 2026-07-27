@@ -35,11 +35,11 @@ describe('JobsService.enqueueCron — jobId validation', () => {
 
   it('accepts a 3-part colon ID (date-keyed crons)', async () => {
     const { svc, add } = makeService();
-    await svc.enqueueCron('notifications.dailyDigest' as any, {}, 'cron:notificationsDailyDigest:2026-02-26');
+    await svc.enqueueCron('dailyContent.publishWord' as any, {}, 'cron:dailyContentPublishWord:2026-02-26');
     expect(add).toHaveBeenCalledWith(
-      'notifications.dailyDigest',
+      'dailyContent.publishWord',
       {},
-      expect.objectContaining({ jobId: 'cron:notificationsDailyDigest:2026-02-26' }),
+      expect.objectContaining({ jobId: 'cron:dailyContentPublishWord:2026-02-26' }),
     );
   });
 
@@ -76,7 +76,8 @@ describe('Cron job ID registry — no invalid colons', () => {
     'cron-hashtagsTrendingScoreRefresh',
     'cron-postsTopicsBackfill',
     'cron-postsPollResultsReadySweep',
-    'cron-dailyContentRefresh',
+    // daily content publish jobs use dynamic IDs: cron:dailyContentPublish:{item}:{dayKey}
+    // (not static; tested via cron integration tests)
     'cron-authCleanup',
     'cron-linkMetadataBackfill',
     'cron-searchCleanup',

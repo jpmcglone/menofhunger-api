@@ -37,12 +37,11 @@ function makeCron(overrides?: {
   } as any;
 
   const jobs = { enqueueCron: jest.fn(async () => undefined) } as any;
-  const dailyContent = {} as any;
   const messages = { getUnreadSummary: jest.fn(async () => ({ primary: 0, requests: 0 })) } as any;
   const slack = { post: jest.fn() } as any;
   const notifications = {} as any;
 
-  return new NotificationsEmailCron(prisma, email, appConfig, jobs, dailyContent, messages, slack, notifications);
+  return new NotificationsEmailCron(prisma, email, appConfig, jobs, messages, slack, notifications);
 }
 
 // Access private methods for focused unit tests.

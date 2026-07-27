@@ -6,7 +6,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { EmailService } from '../email/email.service';
 import { escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
-import { DailyContentService } from '../daily-content/daily-content.service';
 import { buildFollowedArticleEmail } from '../email/email-content-article';
 
 function safeBaseUrl(raw: string | null): string {
@@ -15,7 +14,7 @@ function safeBaseUrl(raw: string | null): string {
 }
 
 const schema = z.object({
-  type: z.enum(['daily_digest', 'weekly_digest', 'new_notifications', 'instant_high_signal', 'streak_reminder', 'followed_article']),
+  type: z.enum(['weekly_digest', 'new_notifications', 'instant_high_signal', 'streak_reminder', 'followed_article']),
 });
 
 type SampleType = z.infer<typeof schema>['type'];
@@ -27,7 +26,6 @@ export class AdminEmailSamplesController {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly email: EmailService,
-    private readonly dailyContent: DailyContentService,
   ) {}
 
   @Post('send')
@@ -71,132 +69,11 @@ export class AdminEmailSamplesController {
     type: SampleType,
     ctx: { baseUrl: string; greeting: string },
   ): Promise<{ subject: string; text: string; html: string }> {
-    if (type === 'daily_digest') return await this.renderDailyDigestSample(ctx);
     if (type === 'weekly_digest') return this.renderWeeklyDigestSample(ctx);
     if (type === 'new_notifications') return this.renderNewNotificationsSample(ctx);
     if (type === 'instant_high_signal') return this.renderInstantHighSignalSample(ctx);
     if (type === 'followed_article') return this.renderFollowedArticleSample(ctx);
     return this.renderStreakReminderSample(ctx);
-  }
-
-  private async renderDailyDigestSample(ctx: { baseUrl: string; greeting: string }) {
-    const notificationsUrl = `${ctx.baseUrl}/notifications`;
-    const messagesUrl = `${ctx.baseUrl}/chat`;
-    const settingsUrl = `${ctx.baseUrl}/settings/notifications`;
-    const homeUrl = `${ctx.baseUrl}/home`;
-    const sampleArticles = [
-      { id: 'sample-article-1', title: 'A quiet hour before sunrise', username: 'john_doe' },
-      { id: 'sample-article-2', title: 'Why disciplined men need community', username: 'mike_ross' },
-      { id: 'sample-article-3', title: 'A weekly reset that actually works', username: 'david_c' },
-    ];
-
-    const snap = await this.dailyContent.getToday().catch(() => null);
-    const quoteText = (snap?.quote?.text ?? '').trim();
-    const quoteAttr = snap?.quote
-      ? snap.quote.kind === 'scripture'
-        ? [snap.quote.reference, snap.quote.tradition].filter(Boolean).join(' · ')
-        : (snap.quote.author ?? '').trim()
-      : '';
-    const w = snap?.websters1828 ?? null;
-    const word = (w?.word ?? '').trim();
-    const definition = (w?.definition ?? '').trim();
-    const dictionaryUrl = (w?.dictionaryUrl ?? '').trim();
-
-    const subject = 'Sample — Daily digest';
-    const text = [
-      `${ctx.greeting}`,
-      '',
-      'This is a sample of the Daily digest email.',
-      '',
-      `Notifications: ${notificationsUrl}`,
-      `Messages: ${messagesUrl}`,
-      '',
-      'Definition of the day',
-      word ? word : '(unavailable)',
-      definition ? definition : '',
-      dictionaryUrl ? `Source: ${dictionaryUrl}` : '',
-      '',
-      'Quote of the day',
-      quoteText ? `“${quoteText}”` : '(unavailable)',
-      quoteAttr ? `— ${quoteAttr}` : '',
-      '',
-      'Top articles today',
-      ...sampleArticles.map((a, idx) => `${idx + 1}. ${a.title} — @${a.username} (${ctx.baseUrl}/a/${a.id})`),
-      '',
-      `Open: ${homeUrl}`,
-      '',
-      `Manage notification settings: ${settingsUrl}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
-
-    const definitionBlock = word && definition
-      ? renderCard(
-          [
-            `<div style="margin-bottom:10px;">${renderPill('Definition of the day', 'neutral')}</div>`,
-            `<div style="font-size:14px;line-height:1.8;color:#111827;"><strong style="letter-spacing:0.06em;">${escapeHtml(
-              word.toUpperCase(),
-            )}</strong> — ${escapeHtml(definition).replace(/\n/g, '<br/>')}</div>`,
-            dictionaryUrl
-              ? `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">Source: <a href="${escapeHtml(
-                  dictionaryUrl,
-                )}" style="color:#111827;text-decoration:underline;">Webster’s 1828</a></div>`
-              : ``,
-          ].join(''),
-        )
-      : renderCard(`<div>${renderPill('Definition of the day', 'neutral')}</div><div style="margin-top:10px;color:#6b7280;">(unavailable)</div>`);
-
-    const quoteBlock = quoteText
-      ? renderCard(
-          [
-            `<div style="margin-bottom:10px;">${renderPill('Quote of the day', 'info')}</div>`,
-            `<div style="font-size:16px;line-height:1.7;color:#111827;">“${escapeHtml(quoteText)}”</div>`,
-            quoteAttr ? `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">— ${escapeHtml(quoteAttr)}</div>` : ``,
-          ].join(''),
-        )
-      : renderCard(`<div>${renderPill('Quote of the day', 'info')}</div><div style="margin-top:10px;color:#6b7280;">(unavailable)</div>`);
-
-    const html = renderMohEmail({
-      title: 'Sample — Daily digest',
-      preheader: 'This is a sample of the Daily digest email.',
-      contentHtml: [
-        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">Daily digest (sample)</div>`,
-        `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(ctx.greeting)}</div>`,
-        `<div style="margin:0 0 14px 0;">${renderPill('Sample email', 'warning')}</div>`,
-        `<div style="margin-top:6px;">${renderButton({ href: notificationsUrl, label: 'Notifications' })} <span style="display:inline-block;width:8px;"></span> ${renderButton({
-          href: messagesUrl,
-          label: 'Messages',
-          variant: 'secondary',
-        })}</div>`,
-        `<div style="height:12px;"></div>`,
-        definitionBlock,
-        quoteBlock,
-        renderCard(
-          [
-            `<div style="margin-bottom:10px;">${renderPill('Top articles today', 'success')}</div>`,
-            ...sampleArticles.map((a, idx) => {
-              const url = `${ctx.baseUrl}/a/${a.id}`;
-              return `<div style="${idx > 0 ? 'margin-top:8px;' : ''}"><a href="${escapeHtml(url)}" style="color:#111827;text-decoration:none;font-size:13px;font-weight:700;">${escapeHtml(
-                a.title,
-              )}</a><div style="font-size:12px;color:#6b7280;">by @${escapeHtml(a.username)}</div></div>`;
-            }),
-          ].join(''),
-        ),
-        renderCard(
-          [
-            `<div style="margin-bottom:10px;">${renderPill('Daily check-in', 'warning')}</div>`,
-            `<div style="font-size:14px;line-height:1.8;color:#111827;">How are you doing today?</div>`,
-            `<div style="margin-top:12px;">${renderButton({ href: homeUrl, label: 'Check in' })}</div>`,
-          ].join(''),
-        ),
-        `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(
-          settingsUrl,
-        )}" style="color:#111827;text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
-      ].join(''),
-      footerHtml: `Men of Hunger · Sample email`,
-    });
-
-    return { subject, text, html };
   }
 
   private renderWeeklyDigestSample(ctx: { baseUrl: string; greeting: string }) {

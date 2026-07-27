@@ -192,6 +192,10 @@ export class NotificationsService {
     return this.readState.markAllRead(...args);
   }
 
+  markReadByKind(...args: Parameters<NotificationReadStateService['markReadByKind']>) {
+    return this.readState.markReadByKind(...args);
+  }
+
   markConversationMessageNotificationRead(
     ...args: Parameters<NotificationReadStateService['markConversationMessageNotificationRead']>
   ) {

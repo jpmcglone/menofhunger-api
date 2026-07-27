@@ -13,7 +13,8 @@ export type NotificationPreferencesDto = {
   pushCrewStreak: boolean;
   /** Group activity: push for join, approve/reject, remove, disband events. */
   pushGroupActivity: boolean;
-  emailDigestDaily: boolean;
+  /** Word of the day + quote of the day push (fires at 9:00am / 9:30am ET). */
+  pushDailyContent: boolean;
   emailDigestWeekly: boolean;
   emailNewNotifications: boolean;
   /** Optional: near-immediate emails for high-signal events (messages + mentions/replies). */

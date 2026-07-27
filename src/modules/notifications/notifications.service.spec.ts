@@ -770,7 +770,7 @@ describe('NotificationsService.upsertGroupMemberJoinedNotification', () => {
         upsert: jest.fn(async () => ({
           pushComment: true, pushBoost: true, pushFollow: true, pushMention: true,
           pushMessage: true, pushRepost: true, pushNudge: true, pushFollowedPost: true,
-          pushReplyNudge: true, pushCrewStreak: true, pushGroupActivity: false,
+          pushReplyNudge: true, pushCrewStreak: true, pushGroupActivity: false, pushDailyContent: true,
         })),
       },
     } as any;

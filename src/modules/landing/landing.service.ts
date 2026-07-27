@@ -57,11 +57,15 @@ export class LandingService {
       this.prisma.$queryRaw<Array<{ public_post_count: bigint; verified_men_count: bigint }>>`
         SELECT
           (SELECT COUNT(*)::bigint
-           FROM "Post"
-           WHERE "deletedAt" IS NULL
-             AND "isDraft" = false
-             AND "kind" = 'regular'
-             AND "visibility" = 'public') AS public_post_count,
+           FROM "Post" p
+           JOIN "User" u ON u.id = p."userId"
+           WHERE p."deletedAt" IS NULL
+             AND p."isDraft" = false
+             AND p."kind" = 'regular'
+             AND p."visibility" = 'public'
+             AND u."bannedAt" IS NULL
+             AND u."isOrganization" = false
+             AND u."verifiedStatus" != 'none') AS public_post_count,
           (SELECT COUNT(*)::bigint
            FROM "User"
            WHERE "bannedAt" IS NULL

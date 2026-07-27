@@ -21,6 +21,10 @@ export type DailyContentTodayDto = {
   quoteRefreshedAt: string | null;
   websters1828: Websters1828WordOfDayDto | null;
   websters1828RefreshedAt: string | null;
-  websters1828RecheckedAt: string | null;
+  /**
+   * ISO timestamp of the next daily-content publish boundary (09:00 ET for word,
+   * 09:30 ET for quote). Clients should use this to schedule their next refetch
+   * rather than relying on a fixed midnight rollover.
+   */
+  nextPublishAt: string | null;
 };
-

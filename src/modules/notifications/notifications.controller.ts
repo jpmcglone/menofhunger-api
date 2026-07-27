@@ -39,6 +39,8 @@ const listQuerySchema = z.object({
     'crew_owner_transferred',
     'crew_owner_transfer_vote',
     'crew_wall_mention',
+    'word_of_the_day',
+    'quote_of_the_day',
     'other',
   ]).optional(),
 });
@@ -87,7 +89,7 @@ const preferencesPatchSchema = z
     pushNudge: z.boolean().optional(),
     pushFollowedPost: z.boolean().optional(),
     pushReplyNudge: z.boolean().optional(),
-    emailDigestDaily: z.boolean().optional(),
+    pushDailyContent: z.boolean().optional(),
     emailDigestWeekly: z.boolean().optional(),
     emailNewNotifications: z.boolean().optional(),
     emailInstantHighSignal: z.boolean().optional(),
@@ -422,6 +424,25 @@ export class NotificationsController {
   ) {
     const updated = await this.notifications.ignoreById(userId, id);
     return { data: { updated } };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('mark-read-by-kind')
+  async markReadByKind(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ) {
+    const { kind } = z.object({
+      kind: z.enum(['word_of_the_day', 'quote_of_the_day']),
+    }).parse(body);
+    await this.notifications.markReadByKind(userId, kind);
+    return { data: {} };
   }
 
   @UseGuards(AuthGuard)

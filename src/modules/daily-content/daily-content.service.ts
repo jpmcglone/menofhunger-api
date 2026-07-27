@@ -3,94 +3,22 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Websters1828Service, type Websters1828WordOfDay } from '../websters1828/websters1828.service';
 import { DAILY_QUOTES, type DailyQuote } from './daily-quotes';
 import type { DailyContentTodayDto, DailyQuoteDto } from '../../common/dto/daily-content.dto';
-
-const ET_ZONE = 'America/New_York';
-
-function easternParts(d: Date): { yyyy: number; mm: number; dd: number; hour: number; minute: number } {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: ET_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).formatToParts(d);
-  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
-  return { yyyy: get('year'), mm: get('month'), dd: get('day'), hour: get('hour'), minute: get('minute') };
-}
-
-function easternDayKey(d: Date): string {
-  const p = easternParts(d);
-  const yyyy = String(p.yyyy).padStart(4, '0');
-  const mm = String(p.mm).padStart(2, '0');
-  const dd = String(p.dd).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-/** Day number for the calendar day in Eastern Time (quote changes at midnight ET). */
-function dayIndexEastern(d: Date): number {
-  const p = easternParts(d);
-  // Date.UTC expects month 0-11.
-  return Math.floor(Date.UTC(p.yyyy, p.mm - 1, p.dd) / 86400000);
-}
+import {
+  easternDayKey,
+  dayIndexEastern,
+  wordContentDayKey,
+  quoteContentDayKey,
+  nextPublishBoundaryUtcMs,
+  dayKeyToDate,
+} from '../../common/time/eastern-day-key';
 
 function pickDailyQuote(quotes: DailyQuote[], now: Date): DailyQuote | null {
   const list = Array.isArray(quotes) ? quotes.filter(Boolean) : [];
   if (list.length === 0) return null;
-  // Keep parity with web: +1 so index rotates starting “tomorrow” from day 0.
+  // Keep parity with web: +1 so index rotates starting "tomorrow" from day 0.
   const dayIndex = dayIndexEastern(now) + 1;
   const i = ((dayIndex % list.length) + list.length) % list.length;
   return list[i] ?? null;
-}
-
-function safeMinuteOfDayEt(d: Date): number {
-  const p = easternParts(d);
-  return p.hour * 60 + p.minute;
-}
-
-function easternYmd(d: Date): { y: number; m: number; d: number } {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: ET_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(d);
-  const y = Number(parts.find((p) => p.type === 'year')?.value ?? 0);
-  const m = Number(parts.find((p) => p.type === 'month')?.value ?? 1);
-  const dd = Number(parts.find((p) => p.type === 'day')?.value ?? 1);
-  return { y, m, d: dd };
-}
-
-function easternYmdHms(d: Date): { y: number; m: number; d: number; hh: number; mm: number; ss: number } {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: ET_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).formatToParts(d);
-  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
-  return { y: get('year'), m: get('month'), d: get('day'), hh: get('hour'), mm: get('minute'), ss: get('second') };
-}
-
-/**
- * UTC timestamp for the next midnight in Eastern Time.
- * (Small UTC search window; avoids pulling a timezone library.)
- */
-function nextEasternMidnightUtcMs(now: Date): number {
-  const tomorrowEt = easternYmd(new Date(now.getTime() + 36 * 60 * 60 * 1000));
-  for (let utcHour = 0; utcHour <= 12; utcHour++) {
-    const cand = new Date(Date.UTC(tomorrowEt.y, tomorrowEt.m - 1, tomorrowEt.d, utcHour, 0, 0));
-    const p = easternYmdHms(cand);
-    if (p.y === tomorrowEt.y && p.m === tomorrowEt.m && p.d === tomorrowEt.d && p.hh === 0 && p.mm === 0) {
-      return cand.getTime();
-    }
-  }
-  return now.getTime() + 24 * 60 * 60 * 1000;
 }
 
 function toIsoOrNull(d: Date | null | undefined): string | null {
@@ -118,6 +46,8 @@ function mapQuoteDto(q: unknown): DailyQuoteDto | null {
   };
 }
 
+export type DailyContentItem = 'word' | 'quote';
+
 @Injectable()
 export class DailyContentService {
   private readonly logger = new Logger(DailyContentService.name);
@@ -128,131 +58,199 @@ export class DailyContentService {
     private readonly websters1828: Websters1828Service,
   ) {}
 
-  /** Cache-Control max-age in seconds (until next midnight ET, with a short early-morning window for healing). */
+  /** Cache-Control max-age in seconds (until the next publish boundary). */
   getCacheControlMaxAgeSeconds(now: Date = new Date()): number {
-    const expiresAtMs = nextEasternMidnightUtcMs(now);
-    const secondsUntilMidnight = Math.max(0, Math.floor((expiresAtMs - now.getTime()) / 1000));
-    const et = easternYmdHms(now);
-    if (et.hh < 9) return Math.min(300, secondsUntilMidnight);
-    return secondsUntilMidnight;
+    const nextBoundary = nextPublishBoundaryUtcMs(now);
+    return Math.max(60, Math.floor((nextBoundary - now.getTime()) / 1000));
   }
 
+  /**
+   * Pure read: return the currently-active word and quote, each from their
+   * respective publish-boundary day key. May return null fields if the
+   * relevant snapshot has not been published yet.
+   *
+   * Does NOT scrape inline. If a snapshot is missing it fire-and-forgets the
+   * publish job via the cron; the next request will find the row.
+   */
   async getToday(now: Date = new Date()): Promise<DailyContentTodayDto> {
-    const dayKey = easternDayKey(now);
-    // Ensure the snapshot exists (best-effort; cron normally maintains it).
-    try {
-      await this.refreshForTodayIfNeeded(now);
-    } catch (err) {
-      this.logger.warn(`[daily-content] refreshForTodayIfNeeded failed: ${(err as Error)?.message ?? String(err)}`);
-    }
-    const snap = await this.prisma.dailyContentSnapshot.findUnique({
-      where: { dayKey },
+    const todayKey = easternDayKey(now);
+    const wordDayKey = wordContentDayKey(now);
+    const quoteDayKey = quoteContentDayKey(now);
+
+    const keys = [...new Set([wordDayKey, quoteDayKey])];
+    const snaps = await this.prisma.dailyContentSnapshot.findMany({
+      where: { dayKey: { in: keys } },
       select: {
         dayKey: true,
         quote: true,
         quoteRefreshedAt: true,
         websters1828: true,
         websters1828RefreshedAt: true,
-        websters1828RecheckedAt: true,
       },
     });
 
+    const wordSnap = snaps.find((s) => s.dayKey === wordDayKey);
+    const quoteSnap = snaps.find((s) => s.dayKey === quoteDayKey);
+
+    const nextPublishAt = new Date(nextPublishBoundaryUtcMs(now)).toISOString();
+
     return {
-      dayKey,
-      quote: mapQuoteDto(snap?.quote ?? null),
-      quoteRefreshedAt: toIsoOrNull(snap?.quoteRefreshedAt ?? null),
-      websters1828: (snap?.websters1828 ?? null) as any,
-      websters1828RefreshedAt: toIsoOrNull(snap?.websters1828RefreshedAt ?? null),
-      websters1828RecheckedAt: toIsoOrNull(snap?.websters1828RecheckedAt ?? null),
+      dayKey: todayKey,
+      quote: mapQuoteDto(quoteSnap?.quote ?? null),
+      quoteRefreshedAt: toIsoOrNull(quoteSnap?.quoteRefreshedAt ?? null),
+      websters1828: (wordSnap?.websters1828 ?? null) as any,
+      websters1828RefreshedAt: toIsoOrNull(wordSnap?.websters1828RefreshedAt ?? null),
+      nextPublishAt,
     };
   }
 
-  async forceRefreshToday(params?: { quote?: boolean; websters1828?: boolean; now?: Date }): Promise<DailyContentTodayDto> {
-    const now = params?.now ?? new Date();
-    const dayKey = easternDayKey(now);
-    const refreshQuote = params?.quote !== false;
-    const refreshWotd = params?.websters1828 !== false;
+  /**
+   * Publish word or quote for a given day key.
+   * Uses an atomic claim (updateMany where refreshedAt IS NULL) so concurrent
+   * workers can only publish once per day per item. Idempotent: bails if already published.
+   * Does NOT send notifications — the fan-out step handles that separately.
+   */
+  async publish(params: { item: DailyContentItem; dayKey: string }): Promise<{ published: boolean }> {
+    const { item, dayKey } = params;
 
-    const quote = refreshQuote ? pickDailyQuote(this.quotes, now) : null;
-    let wotd: Websters1828WordOfDay | null = null;
-    if (refreshWotd) {
+    // Ensure the row exists before claiming.
+    await this.prisma.dailyContentSnapshot.upsert({
+      where: { dayKey },
+      create: { dayKey },
+      update: {},
+    });
+
+    if (item === 'word') {
+      return this.publishWord(dayKey);
+    }
+    return this.publishQuote(dayKey);
+  }
+
+  private async publishWord(dayKey: string): Promise<{ published: boolean }> {
+    // Atomic claim: only proceed if websters1828RefreshedAt is still null.
+    const claimed = await this.prisma.dailyContentSnapshot.updateMany({
+      where: { dayKey, websters1828RefreshedAt: null },
+      data: { websters1828RefreshedAt: new Date(1) }, // sentinel "in-progress"
+    });
+    if (claimed.count === 0) {
+      this.logger.debug(`[daily-content] word already published for ${dayKey}`);
+      return { published: false };
+    }
+
+    let wotd: Websters1828WordOfDay;
+    try {
+      wotd = await this.websters1828.fetchWordOfDay();
+    } catch (err) {
+      // Roll back the claim so the next cron cycle retries.
+      await this.prisma.dailyContentSnapshot.updateMany({
+        where: { dayKey, websters1828RefreshedAt: new Date(1) },
+        data: { websters1828RefreshedAt: null },
+      }).catch(() => undefined);
+      throw err;
+    }
+
+    const now = new Date();
+    await this.prisma.dailyContentSnapshot.update({
+      where: { dayKey },
+      data: { websters1828: wotd as any, websters1828RefreshedAt: now },
+    });
+    this.logger.log(`[daily-content] word published for ${dayKey}: "${wotd.word}"`);
+    return { published: true };
+  }
+
+  private async publishQuote(dayKey: string): Promise<{ published: boolean }> {
+    // Atomic claim: only proceed if quoteRefreshedAt is still null.
+    const claimed = await this.prisma.dailyContentSnapshot.updateMany({
+      where: { dayKey, quoteRefreshedAt: null },
+      data: { quoteRefreshedAt: new Date(1) }, // sentinel "in-progress"
+    });
+    if (claimed.count === 0) {
+      this.logger.debug(`[daily-content] quote already published for ${dayKey}`);
+      return { published: false };
+    }
+
+    // Pick the quote for the specific dayKey.
+    const dateForDay = dayKeyToDate(dayKey);
+    const quote = pickDailyQuote(this.quotes, dateForDay);
+
+    if (!quote) {
+      // No quotes configured; roll back sentinel.
+      await this.prisma.dailyContentSnapshot.updateMany({
+        where: { dayKey, quoteRefreshedAt: new Date(1) },
+        data: { quoteRefreshedAt: null },
+      }).catch(() => undefined);
+      this.logger.warn('[daily-content] No quotes available to publish');
+      return { published: false };
+    }
+
+    const now = new Date();
+    await this.prisma.dailyContentSnapshot.update({
+      where: { dayKey },
+      data: { quote: quote as any, quoteRefreshedAt: now },
+    });
+    this.logger.log(`[daily-content] quote published for ${dayKey} by "${quote.author}"`);
+    return { published: true };
+  }
+
+  /**
+   * Admin-only: force re-publish (overwrites existing snapshot, does NOT re-notify).
+   * Used by the admin panel to correct a bad word/quote scrape.
+   */
+  async republish(params: {
+    item?: DailyContentItem;
+    dayKey?: string;
+    now?: Date;
+  }): Promise<DailyContentTodayDto> {
+    const now = params?.now ?? new Date();
+    const dayKey = params?.dayKey ?? easternDayKey(now);
+    const item = params?.item;
+
+    const refreshWord = !item || item === 'word';
+    const refreshQuote = !item || item === 'quote';
+
+    if (refreshWord) {
+      let wotd: Websters1828WordOfDay | null = null;
       try {
-        wotd = await this.websters1828.getWordOfDay({ includeDefinition: true, forceRefresh: true });
+        wotd = await this.websters1828.fetchWordOfDay();
       } catch (err) {
-        this.logger.warn(`[daily-content] force refresh wotd failed: ${(err as Error)?.message ?? String(err)}`);
-        wotd = null;
+        this.logger.warn(`[daily-content] republish word failed: ${(err as Error)?.message ?? String(err)}`);
+      }
+      if (wotd) {
+        await this.prisma.dailyContentSnapshot.upsert({
+          where: { dayKey },
+          create: { dayKey, websters1828: wotd as any, websters1828RefreshedAt: now },
+          update: { websters1828: wotd as any, websters1828RefreshedAt: now },
+        });
       }
     }
 
-    await this.prisma.dailyContentSnapshot.upsert({
-      where: { dayKey },
-      create: {
-        dayKey,
-        ...(quote ? { quote: quote as any, quoteRefreshedAt: now } : {}),
-        ...(wotd ? { websters1828: wotd as any, websters1828RefreshedAt: now, websters1828RecheckedAt: now } : {}),
-      },
-      update: {
-        ...(quote ? { quote: quote as any, quoteRefreshedAt: now } : {}),
-        ...(wotd ? { websters1828: wotd as any, websters1828RefreshedAt: now, websters1828RecheckedAt: now } : {}),
-      },
-    });
-
-    return await this.getToday(now);
-  }
-
-  async refreshForTodayIfNeeded(now: Date = new Date()): Promise<void> {
-    const dayKey = easternDayKey(now);
-    const minuteOfDay = safeMinuteOfDayEt(now);
-
-    const snap = await this.prisma.dailyContentSnapshot.findUnique({
-      where: { dayKey },
-      select: {
-        dayKey: true,
-        quoteRefreshedAt: true,
-        websters1828RefreshedAt: true,
-        websters1828RecheckedAt: true,
-      },
-    });
-
-    const shouldEnsureBase = !snap || !snap.quoteRefreshedAt || !snap.websters1828RefreshedAt;
-    const shouldRecheckAt8am = minuteOfDay >= 8 * 60 && Boolean(snap?.websters1828RecheckedAt == null);
-
-    if (!shouldEnsureBase && !shouldRecheckAt8am) return;
-
-    const quote = pickDailyQuote(this.quotes, now);
-
-    let wotd: Websters1828WordOfDay | null = null;
-    try {
-      wotd = await this.websters1828.getWordOfDay({ includeDefinition: true, forceRefresh: true });
-    } catch (err) {
-      this.logger.warn(`[daily-content] wotd fetch failed: ${(err as Error)?.message ?? String(err)}`);
+    if (refreshQuote) {
+      const dateForDay = dayKeyToDate(dayKey);
+      const quote = pickDailyQuote(this.quotes, dateForDay);
+      if (quote) {
+        await this.prisma.dailyContentSnapshot.upsert({
+          where: { dayKey },
+          create: { dayKey, quote: quote as any, quoteRefreshedAt: now },
+          update: { quote: quote as any, quoteRefreshedAt: now },
+        });
+      }
     }
 
-    const quoteRefreshedAt = quote ? now : snap?.quoteRefreshedAt ?? null;
-    const websters1828RefreshedAt = wotd ? (snap?.websters1828RefreshedAt ? snap.websters1828RefreshedAt : now) : snap?.websters1828RefreshedAt ?? null;
-    const websters1828RecheckedAt = wotd && shouldRecheckAt8am ? now : snap?.websters1828RecheckedAt ?? null;
+    return this.getToday(now);
+  }
 
-    await this.prisma.dailyContentSnapshot.upsert({
+  /**
+   * Check whether the given item has been published for the given day key.
+   * Used by the cron to decide whether to enqueue a publish job.
+   */
+  async isPublished(item: DailyContentItem, dayKey: string): Promise<boolean> {
+    const snap = await this.prisma.dailyContentSnapshot.findUnique({
       where: { dayKey },
-      create: {
-        dayKey,
-        quote: quote as any,
-        quoteRefreshedAt: quote ? now : null,
-        websters1828: wotd as any,
-        websters1828RefreshedAt: wotd ? now : null,
-        websters1828RecheckedAt: wotd && shouldRecheckAt8am ? now : null,
-      },
-      update: {
-        ...(quote ? { quote: quote as any, quoteRefreshedAt } : {}),
-        ...(wotd
-          ? {
-              websters1828: wotd as any,
-              ...(websters1828RefreshedAt ? { websters1828RefreshedAt } : {}),
-              ...(websters1828RecheckedAt ? { websters1828RecheckedAt } : {}),
-            }
-          : {}),
-      },
+      select: { websters1828RefreshedAt: true, quoteRefreshedAt: true },
     });
+    if (!snap) return false;
+    const ts = item === 'word' ? snap.websters1828RefreshedAt : snap.quoteRefreshedAt;
+    // Exclude the sentinel new Date(1) = epoch+1ms, which signals "in-progress".
+    return ts !== null && ts.getTime() > 1;
   }
 }
-

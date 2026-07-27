@@ -9,6 +9,17 @@ After **substantive** work in this repo (new endpoint, new module, schema change
 
 A change is "substantive" if it touches: `src/**`, `prisma/**`, `test/**`, or any project config (`nest-cli.json`, `tsconfig.json`, `package.json`).
 
+## Multi-phase plan mode
+
+When implementing a **multi-phase plan** (a `.plan.md` file, or a todo list with multiple phases across which you are progressing):
+
+- **Between phases** (todos remain): run only **steps 1–3** (lint + typecheck + build). Skip `npm test`.
+- **After the final phase** (no more pending todos): run the **complete checklist** including tests.
+
+Rationale: `npm test` can take 30–90 seconds per run. In a multi-phase plan that overhead compounds. Lint + typecheck + build catch the vast majority of errors fast; the test suite at the end validates the fully integrated work.
+
+**Single task (no plan, or this is the only todo):** run all steps as usual.
+
 ## Run, in order, from `menofhunger-api/`
 
 1. **Lint** — `npm run lint`
@@ -17,7 +28,7 @@ A change is "substantive" if it touches: `src/**`, `prisma/**`, `test/**`, or an
    - Zero errors.
 3. **Build** — `npm run build`
    - Must succeed. Catches Nest module wiring issues that the typechecker misses.
-4. **Tests** — `npm test`
+4. **Tests** — `npm test` *(skip between phases in a multi-phase plan; always run after the final phase)*
    - All green. If you added a controller, service, or DTO, add at least one targeted unit test. If you changed an endpoint contract, prefer an e2e/integration test.
 5. **Prisma (only if `prisma/schema.prisma` changed)**
    - `npm run prisma:migrate:create -- <descriptive_name>` — generates the migration SQL.

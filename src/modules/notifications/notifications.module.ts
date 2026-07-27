@@ -42,6 +42,7 @@ import { StatusNotificationEventsHandler } from './status-notification-events.ha
   ],
   exports: [
     NotificationsService,
+    NotificationWriterService,
     NotificationsCleanupCron,
     NotificationsOrphanCleanupCron,
     NotificationsEmailCron,

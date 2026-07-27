@@ -25,7 +25,6 @@ export const JOBS = {
   notificationsCleanup: 'notifications.cleanup',
   notificationsOrphanCleanup: 'notifications.orphanCleanup',
   notificationsEmailNudges: 'notifications.emailNudges',
-  notificationsDailyDigest: 'notifications.dailyDigest',
   notificationsWeeklyDigest: 'notifications.weeklyDigest',
   notificationsInstantHighSignalEmail: 'notifications.instantHighSignalEmail',
   notificationsStreakReminderEmail: 'notifications.streakReminderEmail',
@@ -33,7 +32,10 @@ export const JOBS = {
   notificationsReplyNudgePush: 'notifications.replyNudgePush',
 
   // Daily content (quote/definition snapshots)
-  dailyContentRefresh: 'dailyContent.refresh',
+  dailyContentPublishWord: 'dailyContent.publishWord',
+  dailyContentPublishQuote: 'dailyContent.publishQuote',
+  dailyContentFanoutWord: 'dailyContent.fanoutWord',
+  dailyContentFanoutQuote: 'dailyContent.fanoutQuote',
 
   // Auth / search
   authCleanup: 'auth.cleanup',

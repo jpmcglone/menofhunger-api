@@ -5,7 +5,7 @@ import { AdminGuard } from './admin.guard';
 import { DailyContentService } from '../daily-content/daily-content.service';
 import { queryBoolean } from '../../common/validation/query-boolean';
 
-const refreshSchema = z.object({
+const republishSchema = z.object({
   quote: queryBoolean().optional(),
   websters1828: queryBoolean().optional(),
 });
@@ -24,12 +24,14 @@ export class AdminDailyContentController {
   @Post('refresh')
   async refresh(@Res({ passthrough: true }) res: Response, @Body() body: unknown) {
     res.setHeader('Cache-Control', 'no-store');
-    const parsed = refreshSchema.parse(body ?? {});
-    const data = await this.daily.forceRefreshToday({
-      quote: parsed.quote,
-      websters1828: parsed.websters1828,
-    });
+    const parsed = republishSchema.parse(body ?? {});
+    const item =
+      parsed.websters1828 === true && parsed.quote !== true
+        ? 'word'
+        : parsed.quote === true && parsed.websters1828 !== true
+          ? 'quote'
+          : undefined;
+    const data = await this.daily.republish({ item });
     return { data };
   }
 }
-

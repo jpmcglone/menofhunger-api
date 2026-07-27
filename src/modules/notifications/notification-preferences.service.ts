@@ -28,7 +28,6 @@ export class NotificationPreferencesService {
     // Email prefs are only meaningful for verified emails. Keep the stored settings,
     // but prevent toggling them until the user verifies their email.
     const wantsEmailPatch =
-      patch.emailDigestDaily !== undefined ||
       patch.emailDigestWeekly !== undefined ||
       patch.emailNewNotifications !== undefined ||
       patch.emailInstantHighSignal !== undefined ||
@@ -44,7 +43,6 @@ export class NotificationPreferencesService {
       const canUseEmail = Boolean((u?.email ?? '').trim()) && Boolean(u?.emailVerifiedAt);
       if (!canUseEmail) {
         effectivePatch = { ...patch };
-        delete effectivePatch.emailDigestDaily;
         delete effectivePatch.emailDigestWeekly;
         delete effectivePatch.emailNewNotifications;
         delete effectivePatch.emailInstantHighSignal;
@@ -73,7 +71,7 @@ export class NotificationPreferencesService {
     pushReplyNudge: boolean;
     pushCrewStreak: boolean;
     pushGroupActivity: boolean;
-    emailDigestDaily: boolean;
+    pushDailyContent: boolean;
     emailDigestWeekly: boolean;
     emailNewNotifications: boolean;
     emailInstantHighSignal: boolean;
@@ -92,7 +90,7 @@ export class NotificationPreferencesService {
       pushReplyNudge: Boolean(prefs.pushReplyNudge),
       pushCrewStreak: Boolean(prefs.pushCrewStreak),
       pushGroupActivity: Boolean(prefs.pushGroupActivity),
-      emailDigestDaily: Boolean(prefs.emailDigestDaily),
+      pushDailyContent: Boolean(prefs.pushDailyContent),
       emailDigestWeekly: Boolean(prefs.emailDigestWeekly),
       emailNewNotifications: Boolean(prefs.emailNewNotifications),
       emailInstantHighSignal: Boolean(prefs.emailInstantHighSignal),

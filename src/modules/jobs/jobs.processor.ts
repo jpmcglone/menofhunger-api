@@ -22,6 +22,7 @@ import { PostsService } from '../posts/posts.service';
 import { ArticlesTrendingScoreCron } from '../articles/articles-trending-score.cron';
 import { CrewJobsCron } from '../crew/crew-jobs.cron';
 import { ScheduledPostsPublishCron } from '../posts/scheduled-posts-publish.cron';
+import { NotificationWriterService } from '../notifications/notification-writer.service';
 
 @Processor(MOH_BACKGROUND_QUEUE)
 export class JobsProcessor extends WorkerHost {
@@ -48,6 +49,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly articlesTrendingScore: ArticlesTrendingScoreCron,
     private readonly crewJobs: CrewJobsCron,
     private readonly scheduledPostsPublish: ScheduledPostsPublishCron,
+    private readonly notificationWriter: NotificationWriterService,
   ) {
     super();
   }
@@ -81,9 +83,6 @@ export class JobsProcessor extends WorkerHost {
         case JOBS.notificationsEmailNudges:
           await this.notificationsEmail.runSendNewNotificationsNudges();
           return { ok: true };
-        case JOBS.notificationsDailyDigest:
-          await this.notificationsEmail.runSendDailyDigest();
-          return { ok: true };
         case JOBS.notificationsWeeklyDigest:
           await this.notificationsEmail.runSendWeeklyDigest();
           return { ok: true };
@@ -99,8 +98,17 @@ export class JobsProcessor extends WorkerHost {
         case JOBS.notificationsReplyNudgePush:
           await this.notificationsReplyNudge.runReplyNudgeSweep();
           return { ok: true };
-        case JOBS.dailyContentRefresh:
-          await this.dailyContent.runRefreshDailyContent();
+        case JOBS.dailyContentPublishWord:
+          await this.dailyContent.runPublishWord(job.data ?? {});
+          return { ok: true };
+        case JOBS.dailyContentPublishQuote:
+          await this.dailyContent.runPublishQuote(job.data ?? {});
+          return { ok: true };
+        case JOBS.dailyContentFanoutWord:
+          await this.notificationWriter.fanOutDailyContentNotifications({ item: 'word', dayKey: String(job.data?.dayKey ?? '') });
+          return { ok: true };
+        case JOBS.dailyContentFanoutQuote:
+          await this.notificationWriter.fanOutDailyContentNotifications({ item: 'quote', dayKey: String(job.data?.dayKey ?? '') });
           return { ok: true };
         case JOBS.authCleanup:
           await this.authCleanup.runCleanupExpiredAuthRecords();
