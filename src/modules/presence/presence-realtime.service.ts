@@ -110,6 +110,17 @@ export class PresenceRealtimeService {
     server.emit('daily:content-published', { item, dayKey });
   }
 
+  /**
+   * Broadcast the updated like count for the current WOTD to all connected clients.
+   * Both the full WOTD page and the right-rail card can patch their local state
+   * without refetching the entire word entry.
+   */
+  emitWotdLikeUpdated(likeCount: number): void {
+    const server = this.getServerOrNull();
+    if (!server) return;
+    server.emit('wotd:like-updated', { likeCount });
+  }
+
   disconnectUserSockets(userId: string): void {
     const server = this.getServerOrNull();
     if (!server) return;

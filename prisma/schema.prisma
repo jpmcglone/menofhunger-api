@@ -523,6 +523,8 @@ model User {
   affiliateEarningsAsAffiliate AffiliateEarning[] @relation("AffiliateEarning_affiliate")
   affiliateEarningsAsRecruit   AffiliateEarning[] @relation("AffiliateEarning_recruit")
 
+  wotdLikes                    WotdLike[]
+
   @@index([phone])
   @@index([lastSeenAt])
   @@index([referralCode])
@@ -605,6 +607,23 @@ model DailyContentSnapshot {
   wordFanoutCursor  String?
 
   @@index([updatedAt])
+}
+
+/**
+ * One like per (normalized word, user). Likes are keyed by the word itself
+ * so they accumulate across days if the same word appears again.
+ */
+model WotdLike {
+  id        String   @id @default(cuid())
+  /// Normalized (lowercased, trimmed) word. Keyed on the word, not the day.
+  word      String
+  userId    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([word, userId])
+  @@index([word])
+  @@index([userId])
 }
 
 /**

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Websters1828Service, type Websters1828WordOfDay } from '../websters1828/websters1828.service';
+import { Websters1828Service, type Websters1828WordOfDaySnapshot } from '../websters1828/websters1828.service';
 import { DAILY_QUOTES, type DailyQuote } from './daily-quotes';
 import type { DailyContentTodayDto, DailyQuoteDto } from '../../common/dto/daily-content.dto';
 import {
@@ -143,7 +143,7 @@ export class DailyContentService {
       return { published: false };
     }
 
-    let wotd: Websters1828WordOfDay;
+    let wotd: Websters1828WordOfDaySnapshot;
     try {
       wotd = await this.websters1828.fetchWordOfDay();
     } catch (err) {
@@ -215,7 +215,7 @@ export class DailyContentService {
     const refreshQuote = !item || item === 'quote';
 
     if (refreshWord) {
-      let wotd: Websters1828WordOfDay | null = null;
+      let wotd: Websters1828WordOfDaySnapshot | null = null;
       try {
         wotd = await this.websters1828.fetchWordOfDay();
       } catch (err) {

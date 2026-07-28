@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { wordContentDayKey, nextPublishBoundaryUtcMs } from '../../common/time/eastern-day-key';
+import type { WotdLikeBreakdownDto, WotdLikeToggleDto } from '../../common/dto/websters1828.dto';
 
-export type Websters1828WordOfDay = {
+/** Shape stored in the DailyContentSnapshot JSON blob (no like fields). */
+export type Websters1828WordOfDaySnapshot = {
   word: string;
   dictionaryUrl: string;
   /** Parsed definition text (paragraphs separated by blank lines). */
@@ -12,6 +14,12 @@ export type Websters1828WordOfDay = {
   /** Canonical source URL for the definition. */
   sourceUrl: string;
   fetchedAt: string;
+};
+
+/** Full response shape returned to clients (snapshot + live like info). */
+export type Websters1828WordOfDay = Websters1828WordOfDaySnapshot & {
+  likeCount: number;
+  viewerHasLiked: boolean;
 };
 
 const WEBSTERS_HEADERS = {
@@ -31,18 +39,74 @@ export class Websters1828Service {
    * Read the current word-of-the-day from the DailyContentSnapshot.
    * Returns null if today's snapshot has not been published yet.
    */
-  async getWordOfDay(options?: { includeDefinition?: boolean }): Promise<Websters1828WordOfDay | null> {
+  async getWordOfDay(options?: {
+    includeDefinition?: boolean;
+    userId?: string;
+  }): Promise<Websters1828WordOfDay | null> {
     const dayKey = wordContentDayKey(new Date());
     const snap = await this.prisma.dailyContentSnapshot.findUnique({
       where: { dayKey },
       select: { websters1828: true },
     });
-    const wotd = (snap?.websters1828 ?? null) as Websters1828WordOfDay | null;
-    if (!wotd) return null;
+    const raw = (snap?.websters1828 ?? null) as Websters1828WordOfDaySnapshot | null;
+    if (!raw) return null;
+    const { likeCount, viewerHasLiked } = await this.getLikeInfo(raw.word, options?.userId);
+    const base = { ...raw, likeCount, viewerHasLiked };
     if (!options?.includeDefinition) {
-      return { ...wotd, definition: null, definitionHtml: null };
+      return { ...base, definition: null, definitionHtml: null };
     }
-    return wotd;
+    return base;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Like methods
+  // ---------------------------------------------------------------------------
+
+  async toggleLike(userId: string, word: string): Promise<WotdLikeToggleDto> {
+    const w = word.toLowerCase().trim();
+    const existing = await this.prisma.wotdLike.findUnique({
+      where: { word_userId: { word: w, userId } },
+    });
+    if (existing) {
+      await this.prisma.wotdLike.delete({ where: { id: existing.id } });
+    } else {
+      await this.prisma.wotdLike.create({ data: { word: w, userId } });
+    }
+    const likeCount = await this.prisma.wotdLike.count({ where: { word: w } });
+    return { liked: !existing, likeCount };
+  }
+
+  async getLikeBreakdown(word: string): Promise<WotdLikeBreakdownDto> {
+    const w = word.toLowerCase().trim();
+    const likes = await this.prisma.wotdLike.findMany({
+      where: { word: w },
+      include: {
+        user: { select: { premium: true, premiumPlus: true, verifiedStatus: true } },
+      },
+    });
+    let premium = 0;
+    let verified = 0;
+    let unverified = 0;
+    for (const like of likes) {
+      if (like.user.premium || like.user.premiumPlus) premium++;
+      else if (like.user.verifiedStatus !== 'none') verified++;
+      else unverified++;
+    }
+    return { premium, verified, unverified, total: likes.length };
+  }
+
+  async getLikeInfo(
+    word: string,
+    userId?: string,
+  ): Promise<{ likeCount: number; viewerHasLiked: boolean }> {
+    const w = word.toLowerCase().trim();
+    const [likeCount, viewerLike] = await Promise.all([
+      this.prisma.wotdLike.count({ where: { word: w } }),
+      userId
+        ? this.prisma.wotdLike.findUnique({ where: { word_userId: { word: w, userId } } })
+        : null,
+    ]);
+    return { likeCount, viewerHasLiked: viewerLike !== null };
   }
 
   /**
@@ -50,7 +114,7 @@ export class Websters1828Service {
    * Uses the dictionary page as the canonical definition source; homepage block is fallback.
    * Throws if the fetch fails.
    */
-  async fetchWordOfDay(): Promise<Websters1828WordOfDay> {
+  async fetchWordOfDay(): Promise<Websters1828WordOfDaySnapshot> {
     const homepageUrl = 'https://webstersdictionary1828.com/';
     const html = await fetchWithTimeout(homepageUrl, 10_000);
 
