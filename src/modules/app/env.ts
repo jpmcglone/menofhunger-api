@@ -148,6 +148,13 @@ export const envSchema = z.object({
     z.string().optional(),
   ),
 
+  // Scripture translation ID for bible.helloao.org (default: BSB = Berean Standard Bible).
+  // Set to a different ID (e.g. NKJV) once a commercial licence is in place.
+  SCRIPTURE_TRANSLATION: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+
   // Global API rate limiting (generous defaults if unset).
   RATE_LIMIT_TTL_SECONDS: z
     .string()

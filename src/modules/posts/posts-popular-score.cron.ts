@@ -388,7 +388,7 @@ export class PostsPopularScoreCron {
                 END
               )
               * (CASE WHEN p."parentId" IS NULL THEN 1.15 ELSE 1.0 END)
-              * (CASE WHEN p."kind" = 'checkin' THEN 0.85 ELSE 1.0 END)
+              * (CASE WHEN p."kind" = 'checkin' THEN 0.85 WHEN p."kind" = 'status' THEN 0.60 ELSE 1.0 END)
               * (
                 CASE
                   WHEN u."verifiedStatus" = 'none' AND u."createdAt" >= (${asOf}::timestamptz - INTERVAL '7 days') THEN 0.85

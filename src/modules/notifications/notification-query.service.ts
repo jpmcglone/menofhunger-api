@@ -19,7 +19,7 @@ import { collapseFeedByRoot, type FeedCollapseMode, type FeedCollapsePrefer } fr
  * Kinds that have dedicated filter chips on the notifications page.
  * "Other" = every kind that is NOT in this set and NOT 'message'.
  */
-const PRIMARY_NOTIFICATION_KINDS = ['comment', 'mention', 'followed_post', 'follow', 'boost'] as const satisfies NotificationKind[];
+const PRIMARY_NOTIFICATION_KINDS = ['comment', 'mention', 'followed_post', 'status_update', 'checkin_post', 'follow', 'boost'] as const satisfies NotificationKind[];
 
 /**
  * Notification feed reads: the bell list (with grouping), the
@@ -38,7 +38,7 @@ export class NotificationQueryService {
   notificationPostId(
     n: { kind: NotificationKind; actorPostId?: string | null; subjectPostId?: string | null },
   ): string | null {
-    if (n.kind === 'followed_post') return (n.subjectPostId ?? '').trim() || null;
+    if (n.kind === 'followed_post' || n.kind === 'checkin_post') return (n.subjectPostId ?? '').trim() || null;
     if (n.kind === 'comment') return (n.actorPostId ?? '').trim() || null;
     if (n.kind === 'mention') return (n.actorPostId ?? '').trim() || null;
     if (n.kind === 'repost') return (n.actorPostId ?? n.subjectPostId ?? '').trim() || null;
@@ -454,9 +454,9 @@ export class NotificationQueryService {
     while (i < dtos.length && items.length < desiredItemLimit) {
       const n = dtos[i]!;
 
-      // followed_post notifications always appear as standalone items regardless of bell setting.
+      // followed_post / checkin_post notifications always appear as standalone items regardless of bell setting.
       // The bell only controls whether reply notifications from followed users are delivered.
-      if (n.kind === 'followed_post') {
+      if (n.kind === 'followed_post' || n.kind === 'checkin_post') {
         items.push({ type: 'single', notification: n });
         i += 1;
         continue;
@@ -552,6 +552,7 @@ export class NotificationQueryService {
         OR: [
           // Canonical "new post from someone you follow".
           { kind: 'followed_post', subjectPostId: { not: null } },
+          { kind: 'checkin_post', subjectPostId: { not: null } },
           // Replies can show up as comment/mention notifications for the same action.
           // Include them when the actor is someone the viewer follows so /new-posts
           // remains "posts from followed users", regardless of notification kind.
@@ -584,7 +585,7 @@ export class NotificationQueryService {
     const orderedSubjectPostIds: string[] = [];
     const seenSubjectPostIds = new Set<string>();
     for (const n of raw) {
-      const postId = (n.kind === 'followed_post'
+      const postId = (n.kind === 'followed_post' || n.kind === 'checkin_post'
         ? (n.subjectPostId ?? '')
         : (n.actorPostId ?? '')).trim();
       if (!postId || seenSubjectPostIds.has(postId)) continue;
@@ -618,7 +619,7 @@ export class NotificationQueryService {
     let boundaryIndex = -1;
     for (let i = 0; i < raw.length; i++) {
       const row = raw[i];
-      const postId = (row?.kind === 'followed_post'
+      const postId = (row?.kind === 'followed_post' || row?.kind === 'checkin_post'
         ? (row?.subjectPostId ?? '')
         : (row?.actorPostId ?? '')).trim();
       if (postId && returnedPostIds.has(postId)) boundaryIndex = i;

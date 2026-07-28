@@ -4,6 +4,7 @@ import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { AppConfigService } from '../app/app-config.service';
 import { DailyContentService } from './daily-content.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import {
   easternDayKey,
   easternMinuteOfDay,
@@ -17,6 +18,7 @@ export class DailyContentCron {
     private readonly jobs: JobsService,
     private readonly appConfig: AppConfigService,
     private readonly dailyContent: DailyContentService,
+    private readonly realtime: PresenceRealtimeService,
   ) {}
 
   /**
@@ -68,6 +70,8 @@ export class DailyContentCron {
     const { published } = await this.dailyContent.publish({ item: 'word', dayKey });
     if (published) {
       this.logger.log(`[daily-content] word published for ${dayKey}`);
+      // Broadcast to all connected clients so they can update in real-time.
+      this.realtime.emitDailyContentPublished('word', dayKey);
       try {
         await this.jobs.enqueueCron(
           JOBS.dailyContentFanoutWord,
@@ -90,6 +94,8 @@ export class DailyContentCron {
     const { published } = await this.dailyContent.publish({ item: 'quote', dayKey });
     if (published) {
       this.logger.log(`[daily-content] quote published for ${dayKey}`);
+      // Broadcast to all connected clients so they can update in real-time.
+      this.realtime.emitDailyContentPublished('quote', dayKey);
       try {
         await this.jobs.enqueueCron(
           JOBS.dailyContentFanoutQuote,

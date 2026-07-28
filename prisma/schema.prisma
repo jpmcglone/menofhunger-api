@@ -25,6 +25,7 @@ enum PostKind {
   checkin
   repost
   articleShare
+  status
 }
 
 enum FollowVisibility {
@@ -88,6 +89,7 @@ enum NotificationKind {
   community_group_post
   marv_not_in_group
   status_update
+  checkin_post
   word_of_the_day
   quote_of_the_day
 }
@@ -368,6 +370,9 @@ model User {
   statusText                   String?
   statusSetAt                  DateTime?
   statusExpiresAt              DateTime?
+  // When createsPost=true on PUT /presence/status, this links to the generated feed post.
+  // Nulled on clearStatus; the post itself is never deleted.
+  statusPostId                 String?
   // Denormalized badge count for notifications where deliveredAt is still null.
   // Maintained atomically in NotificationsService.
   undeliveredNotificationCount Int                @default(0)
@@ -2317,6 +2322,7 @@ model LinkMetadata {
   imageUrl    String?
   siteName    String?
   socialPost  Json?
+  videoEmbed  Json?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

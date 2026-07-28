@@ -82,7 +82,7 @@ export class NotificationPushService {
     if (kind === 'mention') return Boolean(prefs.pushMention);
     if (kind === 'repost') return Boolean(prefs.pushRepost);
     if (kind === 'nudge') return Boolean(prefs.pushNudge);
-    if (kind === 'followed_post') return Boolean(prefs.pushFollowedPost);
+    if (kind === 'followed_post' || kind === 'checkin_post') return Boolean(prefs.pushFollowedPost);
     if (kind === 'followed_article') return Boolean(prefs.pushFollowedPost);
     if (kind === 'status_update') return Boolean(prefs.pushFollowedPost);
     if (kind === 'message') return Boolean(prefs.pushMessage);
@@ -214,6 +214,12 @@ export class NotificationPushService {
       return {
         title: `${actorName} shared a new post`,
         body: snippet ?? 'Open to read it.',
+      };
+    }
+    if (kind === 'checkin_post') {
+      return {
+        title: `${actorName} checked in`,
+        body: snippet ?? 'Open to see their check-in.',
       };
     }
     if (kind === 'status_update') {

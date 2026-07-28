@@ -186,17 +186,16 @@ export class NotificationReadStateService {
   async markNewPostsRead(recipientUserId: string): Promise<{ undeliveredCount: number }> {
     const undeliveredCount = await this.prisma.$transaction(async (tx) => {
       const now = new Date();
-      const where = {
+      const baseWhere = {
         recipientUserId,
-        kind: 'followed_post' as const,
-        OR: [{ readAt: null }, { deliveredAt: null }],
+        kind: { in: ['followed_post' as const, 'checkin_post' as const] },
       };
       const deliveredRes = await tx.notification.updateMany({
-        where: { ...where, deliveredAt: null },
+        where: { ...baseWhere, deliveredAt: null },
         data: { deliveredAt: now },
       });
       await tx.notification.updateMany({
-        where,
+        where: { ...baseWhere, OR: [{ readAt: null }, { deliveredAt: null }] },
         data: { readAt: now, deliveredAt: now },
       });
       if (deliveredRes.count > 0) {
@@ -243,7 +242,7 @@ export class NotificationReadStateService {
       // Important: do NOT implicitly mark nudges as read when visiting a user's profile.
       // Nudges should only be cleared via explicit actions (ignore / acknowledge / nudge back).
       or.push({ subjectUserId: userId, kind: { not: 'nudge' } });
-      or.push({ kind: 'followed_post', actorUserId: userId });
+      or.push({ kind: { in: ['followed_post', 'checkin_post'] as const }, actorUserId: userId });
     }
     if (articleId) {
       or.push({ subjectArticleId: articleId });

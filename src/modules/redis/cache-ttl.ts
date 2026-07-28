@@ -12,6 +12,8 @@ export const CacheTtl = {
   giphySeconds: 30,
   linkMetaFrontSeconds: 6 * 60 * 60,
   linkMetaNullSeconds: 60,
+  // Scripture verse text is immutable public-domain content; 30-day TTL.
+  scriptureChapterSeconds: 30 * 24 * 60 * 60,
   // US geocode normalizations are fairly stable.
   geoUsSeconds: 30 * 24 * 60 * 60,
 } as const;

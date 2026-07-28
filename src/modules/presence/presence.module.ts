@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { FollowsModule } from '../follows/follows.module';
 import { MarvinModule } from '../marvin/marvin.module';
 import { MessagesModule } from '../messages/messages.module';
+import { PostsModule } from '../posts/posts.module';
 import { RadioModule } from '../radio/radio.module';
 import { SpacesModule } from '../spaces/spaces.module';
 import { RealtimeModule } from '../realtime/realtime.module';
@@ -23,6 +24,7 @@ import { MessagingGatewayHandler } from './gateway/gateway-messaging.handler';
     AuthModule,
     FollowsModule,
     MessagesModule,
+    PostsModule,
     RadioModule,
     SpacesModule,
     RealtimeModule,

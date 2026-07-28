@@ -74,6 +74,7 @@ function makeController(opts?: {
     ),
   };
 
+  const posts: any = {};
   const controller = new PresenceController(
     presenceRedis,
     presence,
@@ -83,6 +84,7 @@ function makeController(opts?: {
     redis,
     appConfig,
     marvIdentity,
+    posts,
   );
 
   return { controller, follows, redis, marvIdentity, appConfig, presenceRedis, prisma };

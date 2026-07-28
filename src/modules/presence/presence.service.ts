@@ -12,7 +12,6 @@ const MAX_SUBSCRIPTIONS_PER_SOCKET = 100;
 const LAST_SEEN_PERSIST_THROTTLE_MS = 2 * 60 * 1000;
 // Daily activity should be written at most once per day per user per server.
 const DAILY_ACTIVITY_PERSIST_THROTTLE_MS = 5 * 60 * 1000;
-const STATUS_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * In-memory presence: userId -> Set of socketIds, socketId -> { userId, client }.
@@ -147,6 +146,7 @@ export class PresenceService {
     statusText: string | null;
     statusSetAt: Date | null;
     statusExpiresAt: Date | null;
+    statusPostId?: string | null;
   }, now = new Date()): UserStatusDto | null {
     const text = String(user.statusText ?? '').trim();
     if (!text || !user.statusSetAt || !user.statusExpiresAt || user.statusExpiresAt <= now) {
@@ -157,6 +157,7 @@ export class PresenceService {
       text,
       setAt: user.statusSetAt.toISOString(),
       expiresAt: user.statusExpiresAt.toISOString(),
+      postId: user.statusPostId ?? null,
     };
   }
 
@@ -177,6 +178,7 @@ export class PresenceService {
         statusText: true,
         statusSetAt: true,
         statusExpiresAt: true,
+        statusPostId: true,
       },
     });
 
@@ -195,32 +197,81 @@ export class PresenceService {
         statusText: true,
         statusSetAt: true,
         statusExpiresAt: true,
+        statusPostId: true,
       },
     });
     return user ? this.toActiveStatusDto(user) : null;
   }
 
-  async setStatus(userId: string, text: string): Promise<UserStatusDto> {
+  /**
+   * Sets a new status for the user, superseding any existing one.
+   *
+   * Each call is a distinct status with its own expiry and (optionally) its own post,
+   * so it always fans out a NEW `status_update` notification to followers. The previous
+   * status's post and notification are left alone — they stay valid history.
+   */
+  async setStatus(
+    userId: string,
+    text: string,
+    durationHours: 1 | 3 | 6 | 12 | 24 = 24,
+    statusPostId: string | null = null,
+  ): Promise<UserStatusDto> {
     const uid = String(userId ?? '').trim();
     const cleanText = String(text ?? '').trim();
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + STATUS_TTL_MS);
+    const expiresAt = new Date(now.getTime() + durationHours * 60 * 60 * 1000);
     const user = await this.prisma.user.update({
       where: { id: uid },
       data: {
         statusText: cleanText,
         statusSetAt: now,
         statusExpiresAt: expiresAt,
+        statusPostId,
       },
       select: {
         id: true,
         statusText: true,
         statusSetAt: true,
         statusExpiresAt: true,
+        statusPostId: true,
       },
     });
-    this.domainEvents.emitUserStatusSet({ userId: uid, text: cleanText });
+    this.domainEvents.emitUserStatusSet({ userId: uid, text: cleanText, postId: statusPostId, mode: 'created' });
     return this.toActiveStatusDto(user, now)!;
+  }
+
+  /**
+   * Edits the text of the active status without changing its expiry.
+   * Patches the existing notification in place (no new notification, no push).
+   * If a status post exists, the caller should also update that post's body.
+   */
+  async editStatus(userId: string, text: string): Promise<{
+    statusDto: UserStatusDto | null;
+    statusPostId: string | null;
+  }> {
+    const uid = String(userId ?? '').trim();
+    const cleanText = String(text ?? '').trim();
+    const user = await this.prisma.user.update({
+      where: { id: uid },
+      data: { statusText: cleanText },
+      select: {
+        id: true,
+        statusText: true,
+        statusSetAt: true,
+        statusExpiresAt: true,
+        statusPostId: true,
+      },
+    });
+    const statusDto = this.toActiveStatusDto(user);
+    if (statusDto) {
+      this.domainEvents.emitUserStatusSet({
+        userId: uid,
+        text: cleanText,
+        postId: user.statusPostId ?? null,
+        mode: 'edited',
+      });
+    }
+    return { statusDto, statusPostId: user.statusPostId ?? null };
   }
 
   async clearStatus(userId: string): Promise<void> {
@@ -232,6 +283,8 @@ export class PresenceService {
         statusText: null,
         statusSetAt: null,
         statusExpiresAt: null,
+        // Null the link; the post itself persists permanently.
+        statusPostId: null,
       },
       select: { id: true },
     });

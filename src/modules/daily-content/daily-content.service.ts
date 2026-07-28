@@ -9,6 +9,8 @@ import {
   wordContentDayKey,
   quoteContentDayKey,
   nextPublishBoundaryUtcMs,
+  nextWordPublishUtcMs,
+  nextQuotePublishUtcMs,
   dayKeyToDate,
 } from '../../common/time/eastern-day-key';
 
@@ -93,6 +95,8 @@ export class DailyContentService {
     const quoteSnap = snaps.find((s) => s.dayKey === quoteDayKey);
 
     const nextPublishAt = new Date(nextPublishBoundaryUtcMs(now)).toISOString();
+    const nextWordPublishAt = new Date(nextWordPublishUtcMs(now)).toISOString();
+    const nextQuotePublishAt = new Date(nextQuotePublishUtcMs(now)).toISOString();
 
     return {
       dayKey: todayKey,
@@ -101,6 +105,8 @@ export class DailyContentService {
       websters1828: (wordSnap?.websters1828 ?? null) as any,
       websters1828RefreshedAt: toIsoOrNull(wordSnap?.websters1828RefreshedAt ?? null),
       nextPublishAt,
+      nextWordPublishAt,
+      nextQuotePublishAt,
     };
   }
 

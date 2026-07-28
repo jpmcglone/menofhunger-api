@@ -206,6 +206,11 @@ export const RedisKeys = {
     return `lock:linkmeta:${h}`;
   },
 
+  /** scripture:{translation}:{bookId}:{chapter} — immutable verse text, 30-day TTL. */
+  scriptureChapter(translation: string, bookId: string, chapter: number): string {
+    return `scripture:${clean(translation)}:${clean(bookId)}:${chapter}`;
+  },
+
   // Spaces lobby counts — global snapshot (updated on every join/leave)
   spacesLobbyCounts(): string {
     return 'spaces:lobbyCounts';

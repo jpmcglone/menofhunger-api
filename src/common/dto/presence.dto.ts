@@ -5,6 +5,8 @@ export type UserStatusDto = {
   text: string;
   setAt: string;
   expiresAt: string;
+  /** ID of the `kind: 'status'` post created when `createsPost` was true. Null when no post was generated. */
+  postId: string | null;
 };
 
 export type OnlineUserDto = UserListDto & {

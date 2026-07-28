@@ -16,7 +16,12 @@ export class StatusNotificationEventsHandler implements OnModuleInit, OnModuleDe
   onModuleInit(): void {
     this.sub = this.events.onUserStatusSet((event) => {
       void this.notifications
-        .fanOutStatusUpdateNotifications({ actorUserId: event.userId, text: event.text })
+        .fanOutStatusUpdateNotifications({
+          actorUserId: event.userId,
+          text: event.text,
+          postId: event.postId,
+          mode: event.mode,
+        })
         .catch((err) => {
           this.logger.warn(
             `[notifications] Status fan-out failed: ${err instanceof Error ? err.message : String(err)}`,

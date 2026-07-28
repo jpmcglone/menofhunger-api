@@ -21,6 +21,8 @@ import {
   type SocialPostMetadataDto,
   xSyndicationToken,
 } from './x-link-metadata';
+import { isRumbleVideoUrl, enrichRumbleVideo, type VideoEmbedDto } from './rumble-link-metadata';
+import { isSubstackPostUrl, enrichSubstackPost } from './substack-link-metadata';
 
 export type LinkMetadataDto = {
   url: string;
@@ -29,12 +31,14 @@ export type LinkMetadataDto = {
   imageUrl: string | null;
   siteName: string | null;
   socialPost: SocialPostMetadataDto | null;
+  videoEmbed: VideoEmbedDto | null;
 };
 
 const FETCH_TIMEOUT_MS = 2000;
 /** Pickax post pages need a longer scrape window to recover avatar + @handle. */
 const PICKAX_ENRICH_TIMEOUT_MS = 8_000;
 const X_ENRICH_TIMEOUT_MS = 6_000;
+const SUBSTACK_ENRICH_TIMEOUT_MS = 6_000;
 const X_CONNECTOR_LAUNCHED_AT = new Date('2026-07-16T00:00:00.000Z');
 const STALE_DAYS = 7;
 /** Keyset pagination page size when scanning recent posts during backfill. */
@@ -95,6 +99,7 @@ function buildMohSyntheticMeta(url: string): LinkMetadataDto {
       imageUrl: null,
       siteName: 'Men of Hunger',
       socialPost: null,
+      videoEmbed: null,
     };
   } catch {
     return {
@@ -104,6 +109,7 @@ function buildMohSyntheticMeta(url: string): LinkMetadataDto {
       imageUrl: null,
       siteName: 'Men of Hunger',
       socialPost: null,
+      videoEmbed: null,
     };
   }
 }
@@ -258,6 +264,7 @@ export class LinkMetadataService {
     imageUrl: string | null;
     siteName: string | null;
     socialPost: Prisma.JsonValue;
+    videoEmbed?: Prisma.JsonValue;
   }): LinkMetadataDto {
     return {
       url: row.url,
@@ -268,6 +275,10 @@ export class LinkMetadataService {
       socialPost:
         row.socialPost && typeof row.socialPost === 'object' && !Array.isArray(row.socialPost)
           ? (row.socialPost as unknown as SocialPostMetadataDto)
+          : null,
+      videoEmbed:
+        row.videoEmbed && typeof row.videoEmbed === 'object' && !Array.isArray(row.videoEmbed)
+          ? (row.videoEmbed as unknown as VideoEmbedDto)
           : null,
     };
   }
@@ -322,6 +333,9 @@ export class LinkMetadataService {
           socialPost: meta.socialPost
             ? (meta.socialPost as unknown as Prisma.InputJsonValue)
             : Prisma.JsonNull,
+          videoEmbed: meta.videoEmbed
+            ? (meta.videoEmbed as unknown as Prisma.InputJsonValue)
+            : Prisma.JsonNull,
         },
         update: {
           title: meta.title,
@@ -330,6 +344,9 @@ export class LinkMetadataService {
           siteName: meta.siteName,
           socialPost: meta.socialPost
             ? (meta.socialPost as unknown as Prisma.InputJsonValue)
+            : Prisma.JsonNull,
+          videoEmbed: meta.videoEmbed
+            ? (meta.videoEmbed as unknown as Prisma.InputJsonValue)
             : Prisma.JsonNull,
         },
       });
@@ -346,7 +363,9 @@ export class LinkMetadataService {
       ? PICKAX_ENRICH_TIMEOUT_MS
       : isXPostUrl(url)
         ? X_ENRICH_TIMEOUT_MS
-        : FETCH_TIMEOUT_MS;
+        : isSubstackPostUrl(url)
+          ? SUBSTACK_ENRICH_TIMEOUT_MS
+          : FETCH_TIMEOUT_MS;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
@@ -360,6 +379,37 @@ export class LinkMetadataService {
       if (isXPostUrl(u.toString())) {
         const xMetadata = await this.enrichXPost(u.toString(), controller.signal);
         if (xMetadata) return xMetadata;
+      }
+
+      if (isRumbleVideoUrl(u.toString())) {
+        const videoEmbed = await enrichRumbleVideo(u.toString(), controller.signal);
+        if (videoEmbed) {
+          return {
+            url: u.toString(),
+            title: null,
+            description: null,
+            imageUrl: videoEmbed.thumbnailUrl,
+            siteName: 'Rumble',
+            socialPost: null,
+            videoEmbed,
+          };
+        }
+      }
+
+      if (isSubstackPostUrl(u.toString())) {
+        const enriched = await enrichSubstackPost(u.toString(), controller.signal);
+        if (enriched) {
+          return {
+            url: u.toString(),
+            title: null,
+            description: null,
+            imageUrl: null,
+            siteName: null,
+            ...enriched,
+            socialPost: null,
+            videoEmbed: null,
+          };
+        }
       }
 
       // Jina is the only public source that provides the complete Pickax body and,
@@ -385,6 +435,7 @@ export class LinkMetadataService {
               siteName: normalizeText(json.data.publisher ?? null) ?? normalizeText(json.data.author ?? null),
               imageUrl: normalizeText(img ?? null),
               socialPost: null,
+              videoEmbed: null,
             };
           }
         }
@@ -431,6 +482,7 @@ export class LinkMetadataService {
         siteName: normalizeText(u.hostname.replace(/^www\./, '')) ?? null,
         imageUrl,
         socialPost: null,
+        videoEmbed: null,
       };
     } catch (err) {
       const name = (err as { name?: string })?.name;
@@ -467,6 +519,7 @@ export class LinkMetadataService {
         imageUrl: socialPost.author.avatarUrl,
         siteName: 'X',
         socialPost,
+        videoEmbed: null,
       };
     } catch (error) {
       const name = (error as { name?: string })?.name;
@@ -509,6 +562,7 @@ export class LinkMetadataService {
         siteName: username ? `@${username}` : 'Pickax',
         imageUrl: avatarUrl ?? (isWeakPickaxImage(base?.imageUrl) ? null : (base?.imageUrl ?? null)),
         socialPost: null,
+        videoEmbed: null,
       };
     } catch {
       return null;

@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Put, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Patch, Put, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { Throttle } from '@nestjs/throttler';
@@ -16,6 +16,7 @@ import type { OnlinePaginationDto, OnlineUserDto, PresenceOnlinePageDto, Recentl
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
+import { PostsService } from '../posts/posts.service';
 
 const ONLINE_LIST_CACHE_TTL_MS = 10_000;
 const RECENTLY_ONLINE_WINDOW_MS = 60 * 60_000;
@@ -31,7 +32,18 @@ const onlinePageSchema = z.object({
   recentCursor: z.string().optional(),
 });
 
+const STATUS_DURATION_HOURS = [1, 3, 6, 12, 24] as const;
+type StatusDurationHours = (typeof STATUS_DURATION_HOURS)[number];
+
 const statusBodySchema = z.object({
+  text: z.string().trim().min(1).max(120),
+  durationHours: z
+    .union(STATUS_DURATION_HOURS.map((h) => z.literal(h)) as [z.ZodLiteral<1>, z.ZodLiteral<3>, z.ZodLiteral<6>, z.ZodLiteral<12>, z.ZodLiteral<24>])
+    .default(24),
+  createsPost: z.boolean().default(true),
+});
+
+const editStatusBodySchema = z.object({
   text: z.string().trim().min(1).max(120),
 });
 
@@ -91,6 +103,7 @@ export class PresenceController {
     private readonly redis: RedisService,
     private readonly appConfig: AppConfigService,
     private readonly marvIdentity: MarvinBotIdentityService,
+    private readonly posts: PostsService,
   ) {}
 
   /**
@@ -151,7 +164,53 @@ export class PresenceController {
   @Put('status')
   async setStatus(@CurrentUserId() userId: string, @Body() body: unknown): Promise<{ data: UserStatusDto }> {
     const parsed = statusBodySchema.parse(body);
-    const status = await this.presence.setStatus(userId, parsed.text);
+    const durationHours = (parsed.durationHours ?? 24) as StatusDurationHours;
+
+    // When createsPost=true, create the feed post first then link it to the status.
+    let statusPostId: string | null = null;
+    if (parsed.createsPost) {
+      const postResult = await this.posts.createPost({
+        userId,
+        body: parsed.text,
+        visibility: 'public',
+        media: null,
+        poll: null,
+        kind: 'status',
+      });
+      statusPostId = postResult.post.id;
+    }
+
+    // setStatus fans out a new status_update notification. The followed_post notification
+    // is suppressed inside posts-mutation.service for kind=status posts so followers
+    // don't receive two notifications for the same status.
+    const status = await this.presence.setStatus(userId, parsed.text, durationHours, statusPostId);
+    this.realtime.emitPresenceStatusUpdated(userId, { status });
+    return { data: status };
+  }
+
+  @UseGuards(AuthGuard, VerifiedGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 20),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Patch('status')
+  async editStatus(@CurrentUserId() userId: string, @Body() body: unknown): Promise<{ data: UserStatusDto }> {
+    const parsed = editStatusBodySchema.parse(body);
+    const { statusDto, statusPostId } = await this.presence.editStatus(userId, parsed.text);
+
+    // If the status has a linked post, update its body in place.
+    // isSiteAdmin bypasses the 30-min edit window and 3-edit limit — status posts
+    // are system-managed and may be edited at any time while the status is active.
+    if (statusPostId) {
+      await this.posts.updatePost({ postId: statusPostId, userId, body: parsed.text, isSiteAdmin: true });
+    }
+
+    const status = statusDto;
+    if (!status) {
+      throw new BadRequestException('No active status to edit. Use PUT /presence/status to set a new one.');
+    }
     this.realtime.emitPresenceStatusUpdated(userId, { status });
     return { data: status };
   }

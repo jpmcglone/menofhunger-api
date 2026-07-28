@@ -32,6 +32,7 @@ import {
 } from './posts-mentions.helpers';
 import { PostsRankingService } from './posts-ranking.service';
 import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
+import { LinkMetadataService } from '../link-metadata/link-metadata.service';
 
 /**
  * Post write paths: create (with the full side-effect pipeline), update,
@@ -57,6 +58,7 @@ export class PostsMutationService {
     private readonly enrichment: PostsViewerEnrichmentService,
     private readonly ranking: PostsRankingService,
     private readonly ticker: TickerService,
+    private readonly linkMetadata: LinkMetadataService,
   ) {}
 
   private async recomputeStreakFromPostsTx(tx: Prisma.TransactionClient, userId: string, now: Date): Promise<void> {
@@ -705,7 +707,7 @@ export class PostsMutationService {
         image: { r2Key: string; width: number | null; height: number | null; alt: string | null } | null;
       }>;
     } | null;
-    kind?: 'regular' | 'checkin';
+    kind?: 'regular' | 'checkin' | 'status';
     checkinDayKey?: string | null;
     checkinPrompt?: string | null;
     /** Top-level post only: creates a post inside this community group (membership required). */
@@ -720,7 +722,7 @@ export class PostsMutationService {
     const { userId, body, visibility: requestedVisibility, parentId, mentions: clientMentions } = params;
     const requestedMarvMode = params.marvMode ?? null;
     const requestedCommunityGroupId = (params.communityGroupId ?? '').trim() || null;
-    const kind = (params.kind ?? 'regular') as 'regular' | 'checkin';
+    const kind = (params.kind ?? 'regular') as 'regular' | 'checkin' | 'status';
     const now = new Date();
     const checkinDayKeyRaw = (params.checkinDayKey ?? null)?.trim() || null;
     const checkinPromptRaw = (params.checkinPrompt ?? null)?.trim() || null;
@@ -738,6 +740,13 @@ export class PostsMutationService {
         throw new BadRequestException('Invalid check-in day.');
       }
       if (!checkinPromptRaw) throw new BadRequestException('Check-in prompt is required.');
+    }
+
+    if (kind === 'status') {
+      if (requestedCommunityGroupId) {
+        throw new BadRequestException('Status posts cannot be posted inside a community group.');
+      }
+      if (parentId) throw new BadRequestException('Status posts must be top-level.');
     }
 
     // Fetch viewer context (request-cached) and parent post in parallel.
@@ -1765,21 +1774,26 @@ export class PostsMutationService {
               if (!isPremium) continue;
             }
 
-            this.notifications
-              .create({
-                recipientUserId,
-                kind: 'followed_post',
-                actorUserId: userId,
-                actorPostId: post.id,
-                subjectPostId: post.id,
-                subjectUserId: userId,
-                body: bodySnippet || undefined,
-              })
-              .catch((err) => {
-                this.logger.warn(
-                  `[notifications] Failed to create followed-post notification: ${err instanceof Error ? err.message : String(err)}`,
-                );
-              });
+            // Status posts skip the followed_post notification — followers receive a
+            // status_update notification instead (fired by the presence domain event).
+            // Checkin posts use the checkin_post kind so followers can filter them separately.
+            if (post.kind !== 'status') {
+              this.notifications
+                .create({
+                  recipientUserId,
+                  kind: post.kind === 'checkin' ? 'checkin_post' : 'followed_post',
+                  actorUserId: userId,
+                  actorPostId: post.id,
+                  subjectPostId: post.id,
+                  subjectUserId: userId,
+                  body: bodySnippet || undefined,
+                })
+                .catch((err) => {
+                  this.logger.warn(
+                    `[notifications] Failed to create followed-post notification: ${err instanceof Error ? err.message : String(err)}`,
+                  );
+                });
+            }
 
             if (!parentId) feedFollowerIds.push(recipientUserId);
           }
@@ -2012,6 +2026,16 @@ export class PostsMutationService {
       this.logger.warn(
         `[posts] Deferred post-create side effects failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+
+    // Pre-warm link-metadata cache for any external URLs in the post body.
+    // Runs outside the main try/catch so a scrape failure never affects the
+    // side-effect pipeline. The 5-min backfill cron is the safety net.
+    const bodyUrls = this.linkMetadata.extractLinks(post.body ?? '');
+    if (bodyUrls.length > 0) {
+      void this.linkMetadata.backfillForUrls(bodyUrls).catch((err) => {
+        this.logger.debug(`[link-metadata] pre-warm failed for post ${post.id}: ${(err as Error).message}`);
+      });
     }
   }
 

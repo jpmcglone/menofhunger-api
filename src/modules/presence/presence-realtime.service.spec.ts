@@ -38,6 +38,7 @@ describe('PresenceRealtimeService user statuses', () => {
         text: 'Around tonight',
         setAt: '2026-04-25T03:00:00.000Z',
         expiresAt: '2026-04-26T03:00:00.000Z',
+        postId: null,
       },
     };
 

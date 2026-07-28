@@ -151,6 +151,7 @@ function makeService(
     enrichment,
     ranking,
     { isValid: () => false } as any,
+    { extractLinks: jest.fn(() => []), backfillForUrls: jest.fn(async () => 0) } as any,
   );
 
   const service = new PostsService(

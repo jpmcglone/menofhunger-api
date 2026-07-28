@@ -17,6 +17,15 @@ export type ConversationReadEvent = {
 export type UserStatusSetEvent = {
   userId: string;
   text: string;
+  /** ID of the `kind: 'status'` post created alongside this status (null when `createsPost` was false). */
+  postId: string | null;
+  /**
+   * `created` — a brand-new status (PUT). Each one is its own event, so every follower
+   * gets a NEW notification row pointing at that status's post (or the profile).
+   * `edited` — a text edit of the active status (PATCH). Patches the existing notification
+   * in place: no new row, no bell increment, no push.
+   */
+  mode: 'created' | 'edited';
 };
 
 @Injectable()

@@ -713,7 +713,7 @@ describe('NotificationsService.markNewPostsRead', () => {
     expect(notification.updateMany).toHaveBeenNthCalledWith(1, {
       where: expect.objectContaining({
         recipientUserId: 'viewer-1',
-        kind: 'followed_post',
+        kind: { in: ['followed_post', 'checkin_post'] },
         deliveredAt: null,
       }),
       data: { deliveredAt: expect.any(Date) },
@@ -721,7 +721,7 @@ describe('NotificationsService.markNewPostsRead', () => {
     expect(notification.updateMany).toHaveBeenNthCalledWith(2, {
       where: expect.objectContaining({
         recipientUserId: 'viewer-1',
-        kind: 'followed_post',
+        kind: { in: ['followed_post', 'checkin_post'] },
       }),
       data: { readAt: expect.any(Date), deliveredAt: expect.any(Date) },
     });

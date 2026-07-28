@@ -99,6 +99,17 @@ export class PresenceRealtimeService {
     void this.presenceRedis.publishEmitToRoom({ room: r, event: ev, payload }).catch(() => undefined);
   }
 
+  /**
+   * Broadcast to ALL connected clients that a daily-content item has just been published.
+   * Clients on the word/quote pages or the right-rail can refetch and show the fresh content
+   * without waiting for the push/email notification or a manual reload.
+   */
+  emitDailyContentPublished(item: 'word' | 'quote', dayKey: string): void {
+    const server = this.getServerOrNull();
+    if (!server) return;
+    server.emit('daily:content-published', { item, dayKey });
+  }
+
   disconnectUserSockets(userId: string): void {
     const server = this.getServerOrNull();
     if (!server) return;

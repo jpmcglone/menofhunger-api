@@ -1,10 +1,10 @@
 /**
- * Unit tests for status_update notification fan-out:
- *   1. fan-out hits every follower
- *   2. no self-notify (actor is never a recipient)
- *   3. push is sent on first create
- *   4. push is NOT sent when inside the 6h cooldown
- *   5. push IS sent again after the cooldown window
+ * Unit tests for status_update notification fan-out.
+ *
+ * Contract: a NEW status (mode 'created') always writes a NEW notification row per
+ * follower — bell + push every time, no cooldown. Editing the active status
+ * (mode 'edited') patches the latest existing row in place — no new row, no bell,
+ * no push.
  */
 
 import { NotificationsService } from './notifications.service';
@@ -99,9 +99,14 @@ describe('fanOutStatusUpdateNotifications', () => {
       follow: { findMany: jest.fn(async () => followers) },
     });
 
-    await svc.fanOutStatusUpdateNotifications({ actorUserId: 'actor-1', text: 'Feeling great!' });
+    await svc.fanOutStatusUpdateNotifications({
+      actorUserId: 'actor-1',
+      text: 'Feeling great!',
+      postId: null,
+      mode: 'created',
+    });
 
-    // one upsert call per follower (via $transaction)
+    // one create call per follower (via $transaction)
     expect(prisma.$transaction).toHaveBeenCalledTimes(2);
   });
 
@@ -114,7 +119,12 @@ describe('fanOutStatusUpdateNotifications', () => {
       follow: { findMany: jest.fn(async () => followers) },
     });
 
-    await svc.fanOutStatusUpdateNotifications({ actorUserId: 'actor-1', text: 'Self check' });
+    await svc.fanOutStatusUpdateNotifications({
+      actorUserId: 'actor-1',
+      text: 'Self check',
+      postId: null,
+      mode: 'created',
+    });
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
@@ -124,30 +134,29 @@ describe('fanOutStatusUpdateNotifications', () => {
       follow: { findMany: jest.fn(async () => []) },
     });
 
-    await svc.fanOutStatusUpdateNotifications({ actorUserId: 'actor-1', text: 'No followers' });
+    await svc.fanOutStatusUpdateNotifications({
+      actorUserId: 'actor-1',
+      text: 'No followers',
+      postId: null,
+      mode: 'created',
+    });
 
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });
 
 // ---------------------------------------------------------------------------
-// upsertStatusUpdateNotification – cooldown behaviour
+// createStatusUpdateNotification – every new status is its own notification
 // ---------------------------------------------------------------------------
 
-describe('upsertStatusUpdateNotification – cooldown', () => {
-  const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-
+describe('createStatusUpdateNotification', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  function buildWithExisting(existingCreatedAt: Date | null) {
-    const notif = existingCreatedAt
-      ? { id: 'existing-notif', createdAt: existingCreatedAt, deliveredAt: null, readAt: null }
-      : null;
-
+  function build(existing: { id: string } | null = null) {
     const sendKindPushSpy = jest.fn(async () => {});
     const { svc, prisma, push } = buildServices({
       notification: {
-        findFirst: jest.fn(async () => notif),
+        findFirst: jest.fn(async () => existing),
         create: jest.fn(async () => ({ id: 'new-notif' })),
         update: jest.fn(async () => ({})),
         count: jest.fn(async () => 1),
@@ -159,77 +168,225 @@ describe('upsertStatusUpdateNotification – cooldown', () => {
     return { svc, prisma, sendKindPushSpy };
   }
 
-  it('creates notification and sends push when no existing row', async () => {
-    const { svc, prisma, sendKindPushSpy } = buildWithExisting(null);
+  it('creates a row, increments the bell, and pushes', async () => {
+    const { svc, prisma, sendKindPushSpy } = build();
 
-    await svc['writer'].upsertStatusUpdateNotification({
+    await svc['writer'].createStatusUpdateNotification({
       recipientUserId: 'r1',
       actorUserId: 'a1',
       actorUsername: 'actor-user',
       text: 'Fresh status',
+      postId: null,
     });
 
     expect(prisma.notification.create).toHaveBeenCalledTimes(1);
-    // Allow micro-tick for fire-and-forget push
+    expect(prisma.user.update).toHaveBeenCalledTimes(1); // bell increment
     await new Promise(setImmediate);
-    expect(sendKindPushSpy).toHaveBeenCalledTimes(1);
     expect(sendKindPushSpy).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'status_update', recipientUserId: 'r1' }),
     );
   });
 
-  it('updates row silently (no push, no bell) when inside the 6h cooldown', async () => {
-    const recentCreatedAt = new Date(Date.now() - 30 * 60 * 1000); // 30 min ago
-    const { svc, prisma, sendKindPushSpy } = buildWithExisting(recentCreatedAt);
+  it('emits a non-silent event so clients announce the arrival', async () => {
+    const { svc } = build();
+    stubPresenceRealtime.emitNotificationNew.mockClear();
+    jest
+      .spyOn(svc['query'], 'buildNotificationDtoForRecipient')
+      .mockResolvedValue({ id: 'new-notif' } as any);
 
-    await svc['writer'].upsertStatusUpdateNotification({
+    await svc['writer'].createStatusUpdateNotification({
       recipientUserId: 'r1',
       actorUserId: 'a1',
       actorUsername: 'actor-user',
-      text: 'Updated status',
+      text: 'Fresh status',
+      postId: null,
     });
 
-    expect(prisma.notification.update).toHaveBeenCalledTimes(1);
-    // update should NOT nullify deliveredAt/readAt
-    const updateArgs = prisma.notification.update.mock.calls[0][0];
-    expect(updateArgs.data).not.toHaveProperty('deliveredAt');
-    expect(prisma.user.update).not.toHaveBeenCalled(); // no bell increment
-    await new Promise(setImmediate);
-    expect(sendKindPushSpy).not.toHaveBeenCalled();
+    const [, payload] = stubPresenceRealtime.emitNotificationNew.mock.calls[0];
+    expect(payload.silent).toBeUndefined();
+    expect(stubPresenceRealtime.emitNotificationsUpdated).toHaveBeenCalled();
   });
 
-  it('renotifies (push + bell) after the 6h cooldown expires', async () => {
-    const oldCreatedAt = new Date(Date.now() - SIX_HOURS_MS - 60_000); // just past cooldown
-    const { svc, prisma, sendKindPushSpy } = buildWithExisting(oldCreatedAt);
+  it('creates a NEW row even when an earlier status notification exists', async () => {
+    const { svc, prisma, sendKindPushSpy } = build({ id: 'older-status-notif' });
 
-    await svc['writer'].upsertStatusUpdateNotification({
+    await svc['writer'].createStatusUpdateNotification({
       recipientUserId: 'r1',
       actorUserId: 'a1',
       actorUsername: 'actor-user',
-      text: 'Status after cooldown',
+      text: 'Second status today',
+      postId: 'post-2',
     });
 
-    expect(prisma.notification.update).toHaveBeenCalledTimes(1);
-    const updateArgs = prisma.notification.update.mock.calls[0][0];
-    expect(updateArgs.data).toHaveProperty('deliveredAt', null);
-    expect(updateArgs.data).toHaveProperty('readAt', null);
-    expect(prisma.user.update).toHaveBeenCalledTimes(1); // bell increment
+    expect(prisma.notification.create).toHaveBeenCalledTimes(1);
+    expect(prisma.notification.update).not.toHaveBeenCalled(); // never reuses the old row
     await new Promise(setImmediate);
     expect(sendKindPushSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('never notifies the actor about themselves', async () => {
-    const { svc, sendKindPushSpy } = buildWithExisting(null);
+  it('deep-links the push to the status post when one exists', async () => {
+    const { svc, sendKindPushSpy } = build();
 
-    await svc['writer'].upsertStatusUpdateNotification({
+    await svc['writer'].createStatusUpdateNotification({
+      recipientUserId: 'r1',
+      actorUserId: 'a1',
+      actorUsername: 'actor-user',
+      text: 'With a post',
+      postId: 'post-abc',
+    });
+
+    await new Promise(setImmediate);
+    expect(sendKindPushSpy).toHaveBeenCalledWith(expect.objectContaining({ url: '/p/post-abc' }));
+  });
+
+  it('falls back to the profile when the status made no post', async () => {
+    const { svc, sendKindPushSpy } = build();
+
+    await svc['writer'].createStatusUpdateNotification({
+      recipientUserId: 'r1',
+      actorUserId: 'a1',
+      actorUsername: 'actor-user',
+      text: 'No post',
+      postId: null,
+    });
+
+    await new Promise(setImmediate);
+    expect(sendKindPushSpy).toHaveBeenCalledWith(expect.objectContaining({ url: '/u/actor-user' }));
+  });
+
+  it('never notifies the actor about themselves', async () => {
+    const { svc, prisma, sendKindPushSpy } = build();
+
+    await svc['writer'].createStatusUpdateNotification({
       recipientUserId: 'actor-self',
       actorUserId: 'actor-self',
       actorUsername: 'actor-user',
       text: 'Should be no-op',
+      postId: null,
     });
 
+    expect(prisma.notification.create).not.toHaveBeenCalled();
     await new Promise(setImmediate);
     expect(sendKindPushSpy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Notifications are one-row-per-status, but pushes must still coalesce so a burst of
+   * statuses doesn't buzz followers repeatedly. Coalescing keys off the resolved push tag,
+   * and `buildPushTag` prefers subjectPostId over subjectUserId — so passing subjectPostId
+   * here would give every status its own tag and silently disable coalescing entirely.
+   */
+  it('keeps the push coalesce tag actor-scoped so a burst of statuses collapses', async () => {
+    const sendKindPushSpy = jest.fn(async (_args: any) => {});
+    const { svc, push } = buildServices({});
+    jest.spyOn(push, 'sendKindPushForActor').mockImplementation(sendKindPushSpy);
+
+    for (const postId of ['post-1', 'post-2']) {
+      await svc['writer'].createStatusUpdateNotification({
+        recipientUserId: 'r1',
+        actorUserId: 'a1',
+        actorUsername: 'actor-user',
+        text: `Status for ${postId}`,
+        postId,
+      });
+    }
+    await new Promise(setImmediate);
+
+    expect(sendKindPushSpy).toHaveBeenCalledTimes(2);
+    const tags = sendKindPushSpy.mock.calls.map(([args]) =>
+      push.buildPushTag({
+        recipientUserId: args.recipientUserId,
+        kind: args.kind,
+        actorUserId: args.actorUserId,
+        subjectPostId: args.subjectPostId ?? null,
+        subjectUserId: args.subjectUserId ?? null,
+      }),
+    );
+    expect(tags[0]).toBe('notif-status_update-user-a1');
+    expect(tags[1]).toBe(tags[0]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// patchStatusUpdateNotification – editing a status is silent
+// ---------------------------------------------------------------------------
+
+describe('patchStatusUpdateNotification', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  function build(existing: { id: string } | null) {
+    const sendKindPushSpy = jest.fn(async () => {});
+    const { svc, prisma, push } = buildServices({
+      notification: {
+        findFirst: jest.fn(async () => existing),
+        create: jest.fn(async () => ({ id: 'new-notif' })),
+        update: jest.fn(async () => ({})),
+        count: jest.fn(async () => 1),
+        findUnique: jest.fn(async () => null),
+        findMany: jest.fn(async () => []),
+      },
+    });
+    jest.spyOn(push, 'sendKindPushForActor').mockImplementation(sendKindPushSpy);
+    return { svc, prisma, sendKindPushSpy };
+  }
+
+  it('patches the latest row in place with no bell and no push', async () => {
+    const { svc, prisma, sendKindPushSpy } = build({ id: 'existing-notif' });
+
+    await svc['writer'].patchStatusUpdateNotification({
+      recipientUserId: 'r1',
+      actorUserId: 'a1',
+      text: 'Edited text',
+      postId: 'post-1',
+    });
+
+    expect(prisma.notification.update).toHaveBeenCalledTimes(1);
+    const updateArgs = prisma.notification.update.mock.calls[0][0];
+    expect(updateArgs.where).toEqual({ id: 'existing-notif' });
+    expect(updateArgs.data).toMatchObject({ body: 'Edited text' });
+    // Unread state is untouched — an edit must not resurface the notification.
+    expect(updateArgs.data).not.toHaveProperty('deliveredAt');
+    expect(updateArgs.data).not.toHaveProperty('readAt');
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+    expect(prisma.user.update).not.toHaveBeenCalled();
+    await new Promise(setImmediate);
+    expect(sendKindPushSpy).not.toHaveBeenCalled();
+  });
+
+  it('marks the realtime emit silent so clients skip the sound and badge', async () => {
+    const { svc } = build({ id: 'existing-notif' });
+    stubPresenceRealtime.emitNotificationNew.mockClear();
+    jest
+      .spyOn(svc['query'], 'buildNotificationDtoForRecipient')
+      .mockResolvedValue({ id: 'existing-notif' } as any);
+
+    await svc['writer'].patchStatusUpdateNotification({
+      recipientUserId: 'r1',
+      actorUserId: 'a1',
+      text: 'Edited text',
+      postId: null,
+    });
+
+    expect(stubPresenceRealtime.emitNotificationNew).toHaveBeenCalledWith(
+      'r1',
+      expect.objectContaining({ silent: true }),
+    );
+    // A silent patch must never touch the bell count.
+    expect(stubPresenceRealtime.emitNotificationsUpdated).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the recipient has no status notification to patch', async () => {
+    const { svc, prisma } = build(null);
+
+    await svc['writer'].patchStatusUpdateNotification({
+      recipientUserId: 'r1',
+      actorUserId: 'a1',
+      text: 'Edited text',
+      postId: null,
+    });
+
+    expect(prisma.notification.update).not.toHaveBeenCalled();
+    expect(prisma.notification.create).not.toHaveBeenCalled();
   });
 });
 

@@ -17,6 +17,12 @@ import type { ScheduledPostDto } from './scheduled-post.dto';
 
 export type NotificationsNewPayloadDto = {
   notification: NotificationDto;
+  /**
+   * True when this event only re-renders an already-seen notification (e.g. the actor
+   * reworded their active status). The row's unread state and the bell count are
+   * untouched, so clients must patch quietly: no sound, no badge change, no highlight.
+   */
+  silent?: boolean;
 };
 
 export type NotificationsDeletedPayloadDto = {

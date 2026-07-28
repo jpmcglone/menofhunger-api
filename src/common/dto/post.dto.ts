@@ -86,7 +86,7 @@ export type PostDto = {
   editCount: number;
   body: string;
   deletedAt: string | null;
-  kind: 'regular' | 'checkin' | 'repost' | 'articleShare';
+  kind: 'regular' | 'checkin' | 'repost' | 'articleShare' | 'status';
   checkinDayKey: string | null;
   checkinPrompt: string | null;
   visibility: PostVisibility;

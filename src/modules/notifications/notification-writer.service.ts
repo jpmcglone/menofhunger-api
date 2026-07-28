@@ -140,6 +140,7 @@ export class NotificationWriterService {
         community_group_invite_cancelled: 'cancelled their group invite',
         marv_not_in_group: '@marv is not in this group',
         status_update: 'updated their status',
+        checkin_post: 'checked in',
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
@@ -215,7 +216,7 @@ export class NotificationWriterService {
         ? `/p/${actorPostId}`
         : kind === 'mention' && actorPostId
           ? `/p/${actorPostId}`
-          : kind === 'followed_post' && subjectPostId
+          : (kind === 'followed_post' || kind === 'checkin_post') && subjectPostId
             ? `/p/${subjectPostId}`
           : kind === 'boost' && subjectPostId
             ? `/p/${subjectPostId}`
@@ -1292,11 +1293,21 @@ export class NotificationWriterService {
 
   /**
    * Fan-out a status_update notification to all followers of the actor.
-   * Fetches the actor's username once for the push URL, then spawns a
-   * fire-and-forget upsert per follower.
+   *
+   * `mode: 'created'` — a new status: write a NEW notification row per follower (bell + push).
+   * `mode: 'edited'` — the active status was reworded: patch each follower's latest row in
+   * place (no new row, no bell, no push).
+   *
+   * Fetches the actor's username once for the push URL, then spawns one fire-and-forget
+   * write per follower.
    */
-  async fanOutStatusUpdateNotifications(params: { actorUserId: string; text: string }): Promise<void> {
-    const { actorUserId, text } = params;
+  async fanOutStatusUpdateNotifications(params: {
+    actorUserId: string;
+    text: string;
+    postId: string | null;
+    mode: 'created' | 'edited';
+  }): Promise<void> {
+    const { actorUserId, text, postId, mode } = params;
 
     const [actor, follows] = await Promise.all([
       this.prisma.user.findUnique({
@@ -1315,15 +1326,15 @@ export class NotificationWriterService {
     const tasks: Promise<void>[] = [];
     for (const f of follows) {
       if (!f.followerId || f.followerId === actorUserId) continue;
+      const args = { recipientUserId: f.followerId, actorUserId, actorUsername, text, postId };
+      const task =
+        mode === 'created'
+          ? this.createStatusUpdateNotification(args)
+          : this.patchStatusUpdateNotification(args);
       tasks.push(
-        this.upsertStatusUpdateNotification({
-          recipientUserId: f.followerId,
-          actorUserId,
-          actorUsername,
-          text,
-        }).catch((err) => {
+        task.catch((err) => {
           this.logger.warn(
-            `[notifications] Failed to upsert status_update notification: ${err instanceof Error ? err.message : String(err)}`,
+            `[notifications] Failed to write status_update notification: ${err instanceof Error ? err.message : String(err)}`,
           );
         }),
       );
@@ -1331,22 +1342,21 @@ export class NotificationWriterService {
     await Promise.allSettled(tasks);
   }
 
-  private static readonly STATUS_RENOTIFY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
-
   /**
-   * Create-or-update a status_update notification for one recipient.
+   * Create a NEW status_update notification row for one recipient.
    *
-   * - No existing row → create; increment bell; push.
-   * - Existing row older than 6h → update body/createdAt, reset unread state; increment bell; push.
-   * - Existing row within 6h → update body/createdAt only (live patch for open clients); no bell, no push.
+   * Every new status is its own event, so it gets its own row pointing at that status's
+   * post (or the actor's profile when the status made no post). Older status notifications
+   * are left intact as history. Increments the bell and sends a push.
    */
-  async upsertStatusUpdateNotification(params: {
+  async createStatusUpdateNotification(params: {
     recipientUserId: string;
     actorUserId: string;
     actorUsername: string;
     text: string;
+    postId: string | null;
   }): Promise<void> {
-    const { recipientUserId, actorUserId, actorUsername, text } = params;
+    const { recipientUserId, actorUserId, actorUsername, text, postId } = params;
     if (actorUserId === recipientUserId) return;
 
     const maxAttempts = 3;
@@ -1356,47 +1366,13 @@ export class NotificationWriterService {
       try {
         const res = await this.prisma.$transaction(
           async (tx) => {
-            const existing = await tx.notification.findFirst({
-              where: { recipientUserId, actorUserId, kind: 'status_update' },
-              select: { id: true, createdAt: true, deliveredAt: true, readAt: true },
-            });
-
-            const now = new Date();
-            const cooldown = NotificationWriterService.STATUS_RENOTIFY_COOLDOWN_MS;
-
-            if (existing) {
-              const msSinceCreated = now.getTime() - existing.createdAt.getTime();
-              const renotify = msSinceCreated >= cooldown;
-
-              await tx.notification.update({
-                where: { id: existing.id },
-                data: {
-                  body: text,
-                  createdAt: now,
-                  ...(renotify ? { deliveredAt: null, readAt: null, ignoredAt: null, presentAt: presentAt ?? undefined } : {}),
-                },
-              });
-
-              if (renotify) {
-                await tx.user.update({
-                  where: { id: recipientUserId },
-                  data: { undeliveredNotificationCount: { increment: 1 } },
-                });
-              }
-
-              const undeliveredCount = renotify
-                ? await tx.notification.count({ where: this.readState.undeliveredBellWhere(recipientUserId) })
-                : null;
-
-              return { kind: renotify ? ('renotify' as const) : ('silent' as const), notificationId: existing.id, undeliveredCount };
-            }
-
             const notification = await tx.notification.create({
               data: {
                 recipientUserId,
                 kind: 'status_update',
                 actorUserId,
                 subjectUserId: actorUserId,
+                subjectPostId: postId ?? undefined,
                 title: 'updated their status',
                 body: text,
                 presentAt: presentAt ?? undefined,
@@ -1413,17 +1389,15 @@ export class NotificationWriterService {
               where: this.readState.undeliveredBellWhere(recipientUserId),
             });
 
-            return { kind: 'created' as const, notificationId: notification.id, undeliveredCount };
+            return { notificationId: notification.id, undeliveredCount };
           },
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
         );
 
-        // Badge update (created or renotify).
-        if ((res.kind === 'created' || res.kind === 'renotify') && typeof res.undeliveredCount === 'number') {
-          this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount: res.undeliveredCount });
-        }
+        this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
+          undeliveredCount: res.undeliveredCount,
+        });
 
-        // Always emit notifications:new so open clients patch the row in place.
         try {
           const dto = await this.query.buildNotificationDtoForRecipient({
             recipientUserId,
@@ -1436,19 +1410,21 @@ export class NotificationWriterService {
           // Best-effort
         }
 
-        // Push only on created or renotify (not silent).
-        if (res.kind === 'created' || res.kind === 'renotify') {
-          void this.push.sendKindPushForActor({
-            recipientUserId,
-            kind: 'status_update',
-            actorUserId,
-            fallbackTitle: 'updated their status',
-            body: text,
-            subjectUserId: actorUserId,
-            url: `/u/${actorUsername}`,
-            notificationId: res.notificationId,
-          });
-        }
+        // Deliberately no subjectPostId: buildPushTag prefers it over subjectUserId, which
+        // would give every status its own coalesce tag and let a burst of statuses buzz the
+        // follower once each. Keeping the tag actor-scoped means the in-app rows stay
+        // one-per-status while pushes collapse inside the status_update coalesce window.
+        // The deep link is passed explicitly via `url` instead.
+        void this.push.sendKindPushForActor({
+          recipientUserId,
+          kind: 'status_update',
+          actorUserId,
+          fallbackTitle: 'updated their status',
+          body: text,
+          subjectUserId: actorUserId,
+          url: postId ? `/p/${postId}` : `/u/${actorUsername}`,
+          notificationId: res.notificationId,
+        });
 
         return;
       } catch (err) {
@@ -1461,6 +1437,48 @@ export class NotificationWriterService {
         }
         throw err;
       }
+    }
+  }
+
+  /**
+   * Patch the most recent status_update notification for one recipient in place.
+   *
+   * Used when the actor edits the text of their active status: the notification already
+   * exists and already points at the right post, so we only refresh the body. No new row,
+   * no bell increment, no push — just a `silent` notifications:new emit so open clients
+   * repaint the text without a sound or badge change.
+   */
+  async patchStatusUpdateNotification(params: {
+    recipientUserId: string;
+    actorUserId: string;
+    text: string;
+    postId: string | null;
+  }): Promise<void> {
+    const { recipientUserId, actorUserId, text, postId } = params;
+    if (actorUserId === recipientUserId) return;
+
+    const existing = await this.prisma.notification.findFirst({
+      where: { recipientUserId, actorUserId, kind: 'status_update' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    if (!existing) return;
+
+    await this.prisma.notification.update({
+      where: { id: existing.id },
+      data: { body: text, subjectPostId: postId ?? undefined },
+    });
+
+    try {
+      const dto = await this.query.buildNotificationDtoForRecipient({
+        recipientUserId,
+        notificationId: existing.id,
+      });
+      if (dto) {
+        this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto, silent: true });
+      }
+    } catch {
+      // Best-effort
     }
   }
 

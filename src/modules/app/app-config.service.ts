@@ -296,6 +296,12 @@ export class AppConfigService {
     return v ? v : null;
   }
 
+  /** bible.helloao.org translation ID. Defaults to BSB (public domain, modern English). */
+  scriptureTranslation(): string {
+    const v = this.config.get<string>('SCRIPTURE_TRANSLATION')?.trim() ?? '';
+    return v || 'BSB';
+  }
+
   rateLimitTtlSeconds(): number {
     const raw = this.config.get<string>('RATE_LIMIT_TTL_SECONDS') ?? '';
     const n = Number(raw);

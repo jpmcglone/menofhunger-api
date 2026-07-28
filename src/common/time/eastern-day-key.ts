@@ -106,6 +106,32 @@ export function nextPublishBoundaryUtcMs(now: Date): number {
 }
 
 /**
+ * UTC ms of when the next word-of-the-day will publish (09:00 ET).
+ * If 09:00 ET today has already passed, returns 09:00 ET tomorrow.
+ */
+export function nextWordPublishUtcMs(now: Date): number {
+  const min = easternMinuteOfDay(now);
+  if (min < 9 * 60) {
+    return etLocalToUtcMs(now, 9, 0);
+  }
+  const tomorrowUtc = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  return etLocalToUtcMs(tomorrowUtc, 9, 0);
+}
+
+/**
+ * UTC ms of when the next quote-of-the-day will publish (09:30 ET).
+ * If 09:30 ET today has already passed, returns 09:30 ET tomorrow.
+ */
+export function nextQuotePublishUtcMs(now: Date): number {
+  const min = easternMinuteOfDay(now);
+  if (min < 9 * 60 + 30) {
+    return etLocalToUtcMs(now, 9, 30);
+  }
+  const tomorrowUtc = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  return etLocalToUtcMs(tomorrowUtc, 9, 30);
+}
+
+/**
  * Find the UTC timestamp corresponding to hh:mm ET on the ET calendar date of `ref`.
  * Scans UTC hours (DST-safe).
  */

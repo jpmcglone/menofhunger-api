@@ -19,12 +19,14 @@ describe('PresenceService user statuses', () => {
           statusText: 'Around tonight',
           statusSetAt: new Date('2026-04-25T02:00:00.000Z'),
           statusExpiresAt: new Date('2026-04-26T02:00:00.000Z'),
+          statusPostId: null,
         },
         {
           id: 'user-expired',
           statusText: 'Old news',
           statusSetAt: new Date('2026-04-23T02:00:00.000Z'),
           statusExpiresAt: new Date('2026-04-24T02:00:00.000Z'),
+          statusPostId: null,
         },
       ]),
     };
@@ -36,6 +38,7 @@ describe('PresenceService user statuses', () => {
         statusText: status.text,
         statusSetAt: new Date(status.setAt),
         statusExpiresAt: new Date(status.expiresAt),
+        statusPostId: status.postId,
       }, now))
       .filter(Boolean);
 
@@ -50,6 +53,7 @@ describe('PresenceService user statuses', () => {
         text: 'Around tonight',
         setAt: '2026-04-25T02:00:00.000Z',
         expiresAt: '2026-04-26T02:00:00.000Z',
+        postId: null,
       },
     ]);
     jest.useRealTimers();
@@ -64,6 +68,7 @@ describe('PresenceService user statuses', () => {
           statusText: 'Working late',
           statusSetAt: new Date('2026-04-25T03:00:00.000Z'),
           statusExpiresAt: new Date('2026-04-26T03:00:00.000Z'),
+          statusPostId: null,
         })
         .mockResolvedValueOnce({ id: 'user-1' }),
     };
@@ -74,23 +79,156 @@ describe('PresenceService user statuses', () => {
       text: 'Working late',
       setAt: '2026-04-25T03:00:00.000Z',
       expiresAt: '2026-04-26T03:00:00.000Z',
+      postId: null,
     });
     await service.clearStatus('user-1');
 
     expect(prismaUser.update).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      data: {
+      data: expect.objectContaining({
         statusText: 'Working late',
         statusSetAt: new Date('2026-04-25T03:00:00.000Z'),
         statusExpiresAt: new Date('2026-04-26T03:00:00.000Z'),
-      },
+        statusPostId: null,
+      }),
     }));
     expect(prismaUser.update).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      data: {
+      data: expect.objectContaining({
         statusText: null,
         statusSetAt: null,
         statusExpiresAt: null,
-      },
+        statusPostId: null,
+      }),
     }));
+    jest.useRealTimers();
+  });
+
+  it('sets a status with a custom durationHours', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-04-25T03:00:00.000Z'));
+    const prismaUser = {
+      update: jest.fn().mockResolvedValue({
+        id: 'user-1',
+        statusText: 'Quick update',
+        statusSetAt: new Date('2026-04-25T03:00:00.000Z'),
+        statusExpiresAt: new Date('2026-04-25T06:00:00.000Z'),
+        statusPostId: null,
+      }),
+    };
+    const service = makeService(prismaUser);
+
+    const result = await service.setStatus('user-1', 'Quick update', 3);
+    expect(result.expiresAt).toBe('2026-04-25T06:00:00.000Z');
+    expect(prismaUser.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        statusExpiresAt: new Date('2026-04-25T06:00:00.000Z'),
+      }),
+    }));
+    jest.useRealTimers();
+  });
+
+  it('editStatus updates text without changing expiry', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-04-25T04:00:00.000Z'));
+    const prismaUser = {
+      update: jest.fn().mockResolvedValue({
+        id: 'user-1',
+        statusText: 'Updated text',
+        statusSetAt: new Date('2026-04-25T03:00:00.000Z'),
+        statusExpiresAt: new Date('2026-04-26T03:00:00.000Z'),
+        statusPostId: 'post-abc',
+      }),
+    };
+    const service = makeService(prismaUser);
+
+    const { statusDto, statusPostId } = await service.editStatus('user-1', 'Updated text');
+    expect(statusDto?.text).toBe('Updated text');
+    expect(statusPostId).toBe('post-abc');
+    // Should only update statusText, not expiresAt
+    expect(prismaUser.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: { statusText: 'Updated text' },
+    }));
+    jest.useRealTimers();
+  });
+
+  it('setStatus always emits a created event so every new status notifies followers', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-04-25T03:00:00.000Z'));
+    const localStubDomainEvents = { emitUserStatusSet: jest.fn() } as any;
+    const service = new PresenceService(
+      { presenceIdleAfterMinutes: jest.fn(), presenceIdleDisconnectMinutes: jest.fn() } as any,
+      {
+        user: {
+          update: jest.fn().mockResolvedValue({
+            id: 'user-1',
+            statusText: 'Back at it',
+            statusSetAt: new Date(),
+            statusExpiresAt: new Date(),
+            statusPostId: 'post-1',
+          }),
+        },
+      } as any,
+      localStubDomainEvents,
+    );
+
+    await service.setStatus('user-1', 'Back at it', 24, 'post-1');
+    expect(localStubDomainEvents.emitUserStatusSet).toHaveBeenCalledWith({
+      userId: 'user-1',
+      text: 'Back at it',
+      postId: 'post-1',
+      mode: 'created',
+    });
+    jest.useRealTimers();
+  });
+
+  it('setStatus without a post still emits a created event', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-04-25T03:00:00.000Z'));
+    const localStubDomainEvents = { emitUserStatusSet: jest.fn() } as any;
+    const service = new PresenceService(
+      { presenceIdleAfterMinutes: jest.fn(), presenceIdleDisconnectMinutes: jest.fn() } as any,
+      {
+        user: {
+          update: jest.fn().mockResolvedValue({
+            id: 'user-1',
+            statusText: 'Quiet one',
+            statusSetAt: new Date(),
+            statusExpiresAt: new Date(),
+            statusPostId: null,
+          }),
+        },
+      } as any,
+      localStubDomainEvents,
+    );
+
+    await service.setStatus('user-1', 'Quiet one', 24, null);
+    expect(localStubDomainEvents.emitUserStatusSet).toHaveBeenCalledWith(
+      expect.objectContaining({ postId: null, mode: 'created' }),
+    );
+    jest.useRealTimers();
+  });
+
+  it('editStatus emits an edited event so the existing notification is patched, not duplicated', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-04-25T04:00:00.000Z'));
+    const localStubDomainEvents = { emitUserStatusSet: jest.fn() } as any;
+    const service = new PresenceService(
+      { presenceIdleAfterMinutes: jest.fn(), presenceIdleDisconnectMinutes: jest.fn() } as any,
+      {
+        user: {
+          update: jest.fn().mockResolvedValue({
+            id: 'user-1',
+            statusText: 'Reworded',
+            statusSetAt: new Date('2026-04-25T03:00:00.000Z'),
+            statusExpiresAt: new Date('2026-04-26T03:00:00.000Z'),
+            statusPostId: 'post-abc',
+          }),
+        },
+      } as any,
+      localStubDomainEvents,
+    );
+
+    await service.editStatus('user-1', 'Reworded');
+    expect(localStubDomainEvents.emitUserStatusSet).toHaveBeenCalledWith({
+      userId: 'user-1',
+      text: 'Reworded',
+      postId: 'post-abc',
+      mode: 'edited',
+    });
     jest.useRealTimers();
   });
 });
