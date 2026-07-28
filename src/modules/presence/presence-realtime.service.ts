@@ -112,13 +112,14 @@ export class PresenceRealtimeService {
 
   /**
    * Broadcast the updated like count for the current WOTD to all connected clients.
-   * Both the full WOTD page and the right-rail card can patch their local state
-   * without refetching the entire word entry.
+   * Includes `actorUserId` and `liked` so each client can determine whether the
+   * acting user is themselves (for multi-device viewerHasLiked sync) without leaking
+   * private like state to other users.
    */
-  emitWotdLikeUpdated(likeCount: number): void {
+  emitWotdLikeUpdated(likeCount: number, actorUserId: string, liked: boolean): void {
     const server = this.getServerOrNull();
     if (!server) return;
-    server.emit('wotd:like-updated', { likeCount });
+    server.emit('wotd:like-updated', { likeCount, actorUserId, liked });
   }
 
   disconnectUserSockets(userId: string): void {

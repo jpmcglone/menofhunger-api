@@ -43,7 +43,7 @@ export class Websters1828Controller {
     const wotd = await this.websters.getWordOfDay({ includeDefinition: false, userId });
     if (!wotd) throw new NotFoundException('No word of the day is available yet.');
     const result = await this.websters.toggleLike(userId, wotd.word);
-    this.realtime.emitWotdLikeUpdated(result.likeCount);
+    this.realtime.emitWotdLikeUpdated(result.likeCount, userId, result.liked);
     return { data: result };
   }
 
