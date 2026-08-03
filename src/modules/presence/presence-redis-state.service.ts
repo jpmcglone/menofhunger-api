@@ -15,6 +15,7 @@ type PresenceEvent =
   | { type: 'platformsChanged'; userId: string; instanceId: string; platforms: string[] }
   | { type: 'emitToUser'; userId: string; instanceId: string; event: string; payload: unknown }
   | { type: 'emitToRoom'; userId: string; instanceId: string; room: string; event: string; payload: unknown }
+  | { type: 'broadcast'; instanceId: string; event: string; payload: unknown }
   | { type: 'userStatusChanged'; userId: string; instanceId: string; event: string; payload: unknown }
   | { type: 'spacesLobbyCounts'; instanceId: string; countsBySpaceId: Record<string, number> }
   | {
@@ -324,6 +325,17 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
     if (!room || !event) return;
     // `userId` remains required by the pubsub envelope; use '-' for room emits.
     await this.publish({ type: 'emitToRoom', userId: '-', instanceId: this.instanceId, room, event, payload: params.payload });
+  }
+
+  /**
+   * Cross-instance global broadcast (best-effort). Every instance re-emits to all of its
+   * connected sockets. Needed so broadcasts originating from a worker process (which has no
+   * Socket.IO server of its own) still reach clients.
+   */
+  async publishBroadcast(params: { event: string; payload: unknown }): Promise<void> {
+    const event = String(params.event ?? '').trim();
+    if (!event) return;
+    await this.publish({ type: 'broadcast', instanceId: this.instanceId, event, payload: params.payload });
   }
 
   async isIdle(userId: string): Promise<boolean> {

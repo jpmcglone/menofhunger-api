@@ -33,6 +33,7 @@ import { SlackService } from '../../common/slack/slack.service';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
 import { PresenceService } from '../presence/presence.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 
 /** TTL for the full session cache (auth guards). Short enough to pick up bans/revocations quickly. */
 const SESSION_FULL_CACHE_TTL_MS = 30_000;
@@ -104,6 +105,7 @@ export class AuthService {
     private readonly requestCache: RequestCacheService,
     private readonly presence: PresenceService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   private maskPhone(phone: string) {
@@ -355,6 +357,13 @@ export class AuthService {
     if (isNewUser) {
       this.posthog.capture(user.id, 'user_signed_up', { phone_masked: this.maskPhone(phone) });
       this.slack.notifySignup({ userId: user.id });
+
+      // Auto-verify (coins, affiliate earnings, billing hooks) never blocks a signup.
+      this.sideEffects.dispatch('user.auto-verify', {
+        userId: user.id,
+        recruitedById,
+        source: 'auto_signup',
+      });
     } else if (restoredPendingDeletion) {
       this.posthog.capture(user.id, 'account_deletion_cancelled');
     } else {

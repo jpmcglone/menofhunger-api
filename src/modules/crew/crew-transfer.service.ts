@@ -10,7 +10,7 @@ import { Prisma } from '@prisma/client';
 import type { CrewOwnerTransferVote } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { NotificationsService } from '../notifications/notifications.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import {
   CREW_INACTIVE_OWNER_DAYS,
   CREW_TRANSFER_VOTE_EXPIRY_DAYS,
@@ -26,7 +26,7 @@ export class CrewTransferService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly presenceRealtime: PresenceRealtimeService,
-    private readonly notifications: NotificationsService,
+    private readonly sideEffects: SideEffectsService,
     private readonly crew: CrewService,
   ) {}
 
@@ -108,20 +108,6 @@ export class CrewTransferService {
       return created;
     });
 
-    // Notify all non-owner members (except proposer).
-    const nonOwners = await this.prisma.crewMember.findMany({
-      where: { crewId, role: 'member' },
-      select: { userId: true },
-    });
-    for (const nm of nonOwners) {
-      if (nm.userId === params.viewerUserId) continue;
-      await this.notifications.create({
-        recipientUserId: nm.userId,
-        kind: 'crew_owner_transfer_vote',
-        actorUserId: params.viewerUserId,
-        subjectCrewId: crewId,
-      });
-    }
     const memberIds = await this.prisma.crewMember
       .findMany({ where: { crewId }, select: { userId: true } })
       .then((rs) => rs.map((r) => r.userId));
@@ -131,8 +117,15 @@ export class CrewTransferService {
     });
 
     // If the crew has exactly 2 members, the proposer is the only non-owner and
-    // a single yes ballot already passes the vote.
+    // a single yes ballot already passes the vote. Resolve before dispatching so the
+    // handler sees the closed vote and skips asking anyone to vote on it.
     await this.maybeResolveVote(vote.id);
+
+    this.sideEffects.dispatch('crew.transfer.vote.opened', {
+      crewId,
+      voteId: vote.id,
+      actorUserId: params.viewerUserId,
+    });
 
     return vote;
   }
@@ -449,13 +442,11 @@ export class CrewTransferService {
       previousOwnerUserId,
       reason,
     });
-    for (const userId of memberIds) {
-      await this.notifications.create({
-        recipientUserId: userId,
-        kind: 'crew_owner_transferred',
-        actorUserId: reason === 'inactivity' ? null : previousOwnerUserId,
-        subjectCrewId: crewId,
-      });
-    }
+    this.sideEffects.dispatch('crew.owner.transferred', {
+      crewId,
+      previousOwnerUserId,
+      newOwnerUserId,
+      reason,
+    });
   }
 }

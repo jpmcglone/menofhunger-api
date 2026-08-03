@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { AppConfigModule } from '../app/app-config.module';
 import { JobsService } from './jobs.service';
 import { JobsStatusService } from './jobs-status.service';
+import { SideEffectsModule } from '../side-effects/side-effects.module';
 import { MOH_BACKGROUND_QUEUE, MOH_MARVIN_QUEUE } from './jobs.constants';
 
 @Global()
@@ -17,6 +18,9 @@ import { MOH_BACKGROUND_QUEUE, MOH_MARVIN_QUEUE } from './jobs.constants';
     BullModule.registerQueue({
       name: MOH_MARVIN_QUEUE,
     }),
+    // Imported explicitly (rather than relying on the global scope) so `JobsStatusService`
+    // shares the one side-effects Queue instance instead of opening a second connection.
+    SideEffectsModule,
   ],
   providers: [JobsService, JobsStatusService],
   exports: [JobsService, JobsStatusService, BullModule],

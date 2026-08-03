@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PostViewsService } from '../post-views/post-views.service';
@@ -21,7 +21,7 @@ import { PostsFeedQueryService } from './posts-feed-query.service';
 export class PostsEngagementService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly notifications: NotificationsService,
+    private readonly sideEffects: SideEffectsService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly cacheInvalidation: CacheInvalidationService,
     private readonly appConfig: AppConfigService,
@@ -103,15 +103,13 @@ export class PostsEngagementService {
     });
 
     if (post.userId !== userId) {
-      const bodySnippet = (post.body ?? '').trim().slice(0, 150) || undefined;
-      this.notifications
-        .upsertBoostNotification({
-          recipientUserId: post.userId,
-          actorUserId: userId,
-          subjectPostId: id,
-          bodySnippet: bodySnippet ?? null,
-        })
-        .catch(() => {});
+      this.sideEffects.dispatch('post.engagement.changed', {
+        kind: 'boost',
+        active: true,
+        postId: id,
+        recipientUserId: post.userId,
+        actorUserId: userId,
+      });
     }
 
     // Boosting implies the user saw the post.
@@ -190,7 +188,13 @@ export class PostsEngagementService {
     });
 
     if (post.userId !== userId) {
-      this.notifications.deleteBoostNotification(post.userId, userId, id).catch(() => {});
+      this.sideEffects.dispatch('post.engagement.changed', {
+        kind: 'boost',
+        active: false,
+        postId: id,
+        recipientUserId: post.userId,
+        actorUserId: userId,
+      });
     }
 
     // Realtime post interaction update (post author + actor) — used by the
@@ -325,12 +329,14 @@ export class PostsEngagementService {
 
     // Notify original author (not self-repost).
     if (canonicalPost.userId !== userId) {
-      this.notifications.upsertRepostNotification({
+      this.sideEffects.dispatch('post.engagement.changed', {
+        kind: 'repost',
+        active: true,
+        postId: canonicalId,
         recipientUserId: canonicalPost.userId,
         actorUserId: userId,
-        subjectPostId: canonicalId,
         actorPostId: repostId,
-      }).catch(() => {});
+      });
     }
 
     // Realtime fan-out: every viewer subscribed to the canonical post's room
@@ -454,7 +460,13 @@ export class PostsEngagementService {
     // Clean up repost notification.
     const canonicalPost = await this.prisma.post.findFirst({ where: { id: canonicalId }, select: { userId: true } });
     if (canonicalPost?.userId && canonicalPost.userId !== userId) {
-      this.notifications.deleteRepostNotification(canonicalPost.userId, userId, canonicalId).catch(() => {});
+      this.sideEffects.dispatch('post.engagement.changed', {
+        kind: 'repost',
+        active: false,
+        postId: canonicalId,
+        recipientUserId: canonicalPost.userId,
+        actorUserId: userId,
+      });
     }
 
     // Realtime fan-out: every viewer subscribed to the canonical post's room

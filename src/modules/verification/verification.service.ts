@@ -3,11 +3,9 @@ import type { Prisma, VerificationRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { PublicProfileCacheService } from '../users/public-profile-cache.service';
-import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
-import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
 import { VERIFICATION_ADMIN_USER_SELECT } from '../../common/prisma-selects/user.select';
 import { SlackService } from '../../common/slack/slack.service';
+import { UserVerificationService } from './user-verification.service';
 
 @Injectable()
 export class VerificationService {
@@ -15,9 +13,7 @@ export class VerificationService {
     private readonly prisma: PrismaService,
     private readonly slack: SlackService,
     private readonly presenceRealtime: PresenceRealtimeService,
-    private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
-    private readonly usersMeRealtime: UsersMeRealtimeService,
-    private readonly usersPublicRealtime: UsersPublicRealtimeService,
+    private readonly userVerification: UserVerificationService,
   ) {}
 
   async createRequestForUser(params: { userId: string | null; providerHint: string | null }) {
@@ -162,80 +158,33 @@ export class VerificationService {
     const id = (params.requestId ?? '').trim();
     if (!id) throw new NotFoundException('Verification request not found.');
 
-    const now = new Date();
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const existing = await tx.verificationRequest.findUnique({
-        where: { id },
-        include: { user: { select: { id: true, verifiedStatus: true } } },
-      });
-      if (!existing) throw new NotFoundException('Verification request not found.');
-
-      const alreadyVerified = (existing.user.verifiedStatus ?? 'none') !== 'none';
-
-      if (existing.status !== 'pending') {
-        if (!alreadyVerified) throw new BadRequestException('This verification request is not pending.');
-        // Idempotent: user already verified; ensure manual and return current request.
-        await tx.user.update({
-          where: { id: existing.user.id },
-          data: { verifiedStatus: 'manual', verifiedAt: now, unverifiedAt: null },
-        });
-        return await tx.verificationRequest.findUniqueOrThrow({
-          where: { id },
-          include: {
-            user: { select: VERIFICATION_ADMIN_USER_SELECT },
-            reviewedByAdmin: { select: { id: true, username: true, name: true } },
-          },
-        });
-      }
-
-      // Request is pending. If user already verified, accept idempotently (mark approved, set manual).
-      const updatedReq = await tx.verificationRequest.update({
-        where: { id },
-        data: {
-          status: 'approved',
-          provider: 'manual',
-          reviewedAt: now,
-          reviewedByAdmin: { connect: { id: params.adminUserId } },
-          adminNote: params.adminNote ?? null,
-          rejectionReason: null,
-        },
-        include: {
-          user: { select: VERIFICATION_ADMIN_USER_SELECT },
-          reviewedByAdmin: { select: { id: true, username: true, name: true } },
-        },
-      });
-
-      await tx.user.update({
-        where: { id: updatedReq.userId },
-        data: {
-          verifiedStatus: 'manual',
-          verifiedAt: now,
-          unverifiedAt: null,
-        },
-      });
-
-      return updatedReq;
+    const existing = await this.prisma.verificationRequest.findUnique({
+      where: { id },
+      include: { user: { select: { id: true, verifiedStatus: true } } },
     });
-    await this.publicProfileCache.invalidateForUser({
-      id: updated.userId,
-      username: updated.user?.username ?? null,
-    });
+    if (!existing) throw new NotFoundException('Verification request not found.');
 
-    // Realtime: admin cross-tab sync + user/follower tier updates.
-    try {
-      this.presenceRealtime.emitAdminUpdated(params.adminUserId, {
-        kind: 'verification',
-        action: 'reviewed',
-        id: updated.id,
-      });
-      await this.usersPublicRealtime.emitPublicProfileUpdated(updated.userId);
-      void this.usersMeRealtime.emitMeUpdated(updated.userId, 'verification_status_changed');
-    } catch {
-      // Best-effort
+    const alreadyVerified = (existing.user.verifiedStatus ?? 'none') !== 'none';
+    if (existing.status !== 'pending' && !alreadyVerified) {
+      throw new BadRequestException('This verification request is not pending.');
     }
 
-    return updated;
+    await this.userVerification.verifyUser({
+      userId: existing.userId,
+      source: 'admin_request',
+      requestId: id,
+      adminUserId: params.adminUserId,
+      adminNote: params.adminNote ?? null,
+      verifiedStatus: 'manual',
+    });
+
+    return await this.prisma.verificationRequest.findUniqueOrThrow({
+      where: { id },
+      include: {
+        user: { select: VERIFICATION_ADMIN_USER_SELECT },
+        reviewedByAdmin: { select: { id: true, username: true, name: true } },
+      },
+    });
   }
 
   async rejectAdmin(params: { requestId: string; adminUserId: string; rejectionReason: string; adminNote?: string | null }) {

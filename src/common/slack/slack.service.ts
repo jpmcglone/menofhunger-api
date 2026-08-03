@@ -53,9 +53,13 @@ export interface SlackProfileReminderPayload {
 export interface SlackDailyDigestPayload {
   dateLabel: string;
   totalNewUserCount: number;
+  totalUserCount: number;
   newPostCount: number;
+  newReplyCount: number;
+  usersWhoPostedCount: number;
   newArticleCount: number;
   activeUserCount: number;
+  wauCount: number;
   bannedUserCount: number;
   activePremiumCount: number;
   activePremiumPlusCount: number;
@@ -265,12 +269,18 @@ export class SlackService {
     blocks.push({ type: 'divider' });
 
     // Yesterday's Activity
-      blocks.push(this.section('*Yesterday\'s Activity*'));
+    blocks.push(this.section('*Yesterday\'s Activity*'));
     const activityFields: SlackBlock[] = [
-      { type: 'mrkdwn', text: `*New Members*\n${base ? `<${base}/admin/users|${p.totalNewUserCount}>` : String(p.totalNewUserCount)}` },
+      {
+        type: 'mrkdwn',
+        text: `*New Members*\n${base ? `<${base}/admin/users|${p.totalNewUserCount}>` : String(p.totalNewUserCount)} _(${p.totalUserCount} total)_`,
+      },
       { type: 'mrkdwn', text: `*New Posts*\n${p.newPostCount}` },
+      { type: 'mrkdwn', text: `*Users Who Posted*\n${p.usersWhoPostedCount}` },
+      { type: 'mrkdwn', text: `*New Replies*\n${p.newReplyCount}` },
       { type: 'mrkdwn', text: `*New Articles*\n${p.newArticleCount}` },
-      { type: 'mrkdwn', text: `*Active Users*\n${p.activeUserCount}` },
+      { type: 'mrkdwn', text: `*Active Users (DAU)*\n${p.activeUserCount}` },
+      { type: 'mrkdwn', text: `*Active Users (7d WAU)*\n${p.wauCount}` },
     ];
     if (p.bannedUserCount > 0) {
       activityFields.push({ type: 'mrkdwn', text: `*Users Banned*\n:rotating_light: ${p.bannedUserCount}` });

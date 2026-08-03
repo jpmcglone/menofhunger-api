@@ -88,6 +88,7 @@ function makeService(
     cachedMarvUserId: jest.fn(() => null),
     getMarvUserId: jest.fn(async () => null),
   };
+  const sideEffects: any = { dispatch: jest.fn() };
 
   const deps = {
     prisma,
@@ -104,6 +105,7 @@ function makeService(
     posthog,
     redis,
     marvIdentity,
+    sideEffects,
     ...extraOverrides,
   };
 
@@ -128,7 +130,7 @@ function makeService(
   );
   const engagement = new PostsEngagementService(
     deps.prisma,
-    deps.notifications,
+    deps.sideEffects,
     deps.presenceRealtime,
     deps.cacheInvalidation,
     deps.appConfig,
@@ -139,19 +141,29 @@ function makeService(
   );
   const mutation = new PostsMutationService(
     deps.prisma,
-    deps.notifications,
     deps.presenceRealtime,
     deps.cacheInvalidation,
     deps.appConfig,
     deps.postViews,
-    deps.jobs,
     deps.posthog,
-    deps.marvIdentity,
     deps.viewerContext,
     enrichment,
     ranking,
     { isValid: () => false } as any,
-    { extractLinks: jest.fn(() => []), backfillForUrls: jest.fn(async () => 0) } as any,
+    {
+      get: jest.fn(async () => ({
+        id: 1,
+        postsPerWindow: 100,
+        windowSeconds: 60,
+        verifiedPostsPerWindow: 100,
+        verifiedWindowSeconds: 60,
+        premiumPostsPerWindow: 100,
+        premiumWindowSeconds: 60,
+        autoVerifyNewUsers: false,
+        autoVerifyRecruiterId: null,
+      })),
+    } as any,
+    deps.sideEffects,
   );
 
   const service = new PostsService(
@@ -509,7 +521,12 @@ describe('PostsService.deletePost', () => {
     expect(result).toEqual({ success: true });
     expect(deps.prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(deps.cacheInvalidation.bumpForPostWrite).toHaveBeenCalledWith({ topics: ['depression'] });
-    expect(deps.notifications.deleteBySubjectPostId).toHaveBeenCalledWith('p1');
+    // Notification cleanup is handed to the side-effects queue, not awaited here.
+    expect(deps.sideEffects.dispatch).toHaveBeenCalledWith(
+      'post.deleted',
+      { postId: 'p1' },
+      { jobId: 'post-deleted-p1' },
+    );
   });
 
   it('schedules a trending-score refresh for the reposted target', async () => {
@@ -1217,427 +1234,6 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
     await expect(service.boostPost({ userId: 'u1', postId: 'p1' })).resolves.toEqual(
       expect.objectContaining({ success: true, viewerHasBoosted: true, boostCount: 1 }),
     );
-  });
-});
-
-// ─── runPostCreateSideEffects: mention notifications gated by group privacy ──
-//
-// The mention loop inside `runPostCreateSideEffects` must:
-//   • notify all explicitly @mentioned users for non-group posts
-//   • notify all mentioned users for posts in OPEN community groups
-//   • notify only ACTIVE members for posts in PRIVATE (approval) community
-//     groups — mentioning someone who can't read the post is a dead end and
-//     leaks existence of private content.
-
-describe('PostsService.runPostCreateSideEffects — mention privacy gating', () => {
-  function setup() {
-    const { service, deps } = makeService();
-    deps.prisma.communityGroup = { findUnique: jest.fn() };
-    deps.prisma.communityGroupMember = { findMany: jest.fn(async () => []) };
-    deps.prisma.follow = { findMany: jest.fn(async () => []) };
-    return { service, deps };
-  }
-
-  function basePost(overrides: Partial<Record<string, unknown>> = {}) {
-    return {
-      id: 'post-1',
-      userId: 'author',
-      communityGroupId: null,
-      user: { name: 'Test Author', username: 'testauthor' },
-      ...overrides,
-    } as any;
-  }
-
-  async function callSideEffects(service: PostsService, args: any): Promise<void> {
-    await ((service as any).mutation).runPostCreateSideEffects({
-      actorUserId: 'author',
-      post: basePost(args.postOverrides),
-      parentId: null,
-      parentAuthorUserId: null,
-      threadPostsForRoles: [],
-      bodyMentionIds: args.bodyMentionIds ?? [],
-      bodyMentionSet: new Set(args.bodyMentionIds ?? []),
-      bodySnippet: '',
-      visibility: 'public',
-      quotedInfo: null,
-      didAwardStreak: false,
-    });
-  }
-
-  it('notifies every mentioned user when the post is not in a community group', async () => {
-    const { service, deps } = setup();
-    await callSideEffects(service, {
-      bodyMentionIds: ['u1', 'u2'],
-      postOverrides: { communityGroupId: null },
-    });
-    expect(deps.prisma.communityGroup.findUnique).not.toHaveBeenCalled();
-    const mentionCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
-      (c) => c[0]?.kind === 'mention',
-    );
-    expect(mentionCalls.map((c) => c[0].recipientUserId).sort()).toEqual(['u1', 'u2']);
-  });
-
-  it('notifies every mentioned user when the post is in an OPEN community group', async () => {
-    const { service, deps } = setup();
-    deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy: 'open' });
-
-    await callSideEffects(service, {
-      bodyMentionIds: ['u1', 'u2'],
-      postOverrides: { communityGroupId: 'g1' },
-    });
-
-    expect(deps.prisma.communityGroup.findUnique).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'g1' } }),
-    );
-    // For open groups, findMany must NOT be called for mention-gating (userId.in check).
-    // The badge fan-out may call findMany with a different shape (userId.not).
-    const mentionGatingCalls = (deps.prisma.communityGroupMember.findMany as jest.Mock).mock.calls
-      .filter((c: any[]) => Array.isArray(c[0]?.where?.userId?.in));
-    expect(mentionGatingCalls).toHaveLength(0);
-    const mentionCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
-      (c) => c[0]?.kind === 'mention',
-    );
-    expect(mentionCalls.map((c) => c[0].recipientUserId).sort()).toEqual(['u1', 'u2']);
-  });
-
-  it('only notifies active members when the post is in a PRIVATE (approval) community group', async () => {
-    const { service, deps } = setup();
-    deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy: 'approval' });
-    deps.prisma.communityGroupMember.findMany.mockResolvedValue([{ userId: 'u1' }]);
-
-    await callSideEffects(service, {
-      bodyMentionIds: ['u1', 'u2'],
-      postOverrides: { communityGroupId: 'g1' },
-    });
-
-    expect(deps.prisma.communityGroupMember.findMany).toHaveBeenCalledWith({
-      where: {
-        groupId: 'g1',
-        userId: { in: ['u1', 'u2'] },
-        status: 'active',
-      },
-      select: { userId: true },
-    });
-    const mentionCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
-      (c) => c[0]?.kind === 'mention',
-    );
-    expect(mentionCalls.map((c) => c[0].recipientUserId)).toEqual(['u1']);
-  });
-
-  it('suppresses all mentions for a private group when the membership lookup fails (fail closed)', async () => {
-    const { service, deps } = setup();
-    deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy: 'approval' });
-    deps.prisma.communityGroupMember.findMany.mockRejectedValue(new Error('db down'));
-
-    await callSideEffects(service, {
-      bodyMentionIds: ['u1', 'u2'],
-      postOverrides: { communityGroupId: 'g1' },
-    });
-
-    const mentionCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
-      (c) => c[0]?.kind === 'mention',
-    );
-    expect(mentionCalls).toHaveLength(0);
-  });
-
-  it('does not call findUnique for join-policy when there are no mentions (only calls it for group name)', async () => {
-    const { service, deps } = setup();
-    deps.prisma.communityGroup.findUnique.mockResolvedValue({ name: 'Test Group' });
-    await callSideEffects(service, {
-      bodyMentionIds: [],
-      postOverrides: { communityGroupId: 'g1' },
-    });
-    // findUnique IS called — for the group name used in badge notification titles.
-    expect(deps.prisma.communityGroup.findUnique).toHaveBeenCalledWith(
-      expect.objectContaining({ select: { name: true }, where: { id: 'g1' } }),
-    );
-  });
-});
-
-// ─── runPostCreateSideEffects: followed-post bell semantics ──────────────────
-
-describe('PostsService.runPostCreateSideEffects — followed-post bell semantics', () => {
-  function setup() {
-    const { service, deps } = makeService();
-    deps.prisma.communityGroup = { findUnique: jest.fn() };
-    deps.prisma.communityGroupMember = { findMany: jest.fn(async () => []) };
-    deps.prisma.follow = {
-      findMany: jest.fn(async () => [
-        {
-          followerId: 'normal-follower',
-          postNotificationsEnabled: false,
-          follower: { verifiedStatus: 'identity', premium: false, premiumPlus: false },
-        },
-        {
-          followerId: 'bell-follower',
-          postNotificationsEnabled: true,
-          follower: { verifiedStatus: 'identity', premium: false, premiumPlus: false },
-        },
-      ]),
-    };
-    return { service, deps };
-  }
-
-  function basePost(overrides: Partial<Record<string, unknown>> = {}) {
-    return {
-      id: 'post-1',
-      userId: 'author',
-      body: 'hello',
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-      editedAt: null,
-      editCount: 0,
-      deletedAt: null,
-      kind: 'regular',
-      checkinDayKey: null,
-      checkinPrompt: null,
-      visibility: 'public',
-      isDraft: false,
-      topics: [],
-      hashtags: [],
-      boostCount: 0,
-      bookmarkCount: 0,
-      commentCount: 0,
-      repostCount: 0,
-      viewerCount: 0,
-      parentId: null,
-      communityGroupId: null,
-      pinnedInGroupAt: null,
-      media: [],
-      mentions: [],
-      poll: null,
-      user: {
-        id: 'author',
-        username: 'author',
-        name: 'Author',
-        premium: false,
-        premiumPlus: false,
-        isOrganization: false,
-        stewardBadgeEnabled: false,
-        verifiedStatus: 'identity',
-        avatarKey: null,
-        avatarUpdatedAt: null,
-        orgMemberships: [],
-        bannedAt: null,
-      },
-      ...overrides,
-    } as any;
-  }
-
-  async function callSideEffects(service: PostsService, args: any): Promise<void> {
-    await ((service as any).mutation).runPostCreateSideEffects({
-      actorUserId: 'author',
-      post: basePost(args.postOverrides),
-      parentId: args.parentId ?? null,
-      parentAuthorUserId: args.parentAuthorUserId ?? null,
-      threadPostsForRoles: args.threadPostsForRoles ?? [],
-      bodyMentionIds: args.bodyMentionIds ?? [],
-      bodyMentionSet: new Set(args.bodyMentionSet ?? args.bodyMentionIds ?? []),
-      bodySnippet: '',
-      visibility: args.visibility ?? 'public',
-      quotedInfo: args.quotedInfo ?? null,
-      didAwardStreak: false,
-    });
-  }
-
-  it('notifies all eligible followers for top-level posts', async () => {
-    const { service, deps } = setup();
-
-    await callSideEffects(service, {});
-
-    const followedPostCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
-      (c) => c[0]?.kind === 'followed_post',
-    );
-    expect(followedPostCalls.map((c) => c[0].recipientUserId).sort()).toEqual([
-      'bell-follower',
-      'normal-follower',
-    ]);
-    expect(deps.presenceRealtime.emitFeedNewPost).toHaveBeenCalledWith(
-      ['normal-follower', 'bell-follower'],
-      expect.any(Object),
-    );
-  });
-
-  it('only notifies bell-enabled followers for replies they are not already involved in', async () => {
-    const { service, deps } = setup();
-
-    await callSideEffects(service, {
-      parentId: 'parent-1',
-      parentAuthorUserId: 'parent-author',
-    });
-
-    const followedPostCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
-      (c) => c[0]?.kind === 'followed_post',
-    );
-    expect(followedPostCalls.map((c) => c[0].recipientUserId)).toEqual(['bell-follower']);
-    expect(deps.presenceRealtime.emitFeedNewPost).not.toHaveBeenCalled();
-  });
-});
-
-// ─── runPostCreateSideEffects: group post notification membership gating ─────
-
-describe('PostsService.runPostCreateSideEffects — group notification gating', () => {
-  function setup(activeMemberIds: string[] = []) {
-    const { service, deps } = makeService();
-    deps.prisma.communityGroup = { findUnique: jest.fn() };
-    deps.prisma.communityGroupMember = {
-      findMany: jest.fn(async (args: any) => {
-        const ids: string[] = args?.where?.userId?.in ?? [];
-        return activeMemberIds.filter((id) => ids.includes(id)).map((userId) => ({ userId }));
-      }),
-    };
-    deps.prisma.follow = { findMany: jest.fn(async () => []) };
-    return { service, deps };
-  }
-
-  function basePost(overrides: Partial<Record<string, unknown>> = {}) {
-    return {
-      id: 'post-1',
-      userId: 'author',
-      body: 'hello',
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-      editedAt: null,
-      editCount: 0,
-      deletedAt: null,
-      kind: 'regular',
-      checkinDayKey: null,
-      checkinPrompt: null,
-      visibility: 'public',
-      isDraft: false,
-      topics: [],
-      hashtags: [],
-      boostCount: 0,
-      bookmarkCount: 0,
-      commentCount: 0,
-      repostCount: 0,
-      viewerCount: 0,
-      parentId: null,
-      communityGroupId: 'g1',
-      pinnedInGroupAt: null,
-      media: [],
-      mentions: [],
-      poll: null,
-      user: {
-        id: 'author',
-        username: 'author',
-        name: 'Author',
-        premium: false,
-        premiumPlus: false,
-        isOrganization: false,
-        stewardBadgeEnabled: false,
-        verifiedStatus: 'identity',
-        avatarKey: null,
-        avatarUpdatedAt: null,
-        orgMemberships: [],
-        bannedAt: null,
-      },
-      ...overrides,
-    } as any;
-  }
-
-  async function callSideEffects(service: PostsService, args: any): Promise<void> {
-    await ((service as any).mutation).runPostCreateSideEffects({
-      actorUserId: 'author',
-      post: basePost(args.postOverrides),
-      parentId: args.parentId ?? null,
-      parentAuthorUserId: args.parentAuthorUserId ?? null,
-      threadPostsForRoles: args.threadPostsForRoles ?? [],
-      bodyMentionIds: args.bodyMentionIds ?? [],
-      bodyMentionSet: new Set(args.bodyMentionSet ?? args.bodyMentionIds ?? []),
-      bodySnippet: '',
-      visibility: args.visibility ?? 'public',
-      quotedInfo: args.quotedInfo ?? null,
-      didAwardStreak: false,
-    });
-  }
-
-  it('skips followed_post notifications and emitFeedNewPost for top-level group posts', async () => {
-    const { service, deps } = setup(['member-follower']);
-    deps.prisma.follow.findMany.mockResolvedValue([
-      { followerId: 'member-follower', follower: { verifiedStatus: 'identity', premium: false, premiumPlus: false } },
-      { followerId: 'outside-follower', follower: { verifiedStatus: 'identity', premium: false, premiumPlus: false } },
-    ]);
-
-    await callSideEffects(service, {
-      postOverrides: { communityGroupId: 'g1' },
-    });
-
-    const followedPostCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
-      (c) => c[0]?.kind === 'followed_post',
-    );
-    // Group posts no longer send followed_post notifications or home-feed pushes.
-    expect(followedPostCalls).toHaveLength(0);
-    expect(deps.presenceRealtime.emitFeedNewPost).not.toHaveBeenCalled();
-  });
-
-  it('suppresses reply notifications for non-members of the post group', async () => {
-    const { service, deps } = setup(['parent-member', 'thread-member']);
-
-    await callSideEffects(service, {
-      parentId: 'parent-1',
-      parentAuthorUserId: 'parent-member',
-      threadPostsForRoles: [
-        {
-          id: 'parent-1',
-          parentId: null,
-          userId: 'parent-member',
-          mentions: [{ userId: 'thread-member' }, { userId: 'outside-thread-user' }],
-        },
-      ],
-      postOverrides: { communityGroupId: 'g1' },
-    });
-
-    const commentCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
-      (c) => c[0]?.kind === 'comment',
-    );
-    expect(commentCalls.map((c) => c[0].recipientUserId)).toEqual(['parent-member', 'thread-member']);
-  });
-
-  it('suppresses quote notifications for non-members of the post group', async () => {
-    const { service, deps } = setup([]);
-
-    await callSideEffects(service, {
-      quotedInfo: { quotedAuthorId: 'quoted-author', quotedPostId: 'quoted-post' },
-      postOverrides: { communityGroupId: 'g1' },
-    });
-
-    expect(deps.notifications.upsertRepostNotification).not.toHaveBeenCalled();
-  });
-
-  it('allows non-member mentions only for public posts in open groups', async () => {
-    const { service, deps } = setup([]);
-    deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy: 'open' });
-
-    await callSideEffects(service, {
-      bodyMentionIds: ['outside-mentioned'],
-      visibility: 'public',
-      postOverrides: { communityGroupId: 'g1', visibility: 'public' },
-    });
-
-    const mentionCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
-      (c) => c[0]?.kind === 'mention',
-    );
-    expect(mentionCalls.map((c) => c[0].recipientUserId)).toEqual(['outside-mentioned']);
-    // For open groups, findMany must NOT be called for mention-gating (userId.in check).
-    // The badge fan-out may call findMany with a different shape (userId.not).
-    const mentionGatingCalls = (deps.prisma.communityGroupMember.findMany as jest.Mock).mock.calls
-      .filter((c: any[]) => Array.isArray(c[0]?.where?.userId?.in));
-    expect(mentionGatingCalls).toHaveLength(0);
-  });
-
-  it('suppresses non-member mentions in open groups when the post is not public', async () => {
-    const { service, deps } = setup([]);
-    deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy: 'open' });
-
-    await callSideEffects(service, {
-      bodyMentionIds: ['outside-mentioned'],
-      visibility: 'verifiedOnly',
-      postOverrides: { communityGroupId: 'g1', visibility: 'verifiedOnly' },
-    });
-
-    const mentionCalls = (deps.notifications.create as jest.Mock).mock.calls.filter(
-      (c) => c[0]?.kind === 'mention',
-    );
-    expect(mentionCalls).toHaveLength(0);
   });
 });
 

@@ -92,6 +92,7 @@ enum NotificationKind {
   checkin_post
   word_of_the_day
   quote_of_the_day
+  account_verified
 }
 
 enum CoinTransferKind {
@@ -1772,6 +1773,11 @@ model SiteConfig {
   verifiedWindowSeconds  Int @default(300)
   premiumPostsPerWindow  Int @default(5)
   premiumWindowSeconds   Int @default(300)
+
+  // When true, new signups (and later recruiter links) are auto-verified.
+  // If autoVerifyRecruiterId is set, only recruits of that user are auto-verified.
+  autoVerifyNewUsers    Boolean @default(false)
+  autoVerifyRecruiterId String?
 }
 
 model PhoneOtp {

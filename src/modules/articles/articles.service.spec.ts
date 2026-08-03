@@ -32,10 +32,10 @@ function makeService(opts?: { allowedVisibilities?: Array<'public' | 'verifiedOn
     viewer,
     appConfig,
     {} as any,
-    {} as any,
     cache,
     cacheInvalidation,
     { enqueue: jest.fn().mockResolvedValue({}) } as any,
+    { dispatch: jest.fn() } as any,
   );
 
   return { service, prisma, viewer };

@@ -9,12 +9,12 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { AppConfigService } from '../app/app-config.service';
-import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { CacheService } from '../redis/cache.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { stableJsonHash } from '../redis/redis-keys';
 import {
   toArticleDto,
@@ -91,11 +91,11 @@ export class ArticlesService {
     private readonly prisma: PrismaService,
     private readonly viewer: ViewerContextService,
     private readonly appConfig: AppConfigService,
-    private readonly notifications: NotificationsService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly cache: CacheService,
     private readonly cacheInvalidation: CacheInvalidationService,
     private readonly jobs: JobsService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   private get r2BaseUrl(): string | null {
@@ -615,53 +615,14 @@ export class ArticlesService {
       return published;
     });
 
-    // Fire follower notifications only on first publish.
+    // Fire follower notifications only on first publish. The fan-out scales with the author's
+    // follower count, so it runs on the side-effects queue rather than in this process.
     if (isFirstPublish) {
-      setImmediate(async () => {
-        try {
-          const follows = await this.prisma.follow.findMany({
-            where: { followingId: userId },
-            select: {
-              followerId: true,
-              follower: { select: { verifiedStatus: true, premium: true, premiumPlus: true } },
-            },
-          });
-
-          const titleSnippet = updated.title.length > 80 ? updated.title.slice(0, 79) + '…' : updated.title;
-
-          for (const f of follows) {
-            const recipientUserId = f.followerId;
-            if (!recipientUserId || recipientUserId === userId) continue;
-
-            if (updated.visibility === 'verifiedOnly') {
-              const vs = f.follower?.verifiedStatus ?? 'none';
-              if (!vs || vs === 'none') continue;
-            }
-            if (updated.visibility === 'premiumOnly') {
-              if (!f.follower?.premium && !f.follower?.premiumPlus) continue;
-            }
-
-            this.notifications
-              .create({
-                recipientUserId,
-                kind: 'followed_article',
-                actorUserId: userId,
-                subjectArticleId: articleId,
-                subjectUserId: userId,
-                body: titleSnippet || undefined,
-              })
-              .catch((err) => {
-                this.logger.warn(
-                  `[notifications] Failed to create followed-article notification: ${err instanceof Error ? err.message : String(err)}`,
-                );
-              });
-          }
-        } catch (err) {
-          this.logger.warn(
-            `[notifications] Failed to query followers for followed-article notifications: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      });
+      this.sideEffects.dispatch(
+        'article.published',
+        { articleId, authorUserId: userId },
+        { jobId: `article-published-${articleId}` },
+      );
     }
 
     void this.cacheInvalidation.bumpFeedGlobal().catch(() => undefined);
@@ -790,27 +751,7 @@ export class ArticlesService {
         patch: { boostCount: afterBoost.boostCount },
       });
     }
-    setImmediate(async () => {
-      try {
-        const article = await this.prisma.article.findUnique({
-          where: { id: articleId },
-          select: { authorId: true, title: true },
-        });
-        if (!article || article.authorId === userId) return;
-        await this.notifications.create({
-          recipientUserId: article.authorId,
-          kind: 'boost',
-          actorUserId: userId,
-          subjectArticleId: articleId,
-          title: 'boosted your article',
-          body: article.title?.trim() ? article.title.trim().slice(0, 150) : null,
-        });
-      } catch (err) {
-        this.logger.warn(
-          `[notifications] Failed to create article boost notification: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    });
+    this.sideEffects.dispatch('article.boosted', { articleId, actorUserId: userId });
     return { boosted: true };
   }
 
@@ -852,38 +793,8 @@ export class ArticlesService {
       if (e?.code === 'P2002') throw new ConflictException('Already reacted with this emoji.');
       throw e;
     }
-    setImmediate(async () => {
-      try {
-        const allReactions = await this.prisma.articleReaction.findMany({ where: { articleId } });
-        this.presenceRealtime.emitArticlesLiveUpdated(articleId, {
-          articleId,
-          version: new Date().toISOString(),
-          reason: 'reactions',
-          patch: { reactions: buildReactionSummaries(allReactions, userId) },
-        });
-      } catch { /* best-effort */ }
-    });
-    setImmediate(async () => {
-      try {
-        const article = await this.prisma.article.findUnique({
-          where: { id: articleId },
-          select: { authorId: true, title: true },
-        });
-        if (!article || article.authorId === userId) return;
-        await this.notifications.create({
-          recipientUserId: article.authorId,
-          kind: 'generic',
-          actorUserId: userId,
-          subjectArticleId: articleId,
-          title: `reacted to your article`,
-          body: reaction.emoji,
-        });
-      } catch (err) {
-        this.logger.warn(
-          `[notifications] Failed to create article reaction notification: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    });
+    await this.emitArticleReactionsChanged(articleId, userId);
+    this.sideEffects.dispatch('article.reaction.added', { articleId, actorUserId: userId, emoji: reaction.emoji });
     return { reactionId: reaction.id, emoji: reaction.emoji };
   }
 
@@ -895,18 +806,30 @@ export class ArticlesService {
     await this.prisma.articleReaction.delete({
       where: { articleId_userId_reactionId: { articleId, userId, reactionId } },
     });
-    setImmediate(async () => {
-      try {
-        const allReactions = await this.prisma.articleReaction.findMany({ where: { articleId } });
-        this.presenceRealtime.emitArticlesLiveUpdated(articleId, {
-          articleId,
-          version: new Date().toISOString(),
-          reason: 'reactions',
-          patch: { reactions: buildReactionSummaries(allReactions, userId) },
-        });
-      } catch { /* best-effort */ }
-    });
+    await this.emitArticleReactionsChanged(articleId, userId);
     return { success: true };
+  }
+
+  /**
+   * Re-read the article's reactions and emit the refreshed summary to live viewers.
+   *
+   * Deliberately on the request path: this is a content emit that other viewers expect to see
+   * immediately, and it costs one small indexed read. Routing it through the side-effects queue
+   * would trade a sub-millisecond emit for seconds of queue latency to gain durability nobody
+   * needs — a dropped reaction count self-heals on the next page load.
+   */
+  private async emitArticleReactionsChanged(articleId: string, viewerUserId: string): Promise<void> {
+    try {
+      const allReactions = await this.prisma.articleReaction.findMany({ where: { articleId } });
+      this.presenceRealtime.emitArticlesLiveUpdated(articleId, {
+        articleId,
+        version: new Date().toISOString(),
+        reason: 'reactions',
+        patch: { reactions: buildReactionSummaries(allReactions, viewerUserId) },
+      });
+    } catch {
+      // Best-effort
+    }
   }
 
   // ─── Comments ─────────────────────────────────────────────────────────────────
@@ -1067,56 +990,12 @@ export class ArticlesService {
 
     this.presenceRealtime.emitArticlesCommentAdded(articleId, { articleId, comment: commentDto });
 
-    setImmediate(async () => {
-      try {
-        const bodySnippet = commentDto.body?.slice(0, 150) ?? null;
-        const mentionUsernames = parseMentionsFromBody(commentDto.body ?? '');
-        const mentionUsers = mentionUsernames.length
-          ? await this.prisma.user.findMany({
-              where: { username: { in: mentionUsernames } },
-              select: { id: true },
-            })
-          : [];
-        const mentionUserIds = new Set<string>(mentionUsers.map((u) => u.id));
-
-        const art = await this.prisma.article.findUnique({ where: { id: articleId }, select: { authorId: true } });
-        if (!art) return;
-
-        const recipientId = data.parentId
-          ? (await this.prisma.articleComment.findUnique({ where: { id: data.parentId }, select: { authorId: true } }))?.authorId ?? art.authorId
-          : art.authorId;
-
-        // Keep parity with post reply behavior: explicit @mentions take priority over reply notifications.
-        if (recipientId !== userId && !mentionUserIds.has(recipientId)) {
-          await this.notifications.create({
-            recipientUserId: recipientId,
-            kind: 'comment',
-            actorUserId: userId,
-            subjectArticleId: articleId,
-            subjectArticleCommentId: comment.id,
-            title: data.parentId ? 'replied to your reply' : 'replied to your article',
-            body: bodySnippet,
-          });
-        }
-
-        const mentionTitle = data.parentId
-          ? 'mentioned you in an article reply'
-          : 'mentioned you in an article reply';
-        for (const mentionedUserId of mentionUserIds) {
-          if (mentionedUserId === userId) continue;
-          await this.notifications.create({
-            recipientUserId: mentionedUserId,
-            kind: 'mention',
-            actorUserId: userId,
-            subjectArticleId: articleId,
-            subjectArticleCommentId: comment.id,
-            title: mentionTitle,
-            body: bodySnippet,
-          });
-        }
-      } catch (err) {
-        this.logger.warn(`[notifications] Failed to create article comment notification: ${err instanceof Error ? err.message : String(err)}`);
-      }
+    this.sideEffects.dispatch('article.comment.created', {
+      articleId,
+      commentId: comment.id,
+      actorUserId: userId,
+      parentCommentId: data.parentId ?? null,
+      mentionUsernames: parseMentionsFromBody(commentDto.body ?? ''),
     });
 
     return commentDto;
@@ -1206,17 +1085,7 @@ export class ArticlesService {
       throw e;
     }
 
-    setImmediate(async () => {
-      try {
-        const reactions = await this.prisma.articleCommentReaction.findMany({ where: { commentId } });
-        this.presenceRealtime.emitArticlesCommentReactionChanged(comment.articleId, {
-          articleId: comment.articleId,
-          commentId,
-          parentId: comment.parentId,
-          reactions: buildReactionSummaries(reactions, userId),
-        });
-      } catch { /* best-effort */ }
-    });
+    await this.emitCommentReactionsChanged(comment, commentId, userId);
 
     return { reactionId: reaction.id, emoji: reaction.emoji };
   }
@@ -1234,20 +1103,29 @@ export class ArticlesService {
     });
 
     if (comment) {
-      setImmediate(async () => {
-        try {
-          const reactions = await this.prisma.articleCommentReaction.findMany({ where: { commentId } });
-          this.presenceRealtime.emitArticlesCommentReactionChanged(comment.articleId, {
-            articleId: comment.articleId,
-            commentId,
-            parentId: comment.parentId,
-            reactions: buildReactionSummaries(reactions, userId),
-          });
-        } catch { /* best-effort */ }
-      });
+      await this.emitCommentReactionsChanged(comment, commentId, userId);
     }
 
     return { success: true };
+  }
+
+  /** Comment-level counterpart of `emitArticleReactionsChanged` — same reasoning for staying inline. */
+  private async emitCommentReactionsChanged(
+    comment: { articleId: string; parentId: string | null },
+    commentId: string,
+    viewerUserId: string,
+  ): Promise<void> {
+    try {
+      const reactions = await this.prisma.articleCommentReaction.findMany({ where: { commentId } });
+      this.presenceRealtime.emitArticlesCommentReactionChanged(comment.articleId, {
+        articleId: comment.articleId,
+        commentId,
+        parentId: comment.parentId,
+        reactions: buildReactionSummaries(reactions, viewerUserId),
+      });
+    } catch {
+      // Best-effort
+    }
   }
 
   // ─── Article share post ───────────────────────────────────────────────────────

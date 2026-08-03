@@ -33,6 +33,12 @@ export const envSchema = z.object({
     z.string().optional().default('true'),
   ),
 
+  // In-flight side-effect jobs per worker (notifications, push, fan-out).
+  SIDE_EFFECTS_QUEUE_CONCURRENCY: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'SIDE_EFFECTS_QUEUE_CONCURRENCY must be a number'),
+
   // Prisma connection retry (e.g. when Postgres is starting in docker compose).
   PRISMA_CONNECT_RETRIES: z
     .string()

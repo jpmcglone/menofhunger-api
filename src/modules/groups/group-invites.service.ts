@@ -10,7 +10,7 @@ import { Prisma, type CommunityGroupMemberRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { NotificationsService } from '../notifications/notifications.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { toUserListDto, type UserListRow } from '../../common/dto/user.dto';
@@ -40,7 +40,7 @@ export class GroupInvitesService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly presenceRealtime: PresenceRealtimeService,
-    private readonly notifications: NotificationsService,
+    private readonly sideEffects: SideEffectsService,
     private readonly marvIdentity: MarvinBotIdentityService,
   ) {}
 
@@ -443,20 +443,21 @@ export class GroupInvitesService {
     }
 
     if (shouldNotify) {
-      const result = await this.notifications.upsertCommunityGroupInviteReceivedNotification({
-        inviteeUserId: inviteeId,
-        inviterUserId: params.viewerUserId,
+      // Stamp the cooldown here rather than waiting on the notification write, so the
+      // returned DTO and the re-issue cooldown both reflect this send immediately.
+      const notifiedAt = new Date();
+      await this.prisma.communityGroupInvite.update({
+        where: { id: inviteRow.id },
+        data: { lastNotifiedAt: notifiedAt },
+      });
+      inviteRow = { ...inviteRow, lastNotifiedAt: notifiedAt };
+      this.sideEffects.dispatch('group.invite.issued', {
         groupId: params.groupId,
         inviteId: inviteRow.id,
+        inviterUserId: params.viewerUserId,
+        inviteeUserId: inviteeId,
         bodySnippet: trimmedNote ? trimmedNote.slice(0, 200) : null,
       });
-      if (result.notified) {
-        await this.prisma.communityGroupInvite.update({
-          where: { id: inviteRow.id },
-          data: { lastNotifiedAt: new Date() },
-        });
-        inviteRow = { ...inviteRow, lastNotifiedAt: new Date() };
-      }
     }
 
     const dto = this.toDto(inviteRow);
@@ -486,17 +487,16 @@ export class GroupInvitesService {
       include: INVITE_INCLUDE,
     });
     const dto = this.toDto(updated);
-    await this.notifications.create({
-      recipientUserId: invite.inviteeUserId,
-      kind: 'community_group_invite_cancelled',
-      actorUserId: params.viewerUserId,
-      subjectGroupId: invite.groupId,
-      subjectCommunityGroupInviteId: invite.id,
-    });
     this.presenceRealtime.emitGroupInviteUpdated(
       [invite.invitedByUserId, invite.inviteeUserId, params.viewerUserId],
       { invite: dto },
     );
+    this.sideEffects.dispatch('group.invite.cancelled', {
+      groupId: invite.groupId,
+      inviteId: invite.id,
+      actorUserId: params.viewerUserId,
+      inviteeUserId: invite.inviteeUserId,
+    });
   }
 
   /** Invitee declines a pending invite. Stamps `lastDeclinedAt` for cooldown. */
@@ -518,18 +518,18 @@ export class GroupInvitesService {
       data: { status: 'declined', respondedAt: now, lastDeclinedAt: now },
       include: INVITE_INCLUDE,
     });
-    await this.notifications.upsertCommunityGroupInviteResponseNotification({
-      inviterUserId: invite.invitedByUserId,
-      inviteeUserId: invite.inviteeUserId,
-      groupId: invite.groupId,
-      inviteId: invite.id,
-      response: 'declined',
-    });
     const dto = this.toDto(updated);
     this.presenceRealtime.emitGroupInviteUpdated(
       [invite.invitedByUserId, invite.inviteeUserId],
       { invite: dto },
     );
+    this.sideEffects.dispatch('group.invite.responded', {
+      groupId: invite.groupId,
+      inviteId: invite.id,
+      inviterUserId: invite.invitedByUserId,
+      inviteeUserId: invite.inviteeUserId,
+      response: 'declined',
+    });
   }
 
   /** Invitee accepts; joins the group as `member` immediately (skips approval). */
@@ -620,14 +620,6 @@ export class GroupInvitesService {
       throw e;
     }
 
-    await this.notifications.upsertCommunityGroupInviteResponseNotification({
-      inviterUserId: invite.invitedByUserId,
-      inviteeUserId: invite.inviteeUserId,
-      groupId: invite.groupId,
-      inviteId: invite.id,
-      response: 'accepted',
-    });
-
     const updated = await this.prisma.communityGroupInvite.findUniqueOrThrow({
       where: { id: invite.id },
       include: INVITE_INCLUDE,
@@ -637,6 +629,13 @@ export class GroupInvitesService {
       [invite.invitedByUserId, invite.inviteeUserId],
       { invite: dto },
     );
+    this.sideEffects.dispatch('group.invite.responded', {
+      groupId: invite.groupId,
+      inviteId: invite.id,
+      inviterUserId: invite.invitedByUserId,
+      inviteeUserId: invite.inviteeUserId,
+      response: 'accepted',
+    });
 
     return { groupId: group.id, groupSlug: group.slug };
   }

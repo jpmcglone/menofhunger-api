@@ -8,6 +8,7 @@ import { AppController } from './app.controller';
 import { envSchema, validateEnv } from './env';
 import { AppConfigModule } from './app-config.module';
 import { AppConfigService } from './app-config.service';
+import { SiteConfigModule } from '../site-config/site-config.module';
 import { MohThrottlerGuard } from '../../common/throttling/moh-throttler.guard';
 import { RequestCacheModule } from '../../common/cache/request-cache.module';
 import { HealthModule } from '../health/health.module';
@@ -39,6 +40,8 @@ import { MetricsModule } from '../metrics/metrics.module';
 import { BillingModule } from '../billing/billing.module';
 import { JobsModule } from '../jobs/jobs.module';
 import { JobsConsumersModule } from '../jobs/jobs-consumers.module';
+import { SideEffectsModule } from '../side-effects/side-effects.module';
+import { SideEffectsConsumersModule } from '../side-effects/side-effects-consumers.module';
 import { RedisModule } from '../redis/redis.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { ViewerContextModule } from '../viewer/viewer-context.module';
@@ -74,6 +77,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
       validate: validateEnv(envSchema),
     }),
     AppConfigModule,
+    SiteConfigModule,
     ViewerContextModule,
     DomainEventsModule,
     RealtimeModule,
@@ -84,6 +88,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
       }),
     }),
     JobsModule,
+    SideEffectsModule,
     RedisModule,
     ThrottlerModule.forRootAsync({
       inject: [AppConfigService],
@@ -138,7 +143,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     ExploreModule,
     PublicModule,
     ScriptureModule,
-    ...(RUN_JOB_CONSUMERS ? [JobsConsumersModule] : []),
+    ...(RUN_JOB_CONSUMERS ? [JobsConsumersModule, SideEffectsConsumersModule] : []),
   ],
   controllers: [AppController],
   providers: [

@@ -37,6 +37,7 @@ import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cu
 import { CoinsService } from '../coins/coins.service';
 import { UsersLocationService } from '../users/users-location.service';
 import { UploadsService } from '../uploads/uploads.service';
+import { UserVerificationService } from '../verification/user-verification.service';
 
 const paginatedSearchSchema = z.object({
   q: z.string().optional(),
@@ -97,6 +98,7 @@ export class AdminUsersController {
     private readonly coinsService: CoinsService,
     private readonly usersLocation: UsersLocationService,
     private readonly uploads: UploadsService,
+    private readonly userVerification: UserVerificationService,
   ) {}
 
   private get publicBaseUrl(): string | null {
@@ -694,16 +696,24 @@ export class AdminUsersController {
       data.isOrganization = parsed.isOrganization;
     }
 
+    const wasVerified = current.verifiedStatus !== 'none';
+    const nowVerified = parsed.verifiedStatus !== undefined
+      ? parsed.verifiedStatus !== 'none'
+      : wasVerified;
+    const isNewlyVerifying = !wasVerified && nowVerified && parsed.verifiedStatus !== undefined;
+
     if (parsed.verifiedStatus !== undefined) {
       if (parsed.verifiedStatus === 'none') {
         data.verifiedStatus = 'none';
         data.verifiedAt = null;
         data.unverifiedAt = now;
-      } else {
+      } else if (!isNewlyVerifying) {
+        // Already verified: allow identity ↔ manual without re-running verify side effects.
         data.verifiedStatus = parsed.verifiedStatus;
         data.verifiedAt = now;
         data.unverifiedAt = null;
       }
+      // Newly verifying: handled by UserVerificationService after the other field updates.
     }
 
     if (parsed.featureToggles !== undefined) {
@@ -713,18 +723,18 @@ export class AdminUsersController {
     try {
       await this.prisma.user.update({ where: { id }, data });
 
-      // Run verification lifecycle hooks when verifiedStatus changes.
       if (parsed.verifiedStatus !== undefined) {
-        const wasVerified = current.verifiedStatus !== 'none';
-        const nowVerified = parsed.verifiedStatus !== 'none';
-        if (!wasVerified && nowVerified) {
-          // Re-verifying: restore banked grant time, resume Stripe sub, recompute tier.
-          await this.billingService.onUserVerified(id, current.unverifiedAt);
+        if (isNewlyVerifying) {
+          await this.userVerification.verifyUser({
+            userId: id,
+            source: 'admin_patch',
+            verifiedStatus: parsed.verifiedStatus === 'identity' ? 'identity' : 'manual',
+          });
         } else if (wasVerified && !nowVerified) {
           // Unverifying: pause Stripe sub, recompute tier (strips premium access).
           await this.billingService.onUserUnverified(id);
-        } else {
-          // Same verified/unverified category (e.g. identity → manual): just recompute.
+        } else if (wasVerified && nowVerified) {
+          // Same verified category (e.g. identity → manual): just recompute.
           await this.entitlementService.recomputeAndApply(id);
         }
       }

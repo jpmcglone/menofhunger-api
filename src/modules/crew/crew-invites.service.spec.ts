@@ -93,10 +93,7 @@ function makeService(prismaOverrides?: Partial<AnyPrisma>) {
     emitCrewMembersChanged: jest.fn(),
     emitCrewDisbanded: jest.fn(),
   } as any;
-  const notifications = {
-    create: jest.fn(async () => undefined),
-    markCrewInviteResolved: jest.fn(async () => undefined),
-  } as any;
+  const sideEffects = { dispatch: jest.fn() } as any;
   const crew = {
     assertVerified: jest.fn(async () => undefined),
     disbandCrewTx: jest.fn(async () => undefined),
@@ -107,11 +104,11 @@ function makeService(prismaOverrides?: Partial<AnyPrisma>) {
     prisma,
     appConfig,
     presenceRealtime,
-    notifications,
+    sideEffects,
     crew,
   );
 
-  return { svc, prisma, presenceRealtime, notifications, crew };
+  return { svc, prisma, presenceRealtime, sideEffects, crew };
 }
 
 describe('CrewInvitesService.sendInvite — solo eligibility', () => {

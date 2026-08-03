@@ -390,6 +390,12 @@ export class NotificationPushService {
         body: snippet ?? 'Open to read today\u2019s quote.',
       };
     }
+    if (kind === 'account_verified') {
+      return {
+        title: titleFromFallback || "You're verified",
+        body: snippet ?? 'Your account is now verified. Welcome.',
+      };
+    }
     // Generic kind is used for one-off actor-driven events that don't have their own kind
     // (e.g. article emoji reactions). Prefix the DB title with the actor name when both
     // are present so the push reads like "Jane reacted to your article" with body=emoji.

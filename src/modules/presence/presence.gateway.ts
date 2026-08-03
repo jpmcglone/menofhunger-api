@@ -78,6 +78,10 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         const e = evt.event.trim();
         if (!room || !e) return;
         this.context.server.to(room).emit(e, evt.payload);
+      } else if (evt.type === 'broadcast') {
+        const e = evt.event.trim();
+        if (!e) return;
+        this.context.server.emit(e, evt.payload);
       } else if (evt.type === 'spacesLobbyCounts') {
         const payload: SpaceLobbyCountsDto = { countsBySpaceId: evt.countsBySpaceId ?? {} };
         this.context.server.emit('spaces:lobbyCounts', payload);

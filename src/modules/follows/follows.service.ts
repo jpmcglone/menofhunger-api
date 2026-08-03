@@ -5,6 +5,7 @@ import * as crypto from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { RedisService } from '../redis/redis.service';
 import { toUserListDto, type NudgeStateDto, type OrgAffiliationDto } from '../../common/dto';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
@@ -70,6 +71,7 @@ export class FollowsService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly notifications: NotificationsService,
+    private readonly sideEffects: SideEffectsService,
     private readonly redis: RedisService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly viewerContext: ViewerContextService,
@@ -583,24 +585,10 @@ export class FollowsService {
 
     if (created) {
       this.posthog.capture(viewerUserId, 'follow_created', { target_user_id: target.id });
-
-      const followNotifyWithinMs = 24 * 60 * 60 * 1000; // 24h: avoid spam if they unfollow then follow again
-      const alreadyNotified = await this.notifications.hasRecentFollowNotification(
-        target.id,
-        viewerUserId,
-        followNotifyWithinMs,
-      );
-      if (!alreadyNotified) {
-        this.notifications
-          .create({
-            recipientUserId: target.id,
-            kind: 'follow',
-            actorUserId: viewerUserId,
-            subjectUserId: viewerUserId,
-            title: 'followed you',
-          })
-          .catch(() => {});
-      }
+      this.sideEffects.dispatch('follow.created', {
+        actorUserId: viewerUserId,
+        targetUserId: target.id,
+      });
     }
 
     // Cross-tab/device sync for the actor (self only).
@@ -625,8 +613,10 @@ export class FollowsService {
       where: { followerId: viewerUserId, followingId: target.id },
     });
 
-    // Remove follow notification(s) if present (user unfollowed).
-    this.notifications.deleteFollowNotification(target.id, viewerUserId).catch(() => {});
+    this.sideEffects.dispatch('follow.removed', {
+      actorUserId: viewerUserId,
+      targetUserId: target.id,
+    });
 
     // Cross-tab/device sync for the actor (self only).
     this.presenceRealtime.emitFollowsChanged(viewerUserId, {
@@ -701,8 +691,10 @@ export class FollowsService {
       }
     }
 
-    // Await creation so subsequent reads (profile/preview) are immediately consistent.
-    // This is still best-effort for UX, but avoids the “Nudged → Nudge again” flicker caused by async writes.
+    // Deliberately NOT dispatched to the side-effects queue. The cooldown check above reads
+    // this exact row, so here the notification IS the feature's state, not a side effect of
+    // it — deferring the write would let a double-tap send two nudges. It's a single indexed
+    // insert, and the expensive part (the push) is already queued inside the writer.
     await this.notifications.create({
       recipientUserId: target.id,
       kind: 'nudge',

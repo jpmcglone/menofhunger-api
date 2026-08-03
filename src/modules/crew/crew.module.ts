@@ -11,6 +11,7 @@ import { CrewInvitesService } from './crew-invites.service';
 import { CrewWallService } from './crew-wall.service';
 import { CrewTransferService } from './crew-transfer.service';
 import { CrewJobsCron } from './crew-jobs.cron';
+import { CrewSideEffectsHandler } from './crew-side-effects.handler';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { CrewJobsCron } from './crew-jobs.cron';
     CrewWallService,
     CrewTransferService,
     CrewJobsCron,
+    CrewSideEffectsHandler,
   ],
   exports: [
     CrewService,

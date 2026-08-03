@@ -9,7 +9,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { NotificationsService } from '../notifications/notifications.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import {
   CREW_INVITE_EXPIRY_DAYS,
@@ -39,7 +39,7 @@ export class CrewInvitesService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly presenceRealtime: PresenceRealtimeService,
-    private readonly notifications: NotificationsService,
+    private readonly sideEffects: SideEffectsService,
     private readonly crew: CrewService,
   ) {}
 
@@ -213,16 +213,9 @@ export class CrewInvitesService {
 
     const dto = this.toDto(invite);
 
-    // Notify + realtime.
-    await this.notifications.create({
-      recipientUserId: inviteeId,
-      kind: 'crew_invite_received',
-      actorUserId: params.viewerUserId,
-      subjectCrewId: crewId,
-      subjectCrewInviteId: invite.id,
-      body: (params.message ?? '').trim().slice(0, 200) || null,
-    });
+    // The invite itself is live for the invitee immediately; the bell row + push follow.
     this.presenceRealtime.emitCrewInviteReceived(inviteeId, { invite: dto });
+    this.sideEffects.dispatch('crew.invite.sent', { inviteId: invite.id });
 
     return dto;
   }
@@ -248,20 +241,13 @@ export class CrewInvitesService {
     });
     const dto = this.toDto(updated);
 
-    await this.notifications.create({
-      recipientUserId: invite.inviteeUserId,
-      kind: 'crew_invite_cancelled',
-      actorUserId: params.viewerUserId,
-      subjectCrewId: invite.crewId,
-      subjectCrewInviteId: invite.id,
-    });
-    // Resolve the invitee's original "you've been invited" notification so the
-    // bell badge clears for them — the invite is no longer actionable.
-    await this.notifications.markCrewInviteResolved(invite.inviteeUserId, invite.id);
     this.presenceRealtime.emitCrewInviteUpdated(
       [invite.invitedByUserId, invite.inviteeUserId],
       { invite: dto },
     );
+    // Notifies the invitee and resolves their original "you've been invited" row so the bell
+    // badge stops counting an invite that is no longer actionable.
+    this.sideEffects.dispatch('crew.invite.resolved', { inviteId: invite.id });
   }
 
   async declineInvite(params: { viewerUserId: string; inviteId: string }): Promise<void> {
@@ -280,19 +266,11 @@ export class CrewInvitesService {
       include: INVITE_INCLUDE,
     });
     const dto = this.toDto(updated);
-    await this.notifications.create({
-      recipientUserId: invite.invitedByUserId,
-      kind: 'crew_invite_declined',
-      actorUserId: params.viewerUserId,
-      subjectCrewId: invite.crewId,
-      subjectCrewInviteId: invite.id,
-    });
-    // Clear the invitee's original "you've been invited" notification.
-    await this.notifications.markCrewInviteResolved(invite.inviteeUserId, invite.id);
     this.presenceRealtime.emitCrewInviteUpdated(
       [invite.invitedByUserId, invite.inviteeUserId],
       { invite: dto },
     );
+    this.sideEffects.dispatch('crew.invite.resolved', { inviteId: invite.id });
   }
 
   async acceptInvite(params: { viewerUserId: string; inviteId: string }): Promise<{ crewId: string }> {
@@ -441,35 +419,13 @@ export class CrewInvitesService {
     });
     const inviteDto = this.toDto(updatedInvite);
 
-    // Notify + realtime.
-    await this.notifications.create({
-      recipientUserId: invite.invitedByUserId,
-      kind: 'crew_invite_accepted',
-      actorUserId: viewerUserId,
-      subjectCrewId: crewId,
-      subjectCrewInviteId: invite.id,
-    });
     const allMembers = await this.prisma.crewMember.findMany({
       where: { crewId },
       select: { userId: true },
     });
-    // Notify every existing member that someone joined. Skip the inviter — they
-    // already received `crew_invite_accepted` above; sending both for the same
-    // event is redundant and trains people to ignore the row.
-    for (const m of allMembers) {
-      if (m.userId === viewerUserId) continue;
-      if (m.userId === invite.invitedByUserId) continue;
-      await this.notifications.create({
-        recipientUserId: m.userId,
-        kind: 'crew_member_joined',
-        actorUserId: viewerUserId,
-        subjectCrewId: crewId,
-      });
-    }
 
-    // Clear the invitee's original "you've been invited" notification — they
-    // just acted on it, so the bell badge should reflect that immediately.
-    await this.notifications.markCrewInviteResolved(viewerUserId, invite.id);
+    // Notifies the inviter, the other members, and clears the invitee's invite row.
+    this.sideEffects.dispatch('crew.invite.resolved', { inviteId: invite.id });
 
     this.presenceRealtime.emitCrewInviteUpdated(
       [invite.invitedByUserId, invite.inviteeUserId],
@@ -618,22 +574,12 @@ export class CrewInvitesService {
       this.crew.clearOpenToCrewStatus(inviterUserId),
     ]);
 
-    // Notify + realtime.
-    await this.notifications.create({
-      recipientUserId: inviterUserId,
-      kind: 'crew_invite_accepted',
-      actorUserId: viewerUserId,
-      subjectCrewId: createdCrewId,
-      subjectCrewInviteId: invite.id,
-    });
-
     const updatedInvite = await this.prisma.crewInvite.findUniqueOrThrow({
       where: { id: invite.id },
       include: INVITE_INCLUDE,
     });
     const inviteDto = this.toDto(updatedInvite);
-    // Clear the invitee's original "you've been invited" notification.
-    await this.notifications.markCrewInviteResolved(viewerUserId, invite.id);
+    this.sideEffects.dispatch('crew.invite.resolved', { inviteId: invite.id });
     this.presenceRealtime.emitCrewInviteUpdated(
       [inviterUserId, viewerUserId],
       { invite: inviteDto },
@@ -667,12 +613,16 @@ export class CrewInvitesService {
       data: { status: 'expired', respondedAt: now },
     });
     for (const row of expiring) {
-      // Clear the original received notification — the invite is no longer
-      // actionable, so it shouldn't keep the bell badge bumped.
-      await this.notifications.markCrewInviteResolved(row.inviteeUserId, row.id);
       this.presenceRealtime.emitCrewInviteUpdated(
         [row.invitedByUserId, row.inviteeUserId],
         { invite: { id: row.id, status: 'expired' } },
+      );
+      // Clears the original received notification — an expired invite is no longer
+      // actionable, so it shouldn't keep the bell badge bumped.
+      this.sideEffects.dispatch(
+        'crew.invite.resolved',
+        { inviteId: row.id },
+        { jobId: `crew.invite.resolved:${row.id}` },
       );
     }
     return result.count;

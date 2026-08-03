@@ -5,7 +5,7 @@
  * (online + not idle) at create time, and null otherwise.
  */
 import { NotificationWriterService } from './notification-writer.service';
-import { NotificationPushService } from './notification-push.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { NotificationQueryService } from './notification-query.service';
 import { NotificationReadStateService } from './notification-read-state.service';
 
@@ -21,7 +21,7 @@ type Deps = {
 };
 
 function buildWriter(deps: Deps): NotificationWriterService {
-  const push = { sendKindPushForActor: jest.fn() } as unknown as NotificationPushService;
+  const sideEffects = { dispatch: jest.fn() } as unknown as SideEffectsService;
   const query = { buildNotificationDtoForRecipient: jest.fn(async () => null) } as unknown as NotificationQueryService;
   const readState = {
     emitWaitingCountForUser: jest.fn(),
@@ -32,7 +32,7 @@ function buildWriter(deps: Deps): NotificationWriterService {
     deps.presenceRealtime as any,
     deps.presenceRedis as any,
     deps.jobs as any,
-    push,
+    sideEffects,
     query,
     readState,
   );

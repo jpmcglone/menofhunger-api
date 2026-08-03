@@ -15,7 +15,7 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { PostsService } from '../posts/posts.service';
 import { AppConfigService } from '../app/app-config.service';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
-import { NotificationsService } from '../notifications/notifications.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
@@ -116,7 +116,7 @@ export class GroupsService {
     private readonly prisma: PrismaService,
     private readonly posts: PostsService,
     private readonly appConfig: AppConfigService,
-    private readonly notifications: NotificationsService,
+    private readonly sideEffects: SideEffectsService,
     private readonly redis: RedisService,
     private readonly marvIdentity: MarvinBotIdentityService,
     private readonly presenceRealtime: PresenceRealtimeService,
@@ -455,8 +455,10 @@ export class GroupsService {
         }
       });
 
-      // Notify existing members (best-effort, fire-and-forget).
-      void this.notifyMembersOfJoin({ groupId: g.id, joinerUserId: params.viewerUserId });
+      this.sideEffects.dispatch('group.member.joined', {
+        groupId: g.id,
+        joinerUserId: params.viewerUserId,
+      });
 
       return { data: { ok: true as const, status: 'active' as const } };
     }
@@ -473,57 +475,14 @@ export class GroupsService {
       update: { status: 'pending', role: 'member' },
     });
 
-    // Notify owners and moderators of the new join request (best-effort).
     if (isNewRequest) {
-      void this.notifyGroupAdminsOfJoinRequest({
+      this.sideEffects.dispatch('group.join.requested', {
         groupId: g.id,
         requestingUserId: params.viewerUserId,
-      }).catch(() => undefined);
+      });
     }
 
     return { data: { ok: true as const, status: 'pending' as const } };
-  }
-
-  private async notifyGroupAdminsOfJoinRequest(params: {
-    groupId: string;
-    requestingUserId: string;
-  }): Promise<void> {
-    const { groupId, requestingUserId } = params;
-    const admins = await this.prisma.communityGroupMember.findMany({
-      where: { groupId, status: 'active', role: { in: ['owner', 'moderator'] } },
-      select: { userId: true },
-    });
-    for (const admin of admins) {
-      if (admin.userId === requestingUserId) continue;
-      await this.notifications.create({
-        recipientUserId: admin.userId,
-        kind: 'group_join_request',
-        actorUserId: requestingUserId,
-        subjectGroupId: groupId,
-      });
-    }
-  }
-
-  /**
-   * Fan-out a `community_group_member_joined` notification to every current
-   * active member of the group (excluding the joiner themselves). Fire-and-
-   * forget: called after the membership row is committed.
-   */
-  private async notifyMembersOfJoin(params: { groupId: string; joinerUserId: string }): Promise<void> {
-    const { groupId, joinerUserId } = params;
-    const members = await this.prisma.communityGroupMember.findMany({
-      where: { groupId, status: 'active', userId: { not: joinerUserId } },
-      select: { userId: true },
-    });
-    await Promise.allSettled(
-      members.map((m) =>
-        this.notifications.upsertGroupMemberJoinedNotification({
-          recipientUserId: m.userId,
-          joinerUserId,
-          groupId,
-        }),
-      ),
-    );
   }
 
   async leave(params: { viewerUserId: string; groupId: string }) {
@@ -616,14 +575,13 @@ export class GroupsService {
       });
     });
 
-    // Notify the approved user and fan-out member-joined to existing members (best-effort).
-    void this.notifications.upsertGroupJoinDecisionNotification({
-      recipientUserId: params.userId,
+    // Notifies the approved user, then fans member-joined out to the existing members.
+    this.sideEffects.dispatch('group.join.decided', {
       groupId: params.groupId,
+      userId: params.userId,
       actorUserId: params.viewerUserId,
       decision: 'approved',
-    }).catch(() => undefined);
-    void this.notifyMembersOfJoin({ groupId: params.groupId, joinerUserId: params.userId });
+    });
 
     return { data: { ok: true as const } };
   }
@@ -639,13 +597,12 @@ export class GroupsService {
       where: { groupId_userId: { groupId: params.groupId, userId: params.userId } },
     });
 
-    // Notify the rejected user (best-effort).
-    void this.notifications.upsertGroupJoinDecisionNotification({
-      recipientUserId: params.userId,
+    this.sideEffects.dispatch('group.join.decided', {
       groupId: params.groupId,
+      userId: params.userId,
       actorUserId: params.viewerUserId,
       decision: 'rejected',
-    }).catch(() => undefined);
+    });
 
     return { data: { ok: true as const } };
   }
@@ -674,15 +631,15 @@ export class GroupsService {
       });
     });
 
-    // Notify the removed user (best-effort). Skip if the removed user is the Marv
-    // bot — he's a machine; sending him a "you were removed" push is meaningless.
+    // Skip the notification if the removed user is the Marv bot — he's a machine; sending him
+    // a "you were removed" push is meaningless.
     const marvId = this.marvIdentity.cachedMarvUserId();
     if (params.userId !== marvId) {
-      void this.notifications.upsertGroupMemberRemovedNotification({
-        recipientUserId: params.userId,
+      this.sideEffects.dispatch('group.member.removed', {
         groupId: params.groupId,
+        userId: params.userId,
         actorUserId: params.viewerUserId,
-      }).catch(() => undefined);
+      });
     } else {
       // Marv was removed — broadcast so other mods' settings pages update live.
       this.presenceRealtime.emitGroupMarvChanged(params.groupId, { groupId: params.groupId, isMember: false });

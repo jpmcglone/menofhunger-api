@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { AppConfigService } from '../app/app-config.service';
+import { FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
 import { BELL_EXCLUDED_KINDS } from './notification-read-state.service';
 
 @Injectable()
@@ -63,16 +64,14 @@ export class NotificationsOrphanCleanupCron {
 
       // Correct undeliveredNotificationCount for affected users (best-effort).
       if (undelivered.length > 0) {
-        await Promise.allSettled(
-          undelivered.map((row) =>
-            this.prisma.user.update({
-              where: { id: row.recipientUserId },
-              data: {
-                undeliveredNotificationCount: { decrement: row._count },
-              },
-            }),
-          ),
-        );
+        await runInBatches(undelivered, FANOUT_CONCURRENCY, async (row) => {
+          await this.prisma.user.update({
+            where: { id: row.recipientUserId },
+            data: {
+              undeliveredNotificationCount: { decrement: row._count },
+            },
+          });
+        });
       }
 
       const ms = Date.now() - startedAt;

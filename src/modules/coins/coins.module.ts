@@ -5,11 +5,12 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { UsersModule } from '../users/users.module';
 import { CoinsController } from './coins.controller';
 import { CoinsService } from './coins.service';
+import { CoinsSideEffectsHandler } from './coins-side-effects.handler';
 
 @Module({
   imports: [AuthModule, PrismaModule, NotificationsModule, UsersModule],
   controllers: [CoinsController],
-  providers: [CoinsService],
+  providers: [CoinsService, CoinsSideEffectsHandler],
   exports: [CoinsService],
 })
 export class CoinsModule {}

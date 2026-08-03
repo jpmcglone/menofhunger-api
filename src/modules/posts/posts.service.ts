@@ -201,10 +201,6 @@ export class PostsService {
     return this.mutation.publishFromOnlyMe(...args);
   }
 
-  invalidateSiteConfigCache(...args: Parameters<PostsMutationService['invalidateSiteConfigCache']>) {
-    return this.mutation.invalidateSiteConfigCache(...args);
-  }
-
   // ── Drafts ─────────────────────────────────────────────────────────────────
 
   listDrafts(...args: Parameters<PostsDraftsService['listDrafts']>) {

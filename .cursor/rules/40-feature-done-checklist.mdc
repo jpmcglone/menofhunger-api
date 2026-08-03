@@ -27,7 +27,8 @@ Rationale: `npm test` can take 30–90 seconds per run. In a multi-phase plan th
 2. **Types** — `npm run build:typecheck`
    - Zero errors.
 3. **Build** — `npm run build`
-   - Must succeed. Catches Nest module wiring issues that the typechecker misses.
+ - Must succeed. Catches Nest module wiring issues that the typechecker misses.
+ - Its `postbuild` hook runs `scripts/check-module-graph.mjs`, which requires the built root module to catch circular imports between `*.module.ts` files. If it fails with `Cannot access 'XModule' before initialization`, **break the cycle** — remove the dependency that shouldn't exist. Do not "fix" it with `forwardRef()`: that resolves DI ordering but the top-level `import` still executes, so the load-time cycle remains.
 4. **Tests** — `npm test` *(skip between phases in a multi-phase plan; always run after the final phase)*
    - All green. If you added a controller, service, or DTO, add at least one targeted unit test. If you changed an endpoint contract, prefer an e2e/integration test.
 5. **Prisma (only if `prisma/schema.prisma` changed)**

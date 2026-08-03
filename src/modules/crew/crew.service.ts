@@ -10,7 +10,7 @@ import type { Crew, CrewMember, CrewMemberRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { NotificationsService } from '../notifications/notifications.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import {
@@ -52,7 +52,7 @@ export class CrewService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly presenceRealtime: PresenceRealtimeService,
-    private readonly notifications: NotificationsService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   // ---------- assertions ----------
@@ -401,30 +401,18 @@ export class CrewService {
       where: { crewId },
       select: { userId: true },
     });
-    // Tidy stale "X joined your crew" / "X accepted your crew invite" rows from
-    // other members' notifications — X is no longer a member, so those entries
-    // are misleading. Best-effort; never block the leave flow if cleanup fails.
-    await this.notifications
-      .deleteCrewJoinedNotificationsForActor({ crewId, actorUserId: params.viewerUserId })
-      .catch((err) => {
-        this.logger.warn(`[crew] Failed to clean up join notifications on leave: ${err}`);
-      });
     this.presenceRealtime.emitCrewMembersChanged(
       [...remaining.map((m) => m.userId), params.viewerUserId],
       { crewId, kind: 'left', userId: params.viewerUserId },
     );
 
-    // Notify remaining members that someone left (best-effort, fire-and-forget).
-    const leaverUserId = params.viewerUserId;
-    void Promise.allSettled(
-      remaining.map((m) =>
-        this.notifications.upsertCrewMemberLeftNotification({
-          recipientUserId: m.userId,
-          leaverUserId,
-          crewId,
-        }),
-      ),
-    );
+    // Notifies the remaining members and tidies now-misleading "X joined your crew" rows.
+    this.sideEffects.dispatch('crew.member.removed', {
+      crewId,
+      actorUserId: params.viewerUserId,
+      subjectUserId: params.viewerUserId,
+      reason: 'left',
+    });
   }
 
   async kickMember(params: {
@@ -465,26 +453,16 @@ export class CrewService {
       where: { crewId: params.crewId },
       select: { userId: true },
     });
-    await this.notifications
-      .deleteCrewJoinedNotificationsForActor({
-        crewId: params.crewId,
-        actorUserId: params.userId,
-      })
-      .catch((err) => {
-        this.logger.warn(`[crew] Failed to clean up join notifications on kick: ${err}`);
-      });
     this.presenceRealtime.emitCrewMembersChanged(
       [...remaining.map((m) => m.userId), params.userId],
       { crewId: params.crewId, kind: 'kicked', userId: params.userId },
     );
 
-    // Notify the kicked member (best-effort, fire-and-forget).
-    void this.notifications.upsertCrewMemberKickedNotification({
-      recipientUserId: params.userId,
-      actorUserId: params.viewerUserId,
+    this.sideEffects.dispatch('crew.member.removed', {
       crewId: params.crewId,
-    }).catch((err) => {
-      this.logger.warn(`[crew] Failed to send kick notification: ${err}`);
+      actorUserId: params.viewerUserId,
+      subjectUserId: params.userId,
+      reason: 'kicked',
     });
   }
 
@@ -524,17 +502,11 @@ export class CrewService {
       { crewId },
     );
 
-    // Notify every former member (best-effort, fire-and-forget).
-    const actorUserId = crew.ownerUserId;
-    void Promise.allSettled(
-      allMembers.map((m) =>
-        this.notifications.upsertCrewDisbandedNotification({
-          recipientUserId: m.userId,
-          actorUserId,
-          crewId,
-        }),
-      ),
-    );
+    this.sideEffects.dispatch('crew.disbanded', {
+      crewId,
+      actorUserId: crew.ownerUserId,
+      memberUserIds: allMembers.map((m) => m.userId),
+    });
   }
 
   async disbandCrew(params: { viewerUserId: string }): Promise<void> {
@@ -557,19 +529,11 @@ export class CrewService {
       { crewId },
     );
 
-    // Notify every former member (best-effort, fire-and-forget).
-    const actorUserId = params.viewerUserId;
-    void Promise.allSettled(
-      allMembers
-        .filter((m) => m.userId !== actorUserId)
-        .map((m) =>
-          this.notifications.upsertCrewDisbandedNotification({
-            recipientUserId: m.userId,
-            actorUserId,
-            crewId,
-          }),
-        ),
-    );
+    this.sideEffects.dispatch('crew.disbanded', {
+      crewId,
+      actorUserId: params.viewerUserId,
+      memberUserIds: allMembers.map((m) => m.userId),
+    });
   }
 
   // ---------- dto helpers ----------

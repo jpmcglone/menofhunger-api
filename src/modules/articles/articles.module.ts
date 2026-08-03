@@ -6,12 +6,13 @@ import { ArticleViewsModule } from '../article-views/article-views.module';
 import { ArticlesController } from './articles.controller';
 import { ArticlesService } from './articles.service';
 import { ArticlesRankingService } from './articles-ranking.service';
+import { ArticlesSideEffectsHandler } from './articles-side-effects.handler';
 import { ArticlesTrendingScoreCron } from './articles-trending-score.cron';
 
 @Module({
   imports: [AuthModule, NotificationsModule, RealtimeModule, ArticleViewsModule],
   controllers: [ArticlesController],
-  providers: [ArticlesService, ArticlesRankingService, ArticlesTrendingScoreCron],
+  providers: [ArticlesService, ArticlesRankingService, ArticlesSideEffectsHandler, ArticlesTrendingScoreCron],
   exports: [ArticlesService, ArticlesRankingService, ArticlesTrendingScoreCron],
 })
 export class ArticlesModule {}

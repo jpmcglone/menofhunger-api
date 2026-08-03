@@ -5,7 +5,9 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
-import { NotificationPushService } from './notification-push.service';
+import { chunk, FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
+import { FANOUT_CHUNK_SIZE } from '../side-effects/side-effects.constants';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { NotificationQueryService } from './notification-query.service';
 import { isBellCountedNotificationKind, NotificationReadStateService } from './notification-read-state.service';
 
@@ -30,7 +32,8 @@ export type CreateNotificationParams = {
 /**
  * Notification row writes: create + the upsert families (boost, repost, group
  * invites, group/crew lifecycle) and bulk deletes. Owns the post-write fan-out
- * (badge emit, `notifications:new` payload emit, web push, instant email).
+ * (badge emit, `notifications:new` payload emit, instant email) and dispatches
+ * the push itself to the side-effects queue so it retries independently.
  */
 @Injectable()
 export class NotificationWriterService {
@@ -41,7 +44,7 @@ export class NotificationWriterService {
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly presenceRedis: PresenceRedisStateService,
     private readonly jobs: JobsService,
-    private readonly push: NotificationPushService,
+    private readonly sideEffects: SideEffectsService,
     private readonly query: NotificationQueryService,
     private readonly readState: NotificationReadStateService,
   ) {}
@@ -141,6 +144,7 @@ export class NotificationWriterService {
         marv_not_in_group: '@marv is not in this group',
         status_update: 'updated their status',
         checkin_post: 'checked in',
+        account_verified: "You're verified",
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
@@ -226,7 +230,7 @@ export class NotificationWriterService {
     // Intentionally omit sourceLabel for actor-driven pushes: the actor's words
     // (snippet) are the most valuable byte budget. sourceLabel is reserved for
     // system-originated pushes (streak reminders, daily prompt, message channel).
-    void this.push.sendKindPushForActor({
+    this.sideEffects.dispatch('notification.push', {
       recipientUserId,
       kind,
       actorUserId: actorUserId ?? null,
@@ -362,7 +366,7 @@ export class NotificationWriterService {
 
         // Web push is optional (VAPID + user preference). (Boosts are high-signal.)
         if (res.kind === 'created') {
-          void this.push.sendKindPushForActor({
+          this.sideEffects.dispatch('notification.push', {
             recipientUserId,
             kind: 'boost',
             actorUserId,
@@ -485,7 +489,7 @@ export class NotificationWriterService {
         // Web push for newly-created reposts (gated by pushRepost pref).
         // Updates (re-reposts of the same post) skip push to avoid re-notifying.
         if (res.kind === 'created') {
-          void this.push.sendKindPushForActor({
+          this.sideEffects.dispatch('notification.push', {
             recipientUserId,
             kind: 'repost',
             actorUserId,
@@ -762,7 +766,7 @@ export class NotificationWriterService {
     }
 
     // Web push (best-effort, gated on user prefs).
-    void this.push.sendKindPushForActor({
+    this.sideEffects.dispatch('notification.push', {
       recipientUserId: inviteeUserId,
       kind: 'community_group_invite_received',
       actorUserId: inviterUserId,
@@ -867,7 +871,7 @@ export class NotificationWriterService {
     }
 
     // Push for accepted/declined is best-effort; reuse generic flow.
-    void this.push.sendKindPushForActor({
+    this.sideEffects.dispatch('notification.push', {
       recipientUserId: inviterUserId,
       kind,
       actorUserId: inviteeUserId,
@@ -962,7 +966,7 @@ export class NotificationWriterService {
       where: { id: subjectGroupId },
       select: { slug: true },
     });
-    void this.push.sendKindPushForActor({
+    this.sideEffects.dispatch('notification.push', {
       recipientUserId,
       kind,
       actorUserId,
@@ -1224,24 +1228,29 @@ export class NotificationWriterService {
     const toCreate = recipientUserIds.filter((id) => id && id !== actorUserId);
     if (toCreate.length === 0) return;
 
-    await this.prisma.notification.createMany({
-      data: toCreate.map((recipientUserId) => ({
-        recipientUserId,
-        kind: 'community_group_post' as const,
-        actorUserId,
-        subjectPostId: postId,
-        subjectGroupId: groupId,
-        title: `posted in ${groupName}`,
-        body: bodySnippet ?? null,
-        createdAt: now,
-      })),
-      skipDuplicates: true,
-    });
-
-    // Emit groups:unreadChanged per recipient (best-effort, fire-and-forget).
-    for (const recipientUserId of toCreate) {
-      void this.readState.emitGroupsUnreadForUser(recipientUserId);
+    // Chunked so a very large group doesn't become one enormous INSERT that holds a
+    // connection (and its locks) for seconds.
+    for (const slice of chunk(toCreate, FANOUT_CHUNK_SIZE)) {
+      await this.prisma.notification.createMany({
+        data: slice.map((recipientUserId) => ({
+          recipientUserId,
+          kind: 'community_group_post' as const,
+          actorUserId,
+          subjectPostId: postId,
+          subjectGroupId: groupId,
+          title: `posted in ${groupName}`,
+          body: bodySnippet ?? null,
+          createdAt: now,
+        })),
+        skipDuplicates: true,
+      });
     }
+
+    // Each badge emit is its own count query, so this is bounded rather than one promise
+    // per recipient.
+    await runInBatches(toCreate, FANOUT_CONCURRENCY, async (recipientUserId) => {
+      await this.readState.emitGroupsUnreadForUser(recipientUserId);
+    });
   }
 
   /**
@@ -1298,8 +1307,9 @@ export class NotificationWriterService {
    * `mode: 'edited'` — the active status was reworded: patch each follower's latest row in
    * place (no new row, no bell, no push).
    *
-   * Fetches the actor's username once for the push URL, then spawns one fire-and-forget
-   * write per follower.
+   * Fetches the actor's username once for the push URL, then writes per follower with
+   * bounded concurrency — one promise per follower would open thousands of transactions at
+   * once for a popular account.
    */
   async fanOutStatusUpdateNotifications(params: {
     actorUserId: string;
@@ -1323,23 +1333,22 @@ export class NotificationWriterService {
     if (!actor || follows.length === 0) return;
     const actorUsername = actor.username ?? '';
 
-    const tasks: Promise<void>[] = [];
-    for (const f of follows) {
-      if (!f.followerId || f.followerId === actorUserId) continue;
-      const args = { recipientUserId: f.followerId, actorUserId, actorUsername, text, postId };
-      const task =
-        mode === 'created'
-          ? this.createStatusUpdateNotification(args)
-          : this.patchStatusUpdateNotification(args);
-      tasks.push(
-        task.catch((err) => {
-          this.logger.warn(
-            `[notifications] Failed to write status_update notification: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }),
+    const recipientIds = follows
+      .map((f) => f.followerId)
+      .filter((id) => id && id !== actorUserId);
+
+    const result = await runInBatches(recipientIds, FANOUT_CONCURRENCY, async (recipientUserId) => {
+      const args = { recipientUserId, actorUserId, actorUsername, text, postId };
+      await (mode === 'created'
+        ? this.createStatusUpdateNotification(args)
+        : this.patchStatusUpdateNotification(args));
+    });
+
+    if (result.failed > 0) {
+      this.logger.warn(
+        `[notifications] status_update fan-out: ${result.failed}/${recipientIds.length} writes failed.`,
       );
     }
-    await Promise.allSettled(tasks);
   }
 
   /**
@@ -1415,7 +1424,7 @@ export class NotificationWriterService {
         // follower once each. Keeping the tag actor-scoped means the in-app rows stay
         // one-per-status while pushes collapse inside the status_update coalesce window.
         // The deep link is passed explicitly via `url` instead.
-        void this.push.sendKindPushForActor({
+        this.sideEffects.dispatch('notification.push', {
           recipientUserId,
           kind: 'status_update',
           actorUserId,
@@ -1555,6 +1564,26 @@ export class NotificationWriterService {
       const userIds = users.map((u) => u.id);
       const now = new Date();
 
+      // Count existing unread rows per user for this kind. The counter adjustment depends
+      // on how many unread rows each user had:
+      //   0 unread → new unread created  → +1
+      //   1 unread → replaced 1-for-1    → net 0
+      //   N unread → N deleted, 1 created → -(N-1)  (counter was inflated from prior days)
+      const existingUnread = await this.prisma.notification.findMany({
+        where: { kind, recipientUserId: { in: userIds }, deliveredAt: null },
+        select: { recipientUserId: true },
+      });
+      const priorUnreadCount = new Map<string, number>();
+      for (const r of existingUnread) {
+        priorUnreadCount.set(r.recipientUserId, (priorUnreadCount.get(r.recipientUserId) ?? 0) + 1);
+      }
+
+      // Delete all prior rows of this kind for this batch — both read and unread — so only
+      // the latest daily notification ever appears in the bell.
+      await this.prisma.notification.deleteMany({
+        where: { kind, recipientUserId: { in: userIds } },
+      });
+
       await this.prisma.notification.createMany({
         data: userIds.map((recipientUserId) => ({
           recipientUserId,
@@ -1563,24 +1592,42 @@ export class NotificationWriterService {
           body,
           createdAt: now,
         })),
-        skipDuplicates: true,
       });
 
-      // Increment undelivered bell counter for each recipient.
-      await this.prisma.$executeRaw`
-        UPDATE "User"
-        SET "undeliveredNotificationCount" = "undeliveredNotificationCount" + 1
-        WHERE id = ANY(${userIds}::text[])
-      `;
+      // Adjust the undelivered bell counter per user:
+      //   Had 0 unread → increment by 1 (batch update, fast)
+      //   Had 1 unread → no change
+      //   Had N > 1    → decrement by (N - 1) to remove the excess (rare after first cleanup)
+      const usersNeedingIncrement = userIds.filter((id) => !priorUnreadCount.has(id));
+      if (usersNeedingIncrement.length > 0) {
+        await this.prisma.$executeRaw`
+          UPDATE "User"
+          SET "undeliveredNotificationCount" = "undeliveredNotificationCount" + 1
+          WHERE id = ANY(${usersNeedingIncrement}::text[])
+        `;
+      }
+      const usersWithExcess = userIds
+        .map((id) => ({ id, excess: (priorUnreadCount.get(id) ?? 0) - 1 }))
+        .filter((u) => u.excess > 0);
+      if (usersWithExcess.length > 0) {
+        await runInBatches(usersWithExcess, FANOUT_CONCURRENCY, async ({ id, excess }) => {
+          await this.prisma.user.update({
+            where: { id },
+            data: { undeliveredNotificationCount: { decrement: excess } },
+          });
+        });
+      }
 
-      // Emit realtime badge update and push — best-effort, never block fan-out.
-      for (const userId of userIds) {
+      // Emit realtime badge update and queue the push. Batched rather than sequential: each
+      // badge emit needs its own count query, and 500 of those in series is minutes of
+      // avoidable wall-clock for a fan-out the whole user base is waiting on.
+      await runInBatches(userIds, FANOUT_CONCURRENCY, async (userId) => {
         const undeliveredCount = await this.prisma.notification
           .count({ where: this.readState.undeliveredBellWhere(userId) })
           .catch(() => 0);
         this.presenceRealtime.emitNotificationsUpdated(userId, { undeliveredCount });
 
-        void this.push.sendKindPushForActor({
+        this.sideEffects.dispatch('notification.push', {
           recipientUserId: userId,
           kind,
           actorUserId: null,
@@ -1589,7 +1636,7 @@ export class NotificationWriterService {
           url,
           sourceLabel: kind,
         });
-      }
+      });
 
       // Persist cursor so a crash resumes from here.
       cursor = userIds[userIds.length - 1];

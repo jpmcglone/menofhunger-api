@@ -8,6 +8,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { GroupsController } from './groups.controller';
 import { GroupsService } from './groups.service';
 import { GroupInvitesService } from './group-invites.service';
+import { GroupsSideEffectsHandler } from './groups-side-effects.handler';
 
 @Module({
   imports: [
@@ -19,7 +20,7 @@ import { GroupInvitesService } from './group-invites.service';
     RealtimeModule,
   ],
   controllers: [GroupsController],
-  providers: [GroupsService, GroupInvitesService],
+  providers: [GroupsService, GroupInvitesService, GroupsSideEffectsHandler],
   exports: [GroupsService, GroupInvitesService],
 })
 export class GroupsModule {}

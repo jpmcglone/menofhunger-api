@@ -34,6 +34,19 @@ await this.realtime.emitGroupInviteReceived(invitee.id, { invite });
 
 Rationale: `PresenceRealtimeService` already handles cross-instance fan-out (via Redis pub/sub), null-server safety during startup, and per-user vs per-room targeting. Feature services should never have to know about any of that.
 
+`PresenceRealtimeService` always publishes to Redis, whether or not the process has a local Socket.IO server, so emits work identically from a `RUN_HTTP=false` worker.
+
+## Which emits stay on the request path
+
+> Emits that make **content** appear stay on the request path. Emits that make a **notification or badge** appear move to the worker.
+
+| Emit | Where | Why |
+| --- | --- | --- |
+| `posts:comment-added`, `posts:live-updated`, `articles:comment-added`, reaction summaries | Request path, synchronous | Cheap in-process Socket.IO calls other viewers expect instantly. Deferring them makes the app feel broken. |
+| `notifications:new`, `notifications:updated`, `groups:unread-changed` | Side-effects worker | They belong with the notification write, which is queued. |
+
+So a mutation both emits its content event synchronously *and* dispatches the notification side effect. See `65-async-side-effects.mdc` for the `dispatch` seam.
+
 ## Naming + payload conventions
 
 - **Event names**: `<domain>:<verb-or-noun>` in kebab-case. Examples: `notifications:new`, `groups:invite-received`, `posts:live-updated`, `users:me-updated`.

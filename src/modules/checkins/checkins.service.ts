@@ -11,7 +11,7 @@ import { dayIndexEastern, easternDayKey, yesterdayEasternDayKey } from '../../co
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { NotificationsService } from '../notifications/notifications.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 
 const LEADERBOARD_CACHE_TTL_SECONDS = 60;
 const WEEKLY_LEADERBOARD_CACHE_TTL_SECONDS = 120;
@@ -39,7 +39,7 @@ export class CheckinsService {
     private readonly redis: RedisService,
     private readonly posthog: PosthogService,
     private readonly presenceRealtime: PresenceRealtimeService,
-    private readonly notifications: NotificationsService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   async getTodayState(params: { userId: string; publicBaseUrl?: string | null; now?: Date }) {
@@ -351,18 +351,13 @@ export class CheckinsService {
       longestStreakDays: nextLongest,
     });
 
-    // Highest-signal push in the product. Gated by per-user pushCrewStreak pref
-    // inside NotificationsService. Fire-and-forget — the streak is already advanced.
-    void this.notifications
-      .sendCrewStreakAdvancedPush({
-        recipientUserIds: memberIds,
-        crewId: crew.id,
-        crewSlug: crew.slug,
-        crewName: crew.name,
-        currentStreakDays: nextCurrent,
-        memberCount: memberIds.length,
-      })
-      .catch(() => undefined);
+    // Highest-signal push in the product, so it goes on the queue and gets retries rather
+    // than being lost if this process dies between the streak write and the APNs call.
+    this.sideEffects.dispatch('crew.streak.advanced', {
+      crewId: crew.id,
+      dayKey,
+      currentStreakDays: nextCurrent,
+    });
   }
 
   /**

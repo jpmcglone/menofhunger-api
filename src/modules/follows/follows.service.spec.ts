@@ -39,6 +39,7 @@ function makeService(rows: any[]) {
     prisma,
     appConfig,
     {} as any,
+    { dispatch: jest.fn() } as any,
     redis,
     {} as any,
     {} as any,

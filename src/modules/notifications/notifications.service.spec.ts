@@ -27,7 +27,14 @@ function buildFacade(deps: FacadeDeps) {
   const readState = new NotificationReadStateService(deps.prisma, deps.presenceRealtime, deps.posthog);
   const postVisibility = new PostVisibilityReadService(deps.prisma, deps.appConfig, deps.viewerContextService);
   const query = new NotificationQueryService(deps.prisma, deps.appConfig, postVisibility, readState);
-  const writer = new NotificationWriterService(deps.prisma, deps.presenceRealtime, deps.presenceRedis ?? stubPresenceRedis, deps.jobs, push, query, readState);
+  // Stands in for the side-effects worker: runs the push handler inline so push assertions
+  // still exercise the real payload through the new dispatch seam.
+  const sideEffects = {
+    dispatch: (name: string, payload: any) => {
+      if (name === 'notification.push') void push.sendKindPushForActor(payload);
+    },
+  } as any;
+  const writer = new NotificationWriterService(deps.prisma, deps.presenceRealtime, deps.presenceRedis ?? stubPresenceRedis, deps.jobs, sideEffects, query, readState);
   const svc = new NotificationsService(preferences, push, apnsPush, readState, query, writer);
   return { svc, preferences, push, apnsPush, readState, query, writer };
 }
@@ -656,7 +663,7 @@ describe('NotificationWriterService bell-counter eligibility', () => {
       { emitNotificationsUpdated: jest.fn(), emitNotificationNew: jest.fn() } as any,
       { isOnline: jest.fn(async () => false), isIdle: jest.fn(async () => false) } as any,
       { enqueueCron: jest.fn() } as any,
-      { sendKindPushForActor: jest.fn(async () => undefined) } as any,
+      { dispatch: jest.fn() } as any,
       { buildNotificationDtoForRecipient: jest.fn(async () => null) } as any,
       { undeliveredBellWhere: jest.fn(() => ({})), emitWaitingCountForUser: jest.fn() } as any,
     );

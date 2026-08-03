@@ -13,6 +13,7 @@ import { AffiliateService } from './affiliate.service';
 import { toUserListDto } from '../../common/dto/user.dto';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import type { ReferralMeDto, RecruitDto } from '../../common/dto/referral.dto';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 
 // Validated after uppercasing, so lowercase input is accepted and normalized.
 const REFERRAL_CODE_REGEX = /^[A-Z0-9_-]{4,20}$/;
@@ -35,6 +36,10 @@ export class ReferralService {
     private readonly entitlement: EntitlementService,
     private readonly follows: FollowsService,
     private readonly affiliate: AffiliateService,
+    // Dispatching auto-verify instead of calling it also removes what used to be a
+    // load-time cycle here: ReferralService → UserVerificationService → BillingService →
+    // ReferralService.
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   // ─── Referral code management ───────────────────────────────────────────────
@@ -170,6 +175,14 @@ export class ReferralService {
         this.logger.warn(`[referral] Auto-follow failed for user ${userId} → ${recruiter.id}: ${err}`);
       }
     }
+
+    // The handler re-reads the site toggle and does the verification (coins, affiliate
+    // earnings, Stripe billing hooks) off the request path.
+    this.sideEffects.dispatch('user.auto-verify', {
+      userId,
+      recruitedById: recruiter.id,
+      source: 'auto_referral',
+    });
 
     return { recruiter: { username: recruiter.username ?? null, name: recruiter.name ?? null } };
   }

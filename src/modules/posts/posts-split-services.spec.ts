@@ -200,7 +200,7 @@ describe('PostsMutationService visibilityRank ordering', () => {
     const svc = new PostsMutationService(
       {} as any, {} as any, {} as any, {} as any, {} as any,
       {} as any, {} as any, {} as any, {} as any, {} as any,
-      {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any,
     );
     const rank = (vis: string) => (svc as any).visibilityRank(vis);
     expect(rank('public')).toBeLessThan(rank('verifiedOnly'));
@@ -287,19 +287,29 @@ describe('PostsMutationService.createPost quote floor enforcement', () => {
     const ranking = new PostsRankingService(prisma, { enqueue: jest.fn(async () => undefined) } as any);
     const svc = new PostsMutationService(
       prisma,
-      { deleteBySubjectPostId: jest.fn(), deleteByActorPostId: jest.fn(), create: jest.fn(), upsertRepostNotification: jest.fn() } as any,
       { emitFeedNewPost: jest.fn(), emitPostsLiveUpdated: jest.fn(), emitPostsInteraction: jest.fn(), emitPostsCommentDeleted: jest.fn() } as any,
       { bumpForPostWrite: jest.fn(async () => undefined) } as any,
       { r2: jest.fn(() => null), get: jest.fn(), frontendBaseUrl: jest.fn(() => null) } as any,
       {} as any,
-      { enqueue: jest.fn(async () => undefined) } as any,
       { capture: jest.fn() } as any,
-      { isBotUserId: jest.fn(() => false) } as any,
       viewerContext,
       enrichment,
       ranking,
       { isValid: () => false } as any,
-      { extractLinks: jest.fn(() => []), backfillForUrls: jest.fn(async () => 0) } as any,
+      {
+        get: jest.fn(async () => ({
+          id: 1,
+          postsPerWindow: 100,
+          windowSeconds: 60,
+          verifiedPostsPerWindow: 100,
+          verifiedWindowSeconds: 60,
+          premiumPostsPerWindow: 100,
+          premiumWindowSeconds: 60,
+          autoVerifyNewUsers: false,
+          autoVerifyRecruiterId: null,
+        })),
+      } as any,
+      { dispatch: jest.fn() } as any,
     );
     return { svc, QUOTED_POST_URL };
   }

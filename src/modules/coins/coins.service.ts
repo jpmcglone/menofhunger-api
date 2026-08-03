@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { z } from 'zod';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
-import { NotificationsService } from '../notifications/notifications.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
@@ -29,7 +29,7 @@ export class CoinsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
-    private readonly notifications: NotificationsService,
+    private readonly sideEffects: SideEffectsService,
     private readonly usersMeRealtime: UsersMeRealtimeService,
   ) {}
 
@@ -101,14 +101,11 @@ export class CoinsService {
       this.usersMeRealtime.emitMeUpdated(recipient.id, 'coin_transfer_received'),
     ]);
 
-    // Notify recipient.
-    const amountLabel = amount === 1 ? '1 coin' : `${amount} coins`;
-    await this.notifications.create({
+    this.sideEffects.dispatch('coins.transferred', {
       recipientUserId: recipient.id,
-      kind: 'coin_transfer',
-      actorUserId: senderUserId,
-      title: `sent you ${amountLabel}`,
-      body: note ?? null,
+      senderUserId,
+      amountLabel: amount === 1 ? '1 coin' : `${amount} coins`,
+      note: note ?? null,
     });
 
     return {

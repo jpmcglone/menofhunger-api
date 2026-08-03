@@ -59,16 +59,21 @@ export class PresenceRealtimeService {
     return null;
   }
 
+  /**
+   * Targeted emit. The Redis publish is the durable path and must ALWAYS run: worker
+   * processes (`RUN_HTTP=false`) never get `setServer` called, so gating the publish on a
+   * local Socket.IO server would silently drop every emit originating from a background
+   * job. Local delivery is only the same-instance fast path.
+   */
   private emitToUser(userId: string, event: string, payload: unknown): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
     const uid = (userId ?? '').trim();
     const ev = (event ?? '').trim();
     if (!uid || !ev) return;
 
-    // Local delivery (fast path).
-    this.presence.emitToUser(server, uid, ev, payload);
-    // Cross-instance delivery (best-effort).
+    // Local delivery (fast path) — skipped in processes without a socket server.
+    const server = this.server;
+    if (server) this.presence.emitToUser(server, uid, ev, payload);
+    // Cross-instance delivery (best-effort, and the only path in worker processes).
     void this.presenceRedis.publishEmitToUser({ userId: uid, event: ev, payload }).catch(() => undefined);
   }
 
@@ -89,14 +94,23 @@ export class PresenceRealtimeService {
     }
   }
 
+  /** Room emit. Same durability contract as `emitToUser`: always publish, deliver locally if we can. */
   private emitToRoom(room: string, event: string, payload: unknown): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
     const r = (room ?? '').trim();
     const ev = (event ?? '').trim();
     if (!r || !ev) return;
-    server.to(r).emit(ev, payload);
+    const server = this.server;
+    if (server) server.to(r).emit(ev, payload);
     void this.presenceRedis.publishEmitToRoom({ room: r, event: ev, payload }).catch(() => undefined);
+  }
+
+  /** Global broadcast. Same durability contract as `emitToUser`/`emitToRoom`. */
+  private emitBroadcast(event: string, payload: unknown): void {
+    const ev = (event ?? '').trim();
+    if (!ev) return;
+    const server = this.server;
+    if (server) server.emit(ev, payload);
+    void this.presenceRedis.publishBroadcast({ event: ev, payload }).catch(() => undefined);
   }
 
   /**
@@ -105,9 +119,7 @@ export class PresenceRealtimeService {
    * without waiting for the push/email notification or a manual reload.
    */
   emitDailyContentPublished(item: 'word' | 'quote', dayKey: string): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
-    server.emit('daily:content-published', { item, dayKey });
+    this.emitBroadcast('daily:content-published', { item, dayKey });
   }
 
   /**
@@ -117,9 +129,7 @@ export class PresenceRealtimeService {
    * private like state to other users.
    */
   emitWotdLikeUpdated(likeCount: number, actorUserId: string, liked: boolean): void {
-    const server = this.getServerOrNull();
-    if (!server) return;
-    server.emit('wotd:like-updated', { likeCount, actorUserId, liked });
+    this.emitBroadcast('wotd:like-updated', { likeCount, actorUserId, liked });
   }
 
   disconnectUserSockets(userId: string): void {

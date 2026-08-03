@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MessagesService, type MessageMediaInput } from '../messages/messages.service';
-import { NotificationsService } from '../notifications/notifications.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { CrewService } from './crew.service';
 
@@ -22,7 +22,7 @@ export class CrewWallService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly messages: MessagesService,
-    private readonly notifications: NotificationsService,
+    private readonly sideEffects: SideEffectsService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly crew: CrewService,
   ) {}
@@ -110,16 +110,12 @@ export class CrewWallService {
         },
         select: { id: true },
       });
-      for (const u of mentioned) {
-        if (u.id === params.viewerUserId) continue;
-        await this.notifications.create({
-          recipientUserId: u.id,
-          kind: 'crew_wall_mention',
-          actorUserId: params.viewerUserId,
-          subjectCrewId: ctx.crewId,
-          body: (params.body ?? '').trim().slice(0, 200) || null,
-        });
-      }
+      this.sideEffects.dispatch('crew.wall.mentioned', {
+        crewId: ctx.crewId,
+        actorUserId: params.viewerUserId,
+        recipientUserIds: mentioned.map((u) => u.id),
+        bodySnippet: (params.body ?? '').trim().slice(0, 200) || null,
+      });
     }
 
     return result;

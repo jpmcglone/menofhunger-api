@@ -104,6 +104,69 @@ describe('PresenceRealtimeService.emitGroupNewPost', () => {
   });
 });
 
+/**
+ * Worker processes (`RUN_HTTP=false`) never receive `setServer`, so the Redis publish is the
+ * ONLY delivery path for realtime events originating from a background job. These tests pin
+ * that contract: no local socket server must never mean "drop the emit".
+ */
+describe('PresenceRealtimeService without a local socket server', () => {
+  function makeServerlessService() {
+    const presence = { emitToUser: jest.fn() };
+    const presenceRedis = {
+      publishEmitToUser: jest.fn().mockResolvedValue(undefined),
+      publishEmitToRoom: jest.fn().mockResolvedValue(undefined),
+      publishBroadcast: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new PresenceRealtimeService(presence as any, presenceRedis as any);
+    return { service, presence, presenceRedis };
+  }
+
+  it('publishes per-user emits cross-instance even with no server attached', () => {
+    const { service, presence, presenceRedis } = makeServerlessService();
+
+    service.emitNotificationsUpdated('user-1', { undeliveredCount: 3 });
+
+    expect(presence.emitToUser).not.toHaveBeenCalled();
+    expect(presenceRedis.publishEmitToUser).toHaveBeenCalledWith({
+      userId: 'user-1',
+      event: 'notifications:updated',
+      payload: { undeliveredCount: 3 },
+    });
+  });
+
+  it('publishes room emits cross-instance even with no server attached', () => {
+    const { service, presenceRedis } = makeServerlessService();
+    const payload = { groupId: 'group-1', post: { id: 'p1' } as any };
+
+    service.emitGroupNewPost('group-1', payload);
+
+    expect(presenceRedis.publishEmitToRoom).toHaveBeenCalledWith({
+      room: 'group:group-1',
+      event: 'groups:newPost',
+      payload,
+    });
+  });
+
+  it('publishes global broadcasts cross-instance even with no server attached', () => {
+    const { service, presenceRedis } = makeServerlessService();
+
+    service.emitDailyContentPublished('word', '2026-08-03');
+
+    expect(presenceRedis.publishBroadcast).toHaveBeenCalledWith({
+      event: 'daily:content-published',
+      payload: { item: 'word', dayKey: '2026-08-03' },
+    });
+  });
+
+  it('still skips emits with a blank user id or event', () => {
+    const { service, presenceRedis } = makeServerlessService();
+
+    service.emitNotificationsUpdated('  ', { undeliveredCount: 1 });
+
+    expect(presenceRedis.publishEmitToUser).not.toHaveBeenCalled();
+  });
+});
+
 describe('PresenceRealtimeService.emitGroupMarvChanged', () => {
   function makeRoomService() {
     const roomEmit = jest.fn();

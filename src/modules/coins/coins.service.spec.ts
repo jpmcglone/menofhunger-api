@@ -30,10 +30,10 @@ function makeService(overrides?: { prisma?: any }) {
     } as any);
 
   const appConfig = { r2: jest.fn(() => null) } as any;
-  const notifications = { create: jest.fn(async () => undefined) } as any;
+  const sideEffects = { dispatch: jest.fn() } as any;
   const usersMeRealtime = { emitMeUpdated: jest.fn(async () => undefined) } as any;
-  const svc = new CoinsService(prisma, appConfig, notifications, usersMeRealtime);
-  return { svc, prisma };
+  const svc = new CoinsService(prisma, appConfig, sideEffects, usersMeRealtime);
+  return { svc, prisma, sideEffects };
 }
 
 describe('CoinsService access rules', () => {

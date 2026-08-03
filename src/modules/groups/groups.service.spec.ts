@@ -42,13 +42,13 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
 
   const posts: any = {};
   const appConfig: any = { r2: jest.fn(() => null) };
-  const notifications: any = {};
+  const sideEffects: any = { dispatch: jest.fn() };
   const redis: any = {};
 
   const marvIdentity: any = { cachedMarvUserId: jest.fn(() => null), getMarvUserId: jest.fn(async () => null) };
   const presenceRealtime: any = { emitGroupMarvChanged: jest.fn() };
-  const service = new GroupsService(prisma, posts, appConfig, notifications, redis, marvIdentity, presenceRealtime);
-  return { service, prisma, presenceRealtime };
+  const service = new GroupsService(prisma, posts, appConfig, sideEffects, redis, marvIdentity, presenceRealtime);
+  return { service, prisma, presenceRealtime, sideEffects };
 }
 
 describe('GroupsService.join — verification gate', () => {
@@ -1086,10 +1086,10 @@ describe('GroupsService.addMarvToGroup', () => {
     };
     const posts: any = {};
     const appConfig: any = { r2: jest.fn(() => null), marvBot: jest.fn(() => ({ enabled: true })) };
-    const notifications: any = {};
+    const sideEffects: any = { dispatch: jest.fn() };
     const redis: any = {};
     const presenceRealtime: any = { emitGroupMarvChanged: jest.fn() };
-    const service = new GroupsService(prisma, posts, appConfig, notifications, redis, marvIdentityLocal, presenceRealtime);
+    const service = new GroupsService(prisma, posts, appConfig, sideEffects, redis, marvIdentityLocal, presenceRealtime);
     return { service, memberCreate, memberUpdate, groupUpdate, inviteUpdateMany, transactionFn, presenceRealtime };
   }
 
@@ -1145,7 +1145,7 @@ describe('GroupsService.removeMember — Marv realtime', () => {
       getMarvUserId: jest.fn(async () => MARV_ID),
     };
     const presenceRealtime: any = { emitGroupMarvChanged: jest.fn() };
-    const notifications: any = { upsertGroupMemberRemovedNotification: jest.fn(async () => undefined) };
+    const sideEffects: any = { dispatch: jest.fn() };
 
     const memberFindUnique = jest.fn(async ({ where }: any) => {
       const uid = where.groupId_userId.userId;
@@ -1170,8 +1170,8 @@ describe('GroupsService.removeMember — Marv realtime', () => {
     const posts: any = {};
     const appConfig: any = { r2: jest.fn(() => null) };
     const redis: any = {};
-    const service = new GroupsService(prisma, posts, appConfig, notifications, redis, marvIdentityLocal, presenceRealtime);
-    return { service, presenceRealtime, notifications };
+    const service = new GroupsService(prisma, posts, appConfig, sideEffects, redis, marvIdentityLocal, presenceRealtime);
+    return { service, presenceRealtime, sideEffects };
   }
 
   it('emits groups:marv-changed with isMember=false when Marv is removed', async () => {
@@ -1187,8 +1187,18 @@ describe('GroupsService.removeMember — Marv realtime', () => {
   });
 
   it('does NOT send a removal notification when Marv is removed', async () => {
-    const { service, notifications } = setupRemove({ targetUserId: MARV_ID });
+    const { service, sideEffects } = setupRemove({ targetUserId: MARV_ID });
     await service.removeMember({ viewerUserId: 'actor-1', groupId: 'g1', userId: MARV_ID });
-    expect(notifications.upsertGroupMemberRemovedNotification).not.toHaveBeenCalled();
+    expect(sideEffects.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('dispatches the removal notification for a regular member', async () => {
+    const { service, sideEffects } = setupRemove({ targetUserId: MEMBER_ID });
+    await service.removeMember({ viewerUserId: 'actor-1', groupId: 'g1', userId: MEMBER_ID });
+    expect(sideEffects.dispatch).toHaveBeenCalledWith('group.member.removed', {
+      groupId: 'g1',
+      userId: MEMBER_ID,
+      actorUserId: 'actor-1',
+    });
   });
 });

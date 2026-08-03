@@ -81,6 +81,18 @@ export class AdminJobsController {
     return { data: await this.jobsStatus.getStatus(String(jobId ?? '').trim()) };
   }
 
+  /**
+   * Worker liveness + backlog depth for every queue.
+   *
+   * Answers "is anything actually draining this queue" permanently, which matters most for
+   * `moh_side_effects` — every notification and push in the app flows through it, and a worker
+   * that never started looks identical to a quiet app from the outside.
+   */
+  @Get('queues')
+  async queuesHealth() {
+    return { data: await this.jobsStatus.getQueuesHealth() };
+  }
+
   @Post('auth-cleanup')
   async runAuthCleanup(@Query('wait') wait?: string) {
     const job = await this.jobs.enqueue(JOBS.authCleanup, {}, { removeOnComplete: true, removeOnFail: false });
@@ -107,6 +119,48 @@ export class AdminJobsController {
   async runNotificationsCleanup() {
     const job = await this.jobs.enqueue(JOBS.notificationsCleanup, {}, { removeOnComplete: true, removeOnFail: false });
     return { data: { ok: true, jobId: String(job.id) } };
+  }
+
+  /**
+   * Retroactively deduplicate word_of_the_day and quote_of_the_day notifications:
+   * keep only the most-recent row per (user, kind) and fix the bell counter.
+   * Safe to run multiple times (idempotent). Going forward the fan-out does this
+   * automatically, so this endpoint is mainly useful as a one-off backfill.
+   */
+  @Post('notifications-dedupe-daily-content')
+  async runDailyContentDeduplication() {
+    const result = await this.prisma.$queryRaw<{ kept: bigint; deleted: bigint }[]>`
+      WITH to_keep AS (
+        SELECT DISTINCT ON ("recipientUserId", kind) id
+        FROM "Notification"
+        WHERE kind IN ('word_of_the_day', 'quote_of_the_day')
+        ORDER BY "recipientUserId", kind, "createdAt" DESC
+      ),
+      deleted AS (
+        DELETE FROM "Notification"
+        WHERE kind IN ('word_of_the_day', 'quote_of_the_day')
+          AND id NOT IN (SELECT id FROM to_keep)
+        RETURNING "recipientUserId", "deliveredAt"
+      ),
+      unread_deleted AS (
+        SELECT "recipientUserId", COUNT(*)::int AS cnt
+        FROM deleted
+        WHERE "deliveredAt" IS NULL
+        GROUP BY "recipientUserId"
+      ),
+      counter_fix AS (
+        UPDATE "User"
+        SET "undeliveredNotificationCount" = GREATEST(0, "undeliveredNotificationCount" - unread_deleted.cnt)
+        FROM unread_deleted
+        WHERE "User".id = unread_deleted."recipientUserId"
+        RETURNING 1
+      )
+      SELECT
+        (SELECT COUNT(*) FROM to_keep) AS kept,
+        (SELECT COUNT(*) FROM deleted) AS deleted
+    `;
+    const row = result[0] ?? { kept: BigInt(0), deleted: BigInt(0) };
+    return { data: { ok: true, kept: Number(row.kept), deleted: Number(row.deleted) } };
   }
 
   @Post('notifications-orphan-cleanup')

@@ -16,6 +16,8 @@
     "build": "nest build",
     "build:ci": "nest build",
     "build:typecheck": "tsc --noEmit",
+    "postbuild": "node scripts/check-module-graph.mjs",
+    "check:module-graph": "node scripts/check-module-graph.mjs",
     "postinstall": "prisma generate",
     "seed:prod": "node scripts/seed-prod.js",
     "seed:tickers": "node scripts/seed-tickers.mjs",

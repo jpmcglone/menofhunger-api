@@ -172,6 +172,19 @@ export class AppConfigService {
     return this.readBool('RUN_JOB_CONSUMERS', true);
   }
 
+  /**
+   * In-flight side-effect jobs per worker (default 12).
+   *
+   * Side effects are I/O-bound (Postgres, Redis, APNs, Web Push), so concurrency well above 1
+   * is the point — but it is capped because every in-flight job also holds Prisma connections.
+   */
+  sideEffectsQueueConcurrency(): number {
+    const raw = this.config.get<string>('SIDE_EFFECTS_QUEUE_CONCURRENCY') ?? '12';
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return 12;
+    return Math.min(64, Math.max(1, Math.floor(n)));
+  }
+
   port(): number {
     const raw = this.config.get<string>('PORT') ?? '3001';
     const n = Number(raw);

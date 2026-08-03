@@ -41,6 +41,7 @@ const listQuerySchema = z.object({
     'crew_wall_mention',
     'word_of_the_day',
     'quote_of_the_day',
+    'account_verified',
     'status_update',
     'checkin_post',
     'other',

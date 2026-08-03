@@ -32,8 +32,9 @@ export class Websters1828Controller {
       String(includeDefinition ?? '').toLowerCase() === '1' ||
       String(includeDefinition ?? '').toLowerCase() === 'true';
     const data = await this.websters.getWordOfDay({ includeDefinition: wantDefinition, userId });
-    const maxAge = this.websters.getCacheControlMaxAgeSeconds(new Date());
-    res.setHeader('Cache-Control', `private, max-age=${maxAge}`);
+    // likeCount and viewerHasLiked are dynamic — don't let the browser cache
+    // a stale snapshot across sessions.
+    res.setHeader('Cache-Control', 'private, no-store');
     return { data };
   }
 

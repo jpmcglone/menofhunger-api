@@ -1,0 +1,70 @@
+---
+description: Post-commit work (notifications, pushes, fan-out, emails) goes on the side-effects queue via SideEffectsService.dispatch — never inline on the request path, never setImmediate.
+alwaysApply: true
+---
+
+# Async Side Effects (API)
+
+A mutation endpoint does exactly three things: validate, commit, respond. Everything that happens *because* of the mutation — notification rows, pushes, follower fan-out, emails, external HTTP — goes on the side-effects queue.
+
+## The one rule to remember
+
+> Emits that make **content** appear stay on the request path. Emits that make a **notification or badge** appear move to the worker.
+
+Content emits (`posts:comment-added`, `posts:live-updated`, `articles:comment-added`, reaction summaries) are cheap in-process Socket.IO calls that other viewers expect instantly — keep them synchronous. Notification emits (`notifications:new`, `notifications:updated`, `groups:unread-changed`) belong with the notification write, in the worker.
+
+## How to dispatch
+
+```ts
+// In the mutation service, after the transaction commits:
+this.sideEffects.dispatch('group.invite.issued', {
+  groupId, inviteId, inviterUserId, inviteeUserId, bodySnippet,
+});
+return { data: invite };
+```
+
+`SideEffectsService.dispatch` never throws and is never awaited. It enqueues onto `moh_side_effects` with retries and exponential backoff. If the Redis enqueue itself fails, it runs the handler in-process and logs a warning — degrades instead of disappearing.
+
+`SideEffectsService` is globally provided, so injecting it needs no module plumbing.
+
+## Adding a side effect
+
+1. Add the name + payload to `SideEffectPayloads` in `src/modules/side-effects/side-effects.constants.ts`.
+2. Register a handler in the owning domain module's `<domain>-side-effects.handler.ts`:
+
+```ts
+onModuleInit(): void {
+  this.registry.register('group.invite.issued', (p) => this.onInviteIssued(p));
+}
+```
+
+3. Add the handler to the domain module's `providers`.
+4. Add a unit test that drives the handler directly.
+
+`side-effects-guardrails.spec.ts` fails the build if a declared name has no handler, or a handler registers a name that isn't declared.
+
+## Payload rules
+
+Payloads are JSON-serialized into Redis and a job may run minutes after the mutation, so:
+
+1. **IDs and primitives only.** No `Map`, `Set`, `Date`, or Prisma model instances.
+2. **No snapshots of mutable state.** The handler re-reads what it needs from Postgres, so a retry acts on current state — a deleted post, an edited body, a changed membership — instead of a stale copy captured at request time.
+3. **Handlers must be idempotent.** Prefer `upsert*` notification methods and rely on `pushCoalesce` for push dedupe. A retry after a partial failure must converge, not double-buzz.
+
+## Fan-out
+
+Never `Promise.all` over a recipient list. Use `runInBatches(items, FANOUT_CONCURRENCY, fn)` from `src/modules/side-effects/batch.ts`. Above `FANOUT_CHUNK_THRESHOLD` recipients, split into `notification.fanout.chunk` child jobs with `chunk(ids, FANOUT_CHUNK_SIZE)` — that is what keeps a 50k-follower account from holding one worker and a slice of the Prisma pool for minutes.
+
+## Banned
+
+- **`setImmediate(...)` anywhere under `src/modules/**` outside the side-effects module.** It looks like deferral but has no durability and no retry: every deploy, restart, or crash drops in-flight work with no record. Guardrail-enforced.
+- **Importing `NotificationsService` or `NotificationPushService` into a request-path service.** Notification writes belong in a `*-side-effects.handler.ts`, `*-events.handler.ts`, `*.cron.ts`, or `*.processor.ts`. Guardrail-enforced, with a short allowlist in the spec for the genuine exceptions (viewer read-state, read-only counts, read-after-write cooldowns) — each with a written reason.
+- **Awaiting notification work before responding.** The user's request should not wait on someone else's bell.
+
+## Deliberate non-goal: no transactional outbox
+
+Enqueue-after-commit leaves a small window where a process death between the commit and the Redis enqueue loses the job. An outbox table would close it, at the cost of a new table, a relay poller, and an extra write on every mutation. Revisit only if enqueue-loss is actually observed.
+
+## Observability
+
+`GET /admin/jobs/queues` reports registered worker count and waiting/active/delayed/failed depth per queue. `workers: 0` on `moh_side_effects` means notifications are piling up and nobody is draining them — check that a process is running with `RUN_JOB_CONSUMERS=true`.
