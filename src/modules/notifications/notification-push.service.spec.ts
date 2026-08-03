@@ -64,7 +64,7 @@ function makeAppConfig(opts?: { vapid?: boolean; apns?: boolean }) {
 }
 
 function makePreferences(opts?: { pushComment?: boolean }) {
-  const prefs = { pushComment: opts?.pushComment ?? true, pushBoost: true, pushFollow: true, pushMention: true, pushMessage: true, pushRepost: true, pushNudge: true, pushFollowedPost: true, pushReplyNudge: true, pushCrewStreak: true, pushGroupActivity: true, pushDailyContent: true };
+  const prefs = { pushComment: opts?.pushComment ?? true, pushBoost: true, pushFollow: true, pushMention: true, pushMessage: true, pushRepost: true, pushNudge: true, pushFollowedPost: true, pushReplyNudge: true, pushCrewStreak: true, pushGroupActivity: true, pushDailyContent: true, pushCheckinReminder: true };
   const svc = {
     getPreferencesInternal: jest.fn(async () => prefs),
   } as unknown as NotificationPreferencesService;

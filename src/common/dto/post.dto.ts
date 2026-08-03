@@ -119,6 +119,8 @@ export type PostDto = {
   viewerBookmarkCollectionIds?: string[];
   /** True if the viewer has created a flat repost of this post. */
   viewerHasReposted?: boolean;
+  /** True if the viewer has viewed this post (exists in PostView table). */
+  viewerHasViewed?: boolean;
   /** Set when a block exists between viewer and author. 'viewer_blocked' = viewer blocked the author; 'viewer_blocked_by' = author blocked the viewer. */
   viewerBlockStatus?: 'viewer_blocked' | 'viewer_blocked_by' | null;
   /** For kind='repost': the original post being reshared. */
@@ -264,6 +266,7 @@ export function toPostDto(
     viewerCreatorSkipped?: boolean;
     viewerBlockStatus?: 'viewer_blocked' | 'viewer_blocked_by' | null;
     viewerHasReposted?: boolean;
+    viewerHasViewed?: boolean;
     /** Pre-built nested DTO for a flat repost's original post. */
     repostedPost?: PostDto;
     /** Pre-built nested DTO for a quote repost's quoted post. */
@@ -494,6 +497,7 @@ export function toPostDto(
     ...(typeof opts?.viewerHasBookmarked === 'boolean' ? { viewerHasBookmarked: opts.viewerHasBookmarked } : {}),
     ...(Array.isArray(opts?.viewerBookmarkCollectionIds) ? { viewerBookmarkCollectionIds: opts.viewerBookmarkCollectionIds } : {}),
     ...(typeof opts?.viewerHasReposted === 'boolean' ? { viewerHasReposted: opts.viewerHasReposted } : {}),
+    ...(typeof opts?.viewerHasViewed === 'boolean' ? { viewerHasViewed: opts.viewerHasViewed } : {}),
     ...(typeof opts?.viewerBlockStatus !== 'undefined' ? { viewerBlockStatus: opts.viewerBlockStatus ?? null } : {}),
     ...(opts?.repostedPost ? { repostedPost: opts.repostedPost } : {}),
     ...(opts?.quotedPost ? { quotedPost: opts.quotedPost } : {}),

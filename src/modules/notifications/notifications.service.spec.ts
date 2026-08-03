@@ -49,6 +49,7 @@ function makeService(overrides?: { prisma?: any }) {
     boost: { findMany: jest.fn(async () => []) },
     bookmark: { findMany: jest.fn(async () => []) },
     postPollVote: { findMany: jest.fn(async () => []) },
+    postView: { findMany: jest.fn(async () => []) },
     communityGroup: { findMany: jest.fn(async () => []) },
     communityGroupMember: { findMany: jest.fn(async () => []) },
   } as any;
@@ -66,6 +67,7 @@ function makeService(overrides?: { prisma?: any }) {
         postPollVote: { ...basePrisma.postPollVote, ...(overrides.prisma.postPollVote ?? {}) },
         communityGroup: { ...basePrisma.communityGroup, ...(overrides.prisma.communityGroup ?? {}) },
         communityGroupMember: { ...basePrisma.communityGroupMember, ...(overrides.prisma.communityGroupMember ?? {}) },
+        postView: { ...basePrisma.postView, ...(overrides.prisma.postView ?? {}) },
       }
     : basePrisma;
 

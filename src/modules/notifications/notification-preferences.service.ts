@@ -72,6 +72,7 @@ export class NotificationPreferencesService {
     pushCrewStreak: boolean;
     pushGroupActivity: boolean;
     pushDailyContent: boolean;
+    pushCheckinReminder: boolean;
     emailDigestWeekly: boolean;
     emailNewNotifications: boolean;
     emailInstantHighSignal: boolean;
@@ -91,6 +92,7 @@ export class NotificationPreferencesService {
       pushCrewStreak: Boolean(prefs.pushCrewStreak),
       pushGroupActivity: Boolean(prefs.pushGroupActivity),
       pushDailyContent: Boolean(prefs.pushDailyContent),
+      pushCheckinReminder: Boolean(prefs.pushCheckinReminder),
       emailDigestWeekly: Boolean(prefs.emailDigestWeekly),
       emailNewNotifications: Boolean(prefs.emailNewNotifications),
       emailInstantHighSignal: Boolean(prefs.emailInstantHighSignal),

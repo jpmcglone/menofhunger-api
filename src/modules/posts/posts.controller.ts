@@ -673,6 +673,7 @@ export class PostsController {
           votedPollOptionIdByPostId,
           blockSetsUser,
           repostedByPostIdUser,
+          viewedByPostIdUser,
           internalByPostId,
           scoreByPostIdUser,
         ] = await Promise.all([
@@ -690,6 +691,9 @@ export class PostsController {
             : Promise.resolve({ blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() }),
           viewerUserId
             ? this.posts.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
+            : Promise.resolve(new Set<string>()),
+          viewerUserId
+            ? this.posts.viewerViewedPostIds({ viewerUserId, postIds: allPostIds })
             : Promise.resolve(new Set<string>()),
           viewerHasAdmin
             ? this.posts.ensureBoostScoresFresh(filteredPostsUser.map((p) => p.id))
@@ -731,6 +735,7 @@ export class PostsController {
           repostedPostMap: repostedPostMapUser as any,
           viewerCanAccessByPostId,
           groupPreviewByGroupId: groupPreviewByGroupIdUser,
+          viewedByPostId: viewedByPostIdUser,
         });
 
         return {
@@ -1036,6 +1041,9 @@ export class PostsController {
     const repostedByPostId = viewerUserId
       ? await this.posts.viewerRepostedPostIds({ viewerUserId, postIds })
       : new Set<string>();
+    const viewedByPostId = viewerUserId
+      ? await this.posts.viewerViewedPostIds({ viewerUserId, postIds })
+      : new Set<string>();
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(postIds) : null;
     const scoreByPostIdGet =
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(postIds) : undefined;
@@ -1074,8 +1082,8 @@ export class PostsController {
         viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
         viewerVotedPollOptionId: votedPollOptionIdByPostId.get(p.id) ?? null,
         viewerHasReposted: repostedByPostId.has(p.id),
+        viewerHasViewed: viewedByPostId.has(p.id),
         viewerCreatorSkipped: viewerCreatorSkipped || undefined,
-        includeInternal: viewerHasAdmin,
         internalOverride:
           base || (typeof score === 'number' ? { score } : undefined)
             ? { ...base, ...(typeof score === 'number' ? { score } : {}) }

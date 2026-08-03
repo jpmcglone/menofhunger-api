@@ -51,6 +51,34 @@ export class PostsViewerEnrichmentService {
     return out;
   }
 
+  /** Returns the set of post IDs that the viewer has viewed (exists in PostView table). */
+  async viewerViewedPostIds(params: { viewerUserId: string; postIds: string[] }) {
+    const { viewerUserId, postIds } = params;
+    if (!viewerUserId) return new Set<string>();
+    const ids = (postIds ?? []).filter(Boolean);
+    if (ids.length === 0) return new Set<string>();
+
+    const key = `posts.viewerViewed:${viewerUserId}`;
+    const map = this.requestCache.get<Map<string, boolean>>(key) ?? new Map<string, boolean>();
+    if (this.requestCache.get<Map<string, boolean>>(key) == null) {
+      this.requestCache.set(key, map);
+    }
+
+    const missing = ids.filter((id) => !map.has(id));
+    if (missing.length > 0) {
+      const rows = await this.prisma.postView.findMany({
+        where: { userId: viewerUserId, postId: { in: missing } },
+        select: { postId: true },
+      });
+      const viewedSet = new Set(rows.map((r) => r.postId));
+      for (const id of missing) map.set(id, viewedSet.has(id));
+    }
+
+    const out = new Set<string>();
+    for (const id of ids) if (map.get(id)) out.add(id);
+    return out;
+  }
+
   /** Returns the set of canonical post IDs that the viewer has flat-reposted. */
   async viewerRepostedPostIds(params: { viewerUserId: string; postIds: string[] }) {
     const { viewerUserId, postIds } = params;

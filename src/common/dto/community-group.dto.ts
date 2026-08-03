@@ -54,6 +54,11 @@ export type CommunityGroupShellDto = {
    * (getShellBySlug); null when Marv is not configured on this server.
    */
   marv?: { userId: string; username: string | null; isMember: boolean } | null;
+  /**
+   * ISO timestamp of the viewer's most recent post (or reply) in this group.
+   * Only populated on listMine; null when the viewer has never posted here.
+   */
+  lastViewerPostAt?: string | null;
 };
 
 export type CommunityGroupMemberUserDto = {

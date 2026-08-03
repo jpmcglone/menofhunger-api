@@ -550,6 +550,9 @@ export class AdminUsersController {
     const rows = await this.prisma.userSearch.findMany({
       where: {
         userId: user.id,
+        // Exclude profile/group-tap entries — admin list is for typed queries only.
+        targetUserId: null,
+        targetGroupId: null,
         ...(cursorWhere ?? {}),
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],

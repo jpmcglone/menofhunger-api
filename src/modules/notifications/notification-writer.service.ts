@@ -1660,4 +1660,258 @@ export class NotificationWriterService {
 
     this.logger.log(`[daily-content fan-out] ${item} fan-out complete for ${dayKey}`);
   }
+
+  // ─── checkin_reminder fan-out ─────────────────────────────────────────────
+
+  /**
+   * Fan-out 6pm ET check-in reminder to all verified-or-above users who have
+   * NOT already posted a check-in today.
+   * Cursor-paginated in chunks of 500. Guarded by `checkinReminderNotifiedAt`.
+   */
+  async fanOutCheckinReminders(params: { dayKey: string }): Promise<void> {
+    const { dayKey } = params;
+
+    const snap = await this.prisma.dailyContentSnapshot.findUnique({
+      where: { dayKey },
+      select: { checkinReminderNotifiedAt: true, checkinReminderFanoutCursor: true },
+    });
+
+    if (snap?.checkinReminderNotifiedAt && snap.checkinReminderNotifiedAt.getTime() > 1) {
+      this.logger.debug(`[checkin-reminder fan-out] already notified for ${dayKey}`);
+      return;
+    }
+
+    const kind = 'checkin_reminder' as const;
+    const title = 'Have you checked in today?';
+    const body = 'Tap to post your check-in and keep your streak alive.';
+    const url = '/home?checkin=1';
+
+    const CHUNK = 500;
+    let cursor: string | undefined = snap?.checkinReminderFanoutCursor ?? undefined;
+
+    while (true) {
+      // Fetch verified-or-above users who haven't yet checked in today.
+      const users = await this.prisma.user.findMany({
+        where: {
+          bannedAt: null,
+          OR: [
+            { verifiedStatus: { not: 'none' } },
+            { premium: true },
+            { premiumPlus: true },
+          ],
+          // Exclude users who already have a check-in post for today.
+          NOT: {
+            posts: {
+              some: { kind: 'checkin', checkinDayKey: dayKey, deletedAt: null },
+            },
+          },
+          ...(cursor ? { id: { gt: cursor } } : {}),
+        },
+        orderBy: { id: 'asc' },
+        take: CHUNK,
+        select: { id: true },
+      });
+
+      if (users.length === 0) break;
+
+      const userIds = users.map((u) => u.id);
+      const now = new Date();
+
+      // Delete any existing reminder for today so we don't double-badge.
+      const existingUnread = await this.prisma.notification.findMany({
+        where: { kind, recipientUserId: { in: userIds }, deliveredAt: null },
+        select: { recipientUserId: true },
+      });
+      const priorUnreadSet = new Set(existingUnread.map((r) => r.recipientUserId));
+
+      await this.prisma.notification.deleteMany({
+        where: { kind, recipientUserId: { in: userIds } },
+      });
+
+      await this.prisma.notification.createMany({
+        data: userIds.map((recipientUserId) => ({
+          recipientUserId,
+          kind,
+          title,
+          body,
+          createdAt: now,
+        })),
+      });
+
+      const usersNeedingIncrement = userIds.filter((id) => !priorUnreadSet.has(id));
+      if (usersNeedingIncrement.length > 0) {
+        await this.prisma.$executeRaw`
+          UPDATE "User"
+          SET "undeliveredNotificationCount" = "undeliveredNotificationCount" + 1
+          WHERE id = ANY(${usersNeedingIncrement}::text[])
+        `;
+      }
+
+      await runInBatches(userIds, FANOUT_CONCURRENCY, async (userId) => {
+        const undeliveredCount = await this.prisma.notification
+          .count({ where: this.readState.undeliveredBellWhere(userId) })
+          .catch(() => 0);
+        this.presenceRealtime.emitNotificationsUpdated(userId, { undeliveredCount });
+
+        this.sideEffects.dispatch('notification.push', {
+          recipientUserId: userId,
+          kind,
+          actorUserId: null,
+          fallbackTitle: title,
+          body,
+          url,
+          sourceLabel: kind,
+        });
+      });
+
+      cursor = userIds[userIds.length - 1];
+      if (!snap) {
+        await this.prisma.dailyContentSnapshot.upsert({
+          where: { dayKey },
+          create: { dayKey, checkinReminderFanoutCursor: cursor },
+          update: { checkinReminderFanoutCursor: cursor },
+        });
+      } else {
+        await this.prisma.dailyContentSnapshot.update({
+          where: { dayKey },
+          data: { checkinReminderFanoutCursor: cursor },
+        });
+      }
+
+      if (users.length < CHUNK) break;
+    }
+
+    await this.prisma.dailyContentSnapshot.upsert({
+      where: { dayKey },
+      create: { dayKey, checkinReminderNotifiedAt: new Date() },
+      update: { checkinReminderNotifiedAt: new Date() },
+    });
+    this.logger.log(`[checkin-reminder fan-out] complete for ${dayKey}`);
+  }
+
+  // ─── on_this_day fan-out ──────────────────────────────────────────────────
+
+  /**
+   * Fan-out 8am ET "On This Day" notifications to users who had a post
+   * exactly one or more years ago on this calendar date (ET month-day match).
+   * Picks the most-recent matching year. Cursor-paginated in chunks of 500.
+   * Guarded by `onThisDayNotifiedAt`.
+   */
+  async fanOutOnThisDayNotifications(params: { dayKey: string }): Promise<void> {
+    const { dayKey } = params;
+
+    const snap = await this.prisma.dailyContentSnapshot.findUnique({
+      where: { dayKey },
+      select: { onThisDayNotifiedAt: true, onThisDayFanoutCursor: true },
+    });
+
+    if (snap?.onThisDayNotifiedAt && snap.onThisDayNotifiedAt.getTime() > 1) {
+      this.logger.debug(`[on-this-day fan-out] already notified for ${dayKey}`);
+      return;
+    }
+
+    // Parse the current ET month-day to build the SQL pattern.
+    // dayKey format: YYYY-MM-DD
+    const [yearStr, monthStr, dayStr] = dayKey.split('-');
+    const year = Number(yearStr);
+    if (!year || !monthStr || !dayStr) {
+      this.logger.warn(`[on-this-day fan-out] invalid dayKey=${dayKey}`);
+      return;
+    }
+    const monthDay = `${monthStr}-${dayStr}`; // MM-DD
+
+    const kind = 'on_this_day' as const;
+    const CHUNK = 500;
+    let cursor: string | undefined = snap?.onThisDayFanoutCursor ?? undefined;
+
+    while (true) {
+      // Find users who have at least one public/verifiedOnly checkin post from
+      // a prior year on this same ET month-day, using a raw query for the
+      // DISTINCT ON + TO_CHAR(AT TIME ZONE) matching.
+      const rows = await this.prisma.$queryRaw<{ userId: string; postId: string; yearsAgo: number }[]>`
+        SELECT DISTINCT ON (p."userId") p."userId" AS "userId", p.id AS "postId",
+          EXTRACT(YEAR FROM now() AT TIME ZONE 'America/New_York')::int
+          - EXTRACT(YEAR FROM p."createdAt" AT TIME ZONE 'America/New_York')::int AS "yearsAgo"
+        FROM "Post" p
+        WHERE p."kind" = 'checkin'
+          AND p."deletedAt" IS NULL
+          AND p."visibility" IN ('public', 'verifiedOnly')
+          AND TO_CHAR(p."createdAt" AT TIME ZONE 'America/New_York', 'MM-DD') = ${monthDay}
+          AND EXTRACT(YEAR FROM p."createdAt" AT TIME ZONE 'America/New_York') < ${year}
+          ${cursor ? Prisma.sql`AND p."userId" > ${cursor}` : Prisma.empty}
+        ORDER BY p."userId" ASC, p."createdAt" DESC
+        LIMIT ${CHUNK}
+      `;
+
+      if (rows.length === 0) break;
+
+      const now = new Date();
+
+      const existingUnread = await this.prisma.notification.findMany({
+        where: { kind, recipientUserId: { in: rows.map((r) => r.userId) }, deliveredAt: null },
+        select: { recipientUserId: true },
+      });
+      const priorUnreadSet = new Set(existingUnread.map((r) => r.recipientUserId));
+
+      // Delete previous on_this_day for today so only one shows in the bell.
+      await this.prisma.notification.deleteMany({
+        where: { kind, recipientUserId: { in: rows.map((r) => r.userId) } },
+      });
+
+      await this.prisma.notification.createMany({
+        data: rows.map(({ userId, postId, yearsAgo }) => ({
+          recipientUserId: userId,
+          kind,
+          subjectPostId: postId,
+          title: 'On this day',
+          body: yearsAgo === 1 ? 'You checked in 1 year ago today.' : `You checked in ${yearsAgo} years ago today.`,
+          createdAt: now,
+        })),
+      });
+
+      const userIds = rows.map((r) => r.userId);
+      const usersNeedingIncrement = userIds.filter((id) => !priorUnreadSet.has(id));
+      if (usersNeedingIncrement.length > 0) {
+        await this.prisma.$executeRaw`
+          UPDATE "User"
+          SET "undeliveredNotificationCount" = "undeliveredNotificationCount" + 1
+          WHERE id = ANY(${usersNeedingIncrement}::text[])
+        `;
+      }
+
+      await runInBatches(rows, FANOUT_CONCURRENCY, async ({ userId, postId, yearsAgo }) => {
+        const undeliveredCount = await this.prisma.notification
+          .count({ where: this.readState.undeliveredBellWhere(userId) })
+          .catch(() => 0);
+        this.presenceRealtime.emitNotificationsUpdated(userId, { undeliveredCount });
+
+        const body = yearsAgo === 1 ? 'You checked in 1 year ago today.' : `You checked in ${yearsAgo} years ago today.`;
+        this.sideEffects.dispatch('notification.push', {
+          recipientUserId: userId,
+          kind,
+          actorUserId: null,
+          fallbackTitle: 'On this day',
+          body,
+          url: `/p/${postId}`,
+          sourceLabel: kind,
+        });
+      });
+
+      cursor = userIds[userIds.length - 1];
+      await this.prisma.dailyContentSnapshot.upsert({
+        where: { dayKey },
+        create: { dayKey, onThisDayFanoutCursor: cursor },
+        update: { onThisDayFanoutCursor: cursor },
+      });
+
+      if (rows.length < CHUNK) break;
+    }
+
+    await this.prisma.dailyContentSnapshot.upsert({
+      where: { dayKey },
+      create: { dayKey, onThisDayNotifiedAt: new Date() },
+      update: { onThisDayNotifiedAt: new Date() },
+    });
+    this.logger.log(`[on-this-day fan-out] complete for ${dayKey}`);
+  }
 }

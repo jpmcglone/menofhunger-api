@@ -644,6 +644,14 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       // We emit only for non-private check-ins; onlyMe should never leak presence.
       const postKind = post.kind ?? null;
       const checkinDayKey = post.checkinDayKey ?? null;
+      if (postKind === 'checkin' && checkinDayKey) {
+        // Clear the 6pm check-in reminder for this user now that they've answered.
+        await this.clearCheckinReminder(userId).catch((err) => {
+          this.logger.warn(
+            `[checkin-reminder] Failed to clear reminder for user ${userId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      }
       if (postKind === 'checkin' && checkinDayKey && visibility !== 'onlyMe') {
         try {
           const [allFollowers, crewMembers, totalToday, actor] = await Promise.all([
@@ -798,6 +806,36 @@ export class PostsSideEffectsHandler implements OnModuleInit {
           );
         });
     });
+  }
+
+  /**
+   * Delete any pending checkin_reminder notification for the user now that they have checked in.
+   * Decrements the undelivered badge count for any unread (not yet delivered) reminders removed.
+   */
+  private async clearCheckinReminder(userId: string): Promise<void> {
+    const existing = await this.prisma.notification.findMany({
+      where: { kind: 'checkin_reminder', recipientUserId: userId },
+      select: { id: true, deliveredAt: true },
+    });
+    if (existing.length === 0) return;
+
+    await this.prisma.notification.deleteMany({
+      where: { kind: 'checkin_reminder', recipientUserId: userId },
+    });
+
+    const unreadCount = existing.filter((n) => n.deliveredAt === null).length;
+    if (unreadCount > 0) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { undeliveredNotificationCount: { decrement: unreadCount } },
+      });
+    }
+
+    const undeliveredCount = await this.prisma.notification
+      .count({ where: { recipientUserId: userId, deliveredAt: null } })
+      .catch(() => 0);
+    this.presenceRealtime.emitNotificationsUpdated(userId, { undeliveredCount });
+    this.presenceRealtime.emitNotificationsDeleted(userId, { notificationIds: existing.map((n) => n.id) });
   }
 
   /**

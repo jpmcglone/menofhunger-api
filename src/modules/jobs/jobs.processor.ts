@@ -18,6 +18,8 @@ import { LinkMetadataCron } from '../link-metadata/link-metadata.cron';
 import { DailyContentCron } from '../daily-content/daily-content.cron';
 import { AdminDailyDigestCron } from '../admin/admin-digest-email.cron';
 import { CheckinsStreakResetCron } from '../checkins/checkins-streak-reset.cron';
+import { CheckinReminderCron } from '../checkins/checkin-reminder.cron';
+import { OnThisDayCron } from '../notifications/on-this-day.cron';
 import { PostsService } from '../posts/posts.service';
 import { ArticlesTrendingScoreCron } from '../articles/articles-trending-score.cron';
 import { CrewJobsCron } from '../crew/crew-jobs.cron';
@@ -45,6 +47,8 @@ export class JobsProcessor extends WorkerHost {
     private readonly linkMetadata: LinkMetadataCron,
     private readonly adminDailyDigest: AdminDailyDigestCron,
     private readonly checkinsStreakReset: CheckinsStreakResetCron,
+    private readonly checkinReminder: CheckinReminderCron,
+    private readonly onThisDay: OnThisDayCron,
     private readonly postsService: PostsService,
     private readonly articlesTrendingScore: ArticlesTrendingScoreCron,
     private readonly crewJobs: CrewJobsCron,
@@ -130,6 +134,12 @@ export class JobsProcessor extends WorkerHost {
           return { ok: true };
         case JOBS.checkinsStreakReminderPush:
           await this.notificationsEmail.runSendStreakReminderPush();
+          return { ok: true };
+        case JOBS.checkinReminderFanout:
+          await this.notificationWriter.fanOutCheckinReminders({ dayKey: String(job.data?.dayKey ?? '') });
+          return { ok: true };
+        case JOBS.onThisDayFanout:
+          await this.notificationWriter.fanOutOnThisDayNotifications({ dayKey: String(job.data?.dayKey ?? '') });
           return { ok: true };
         case JOBS.articlesViewMilestoneSweep:
           await this.articlesTrendingScore.runViewMilestoneSweep();

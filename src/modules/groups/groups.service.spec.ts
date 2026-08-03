@@ -34,6 +34,9 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
       findUnique: jest.fn(),
       findMany: jest.fn(async () => []),
     },
+    post: {
+      groupBy: jest.fn(async () => []),
+    },
     // searchGroups runs an optional pg_trgm/FTS raw query; default stub returns
     // no augment candidates so tests opt in via override when they care.
     $queryRaw: jest.fn(async () => []),
@@ -384,7 +387,7 @@ describe('GroupsService.listMine', () => {
     };
   }
 
-  it('orders owned groups first, then active memberships by most recently joined', async () => {
+  it('puts owners first, then sorts by activity (unread → lastViewerPostAt → group age)', async () => {
     const { service, prisma } = makeService();
     prisma.communityGroupMember.findMany.mockResolvedValue([
       {
@@ -416,15 +419,57 @@ describe('GroupsService.listMine', () => {
         group: makeGroup('member-old', '2026-01-01T00:00:00Z'),
       },
     ]);
+    // No lastViewerPostAt for any group (no posts); stable sort preserves input order within tier
+    prisma.post.groupBy.mockResolvedValue([]);
 
     const out = await service.listMine({ viewerUserId: 'u1' });
 
+    // Owners come before members; within each tier, API sort falls back to membership join date (desc)
     expect(out.data.map((g: any) => g.id)).toEqual([
       'owner-new',
       'owner-old',
       'member-new',
       'member-old',
     ]);
+  });
+
+  it('attaches lastViewerPostAt to each group from the viewer\'s post history', async () => {
+    const { service, prisma } = makeService();
+    prisma.communityGroupMember.findMany.mockResolvedValue([
+      {
+        groupId: 'group-a',
+        status: 'active',
+        role: 'member',
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        group: makeGroup('group-a', '2026-01-01T00:00:00Z'),
+      },
+      {
+        groupId: 'group-b',
+        status: 'active',
+        role: 'member',
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        group: makeGroup('group-b', '2026-01-01T00:00:00Z'),
+      },
+      {
+        groupId: 'group-c',
+        status: 'active',
+        role: 'member',
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        group: makeGroup('group-c', '2026-01-01T00:00:00Z'),
+      },
+    ]);
+    prisma.post.groupBy.mockResolvedValue([
+      { communityGroupId: 'group-b', _max: { createdAt: new Date('2026-07-01T00:00:00Z') } },
+      { communityGroupId: 'group-a', _max: { createdAt: new Date('2026-06-01T00:00:00Z') } },
+      // group-c has no posts
+    ]);
+
+    const out = await service.listMine({ viewerUserId: 'u1' });
+    const byId = Object.fromEntries(out.data.map((g: any) => [g.id, g]));
+
+    expect(byId['group-a'].lastViewerPostAt).toBe('2026-06-01T00:00:00.000Z');
+    expect(byId['group-b'].lastViewerPostAt).toBe('2026-07-01T00:00:00.000Z');
+    expect(byId['group-c'].lastViewerPostAt).toBeNull();
   });
 });
 

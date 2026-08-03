@@ -21,6 +21,7 @@ import { MessagePushEventsHandler } from './message-push-events.handler';
 import { MessageInstantEmailEventsHandler } from './message-instant-email-events.handler';
 import { StatusNotificationEventsHandler } from './status-notification-events.handler';
 import { NotificationSideEffectsHandler } from './notification-side-effects.handler';
+import { OnThisDayCron } from './on-this-day.cron';
 
 @Module({
   imports: [AuthModule, RealtimeModule, EmailModule, DailyContentModule, MessagesModule, ViewerContextModule],
@@ -41,6 +42,7 @@ import { NotificationSideEffectsHandler } from './notification-side-effects.hand
     NotificationsOrphanCleanupCron,
     NotificationsEmailCron,
     NotificationsReplyNudgeCron,
+    OnThisDayCron,
   ],
   exports: [
     NotificationsService,
@@ -49,6 +51,7 @@ import { NotificationSideEffectsHandler } from './notification-side-effects.hand
     NotificationsOrphanCleanupCron,
     NotificationsEmailCron,
     NotificationsReplyNudgeCron,
+    OnThisDayCron,
   ],
 })
 export class NotificationsModule {}

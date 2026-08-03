@@ -169,3 +169,161 @@ describe('SearchService.searchCommunityGroups — group visibility', () => {
     expect(memberBranch.members.some.status).toBe('active');
   });
 });
+
+describe('SearchService.recordUserSearch', () => {
+  function makeRecordService() {
+    const rows: any[] = [];
+    const prisma: any = {
+      post: { findMany: jest.fn(async () => []) },
+      $queryRaw: jest.fn(async () => []),
+      userSearch: {
+        findFirst: jest.fn(async (args: any) => {
+          const filtered = rows.filter((r) => {
+            if (args.where.userId && r.userId !== args.where.userId) return false;
+            if ('targetUserId' in args.where) {
+              if (args.where.targetUserId === null && r.targetUserId !== null) return false;
+              if (args.where.targetUserId && r.targetUserId !== args.where.targetUserId) return false;
+            }
+            return true;
+          });
+          filtered.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+          return filtered[0] ?? null;
+        }),
+        create: jest.fn(async (args: any) => {
+          const row = { id: `row-${rows.length}`, createdAt: new Date(), ...args.data };
+          rows.push(row);
+          return row;
+        }),
+      },
+    };
+    const service = new SearchService(
+      prisma,
+      {} as any,
+      { ensureBoostScoresFresh: async () => new Map(), computeScoresForPostIds: async () => new Map() } as any,
+      { ensureArticleBoostScoresFresh: async () => {} } as any,
+      { getViewer: async () => null, isVerified: () => false, allowedPostVisibilities: () => ['public'] } as any,
+      { isValid: () => false, searchPrefix: async () => [] } as any,
+    );
+    return { service, prisma, rows };
+  }
+
+  it('creates a row for a typed query', async () => {
+    const { service, prisma } = makeRecordService();
+    await service.recordUserSearch({ userId: 'u1', query: 'hello' });
+    expect(prisma.userSearch.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ userId: 'u1', query: 'hello' }) }),
+    );
+  });
+
+  it('dedupes identical text queries within 30 minutes', async () => {
+    const { service, prisma } = makeRecordService();
+    await service.recordUserSearch({ userId: 'u1', query: 'hello' });
+    await service.recordUserSearch({ userId: 'u1', query: 'hello' });
+    expect(prisma.userSearch.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates a row for a profile tap with targetUserId', async () => {
+    const { service, prisma } = makeRecordService();
+    await service.recordUserSearch({ userId: 'u1', query: '@bob', targetUserId: 'u2' });
+    expect(prisma.userSearch.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ targetUserId: 'u2' }) }),
+    );
+  });
+
+  it('dedupes repeated profile taps on the same target within 30 minutes', async () => {
+    const { service, prisma } = makeRecordService();
+    await service.recordUserSearch({ userId: 'u1', query: '@bob', targetUserId: 'u2' });
+    await service.recordUserSearch({ userId: 'u1', query: '@bob', targetUserId: 'u2' });
+    expect(prisma.userSearch.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows re-recording a profile tap after 30 minutes', async () => {
+    const { service, prisma, rows } = makeRecordService();
+    await service.recordUserSearch({ userId: 'u1', query: '@bob', targetUserId: 'u2' });
+    // Backdate the row to 31 minutes ago.
+    rows[0].createdAt = new Date(Date.now() - 1000 * 60 * 31);
+    await service.recordUserSearch({ userId: 'u1', query: '@bob', targetUserId: 'u2' });
+    expect(prisma.userSearch.create).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('SearchService.searchUsers — ranking', () => {
+  function makeUser(overrides: Partial<{
+    id: string; username: string; name: string; bio: string;
+    premium: boolean; premiumPlus: boolean; isOrganization: boolean;
+    stewardBadgeEnabled: boolean; verifiedStatus: string;
+    avatarKey: null; avatarUpdatedAt: null; lastOnlineAt: Date | null; createdAt: Date;
+  }>) {
+    return {
+      id: overrides.id ?? 'u1',
+      createdAt: overrides.createdAt ?? new Date('2024-01-01'),
+      username: overrides.username ?? null,
+      name: overrides.name ?? null,
+      bio: overrides.bio ?? null,
+      premium: overrides.premium ?? false,
+      premiumPlus: overrides.premiumPlus ?? false,
+      isOrganization: overrides.isOrganization ?? false,
+      stewardBadgeEnabled: overrides.stewardBadgeEnabled ?? false,
+      verifiedStatus: (overrides.verifiedStatus ?? 'none') as any,
+      avatarKey: null,
+      avatarUpdatedAt: null,
+      lastOnlineAt: overrides.lastOnlineAt ?? null,
+    };
+  }
+
+  function makeSearchService(users: ReturnType<typeof makeUser>[]) {
+    const prisma: any = {
+      userBlock: { findMany: jest.fn(async () => []) },
+      user: { findMany: jest.fn(async () => users), findUnique: jest.fn(async () => null) },
+      userOrgMembership: { findMany: jest.fn(async () => []) },
+      crewMember: { findMany: jest.fn(async () => []) },
+    };
+    const follows: any = {
+      batchRelationshipForUserIds: jest.fn(async () => ({
+        viewerFollows: new Set(),
+        followsViewer: new Set(),
+        viewerBellEnabled: new Set(),
+      })),
+    };
+    const service = new SearchService(
+      prisma,
+      follows,
+      { ensureBoostScoresFresh: async () => new Map(), computeScoresForPostIds: async () => new Map() } as any,
+      { ensureArticleBoostScoresFresh: async () => {} } as any,
+      { getViewer: async () => null, isVerified: () => false, allowedPostVisibilities: () => ['public'] } as any,
+      { isValid: () => false, searchPrefix: async () => [] } as any,
+    );
+    return { service };
+  }
+
+  it('strips leading @ so @john matches username "john"', async () => {
+    const { service } = makeSearchService([
+      makeUser({ id: 'u1', username: 'john' }),
+    ]);
+    const result = await service.searchUsers({ q: '@john', limit: 10, cursor: null, viewerUserId: null });
+    expect(result.users).toHaveLength(1);
+    expect(result.users[0]!.username).toBe('john');
+  });
+
+  it('ranks closer username prefix matches higher within the same tier', async () => {
+    // "joe" starts both usernames; shorter one is a closer match
+    const users = [
+      makeUser({ id: 'u_long', username: 'joe_black_account_12345' }),
+      makeUser({ id: 'u_short', username: 'joe_s' }),
+    ];
+    const { service } = makeSearchService(users);
+    const result = await service.searchUsers({ q: 'joe', limit: 10, cursor: null, viewerUserId: null });
+    const usernames = result.users.map((u) => u.username);
+    expect(usernames.indexOf('joe_s')).toBeLessThan(usernames.indexOf('joe_black_account_12345'));
+  });
+
+  it('ranks exact username match above prefix matches', async () => {
+    const users = [
+      makeUser({ id: 'u_exact', username: 'joe' }),
+      makeUser({ id: 'u_prefix', username: 'joe_smith' }),
+    ];
+    const { service } = makeSearchService(users);
+    const result = await service.searchUsers({ q: 'joe', limit: 10, cursor: null, viewerUserId: null });
+    expect(result.users[0]!.username).toBe('joe');
+  });
+});

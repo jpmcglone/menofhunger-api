@@ -18,6 +18,8 @@ export const EMAIL_EXCLUDED_KINDS: NotificationKind[] = [
   'community_group_post',
   'word_of_the_day',
   'quote_of_the_day',
+  'checkin_reminder',
+  'on_this_day',
 ];
 
 export function isBellCountedNotificationKind(kind: NotificationKind): boolean {

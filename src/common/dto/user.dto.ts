@@ -216,6 +216,24 @@ export type AdminUserRecentSearchDto = {
   createdAt: string;
 };
 
+/** Minimal group info attached to a recent search entry (group tap). */
+export type RecentSearchGroupDto = {
+  id: string;
+  slug: string;
+  name: string;
+  avatarImageUrl: string | null;
+  memberCount: number;
+};
+
+/** Viewer-facing recent search entry — typed query, a tapped user profile, or a tapped group. */
+export type RecentSearchDto = {
+  id: string;
+  query: string;
+  createdAt: string;
+  user: UserListDto | null;
+  group: RecentSearchGroupDto | null;
+};
+
 export type UserPreviewDto = {
   id: string;
   username: string | null;

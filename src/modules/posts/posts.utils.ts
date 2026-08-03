@@ -25,6 +25,8 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
   viewerBlockedBy?: Set<string>;
   /** Set of canonical post IDs that the viewer has flat-reposted. */
   repostedByPostId?: Set<string>;
+  /** Set of post IDs that the viewer has viewed (used for viewerHasViewed flag). */
+  viewedByPostId?: Set<string>;
   /** Map from repostedPostId to the raw post data for flat reposts. */
   repostedPostMap?: Map<string, T>;
   /** When set, used to determine per-post viewerCanAccess. Posts not in the map default to true. */
@@ -49,6 +51,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     repostedPostMap,
     viewerCanAccessByPostId,
     groupPreviewByGroupId,
+    viewedByPostId,
   } = opts;
 
   function attachParentChain(post: T): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } {
@@ -95,6 +98,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
       viewerCreatorSkipped: viewerCreatorSkipped || undefined,
       viewerBlockStatus: viewerBlockStatus ?? undefined,
       viewerHasReposted: repostedByPostId ? repostedByPostId.has(post.id) : undefined,
+      viewerHasViewed: viewedByPostId ? viewedByPostId.has(post.id) : undefined,
       repostedPost: repostedPostDto,
       quotedPost: quotedPostDto,
       includeInternal: viewerHasAdmin,

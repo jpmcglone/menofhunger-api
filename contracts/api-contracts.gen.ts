@@ -23,7 +23,7 @@ export type FeedbackStatus = 'new' | 'triaged' | 'resolved'
 export type FollowVisibility = 'none' | 'all' | 'verified' | 'premium'
 export type MessageParticipantRole = 'owner' | 'member'
 export type MessageParticipantStatus = 'pending' | 'accepted'
-export type NotificationKind = 'comment' | 'boost' | 'repost' | 'follow' | 'followed_post' | 'followed_article' | 'mention' | 'nudge' | 'poll_results_ready' | 'generic' | 'coin_transfer' | 'message' | 'group_join_request' | 'community_group_member_joined' | 'community_group_join_approved' | 'community_group_join_rejected' | 'community_group_member_removed' | 'community_group_disbanded' | 'crew_invite_received' | 'crew_invite_accepted' | 'crew_invite_declined' | 'crew_invite_cancelled' | 'crew_member_joined' | 'crew_member_left' | 'crew_member_kicked' | 'crew_owner_transferred' | 'crew_owner_transfer_vote' | 'crew_wall_mention' | 'crew_disbanded' | 'community_group_invite_received' | 'community_group_invite_accepted' | 'community_group_invite_declined' | 'community_group_invite_cancelled' | 'community_group_post' | 'marv_not_in_group' | 'status_update' | 'checkin_post' | 'word_of_the_day' | 'quote_of_the_day' | 'account_verified'
+export type NotificationKind = 'comment' | 'boost' | 'repost' | 'follow' | 'followed_post' | 'followed_article' | 'mention' | 'nudge' | 'poll_results_ready' | 'generic' | 'coin_transfer' | 'message' | 'group_join_request' | 'community_group_member_joined' | 'community_group_join_approved' | 'community_group_join_rejected' | 'community_group_member_removed' | 'community_group_disbanded' | 'crew_invite_received' | 'crew_invite_accepted' | 'crew_invite_declined' | 'crew_invite_cancelled' | 'crew_member_joined' | 'crew_member_left' | 'crew_member_kicked' | 'crew_owner_transferred' | 'crew_owner_transfer_vote' | 'crew_wall_mention' | 'crew_disbanded' | 'community_group_invite_received' | 'community_group_invite_accepted' | 'community_group_invite_declined' | 'community_group_invite_cancelled' | 'community_group_post' | 'marv_not_in_group' | 'status_update' | 'checkin_post' | 'word_of_the_day' | 'quote_of_the_day' | 'account_verified' | 'checkin_reminder' | 'on_this_day'
 export type PostMediaKind = 'image' | 'gif' | 'video'
 export type PostMediaSource = 'upload' | 'giphy'
 export type PostVisibility = 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe'
@@ -668,6 +668,11 @@ export type CommunityGroupShellDto = {
    * (getShellBySlug); null when Marv is not configured on this server.
    */
   marv?: { userId: string; username: string | null; isMember: boolean } | null;
+  /**
+   * ISO timestamp of the viewer's most recent post (or reply) in this group.
+   * Only populated on listMine; null when the viewer has never posted here.
+   */
+  lastViewerPostAt?: string | null;
 };
 
 export type CommunityGroupMemberUserDto = {
@@ -1156,6 +1161,8 @@ export type NotificationPreferencesDto = {
   pushGroupActivity: boolean;
   /** Word of the day + quote of the day push (fires at 9:00am / 9:30am ET). */
   pushDailyContent: boolean;
+  /** 6pm ET reminder to complete today's check-in (skipped if user already checked in). */
+  pushCheckinReminder: boolean;
   emailDigestWeekly: boolean;
   emailNewNotifications: boolean;
   /** Optional: near-immediate emails for high-signal events (messages + mentions/replies). */
@@ -1273,6 +1280,8 @@ export type PostDto = {
   viewerBookmarkCollectionIds?: string[];
   /** True if the viewer has created a flat repost of this post. */
   viewerHasReposted?: boolean;
+  /** True if the viewer has viewed this post (exists in PostView table). */
+  viewerHasViewed?: boolean;
   /** Set when a block exists between viewer and author. 'viewer_blocked' = viewer blocked the author; 'viewer_blocked_by' = author blocked the viewer. */
   viewerBlockStatus?: 'viewer_blocked' | 'viewer_blocked_by' | null;
   /** For kind='repost': the original post being reshared. */
@@ -2288,6 +2297,14 @@ export type AdminUserRecentSearchDto = {
   id: string;
   query: string;
   createdAt: string;
+};
+
+/** Viewer-facing recent search entry — typed query or a tapped user profile. */
+export type RecentSearchDto = {
+  id: string;
+  query: string;
+  createdAt: string;
+  user: UserListDto | null;
 };
 
 export type UserPreviewDto = {

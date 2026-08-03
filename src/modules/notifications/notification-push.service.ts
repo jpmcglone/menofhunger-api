@@ -73,6 +73,7 @@ export class NotificationPushService {
       | 'pushMessage'
       | 'pushGroupActivity'
       | 'pushDailyContent'
+      | 'pushCheckinReminder'
     >,
     kind: NotificationKind,
   ): boolean {
@@ -101,8 +102,9 @@ export class NotificationPushService {
     // marv_not_in_group is an informational notice, not an action the user needs to
     // act on urgently — skip push to avoid noise.
     if (kind === 'marv_not_in_group') return false;
-    if (kind === 'word_of_the_day' || kind === 'quote_of_the_day')
+    if (kind === 'word_of_the_day' || kind === 'quote_of_the_day' || kind === 'on_this_day')
       return Boolean(prefs.pushDailyContent);
+    if (kind === 'checkin_reminder') return Boolean(prefs.pushCheckinReminder);
     // Non-mapped kinds pass through default (allow).
     return true;
   }

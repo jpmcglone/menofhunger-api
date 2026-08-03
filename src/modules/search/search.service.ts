@@ -258,7 +258,8 @@ export class SearchService {
     viewerUserId: string | null;
   }): Promise<{ users: SearchUserRow[]; nextCursor: string | null }> {
     const { text: qText } = splitSearchQuery(params.q ?? '');
-    const q = (qText ?? '').trim();
+    // Strip leading @ so typing "@john" is equivalent to "john" (usernames don't include @).
+    const q = (qText ?? '').trim().replace(/^@+/, '');
     if (!q) return { users: [], nextCursor: null };
     const limit = Math.max(1, Math.min(50, params.limit || 30));
     const cursor = params.cursor ?? null;
@@ -477,31 +478,37 @@ export class SearchService {
       const nm = (u.name ?? '').trim().toLowerCase();
       const bio = (u.bio ?? '').trim().toLowerCase();
 
+      // Decimal sub-sort within each tier: how much of the matched field the query "covers".
+      // Keeps tiers intact (integer part) while surfacing closer matches first.
+      // e.g. typing "joe" — "joe_s" scores 85.79, "joe_black12345" scores 85.21.
+      const ratio = (fieldLen: number) =>
+        fieldLen > 0 ? Math.min(qLower.length / fieldLen, 1) * 0.99 : 0;
+
       if (un === qLower) return USER_SCORE.exactUsername;
       if (nm === qLower) return USER_SCORE.exactName;
-      if (un && un.startsWith(qLower)) return USER_SCORE.usernameStartsWith;
+      if (un && un.startsWith(qLower)) return USER_SCORE.usernameStartsWith + ratio(un.length);
 
       // Multi-word: all query words (≥ 2 chars) appear anywhere in name/username.
       // Beats nameStartsWith because it's word-order-independent and more specific for
       // queries like "Chris Griffith" or "Griffith Chris".
       const mw = words.filter((w) => w.length >= 2);
-      if (mw.length >= 2 && nm && mw.every((w) => nm.includes(w))) return USER_SCORE.nameAllWords;
-      if (mw.length >= 2 && un && mw.every((w) => un.includes(w))) return USER_SCORE.usernameAllWords;
+      if (mw.length >= 2 && nm && mw.every((w) => nm.includes(w))) return USER_SCORE.nameAllWords + ratio(nm.length);
+      if (mw.length >= 2 && un && mw.every((w) => un.includes(w))) return USER_SCORE.usernameAllWords + ratio(un.length);
 
-      if (nm && nm.startsWith(qLower)) return USER_SCORE.nameStartsWith;
-      if (un && un.includes(qLower)) return USER_SCORE.usernameContains;
+      if (nm && nm.startsWith(qLower)) return USER_SCORE.nameStartsWith + ratio(nm.length);
+      if (un && un.includes(qLower)) return USER_SCORE.usernameContains + ratio(un.length);
 
       // Multi-word: each query word is a prefix of at least one word in the display name.
       // Handles "ch gr" → "Chris Griffith", "jo sm" → "John Smith".
       if (mw.length >= 2 && nm) {
         const nmTokens = nm.split(/\s+/).filter(Boolean);
         if (mw.every((qw) => nmTokens.some((nw) => nw.startsWith(qw)))) {
-          return USER_SCORE.nameWordPrefixes;
+          return USER_SCORE.nameWordPrefixes + ratio(nm.length);
         }
       }
 
-      if (nm && nm.includes(qLower)) return USER_SCORE.nameContains;
-      if (bio && bio.includes(qLower)) return USER_SCORE.bioPhrase;
+      if (nm && nm.includes(qLower)) return USER_SCORE.nameContains + ratio(nm.length);
+      if (bio && bio.includes(qLower)) return USER_SCORE.bioPhrase + ratio(bio.length);
       if (words.length > 0 && words.every((w) => bio.includes(w))) return USER_SCORE.bioAllWords;
       if (words.some((w) => bio.includes(w))) return USER_SCORE.bioAnyWord;
       return 0;
@@ -1514,16 +1521,51 @@ export class SearchService {
     };
   }
 
-  /** Store a user search for admin/analytics; called when type=all with logged-in user. */
-  async recordUserSearch(params: { userId: string; query: string }) {
+  /**
+   * Store a user search for admin/analytics.
+   * Called for typed queries (type=all) or for explicit user/group selections.
+   * When a target (userId/groupId) is provided the dedupe key is the target rather than the query text.
+   */
+  async recordUserSearch(params: { userId: string; query: string; targetUserId?: string | null; targetGroupId?: string | null }) {
     const query = (params.query ?? '').trim().slice(0, 200);
+    const targetUserId = params.targetUserId ?? null;
+    const targetGroupId = params.targetGroupId ?? null;
+
+    if (targetUserId) {
+      // For profile taps: dedupe on the target within 30 min.
+      const latest = await this.prisma.userSearch.findFirst({
+        where: { userId: params.userId, targetUserId },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: { createdAt: true },
+      });
+      if (latest && Date.now() - latest.createdAt.getTime() < 1000 * 60 * 30) return;
+      await this.prisma.userSearch.create({
+        data: { userId: params.userId, query, targetUserId, targetGroupId: null },
+      });
+      return;
+    }
+
+    if (targetGroupId) {
+      // For group taps: dedupe on the target within 30 min.
+      const latest = await this.prisma.userSearch.findFirst({
+        where: { userId: params.userId, targetGroupId },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: { createdAt: true },
+      });
+      if (latest && Date.now() - latest.createdAt.getTime() < 1000 * 60 * 30) return;
+      await this.prisma.userSearch.create({
+        data: { userId: params.userId, query, targetUserId: null, targetGroupId },
+      });
+      return;
+    }
+
     if (!query) return;
     const normalized = query.toLowerCase().replace(/\s+/g, ' ').trim();
     if (!normalized) return;
 
-    // Tight dedupe: skip writing repeated identical searches within a short window.
+    // Tight dedupe: skip repeated identical text searches within 30 min.
     const latest = await this.prisma.userSearch.findFirst({
-      where: { userId: params.userId },
+      where: { userId: params.userId, targetUserId: null, targetGroupId: null },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       select: { query: true, createdAt: true },
     });
@@ -1534,7 +1576,7 @@ export class SearchService {
     }
 
     await this.prisma.userSearch.create({
-      data: { userId: params.userId, query },
+      data: { userId: params.userId, query, targetUserId: null, targetGroupId: null },
     });
   }
 

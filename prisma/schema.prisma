@@ -93,6 +93,8 @@ enum NotificationKind {
   word_of_the_day
   quote_of_the_day
   account_verified
+  checkin_reminder
+  on_this_day
 }
 
 enum CoinTransferKind {
@@ -443,6 +445,7 @@ model User {
   taxonomyPreferences          UserTaxonomyPreference[]
   pushCoalesces                PushCoalesce[]
   userSearches                 UserSearch[]
+  userSearchTargets            UserSearch[]               @relation("UserSearchTarget")
   feedbacks                    Feedback[]
   reportsMade                  Report[]                   @relation("Report_reporter")
   reportsReceived              Report[]                   @relation("Report_subjectUser")
@@ -607,6 +610,24 @@ model DailyContentSnapshot {
    */
   wordFanoutCursor  String?
 
+  /**
+   * Set when the 6pm check-in reminder fan-out completes for this day.
+   */
+  checkinReminderNotifiedAt DateTime?
+  /**
+   * Cursor (last user id processed) for the resumable check-in reminder fan-out.
+   */
+  checkinReminderFanoutCursor String?
+
+  /**
+   * Set when the On This Day fan-out completes for this day.
+   */
+  onThisDayNotifiedAt DateTime?
+  /**
+   * Cursor (last user id processed) for the resumable On This Day fan-out.
+   */
+  onThisDayFanoutCursor String?
+
   @@index([updatedAt])
 }
 
@@ -710,13 +731,19 @@ model UserDailyActivity {
 }
 
 model UserSearch {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-  query     String   @db.VarChar(200)
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id            String          @id @default(cuid())
+  createdAt     DateTime        @default(now())
+  query         String          @db.VarChar(200)
+  userId        String
+  targetUserId  String?
+  targetGroupId String?
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetUser    User?           @relation("UserSearchTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
+  targetGroup   CommunityGroup? @relation("UserSearchGroupTarget", fields: [targetGroupId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
+  @@index([userId, targetUserId])
+  @@index([userId, targetGroupId])
   @@index([createdAt])
   @@index([query])
 }
@@ -829,11 +856,12 @@ model CommunityGroup {
    */
   memberCount   Int     @default(0)
 
-  members        CommunityGroupMember[]
-  invites        CommunityGroupInvite[]
-  posts          Post[]
-  scheduledPosts Post[]                 @relation("Post_scheduledCommunityGroup")
-  notifications  Notification[]         @relation("Notification_subjectGroup")
+  members           CommunityGroupMember[]
+  invites           CommunityGroupInvite[]
+  posts             Post[]
+  scheduledPosts    Post[]                 @relation("Post_scheduledCommunityGroup")
+  notifications     Notification[]         @relation("Notification_subjectGroup")
+  userSearchTargets UserSearch[]           @relation("UserSearchGroupTarget")
 
   @@index([deletedAt, isFeatured, featuredOrder])
   @@index([createdAt])
@@ -1944,6 +1972,10 @@ model NotificationPreferences {
    * Daily word and quote of the day push notification (sent at 09:00 and 09:30 ET).
    */
   pushDailyContent  Boolean @default(true)
+  /**
+   * 6pm ET reminder to complete today's check-in (only sent if the user hasn't checked in yet).
+   */
+  pushCheckinReminder Boolean @default(true)
 
   // Email preferences (requires user.email).
   emailDigestWeekly      Boolean @default(true)

@@ -247,17 +247,42 @@ export class GroupsService {
       include: { group: true },
       orderBy: [{ role: 'asc' }, { createdAt: 'desc' }],
     });
-    const data = memberships
-      .filter((m) => m.group.deletedAt == null)
-      .sort((a, b) => this.compareViewerGroupOrder(
-        { createdAt: a.group.createdAt },
-        { status: a.status, role: a.role, createdAt: a.createdAt },
-        { createdAt: b.group.createdAt },
-        { status: b.status, role: b.role, createdAt: b.createdAt },
-      ))
-      .map((m) =>
-        toCommunityGroupShellDto(m.group, { status: m.status, role: m.role }),
-      );
+
+    const active = memberships.filter((m) => m.group.deletedAt == null);
+    const groupIds = active.map((m) => m.groupId);
+
+    const lastPostRows =
+      groupIds.length > 0
+        ? await this.prisma.post.groupBy({
+            by: ['communityGroupId'],
+            where: {
+              userId: params.viewerUserId,
+              communityGroupId: { in: groupIds },
+              deletedAt: null,
+              isDraft: false,
+            },
+            _max: { createdAt: true },
+          })
+        : [];
+
+    const lastPostByGroupId = new Map(
+      lastPostRows.map((r) => [r.communityGroupId!, r._max.createdAt]),
+    );
+
+    const data = active
+      .sort((a, b) =>
+        this.compareViewerGroupOrder(
+          { createdAt: a.group.createdAt },
+          { status: a.status, role: a.role, createdAt: a.createdAt },
+          { createdAt: b.group.createdAt },
+          { status: b.status, role: b.role, createdAt: b.createdAt },
+        ),
+      )
+      .map((m) => ({
+        ...toCommunityGroupShellDto(m.group, { status: m.status, role: m.role }),
+        lastViewerPostAt: lastPostByGroupId.get(m.groupId)?.toISOString() ?? null,
+      }));
+
     return { data };
   }
 

@@ -32,7 +32,7 @@ function makeDefaultPrefs() {
   return {
     pushComment: true, pushBoost: true, pushFollow: true, pushMention: true,
     pushMessage: true, pushRepost: true, pushNudge: true, pushFollowedPost: true,
-    pushReplyNudge: true, pushCrewStreak: true, pushGroupActivity: true, pushDailyContent: true,
+    pushReplyNudge: true, pushCrewStreak: true, pushGroupActivity: true, pushDailyContent: true, pushCheckinReminder: true,
   };
 }
 

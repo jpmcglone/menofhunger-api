@@ -442,7 +442,7 @@ export class NotificationsController {
     @Body() body: unknown,
   ) {
     const { kind } = z.object({
-      kind: z.enum(['word_of_the_day', 'quote_of_the_day']),
+      kind: z.enum(['word_of_the_day', 'quote_of_the_day', 'checkin_reminder', 'on_this_day']),
     }).parse(body);
     await this.notifications.markReadByKind(userId, kind);
     return { data: {} };

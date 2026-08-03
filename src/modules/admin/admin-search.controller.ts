@@ -31,13 +31,15 @@ export class AdminSearchController {
         }),
     });
 
+    // Exclude profile/group taps — audit log is for typed queries only.
+    const baseWhere = { targetUserId: null, targetGroupId: null };
     const where = cursorWhere
       ? q
-        ? { AND: [cursorWhere, { query: { contains: q, mode: 'insensitive' as const } }] }
-        : cursorWhere
+        ? { AND: [baseWhere, cursorWhere, { query: { contains: q, mode: 'insensitive' as const } }] }
+        : { AND: [baseWhere, cursorWhere] }
       : q
-        ? { query: { contains: q, mode: 'insensitive' as const } }
-        : undefined;
+        ? { AND: [baseWhere, { query: { contains: q, mode: 'insensitive' as const } }] }
+        : baseWhere;
 
     const rows = await this.prisma.userSearch.findMany({
       where,

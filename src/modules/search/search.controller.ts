@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { OptionalCurrentUserId, CurrentUserId } from '../users/users.decorator';
 import { z } from 'zod';
@@ -9,6 +9,7 @@ import { AppConfigService } from '../app/app-config.service';
 import type { PostWithAuthorAndMedia } from '../../common/dto/post.dto';
 import type { ArticleWithAuthor } from '../../common/dto/article.dto';
 import { toArticleDto, toPostDto, toUserListDto } from '../../common/dto';
+import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { PostsService } from '../posts/posts.service';
 import { SearchService } from './search.service';
 import { Throttle } from '@nestjs/throttler';
@@ -22,7 +23,7 @@ import { TaxonomyService } from '../taxonomy/taxonomy.service';
 
 const searchSchema = z.object({
   q: z.string().trim().max(200).optional(),
-  type: z.enum(['posts', 'users', 'bookmarks', 'all', 'articles', 'hashtags', 'taxonomy', 'cashtags']).optional(),
+  type: z.enum(['posts', 'users', 'bookmarks', 'all', 'articles', 'hashtags', 'taxonomy', 'cashtags', 'groups']).optional(),
   // Source hint for analytics/search-history recording.
   source: z.enum(['explore', 'external']).optional(),
   // Posts-only: filter by kind (e.g. allow "check-ins only" in search UI)
@@ -255,6 +256,11 @@ export class SearchController {
       }));
       return { data: users, pagination: { nextCursor: result.nextCursor } };
     }
+    if (type === 'groups') {
+      const res = await this.search.searchCommunityGroups({ viewerUserId, q, limit });
+      return { data: res.groups, pagination: { nextCursor: null } };
+    }
+
     if (type === 'bookmarks') {
       const collectionId = parsed.collectionId ?? null;
       const unorganized = /^(1|true)$/i.test((parsed.unorganized ?? '').trim());
@@ -391,21 +397,107 @@ export class SearchController {
   })
   @Get('recent')
   async getRecentSearches(@CurrentUserId() userId: string) {
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    // Fetch more than we need so deduplication leaves us with 10 after filtering.
     const rows = await this.prisma.userSearch.findMany({
       where: { userId },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: 10,
-      select: { id: true, query: true, createdAt: true },
+      take: 30,
+      select: {
+        id: true,
+        query: true,
+        createdAt: true,
+        targetUserId: true,
+        targetGroupId: true,
+        targetUser: { select: USER_LIST_SELECT },
+        targetGroup: {
+          select: { id: true, slug: true, name: true, avatarImageUrl: true, memberCount: true },
+        },
+      },
     });
-    // Dedupe by normalized query, keeping the most recent occurrence.
+
+    // Dedupe: key on targetUserId, targetGroupId, or normalized query text.
     const seen = new Set<string>();
     const unique = rows.filter((r) => {
-      const key = r.query.toLowerCase().replace(/\s+/g, ' ').trim();
-      if (seen.has(key)) return false;
+      const key = r.targetUserId
+        ? `uid:${r.targetUserId}`
+        : r.targetGroupId
+          ? `gid:${r.targetGroupId}`
+          : `q:${r.query.toLowerCase().replace(/\s+/g, ' ').trim()}`;
+      if (!key || seen.has(key)) return false;
       seen.add(key);
       return true;
+    }).slice(0, 10);
+
+    return {
+      data: unique.map((r) => ({
+        id: r.id,
+        query: r.query,
+        createdAt: r.createdAt.toISOString(),
+        user: r.targetUser ? toUserListDto(r.targetUser, publicBaseUrl) : null,
+        group: r.targetGroup
+          ? { id: r.targetGroup.id, slug: r.targetGroup.slug, name: r.targetGroup.name, avatarImageUrl: r.targetGroup.avatarImageUrl, memberCount: r.targetGroup.memberCount }
+          : null,
+      })),
+    };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 30),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('recent')
+  async recordRecentSearch(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ) {
+    const schema = z.object({
+      query: z.string().trim().max(200).optional(),
+      userId: z.string().trim().optional(),
+      groupId: z.string().trim().optional(),
+    }).refine((d) => Boolean(d.query?.trim() || d.userId?.trim() || d.groupId?.trim()), {
+      message: 'At least one of query, userId, or groupId is required',
     });
-    return { data: unique.map((r) => ({ id: r.id, query: r.query, createdAt: r.createdAt.toISOString() })) };
+    const parsed = schema.parse(body);
+    const targetUserId = parsed.userId ?? null;
+    const targetGroupId = parsed.groupId ?? null;
+    const query = (parsed.query ?? '').trim();
+
+    // Resolve the display query text from the target if not provided.
+    let resolvedQuery = query;
+    if (targetUserId && !resolvedQuery) {
+      const target = await this.prisma.user.findUnique({
+        where: { id: targetUserId },
+        select: { username: true },
+      });
+      resolvedQuery = target?.username ? `@${target.username}` : '';
+    }
+    if (targetGroupId && !resolvedQuery) {
+      const target = await this.prisma.communityGroup.findUnique({
+        where: { id: targetGroupId },
+        select: { name: true },
+      });
+      resolvedQuery = target?.name ?? '';
+    }
+
+    await this.search.recordUserSearch({ userId, query: resolvedQuery, targetUserId, targetGroupId });
+    return { data: { recorded: true } };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 30),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Delete('recent/:id')
+  async deleteRecentSearch(@CurrentUserId() userId: string, @Param('id') id: string) {
+    await this.prisma.userSearch.deleteMany({ where: { id: id.trim(), userId } });
+    return { data: { deleted: true } };
   }
 
   @UseGuards(AuthGuard)

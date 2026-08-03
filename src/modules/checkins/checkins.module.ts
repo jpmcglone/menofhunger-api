@@ -10,12 +10,13 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { CheckinsController } from './checkins.controller';
 import { CheckinsService } from './checkins.service';
 import { CheckinsStreakResetCron } from './checkins-streak-reset.cron';
+import { CheckinReminderCron } from './checkin-reminder.cron';
 
 @Module({
   imports: [AuthModule, PrismaModule, PostsModule, UsersModule, ViewerContextModule, RealtimeModule, NotificationsModule],
   controllers: [CheckinsController],
-  providers: [CheckinsService, CheckinsStreakResetCron, VerifiedGuard],
-  exports: [CheckinsStreakResetCron, CheckinsService],
+  providers: [CheckinsService, CheckinsStreakResetCron, CheckinReminderCron, VerifiedGuard],
+  exports: [CheckinsStreakResetCron, CheckinReminderCron, CheckinsService],
 })
 export class CheckinsModule {}
 

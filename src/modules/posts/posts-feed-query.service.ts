@@ -662,6 +662,7 @@ export class PostsFeedQueryService {
       votedPollOptionIdByPostId,
       blockSets,
       repostedByPostId,
+      viewedByPostId,
       internalByPostId,
       scoreByPostIdResolved,
     ] = await Promise.all([
@@ -679,6 +680,9 @@ export class PostsFeedQueryService {
         : Promise.resolve({ blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() }),
       viewerUserId
         ? this.enrichment.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
+        : Promise.resolve(new Set<string>()),
+      viewerUserId
+        ? this.enrichment.viewerViewedPostIds({ viewerUserId, postIds: allPostIds })
         : Promise.resolve(new Set<string>()),
       viewerHasAdmin ? this.ranking.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)) : Promise.resolve(null),
       viewerHasAdmin
@@ -718,6 +722,7 @@ export class PostsFeedQueryService {
       repostedByPostId,
       repostedPostMap,
       groupPreviewByGroupId,
+      viewedByPostId,
     });
 
     return filteredPosts.map((p) => {
