@@ -2,11 +2,29 @@ import type { ArticleDto } from './article.dto';
 import type { PostDto } from './post.dto';
 import type { UserListDto } from './user.dto';
 
+export type LandingMenBreakdownDto = {
+  /** premium OR premiumPlus. */
+  premium: number;
+  /** verifiedStatus != 'none' AND NOT (premium OR premiumPlus). */
+  verified: number;
+  /** premium + verified. */
+  total: number;
+};
+
+export type LandingPostBreakdownDto = {
+  /** visibility = 'public'. */
+  public: number;
+  /** visibility = 'verifiedOnly'. */
+  verified: number;
+  /** visibility = 'premiumOnly'. */
+  premium: number;
+  /** public + verified + premium (onlyMe excluded). */
+  total: number;
+};
+
 export type LandingStatsDto = {
-  /** All-time public, regular, non-draft, non-deleted posts. */
-  publicPostCount: number;
-  /** Verified, non-org, non-banned users with completed usernames. */
-  verifiedMenCount: number;
+  men: LandingMenBreakdownDto;
+  posts: LandingPostBreakdownDto;
 };
 
 export type LandingTopPostDto = PostDto & {

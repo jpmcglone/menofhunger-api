@@ -48,6 +48,21 @@ export interface SideEffectPayloads {
     actorPostId?: string | null;
   };
 
+  /**
+   * The quoted post link inside an existing post was added, removed, or swapped.
+   * The side-effects worker adjusts the post's `quotedPost` notification on the new
+   * target (if any) and deletes the notification on the old target (if any).
+   */
+  'post.quote.changed': {
+    /** The post whose body was edited. */
+    postId: string;
+    actorUserId: string;
+    /** The previously-quoted post's id (null when the edit *added* the first quote). */
+    prevQuotedPostId: string | null;
+    /** The newly-quoted post's id (null when the edit *removed* the last quote). */
+    nextQuotedPostId: string | null;
+  };
+
   // ─── Articles ─────────────────────────────────────────────────────────
   'article.published': {
     articleId: string;
@@ -233,6 +248,16 @@ export interface SideEffectPayloads {
   /** A user just became verified; tell them. */
   'user.verified': {
     userId: string;
+  };
+  /**
+   * The user's premium access boundary crossed none<->premium.
+   * `direction: 'started'` when they gained any premium tier;
+   * `direction: 'ended'` when they lost it entirely.
+   * Premium <-> Premium+ moves are not dispatched.
+   */
+  'billing.premium.changed': {
+    userId: string;
+    direction: 'started' | 'ended';
   };
   /**
    * Evaluate the auto-verify site toggle for a new signup or a freshly-linked recruit.

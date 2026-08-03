@@ -101,7 +101,7 @@ describe('PostsSideEffectsHandler registration', () => {
 
     handler.onModuleInit();
 
-    expect(deps.registry.names()).toEqual(['post.created', 'post.deleted', 'post.engagement.changed']);
+    expect(deps.registry.names()).toEqual(['post.created', 'post.deleted', 'post.engagement.changed', 'post.quote.changed']);
   });
 });
 

@@ -10,7 +10,9 @@ import { toCommunityGroupPreviewDto } from '../../common/dto/community-group.dto
 import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import { ARTICLE_SHARE_INCLUDE, QUOTED_POST_INCLUDE } from '../../common/prisma-includes/post.include';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
-import { collapseFeedByRoot } from '../../common/feed-collapse/collapse-by-root';
+import { collapseFeedByRoot, type FeedCollapsedItem } from '../../common/feed-collapse/collapse-by-root';
+import { applyCollapsedThreadSummary } from '../../common/feed-collapse/collapsed-thread-summary';
+import { collapseRepostsByCanonical } from '../../common/feed-collapse/collapse-reposts-by-canonical';
 import { toPostDto, toPostAuthorDtoFromFeedRow, type PostAuthorDto, type PostDto } from '../../common/dto/post.dto';
 import { buildAttachParentChain } from './posts.utils';
 import { POSTS_RANKING } from './posts-ranking.config';
@@ -636,25 +638,48 @@ export class PostsFeedQueryService {
   async composeFeedPostDtos(params: {
     viewerUserId: string | null;
     filteredPosts: FeedPost[];
-    collapsedCountByItemId: Map<string, number>;
-    collapsedAuthorsByItemId?: Map<string, PostAuthorDto[]>;
+    collapsedItemsByItemId: Map<string, FeedCollapsedItem<PostAuthorDto>[]>;
     scoreByPostId?: Map<string, number>;
   }): Promise<PostDto[]> {
-    const { viewerUserId, filteredPosts, collapsedCountByItemId, collapsedAuthorsByItemId } = params;
+    const { viewerUserId, filteredPosts, collapsedItemsByItemId } = params;
     const repostedPostIds = filteredPosts
       .filter((p) => (p as { kind?: string }).kind === 'repost' && (p as { repostedPostId?: string }).repostedPostId)
       .map((p) => (p as { repostedPostId: string }).repostedPostId);
 
-    const [viewer, parentMap, repostedPostMap] = await Promise.all([
+    const quotedPostIds = filteredPosts
+      .map((p) => (p as { quotedPostId?: string | null }).quotedPostId)
+      .filter((id): id is string => Boolean(id));
+
+    // viewer + repostedPostMap + quotedPostMap are independent of parentMap; fetch them in
+    // parallel first so we can include reposted originals' parentIds in the parent-map fetch.
+    const [viewer, repostedPostMap, quotedPostMap] = await Promise.all([
       this.enrichment.viewerContext(viewerUserId),
-      this.collectParentMapForFeed(
-        viewerUserId,
-        filteredPosts.map((p) => p.parentId),
-      ),
       this.collectRepostedMapForFeed(viewerUserId, repostedPostIds),
+      // Route quoted posts through the same viewer-gated getByIds path so visibility,
+      // block status, and tier gating are applied consistently.
+      this.collectRepostedMapForFeed(viewerUserId, quotedPostIds),
     ]);
+
+    // Now build the parent map: include parentIds from page posts AND from reposted originals
+    // so a reposted reply renders with its thread context instead of a bare row.
+    const repostedOriginalParentIds = [...repostedPostMap.values()].map(
+      (p) => (p as { parentId?: string | null }).parentId ?? null,
+    );
+    const parentMap = await this.collectParentMapForFeed(viewerUserId, [
+      ...filteredPosts.map((p) => p.parentId),
+      ...repostedOriginalParentIds,
+    ]);
+
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-    const allPostIds = [...filteredPosts.map((p) => p.id), ...parentMap.keys()];
+    // Include embedded post IDs (reposted originals + quoted posts) so their viewer state
+    // (viewerHasBoosted, viewerHasBookmarked, viewerHasReposted, viewerVotedPollOptionId) is
+    // fetched and available when attachParentChain recurses into them.
+    const allPostIds = [
+      ...filteredPosts.map((p) => p.id),
+      ...parentMap.keys(),
+      ...repostedPostMap.keys(),
+      ...quotedPostIds,
+    ];
 
     const [
       boosted,
@@ -701,6 +726,7 @@ export class PostsFeedQueryService {
     for (const p of filteredPosts) accCommunityGroupId(p as { communityGroupId?: string | null });
     for (const p of parentMap.values()) accCommunityGroupId(p as { communityGroupId?: string | null });
     for (const p of repostedPostMap.values()) accCommunityGroupId(p as { communityGroupId?: string | null });
+    for (const p of quotedPostMap.values()) accCommunityGroupId(p as { communityGroupId?: string | null });
     const groupPreviewByGroupId = await this.communityGroupPreviewMapForFeed(viewerUserId, [
       ...communityGroupIdsForPage,
     ]);
@@ -721,16 +747,14 @@ export class PostsFeedQueryService {
       viewerBlockedBy,
       repostedByPostId,
       repostedPostMap,
+      quotedPostMap,
       groupPreviewByGroupId,
       viewedByPostId,
     });
 
     return filteredPosts.map((p) => {
       const dto = attachParentChain(p);
-      const collapsed = collapsedCountByItemId.get(p.id);
-      if (collapsed && collapsed > 0) (dto as { threadCollapsedCount?: number }).threadCollapsedCount = collapsed;
-      const authors = collapsedAuthorsByItemId?.get(p.id);
-      if (authors?.length) (dto as { threadCollapsedAuthors?: PostAuthorDto[] }).threadCollapsedAuthors = authors;
+      applyCollapsedThreadSummary(dto, collapsedItemsByItemId.get(p.id));
       return dto;
     });
   }
@@ -759,8 +783,19 @@ export class PostsFeedQueryService {
       topLevelOnly: params.topLevelOnly,
       allowedVisibilities,
     });
-    const { items: filteredPosts, collapsedCountByItemId, collapsedAuthorsByItemId } = collapseFeedByRoot(
+    const groupBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    // Collapse multi-repost rows before thread-collapse so the thread collapser
+    // sees only one row per canonical original.
+    const {
+      items: groupDedupedPosts,
+      repostedByAuthorsByItemId: groupRepostedByAuthors,
+      repostedByCountByItemId: groupRepostedByCount,
+    } = collapseRepostsByCanonical(
       raw.posts,
+      (p) => toPostAuthorDtoFromFeedRow(p, groupBaseUrl),
+    );
+    const { items: filteredPosts, collapsedItemsByItemId } = collapseFeedByRoot(
+      groupDedupedPosts,
       {
       collapseByRoot: params.collapseByRoot,
       collapseMode: params.collapseMode,
@@ -768,16 +803,20 @@ export class PostsFeedQueryService {
       maxPerRoot: params.collapseMaxPerRoot,
       getId: (p) => p.id,
       getParentId: (p) => p.parentId ?? null,
-      getAuthorPreview: (p) =>
-        toPostAuthorDtoFromFeedRow(p, this.appConfig.r2()?.publicBaseUrl ?? null),
+      getAuthorPreview: (p) => toPostAuthorDtoFromFeedRow(p, groupBaseUrl),
     },
     );
     const data = await this.composeFeedPostDtos({
       viewerUserId: params.viewerUserId,
       filteredPosts,
-      collapsedCountByItemId,
-      collapsedAuthorsByItemId,
+      collapsedItemsByItemId,
     });
+    for (const dto of data) {
+      const authors = groupRepostedByAuthors.get(dto.id);
+      const count = groupRepostedByCount.get(dto.id);
+      if (authors) dto.repostedByAuthors = authors;
+      if (count) dto.repostedByCount = count;
+    }
     return { data, pagination: { nextCursor: raw.nextCursor } };
   }
 
@@ -1339,6 +1378,9 @@ export class PostsFeedQueryService {
                   OR: [
                     { boosts: { some: { userId: { in: viewerFollowingIds } } } },
                     { replies: { some: { userId: { in: viewerFollowingIds }, deletedAt: null } } },
+                    // Surface posts a followed user reposted — a flat repost is like a
+                    // "public endorsement" signal similar to a boost or comment.
+                    { reposts: { some: { userId: { in: viewerFollowingIds }, deletedAt: null } } },
                   ],
                 },
               ],
@@ -3423,7 +3465,7 @@ export class PostsFeedQueryService {
     const [dto] = await this.composeFeedPostDtos({
       viewerUserId: null,
       filteredPosts: [post],
-      collapsedCountByItemId: new Map(),
+      collapsedItemsByItemId: new Map(),
     });
     if (!dto) throw new NotFoundException('Post not found.');
     return dto;
@@ -3448,7 +3490,7 @@ export class PostsFeedQueryService {
     const [dto] = await this.composeFeedPostDtos({
       viewerUserId: null,
       filteredPosts: [post],
-      collapsedCountByItemId: new Map(),
+      collapsedItemsByItemId: new Map(),
     });
     if (!dto) throw new NotFoundException('Post not found.');
     return dto;
@@ -3925,5 +3967,94 @@ export class PostsFeedQueryService {
       })),
       nextCursor,
     };
+  }
+
+  /**
+   * Cursor-paginated list of users who flat-reposted a post.
+   * Ordered newest-repost-first. Soft-deleted reposts are excluded.
+   */
+  async listReposters(params: {
+    viewerUserId: string | null;
+    postId: string;
+    limit: number;
+    cursor: string | null;
+  }): Promise<{ authors: PostAuthorDto[]; nextCursor: string | null }> {
+    const { viewerUserId, postId, limit, cursor } = params;
+
+    const post = await this.prisma.post.findFirst({
+      where: { id: postId, deletedAt: null },
+      select: { id: true, visibility: true, userId: true },
+    });
+    if (!post) throw new NotFoundException('Post not found.');
+
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
+    const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
+    if (!allowed.includes(post.visibility)) throw new NotFoundException('Post not found.');
+
+    const reposts = await this.prisma.post.findMany({
+      where: {
+        kind: 'repost',
+        repostedPostId: postId,
+        deletedAt: null,
+        ...(cursor ? { createdAt: { lt: new Date(cursor) } } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit + 1,
+      include: { user: { select: USER_LIST_SELECT } },
+    });
+
+    const hasMore = reposts.length > limit;
+    const page = hasMore ? reposts.slice(0, limit) : reposts;
+    const r2BaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const authors = page
+      .map((r) => toPostAuthorDtoFromFeedRow(r as any, r2BaseUrl))
+      .filter((a): a is PostAuthorDto => a !== null);
+    const nextCursor = hasMore ? page[page.length - 1].createdAt.toISOString() : null;
+    return { authors, nextCursor };
+  }
+
+  /**
+   * Cursor-paginated list of posts that quote a given post (quotedPostId = postId).
+   * Applies full viewer gating on the quoting posts themselves.
+   */
+  async listQuotes(params: {
+    viewerUserId: string | null;
+    postId: string;
+    limit: number;
+    cursor: string | null;
+  }): Promise<{ posts: FeedPost[]; nextCursor: string | null }> {
+    const { viewerUserId, postId, limit, cursor } = params;
+
+    const post = await this.prisma.post.findFirst({
+      where: { id: postId, deletedAt: null },
+      select: { id: true, visibility: true, userId: true },
+    });
+    if (!post) throw new NotFoundException('Post not found.');
+
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
+    const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
+    if (!allowed.includes(post.visibility)) throw new NotFoundException('Post not found.');
+
+    const quotes = await this.prisma.post.findMany({
+      where: {
+        quotedPostId: postId,
+        deletedAt: null,
+        visibility: { in: allowed },
+        kind: { not: 'repost' },
+        ...(cursor ? { createdAt: { lt: new Date(cursor) } } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit + 1,
+      include: {
+        user: { select: USER_LIST_SELECT },
+        media: { orderBy: { position: 'asc' } },
+        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
+      },
+    });
+
+    const hasMore = quotes.length > limit;
+    const page = hasMore ? quotes.slice(0, limit) : quotes;
+    const nextCursor = hasMore ? page[page.length - 1].createdAt.toISOString() : null;
+    return { posts: page as unknown as FeedPost[], nextCursor };
   }
 }

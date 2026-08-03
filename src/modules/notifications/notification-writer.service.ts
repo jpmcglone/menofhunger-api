@@ -145,6 +145,8 @@ export class NotificationWriterService {
         status_update: 'updated their status',
         checkin_post: 'checked in',
         account_verified: "You're verified",
+        premium_started: "You're Premium",
+        premium_ended: 'Your Premium ended',
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
@@ -433,6 +435,7 @@ export class NotificationWriterService {
     const { recipientUserId, actorUserId, subjectPostId, actorPostId, title = 'reposted your post' } = params;
     // Never notify a user about their own repost/quote.
     if (actorUserId && actorUserId === recipientUserId) return;
+    const isQuote = title === 'quoted your post';
     const maxAttempts = 3;
     // Resolve presence before the transaction so the Redis call doesn't extend it.
     const presentAt = await this.presentAtForRecipient(recipientUserId);
@@ -440,8 +443,12 @@ export class NotificationWriterService {
       try {
         const res = await this.prisma.$transaction(
           async (tx) => {
+            // Quote reposts are keyed by actorPostId (each quoting post → its own row).
+            // Flat reposts are keyed by (actorUserId, subjectPostId) — one per user per post.
             const existing = await tx.notification.findFirst({
-              where: { recipientUserId, actorUserId, subjectPostId, kind: 'repost' },
+              where: isQuote && actorPostId
+                ? { actorPostId, kind: 'repost' }
+                : { recipientUserId, actorUserId, subjectPostId, kind: 'repost' },
               select: { id: true, deliveredAt: true },
             });
 
@@ -1913,5 +1920,47 @@ export class NotificationWriterService {
       update: { onThisDayNotifiedAt: new Date() },
     });
     this.logger.log(`[on-this-day fan-out] complete for ${dayKey}`);
+  }
+
+  /**
+   * Write a premium_started or premium_ended notification for a user.
+   *
+   * Deletes any prior premium_started / premium_ended rows first so a
+   * subscribe → cancel → resubscribe cycle always shows the current state,
+   * not a history of transitions.
+   */
+  async upsertPremiumStatusNotification(params: {
+    recipientUserId: string;
+    kind: 'premium_started' | 'premium_ended';
+    isPremiumPlus: boolean;
+  }): Promise<void> {
+    const { recipientUserId, kind, isPremiumPlus } = params;
+
+    // Remove stale premium transition rows before writing the fresh one.
+    await this.prisma.notification.deleteMany({
+      where: {
+        recipientUserId,
+        kind: { in: ['premium_started', 'premium_ended'] },
+      },
+    });
+
+    const title =
+      kind === 'premium_started'
+        ? isPremiumPlus
+          ? "You're Premium+"
+          : "You're Premium"
+        : 'Your Premium ended';
+    const body =
+      kind === 'premium_started'
+        ? 'Premium is active. Thanks for backing Men of Hunger.'
+        : 'Premium access has ended. You can restart anytime.';
+
+    await this.create({
+      recipientUserId,
+      kind,
+      subjectUserId: kind === 'premium_started' ? recipientUserId : undefined,
+      title,
+      body,
+    });
   }
 }

@@ -207,6 +207,12 @@ export class NotificationPushService {
       };
     }
     if (kind === 'repost') {
+      if (titleFromFallback) {
+        return {
+          title: `${actorName} ${titleFromFallback}`,
+          body: snippet ?? 'Open to view.',
+        };
+      }
       return {
         title: `${actorName} reposted your post`,
         body: snippet ?? 'Open to view the repost.',
@@ -396,6 +402,18 @@ export class NotificationPushService {
       return {
         title: titleFromFallback || "You're verified",
         body: snippet ?? 'Your account is now verified. Welcome.',
+      };
+    }
+    if (kind === 'premium_started') {
+      return {
+        title: titleFromFallback || "You're Premium",
+        body: snippet ?? 'Premium is active. Thanks for backing Men of Hunger.',
+      };
+    }
+    if (kind === 'premium_ended') {
+      return {
+        title: titleFromFallback || 'Your Premium ended',
+        body: snippet ?? 'Premium access has ended. You can restart anytime.',
       };
     }
     // Generic kind is used for one-off actor-driven events that don't have their own kind

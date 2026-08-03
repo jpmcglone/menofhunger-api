@@ -29,6 +29,13 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
   viewedByPostId?: Set<string>;
   /** Map from repostedPostId to the raw post data for flat reposts. */
   repostedPostMap?: Map<string, T>;
+  /**
+   * Map from quotedPostId to viewer-gated post data for quote-post cards.
+   * When present, this map is authoritative: a missing entry means the viewer
+   * cannot access the quoted post and the quotedPost DTO is omitted.
+   * Falls back to the raw Prisma include when this map is absent (single-post paths).
+   */
+  quotedPostMap?: Map<string, T>;
   /** When set, used to determine per-post viewerCanAccess. Posts not in the map default to true. */
   viewerCanAccessByPostId?: Map<string, boolean>;
   /** Join previews for posts scoped to a community group (inline chip + hover card). */
@@ -49,6 +56,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     viewerBlockedBy,
     repostedByPostId,
     repostedPostMap,
+    quotedPostMap,
     viewerCanAccessByPostId,
     groupPreviewByGroupId,
     viewedByPostId,
@@ -76,14 +84,24 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     const repostedPostRaw = repostedPostIdVal ? repostedPostMap?.get(repostedPostIdVal) : undefined;
     const repostedPostDto = repostedPostRaw ? attachParentChain(repostedPostRaw) : undefined;
 
-    // For posts with an embedded quoted-post link, convert the nested DB row (if already
-    // fetched via the Prisma include) into a DTO so the client renders it instantly without
-    // a secondary network round-trip.  Deliberately uses toPostDto directly (not
-    // attachParentChain) to stay shallow — no parent threading needed for a quoted post.
-    const quotedPostRaw = (post as any).quotedPost ?? null;
-    const quotedPostDto = quotedPostRaw
-      ? toPostDto(quotedPostRaw as PostWithAuthorAndMedia, baseUrl)
-      : undefined;
+    // For posts with an embedded quoted-post link, build the DTO via the viewer-gated
+    // quotedPostMap (populated by getByIds on the feed path).  A map miss means the viewer
+    // cannot access that post; omit quotedPost so the client shows "Post unavailable".
+    // Single-post paths that don't supply quotedPostMap fall back to the raw Prisma include
+    // so they keep working without the full feed plumbing.
+    const quotedPostIdVal = (post as any).quotedPostId as string | null | undefined;
+    let quotedPostDto: ReturnType<typeof toPostDto> | undefined;
+    if (quotedPostMap && quotedPostIdVal) {
+      // Feed path: use the viewer-gated map; absence = gated out.
+      const quotedFromMap = quotedPostMap.get(quotedPostIdVal);
+      quotedPostDto = quotedFromMap ? (attachParentChain(quotedFromMap) as ReturnType<typeof toPostDto>) : undefined;
+    } else {
+      // Single-post / legacy path: fall back to the raw Prisma include.
+      const quotedPostRaw = (post as any).quotedPost ?? null;
+      quotedPostDto = quotedPostRaw
+        ? toPostDto(quotedPostRaw as PostWithAuthorAndMedia, baseUrl)
+        : undefined;
+    }
 
     const postViewerCanAccess = viewerCanAccessByPostId ? (viewerCanAccessByPostId.get(post.id) ?? true) : undefined;
 

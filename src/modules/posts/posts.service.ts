@@ -147,6 +147,14 @@ export class PostsService {
     return this.feedQuery.listForUsername(...args);
   }
 
+  listReposters(...args: Parameters<PostsFeedQueryService['listReposters']>) {
+    return this.feedQuery.listReposters(...args);
+  }
+
+  listQuotes(...args: Parameters<PostsFeedQueryService['listQuotes']>) {
+    return this.feedQuery.listQuotes(...args);
+  }
+
   listComments(...args: Parameters<PostsFeedQueryService['listComments']>) {
     return this.feedQuery.listComments(...args);
   }

@@ -20,17 +20,48 @@ import {
 import { MARV_ERROR_CODES } from '../marvin.constants';
 import { MARV_CONCISENESS } from '../marvin-prompt-instructions';
 
-/** Cache lifetime for a generated summary (a fresh reply or two invalidates via the marker). */
-const SUMMARY_CACHE_TTL_SECONDS = 15 * 60;
+/**
+ * Cache lifetime for a generated summary. Generous because the freshness marker — not the
+ * TTL — is the real invalidation mechanism: a summary of an unchanged thread stays accurate
+ * indefinitely, so a short TTL only threw away good summaries and re-charged for them. The
+ * ceiling exists because a summary can fold in link previews and web-search context, which
+ * do drift with the outside world.
+ */
+const SUMMARY_CACHE_TTL_SECONDS = 6 * 60 * 60;
+
+/**
+ * How much thread growth a stale summary can absorb and still be worth serving.
+ * Beyond this we treat the entry as a miss: a summary covering a small fraction of the
+ * current thread is misleading even when it's labeled, and it would make the "summary
+ * ready" affordance on the post row dishonest.
+ */
+const STALE_SERVE_MAX_NEW_REPLIES = 25;
+const STALE_SERVE_MAX_GROWTH_RATIO = 0.5;
+
+/** Thread state a summary was generated against. Drives fresh/stale/too-stale decisions. */
+type FreshnessMarker = { totalDescendants: number; latestMs: number };
+
+/**
+ * What actually lives in Redis: the summary plus the thread state it was generated against.
+ * The marker is stored in the VALUE rather than baked into the key so a changed thread can
+ * still find (and soft-serve) the previous summary. Keying by marker made a single new reply
+ * orphan a paid summary and drop the user back onto a paywall with no context.
+ */
+type CachedCatchUp = { dto: MarvinCatchUpDto; marker: FreshnessMarker };
+
+/** A cache read that's worth serving, with how far the thread has drifted since. */
+type CacheReadHit = { dto: MarvinCatchUpDto; stale: boolean; newReplies: number };
 
 /**
  * "Catch me up" — a synchronous, premium, credit-spending request that summarizes the
  * conversation BOTH above and below a focal post (ancestors + descendant subtree).
  *
  * Mirrors the credit/routing/usage discipline of the reply processors, but returns the
- * summary in the HTTP envelope instead of posting it. Results are cached per-thread
- * (keyed by a freshness marker) so a second viewer — or the same viewer re-opening the
- * modal — pays nothing while the thread is unchanged.
+ * summary in the HTTP envelope instead of posting it. Results are cached per (post, mode,
+ * images) and shared across viewers, so a second viewer — or the same viewer re-opening the
+ * modal — pays nothing. Invalidation is SOFT: when the thread has moved on, the previous
+ * summary is still served free and flagged `stale` with a `newReplies` count, so the client
+ * can offer an informed "Update" instead of a dead end.
  */
 @Injectable()
 export class MarvinCatchUpService {
@@ -112,23 +143,37 @@ export class MarvinCatchUpService {
 
     // 5. Cache check — keyed by the REQUESTED mode (so Auto/Fast/Regular/Smart cache
     //    separately and switching the picker never returns a summary from another tier) and
-    //    a freshness marker (descendant count + latest updatedAt/createdAt across all posts).
-    //    A forced refresh (the "Regenerate" button) skips the read and recomputes.
+    //    by the images opt-in. The freshness marker is compared against the STORED marker
+    //    rather than being part of the key, so a moved-on thread still finds its previous
+    //    summary and serves it as `stale`.
+    //    A forced refresh (the "Regenerate"/"Update" button) skips the read and recomputes.
     const marker = this.freshnessMarker(context);
     const imgToken = includeImages ? 'img' : 'noimg';
-    const cacheKey = `marv:catchup:${postId}:${requestedMode}:${imgToken}:${marker}`;
-    if (!params.forceRefresh) {
-      const cached = await this.cache.getJson<MarvinCatchUpDto>(cacheKey);
-      if (cached) {
-        this.logger.log(`[marv] catch-up CACHE HIT post=${postId} mode=${requestedMode} marker=${marker}`);
-        return {
-          ...cached,
-          creditsSpent: 0,
-          costBreakdown: { mode: 0, vision: 0, webSearch: 0, urlFetch: 0 },
-          cached: true,
-        };
+    const cacheKey = `marv:catchup:${postId}:${requestedMode}:${imgToken}`;
+    // One read serves two purposes: a servable entry short-circuits the request, and an entry
+    // we won't serve (too stale, or a forced update) still seeds the delta below.
+    const previous = await this.readCachedEnvelope(cacheKey);
+    if (!params.forceRefresh && previous) {
+      const hit = this.evaluateCached(previous, marker);
+      if (hit) {
+        this.logger.log(
+          `[marv] catch-up CACHE HIT post=${postId} mode=${requestedMode} stale=${hit.stale} newReplies=${hit.newReplies}`,
+        );
+        return hit.dto;
       }
     }
+
+    // Delta: when we're generating over a thread we've already summarized, hand the model the
+    // previous summary and mark which replies are new, so the result leads with what changed
+    // instead of re-narrating the whole thread to someone who already read it.
+    const deltaContext =
+      previous && previous.marker.totalDescendants < marker.totalDescendants
+        ? {
+            previousSummary: previous.dto.summary,
+            sinceMs: previous.marker.latestMs,
+            newReplyCount: marker.totalDescendants - previous.marker.totalDescendants,
+          }
+        : null;
 
     if (!this.ai.isConfigured()) {
       throw new HttpException(
@@ -220,6 +265,7 @@ export class MarvinCatchUpService {
         hasGifAttached: hasGifAttached && imageUrls.length > 0,
         rollingSummary: rollingSummary ?? undefined,
         linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,
+        delta: deltaContext ?? undefined,
       });
       let aiResult: Awaited<ReturnType<MarvinAIService['respond']>>;
       try {
@@ -359,6 +405,9 @@ export class MarvinCatchUpService {
           urlFetch: urlFetchSurcharge,
         },
         cached: false,
+        // A summary generated against the thread as it stands right now is by definition current.
+        stale: false,
+        newReplies: 0,
         included: {
           ancestors: context.ancestors.length,
           descendants: context.descendants.length,
@@ -374,60 +423,55 @@ export class MarvinCatchUpService {
     };
 
     type LockOutcome = { fromCache: boolean; dto: MarvinCatchUpDto };
+    // The LOCK key keeps the marker: two requests generating against different thread states
+    // are genuinely different work and must not block each other.
     const lockResult = await this.cache.withLock<LockOutcome>(
-      `marv:catchup:gen:${cacheKey}`,
+      `marv:catchup:gen:${cacheKey}:${this.markerToken(marker)}`,
       { ttlMs: 120_000, waitMs: 10_000, retryDelayMs: 200 },
       async () => {
         // Double-check cache inside the lock — the previous holder may have just written it.
         // Skip this second check if forceRefresh was requested (user wants a fresh result).
         if (!params.forceRefresh) {
-          const fresh = await this.cache.getJson<MarvinCatchUpDto>(cacheKey);
-          if (fresh) {
-            this.logger.log(`[marv] catch-up CACHE HIT (inside lock) post=${postId} mode=${requestedMode} marker=${marker}`);
-            return { fromCache: true, dto: fresh };
+          const entry = await this.readCachedEnvelope(cacheKey);
+          const hit = entry ? this.evaluateCached(entry, marker) : null;
+          if (hit) {
+            this.logger.log(
+              `[marv] catch-up CACHE HIT (inside lock) post=${postId} mode=${requestedMode} stale=${hit.stale}`,
+            );
+            return { fromCache: true, dto: hit.dto };
           }
         }
-        // We are the lock holder — generate, spend, and write the normalized DTO to cache.
+        // We are the lock holder — generate, spend, and cache alongside the thread state it
+        // was generated against.
         const freshDto = await generateFn();
-        // Cache the normalized (free) version so all subsequent readers pay nothing.
-        const normalized: MarvinCatchUpDto = {
-          ...freshDto,
-          creditsSpent: 0,
-          costBreakdown: { mode: 0, vision: 0, webSearch: 0, urlFetch: 0 },
-          cached: true,
-        };
-        await this.cache.setJson(cacheKey, normalized, { ttlSeconds: SUMMARY_CACHE_TTL_SECONDS });
+        await this.writeCached(cacheKey, freshDto, marker);
         return { fromCache: false, dto: freshDto };
       },
     );
 
-    if (lockResult !== null) {
-      const { fromCache, dto } = lockResult;
-      if (fromCache) {
-        return { ...dto, creditsSpent: 0, costBreakdown: { mode: 0, vision: 0, webSearch: 0, urlFetch: 0 }, cached: true };
-      }
-      return dto; // fresh — creditsSpent and cached are already set correctly
-    }
+    if (lockResult !== null) return lockResult.dto;
 
     // Lock timed out (very rare) — generate independently, same as before this fix.
     this.logger.warn(`[marv] catch-up lock timeout for post=${postId}, generating independently`);
     const fallbackDto = await generateFn();
     // Also write to cache so future requests benefit (the lock is no longer held).
-    const fallbackNormalized: MarvinCatchUpDto = {
-      ...fallbackDto,
-      creditsSpent: 0,
-      costBreakdown: { mode: 0, vision: 0, webSearch: 0, urlFetch: 0 },
-      cached: true,
-    };
-    void this.cache.setJson(cacheKey, fallbackNormalized, { ttlSeconds: SUMMARY_CACHE_TTL_SECONDS }).catch(() => undefined);
+    void this.writeCached(cacheKey, fallbackDto, marker).catch(() => undefined);
     return fallbackDto;
   }
 
   /**
-   * Cache-only "peek": resolve the exact cache key for (post, mode, current thread state)
-   * and return the cached summary if one exists — WITHOUT ever calling the AI or spending
-   * credits. Used by the client to decide whether opening the modal can show a free summary
-   * immediately (cache hit) or must wait for an explicit, credit-spending "Catch me up".
+   * Cache-only "peek": resolve the cache key for (post, mode, images), compare the stored
+   * thread state against the current one, and return the summary if it's worth serving —
+   * WITHOUT ever calling the AI or spending credits. Used by the client to decide whether
+   * opening the modal can show a free summary immediately or must wait for an explicit,
+   * credit-spending "Catch me up".
+   *
+   * Deliberately NOT premium-gated. Summaries are already shared across viewers, so an
+   * existing cache entry costs nothing to serve, and letting a non-premium viewer read one
+   * is a better funnel than a lock icon: they experience the feature instead of reading
+   * about it, and the modal puts the upgrade CTA next to real output. They still can't
+   * GENERATE — `catchUp()` keeps the premium gate — so nobody gets on-demand summaries for
+   * free, and an entry only exists because a premium member paid for it.
    *
    * Returns `null` on any miss, gate failure, or access error: a peek must never throw and
    * must never cost anything. The cheap gates + a context collect (recursive CTEs) are the
@@ -443,15 +487,11 @@ export class MarvinCatchUpService {
     const includeImages = params.includeImages !== false;
     try {
       const cfg = this.appConfig.marvBot();
-      const [viewer, settings] = await Promise.all([
-        this.prisma.user.findUnique({ where: { id: userId }, select: { premium: true, premiumPlus: true } }),
-        this.prisma.marvinUserSettings.findUnique({
-          where: { userId },
-          select: { disabledByAdmin: true, preferredMode: true },
-        }),
-      ]);
+      const settings = await this.prisma.marvinUserSettings.findUnique({
+        where: { userId },
+        select: { disabledByAdmin: true, preferredMode: true },
+      });
       if (!cfg.enabled || settings?.disabledByAdmin) return null;
-      if (!viewer?.premium && !viewer?.premiumPlus) return null;
 
       const requestedMode: MarvinMode = params.requestedMode ?? settings?.preferredMode ?? 'auto';
 
@@ -462,17 +502,15 @@ export class MarvinCatchUpService {
       const context = await this.context.collect({ focalPostId: postId });
       const marker = this.freshnessMarker(context);
       const imgToken = includeImages ? 'img' : 'noimg';
-      const cacheKey = `marv:catchup:${postId}:${requestedMode}:${imgToken}:${marker}`;
-      const cached = await this.cache.getJson<MarvinCatchUpDto>(cacheKey);
-      if (!cached) return null;
+      const cacheKey = `marv:catchup:${postId}:${requestedMode}:${imgToken}`;
+      const entry = await this.readCachedEnvelope(cacheKey);
+      const hit = entry ? this.evaluateCached(entry, marker) : null;
+      if (!hit) return null;
 
-      this.logger.log(`[marv] catch-up PEEK hit post=${postId} mode=${requestedMode} marker=${marker}`);
-      return {
-        ...cached,
-        creditsSpent: 0,
-        costBreakdown: { mode: 0, vision: 0, webSearch: 0, urlFetch: 0 },
-        cached: true,
-      };
+      this.logger.log(
+        `[marv] catch-up PEEK hit post=${postId} mode=${requestedMode} stale=${hit.stale} newReplies=${hit.newReplies}`,
+      );
+      return hit.dto;
     } catch (err) {
       this.logger.debug(`[marv] catch-up PEEK error post=${postId}: ${err instanceof Error ? err.message : String(err)}`);
       return null;
@@ -480,10 +518,76 @@ export class MarvinCatchUpService {
   }
 
   /**
-   * Parse the AI's two-section output into structured fields.
+   * Fetch the stored envelope, guarding the shape. Entries written before the marker moved
+   * into the value have no `.marker` and can't be compared against the current thread, so
+   * they're treated as absent; they expire on their own.
+   */
+  private async readCachedEnvelope(cacheKey: string): Promise<CachedCatchUp | null> {
+    const entry = await this.cache.getJson<CachedCatchUp>(cacheKey);
+    if (!entry?.dto || !entry.marker) return null;
+    return entry;
+  }
+
+  /**
+   * Decide whether a stored summary is worth serving against the CURRENT thread state.
+   * Returns null when the thread has outgrown it badly enough that showing it would mislead.
+   *
+   * A hit is always free: `creditsSpent` and `costBreakdown` are zeroed, `cached` is true, and
+   * `stale`/`newReplies` describe the drift so the client can label it and offer an update.
+   */
+  private evaluateCached(entry: CachedCatchUp, current: FreshnessMarker): CacheReadHit | null {
+    const newReplies = Math.max(0, current.totalDescendants - entry.marker.totalDescendants);
+    const stale =
+      current.totalDescendants !== entry.marker.totalDescendants || current.latestMs !== entry.marker.latestMs;
+
+    if (stale && !this.isStaleWorthServing(newReplies, entry.marker.totalDescendants)) return null;
+
+    return {
+      dto: {
+        ...entry.dto,
+        creditsSpent: 0,
+        costBreakdown: { mode: 0, vision: 0, webSearch: 0, urlFetch: 0 },
+        cached: true,
+        stale,
+        newReplies,
+      },
+      stale,
+      newReplies,
+    };
+  }
+
+  /** Store the summary (normalized to free) alongside the thread state it was generated against. */
+  private async writeCached(cacheKey: string, dto: MarvinCatchUpDto, marker: FreshnessMarker): Promise<void> {
+    const entry: CachedCatchUp = {
+      dto: {
+        ...dto,
+        creditsSpent: 0,
+        costBreakdown: { mode: 0, vision: 0, webSearch: 0, urlFetch: 0 },
+        cached: true,
+        stale: false,
+        newReplies: 0,
+      },
+      marker,
+    };
+    await this.cache.setJson(cacheKey, entry, { ttlSeconds: SUMMARY_CACHE_TTL_SECONDS });
+  }
+
+  /**
+   * A stale summary is worth serving while the thread hasn't grown much relative to what was
+   * summarized. Proportional with an absolute floor: 20 new replies is noise on a 400-reply
+   * thread but the whole story on a 5-reply one.
+   */
+  private isStaleWorthServing(newReplies: number, summarizedTotal: number): boolean {
+    const allowed = Math.max(STALE_SERVE_MAX_NEW_REPLIES, summarizedTotal * STALE_SERVE_MAX_GROWTH_RATIO);
+    return newReplies <= allowed;
+  }
+
+  /**
+   * Parse the AI's labeled output into structured fields.
    * Expected format (when hasReplies):
    *   POST: <text>
    *   REPLIES: <text>
+   *   SINCE: <text>          ← only when a delta was requested
    * Falls back gracefully when the model doesn't follow the format exactly.
    */
   private parseSections(
@@ -493,27 +597,51 @@ export class MarvinCatchUpService {
     if (!hasReplies) {
       return { summary: text, sections: null };
     }
-    const postMatch = /^POST:\s*(.+?)(?=\nREPLIES:|$)/ms.exec(text);
-    const repliesMatch = /^REPLIES:\s*([\s\S]+?)$/ms.exec(text);
-    if (postMatch && repliesMatch) {
-      const post = postMatch[1].trim();
-      const replies = repliesMatch[1].trim();
-      return {
-        summary: replies ? `${post}\n\n${replies}` : post,
-        sections: { post, replies: replies || null },
-      };
+    const parts = this.splitLabeledSections(text);
+    if (parts.POST && parts.REPLIES) {
+      const post = parts.POST;
+      const replies = parts.REPLIES;
+      const since = parts.SINCE ?? null;
+      // `summary` is the flat fallback for anything that doesn't read `sections`. Lead with
+      // the delta when there is one — it's the news.
+      const summary = [since, post, replies].filter(Boolean).join('\n\n');
+      return { summary, sections: { post, replies: replies || null, since } };
     }
     // AI didn't follow the format — strip any partial markers and return as a single blob.
-    const stripped = text.replace(/^(POST|REPLIES):\s*/gm, '').trim();
+    const stripped = text.replace(/^(POST|REPLIES|SINCE):\s*/gm, '').trim();
     return { summary: stripped || text, sections: null };
+  }
+
+  /**
+   * Slice text on its leading section labels. Handles labels in any order and tolerates a
+   * missing one, which a positional regex per label can't do once there are three of them.
+   */
+  private splitLabeledSections(text: string): Partial<Record<'POST' | 'REPLIES' | 'SINCE', string>> {
+    const re = /^(POST|REPLIES|SINCE):[ \t]*/gm;
+    const hits: Array<{ name: 'POST' | 'REPLIES' | 'SINCE'; labelStart: number; bodyStart: number }> = [];
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(text)) !== null) {
+      hits.push({
+        name: match[1] as 'POST' | 'REPLIES' | 'SINCE',
+        labelStart: match.index,
+        bodyStart: match.index + match[0].length,
+      });
+    }
+    const out: Partial<Record<'POST' | 'REPLIES' | 'SINCE', string>> = {};
+    for (let i = 0; i < hits.length; i += 1) {
+      const end = i + 1 < hits.length ? hits[i + 1].labelStart : text.length;
+      out[hits[i].name] = text.slice(hits[i].bodyStart, end).trim();
+    }
+    return out;
   }
 
   /**
    * Marker that changes when: a reply is added/removed, any visible post is edited
    * (updatedAt), or the focal post itself changes. Covers edits to the focal post, ancestors,
-   * or any descendant — ensuring stale summaries don't survive a meaningful thread update.
+   * or any descendant — so a summary is never silently presented as current after a
+   * meaningful thread update.
    */
-  private freshnessMarker(context: MarvThreadContext): string {
+  private freshnessMarker(context: MarvThreadContext): FreshnessMarker {
     let latestMs = 0;
     const touch = (p: MarvThreadContextPost) => {
       latestMs = Math.max(latestMs, p.createdAt.getTime(), p.editedAt?.getTime() ?? 0);
@@ -521,7 +649,12 @@ export class MarvinCatchUpService {
     if (context.focal) touch(context.focal);
     for (const p of context.ancestors) touch(p);
     for (const p of context.descendants) touch(p);
-    return `${context.totalDescendants}-${latestMs}`;
+    return { totalDescendants: context.totalDescendants, latestMs };
+  }
+
+  /** Flat form of the marker, for lock keys and logs. */
+  private markerToken(marker: FreshnessMarker): string {
+    return `${marker.totalDescendants}-${marker.latestMs}`;
   }
 
   private distinctAuthorCount(context: MarvThreadContext): number {
@@ -547,9 +680,11 @@ export class MarvinCatchUpService {
       hasGifAttached: boolean;
       rollingSummary?: string;
       linkPreviews?: Array<{ url: string; title: string | null; description: string | null; siteName: string | null }>;
+      /** Present when the viewer has summarized this thread before — drives the SINCE section. */
+      delta?: { previousSummary: string; sinceMs: number; newReplyCount: number };
     },
   ): { developerNote: string; userMessage: string } {
-    const { imageCount, hasGifAttached, rollingSummary, linkPreviews } = opts;
+    const { imageCount, hasGifAttached, rollingSummary, linkPreviews, delta } = opts;
     const hasImages = imageCount > 0;
     const hasThread = context.ancestors.length > 0 || context.descendants.length > 0;
     const hasReplies = context.descendants.length > 0;
@@ -592,12 +727,31 @@ export class MarvinCatchUpService {
     // Sections format (only when there are replies)
     if (hasReplies) {
       lines.push('');
-      lines.push(
-        'FORMAT: Output EXACTLY two labeled paragraphs with no other text:\n' +
-          'POST: [the highlighted post\'s point, read IN CONTEXT of the path above it. ' +
-          'If it is a reply, make clear what it is responding to. One or two sentences.]\n' +
-          'REPLIES: [synthesis of the replies BELOW the highlighted post — throughline, key points, any conclusion]',
-      );
+      const postLine =
+        'POST: [the highlighted post\'s point, read IN CONTEXT of the path above it. ' +
+        'If it is a reply, make clear what it is responding to. One or two sentences.]';
+      const repliesLine =
+        'REPLIES: [synthesis of the replies BELOW the highlighted post — throughline, key points, any conclusion]';
+      if (delta) {
+        lines.push(
+          'FORMAT: Output EXACTLY three labeled paragraphs with no other text:\n' +
+            `SINCE: [what has changed since the earlier summary quoted below — the reader has ` +
+            `ALREADY read that summary, so cover only the ${delta.newReplyCount} newer ` +
+            `repl${delta.newReplyCount === 1 ? 'y' : 'ies'} marked [new] and any shift in where ` +
+            `the thread landed. Do NOT repeat what the earlier summary already said. If the new ` +
+            `replies add nothing of substance, say so in one short sentence.]\n` +
+            `${postLine}\n${repliesLine}`,
+        );
+      } else {
+        lines.push(`FORMAT: Output EXACTLY two labeled paragraphs with no other text:\n${postLine}\n${repliesLine}`);
+      }
+    }
+
+    // Prior summary the reader has already seen — the baseline the SINCE section works against.
+    if (delta) {
+      lines.push('');
+      lines.push('Earlier summary the reader has already read:');
+      lines.push(`  ${delta.previousSummary.trim().slice(0, 1500)}`);
     }
 
     // Rolling summary covers posts beyond the context window (mirrors prompt-builder line 176-179).
@@ -620,10 +774,15 @@ export class MarvinCatchUpService {
 
     if (context.descendants.length > 0) {
       lines.push('');
-      lines.push('Replies below the highlighted post (depth-first reading order):');
+      lines.push(
+        delta
+          ? 'Replies below the highlighted post (depth-first reading order); [new] marks replies posted after the earlier summary:'
+          : 'Replies below the highlighted post (depth-first reading order):',
+      );
       for (const p of context.descendants) {
         const indent = '  '.repeat(Math.max(1, p.depth));
-        lines.push(`${indent}${this.renderPost(p)}`);
+        const isNew = delta ? Math.max(p.createdAt.getTime(), p.editedAt?.getTime() ?? 0) > delta.sinceMs : false;
+        lines.push(`${indent}${isNew ? '[new] ' : ''}${this.renderPost(p)}`);
       }
       const hidden = context.totalDescendants - context.descendants.length;
       if (hidden > 0) lines.push(`  …and ${hidden} more repl${hidden === 1 ? 'y' : 'ies'} not shown.`);

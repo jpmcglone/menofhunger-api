@@ -121,7 +121,7 @@ export class PostsMutationService {
         `.catch(() => { /* ignore if parent is gone */ });
       }
 
-      // Decrement repostCount on the target post when a repost/quote repost is deleted.
+      // Decrement repostCount (and quoteCount for quotes) on the target post when a repost/quote repost is deleted.
       const repostedPostId = post.repostedPostId;
       const quotedPostId = post.quotedPostId;
       if (post.kind === 'repost' && repostedPostId) {
@@ -132,7 +132,7 @@ export class PostsMutationService {
       } else if (quotedPostId) {
         await tx.post.update({
           where: { id: quotedPostId },
-          data: { repostCount: { decrement: 1 } },
+          data: { repostCount: { decrement: 1 }, quoteCount: { decrement: 1 } },
         }).catch(() => { /* ignore if quoted is gone */ });
       }
 
@@ -303,6 +303,18 @@ export class PostsMutationService {
     const existingMentionIds = (post.mentions ?? []).map((m) => m.userId);
     const mentionUserIds = Array.from(new Set([...existingMentionIds, ...bodyMentionIds])).filter(Boolean);
 
+    // Detect whether the quoted post link changed so we can adjust repostCount.
+    const prevQuotedPostId: string | null = (post as any).quotedPostId ?? null;
+    const detectedQuotedId = this.extractQuotedPostIdFromBody(nextBody);
+    const nextQuotedExists = detectedQuotedId
+      ? await this.prisma.post.findFirst({
+          where: { id: detectedQuotedId, deletedAt: null },
+          select: { id: true },
+        })
+      : null;
+    const nextQuotedPostId: string | null = nextQuotedExists?.id ?? null;
+    const quoteLinkChanged = prevQuotedPostId !== nextQuotedPostId;
+
     const prevTopics = post.topics ?? [];
     const updated = await this.prisma.$transaction(async (tx) => {
       // Snapshot previous state (pre-edit).
@@ -331,6 +343,8 @@ export class PostsMutationService {
           cashtags,
           editedAt: new Date(),
           editCount: { increment: 1 },
+          // Update the stored quotedPostId to reflect the new body's link.
+          ...(quoteLinkChanged ? { quotedPostId: nextQuotedPostId } : {}),
         },
         include: {
           user: { select: USER_LIST_SELECT },
@@ -344,6 +358,24 @@ export class PostsMutationService {
           },
         },
       });
+
+      // Adjust repostCount and quoteCount on old and new quoted targets (in-transaction to prevent drift).
+      if (quoteLinkChanged) {
+        if (prevQuotedPostId) {
+          // Quote link removed or swapped away — decrement the old target.
+          await tx.post.updateMany({
+            where: { id: prevQuotedPostId },
+            data: { repostCount: { decrement: 1 }, quoteCount: { decrement: 1 } },
+          });
+        }
+        if (nextQuotedPostId) {
+          // Quote link added or swapped in — increment the new target.
+          await tx.post.update({
+            where: { id: nextQuotedPostId },
+            data: { repostCount: { increment: 1 }, quoteCount: { increment: 1 } },
+          });
+        }
+      }
 
       await tx.postMention.deleteMany({ where: { postId: post.id } });
       if (mentionUserIds.length > 0) {
@@ -426,6 +458,18 @@ export class PostsMutationService {
     } catch {
       // Best-effort
     }
+
+    // If the quoted link changed, dispatch a side effect to reconcile notifications and
+    // emit liveUpdated on both old and new quoted targets.
+    if (quoteLinkChanged) {
+      this.sideEffects.dispatch('post.quote.changed', {
+        postId: id,
+        actorUserId: userId,
+        prevQuotedPostId,
+        nextQuotedPostId,
+      });
+    }
+
     return updated;
   }
 
@@ -1044,15 +1088,24 @@ export class PostsMutationService {
         const quotedExists = detectedQuotedPostId
           ? await tx.post.findFirst({
               where: { id: detectedQuotedPostId, deletedAt: null },
-              select: { id: true, userId: true, visibility: true },
+              select: { id: true, userId: true, visibility: true, communityGroupId: true },
             })
           : null;
         const quotedPostIdToSet = quotedExists ? quotedExists.id : null;
 
-        // Quote floor: a quote cannot be more open (less restrictive) than the quoted post.
-        // Skipped for replies (visibility inherited from parent) and group posts (forced public).
-        if (quotedExists && !parentId && !requestedCommunityGroupId && kind !== 'checkin') {
-          if (this.visibilityRank(requestedVisibility) < this.visibilityRank(quotedExists.visibility)) {
+        // Quote floor: the quoting post's effective visibility must not be more open than
+        // the quoted post's visibility.  Applied universally — replies, group posts, and
+        // check-ins are no longer bypassed.
+        //
+        // `visibility` is already the effective value: parentPost.visibility for replies,
+        // 'public' for group posts, requestedVisibility otherwise.
+        //
+        // Exception: a group post quoting a post that lives in the same group is allowed
+        // because every member of the group has read access regardless of their tier.
+        if (quotedExists) {
+          const sameGroup =
+            resolvedCommunityGroupId && quotedExists.communityGroupId === resolvedCommunityGroupId;
+          if (!sameGroup && this.visibilityRank(visibility) < this.visibilityRank(quotedExists.visibility)) {
             throw new ForbiddenException("A quote can't be more public than the post it quotes.");
           }
         }
@@ -1209,11 +1262,11 @@ export class PostsMutationService {
             })
           : Promise.resolve();
 
-        // Quoted-post repost counter bump (only when a local quote was detected).
+        // Quoted-post repost + quoteCount counter bump (only when a local quote was detected).
         const quotedBumpOp = quotedExists
           ? tx.post.update({
               where: { id: quotedExists.id },
-              data: { repostCount: { increment: 1 } },
+              data: { repostCount: { increment: 1 }, quoteCount: { increment: 1 } },
             }).then(() => undefined)
           : Promise.resolve();
 

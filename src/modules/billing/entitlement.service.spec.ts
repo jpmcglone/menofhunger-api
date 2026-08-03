@@ -4,6 +4,7 @@ import { EntitlementService, laterDate } from './entitlement.service';
 type Deps = {
   prisma: any;
   appConfig: any;
+  sideEffects: any;
 };
 
 const STRIPE_CFG = {
@@ -32,13 +33,16 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
       stripe: jest.fn(() => STRIPE_CFG),
       appleIap: jest.fn(() => null),
     },
+    sideEffects: {
+      dispatch: jest.fn(),
+    },
     ...overrides,
   };
 }
 
 function makeService(overrides: Partial<Deps> = {}) {
   const deps = makeDeps(overrides);
-  const service = new EntitlementService(deps.prisma, deps.appConfig);
+  const service = new EntitlementService(deps.prisma, deps.appConfig, deps.sideEffects);
   return { service, deps };
 }
 
@@ -63,6 +67,7 @@ function grantRow(overrides: Record<string, unknown> = {}) {
 
 function userRow(overrides: Record<string, unknown> = {}) {
   return {
+    premium: false,
     verifiedStatus: 'identity',
     stripeSubscriptionStatus: null,
     stripeSubscriptionPriceId: null,
@@ -351,6 +356,86 @@ describe('EntitlementService.recomputeAndApply', () => {
 
     expect(result.isPremium).toBe(false);
     expect(result.effectiveTier).toBe('none');
+  });
+
+  // ── billing.premium.changed dispatch ─────────────────────────────────────
+
+  it('dispatches billing.premium.changed started when premium flips false -> true', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue(
+      userRow({
+        premium: false,
+        stripeSubscriptionStatus: 'active',
+        stripeSubscriptionPriceId: 'price_premium',
+      }),
+    );
+
+    await service.recomputeAndApply('u1');
+
+    expect(deps.sideEffects.dispatch).toHaveBeenCalledWith('billing.premium.changed', {
+      userId: 'u1',
+      direction: 'started',
+    });
+  });
+
+  it('dispatches billing.premium.changed ended when premium flips true -> false', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue(
+      userRow({
+        premium: true,
+        stripeSubscriptionStatus: 'canceled',
+        stripeSubscriptionPriceId: 'price_premium',
+      }),
+    );
+
+    await service.recomputeAndApply('u1');
+
+    expect(deps.sideEffects.dispatch).toHaveBeenCalledWith('billing.premium.changed', {
+      userId: 'u1',
+      direction: 'ended',
+    });
+  });
+
+  it('does not dispatch when premium is unchanged (already false)', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue(
+      userRow({ premium: false, stripeSubscriptionStatus: 'canceled' }),
+    );
+
+    await service.recomputeAndApply('u1');
+
+    expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch when premium is unchanged (already true stays true)', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue(
+      userRow({
+        premium: true,
+        stripeSubscriptionStatus: 'active',
+        stripeSubscriptionPriceId: 'price_premium',
+      }),
+    );
+
+    await service.recomputeAndApply('u1');
+
+    expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch when only the Plus tier changes (premium stays true)', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue(
+      userRow({
+        premium: true,
+        stripeSubscriptionStatus: 'active',
+        stripeSubscriptionPriceId: 'price_premium_plus',
+      }),
+    );
+
+    await service.recomputeAndApply('u1');
+
+    // isPremium stays true, only premiumPlus changes — no dispatch.
+    expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();
   });
 });
 

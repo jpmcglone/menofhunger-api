@@ -95,6 +95,8 @@ enum NotificationKind {
   account_verified
   checkin_reminder
   on_this_day
+  premium_started
+  premium_ended
 }
 
 enum CoinTransferKind {
@@ -1294,6 +1296,11 @@ model Post {
    * Denormalized count of flat reposts + quote reposts referencing this post.
    */
   repostCount               Int             @default(0)
+  /**
+   * Denormalized count of quote reposts (posts whose quotedPostId = this id).
+   * Backfilled by the add-quote-count migration; incremented/decremented alongside repostCount for quotes.
+   */
+  quoteCount                Int             @default(0)
   viewerCount               Int             @default(0)
   weightedViewCount         Float           @default(0)
   boostScore                Float?

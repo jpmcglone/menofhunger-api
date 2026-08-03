@@ -17,6 +17,8 @@ import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
 import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
 import { collapseFeedByRoot } from '../../common/feed-collapse/collapse-by-root';
+import { applyCollapsedThreadSummary } from '../../common/feed-collapse/collapsed-thread-summary';
+import { collapseRepostsByCanonical } from '../../common/feed-collapse/collapse-reposts-by-canonical';
 import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import { queryBoolean } from '../../common/validation/query-boolean';
 
@@ -518,23 +520,22 @@ export class PostsController {
                   });
         stageMs.list = Date.now() - listStartMs;
 
-        // When a repost and its original appear in the same page, keep the repost activity
-        // row. It is authored by the reposter and already embeds the original content.
-        const dedupedPosts = (() => {
-          const repostedOriginalIds = new Set(
-            result.posts
-              .filter((p) => (p as { kind?: string }).kind === 'repost' && (p as { repostedPostId?: string | null }).repostedPostId)
-              .map((p) => (p as { repostedPostId: string }).repostedPostId),
-          );
-          if (repostedOriginalIds.size === 0) return result.posts;
-          return result.posts.filter(
-            (p) => (p as { kind?: string }).kind === 'repost' || !repostedOriginalIds.has(p.id),
-          );
-        })();
-
         const dedupeStartMs = Date.now();
         const feedAuthorBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-        const { items: filteredPosts, collapsedCountByItemId, collapsedAuthorsByItemId } =
+        // Collapse multiple flat-repost rows for the same original into one surviving row
+        // and remove co-page standalone originals (the repost shell already embeds them).
+        // repostedByAuthorsByItemId / repostedByCountByItemId are attached to DTOs for
+        // "Alice and N others reposted" UI.
+        const {
+          items: dedupedPosts,
+          repostedByAuthorsByItemId,
+          repostedByCountByItemId,
+        } = collapseRepostsByCanonical(
+          result.posts,
+          (p) => toPostAuthorDtoFromFeedRow(p, feedAuthorBaseUrl),
+        );
+
+        const { items: filteredPosts, collapsedItemsByItemId } =
           collapseFeedByRoot(dedupedPosts, {
           collapseByRoot: parsed.collapseByRoot ?? false,
           collapseMode: parsed.collapseMode ?? 'root',
@@ -550,10 +551,16 @@ export class PostsController {
         const dtos = await this.posts.composeFeedPostDtos({
           viewerUserId,
           filteredPosts,
-          collapsedCountByItemId,
-          collapsedAuthorsByItemId,
+          collapsedItemsByItemId,
           scoreByPostId: popResult.scoreByPostId,
         });
+        // Annotate collapsed repost rows so the UI can render "Alice and N others reposted".
+        for (const dto of dtos) {
+          const authors = repostedByAuthorsByItemId.get(dto.id);
+          const count = repostedByCountByItemId.get(dto.id);
+          if (authors) dto.repostedByAuthors = authors;
+          if (count) dto.repostedByCount = count;
+        }
         const payload = {
           data: dtos,
           pagination: { nextCursor: result.nextCursor },
@@ -633,11 +640,20 @@ export class PostsController {
         });
 
         const profileAuthorBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+        // Collapse multiple flat reposts of the same original on the profile feed
+        // (e.g. a user who reposted the same thing twice after un-reposting).
+        const {
+          items: profileDedupedPosts,
+          repostedByAuthorsByItemId: profileRepostedByAuthors,
+          repostedByCountByItemId: profileRepostedByCount,
+        } = collapseRepostsByCanonical(
+          result.posts,
+          (p) => toPostAuthorDtoFromFeedRow(p, profileAuthorBaseUrl),
+        );
         const {
           items: filteredPostsUser,
-          collapsedCountByItemId: collapsedCountByItemIdUser,
-          collapsedAuthorsByItemId: collapsedAuthorsByItemIdUser,
-        } = collapseFeedByRoot(result.posts, {
+          collapsedItemsByItemId: collapsedItemsByItemIdUser,
+        } = collapseFeedByRoot(profileDedupedPosts, {
           collapseByRoot: parsed.collapseByRoot ?? false,
           collapseMode: parsed.collapseMode ?? 'root',
           prefer: parsed.prefer ?? 'reply',
@@ -650,23 +666,58 @@ export class PostsController {
         const repostedPostIdsUser = filteredPostsUser
           .filter((p) => (p as any).kind === 'repost' && (p as any).repostedPostId)
           .map((p) => (p as any).repostedPostId as string);
-        const [viewer, parentMap, repostedPostMapUser] = await Promise.all([
+
+        const quotedPostIdsUser = filteredPostsUser
+          .map((p) => (p as any).quotedPostId as string | null | undefined)
+          .filter((id): id is string => Boolean(id));
+
+        // viewer + repostedPostMap + quotedPostMap are independent of parentMap; fetch them
+        // first so we can include reposted originals' parentIds in the parent-map fetch below.
+        const [viewer, repostedPostMapUser, quotedPostMapUser] = await Promise.all([
           this.posts.viewerContext(viewerUserId),
-          this.collectParentMap(viewerUserId, filteredPostsUser.map((p) => p.parentId)),
           this.collectRepostedMap(viewerUserId, repostedPostIdsUser),
+          // Route quoted posts through the same viewer-gated path (visibility + tier + blocks).
+          this.collectRepostedMap(viewerUserId, quotedPostIdsUser),
         ]);
         const viewerHasAdmin = Boolean(viewer?.siteAdmin);
 
+        // Build parentMap including reposted originals' parentIds so reposted replies
+        // render with thread context.
+        const repostedOriginalParentIdsUser = [...repostedPostMapUser.values()].map(
+          (p) => (p as any).parentId as string | null | undefined ?? null,
+        );
+        const parentMap = await this.collectParentMap(viewerUserId, [
+          ...filteredPostsUser.map((p) => p.parentId),
+          ...repostedOriginalParentIdsUser,
+        ]);
+
         // Compute per-post viewerCanAccess when includeRestricted=true.
+        // Extend to cover embedded posts (reposted originals + quoted posts).
         let viewerCanAccessByPostId: Map<string, boolean> | undefined;
         if (parsed.includeRestricted) {
           const allowed = this.posts.allowedVisibilities(viewer);
+          const allResultIds = [
+            ...result.posts.map((p) => p.id),
+            ...repostedPostIdsUser,
+            ...quotedPostIdsUser,
+          ];
           viewerCanAccessByPostId = new Map(
-            result.posts.map((p) => [p.id, allowed.includes(p.visibility) || p.userId === viewerUserId]),
+            allResultIds.map((id) => {
+              const post = result.posts.find((p) => p.id === id) ??
+                repostedPostMapUser.get(id) as any ?? null;
+              return [id, post ? (allowed.includes(post.visibility) || post.userId === viewerUserId) : true];
+            }),
           );
         }
 
-        const allPostIds = [...filteredPostsUser.map((p) => p.id), ...parentMap.keys()];
+        // Include embedded post IDs (reposted originals + quoted posts) so their viewer state
+        // (viewerHasBoosted, viewerHasBookmarked, viewerHasReposted, poll vote) is fetched.
+        const allPostIds = [
+          ...filteredPostsUser.map((p) => p.id),
+          ...parentMap.keys(),
+          ...repostedPostMapUser.keys(),
+          ...quotedPostIdsUser,
+        ];
         const [
           boosted,
           bookmarksByPostId,
@@ -712,6 +763,7 @@ export class PostsController {
         for (const p of filteredPostsUser) accCommunityGroupIdUser(p as { communityGroupId?: string | null });
         for (const p of parentMap.values()) accCommunityGroupIdUser(p as { communityGroupId?: string | null });
         for (const p of repostedPostMapUser.values()) accCommunityGroupIdUser(p as { communityGroupId?: string | null });
+        for (const p of quotedPostMapUser.values()) accCommunityGroupIdUser(p as { communityGroupId?: string | null });
         const groupPreviewByGroupIdUser = await this.communityGroupPreviewMapForIds(
           viewerUserId,
           [...communityGroupIdsForUserPage],
@@ -733,20 +785,23 @@ export class PostsController {
           viewerBlockedBy: viewerBlockedByUser,
           repostedByPostId: repostedByPostIdUser,
           repostedPostMap: repostedPostMapUser as any,
+          quotedPostMap: quotedPostMapUser as any,
           viewerCanAccessByPostId,
           groupPreviewByGroupId: groupPreviewByGroupIdUser,
           viewedByPostId: viewedByPostIdUser,
         });
 
+        const profileDtos = filteredPostsUser.map((p) => {
+          const dto = attachParentChain(p);
+          applyCollapsedThreadSummary(dto, collapsedItemsByItemIdUser.get(p.id));
+          const profileAuthors = profileRepostedByAuthors.get(dto.id);
+          const profileCount = profileRepostedByCount.get(dto.id);
+          if (profileAuthors) dto.repostedByAuthors = profileAuthors;
+          if (profileCount) dto.repostedByCount = profileCount;
+          return dto;
+        });
         return {
-          data: filteredPostsUser.map((p) => {
-            const dto = attachParentChain(p);
-            const collapsed = collapsedCountByItemIdUser.get(p.id);
-            if (collapsed && collapsed > 0) (dto as any).threadCollapsedCount = collapsed;
-            const authors = collapsedAuthorsByItemIdUser.get(p.id);
-            if (authors?.length) (dto as any).threadCollapsedAuthors = authors;
-            return dto;
-          }),
+          data: profileDtos,
           pagination: { nextCursor: result.nextCursor, counts: result.counts ?? null },
         };
       },
@@ -1121,6 +1176,52 @@ export class PostsController {
 
     setReadCache(httpRes, { viewerUserId });
     return { data: dto };
+  }
+
+  @UseGuards(OptionalAuthGuard)
+  @Throttle(readThrottle)
+  @Get(':id/reposts')
+  async listReposters(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('id') id: string,
+    @Query() query: unknown,
+    @Res({ passthrough: true }) httpRes: Response,
+  ) {
+    const { cursor, limit } = z
+      .object({ cursor: z.string().optional(), limit: z.coerce.number().int().min(1).max(50).optional() })
+      .parse(query);
+    const viewerUserId = userId ?? null;
+    const result = await this.posts.listReposters({ viewerUserId, postId: id, limit: limit ?? 30, cursor: cursor ?? null });
+    setReadCache(httpRes, { viewerUserId });
+    return { data: result.authors, pagination: { nextCursor: result.nextCursor } };
+  }
+
+  @UseGuards(OptionalAuthGuard)
+  @Throttle(readThrottle)
+  @Get(':id/quotes')
+  async listQuotes(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('id') id: string,
+    @Query() query: unknown,
+    @Res({ passthrough: true }) httpRes: Response,
+  ) {
+    const { cursor, limit } = z
+      .object({ cursor: z.string().optional(), limit: z.coerce.number().int().min(1).max(50).optional() })
+      .parse(query);
+    const viewerUserId = userId ?? null;
+    const result = await this.posts.listQuotes({ viewerUserId, postId: id, limit: limit ?? 20, cursor: cursor ?? null });
+    const r2BaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const allPostIds = result.posts.map((p) => p.id);
+    const viewerRepostedPostIds = viewerUserId
+      ? await this.posts.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
+      : new Set<string>();
+    const dtos = result.posts.map((p) =>
+      toPostDto(p, r2BaseUrl, {
+        viewerHasReposted: viewerRepostedPostIds.has(p.id),
+      }),
+    );
+    setReadCache(httpRes, { viewerUserId });
+    return { data: dtos, pagination: { nextCursor: result.nextCursor } };
   }
 
   @UseGuards(AuthGuard)

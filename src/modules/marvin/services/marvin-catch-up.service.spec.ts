@@ -10,7 +10,39 @@ import type { MarvinCatchUpDto } from '../../../common/dto/marvin';
  *  2. Non-premium users are rejected.
  *  3. Out-of-credits is rejected BEFORE any spend.
  *  4. The happy path spends credits and records a usage event (which emits credits).
+ *  5. Invalidation is SOFT: a summary generated against an older thread state is still served
+ *     free, flagged `stale` with a `newReplies` count — until the thread has outgrown it.
  */
+
+/** Mirrors the service's private freshnessMarker() so fixtures can be fresh or deliberately stale. */
+function markerFor(ctx: ReturnType<typeof makeContext>) {
+  let latestMs = 0;
+  const touch = (p: { createdAt: Date; editedAt: Date | null }) => {
+    latestMs = Math.max(latestMs, p.createdAt.getTime(), p.editedAt?.getTime() ?? 0);
+  };
+  if (ctx.focal) touch(ctx.focal);
+  for (const p of ctx.ancestors) touch(p);
+  for (const p of ctx.descendants) touch(p);
+  return { totalDescendants: ctx.totalDescendants, latestMs };
+}
+
+/** A minimal cached summary DTO for cache-hit fixtures. */
+function makeCachedDto(overrides?: Partial<MarvinCatchUpDto>): MarvinCatchUpDto {
+  return {
+    postId: 'focal',
+    rootPostId: 'root',
+    summary: 'cached summary',
+    effectiveMode: 'regular',
+    creditsSpent: 2,
+    costBreakdown: { mode: 2, vision: 0, webSearch: 0, urlFetch: 0 },
+    cached: false,
+    stale: false,
+    newReplies: 0,
+    included: { ancestors: 1, descendants: 1, totalDescendants: 1 },
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
 
 function makeContext() {
   return {
@@ -77,6 +109,14 @@ function makeService(opts?: {
   disabledByAdmin?: boolean;
   preferredMode?: string;
   cached?: MarvinCatchUpDto | null;
+  /**
+   * Thread state the cached summary was generated against. Defaults to the current context's
+   * marker, i.e. a FRESH entry. Pass a smaller `totalDescendants` to simulate a thread that
+   * has moved on since the summary was written.
+   */
+  cachedMarker?: { totalDescendants: number; latestMs: number };
+  /** Store the cached DTO with no marker at all, as pre-soft-invalidation entries were. */
+  cachedWithoutMarker?: boolean;
   credits?: number;
   cost?: number;
   aiConfigured?: boolean;
@@ -118,8 +158,14 @@ function makeService(opts?: {
       creditsPerDay: 40,
     })),
   };
+  // Redis stores an envelope: the summary plus the thread state it was generated against.
+  const cachedEnvelope = opts?.cached
+    ? opts.cachedWithoutMarker
+      ? { dto: opts.cached }
+      : { dto: opts.cached, marker: opts.cachedMarker ?? markerFor(opts?.context ?? makeContext()) }
+    : null;
   const cache: any = {
-    getJson: jest.fn(async () => opts?.cached ?? null),
+    getJson: jest.fn(async () => cachedEnvelope),
     setJson: jest.fn(async () => undefined),
     withLock: jest.fn(async (_key: string, _opts: any, fn: () => Promise<any>) => fn()),
   };
@@ -182,41 +228,24 @@ function makeService(opts?: {
 
 describe('MarvinCatchUpService', () => {
   it('returns a cached summary without calling the model or spending credits', async () => {
-    const cached: MarvinCatchUpDto = {
-      postId: 'focal',
-      rootPostId: 'root',
-      summary: 'cached summary',
-      effectiveMode: 'regular',
-      creditsSpent: 2,
-      costBreakdown: { mode: 2, vision: 0, webSearch: 0, urlFetch: 0 },
-      cached: false,
-      included: { ancestors: 1, descendants: 1, totalDescendants: 1 },
-      generatedAt: '2026-01-01T00:00:00.000Z',
-    };
-    const { service, ai, credits } = makeService({ cached });
+    const { service, ai, credits } = makeService({ cached: makeCachedDto() });
     const result = await service.catchUp({ userId: 'u-1', postId: 'focal' });
     expect(result.summary).toBe('cached summary');
     expect(result.cached).toBe(true);
     expect(result.creditsSpent).toBe(0);
+    // Marker matches the current thread state, so this is a FRESH hit.
+    expect(result.stale).toBe(false);
+    expect(result.newReplies).toBe(0);
     expect(ai.respond).not.toHaveBeenCalled();
     expect(credits.spend).not.toHaveBeenCalled();
   });
 
-  it('forceRefresh skips the cache read and regenerates (spending credits)', async () => {
-    const cached: MarvinCatchUpDto = {
-      postId: 'focal',
-      rootPostId: 'root',
-      summary: 'stale cached summary',
-      effectiveMode: 'regular',
-      creditsSpent: 2,
-      costBreakdown: { mode: 2, vision: 0, webSearch: 0, urlFetch: 0 },
-      cached: false,
-      included: { ancestors: 1, descendants: 1, totalDescendants: 1 },
-      generatedAt: '2026-01-01T00:00:00.000Z',
-    };
-    const { service, ai, credits, cache } = makeService({ cached });
+  it('forceRefresh never serves the cached summary and always regenerates (spending credits)', async () => {
+    // The read still happens — the previous summary seeds the delta prompt — but it must
+    // never be SERVED in place of the fresh generation the user paid for.
+    const cached = makeCachedDto({ summary: 'stale cached summary' });
+    const { service, ai, credits } = makeService({ cached });
     const result = await service.catchUp({ userId: 'u-1', postId: 'focal', forceRefresh: true });
-    expect(cache.getJson).not.toHaveBeenCalled();
     expect(ai.respond).toHaveBeenCalledTimes(1);
     expect(credits.spend).toHaveBeenCalledTimes(1);
     expect(result.cached).toBe(false);
@@ -399,7 +428,12 @@ describe('MarvinCatchUpService', () => {
       aiText: 'POST: The post is about testing.\nREPLIES: People agreed it works.',
     });
     const result = await service.catchUp({ userId: 'u-1', postId: 'focal', requestedMode: 'regular' });
-    expect(result.sections).toEqual({ post: 'The post is about testing.', replies: 'People agreed it works.' });
+    expect(result.sections).toEqual({
+      post: 'The post is about testing.',
+      replies: 'People agreed it works.',
+      // No prior summary existed, so there's no delta to report.
+      since: null,
+    });
     expect(result.summary).toContain('The post is about testing.');
     expect(result.summary).toContain('People agreed it works.');
   });
@@ -440,43 +474,189 @@ describe('MarvinCatchUpService', () => {
     cache.setJson.mockClear();
     await service.catchUp({ userId: 'u-1', postId: 'focal', includeImages: false });
     const keyNoImg: string = cache.getJson.mock.calls[0][0];
-    expect(keyWithImg).toContain(':img:');
-    expect(keyNoImg).toContain(':noimg:');
+    expect(keyWithImg).toMatch(/:img$/);
+    expect(keyNoImg).toMatch(/:noimg$/);
     expect(keyWithImg).not.toBe(keyNoImg);
   });
 
   it('peekCached honors the includeImages flag in the cache key', async () => {
-    const cached: MarvinCatchUpDto = {
-      postId: 'focal',
-      rootPostId: 'root',
-      summary: 'peeked',
-      effectiveMode: 'regular',
-      creditsSpent: 2,
-      costBreakdown: { mode: 2, vision: 0, webSearch: 0, urlFetch: 0 },
-      cached: false,
-      included: { ancestors: 1, descendants: 1, totalDescendants: 1 },
-      generatedAt: '2026-01-01T00:00:00.000Z',
-    };
-    const { service, cache } = makeService({ cached });
+    const { service, cache } = makeService({ cached: makeCachedDto({ summary: 'peeked' }) });
     await service.peekCached({ userId: 'u-1', postId: 'focal', includeImages: false });
     const key: string = cache.getJson.mock.calls[0][0];
-    expect(key).toContain(':noimg:');
+    expect(key).toMatch(/:noimg$/);
+  });
+
+  it('keeps the freshness marker OUT of the cache key so a moved-on thread still finds the entry', async () => {
+    // The whole point of soft invalidation: the storage key must be stable across thread
+    // changes. Two contexts at different reply counts must resolve to the same key.
+    const quiet = makeContext();
+    const busy = { ...makeContext(), totalDescendants: 42 };
+    const a = makeService({ cached: null, context: quiet });
+    await a.service.catchUp({ userId: 'u-1', postId: 'focal' });
+    const b = makeService({ cached: null, context: busy });
+    await b.service.catchUp({ userId: 'u-1', postId: 'focal' });
+    expect(a.cache.getJson.mock.calls[0][0]).toBe(b.cache.getJson.mock.calls[0][0]);
+  });
+
+  it('stores the summary alongside the marker it was generated against', async () => {
+    const { service, cache } = makeService({ cached: null });
+    await service.catchUp({ userId: 'u-1', postId: 'focal' });
+    const [, value] = cache.setJson.mock.calls[0];
+    expect(value.marker).toEqual(markerFor(makeContext()));
+    expect(value.dto.summary).toBeTruthy();
+    // Cached copies are always normalized to free so the next reader pays nothing.
+    expect(value.dto.creditsSpent).toBe(0);
+    expect(value.dto.cached).toBe(true);
+  });
+});
+
+describe('MarvinCatchUpService soft invalidation', () => {
+  it('serves a stale summary free, flagged with the new reply count', async () => {
+    // Summary was written when the thread had no replies; it now has 1.
+    const { service, ai, credits } = makeService({
+      cached: makeCachedDto({ summary: 'summary from before the replies' }),
+      cachedMarker: { totalDescendants: 0, latestMs: 0 },
+    });
+    const result = await service.catchUp({ userId: 'u-1', postId: 'focal' });
+    expect(result.summary).toBe('summary from before the replies');
+    expect(result.stale).toBe(true);
+    expect(result.newReplies).toBe(1);
+    // Still free, still no model call — the user gets value and can choose to update.
+    expect(result.creditsSpent).toBe(0);
+    expect(ai.respond).not.toHaveBeenCalled();
+    expect(credits.spend).not.toHaveBeenCalled();
+  });
+
+  it('flags edit-only drift as stale with zero new replies', async () => {
+    const current = markerFor(makeContext());
+    const { service, ai } = makeService({
+      cached: makeCachedDto(),
+      // Same reply count, older latest-touch: something was edited since.
+      cachedMarker: { totalDescendants: current.totalDescendants, latestMs: current.latestMs - 60_000 },
+    });
+    const result = await service.catchUp({ userId: 'u-1', postId: 'focal' });
+    expect(result.stale).toBe(true);
+    expect(result.newReplies).toBe(0);
+    expect(ai.respond).not.toHaveBeenCalled();
+  });
+
+  it('treats a summary the thread has badly outgrown as a miss and regenerates', async () => {
+    // 10 replies summarized, 200 now: serving that would misrepresent the thread.
+    const { service, ai, credits } = makeService({
+      cached: makeCachedDto({ summary: 'summary of a much smaller thread' }),
+      cachedMarker: { totalDescendants: 10, latestMs: 0 },
+      context: { ...makeContext(), totalDescendants: 200 },
+    });
+    const result = await service.catchUp({ userId: 'u-1', postId: 'focal' });
+    expect(result.summary).not.toBe('summary of a much smaller thread');
+    expect(result.cached).toBe(false);
+    expect(ai.respond).toHaveBeenCalledTimes(1);
+    expect(credits.spend).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores pre-soft-invalidation cache entries that carry no marker', async () => {
+    const { service, ai } = makeService({
+      cached: makeCachedDto({ summary: 'legacy entry' }),
+      cachedWithoutMarker: true,
+    });
+    const result = await service.catchUp({ userId: 'u-1', postId: 'focal' });
+    expect(result.summary).not.toBe('legacy entry');
+    expect(ai.respond).toHaveBeenCalledTimes(1);
+  });
+
+  it('peekCached surfaces staleness so the client can offer an informed update', async () => {
+    const { service, ai, credits } = makeService({
+      cached: makeCachedDto({ summary: 'older summary' }),
+      cachedMarker: { totalDescendants: 0, latestMs: 0 },
+    });
+    const result = await service.peekCached({ userId: 'u-1', postId: 'focal' });
+    expect(result?.summary).toBe('older summary');
+    expect(result?.stale).toBe(true);
+    expect(result?.newReplies).toBe(1);
+    expect(result?.creditsSpent).toBe(0);
+    expect(ai.respond).not.toHaveBeenCalled();
+    expect(credits.spend).not.toHaveBeenCalled();
+  });
+
+  it('peekCached returns null when the thread has outgrown the cached summary', async () => {
+    const { service } = makeService({
+      cached: makeCachedDto(),
+      cachedMarker: { totalDescendants: 10, latestMs: 0 },
+      context: { ...makeContext(), totalDescendants: 200 },
+    });
+    await expect(service.peekCached({ userId: 'u-1', postId: 'focal' })).resolves.toBeNull();
+  });
+});
+
+describe('MarvinCatchUpService delta summaries', () => {
+  /** The developer note handed to the model for the most recent respond() call. */
+  function promptOf(ai: any): string {
+    return ai.respond.mock.calls[0][0].developerNote as string;
+  }
+
+  it('asks for a SINCE section and supplies the earlier summary when updating', async () => {
+    const { service, ai } = makeService({
+      cached: makeCachedDto({ summary: 'the thread was about fasting' }),
+      cachedMarker: { totalDescendants: 0, latestMs: 0 },
+      // Updating a stale summary is the flow that produces a delta.
+      aiText: 'SINCE: One new reply pushed back.\nPOST: The point.\nREPLIES: The replies.',
+    });
+    const result = await service.catchUp({ userId: 'u-1', postId: 'focal', forceRefresh: true });
+    const prompt = promptOf(ai);
+    expect(prompt).toContain('SINCE:');
+    expect(prompt).toContain('the thread was about fasting');
+    // New replies are marked so the model can tell them apart from what was already covered.
+    expect(prompt).toContain('[new]');
+    expect(result.sections?.since).toBe('One new reply pushed back.');
+    expect(result.sections?.post).toBe('The point.');
+    expect(result.sections?.replies).toBe('The replies.');
+    // The flat summary leads with the delta for clients that ignore `sections`.
+    expect(result.summary.startsWith('One new reply pushed back.')).toBe(true);
+  });
+
+  it('does not ask for a delta on a first-time summary', async () => {
+    const { service, ai } = makeService({ cached: null });
+    const result = await service.catchUp({ userId: 'u-1', postId: 'focal' });
+    const prompt = promptOf(ai);
+    expect(prompt).not.toContain('SINCE:');
+    expect(prompt).not.toContain('[new]');
+    expect(result.sections?.since ?? null).toBeNull();
+  });
+
+  it('does not ask for a delta when the thread gained no replies', async () => {
+    // Edit-only drift with forceRefresh: nothing new to report, so no SINCE section.
+    const current = markerFor(makeContext());
+    const { service, ai } = makeService({
+      cached: makeCachedDto(),
+      cachedMarker: { totalDescendants: current.totalDescendants, latestMs: current.latestMs - 60_000 },
+    });
+    await service.catchUp({ userId: 'u-1', postId: 'focal', forceRefresh: true });
+    expect(promptOf(ai)).not.toContain('SINCE:');
+  });
+
+  it('falls back to a single blob when the model ignores the labels', async () => {
+    const { service } = makeService({ cached: null, aiText: 'Just a plain summary with no labels.' });
+    const result = await service.catchUp({ userId: 'u-1', postId: 'focal' });
+    expect(result.sections).toBeNull();
+    expect(result.summary).toBe('Just a plain summary with no labels.');
+  });
+
+  it('parses POST/REPLIES without a SINCE section', async () => {
+    const { service } = makeService({
+      cached: null,
+      aiText: 'POST: The focal point.\nREPLIES: What everyone said.',
+    });
+    const result = await service.catchUp({ userId: 'u-1', postId: 'focal' });
+    expect(result.sections?.post).toBe('The focal point.');
+    expect(result.sections?.replies).toBe('What everyone said.');
+    expect(result.sections?.since ?? null).toBeNull();
+    expect(result.summary).toBe('The focal point.\n\nWhat everyone said.');
   });
 });
 
 describe('MarvinCatchUpService.peekCached', () => {
   it('returns the cached summary (free) without calling the model when a cache entry exists', async () => {
-    const cached: MarvinCatchUpDto = {
-      postId: 'focal',
-      rootPostId: 'root',
-      summary: 'cached peek summary',
-      effectiveMode: 'regular',
-      creditsSpent: 2,
-      costBreakdown: { mode: 2, vision: 0, webSearch: 0, urlFetch: 0 },
-      cached: false,
-      included: { ancestors: 1, descendants: 1, totalDescendants: 1 },
-      generatedAt: '2026-01-01T00:00:00.000Z',
-    };
+    const cached = makeCachedDto({ summary: 'cached peek summary' });
     const { service, ai, credits } = makeService({ cached });
     const result = await service.peekCached({ userId: 'u-1', postId: 'focal' });
     expect(result).not.toBeNull();
@@ -497,7 +677,21 @@ describe('MarvinCatchUpService.peekCached', () => {
     expect(credits.spend).not.toHaveBeenCalled();
   });
 
-  it('returns null (never throws) for non-premium users', async () => {
+  it('serves an existing summary to a non-premium viewer as the upgrade funnel', async () => {
+    // Peeking is deliberately not premium-gated: the entry already exists and costs nothing
+    // to serve, so a non-premium viewer sees real output with the upgrade CTA beside it.
+    const { service, ai, credits } = makeService({
+      premium: false,
+      cached: makeCachedDto({ summary: 'someone already summarized this' }),
+    });
+    const result = await service.peekCached({ userId: 'u-1', postId: 'focal' });
+    expect(result?.summary).toBe('someone already summarized this');
+    expect(result?.creditsSpent).toBe(0);
+    expect(ai.respond).not.toHaveBeenCalled();
+    expect(credits.spend).not.toHaveBeenCalled();
+  });
+
+  it('returns null for a non-premium viewer when nothing is cached (no free generation)', async () => {
     const { service, ai } = makeService({ premium: false, cached: null });
     await expect(service.peekCached({ userId: 'u-1', postId: 'focal' })).resolves.toBeNull();
     expect(ai.respond).not.toHaveBeenCalled();

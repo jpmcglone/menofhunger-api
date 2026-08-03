@@ -265,4 +265,8 @@ export class NotificationsService {
   sendMessagePush(...args: Parameters<NotificationPushService['sendMessagePush']>) {
     return this.push.sendMessagePush(...args);
   }
+
+  upsertPremiumStatusNotification(...args: Parameters<NotificationWriterService['upsertPremiumStatusNotification']>) {
+    return this.writer.upsertPremiumStatusNotification(...args);
+  }
 }

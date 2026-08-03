@@ -101,6 +101,8 @@ export type PostDto = {
   commentCount: number;
   /** Denormalized count of flat reposts + quote reposts referencing this post. */
   repostCount: number;
+  /** Denormalized count of quote reposts (posts whose quotedPostId = this post's id). */
+  quoteCount?: number;
   viewerCount: number;
   parentId: string | null;
   /** When set, post lives in a community group (not shown on global feeds). */
@@ -127,6 +129,14 @@ export type PostDto = {
   repostedPost?: PostDto;
   /** For posts containing an embedded post link: the quoted post (preloaded). */
   quotedPost?: PostDto;
+  /**
+   * When multiple followed accounts reposted the same original on this feed page,
+   * the repost rows are collapsed into one. This lists the reposting authors (followed
+   * accounts first, up to 5) and is present only when ≥ 2 were collapsed.
+   */
+  repostedByAuthors?: PostAuthorDto[];
+  /** Total number of repost rows that were collapsed into this row. */
+  repostedByCount?: number;
   /** For kind='articleShare': the shared article preview. */
   article?: import('./article.dto').ArticleSharePreviewDto;
   internal?: {
@@ -141,13 +151,15 @@ export type PostDto = {
   /** False when the viewer's tier does not grant access to this post (preview-only; body/media stripped). */
   viewerCanAccess?: boolean;
   /**
-   * When set, this many other trending/new items from the same root thread were
-   * collapsed by the API and are not shown in the feed. Used by the client to
-   * render an accurate "View N more trending replies" footer.
+   * When set, this many other trending/new items from the same root thread are in
+   * the feed result but render nowhere in this row — not as the post, and not as
+   * one of its hydrated ancestors. Drives the "View N more trending replies"
+   * footer. Never derived from `commentCount`, and never counts a reply the viewer
+   * can already see in this thread.
    */
   threadCollapsedCount?: number;
   /**
-   * Unique authors of collapsed sibling replies (feed order), for reply-count footers.
+   * Unique authors of those unrendered replies (feed order), for reply-count footers.
    * Present when `threadCollapsedCount` is set.
    */
   threadCollapsedAuthors?: PostAuthorDto[];
@@ -482,6 +494,7 @@ export function toPostDto(
     bookmarkCount: post.bookmarkCount ?? 0,
     commentCount: post.commentCount ?? 0,
     repostCount: post.repostCount ?? 0,
+    quoteCount: (post as { quoteCount?: number }).quoteCount ?? 0,
     viewerCount: post.viewerCount ?? 0,
     parentId: post.parentId ?? null,
     communityGroupId: post.communityGroupId ?? null,

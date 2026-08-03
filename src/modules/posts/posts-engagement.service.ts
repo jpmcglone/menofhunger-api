@@ -1,4 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
@@ -19,6 +20,8 @@ import { PostsFeedQueryService } from './posts-feed-query.service';
  */
 @Injectable()
 export class PostsEngagementService {
+  private readonly logger = new Logger(PostsEngagementService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly sideEffects: SideEffectsService,
@@ -293,39 +296,54 @@ export class PostsEngagementService {
       if (blockCount > 0) throw new ForbiddenException('You cannot repost this post.');
     }
 
-    // Check uniqueness: one flat repost per user per canonical post.
-    const existingRepost = await this.prisma.post.findFirst({
-      where: { userId, kind: 'repost', repostedPostId: canonicalId, deletedAt: null },
-      select: { id: true },
-    });
-    if (existingRepost) {
-      const updated = await this.prisma.post.findUnique({ where: { id: canonicalId }, select: { repostCount: true } });
-      return { reposted: true as const, repostId: existingRepost.id, repostCount: updated?.repostCount ?? 0 };
+    // Attempt to create the flat repost and increment the count atomically.
+    // The partial unique index on (userId, repostedPostId) WHERE kind='repost' AND deletedAt IS NULL
+    // enforces one live repost per user per canonical post. A concurrent duplicate hits P2002 and
+    // is treated as an idempotent return, closing the check-then-insert race window.
+    let repostCount: number;
+    let repostId: string;
+    try {
+      const txResult = await this.prisma.$transaction(async (tx) => {
+        const repost = await tx.post.create({
+          data: {
+            body: '',
+            userId,
+            kind: 'repost',
+            visibility: canonicalPost.visibility,
+            repostedPostId: canonicalId,
+            communityGroupId: canonicalGroupId,
+            topics: [],
+            hashtags: [],
+            hashtagCasings: [],
+          },
+          select: { id: true },
+        });
+        const updated = await tx.post.update({
+          where: { id: canonicalId },
+          data: { repostCount: { increment: 1 } },
+          select: { repostCount: true },
+        });
+        return { repostId: repost.id as string, repostCount: updated.repostCount as number };
+      });
+      repostId = txResult.repostId;
+      repostCount = txResult.repostCount;
+    } catch (e: unknown) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        // Unique constraint violation: another concurrent request already created the repost.
+        // Return the existing repost row idempotently.
+        this.logger.debug(`repostPost: P2002 race on (userId=${userId}, canonicalId=${canonicalId}), returning existing repost`);
+        const existing = await this.prisma.post.findFirst({
+          where: { userId, kind: 'repost', repostedPostId: canonicalId, deletedAt: null },
+          select: { id: true },
+        });
+        const countRow = await this.prisma.post.findUnique({ where: { id: canonicalId }, select: { repostCount: true } });
+        return { reposted: true as const, repostId: existing?.id ?? '', repostCount: countRow?.repostCount ?? 0 };
+      }
+      throw e;
     }
-
-    // Create flat repost and increment count.
-    const { repostCount, repostId } = await this.prisma.$transaction(async (tx) => {
-      const repost = await tx.post.create({
-        data: {
-          body: '',
-          userId,
-          kind: 'repost',
-          visibility: canonicalPost.visibility,
-          repostedPostId: canonicalId,
-          communityGroupId: canonicalGroupId,
-          topics: [],
-          hashtags: [],
-          hashtagCasings: [],
-        },
-        select: { id: true },
-      });
-      const updated = await tx.post.update({
-        where: { id: canonicalId },
-        data: { repostCount: { increment: 1 } },
-        select: { repostCount: true },
-      });
-      return { repostId: repost.id as string, repostCount: updated.repostCount as number };
-    });
 
     // Notify original author (not self-repost).
     if (canonicalPost.userId !== userId) {
@@ -351,6 +369,23 @@ export class PostsEngagementService {
     } catch {
       // Best-effort
     }
+
+    // Per-user interaction event: flips viewerHasReposted for the actor, and lets the
+    // canonical post's author see the updated repostCount in their engagement view.
+    const interactionRecipients = new Set<string>(
+      [userId, canonicalPost.userId].filter(Boolean) as string[],
+    );
+    this.presenceRealtime.emitPostsInteraction(interactionRecipients, {
+      postId: canonicalId,
+      actorUserId: userId,
+      kind: 'repost',
+      active: true,
+      repostCount,
+    });
+
+    // Fan-out: emit the new repost post to the home feed of each follower of the reposter,
+    // so they see it live without refreshing. Fire-and-forget — same pattern as post.created.
+    void this.emitFeedRepostToFollowers(repostId, userId);
 
     // Realtime: a group repost is a new item in the group feed. Push the full repost DTO
     // (with its embedded original) to the `group:{id}` room so members viewing the group
@@ -482,8 +517,71 @@ export class PostsEngagementService {
       // Best-effort
     }
 
+    // Per-user interaction event: flips viewerHasReposted=false for the actor.
+    const unrepostRecipients = new Set<string>(
+      [userId, canonicalPost?.userId].filter(Boolean) as string[],
+    );
+    this.presenceRealtime.emitPostsInteraction(unrepostRecipients, {
+      postId: canonicalId,
+      actorUserId: userId,
+      kind: 'repost',
+      active: false,
+      repostCount,
+    });
+
     await this.cacheInvalidation.bumpFeedGlobal();
     this.ranking.enqueueScoreRefresh(canonicalId);
     return { reposted: false as const, repostCount };
+  }
+
+  /**
+   * Best-effort: push the newly created repost shell to the home feeds of the reposter's
+   * followers so they see it live without refreshing. Mirrors the `emitFeedNewPost` call
+   * in the post.created side-effects handler.
+   *
+   * Swallows all errors — a missed live emit just means the row shows up on the next feed
+   * refresh. The repost shell ID and reposter user ID are sufficient to read the full data.
+   */
+  private async emitFeedRepostToFollowers(repostId: string, reposterId: string): Promise<void> {
+    try {
+      const include = {
+        user: { select: USER_LIST_SELECT },
+        media: { orderBy: { position: 'asc' as const } },
+        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
+        poll: { include: { options: { orderBy: { position: 'asc' as const } } } },
+      };
+      const [repostRow, followRows] = await Promise.all([
+        this.prisma.post.findFirst({
+          where: { id: repostId, deletedAt: null },
+          include: {
+            ...include,
+            // Also load the original post so we can embed it in the DTO.
+            repostedPost: { include },
+          },
+        }),
+        this.prisma.follow.findMany({
+          where: { followingId: reposterId },
+          select: { followerId: true },
+          take: 500,
+        }),
+      ]);
+      if (!repostRow || followRows.length === 0) return;
+
+      const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+      const repostedOriginal = (repostRow as any).repostedPost;
+      const repostedPostDto = repostedOriginal
+        ? toPostDto(repostedOriginal, baseUrl, { viewerHasBoosted: false, includeInternal: false })
+        : undefined;
+      const repostDto = toPostDto(repostRow as any, baseUrl, {
+        viewerHasBoosted: false,
+        includeInternal: false,
+        repostedPost: repostedPostDto,
+      });
+
+      const followerIds = followRows.map((f) => f.followerId);
+      this.presenceRealtime.emitFeedNewPost(followerIds, { post: repostDto });
+    } catch {
+      // Best-effort
+    }
   }
 }

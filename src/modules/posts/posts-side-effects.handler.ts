@@ -81,6 +81,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     this.registry.register('post.created', (payload) => this.onPostCreated(payload));
     this.registry.register('post.deleted', (payload) => this.onPostDeleted(payload));
     this.registry.register('post.engagement.changed', (payload) => this.onEngagementChanged(payload));
+    this.registry.register('post.quote.changed', (payload) => this.onQuoteChanged(payload));
   }
 
   // ─── post.engagement.changed ──────────────────────────────────────────
@@ -126,6 +127,80 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       subjectPostId: postId,
       bodySnippet: (post.body ?? '').trim().slice(0, 150) || null,
     });
+  }
+
+  // ─── post.quote.changed ───────────────────────────────────────────────
+
+  /**
+   * When a post's quoted link changes, reconcile the 'repost' notification on both the old
+   * and new quoted targets, then re-emit `posts:liveUpdated` so open viewers update quote info.
+   *
+   * Idempotent: deleteRepost + upsertRepost both converge on retries.
+   */
+  private async onQuoteChanged(payload: SideEffectPayloads['post.quote.changed']): Promise<void> {
+    const { postId, actorUserId, prevQuotedPostId, nextQuotedPostId } = payload;
+    if (!postId || !actorUserId) return;
+
+    // Fetch the editing post body for the new-target notification snippet.
+    const editingPost = await this.prisma.post.findFirst({
+      where: { id: postId, deletedAt: null },
+      select: { body: true },
+    });
+
+    // Delete the quote notification on the old target (if any and non-self).
+    if (prevQuotedPostId) {
+      const prevOwner = await this.prisma.post.findFirst({
+        where: { id: prevQuotedPostId },
+        select: { userId: true },
+      });
+      if (prevOwner && prevOwner.userId !== actorUserId) {
+        // Uses the same notification row as a regular repost; keyed by
+        // (recipientUserId, actorUserId, subjectPostId=quoted, kind='repost').
+        await this.notifications.deleteRepostNotification(prevOwner.userId, actorUserId, prevQuotedPostId);
+      }
+    }
+
+    // Upsert a new quote notification on the new target (if any and non-self).
+    if (nextQuotedPostId && editingPost) {
+      const nextTarget = await this.prisma.post.findFirst({
+        where: { id: nextQuotedPostId, deletedAt: null },
+        select: { userId: true },
+      });
+      if (nextTarget && nextTarget.userId !== actorUserId) {
+        await this.notifications.upsertRepostNotification({
+          recipientUserId: nextTarget.userId,
+          actorUserId,
+          subjectPostId: nextQuotedPostId,
+          actorPostId: postId,
+          title: 'quoted your post',
+        });
+      }
+    }
+
+    // Best-effort realtime emits so open viewers see the updated quote counts.
+    const now = new Date().toISOString();
+    for (const pid of [prevQuotedPostId, nextQuotedPostId].filter(Boolean) as string[]) {
+      try {
+        this.presenceRealtime.emitPostsLiveUpdated(pid, {
+          postId: pid,
+          version: now,
+          reason: 'quote_count_changed',
+          patch: {},
+        });
+      } catch { /* best-effort */ }
+    }
+
+    // Re-emit on the editing post so its viewers pick up the new body.
+    if (editingPost) {
+      try {
+        this.presenceRealtime.emitPostsLiveUpdated(postId, {
+          postId,
+          version: now,
+          reason: 'post_edited',
+          patch: { body: editingPost.body ?? '' },
+        });
+      } catch { /* best-effort */ }
+    }
   }
 
   // ─── post.deleted ─────────────────────────────────────────────────────

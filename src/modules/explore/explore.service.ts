@@ -63,7 +63,7 @@ export class ExploreService {
     const featuredDtos = await this.posts.composeFeedPostDtos({
       viewerUserId,
       filteredPosts: featuredResult.posts,
-      collapsedCountByItemId: new Map(),
+      collapsedItemsByItemId: new Map(),
       scoreByPostId: (featuredResult as { scoreByPostId?: Map<string, number> }).scoreByPostId,
     });
 

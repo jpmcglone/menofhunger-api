@@ -46,7 +46,7 @@ export type FollowsChangedPayloadDto = {
   viewerFollowsUser: boolean;
 };
 
-export type PostInteractionKind = 'boost' | 'bookmark';
+export type PostInteractionKind = 'boost' | 'bookmark' | 'repost';
 
 /** Post interaction updates (currently emitted to post author + actor). */
 export type PostsInteractionPayloadDto = {
@@ -56,6 +56,7 @@ export type PostsInteractionPayloadDto = {
   active: boolean;
   boostCount?: number;
   bookmarkCount?: number;
+  repostCount?: number;
 };
 
 export type AdminUpdateKind = 'reports' | 'verification' | 'feedback';

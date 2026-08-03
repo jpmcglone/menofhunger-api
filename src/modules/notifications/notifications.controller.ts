@@ -42,6 +42,8 @@ const listQuerySchema = z.object({
     'word_of_the_day',
     'quote_of_the_day',
     'account_verified',
+    'premium_started',
+    'premium_ended',
     'status_update',
     'checkin_post',
     'other',

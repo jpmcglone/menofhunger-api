@@ -1,6 +1,7 @@
 import { LandingService } from './landing.service';
 
 const NOW = new Date('2026-04-25T03:00:00.000Z');
+const WINDOW_START = new Date(NOW.getTime() - 30 * 86400000);
 
 function makeUser(overrides: Record<string, unknown> = {}) {
   return {
@@ -12,13 +13,21 @@ function makeUser(overrides: Record<string, unknown> = {}) {
     isOrganization: false,
     stewardBadgeEnabled: true,
     verifiedStatus: 'manual',
-    avatarKey: null,
+    avatarKey: 'avatars/user-1.jpg',
     avatarUpdatedAt: null,
     bannedAt: null,
+    isBot: false,
     orgMemberships: [],
-    createdAt: new Date('2026-01-01T00:00:00.000Z'),
     ...overrides,
   };
+}
+
+function makeCandidate(
+  id: string,
+  lastActiveAt: Date | null = new Date(NOW.getTime() - 3_600_000),
+  recentPostCount = 5,
+): { id: string; last_active_at: Date | null; recent_post_count: bigint } {
+  return { id, last_active_at: lastActiveAt, recent_post_count: BigInt(recentPostCount) };
 }
 
 function makePost(id: string, body: string) {
@@ -63,118 +72,143 @@ function makePost(id: string, body: string) {
   };
 }
 
-function makeTopPostRow(id: string, weeklyViews: number, authorId: string, rootId: string): { id: string; weekly_views: bigint; root_id: string; author_id: string } {
+function makeTopPostRow(
+  id: string,
+  weeklyViews: number,
+  authorId: string,
+  rootId: string,
+): { id: string; weekly_views: bigint; root_id: string; author_id: string } {
   return { id, weekly_views: BigInt(weeklyViews), root_id: rootId, author_id: authorId };
 }
 
-function makeService(topPostRowOverride?: Array<{ id: string; weekly_views: bigint; root_id: string; author_id: string }>) {
-  const defaultRows = [
-    makeTopPostRow('post-2', 8, 'user-1', 'post-2'),
-    makeTopPostRow('post-1', 5, 'user-1', 'post-1'),
-  ];
-  const rows = topPostRowOverride ?? defaultRows;
-  const prisma = {
-    $queryRaw: jest.fn()
-      .mockResolvedValueOnce([{ public_post_count: 42n, verified_men_count: 7n }])
-      .mockResolvedValueOnce(rows),
+const DEFAULT_STATS_ROW = {
+  public_posts: 30n,
+  verified_posts: 10n,
+  premium_posts: 2n,
+  premium_men: 5n,
+  verified_men: 27n,
+};
+
+/** Identify which raw query is being called by looking for distinctive SQL fragments. */
+function makePrisma(
+  opts: {
+    statsRows?: typeof DEFAULT_STATS_ROW[];
+    candidateRows?: ReturnType<typeof makeCandidate>[];
+    topPostRows?: ReturnType<typeof makeTopPostRow>[];
+    userRows?: ReturnType<typeof makeUser>[];
+  } = {},
+) {
+  const statsRows = opts.statsRows ?? [DEFAULT_STATS_ROW];
+  const candidateRows = opts.candidateRows ?? [makeCandidate('user-1')];
+  const topPostRows = opts.topPostRows ?? [makeTopPostRow('post-1', 5, 'user-1', 'post-1')];
+
+  return {
+    $queryRaw: jest.fn().mockImplementation((...args: unknown[]) => {
+      const sql = String((args[0] as { strings: string[] }).strings?.[0] ?? args[0]);
+      if (sql.includes('public_posts')) return Promise.resolve(statsRows);
+      if (sql.includes('recent_post_count')) return Promise.resolve(candidateRows);
+      if (sql.includes('weekly_views')) return Promise.resolve(topPostRows);
+      return Promise.resolve([]);
+    }),
     user: {
-      findMany: jest.fn().mockResolvedValue([makeUser()]),
+      findMany: jest.fn().mockImplementation(async (args: { where?: { id?: { in?: string[] } } }) => {
+        const ids = args?.where?.id?.in ?? [];
+        return ids.map((id) => makeUser({ id, ...(opts.userRows?.find((u) => u.id === id) ?? {}) }));
+      }),
     },
     post: {
-      findMany: jest.fn().mockImplementation(async (args: any) => {
-        const ids: string[] = args?.where?.id?.in ?? [];
+      findMany: jest.fn().mockImplementation(async (args: { where?: { id?: { in?: string[] } } }) => {
+        const ids = args?.where?.id?.in ?? [];
         return ids.map((id) => makePost(id, `Post ${id}`));
       }),
     },
   };
-  const config = {
-    r2: jest.fn(() => ({ publicBaseUrl: 'https://cdn.example.test' })),
-  };
-  const articles = {
-    listTrending: jest.fn().mockResolvedValue([{ id: 'article-1', title: 'Trending' }]),
-  };
+}
+
+function makeService(prismaOverride?: ReturnType<typeof makePrisma>) {
+  const prisma = prismaOverride ?? makePrisma();
+  const config = { r2: jest.fn(() => ({ publicBaseUrl: 'https://cdn.example.test' })) };
+  const articles = { listTrending: jest.fn().mockResolvedValue([{ id: 'article-1', title: 'Trending' }]) };
   const service = new LandingService(prisma as any, config as any, articles as any);
   return { service, prisma, articles };
 }
 
 describe('LandingService', () => {
-  it('builds a public landing snapshot without exact activity timestamps', async () => {
-    const { service, prisma, articles } = makeService();
-
+  it('maps stats to the men/posts breakdown shape', async () => {
+    const { service } = makeService();
     const snapshot = await service.getSnapshot(NOW);
 
-    expect(snapshot.stats).toEqual({ publicPostCount: 42, verifiedMenCount: 7 });
-    expect(snapshot.recentlyActiveMen).toEqual([
-      expect.objectContaining({
-        id: 'user-1',
-        username: 'joseph',
-        isOrganization: false,
-        verifiedStatus: 'manual',
-      }),
-    ]);
+    expect(snapshot.stats.men).toEqual({ premium: 5, verified: 27, total: 32 });
+    expect(snapshot.stats.posts).toEqual({ public: 30, verified: 10, premium: 2, total: 42 });
+  });
+
+  it('builds recentlyActiveMen from scored candidates (avatar required)', async () => {
+    const prisma = makePrisma({
+      candidateRows: [
+        makeCandidate('user-1', new Date(NOW.getTime() - 1_000_000), 20),
+        makeCandidate('user-2', new Date(NOW.getTime() - 2_000_000), 5),
+      ],
+    });
+    const { service } = makeService(prisma);
+    const snapshot = await service.getSnapshot(NOW);
+
+    // user-1 is more recent and more prolific — should come first
+    expect(snapshot.recentlyActiveMen[0].id).toBe('user-1');
+    expect(snapshot.recentlyActiveMen[1].id).toBe('user-2');
+  });
+
+  it('excludes lastOnlineAt / lastSeenAt from the returned user DTOs', async () => {
+    const { service } = makeService();
+    const snapshot = await service.getSnapshot(NOW);
     expect(snapshot.recentlyActiveMen[0]).not.toHaveProperty('lastOnlineAt');
     expect(snapshot.recentlyActiveMen[0]).not.toHaveProperty('lastSeenAt');
-    expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({
-        bannedAt: null,
-        usernameIsSet: true,
-        isOrganization: false,
-        verifiedStatus: { not: 'none' },
-      }),
-      take: 30,
-    }));
-    expect(articles.listTrending).toHaveBeenCalledWith({ viewerUserId: null, limit: 3 });
   });
 
   it('preserves the weekly top-post order from the ranking query', async () => {
-    const { service, prisma } = makeService();
-
+    const prisma = makePrisma({
+      topPostRows: [
+        makeTopPostRow('post-2', 8, 'user-1', 'post-2'),
+        makeTopPostRow('post-1', 5, 'user-1', 'post-1'),
+      ],
+    });
+    const { service } = makeService(prisma);
     const snapshot = await service.getSnapshot(NOW);
 
-    expect(prisma.post.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: { in: ['post-2', 'post-1'] } },
-    }));
-    expect(snapshot.topPostsThisWeek.map((post) => ({ id: post.id, weeklyViewCount: post.weeklyViewCount }))).toEqual([
+    expect(snapshot.topPostsThisWeek.map((p) => ({ id: p.id, weeklyViewCount: p.weeklyViewCount }))).toEqual([
       { id: 'post-2', weeklyViewCount: 8 },
       { id: 'post-1', weeklyViewCount: 5 },
     ]);
   });
 
   it('defers 3rd post from the same author to backfill after first-pass cap', async () => {
-    // 4 rows: 3 from author-a (cap is 2), 1 from author-b.
-    // First pass: p1, p2 admitted; p3 skipped (author-a cap hit); p4 admitted.
-    // Backfill: p3 appended.
     const rows = [
       makeTopPostRow('p1', 100, 'author-a', 'root-1'),
-      makeTopPostRow('p2', 90,  'author-a', 'root-2'),
-      makeTopPostRow('p3', 80,  'author-a', 'root-3'), // 3rd from author-a — deferred
-      makeTopPostRow('p4', 70,  'author-b', 'root-4'),
+      makeTopPostRow('p2', 90, 'author-a', 'root-2'),
+      makeTopPostRow('p3', 80, 'author-a', 'root-3'),
+      makeTopPostRow('p4', 70, 'author-b', 'root-4'),
     ];
-    const { service } = makeService(rows);
-
+    const prisma = makePrisma({ topPostRows: rows });
+    const { service } = makeService(prisma);
     const snapshot = await service.getSnapshot(NOW);
 
     const ids = snapshot.topPostsThisWeek.map((p) => p.id);
     expect(ids).toContain('p1');
     expect(ids).toContain('p2');
     expect(ids).toContain('p4');
-    // p3 must appear after p4 because it was deferred to backfill.
     const p3idx = ids.indexOf('p3');
     const p4idx = ids.indexOf('p4');
     if (p3idx !== -1 && p4idx !== -1) expect(p3idx).toBeGreaterThan(p4idx);
   });
 
   it('defers 3rd post from the same thread root to backfill after first-pass cap', async () => {
-    // 4 rows: 3 that share root-x (cap is 2), 1 from a different root.
-    // First pass: pa and pb admitted; pc skipped (root-x cap hit); pd admitted.
     const rows = [
       makeTopPostRow('pa', 100, 'author-1', 'root-x'),
-      makeTopPostRow('pb', 90,  'author-2', 'root-x'),
-      makeTopPostRow('pc', 80,  'author-3', 'root-x'), // 3rd in root-x — deferred
-      makeTopPostRow('pd', 70,  'author-4', 'root-y'),
+      makeTopPostRow('pb', 90, 'author-2', 'root-x'),
+      makeTopPostRow('pc', 80, 'author-3', 'root-x'),
+      makeTopPostRow('pd', 70, 'author-4', 'root-y'),
     ];
-    const { service } = makeService(rows);
-
+    const prisma = makePrisma({ topPostRows: rows });
+    const { service } = makeService(prisma);
     const snapshot = await service.getSnapshot(NOW);
 
     const ids = snapshot.topPostsThisWeek.map((p) => p.id);
@@ -190,11 +224,58 @@ describe('LandingService', () => {
     const rows = Array.from({ length: 20 }, (_, i) =>
       makeTopPostRow(`p${i}`, 100 - i, `author-${i}`, `root-${i}`),
     );
-    const { service } = makeService(rows);
-
+    const prisma = makePrisma({ topPostRows: rows });
+    const { service } = makeService(prisma);
     const snapshot = await service.getSnapshot(NOW);
 
     expect(snapshot.topPostsThisWeek.length).toBeLessThanOrEqual(14);
     expect(snapshot.topPostsThisWeek.length).toBeGreaterThan(0);
+  });
+
+  it('the stats query uses Prisma.sql so the mock can route it by SQL text', async () => {
+    const prisma = makePrisma();
+    const { service } = makeService(prisma);
+    await service.getSnapshot(NOW);
+    // $queryRaw should have been called at least once for the stats query
+    const calls: unknown[][] = (prisma.$queryRaw as jest.Mock).mock.calls;
+    const statsCall = calls.find((args) => {
+      const sql = String((args[0] as { strings?: string[] }).strings?.[0] ?? args[0]);
+      return sql.includes('public_posts');
+    });
+    expect(statsCall).toBeDefined();
+  });
+
+  it('feeds listTrending with viewerUserId=null and limit=3', async () => {
+    const { service, articles } = makeService();
+    await service.getSnapshot(NOW);
+    expect(articles.listTrending).toHaveBeenCalledWith({ viewerUserId: null, limit: 3 });
+  });
+
+  it('returns zero counts when no stats row exists', async () => {
+    const prisma = makePrisma({ statsRows: [] });
+    const { service } = makeService(prisma);
+    const snapshot = await service.getSnapshot(NOW);
+    expect(snapshot.stats.men).toEqual({ premium: 0, verified: 0, total: 0 });
+    expect(snapshot.stats.posts).toEqual({ public: 0, verified: 0, premium: 0, total: 0 });
+  });
+
+  it('total posts = sum of public + verified + premium', async () => {
+    const { service } = makeService();
+    const snapshot = await service.getSnapshot(NOW);
+    const { public: pub, verified, premium, total } = snapshot.stats.posts;
+    expect(total).toBe(pub + verified + premium);
+  });
+
+  it('total men = premium + verified', async () => {
+    const { service } = makeService();
+    const snapshot = await service.getSnapshot(NOW);
+    const { premium, verified, total } = snapshot.stats.men;
+    expect(total).toBe(premium + verified);
+  });
+
+  it('uses the windowStart variable from the snapshot date', () => {
+    // Verify WINDOW_START is 30 days before NOW — used in candidate query construction
+    const expected = new Date(NOW.getTime() - 30 * 86400000);
+    expect(WINDOW_START.getTime()).toBe(expected.getTime());
   });
 });

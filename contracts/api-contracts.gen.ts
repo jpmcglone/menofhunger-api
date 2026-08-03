@@ -23,7 +23,7 @@ export type FeedbackStatus = 'new' | 'triaged' | 'resolved'
 export type FollowVisibility = 'none' | 'all' | 'verified' | 'premium'
 export type MessageParticipantRole = 'owner' | 'member'
 export type MessageParticipantStatus = 'pending' | 'accepted'
-export type NotificationKind = 'comment' | 'boost' | 'repost' | 'follow' | 'followed_post' | 'followed_article' | 'mention' | 'nudge' | 'poll_results_ready' | 'generic' | 'coin_transfer' | 'message' | 'group_join_request' | 'community_group_member_joined' | 'community_group_join_approved' | 'community_group_join_rejected' | 'community_group_member_removed' | 'community_group_disbanded' | 'crew_invite_received' | 'crew_invite_accepted' | 'crew_invite_declined' | 'crew_invite_cancelled' | 'crew_member_joined' | 'crew_member_left' | 'crew_member_kicked' | 'crew_owner_transferred' | 'crew_owner_transfer_vote' | 'crew_wall_mention' | 'crew_disbanded' | 'community_group_invite_received' | 'community_group_invite_accepted' | 'community_group_invite_declined' | 'community_group_invite_cancelled' | 'community_group_post' | 'marv_not_in_group' | 'status_update' | 'checkin_post' | 'word_of_the_day' | 'quote_of_the_day' | 'account_verified' | 'checkin_reminder' | 'on_this_day'
+export type NotificationKind = 'comment' | 'boost' | 'repost' | 'follow' | 'followed_post' | 'followed_article' | 'mention' | 'nudge' | 'poll_results_ready' | 'generic' | 'coin_transfer' | 'message' | 'group_join_request' | 'community_group_member_joined' | 'community_group_join_approved' | 'community_group_join_rejected' | 'community_group_member_removed' | 'community_group_disbanded' | 'crew_invite_received' | 'crew_invite_accepted' | 'crew_invite_declined' | 'crew_invite_cancelled' | 'crew_member_joined' | 'crew_member_left' | 'crew_member_kicked' | 'crew_owner_transferred' | 'crew_owner_transfer_vote' | 'crew_wall_mention' | 'crew_disbanded' | 'community_group_invite_received' | 'community_group_invite_accepted' | 'community_group_invite_declined' | 'community_group_invite_cancelled' | 'community_group_post' | 'marv_not_in_group' | 'status_update' | 'checkin_post' | 'word_of_the_day' | 'quote_of_the_day' | 'account_verified' | 'checkin_reminder' | 'on_this_day' | 'premium_started' | 'premium_ended'
 export type PostMediaKind = 'image' | 'gif' | 'video'
 export type PostMediaSource = 'upload' | 'giphy'
 export type PostVisibility = 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe'
@@ -868,11 +868,29 @@ export type HashtagResultDto = {
 
 // ─── src/common/dto/landing.dto.ts ─────────────────────────────────────────────
 
+export type LandingMenBreakdownDto = {
+  /** premium OR premiumPlus. */
+  premium: number;
+  /** verifiedStatus != 'none' AND NOT (premium OR premiumPlus). */
+  verified: number;
+  /** premium + verified. */
+  total: number;
+};
+
+export type LandingPostBreakdownDto = {
+  /** visibility = 'public'. */
+  public: number;
+  /** visibility = 'verifiedOnly'. */
+  verified: number;
+  /** visibility = 'premiumOnly'. */
+  premium: number;
+  /** public + verified + premium (onlyMe excluded). */
+  total: number;
+};
+
 export type LandingStatsDto = {
-  /** All-time public, regular, non-draft, non-deleted posts. */
-  publicPostCount: number;
-  /** Verified, non-org, non-banned users with completed usernames. */
-  verifiedMenCount: number;
+  men: LandingMenBreakdownDto;
+  posts: LandingPostBreakdownDto;
 };
 
 export type LandingTopPostDto = PostDto & {
@@ -919,9 +937,12 @@ export type MarvinCatchUpDto = {
   /**
    * Structured summary sections, present when the thread has replies.
    * `post` summarises the focal post; `replies` synthesises the replies below.
+   * `since` is present only when this summary was generated over a thread the viewer had
+   * already summarized — it's the delta, i.e. what changed since then, and clients should
+   * lead with it because it's the part the reader doesn't know yet.
    * Null when the AI didn't output the expected markers (single-blob fallback).
    */
-  sections?: { post: string; replies: string | null } | null;
+  sections?: { post: string; replies: string | null; since?: string | null } | null;
   /** The model tier that actually ran (after routing/auto-upgrades). */
   effectiveMode: MarvinModeDto;
   /** Credits spent on this request (0 on a cache hit). */
@@ -938,6 +959,17 @@ export type MarvinCatchUpDto = {
   };
   /** True when this summary was served from cache (no new credits spent). */
   cached: boolean;
+  /**
+   * True when the thread changed after this summary was generated. The summary is still
+   * served for free — the client shows it immediately and labels it, so regenerating is an
+   * informed choice rather than a paywall. Always false on a freshly generated summary.
+   */
+  stale: boolean;
+  /**
+   * Replies added since this summary was generated. 0 when fresh, and also 0 when `stale`
+   * is true but only edits (no new replies) caused the drift.
+   */
+  newReplies: number;
   /** How much of the thread the summary was built from. */
   included: {
     ancestors: number;
@@ -1262,6 +1294,8 @@ export type PostDto = {
   commentCount: number;
   /** Denormalized count of flat reposts + quote reposts referencing this post. */
   repostCount: number;
+  /** Denormalized count of quote reposts (posts whose quotedPostId = this post's id). */
+  quoteCount?: number;
   viewerCount: number;
   parentId: string | null;
   /** When set, post lives in a community group (not shown on global feeds). */
@@ -1288,6 +1322,14 @@ export type PostDto = {
   repostedPost?: PostDto;
   /** For posts containing an embedded post link: the quoted post (preloaded). */
   quotedPost?: PostDto;
+  /**
+   * When multiple followed accounts reposted the same original on this feed page,
+   * the repost rows are collapsed into one. This lists the reposting authors (followed
+   * accounts first, up to 5) and is present only when ≥ 2 were collapsed.
+   */
+  repostedByAuthors?: PostAuthorDto[];
+  /** Total number of repost rows that were collapsed into this row. */
+  repostedByCount?: number;
   /** For kind='articleShare': the shared article preview. */
   article?: ArticleSharePreviewDto;
   internal?: {
@@ -1302,13 +1344,15 @@ export type PostDto = {
   /** False when the viewer's tier does not grant access to this post (preview-only; body/media stripped). */
   viewerCanAccess?: boolean;
   /**
-   * When set, this many other trending/new items from the same root thread were
-   * collapsed by the API and are not shown in the feed. Used by the client to
-   * render an accurate "View N more trending replies" footer.
+   * When set, this many other trending/new items from the same root thread are in
+   * the feed result but render nowhere in this row — not as the post, and not as
+   * one of its hydrated ancestors. Drives the "View N more trending replies"
+   * footer. Never derived from `commentCount`, and never counts a reply the viewer
+   * can already see in this thread.
    */
   threadCollapsedCount?: number;
   /**
-   * Unique authors of collapsed sibling replies (feed order), for reply-count footers.
+   * Unique authors of those unrendered replies (feed order), for reply-count footers.
    * Present when `threadCollapsedCount` is set.
    */
   threadCollapsedAuthors?: PostAuthorDto[];
@@ -1468,7 +1512,7 @@ export type FollowsChangedPayloadDto = {
   viewerFollowsUser: boolean;
 };
 
-export type PostInteractionKind = 'boost' | 'bookmark';
+export type PostInteractionKind = 'boost' | 'bookmark' | 'repost';
 
 /** Post interaction updates (currently emitted to post author + actor). */
 export type PostsInteractionPayloadDto = {
@@ -1478,6 +1522,7 @@ export type PostsInteractionPayloadDto = {
   active: boolean;
   boostCount?: number;
   bookmarkCount?: number;
+  repostCount?: number;
 };
 
 export type AdminUpdateKind = 'reports' | 'verification' | 'feedback';
@@ -2299,12 +2344,22 @@ export type AdminUserRecentSearchDto = {
   createdAt: string;
 };
 
-/** Viewer-facing recent search entry — typed query or a tapped user profile. */
+/** Minimal group info attached to a recent search entry (group tap). */
+export type RecentSearchGroupDto = {
+  id: string;
+  slug: string;
+  name: string;
+  avatarImageUrl: string | null;
+  memberCount: number;
+};
+
+/** Viewer-facing recent search entry — typed query, a tapped user profile, or a tapped group. */
 export type RecentSearchDto = {
   id: string;
   query: string;
   createdAt: string;
   user: UserListDto | null;
+  group: RecentSearchGroupDto | null;
 };
 
 export type UserPreviewDto = {

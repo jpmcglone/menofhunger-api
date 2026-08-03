@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { SubscriptionGrant } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 
 export type GrantTier = 'premium' | 'premiumPlus';
 export type EffectiveTier = 'none' | 'premium' | 'premiumPlus';
@@ -61,6 +62,7 @@ export class EntitlementService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   /**
@@ -190,6 +192,7 @@ export class EntitlementService {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
+        premium: true,
         verifiedStatus: true,
         stripeSubscriptionStatus: true,
         stripeSubscriptionPriceId: true,
@@ -261,6 +264,16 @@ export class EntitlementService {
       where: { id: userId },
       data: { premium: isPremium, premiumPlus: isPremiumPlus },
     });
+
+    // Fire a side effect only when crossing the none <-> premium boundary.
+    // Premium <-> Premium+ upgrades/downgrades stay silent.
+    const wasPremium = user.premium;
+    if (wasPremium !== isPremium) {
+      this.sideEffects.dispatch('billing.premium.changed', {
+        userId,
+        direction: isPremium ? 'started' : 'ended',
+      });
+    }
 
     return {
       isPremium,

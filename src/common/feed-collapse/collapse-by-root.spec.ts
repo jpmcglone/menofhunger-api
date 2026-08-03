@@ -11,18 +11,24 @@ const opts = {
   getParentId: (item: MinPost) => item.parentId ?? null,
 };
 
+function collapsedIds(
+  map: Map<string, { id: string }[]>,
+  keptId: string,
+): string[] {
+  return (map.get(keptId) ?? []).map((item) => item.id);
+}
+
 // ─── maxPerRoot=1 (backward compat) ───────────────────────────────────────────
 
 describe('collapseFeedByRoot – maxPerRoot=1 (default)', () => {
   it('returns all items unchanged when collapseByRoot=false', () => {
     const items = [p('A'), p('B')];
-    const { items: out, collapsedCountByKey, collapsedCountByItemId } = collapseFeedByRoot(items, {
+    const { items: out, collapsedItemsByItemId } = collapseFeedByRoot(items, {
       collapseByRoot: false,
       ...opts,
     });
     expect(out).toEqual(items);
-    expect(collapsedCountByKey.size).toBe(0);
-    expect(collapsedCountByItemId.size).toBe(0);
+    expect(collapsedItemsByItemId.size).toBe(0);
   });
 
   it('keeps one item per root when prefer=reply', () => {
@@ -39,49 +45,49 @@ describe('collapseFeedByRoot – maxPerRoot=1 (default)', () => {
     expect(out[0]!.id).not.toBe('root');
   });
 
-  it('populates collapsedCountByKey for collapsed items', () => {
+  it('reports the unreturned items for the kept item', () => {
     const root = p('root');
     const r1 = p('r1', 'root');
     const r2 = p('r2', 'root');
-    const { collapsedCountByKey } = collapseFeedByRoot([root, r1, r2], {
-      collapseByRoot: true,
-      ...opts,
-    });
-    // 3 items total, 1 kept → 2 collapsed
-    const val = collapsedCountByKey.get('root');
-    expect(val).toBe(2);
-  });
-
-  it('populates collapsedCountByItemId for the kept item', () => {
-    const root = p('root');
-    const r1 = p('r1', 'root');
-    const r2 = p('r2', 'root');
-    const { items: out, collapsedCountByItemId } = collapseFeedByRoot([root, r1, r2], {
+    const { items: out, collapsedItemsByItemId } = collapseFeedByRoot([root, r1, r2], {
       collapseByRoot: true,
       prefer: 'reply',
       ...opts,
     });
-    // The kept item (a reply) should have an entry
-    const keptId = out[0]!.id;
-    expect(collapsedCountByItemId.get(keptId)).toBe(2);
+    expect(collapsedIds(collapsedItemsByItemId, out[0]!.id).sort()).toEqual(['r2', 'root']);
   });
 
-  it('does not set collapsedCountByItemId when nothing is collapsed', () => {
-    const a = p('A');
-    const b = p('B');
-    const { collapsedCountByItemId } = collapseFeedByRoot([a, b], {
+  it('captures an author preview per collapsed item', () => {
+    type Authored = MinPost & { authorId: string };
+    const items: Authored[] = [
+      { id: 'root', parentId: null, authorId: 'u1' },
+      { id: 'r1', parentId: 'root', authorId: 'u2' },
+      { id: 'r2', parentId: 'root', authorId: 'u3' },
+    ];
+    const { items: out, collapsedItemsByItemId } = collapseFeedByRoot(items, {
+      collapseByRoot: true,
+      prefer: 'reply',
+      getId: (item) => item.id,
+      getParentId: (item) => item.parentId ?? null,
+      getAuthorPreview: (item) => ({ id: item.authorId }),
+    });
+    const collapsed = collapsedItemsByItemId.get(out[0]!.id) ?? [];
+    expect(collapsed.map((item) => item.author?.id).sort()).toEqual(['u1', 'u3']);
+  });
+
+  it('records nothing when each item is its own root', () => {
+    const { collapsedItemsByItemId } = collapseFeedByRoot([p('A'), p('B')], {
       collapseByRoot: true,
       ...opts,
     });
-    // Each is its own root, no collapsing
-    expect(collapsedCountByItemId.size).toBe(0);
+    expect(collapsedItemsByItemId.size).toBe(0);
   });
 });
 
 // ─── maxPerRoot=2 ─────────────────────────────────────────────────────────────
 
 describe('collapseFeedByRoot – maxPerRoot=2', () => {
-  it('keeps up to 2 items per root in sort order', () => {
+  it('keeps the deepest item plus its in-feed parent', () => {
     const root = p('root');
     const r1 = p('r1', 'root');
     const r2 = p('r2', 'root');
@@ -91,182 +97,132 @@ describe('collapseFeedByRoot – maxPerRoot=2', () => {
       maxPerRoot: 2,
       ...opts,
     });
-    expect(out).toHaveLength(2);
-    expect(out.map((i) => i.id)).toContain('root');
-    expect(out.map((i) => i.id)).toContain('r1');
+    expect(out.map((i) => i.id)).toEqual(['root', 'r1']);
   });
 
-  it('collapses the 3rd+ item and reports correct collapsedCount', () => {
+  it('reports sibling branches that were not returned', () => {
     const root = p('root');
     const r1 = p('r1', 'root');
     const r2 = p('r2', 'root');
     const r3 = p('r3', 'root');
-    const { collapsedCountByKey, collapsedCountByItemId, items: out } = collapseFeedByRoot(
-      [root, r1, r2, r3],
-      { collapseByRoot: true, maxPerRoot: 2, ...opts },
-    );
-    expect(collapsedCountByKey.get('root')).toBe(2); // r2 and r3 collapsed
-    // Both kept items should have the collapsed count
-    expect(collapsedCountByItemId.get(out[0]!.id)).toBe(2);
-    expect(collapsedCountByItemId.get(out[1]!.id)).toBe(2);
+    const { collapsedItemsByItemId } = collapseFeedByRoot([root, r1, r2, r3], {
+      collapseByRoot: true,
+      maxPerRoot: 2,
+      ...opts,
+    });
+    // Both kept rows carry the same unreturned set; the DTO stage filters it
+    // down to what each row does not render.
+    expect(collapsedIds(collapsedItemsByItemId, 'root')).toEqual(['r2', 'r3']);
+    expect(collapsedIds(collapsedItemsByItemId, 'r1')).toEqual(['r2', 'r3']);
   });
 
-  it('does not set collapsedCount when exactly 2 items exist per root', () => {
-    const root = p('root');
-    const r1 = p('r1', 'root');
-    const { collapsedCountByKey, collapsedCountByItemId } = collapseFeedByRoot(
-      [root, r1],
-      { collapseByRoot: true, maxPerRoot: 2, ...opts },
-    );
-    expect(collapsedCountByKey.has('root')).toBe(false);
-    expect(collapsedCountByItemId.size).toBe(0);
+  it('records nothing when a root has exactly 2 items', () => {
+    const { collapsedItemsByItemId } = collapseFeedByRoot([p('root'), p('r1', 'root')], {
+      collapseByRoot: true,
+      maxPerRoot: 2,
+      ...opts,
+    });
+    expect(collapsedItemsByItemId.size).toBe(0);
   });
 
   it('handles multiple independent root threads correctly', () => {
     // Thread X: 3 items → keeps 2, collapses 1
     // Thread Y: 1 item  → keeps 1, collapses nothing
-    const xRoot = p('X');
-    const xR1 = p('xr1', 'X');
-    const xR2 = p('xr2', 'X');
-    const yRoot = p('Y');
-    const { items: out, collapsedCountByKey, collapsedCountByItemId } = collapseFeedByRoot(
-      [xRoot, xR1, xR2, yRoot],
+    const { items: out, collapsedItemsByItemId } = collapseFeedByRoot(
+      [p('X'), p('xr1', 'X'), p('xr2', 'X'), p('Y')],
       { collapseByRoot: true, maxPerRoot: 2, ...opts },
     );
-    expect(out).toHaveLength(3); // 2 from X, 1 from Y
-    expect(collapsedCountByKey.get('X')).toBe(1);
-    expect(collapsedCountByKey.has('Y')).toBe(false);
-    expect(collapsedCountByItemId.get('X')).toBe(1);
-    expect(collapsedCountByItemId.get('xr1')).toBe(1);
-    expect(collapsedCountByItemId.has('Y')).toBe(false);
+    expect(out.map((i) => i.id)).toEqual(['X', 'xr1', 'Y']);
+    expect(collapsedIds(collapsedItemsByItemId, 'X')).toEqual(['xr2']);
+    expect(collapsedIds(collapsedItemsByItemId, 'xr1')).toEqual(['xr2']);
+    expect(collapsedItemsByItemId.has('Y')).toBe(false);
   });
 
   it('preserves original feed ordering of first-seen root keys', () => {
-    const a = p('A');
-    const b = p('B');
-    const aR = p('aR', 'A');
     // Feed order: a, b, aR — A's group gets a + aR; B is independent
-    const { items: out } = collapseFeedByRoot([a, b, aR], {
+    const { items: out } = collapseFeedByRoot([p('A'), p('B'), p('aR', 'A')], {
       collapseByRoot: true,
       maxPerRoot: 2,
       ...opts,
     });
-    // A group is first-seen, so its kept items come before B's items;
-    // within group A the items appear in encounter order: [A, aR]
     expect(out.map((i) => i.id)).toEqual(['A', 'aR', 'B']);
   });
 
-  it('handles nested chain: grandchild groups under great-grandparent root', () => {
-    // Chain: root -> A -> B (all in feed)
-    const root = p('root');
-    const A = p('A', 'root');
-    const B = p('B', 'A');
-    // B's root in feed is 'root' (walks up byId to find it)
-    const { items: out } = collapseFeedByRoot([root, A, B], {
-      collapseByRoot: true,
-      maxPerRoot: 2,
-      ...opts,
-    });
-    // All 3 share root 'root', keep first 2
-    expect(out).toHaveLength(2);
+  it('spends its slots on the deepest chain, not on the first two rows', () => {
+    // Chain root -> A -> B, all three in the feed. The client renders one row
+    // anchored on B, so the two slots go to B and its parent A; root still
+    // renders as B's hydrated ancestor.
+    const { items: out, collapsedItemsByItemId } = collapseFeedByRoot(
+      [p('root'), p('A', 'root'), p('B', 'A')],
+      { collapseByRoot: true, maxPerRoot: 2, ...opts },
+    );
+    expect(out.map((i) => i.id)).toEqual(['A', 'B']);
+    expect(collapsedIds(collapsedItemsByItemId, 'B')).toEqual(['root']);
+  });
+
+  it('does not spend a slot on a sibling branch that would render nowhere', () => {
+    // `sibling` replies to root on its own branch. Keeping it would cost a DTO
+    // and still render nothing, so the slot goes to `A` (an ancestor of the
+    // anchor) and `sibling` is reported as unreturned instead.
+    const { items: out, collapsedItemsByItemId } = collapseFeedByRoot(
+      [p('sibling', 'root'), p('root'), p('A', 'root'), p('B', 'A')],
+      { collapseByRoot: true, maxPerRoot: 2, ...opts },
+    );
+    expect(out.map((i) => i.id)).toEqual(['A', 'B']);
+    expect(collapsedIds(collapsedItemsByItemId, 'B').sort()).toEqual(['root', 'sibling']);
   });
 });
 
-// ─── End-to-end scenario: "40 comments, but only 3 new replies" ──────────────
+// ─── Realistic scenario: 40 comments, 4 of them in the "new" feed ────────────
 
 describe('collapseFeedByRoot – realistic scenario: 40 comments, 4 in new feed', () => {
-  it('keeps 2 of 4 trending replies and reports collapsed count of 2', () => {
-    // John's post has 40 comments total. The new/trending feed includes 4 of
-    // them as individual feed items. maxPerRoot=2 keeps the first 2 and
-    // collapses the other 2.
-    // (john himself isn't asserted on; he just anchors the parent thread.)
-    const _john = p('john');
-    const nick = p('nick', 'john');   // reply 1 (kept)
-    const peter = p('peter', 'nick'); // reply 2 (kept) — deeper chain
-    const bob = p('bob', 'john');     // reply 3 (collapsed)
-    const alice = p('alice', 'john'); // reply 4 (collapsed)
+  it('keeps the deepest chain and reports the two sibling replies it dropped', () => {
+    // John's post has 40 comments total but is not itself in the feed page.
+    // Four of its replies are, as individual feed items.
+    const nick = p('nick', 'john');
+    const peter = p('peter', 'nick');
+    const bob = p('bob', 'john');
+    const alice = p('alice', 'john');
 
-    const { items: out, collapsedCountByKey, collapsedCountByItemId } = collapseFeedByRoot(
+    const { items: out, collapsedItemsByItemId } = collapseFeedByRoot(
       [nick, peter, bob, alice],
       { collapseByRoot: true, maxPerRoot: 2, ...opts },
     );
 
-    expect(out).toHaveLength(2);
     expect(out.map((i) => i.id)).toEqual(['nick', 'peter']);
-
-    // 4 total in group, 2 kept → 2 collapsed
-    expect(collapsedCountByKey.get('john')).toBe(2);
-
-    // Both kept items know about the 2 collapsed ones
-    expect(collapsedCountByItemId.get('nick')).toBe(2);
-    expect(collapsedCountByItemId.get('peter')).toBe(2);
-
-    // Collapsed items don't appear in the output or the per-item map
-    expect(out.some((i) => i.id === 'bob')).toBe(false);
-    expect(out.some((i) => i.id === 'alice')).toBe(false);
-    expect(collapsedCountByItemId.has('bob')).toBe(false);
-    expect(collapsedCountByItemId.has('alice')).toBe(false);
+    expect(collapsedIds(collapsedItemsByItemId, 'peter')).toEqual(['bob', 'alice']);
+    expect(collapsedItemsByItemId.has('bob')).toBe(false);
+    expect(collapsedItemsByItemId.has('alice')).toBe(false);
   });
 
-  it('only 1 reply from a 40-comment thread → nothing collapsed, no threadCollapsedCount', () => {
-    // Only 1 reply made the new feed. maxPerRoot=2 keeps it, collapses nothing.
-    const _john = p('john');
-    const nick = p('nick', 'john');
-
-    // Other independent post in the feed
-    const dave = p('dave');
-
-    const { items: out, collapsedCountByKey, collapsedCountByItemId } = collapseFeedByRoot(
-      [nick, dave],
+  it('only 1 reply from a 40-comment thread → nothing collapsed', () => {
+    const { items: out, collapsedItemsByItemId } = collapseFeedByRoot(
+      [p('nick', 'john'), p('dave')],
       { collapseByRoot: true, maxPerRoot: 2, ...opts },
     );
 
-    expect(out).toHaveLength(2);
     expect(out.map((i) => i.id)).toEqual(['nick', 'dave']);
-    expect(collapsedCountByKey.has('john')).toBe(false);
-    expect(collapsedCountByItemId.has('nick')).toBe(false);
+    expect(collapsedItemsByItemId.size).toBe(0);
   });
 
-  it('exactly 2 replies from a thread → both kept, nothing collapsed', () => {
-    const _john = p('john');
-    const nick = p('nick', 'john');
-    const peter = p('peter', 'nick');
-
-    const { items: out, collapsedCountByKey } = collapseFeedByRoot(
-      [nick, peter],
+  it('exactly 2 replies from one chain → both kept, nothing collapsed', () => {
+    const { items: out, collapsedItemsByItemId } = collapseFeedByRoot(
+      [p('nick', 'john'), p('peter', 'nick')],
       { collapseByRoot: true, maxPerRoot: 2, ...opts },
     );
 
     expect(out).toHaveLength(2);
-    expect(collapsedCountByKey.has('john')).toBe(false);
+    expect(collapsedItemsByItemId.size).toBe(0);
   });
 
   it('mixed threads: one thread has 4 items, another has 1', () => {
-    // Thread A (john): 4 replies in feed → keep 2, collapse 2
-    // Thread B (mary): 1 reply in feed → keep 1, collapse 0
-    const _john = p('john');
-    const r1 = p('r1', 'john');
-    const r2 = p('r2', 'john');
-    const r3 = p('r3', 'john');
-    const r4 = p('r4', 'john');
-
-    const _mary = p('mary');
-    const s1 = p('s1', 'mary');
-
-    const { items: out, collapsedCountByKey, collapsedCountByItemId } = collapseFeedByRoot(
-      [r1, r2, s1, r3, r4],
+    const { items: out, collapsedItemsByItemId } = collapseFeedByRoot(
+      [p('r1', 'john'), p('r2', 'john'), p('s1', 'mary'), p('r3', 'john'), p('r4', 'john')],
       { collapseByRoot: true, maxPerRoot: 2, ...opts },
     );
 
-    // r1 + r2 kept from john's thread; s1 kept from mary's thread
-    expect(out).toHaveLength(3);
-    expect(out.map((i) => i.id)).toEqual(['r1', 'r2', 's1']);
-
-    expect(collapsedCountByKey.get('john')).toBe(2);
-    expect(collapsedCountByKey.has('mary')).toBe(false);
-
-    expect(collapsedCountByItemId.get('r1')).toBe(2);
-    expect(collapsedCountByItemId.get('r2')).toBe(2);
-    expect(collapsedCountByItemId.has('s1')).toBe(false);
+    expect(out.map((i) => i.id)).toEqual(['r1', 's1']);
+    expect(collapsedIds(collapsedItemsByItemId, 'r1')).toEqual(['r2', 'r3', 'r4']);
+    expect(collapsedItemsByItemId.has('s1')).toBe(false);
   });
 });
