@@ -18,6 +18,7 @@ export type ImpersonationDto = {
 };
 
 export type AuthMeDto = UserDto & {
+  /** Published, non-deleted posts excluding only-me. Matches the profile total. */
   postCount: number | null;
   articleCount: number | null;
   /** Non-null only while a site admin is impersonating this user. */

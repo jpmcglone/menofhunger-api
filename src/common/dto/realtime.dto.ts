@@ -100,7 +100,7 @@ export type PublicProfileDto = {
   lastOnlineAt: string | null;
   checkinStreakDays: number;
   longestStreakDays: number;
-  /** All published, non-deleted posts; present on full HTTP profiles. */
+  /** Published, non-deleted posts excluding only-me; present on full HTTP profiles. */
   postCount?: number;
   /** Published article total; present on full HTTP profiles and optional on realtime patches. */
   articleCount?: number;

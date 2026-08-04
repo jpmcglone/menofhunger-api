@@ -470,6 +470,7 @@ export type ImpersonationDto = {
 };
 
 export type AuthMeDto = UserDto & {
+  /** Published, non-deleted posts excluding only-me. Matches the profile total. */
   postCount: number | null;
   articleCount: number | null;
   /** Non-null only while a site admin is impersonating this user. */
@@ -542,12 +543,21 @@ export type BillingMeDto = {
     avatarUrl: string | null;
     premium: boolean;
     premiumPlus: boolean;
+    /** The recruiter's own opt-out for the steward shield; clients must honor it. */
+    stewardBadgeEnabled: boolean;
     verifiedStatus: 'none' | 'identity' | 'manual';
   } | null;
   /** How many users this user has recruited. */
   recruitCount: number;
   /** Whether the one-time referral bonus has been granted to this user. */
   referralBonusGranted: boolean;
+  /**
+   * True when the viewer was recruited by someone who is currently a paying subscriber,
+   * meaning their first Premium payment will earn them a free second month.
+   * False when there is no recruiter, the recruiter is not paying, or the bonus has
+   * already been granted.
+   */
+  recruitBonusEligible: boolean;
 };
 
 export type BillingCheckoutSessionDto = {
@@ -1567,7 +1577,7 @@ export type PublicProfileDto = {
   lastOnlineAt: string | null;
   checkinStreakDays: number;
   longestStreakDays: number;
-  /** All published, non-deleted posts; present on full HTTP profiles. */
+  /** Published, non-deleted posts excluding only-me; present on full HTTP profiles. */
   postCount?: number;
   /** Published article total; present on full HTTP profiles and optional on realtime patches. */
   articleCount?: number;
@@ -1901,6 +1911,12 @@ export type ReferralMeDto = {
   recruiter: { username: string | null; name: string | null } | null;
   recruitCount: number;
   referralBonusGranted: boolean;
+  /** True when the viewer can claim and share a referral code (verified or premium). */
+  canInvite: boolean;
+  /** True when the viewer has an active paid subscription (Stripe or Apple IAP). */
+  isPayingPremium: boolean;
+  /** Total months earned from referral grants (all time). */
+  monthsEarned: number;
 };
 
 export type AdminReferralInfoDto = {

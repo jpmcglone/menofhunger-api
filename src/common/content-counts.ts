@@ -2,13 +2,21 @@ import type { Prisma } from '@prisma/client';
 
 /**
  * Canonical authored-post total: every published, non-deleted post regardless
- * of visibility, audience, parent/thread position, repost kind, or group.
+ * of audience tier, parent/thread position, repost kind, or group.
+ *
+ * `onlyMe` posts are excluded. They are reachable only through the dedicated
+ * /posts/only-me feed and are filtered out of every profile feed — including
+ * the author's own view of it — so counting them would print a total that no
+ * viewer can reconcile with the list underneath it. It would also tell
+ * anonymous callers of the public profile API how much private material a
+ * member is keeping.
  */
 export function totalUserPostsWhere(userId: string): Prisma.PostWhereInput {
   return {
     userId,
     deletedAt: null,
     isDraft: false,
+    visibility: { not: 'onlyMe' },
   };
 }
 

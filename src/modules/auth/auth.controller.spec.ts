@@ -5,6 +5,7 @@ import { MessagesService } from '../messages/messages.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { totalUserArticlesWhere, totalUserPostsWhere } from '../../common/content-counts';
 
 describe('AuthController.me', () => {
   it('returns all home-load badge counts in the auth payload', async () => {
@@ -59,16 +60,14 @@ describe('AuthController.me', () => {
       impersonation: null,
     });
     expect(crewInvites.countInboxPending).toHaveBeenCalledWith('user-1');
+    // Defer to the canonical filters so /auth/me can't drift away from the
+    // totals the profile endpoints report. content-counts.spec.ts pins what
+    // those filters actually contain.
     expect(prisma.post.count).toHaveBeenCalledWith({
-      where: { userId: 'user-1', deletedAt: null, isDraft: false },
+      where: totalUserPostsWhere('user-1'),
     });
     expect(prisma.article.count).toHaveBeenCalledWith({
-      where: {
-        authorId: 'user-1',
-        deletedAt: null,
-        isDraft: false,
-        publishedAt: { not: null },
-      },
+      where: totalUserArticlesWhere('user-1'),
     });
   });
 

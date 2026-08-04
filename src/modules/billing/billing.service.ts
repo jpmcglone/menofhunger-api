@@ -95,6 +95,7 @@ export class BillingService {
             avatarUpdatedAt: true,
             premium: true,
             premiumPlus: true,
+            stewardBadgeEnabled: true,
             verifiedStatus: true,
             // Needed to compute recruitBonusEligible via isPayingSubscriber.
             stripeSubscriptionStatus: true,
@@ -161,6 +162,7 @@ export class BillingService {
             }),
             premium: Boolean(user.recruitedBy.premium),
             premiumPlus: Boolean(user.recruitedBy.premiumPlus),
+            stewardBadgeEnabled: Boolean(user.recruitedBy.stewardBadgeEnabled),
             verifiedStatus: (user.recruitedBy.verifiedStatus ?? 'none') as 'none' | 'identity' | 'manual',
           }
         : null,

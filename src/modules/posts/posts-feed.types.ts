@@ -3,6 +3,11 @@ import { POST_MEDIA_FEED_INCLUDE, POST_WITH_POLL_INCLUDE } from '../../common/pr
 
 /** Shared row/result shapes for the posts feed-query and mutation services. */
 
+/**
+ * Author totals shown alongside a profile feed. `all` is the sum of the three
+ * audience tiers — only-me posts are excluded, since they never appear in the
+ * feed these counts label.
+ */
 export type PostCounts = {
   all: number;
   public: number;
