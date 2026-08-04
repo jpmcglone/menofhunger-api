@@ -127,6 +127,7 @@ export class ReferralDigestEmailCron {
         subject,
         text: `${greeting}\n\n${count} ${plural} signed up with your referral code today.\n\n${recruits.map((r) => `• ${r.name ?? r.username ?? 'Someone'}${r.username ? ` (@${r.username}) — ${baseUrl}/u/${r.username}` : ''}`).join('\n')}\n\nManage referrals: ${baseUrl}/settings/billing`,
         html,
+        category: 'engagement',
       });
 
       if (result.sent) {

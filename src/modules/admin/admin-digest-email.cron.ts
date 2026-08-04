@@ -536,7 +536,7 @@ export class AdminDailyDigestCron {
           const subject = `Admin Digest — ${dateLabel}`;
           let sentCount = 0;
           for (const admin of validAdmins) {
-            const res = await this.email.sendEmail({ to: admin.email!, subject, text, html });
+            const res = await this.email.sendEmail({ to: admin.email!, subject, text, html, category: 'transactional' });
             if (res.sent) sentCount++;
             else this.logger.warn(`Admin daily digest: failed to send to ${admin.email}`);
           }

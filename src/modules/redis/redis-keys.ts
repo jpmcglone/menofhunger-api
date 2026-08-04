@@ -206,6 +206,16 @@ export const RedisKeys = {
     return `lock:linkmeta:${h}`;
   },
 
+  // Email quota budget (daily team counter + per-user engagement cap)
+  /** Transactional email send count for a UTC date (e.g. "2026-08-04"). TTL 48h. */
+  emailDailyCount(dateKey: string): string {
+    return `email:daily:count:${clean(dateKey)}`;
+  },
+  /** Last engagement email timestamp for a user. Exists while the 24h cap is active. TTL 24h+. */
+  emailLastEngagement(userId: string): string {
+    return `email:eng:last:${clean(userId)}`;
+  },
+
   /** scripture:{translation}:{bookId}:{chapter} — immutable verse text, 30-day TTL. */
   scriptureChapter(translation: string, bookId: string, chapter: number): string {
     return `scripture:${clean(translation)}:${clean(bookId)}:${chapter}`;

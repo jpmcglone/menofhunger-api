@@ -541,6 +541,27 @@ export const envSchema = z.object({
     .string()
     .optional()
     .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true), 'MARV_QUEUE_CONCURRENCY must be a positive number'),
+
+  // Email quota budget — matches the Resend free-tier hard limit (100/day).
+  // Upgrade Resend and raise these to remove the constraint.
+  // EMAIL_DAILY_QUOTA_LIMIT: total sends allowed per UTC day (default 100).
+  EMAIL_DAILY_QUOTA_LIMIT: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true), 'EMAIL_DAILY_QUOTA_LIMIT must be a positive number'),
+  // EMAIL_DAILY_VERIFICATION_RESERVE: sends kept in reserve for transactional email (default 15).
+  // Engagement sends are blocked once (quota - reserve) is reached.
+  EMAIL_DAILY_VERIFICATION_RESERVE: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) >= 0 : true), 'EMAIL_DAILY_VERIFICATION_RESERVE must be a non-negative number'),
+
+  // Per-publish article fan-out email. Disable (false) on the Resend free tier —
+  // new articles already appear in the weekly digest. Enable (true) after upgrading.
+  EMAIL_FOLLOWED_ARTICLE_ENABLED: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default('false'),
+  ),
 }).superRefine((env, ctx) => {
   if (env.NODE_ENV !== 'production') return;
 

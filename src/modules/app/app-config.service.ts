@@ -539,6 +539,35 @@ export class AppConfigService {
     return null;
   }
 
+  /**
+   * Maximum transactional emails allowed per UTC day across all send paths.
+   * Matches the Resend free-tier hard limit (100). Raise when upgrading plans.
+   */
+  emailDailyQuotaLimit(): number {
+    const raw = this.config.get<string>('EMAIL_DAILY_QUOTA_LIMIT') ?? '';
+    const n = Number(raw.trim());
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 100;
+  }
+
+  /**
+   * Number of sends reserved for transactional email (verification) per day.
+   * Engagement sends are blocked once (quotaLimit - reserve) is reached.
+   */
+  emailDailyVerificationReserve(): number {
+    const raw = this.config.get<string>('EMAIL_DAILY_VERIFICATION_RESERVE') ?? '';
+    const n = Number(raw.trim());
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 15;
+  }
+
+  /**
+   * When false, per-publish article fan-out emails are skipped.
+   * New articles still appear in the weekly digest.
+   * Disable on the Resend free tier; enable after upgrading.
+   */
+  emailFollowedArticleEnabled(): boolean {
+    return this.readBool('EMAIL_FOLLOWED_ARTICLE_ENABLED', false);
+  }
+
   slackWebhookUrl(): string | null {
     const v = this.config.get<string>('SLACK_WEBHOOK_URL')?.trim() ?? '';
     return v ? v : null;

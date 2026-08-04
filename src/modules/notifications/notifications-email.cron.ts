@@ -108,7 +108,9 @@ export class NotificationsEmailCron {
   private readonly logger = new Logger(NotificationsEmailCron.name);
 
   private readonly INSTANT_EMAIL_DELAY_MS = 2 * 60_000;
-  private readonly INSTANT_EMAIL_COOLDOWN_MS = 15 * 60_000;
+  // Raised from 15m: instant email is a supplement to push, not a race.
+  // Still delivers within a business hour for most users.
+  private readonly INSTANT_EMAIL_COOLDOWN_MS = 6 * 60 * 60_000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -139,6 +141,8 @@ export class NotificationsEmailCron {
       text: params.text,
       html: params.html,
       from: this.notificationsFromAddress(),
+      category: 'engagement',
+      userId: params.userId,
     });
 
     if (sent.sent) {
@@ -303,7 +307,8 @@ export class NotificationsEmailCron {
 
     try {
       const now = new Date();
-      const cutoff = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+      // Raised from 12h: one nudge every 2 days conserves quota while still catching lurkers.
+      const cutoff = new Date(now.getTime() - 48 * 60 * 60 * 1000);
       const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
       const notificationsUrl = `${baseUrl}/notifications`;
 
@@ -1703,6 +1708,14 @@ ${chatPreviewRows
     const { articleId, authorUserId } = data ?? {};
     if (!articleId || !authorUserId) {
       this.logger.warn(`[followed-article-email] missing articleId or authorUserId in job data`);
+      return;
+    }
+
+    // Per-publish fan-out is disabled by default on the Resend free tier.
+    // New articles appear in the weekly digest instead.
+    // Enable EMAIL_FOLLOWED_ARTICLE_ENABLED=true after upgrading Resend.
+    if (!this.appConfig.emailFollowedArticleEnabled()) {
+      this.logger.debug(`[followed-article-email] article=${articleId} skipped (EMAIL_FOLLOWED_ARTICLE_ENABLED=false)`);
       return;
     }
 

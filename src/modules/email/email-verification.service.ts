@@ -111,6 +111,7 @@ export class EmailVerificationService {
       text,
       html,
       from: this.appConfig.email()?.fromEmail.support ?? undefined,
+      category: 'transactional',
     });
     if (!sent.sent) {
       this.logger.warn(`[verify] email not sent userId=${user.id} reason=${sent.reason ?? 'unknown'}`);
