@@ -550,3 +550,64 @@ describe('EntitlementService.getGrantSummary', () => {
     expect(summary).toEqual({ premiumMonthsRemaining: 0, premiumPlusMonthsRemaining: 0 });
   });
 });
+
+// ─── isPayingSubscriber ───────────────────────────────────────────────────────
+
+import { isPayingSubscriber } from './entitlement.service';
+
+describe('isPayingSubscriber', () => {
+  const base = {
+    verifiedStatus: 'identity',
+    stripeSubscriptionStatus: null as string | null,
+    appleStatus: null as string | null,
+    appleExpiresAt: null as Date | null,
+  };
+
+  it('returns true when Stripe subscription is active', () => {
+    expect(isPayingSubscriber({ ...base, stripeSubscriptionStatus: 'active' })).toBe(true);
+  });
+
+  it('returns true when Stripe subscription is trialing', () => {
+    expect(isPayingSubscriber({ ...base, stripeSubscriptionStatus: 'trialing' })).toBe(true);
+  });
+
+  it('returns true when Apple subscription is active and not expired', () => {
+    const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    expect(isPayingSubscriber({ ...base, appleStatus: 'active', appleExpiresAt: future })).toBe(true);
+  });
+
+  it('returns false when Apple subscription is active but expired', () => {
+    const past = new Date(Date.now() - 1000);
+    expect(isPayingSubscriber({ ...base, appleStatus: 'active', appleExpiresAt: past })).toBe(false);
+  });
+
+  it('returns false when user is unverified regardless of subscription', () => {
+    expect(
+      isPayingSubscriber({ ...base, verifiedStatus: 'none', stripeSubscriptionStatus: 'active' }),
+    ).toBe(false);
+  });
+
+  it('returns false when there is no paid subscription', () => {
+    expect(isPayingSubscriber(base)).toBe(false);
+  });
+});
+
+// ─── standalone referral grant entitlement ───────────────────────────────────
+
+describe('EntitlementService — standalone referral grant (requiresActiveSubscription: false)', () => {
+  it('grants premium from a referral grant even with no Stripe subscription', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue(
+      userRow({
+        subscriptionGrants: [
+          grantRow({ source: 'referral', requiresActiveSubscription: false }),
+        ],
+      }),
+    );
+
+    const result = await service.recomputeAndApply('u1');
+
+    expect(result.isPremium).toBe(true);
+    expect(result.effectiveTier).toBe('premium');
+  });
+});

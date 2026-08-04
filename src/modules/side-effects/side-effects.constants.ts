@@ -260,6 +260,16 @@ export interface SideEffectPayloads {
     direction: 'started' | 'ended';
   };
   /**
+   * Referral bonus was granted — one-time, once per recruit's first payment.
+   * Handler calls syncGrantTrialToSubscription for both parties so any
+   * active Stripe subscriptions defer their next charge to absorb the free month.
+   * Payload uses IDs only (no mutable state snapshots).
+   */
+  'referral.bonus.granted': {
+    recruitId: string;
+    recruiterId: string;
+  };
+  /**
    * Evaluate the auto-verify site toggle for a new signup or a freshly-linked recruit.
    *
    * The toggle is read in the handler, not the caller, so an admin flipping it mid-flight

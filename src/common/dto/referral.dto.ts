@@ -23,6 +23,12 @@ export type ReferralMeDto = {
   recruiter: { username: string | null; name: string | null } | null;
   recruitCount: number;
   referralBonusGranted: boolean;
+  /** True when the viewer can claim and share a referral code (verified or premium). */
+  canInvite: boolean;
+  /** True when the viewer has an active paid subscription (Stripe or Apple IAP). */
+  isPayingPremium: boolean;
+  /** Total months earned from referral grants (all time). */
+  monthsEarned: number;
 };
 
 export type AdminReferralInfoDto = {

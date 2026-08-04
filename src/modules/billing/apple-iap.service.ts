@@ -11,6 +11,7 @@ import { AppConfigService, type AppleIapConfig } from '../app/app-config.service
 import { EntitlementService } from './entitlement.service';
 import type { BillingMeDto } from '../../common/dto';
 import { BillingService } from './billing.service';
+import { ReferralService } from './referral.service';
 import { APPLE_ROOT_CERTIFICATES } from './apple-root-certs';
 
 const AUTO_RENEWABLE_SUBSCRIPTION = 'Auto-Renewable Subscription';
@@ -40,6 +41,7 @@ export class AppleIapService {
     private readonly appConfig: AppConfigService,
     private readonly entitlement: EntitlementService,
     private readonly billing: BillingService,
+    private readonly referral: ReferralService,
   ) {}
 
   /**
@@ -145,6 +147,18 @@ export class AppleIapService {
     });
 
     await this.entitlement.recomputeAndApply(userId);
+
+    // Mirror the Stripe path: trigger the one-time referral bonus when this user's
+    // Apple subscription first becomes active.  maybeGrantReferralBonus is idempotent
+    // via referralBonusGrantedAt, so calling it on every active transaction is safe.
+    if (isActive) {
+      try {
+        await this.referral.maybeGrantReferralBonus(userId);
+      } catch (err) {
+        this.logger.warn(`[apple-iap] Failed to grant referral bonus for user ${userId}: ${err}`);
+      }
+    }
+
     return this.billing.getMe(userId);
   }
 
@@ -237,6 +251,15 @@ export class AppleIapService {
 
     await this.entitlement.recomputeAndApply(user.id);
     this.logger.log(`[apple-iap] Recomputed entitlement for user ${user.id} after ${notificationType ?? 'notification'}`);
+
+    // Trigger one-time referral bonus on active subscription events (idempotent).
+    if (status === 'active') {
+      try {
+        await this.referral.maybeGrantReferralBonus(user.id);
+      } catch (err) {
+        this.logger.warn(`[apple-iap] Failed to grant referral bonus for user ${user.id}: ${err}`);
+      }
+    }
   }
 
   // ── Private ──────────────────────────────────────────────────────────────

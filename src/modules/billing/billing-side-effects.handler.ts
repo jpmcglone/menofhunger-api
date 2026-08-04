@@ -3,10 +3,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import type { SideEffectPayloads } from '../side-effects/side-effects.constants';
 import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
+import { BillingService } from './billing.service';
 
 /**
  * Billing side effects: sends a bell notification when the user's premium access
- * crosses the none <-> premium boundary.
+ * crosses the none <-> premium boundary, and syncs Stripe trial windows after a
+ * referral bonus is granted so the free month actually defers the next charge.
  *
  * The handler re-reads current DB state before writing so a delayed retry is safe:
  * if the DB already reflects the *opposite* of `direction`, the write is skipped.
@@ -17,10 +19,12 @@ export class BillingSideEffectsHandler implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly registry: SideEffectsRegistry,
+    private readonly billing: BillingService,
   ) {}
 
   onModuleInit(): void {
     this.registry.register('billing.premium.changed', (p) => this.onPremiumChanged(p));
+    this.registry.register('referral.bonus.granted', (p) => this.onReferralBonusGranted(p));
   }
 
   private async onPremiumChanged(
@@ -45,5 +49,19 @@ export class BillingSideEffectsHandler implements OnModuleInit {
       kind: direction === 'started' ? 'premium_started' : 'premium_ended',
       isPremiumPlus: user.premiumPlus,
     });
+  }
+
+  /**
+   * Sync Stripe trial windows for both the recruit and the recruiter so the
+   * referral grant actually defers their next Stripe charge.
+   * Best-effort and idempotent — syncGrantTrialToSubscription is a no-op when the
+   * user has no active Stripe subscription.
+   */
+  private async onReferralBonusGranted(
+    payload: SideEffectPayloads['referral.bonus.granted'],
+  ): Promise<void> {
+    const { recruitId, recruiterId } = payload;
+    await this.billing.syncGrantTrialToSubscription(recruiterId);
+    await this.billing.syncGrantTrialToSubscription(recruitId);
   }
 }

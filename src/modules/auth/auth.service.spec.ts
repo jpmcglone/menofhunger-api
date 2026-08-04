@@ -636,7 +636,7 @@ describe('AuthService.verifyPhoneCode — referral signup linking', () => {
     const prisma = {
       user: {
         findUnique: jest.fn(async () => null),
-        findFirst: jest.fn(async () => ({ id: 'recruiter-1', premium: true })),
+        findFirst: jest.fn(async () => ({ id: 'recruiter-1', verifiedStatus: 'identity' })),
         create: jest.fn(async () => createdUser),
       },
       phoneOtp: {
@@ -657,7 +657,7 @@ describe('AuthService.verifyPhoneCode — referral signup linking', () => {
 
     expect(prisma.user.findFirst).toHaveBeenCalledWith({
       where: { referralCode: 'JOHN-CODE' },
-      select: { id: true, premium: true },
+      select: { id: true, verifiedStatus: true },
     });
     expect(prisma.user.create).toHaveBeenCalledWith({
       data: expect.objectContaining({

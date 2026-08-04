@@ -22,6 +22,7 @@ function makeDeps(appleIapCfg: unknown = APPLE_CFG) {
     appConfig: { appleIap: jest.fn(() => appleIapCfg) },
     entitlement: { recomputeAndApply: jest.fn(async () => undefined) },
     billing: { getMe: jest.fn(async () => ({})) },
+    referral: { maybeGrantReferralBonus: jest.fn(async () => undefined) },
   };
 }
 
@@ -32,6 +33,7 @@ function makeService(appleIapCfg: unknown = APPLE_CFG) {
     deps.appConfig as any,
     deps.entitlement as any,
     deps.billing as any,
+    deps.referral as any,
   );
   return { service, deps };
 }

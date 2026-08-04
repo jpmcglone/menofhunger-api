@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
-import { EntitlementService } from './entitlement.service';
+import { EntitlementService, isPayingSubscriber } from './entitlement.service';
 import { FollowsService } from '../follows/follows.service';
 import { AffiliateService } from './affiliate.service';
 import { toUserListDto } from '../../common/dto/user.dto';
@@ -51,11 +51,29 @@ export class ReferralService {
       select: {
         referralCode: true,
         referralBonusGrantedAt: true,
+        verifiedStatus: true,
+        premium: true,
+        stripeSubscriptionStatus: true,
+        appleStatus: true,
+        appleExpiresAt: true,
         recruitedBy: { select: { username: true, name: true } },
         _count: { select: { recruits: true } },
       },
     });
     if (!user) throw new NotFoundException('User not found.');
+
+    const referralGrants = await this.prisma.subscriptionGrant.aggregate({
+      where: { userId, source: 'referral' },
+      _sum: { months: true },
+    });
+
+    const canInvite = user.verifiedStatus !== 'none' || Boolean(user.premium);
+    const isPayingPremium = isPayingSubscriber({
+      verifiedStatus: user.verifiedStatus,
+      stripeSubscriptionStatus: user.stripeSubscriptionStatus,
+      appleStatus: user.appleStatus,
+      appleExpiresAt: user.appleExpiresAt,
+    });
 
     return {
       referralCode: user.referralCode ?? null,
@@ -64,13 +82,16 @@ export class ReferralService {
         : null,
       recruitCount: user._count.recruits,
       referralBonusGranted: user.referralBonusGrantedAt !== null,
+      canInvite,
+      isPayingPremium,
+      monthsEarned: referralGrants._sum.months ?? 0,
     };
   }
 
   /**
    * Set or update the calling user's referral code.
    * Codes are normalized to uppercase before storage so the DB unique constraint works correctly.
-   * Only premium users may hold a referral code.
+   * Verified members (identity or manual) and premium members may hold a referral code.
    */
   async setReferralCode(userId: string, code: string): Promise<{ referralCode: string }> {
     const normalized = code.trim().toUpperCase();
@@ -82,11 +103,11 @@ export class ReferralService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { premium: true, referralCode: true },
+      select: { premium: true, verifiedStatus: true, referralCode: true },
     });
     if (!user) throw new NotFoundException('User not found.');
-    if (!user.premium) {
-      throw new ForbiddenException('Only premium members can set a referral code.');
+    if (!user.premium && user.verifiedStatus === 'none') {
+      throw new ForbiddenException('Only verified members can set a referral code.');
     }
 
     // Check uniqueness (exclude self). Exact match is sufficient since codes are always uppercased.
@@ -134,7 +155,7 @@ export class ReferralService {
   /**
    * Apply a referral code to link this user to a recruiter.
    * Once set, the recruiter can never be changed by the user.
-   * The code owner must be premium at the time of linking.
+   * The code owner must be verified (or premium) at the time of linking.
    */
   async setRecruiter(userId: string, code: string): Promise<{ recruiter: { username: string | null; name: string | null } }> {
     const normalized = code.trim().toUpperCase();
@@ -150,10 +171,10 @@ export class ReferralService {
 
     const recruiter = await this.prisma.user.findFirst({
       where: { referralCode: normalized },
-      select: { id: true, username: true, name: true, premium: true },
+      select: { id: true, username: true, name: true, premium: true, verifiedStatus: true },
     });
     if (!recruiter) throw new BadRequestException('Invalid referral code.');
-    if (!recruiter.premium) {
+    if (!recruiter.premium && recruiter.verifiedStatus === 'none') {
       throw new BadRequestException('That referral code is no longer active.');
     }
     if (recruiter.id === userId) {
@@ -190,10 +211,19 @@ export class ReferralService {
   // ─── Bonus grant ────────────────────────────────────────────────────────────
 
   /**
-   * Award the one-time referral bonus to both the recruit and their recruiter.
-   * Called after the recruit's first Stripe payment goes through.
-   * Idempotent: uses an atomic DB update to mark the bonus as granted before issuing grants,
-   * preventing duplicate grants if called concurrently.
+   * Award the one-time referral bonus after the recruit's first Premium payment.
+   *
+   * Rules:
+   *   - The **inviter (recruiter) always** receives +1 month of Premium.
+   *   - The **recruit also** receives +1 month, but **only** when the recruiter has an
+   *     active paid subscription (Stripe or Apple IAP) at the time the bonus fires.
+   *     A recruiter whose premium comes only from a comp/grant does not trigger the
+   *     recruit's bonus — the offer is "go Premium yourself and he gets one too."
+   *
+   * Idempotent: uses an atomic DB update on `referralBonusGrantedAt` so concurrent
+   * calls race-free.  Dispatches `referral.bonus.granted` so the side-effects worker
+   * can call syncGrantTrialToSubscription for both parties (fixing the Stripe trial
+   * window without a DI cycle into BillingService from here).
    */
   async maybeGrantReferralBonus(recruitId: string): Promise<void> {
     const recruit = await this.prisma.user.findUnique({
@@ -202,18 +232,25 @@ export class ReferralService {
         id: true,
         referralBonusGrantedAt: true,
         recruitedById: true,
-        recruitedBy: { select: { id: true } },
+        recruitedBy: {
+          select: {
+            id: true,
+            verifiedStatus: true,
+            stripeSubscriptionStatus: true,
+            appleStatus: true,
+            appleExpiresAt: true,
+          },
+        },
       },
     });
 
     if (!recruit) return;
-    if (recruit.referralBonusGrantedAt) return; // fast-path: already done
-    if (!recruit.recruitedById || !recruit.recruitedBy) return; // no recruiter
+    if (recruit.referralBonusGrantedAt) return;
+    if (!recruit.recruitedById || !recruit.recruitedBy) return;
 
     const now = new Date();
 
-    // Atomically claim the bonus slot. If another process already claimed it,
-    // updateMany returns count=0 and we bail out — preventing double grants.
+    // Atomically claim the bonus slot to prevent double-grants under concurrency.
     const { count } = await this.prisma.user.updateMany({
       where: { id: recruitId, referralBonusGrantedAt: null },
       data: { referralBonusGrantedAt: now },
@@ -221,14 +258,27 @@ export class ReferralService {
     if (count === 0) return;
 
     const recruiterId = recruit.recruitedById;
+    const recruiterIsPaying = isPayingSubscriber(recruit.recruitedBy, now);
 
-    await this.issueReferralGrant(recruitId, now);
+    // Recruiter always earns a month.
     await this.issueReferralGrant(recruiterId, now);
+    // Recruit earns a month only when the recruiter has a paid subscription.
+    if (recruiterIsPaying) {
+      await this.issueReferralGrant(recruitId, now);
+    }
 
-    await this.entitlement.recomputeAndApply(recruitId);
     await this.entitlement.recomputeAndApply(recruiterId);
+    await this.entitlement.recomputeAndApply(recruitId);
 
-    this.logger.log(`[referral] Bonus granted: recruit=${recruitId} recruiter=${recruiterId}`);
+    this.logger.log(
+      `[referral] Bonus granted: recruit=${recruitId} recruiter=${recruiterId} recruiterIsPaying=${recruiterIsPaying}`,
+    );
+
+    // Side effect: sync Stripe trial windows for both parties so the free month
+    // actually defers billing.  Dispatched (not awaited) to avoid the DI cycle that
+    // would arise from injecting BillingService here — BillingService already injects
+    // ReferralService.
+    this.sideEffects.dispatch('referral.bonus.granted', { recruitId, recruiterId });
 
     // Record affiliate cash earning for the premium milestone (best-effort; idempotent).
     try {
@@ -255,7 +305,9 @@ export class ReferralService {
         months: REFERRAL_BONUS_MONTHS,
         startsAt,
         endsAt,
-        requiresActiveSubscription: true,
+        // requiresActiveSubscription: false so the month is real standalone access —
+        // a non-paying verified inviter still gets a month of Premium they can use immediately.
+        requiresActiveSubscription: false,
         reason: 'Referral bonus',
       },
     });

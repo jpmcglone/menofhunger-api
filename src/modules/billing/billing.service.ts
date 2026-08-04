@@ -11,7 +11,7 @@ import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
-import { EntitlementService, laterDate } from './entitlement.service';
+import { EntitlementService, laterDate, isPayingSubscriber } from './entitlement.service';
 import { ReferralService } from './referral.service';
 
 type StripeCtx = { stripe: Stripe; cfg: NonNullable<ReturnType<AppConfigService['stripe']>> };
@@ -96,6 +96,10 @@ export class BillingService {
             premium: true,
             premiumPlus: true,
             verifiedStatus: true,
+            // Needed to compute recruitBonusEligible via isPayingSubscriber.
+            stripeSubscriptionStatus: true,
+            appleStatus: true,
+            appleExpiresAt: true,
           },
         },
         _count: { select: { recruits: true } },
@@ -162,6 +166,10 @@ export class BillingService {
         : null,
       recruitCount: user._count.recruits,
       referralBonusGranted: user.referralBonusGrantedAt !== null,
+      recruitBonusEligible:
+        !user.referralBonusGrantedAt &&
+        user.recruitedBy !== null &&
+        isPayingSubscriber(user.recruitedBy, now),
     };
   }
 
@@ -621,8 +629,9 @@ export class BillingService {
     }
 
     // When the subscription first becomes active (paid), check if a referral bonus should be
-    // awarded to this user and their recruiter. The bonus only fires once (guarded by
-    // referralBonusGrantedAt) and only when both parties have an active Stripe subscription.
+    // awarded to this user and their recruiter.  maybeGrantReferralBonus is idempotent via
+    // referralBonusGrantedAt; it determines internally whether the recruit also earns a month
+    // (based on whether the recruiter has an active paid subscription at bonus time).
     if (
       status === 'active' &&
       user.recruitedById &&

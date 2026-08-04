@@ -48,6 +48,32 @@ function addMonths(date: Date, months: number): Date {
 
 const ENTITLED_STRIPE_STATUSES = new Set(['active', 'trialing', 'past_due']);
 
+/**
+ * Returns true when the user has an actual paid subscription (Stripe or Apple IAP),
+ * as opposed to premium backed only by an admin/referral grant.
+ *
+ * Used to determine whether the recruiter side of a referral bonus earns the recruit
+ * a free month — verified inviters always earn a month for themselves, but the recruit
+ * only earns one when the person who brought them in is actively paying.
+ */
+export function isPayingSubscriber(
+  u: {
+    verifiedStatus: string;
+    stripeSubscriptionStatus: string | null;
+    appleStatus: string | null;
+    appleExpiresAt: Date | null;
+  },
+  now = new Date(),
+): boolean {
+  if (u.verifiedStatus === 'none') return false;
+  if (ENTITLED_STRIPE_STATUSES.has(u.stripeSubscriptionStatus ?? '')) return true;
+  return (
+    (u.appleStatus === 'active' || u.appleStatus === 'grace') &&
+    u.appleExpiresAt != null &&
+    u.appleExpiresAt > now
+  );
+}
+
 const MS_PER_MONTH = 30.44 * 24 * 60 * 60 * 1000;
 
 /** Returns the later of two nullable dates, or null if both are null. */

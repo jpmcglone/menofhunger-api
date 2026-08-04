@@ -273,9 +273,10 @@ export class AuthService {
       try {
         const recruiter = await this.prisma.user.findFirst({
           where: { referralCode: referralCode.trim().toUpperCase() },
-          select: { id: true, premium: true },
+          select: { id: true, verifiedStatus: true },
         });
-        if (recruiter && recruiter.premium) {
+        // Code owners must be verified (identity or manual) to be valid recruiters.
+        if (recruiter && recruiter.verifiedStatus !== 'none') {
           recruitedById = recruiter.id;
         }
       } catch {

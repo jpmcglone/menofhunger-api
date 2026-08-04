@@ -1,6 +1,6 @@
 import { BillingSideEffectsHandler } from './billing-side-effects.handler';
 
-function makeHandler(overrides: { prisma?: any; notifications?: any } = {}) {
+function makeHandler(overrides: { prisma?: any; notifications?: any; billing?: any } = {}) {
   const prisma = overrides.prisma ?? {
     user: {
       findUnique: jest.fn(),
@@ -9,9 +9,12 @@ function makeHandler(overrides: { prisma?: any; notifications?: any } = {}) {
   const notifications = overrides.notifications ?? {
     upsertPremiumStatusNotification: jest.fn(async () => undefined),
   };
+  const billing = overrides.billing ?? {
+    syncGrantTrialToSubscription: jest.fn(async () => undefined),
+  };
   const registry = { register: jest.fn() } as any;
-  const handler = new BillingSideEffectsHandler(prisma, notifications, registry);
-  return { handler, prisma, notifications, registry };
+  const handler = new BillingSideEffectsHandler(prisma, notifications, registry, billing);
+  return { handler, prisma, notifications, billing, registry };
 }
 
 afterEach(() => {
@@ -24,6 +27,15 @@ describe('BillingSideEffectsHandler.onModuleInit', () => {
     handler.onModuleInit();
     expect(registry.register).toHaveBeenCalledWith(
       'billing.premium.changed',
+      expect.any(Function),
+    );
+  });
+
+  it('registers referral.bonus.granted', () => {
+    const { handler, registry } = makeHandler();
+    handler.onModuleInit();
+    expect(registry.register).toHaveBeenCalledWith(
+      'referral.bonus.granted',
       expect.any(Function),
     );
   });
@@ -101,5 +113,24 @@ describe('BillingSideEffectsHandler — billing.premium.changed', () => {
     await triggerHandler(handler, { userId: 'missing', direction: 'started' });
 
     expect(notifications.upsertPremiumStatusNotification).not.toHaveBeenCalled();
+  });
+});
+
+describe('BillingSideEffectsHandler — referral.bonus.granted', () => {
+  function triggerHandler(
+    handler: BillingSideEffectsHandler,
+    payload: { recruitId: string; recruiterId: string },
+  ) {
+    return (handler as any).onReferralBonusGranted(payload);
+  }
+
+  it('calls syncGrantTrialToSubscription for both recruit and recruiter', async () => {
+    const { handler, billing } = makeHandler();
+
+    await triggerHandler(handler, { recruitId: 'recruit1', recruiterId: 'recruiter1' });
+
+    expect(billing.syncGrantTrialToSubscription).toHaveBeenCalledWith('recruiter1');
+    expect(billing.syncGrantTrialToSubscription).toHaveBeenCalledWith('recruit1');
+    expect(billing.syncGrantTrialToSubscription).toHaveBeenCalledTimes(2);
   });
 });
