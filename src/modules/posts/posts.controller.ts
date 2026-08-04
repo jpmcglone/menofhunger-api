@@ -1084,6 +1084,24 @@ export class PostsController {
 
     const allPosts = [...chain, ...(repostedPostRaw ? [repostedPostRaw] : [])];
     const postIds = allPosts.map((p) => p.id);
+
+    // Collect quotedPostIds across all posts in the chain and build a viewer-gated map.
+    // Using getById ensures all tier/membership/visibility gates are applied before we
+    // include the quoted post in the DTO — same as the feed path via quotedPostMap.
+    const quotedPostIds = Array.from(
+      new Set(
+        allPosts
+          .map((p) => (p as { quotedPostId?: string | null }).quotedPostId)
+          .filter((qid): qid is string => Boolean(qid)),
+      ),
+    );
+    const quotedPostByIdPermalink = new Map<string, Awaited<ReturnType<typeof this.posts.getById>>>();
+    await Promise.all(
+      quotedPostIds.map(async (qid) => {
+        const qp = await this.posts.getById({ viewerUserId, id: qid }).catch(() => null);
+        if (qp) quotedPostByIdPermalink.set(qid, qp);
+      }),
+    );
     const boosted = viewerUserId
       ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds })
       : new Set<string>();
@@ -1127,9 +1145,10 @@ export class PostsController {
       const resolvedGroupPreview = opts.isGatedRoot
         ? opts.groupPreview ?? null
         : ownGroupPreview ?? undefined;
-      const quotedPostRaw = (p as any).quotedPost ?? null;
-      const quotedPostDto = quotedPostRaw
-        ? toPostDto(quotedPostRaw, r2)
+      const quotedPostIdVal = (p as any).quotedPostId as string | null | undefined;
+      const quotedPostFromMap = quotedPostIdVal ? quotedPostByIdPermalink.get(quotedPostIdVal) : undefined;
+      const quotedPostDto = quotedPostFromMap
+        ? toPostDto(quotedPostFromMap as any, r2)
         : undefined;
       const dto = toPostDto(p, r2, {
         viewerHasBoosted: boosted.has(p.id),

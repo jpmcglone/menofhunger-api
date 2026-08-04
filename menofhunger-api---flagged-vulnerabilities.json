@@ -1,0 +1,67 @@
+{
+    "findings": [
+        {
+            "title": "Premium/gated quote body leaked on permalink via ungated toPostDto call on quotedPost raw include",
+            "status": "active",
+            "commit_hash": "835c7bae2ffe23d0e65465ac3c360145d8eb4233",
+            "detected_at_pst": "2026-08-03T14:07:44-0700",
+            "reported_link": "",
+            "severity": "high",
+            "location": "src/modules/posts/posts.controller.ts"
+        },
+        {
+            "title": "Private group ACL missing on listReposters and listQuotes endpoints allowing non-members to enumerate reposters and quotes",
+            "status": "active",
+            "commit_hash": "835c7bae2ffe23d0e65465ac3c360145d8eb4233",
+            "detected_at_pst": "2026-08-03T14:07:44-0700",
+            "reported_link": "",
+            "severity": "high",
+            "location": "src/modules/posts/posts-feed-query.service.ts"
+        },
+        {
+            "title": "Apple sandbox receipts accepted in production granting premium entitlement without a real App Store charge",
+            "status": "active",
+            "commit_hash": "835c7bae2ffe23d0e65465ac3c360145d8eb4233",
+            "detected_at_pst": "2026-08-03T14:07:44-0700",
+            "reported_link": "",
+            "severity": "high",
+            "location": "src/modules/billing/apple-iap.service.ts"
+        },
+        {
+            "title": "Group membership denial on GET /posts/:id falls through to gated tier preview leaking author identity and body snippet to non-members",
+            "status": "active",
+            "commit_hash": "835c7bae2ffe23d0e65465ac3c360145d8eb4233",
+            "detected_at_pst": "2026-08-03T14:07:44-0700",
+            "reported_link": "",
+            "severity": "medium",
+            "location": "src/modules/posts/posts.controller.ts"
+        },
+        {
+            "title": "Unauthenticated websocket client can subscribe to spaces and radio chat rooms and receive live buffered chat without joining",
+            "status": "active",
+            "commit_hash": "835c7bae2ffe23d0e65465ac3c360145d8eb4233",
+            "detected_at_pst": "2026-08-03T14:07:44-0700",
+            "reported_link": "",
+            "severity": "medium",
+            "location": "src/modules/presence/gateway/gateway-spaces.handler.ts"
+        },
+        {
+            "title": "Client-supplied video durationSeconds trusted without server-side probe allowing premium users to bypass duration caps",
+            "status": "active",
+            "commit_hash": "835c7bae2ffe23d0e65465ac3c360145d8eb4233",
+            "detected_at_pst": "2026-08-03T14:07:44-0700",
+            "reported_link": "",
+            "severity": "medium",
+            "location": "src/modules/uploads/uploads.service.ts"
+        },
+        {
+            "title": "Any stripe-signature header value short-circuits the CSRF Origin hard-gate globally defeating production CSRF protection for all cookie-auth mutations",
+            "status": "active",
+            "commit_hash": "835c7bae2ffe23d0e65465ac3c360145d8eb4233",
+            "detected_at_pst": "2026-08-03T14:07:44-0700",
+            "reported_link": "",
+            "severity": "medium",
+            "location": "src/main.ts"
+        }
+    ]
+}

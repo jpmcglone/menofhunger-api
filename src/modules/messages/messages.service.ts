@@ -1109,12 +1109,13 @@ export class MessagesService {
     if (uniqueRecipients.length === 0) throw new BadRequestException('At least one recipient is required.');
 
     // Tier rule:
+    // - Site admins can start new chats with any user (verified or not) and bypass the mutual-follow gate.
     // - Verified members can start new chats only with mutuals (both follow each other).
     // - Premium members can start new chats with any verified member.
     // If a direct thread already exists (any tier), the message is routed to sendMessage directly.
     const sender = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { premium: true, premiumPlus: true, verifiedStatus: true, bannedAt: true },
+      select: { premium: true, premiumPlus: true, verifiedStatus: true, bannedAt: true, siteAdmin: true },
     });
     if (!sender) throw new NotFoundException('User not found.');
     if (sender.bannedAt) {
@@ -1125,10 +1126,12 @@ export class MessagesService {
         error: 'account_banned',
       });
     }
+    const senderIsAdmin = Boolean(sender.siteAdmin);
     const senderIsVerified = Boolean(sender.verifiedStatus && sender.verifiedStatus !== 'none');
     const senderIsPremium = Boolean(sender.premium || sender.premiumPlus);
-    if (!senderIsVerified && !senderIsPremium) {
-      // Defense-in-depth: MessagesController already uses VerifiedGuard.
+    if (!senderIsAdmin && !senderIsVerified && !senderIsPremium) {
+      // Load-bearing gate: MessagesController no longer uses VerifiedGuard (unverified users
+      // must be able to reply in admin-initiated threads). This is the primary sender check.
       throw new ForbiddenException('Verify to use chat.');
     }
     await this.assertNotBlocked(userId, uniqueRecipients);
@@ -1158,9 +1161,10 @@ export class MessagesService {
 
     // From this point on, we are creating a new conversation (no existing direct thread matched).
     // Rules:
+    //   - Site admins can message any non-banned user regardless of verification status.
     //   - Verified senders can start a new chat only with mutuals (both follow each other).
     //   - Premium senders can start a new chat with any verified member.
-    //   - Unverified users cannot be messaged.
+    //   - Non-admin senders cannot message unverified users.
 
     const users = await this.prisma.user.findMany({
       where: { id: { in: uniqueRecipients } },
@@ -1171,13 +1175,13 @@ export class MessagesService {
       if (u.bannedAt) {
         throw new BadRequestException('Cannot message a banned user.');
       }
-      if (!u.verifiedStatus || u.verifiedStatus === 'none') {
+      if (!senderIsAdmin && (!u.verifiedStatus || u.verifiedStatus === 'none')) {
         throw new ForbiddenException('You can only start chats with verified members.');
       }
     }
 
-    // For verified-only (non-premium) senders, all recipients must be mutuals.
-    if (!senderIsPremium) {
+    // For verified-only (non-premium, non-admin) senders, all recipients must be mutuals.
+    if (!senderIsPremium && !senderIsAdmin) {
       const [senderFollowing, senderFollowers] = await Promise.all([
         this.prisma.follow.findMany({
           where: { followerId: userId, followingId: { in: uniqueRecipients } },
@@ -1235,8 +1239,10 @@ export class MessagesService {
           conversationId: conversation.id,
           userId: recipientId,
           role: 'member' as const,
-          status: followerSet.has(recipientId) ? ('accepted' as const) : ('pending' as const),
-          acceptedAt: followerSet.has(recipientId) ? now : null,
+          // Admin-initiated threads are always accepted so the message lands in the
+          // primary inbox (not the Requests tab) and push shows the real body.
+          status: senderIsAdmin || followerSet.has(recipientId) ? ('accepted' as const) : ('pending' as const),
+          acceptedAt: senderIsAdmin || followerSet.has(recipientId) ? now : null,
         })),
       ];
 
@@ -1387,13 +1393,26 @@ export class MessagesService {
     // boundary, but this protects against stale session caches and any internal callers.
     const sender = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { bannedAt: true },
+      select: { bannedAt: true, verifiedStatus: true, premium: true, premiumPlus: true },
     });
     if (sender?.bannedAt) {
       throw new ForbiddenException({
         message: 'This account was banned. Contact an admin if you think it’s a mistake.',
         error: 'account_banned',
       });
+    }
+
+    if (media.length > 0) {
+      const viewerIsVerified = Boolean(sender?.verifiedStatus && sender.verifiedStatus !== 'none');
+      const viewerIsPremium = Boolean(sender?.premium || sender?.premiumPlus);
+      const hasVideo = media.some((m) => m.kind === 'video');
+      const hasImageOrGif = media.some((m) => m.kind !== 'video');
+      if (hasImageOrGif && !viewerIsVerified) {
+        throw new ForbiddenException('Verify your account to send images and GIFs in chat.');
+      }
+      if (hasVideo && !viewerIsPremium) {
+        throw new ForbiddenException('Video messages are for premium members only.');
+      }
     }
 
     const blockedIds = await this._getBlockedUserIds(userId);

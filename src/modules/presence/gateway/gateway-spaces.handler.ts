@@ -365,6 +365,14 @@ export class SpacesGatewayHandler {
     const spaceId = String(payload?.spaceId ?? '').trim();
     if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
 
+    // Require authentication — unauthenticated clients must not receive the chat snapshot
+    // or live messages for a space they have not joined via spaces:join (which gates on auth).
+    const userId =
+      (client.data as { userId?: string })?.userId ??
+      this.presence.getUserIdForSocket(client.id) ??
+      null;
+    if (!userId) return;
+
     const prev = String((client.data as any)?.spaceChatSpaceId ?? '').trim() || null;
     if (prev && prev !== spaceId) {
       // Emit a leave system message for the old space before switching rooms.

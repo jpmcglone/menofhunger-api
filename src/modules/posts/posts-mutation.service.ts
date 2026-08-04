@@ -309,11 +309,20 @@ export class PostsMutationService {
     const nextQuotedExists = detectedQuotedId
       ? await this.prisma.post.findFirst({
           where: { id: detectedQuotedId, deletedAt: null },
-          select: { id: true },
+          select: { id: true, visibility: true, communityGroupId: true },
         })
       : null;
     const nextQuotedPostId: string | null = nextQuotedExists?.id ?? null;
     const quoteLinkChanged = prevQuotedPostId !== nextQuotedPostId;
+
+    // Quote floor: quoting post visibility must not be more open than the quoted post's.
+    // Same rule as create — applied on edit so a body change can't reintroduce the leak.
+    if (nextQuotedExists) {
+      const sameGroup = post.communityGroupId && nextQuotedExists.communityGroupId === post.communityGroupId;
+      if (!sameGroup && this.visibilityRank(post.visibility) < this.visibilityRank(nextQuotedExists.visibility)) {
+        throw new ForbiddenException("A quote can't be more public than the post it quotes.");
+      }
+    }
 
     const prevTopics = post.topics ?? [];
     const updated = await this.prisma.$transaction(async (tx) => {

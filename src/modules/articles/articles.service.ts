@@ -5,6 +5,8 @@ import {
   BadRequestException,
   ConflictException,
   Logger,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
@@ -30,6 +32,9 @@ import { findReactionById } from '../../common/constants/reactions';
 import { parseMentionsFromBody } from '../../common/mentions/mention-regex';
 import type { PostVisibility } from '@prisma/client';
 import { LOGGED_IN_VIEW_WEIGHT } from '../views/view-tracking.utils';
+import { easternDayKey } from '../../common/time/eastern-day-key';
+
+const VERIFIED_ARTICLES_PER_DAY = 1;
 
 /**
  * Strip leading/trailing whitespace from every line, trim the whole string,
@@ -499,8 +504,17 @@ export class ArticlesService {
 
   async create(userId: string, data: { title?: string; visibility?: PostVisibility }) {
     const viewerCtx = await this.viewer.getViewerOrThrow(userId);
-    if (!this.viewer.isPremium(viewerCtx)) {
-      throw new ForbiddenException('Article creation requires a premium subscription.');
+    if (!this.viewer.isVerified(viewerCtx) && !this.viewer.isPremium(viewerCtx)) {
+      throw new ForbiddenException('Verify your account to create articles.');
+    }
+
+    const requestedVisibility = data.visibility ?? 'public';
+    const allowedVisibilities = this.viewer.allowedPostVisibilities(viewerCtx);
+    if (!allowedVisibilities.includes(requestedVisibility)) {
+      if (requestedVisibility === 'premiumOnly') {
+        throw new ForbiddenException('Upgrade to premium to create premium-only articles.');
+      }
+      throw new ForbiddenException('You do not have permission to create articles with this visibility.');
     }
 
     // Allow empty title for drafts; only publish enforces a non-empty title
@@ -512,7 +526,7 @@ export class ArticlesService {
         authorId: userId,
         title,
         slug,
-        visibility: data.visibility ?? 'public',
+        visibility: requestedVisibility,
         isDraft: true,
         lastSavedAt: new Date(),
       },
@@ -532,6 +546,17 @@ export class ArticlesService {
     const article = await this.prisma.article.findUnique({ where: { id: articleId } });
     if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
     if (article.authorId !== userId) throw new ForbiddenException('Not your article.');
+
+    if (data.visibility !== undefined) {
+      const viewerCtx = await this.viewer.getViewerOrThrow(userId);
+      const allowedVisibilities = this.viewer.allowedPostVisibilities(viewerCtx);
+      if (!allowedVisibilities.includes(data.visibility)) {
+        if (data.visibility === 'premiumOnly') {
+          throw new ForbiddenException('Upgrade to premium to create premium-only articles.');
+        }
+        throw new ForbiddenException('You do not have permission to set this visibility.');
+      }
+    }
 
     const newTitle = typeof data.title === 'string' ? data.title.trim() || article.title : article.title;
     const newSlug =
@@ -579,7 +604,37 @@ export class ArticlesService {
     if (article.authorId !== userId) throw new ForbiddenException('Not your article.');
     if (!article.title.trim()) throw new BadRequestException('Article must have a title before publishing.');
 
+    const viewerCtx = await this.viewer.getViewerOrThrow(userId);
+    if (!this.viewer.isVerified(viewerCtx) && !this.viewer.isPremium(viewerCtx)) {
+      throw new ForbiddenException('Verify your account to publish articles.');
+    }
+
+    const allowedVisibilities = this.viewer.allowedPostVisibilities(viewerCtx);
+    if (!allowedVisibilities.includes(article.visibility)) {
+      throw new ForbiddenException("This article's visibility is not available on your current plan.");
+    }
+
     const isFirstPublish = !article.publishedAt;
+
+    // Verified non-premium: 1 first-publish per Eastern calendar day
+    if (isFirstPublish && !this.viewer.isPremium(viewerCtx)) {
+      const todayKey = easternDayKey(new Date());
+      // 36h lookback covers any ET offset; filter in memory by day key
+      const windowStart = new Date(Date.now() - 36 * 60 * 60 * 1000);
+      const recentPublished = await this.prisma.article.findMany({
+        where: { authorId: userId, publishedAt: { gte: windowStart }, deletedAt: null, id: { not: articleId } },
+        select: { publishedAt: true },
+      });
+      const todayCount = recentPublished.filter(
+        (a) => a.publishedAt !== null && easternDayKey(a.publishedAt) === todayKey,
+      ).length;
+      if (todayCount >= VERIFIED_ARTICLES_PER_DAY) {
+        throw new HttpException(
+          'You can publish 1 article per day. Upgrade to Premium for unlimited.',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const published = await tx.article.update({

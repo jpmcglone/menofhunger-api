@@ -1,4 +1,6 @@
 import { MessagesService } from './messages.service';
+import { MessagesController } from './messages.controller';
+import { VerifiedGuard } from '../auth/verified.guard';
 
 function makeService(overrides?: {
   prisma?: any;
@@ -362,4 +364,116 @@ describe('MessagesService.createConversation — mutual-follow DM gate', () => {
     ).rejects.not.toThrow(MUTUAL_FOLLOW_ERROR);
   });
 });
+describe('MessagesService.createConversation — admin bypass', () => {
+  function makeForAdminDm(opts: {
+    senderIsAdmin: boolean;
+    senderVerified?: boolean;
+    senderPremium?: boolean;
+    recipientUnverified?: boolean;
+    recipientBanned?: boolean;
+  }) {
+    const sender = {
+      premium: opts.senderPremium ?? false,
+      premiumPlus: false,
+      verifiedStatus: (opts.senderVerified ?? false) ? 'identity' : 'none',
+      bannedAt: null,
+      siteAdmin: opts.senderIsAdmin,
+    };
+    const recipient = {
+      id: 'u2',
+      verifiedStatus: opts.recipientUnverified ? 'none' : 'identity',
+      bannedAt: opts.recipientBanned ? new Date() : null,
+    };
 
+    const capturedCreateMany: { data: any[] | null } = { data: null };
+    const now = new Date();
+    const prisma: any = {
+      userBlock: { findMany: jest.fn(async () => []) },
+      user: {
+        findUnique: jest.fn(async () => sender),
+        findMany: jest.fn(async () => [recipient]),
+      },
+      messageConversation: { findFirst: jest.fn(async () => null) },
+      follow: { findMany: jest.fn(async () => []) },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          messageConversation: {
+            create: jest.fn(async () => ({ id: 'conv-1' })),
+            update: jest.fn(async () => ({})),
+          },
+          messageParticipant: {
+            createMany: jest.fn(async (args: any) => {
+              capturedCreateMany.data = args.data;
+              return { count: args.data.length };
+            }),
+          },
+          message: {
+            create: jest.fn(async () => ({
+              id: 'msg-1',
+              body: 'hi',
+              conversationId: 'conv-1',
+              senderId: 'u1',
+              replyTo: null,
+              createdAt: now,
+              media: [],
+              sender: {
+                id: 'u1', username: 'admin', name: 'Admin', premium: false, premiumPlus: false,
+                isOrganization: false, stewardBadgeEnabled: false, verifiedStatus: 'none',
+                avatarKey: null, avatarUpdatedAt: null,
+              },
+            })),
+          },
+        }),
+      ),
+    };
+
+    const presenceRealtime: any = { emitMessageCreated: jest.fn(), emitUnreadCounts: jest.fn() };
+    const events: any = { emitMessagePushRequested: jest.fn() };
+
+    const { svc } = makeService({ prisma, presenceRealtime, events });
+    return { svc, capturedCreateMany };
+  }
+
+  it('admin can open a thread with an unverified recipient', async () => {
+    const { svc } = makeForAdminDm({ senderIsAdmin: true, recipientUnverified: true });
+    await expect(
+      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
+    ).resolves.toMatchObject({ conversationId: 'conv-1' });
+  });
+
+  it('admin-created recipient row has status accepted and a non-null acceptedAt', async () => {
+    const { svc, capturedCreateMany } = makeForAdminDm({ senderIsAdmin: true, recipientUnverified: true });
+    await (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' });
+    const recipientRow = capturedCreateMany.data?.find((r: any) => r.userId === 'u2');
+    expect(recipientRow?.status).toBe('accepted');
+    expect(recipientRow?.acceptedAt).not.toBeNull();
+  });
+
+  it('unverified non-admin sender cannot start a new conversation', async () => {
+    const { svc } = makeForAdminDm({ senderIsAdmin: false, senderVerified: false, senderPremium: false });
+    await expect(
+      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
+    ).rejects.toThrow('Verify to use chat.');
+  });
+
+  it('verified non-admin cannot message an unverified recipient', async () => {
+    const { svc } = makeForAdminDm({ senderIsAdmin: false, senderVerified: true, recipientUnverified: true });
+    await expect(
+      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
+    ).rejects.toThrow('You can only start chats with verified members.');
+  });
+
+  it('admin still cannot message a banned user', async () => {
+    const { svc } = makeForAdminDm({ senderIsAdmin: true, recipientBanned: true });
+    await expect(
+      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
+    ).rejects.toThrow('Cannot message a banned user.');
+  });
+});
+
+describe('MessagesController — VerifiedGuard invariant', () => {
+  it('MessagesController does NOT carry VerifiedGuard (unverified users must be able to read/reply in admin-initiated threads)', () => {
+    const classGuards = (Reflect.getMetadata('__guards__', MessagesController) as unknown[] | undefined) ?? [];
+    expect(classGuards).not.toContain(VerifiedGuard);
+  });
+});

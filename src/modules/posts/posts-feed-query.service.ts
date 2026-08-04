@@ -91,7 +91,9 @@ export class PostsFeedQueryService {
     if (!gid) return;
     if (viewer?.siteAdmin) return;
     if (viewerUserId && post.userId === viewerUserId) return;
-    if (!viewerUserId) throw new ForbiddenException('Sign in to view this post.');
+    // Anonymous users can never join an approval group — treat as not found so the
+    // permalink fallback path does not leak author/body metadata to unauthenticated callers.
+    if (!viewerUserId) throw new NotFoundException('Post not found.');
     if (opts?.knownActiveMember) return;
 
     let joinPolicy: CommunityGroupJoinPolicy | null = opts?.knownGroupJoinPolicy ?? null;
@@ -105,6 +107,8 @@ export class PostsFeedQueryService {
 
     if (joinPolicy === 'open') {
       if (this.viewerContextService.isVerified(viewer)) return;
+      // Unverified users hitting an open group: keep as Forbidden (verifying grants access,
+      // similar to verifiedOnly tier). The permalink will show the verify-prompt preview.
       throw new ForbiddenException('Verify your account to view group posts.');
     }
 
@@ -112,8 +116,10 @@ export class PostsFeedQueryService {
       where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
       select: { status: true },
     });
+    // Approval-group non-members: 404 so the permalink returns not-found instead of
+    // leaking author identity, engagement counts, and a body snippet via getByIdNoAccess.
     if (!m || m.status !== 'active') {
-      throw new ForbiddenException('This post is only visible to group members.');
+      throw new NotFoundException('Post not found.');
     }
   }
 
@@ -3983,13 +3989,20 @@ export class PostsFeedQueryService {
 
     const post = await this.prisma.post.findFirst({
       where: { id: postId, deletedAt: null },
-      select: { id: true, visibility: true, userId: true },
+      select: { id: true, visibility: true, userId: true, communityGroupId: true },
     });
     if (!post) throw new NotFoundException('Post not found.');
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
     if (!allowed.includes(post.visibility)) throw new NotFoundException('Post not found.');
+
+    // Enforce group membership — non-members must not enumerate reposters of a private group post.
+    try {
+      await this.assertReadableCommunityGroupPost(post, viewerUserId, viewer);
+    } catch {
+      throw new NotFoundException('Post not found.');
+    }
 
     const reposts = await this.prisma.post.findMany({
       where: {
@@ -4027,13 +4040,20 @@ export class PostsFeedQueryService {
 
     const post = await this.prisma.post.findFirst({
       where: { id: postId, deletedAt: null },
-      select: { id: true, visibility: true, userId: true },
+      select: { id: true, visibility: true, userId: true, communityGroupId: true },
     });
     if (!post) throw new NotFoundException('Post not found.');
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
     if (!allowed.includes(post.visibility)) throw new NotFoundException('Post not found.');
+
+    // Enforce group membership — non-members must not list quotes of a private group post.
+    try {
+      await this.assertReadableCommunityGroupPost(post, viewerUserId, viewer);
+    } catch {
+      throw new NotFoundException('Post not found.');
+    }
 
     const quotes = await this.prisma.post.findMany({
       where: {

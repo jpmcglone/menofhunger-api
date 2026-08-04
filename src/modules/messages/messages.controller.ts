@@ -3,7 +3,6 @@ import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
-import { VerifiedGuard } from '../auth/verified.guard';
 import { CurrentUserId, IsImpersonating } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { ALLOWED_REACTIONS } from '../../common/constants/reactions';
@@ -82,7 +81,10 @@ const addReactionSchema = z.object({
 
 @ApiTags('Messages (Chat)')
 @Controller('messages')
-@UseGuards(AuthGuard, VerifiedGuard)
+// Chat tier rules live in MessagesService.createConversation, not here: an unverified
+// user must be able to read and reply in a thread an admin opened to verify them.
+// They still cannot start one (createConversation rejects unverified senders).
+@UseGuards(AuthGuard)
 export class MessagesController {
   constructor(private readonly messages: MessagesService) {}
 

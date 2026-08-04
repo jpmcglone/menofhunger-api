@@ -118,6 +118,13 @@ export class AppleIapService {
       throw new UnprocessableEntityException('Verified transaction is missing required fields.');
     }
 
+    // Reject sandbox receipts in production — the App Review fallback in verifyAgainstEnvironments
+    // allows sandbox JWS through on a prod bundle, so we must explicitly guard here.
+    // Server notifications use handleNotification (server-signed payload); this path is client-submitted.
+    if (cfg.environment === 'production' && txn.environment === Environment.SANDBOX) {
+      throw new UnprocessableEntityException('Sandbox transactions are not accepted in production.');
+    }
+
     const tier = cfg.productTierMap[txn.productId];
     if (!tier) {
       throw new UnprocessableEntityException(`Unknown productId: ${txn.productId}. Not in tier map.`);

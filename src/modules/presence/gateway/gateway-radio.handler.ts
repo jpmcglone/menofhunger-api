@@ -185,6 +185,14 @@ export class RadioGatewayHandler {
     const stationId = String(payload?.stationId ?? '').trim();
     if (!this.radio.isValidStationId(stationId)) return;
 
+    // Require authentication — unauthenticated clients must not receive the chat snapshot
+    // or live messages without a verified session.
+    const userId =
+      (client.data as { userId?: string })?.userId ??
+      this.presence.getUserIdForSocket(client.id) ??
+      null;
+    if (!userId) return;
+
     const prev = String((client.data as any)?.radioChatStationId ?? '').trim() || null;
     if (prev && prev !== stationId) {
       client.leave(radioChatRoom(prev));
