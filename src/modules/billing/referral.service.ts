@@ -16,7 +16,7 @@ import type { ReferralMeDto, RecruitDto } from '../../common/dto/referral.dto';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 
 // Validated after uppercasing, so lowercase input is accepted and normalized.
-const REFERRAL_CODE_REGEX = /^[A-Z0-9_-]{4,20}$/;
+const REFERRAL_CODE_REGEX = /^[A-Z0-9_-]{3,20}$/;
 const REFERRAL_BONUS_MONTHS = 1;
 
 /** Adds REFERRAL_BONUS_MONTHS to a Date, stacking from the furthest-out existing active grant end. */
@@ -76,7 +76,7 @@ export class ReferralService {
     const normalized = code.trim().toUpperCase();
     if (!REFERRAL_CODE_REGEX.test(normalized)) {
       throw new BadRequestException(
-        'Referral code must be 4–20 characters and contain only letters, numbers, hyphens, and underscores.',
+        'Referral code must be 3–20 characters and contain only letters, numbers, hyphens, and underscores.',
       );
     }
 
