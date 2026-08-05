@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import type { FollowVisibility, VerifiedStatus } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import * as crypto from 'node:crypto';
@@ -658,6 +658,28 @@ export class FollowsService {
 
     const pendingMs = 24 * 60 * 60 * 1000; // 24h
     const since = new Date(Date.now() - pendingMs);
+
+    // Unverified users may only nudge back — they cannot initiate.
+    const viewer = await this.prisma.user.findUnique({
+      where: { id: viewerUserId },
+      select: { verifiedStatus: true },
+    });
+    const viewerIsVerified = viewer?.verifiedStatus !== 'none';
+    if (!viewerIsVerified) {
+      const inboundFirst = await this.prisma.notification.findFirst({
+        where: {
+          kind: 'nudge',
+          actorUserId: target.id,
+          recipientUserId: viewerUserId,
+          readAt: null,
+          createdAt: { gte: since },
+        },
+        select: { id: true },
+      });
+      if (!inboundFirst) {
+        throw new ForbiddenException('Unverified users can only nudge back.');
+      }
+    }
 
     const lastOutbound = await this.prisma.notification.findFirst({
       where: {
