@@ -65,9 +65,8 @@ export class CheckinsStreakResetCron {
     const todayKey = easternDayKey(now);
     const yesterdayKey = yesterdayEasternDayKey(now);
 
-    // A user's streak is still valid if their last post was today OR yesterday (ET).
-    // Everyone else with a non-zero streak has missed at least one full day and should be reset.
-    const result = await this.prisma.user.updateMany({
+    // Find users whose streaks need resetting before we lose the current count.
+    const toReset = await this.prisma.user.findMany({
       where: {
         checkinStreakDays: { gt: 0 },
         OR: [
@@ -75,21 +74,58 @@ export class CheckinsStreakResetCron {
           { lastCheckinDayKey: { notIn: [todayKey, yesterdayKey] } },
         ],
       },
-      data: { checkinStreakDays: 0 },
+      select: { id: true, checkinStreakDays: true },
     });
 
-    if (result.count > 0) {
-      this.logger.log(
-        `[streak-reset] Reset streaks for ${result.count} user(s) ` +
-          `(todayKey=${todayKey}, yesterdayKey=${yesterdayKey})`,
-      );
-    } else {
+    if (toReset.length === 0) {
       this.logger.debug(
         `[streak-reset] No streaks to reset (todayKey=${todayKey}, yesterdayKey=${yesterdayKey})`,
       );
+      await this.runCrewStreakReset({ todayKey, yesterdayKey });
+      return;
     }
 
+    await this.prisma.user.updateMany({
+      where: { id: { in: toReset.map((u) => u.id) } },
+      data: { checkinStreakDays: 0 },
+    });
+
+    this.logger.log(
+      `[streak-reset] Reset streaks for ${toReset.length} user(s) ` +
+        `(todayKey=${todayKey}, yesterdayKey=${yesterdayKey})`,
+    );
+
+    // Update any still-unread "Have you checked in today?" reminders so the user
+    // sees accurate text instead of a stale call-to-action.
+    await this.updateStaleCheckinReminders(toReset);
+
     await this.runCrewStreakReset({ todayKey, yesterdayKey });
+  }
+
+  /**
+   * For each user whose streak just broke, flip their unread checkin_reminder
+   * notification to say "Streak ended" so they don't see the stale call-to-action.
+   * Tapping the updated notification still navigates to the check-in composer,
+   * letting them start a fresh streak today.
+   */
+  private async updateStaleCheckinReminders(
+    users: { id: string; checkinStreakDays: number }[],
+  ): Promise<void> {
+    for (const user of users) {
+      const n = user.checkinStreakDays;
+      const title = n > 1 ? `Your ${n}-day streak ended` : 'Your streak ended';
+      await this.prisma.notification.updateMany({
+        where: {
+          recipientUserId: user.id,
+          kind: 'checkin_reminder',
+          readAt: null,
+        },
+        data: {
+          title,
+          body: 'Check in today to start a new one.',
+        },
+      });
+    }
   }
 
   /**
