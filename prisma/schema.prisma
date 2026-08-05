@@ -26,6 +26,34 @@ enum PostKind {
   repost
   articleShare
   status
+  fitnessShare
+}
+
+enum FitnessProvider {
+  strava
+  apple_health
+}
+
+enum FitnessActivityType {
+  run
+  ride
+  walk
+  swim
+  workout
+  hike
+  yoga
+  other
+}
+
+enum FitnessUnits {
+  us
+  metric
+}
+
+enum FitnessShareType {
+  activity
+  weight
+  progress
 }
 
 enum FollowVisibility {
@@ -530,6 +558,15 @@ model User {
   affiliateEarningsAsRecruit   AffiliateEarning[] @relation("AffiliateEarning_recruit")
 
   wotdLikes                    WotdLike[]
+
+  // Fitness
+  fitnessUnits                 FitnessUnits   @default(us)
+  fitnessConnections           FitnessConnection[]
+  fitnessActivities            FitnessActivity[]
+  fitnessDailySummaries        FitnessDailySummary[]
+  fitnessBodyMetrics           FitnessBodyMetric[]
+  fitnessGoals                 FitnessGoal[]
+  fitnessShares                FitnessShare[]
 
   @@index([phone])
   @@index([lastSeenAt])
@@ -1342,6 +1379,10 @@ model Post {
   articleId String?
   article   Article? @relation(fields: [articleId], references: [id], onDelete: SetNull)
 
+  // Fitness share: points to the fitness share record (kind=fitnessShare only).
+  fitnessShareId String?      @unique
+  fitnessShare   FitnessShare? @relation(fields: [fitnessShareId], references: [id], onDelete: SetNull)
+
   // Quote repost: the embedded post whose URL was detected in body on save.
   quotedPostId String?
   quotedPost   Post?   @relation("Post_quotes", fields: [quotedPostId], references: [id], onDelete: SetNull)
@@ -1373,6 +1414,7 @@ model Post {
   @@index([repostedPostId, userId])
   @@index([quotedPostId])
   @@index([articleId])
+  @@index([fitnessShareId])
   @@index([topics], type: Gin)
   @@index([hashtags], type: Gin)
   @@index([cashtags], type: Gin)
@@ -2832,6 +2874,184 @@ model MarvinUserSettings {
   disabledByAdmin Boolean    @default(false)
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
+}
+
+// ─── Fitness ─────────────────────────────────────────────────────────────────
+
+/**
+ * OAuth connection (or HealthKit sync state) for a user's external fitness provider.
+ * One row per (userId, provider). Tokens encrypted at application layer before write.
+ */
+model FitnessConnection {
+  id           String          @id @default(cuid())
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  userId       String
+  provider     FitnessProvider
+  /** Encrypted access token (Strava) or "healthkit" sentinel for Apple Health. */
+  accessToken  String?
+  /** Encrypted refresh token (Strava). Null for HealthKit. */
+  refreshToken String?
+  /** When the access token expires (Strava). Null for HealthKit. */
+  tokenExpiresAt DateTime?
+  /** Provider-specific account id (e.g. Strava athlete id). */
+  providerUserId String?
+  /** When we last successfully ingested new data from this provider. */
+  lastSyncAt   DateTime?
+  /** When the user last triggered a manual sync (for cooldown enforcement). */
+  lastManualSyncAt DateTime?
+  /** active | revoked | error */
+  status       String          @default("active")
+  /** Last sync error message if status=error. */
+  lastError    String?
+
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+/**
+ * A single normalized workout / activity, ingested from any provider.
+ * The dedupeKey fingerprints overlapping entries (e.g. Strava + HealthKit).
+ */
+model FitnessActivity {
+  id            String              @id @default(cuid())
+  createdAt     DateTime            @default(now())
+  userId        String
+  provider      FitnessProvider
+  /** Original id from the provider (Strava activity id, HealthKit sample UUID). */
+  externalId    String
+  activityType  FitnessActivityType @default(other)
+  startedAt     DateTime
+  endedAt       DateTime?
+  durationSec   Int
+  distanceM     Float?
+  effortScore   Float?
+  stepsCount    Int?
+  /** Estimated calories burned (kcal). */
+  calories      Float?
+  /** Average heart rate during the activity (bpm). */
+  avgHeartrate  Float?
+  /** Peak heart rate during the activity (bpm). */
+  maxHeartrate  Float?
+  /** Normalized fingerprint: used to identify duplicates across providers. */
+  dedupeKey     String?
+  /** Provider id this row was deduplicated against (the winner's id). */
+  dedupedFromId String?
+  /** Provider this row lost the dedup to (the winner's provider). */
+  dedupedFromProvider FitnessProvider?
+
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, externalId])
+  @@index([userId, startedAt(sort: Desc)])
+  @@index([userId, provider])
+  @@index([dedupeKey])
+}
+
+/**
+ * Pre-aggregated per-user, per-day rollup.
+ * dayKey follows the user's local timezone (YYYY-MM-DD) — same idea as check-in day keys.
+ */
+model FitnessDailySummary {
+  id             String   @id @default(cuid())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  userId         String
+  /** Timezone-local day key (YYYY-MM-DD). */
+  dayKey         String
+  stepsCount     Int?
+  workoutMinutes Int?
+  distanceM      Float?
+  effortScore    Float?
+  /** Nullable until nutrition is connected. */
+  caloriesIn     Int?
+  caloriesOut    Int?
+  /** Sleep minutes from HealthKit (premium display). */
+  sleepMinutes   Int?
+  /** HRV (RMSSD ms) from HealthKit (premium display). */
+  hrvMs          Float?
+
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dayKey])
+  @@index([userId, dayKey(sort: Desc)])
+}
+
+/**
+ * Single weight sample — from HealthKit, manual entry, or (future) Lose It.
+ */
+model FitnessBodyMetric {
+  id           String          @id @default(cuid())
+  createdAt    DateTime        @default(now())
+  userId       String
+  /**
+   * Metric kind: "weight" (kg), "vo2max" (ml/kg/min).
+   * The `weightKg` column stores the canonical numeric value for any kind.
+   */
+  kind         String          @default("weight")
+  /** Canonical numeric value. Kg for weight; ml/kg/min for vo2max. */
+  weightKg     Float
+  measuredAt   DateTime
+  /** Provider or "manual". */
+  source       String          @default("manual")
+  /** HealthKit sample UUID or Lose It log id, for idempotent upserts. */
+  externalId   String?
+
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, kind, measuredAt(sort: Desc)])
+
+  @@unique([userId, source, externalId])
+  @@index([userId, measuredAt(sort: Desc)])
+}
+
+/**
+ * User's weight goal (one active per user).
+ */
+model FitnessGoal {
+  id           String   @id @default(cuid())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  userId       String
+  kind         String   @default("weight")
+  /** Starting weight in kg. */
+  startKg      Float?
+  /** Target weight in kg. */
+  targetKg     Float?
+  /** When the user started tracking toward this goal. */
+  startedAt    DateTime @default(now())
+  /** When the goal was achieved or abandoned. Null = active. */
+  completedAt  DateTime?
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/**
+ * Frozen snapshot of the stats shared when the user posts a fitnessShare post.
+ * Numbers are captured at share time so the feed card doesn't rewrite history
+ * if the user later edits their data.
+ */
+model FitnessShare {
+  id           String           @id @default(cuid())
+  createdAt    DateTime         @default(now())
+  userId       String
+  shareType    FitnessShareType
+  /** FK to the source entity (activity, body metric, goal). */
+  activityId   String?
+  bodyMetricId String?
+  goalId       String?
+  /** Frozen display snapshot (serialized from FitnessShareSnapshotDto). */
+  snapshot     Json
+  /** The post created from this share (nullable until the post is created). */
+  post         Post?
+
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 /**

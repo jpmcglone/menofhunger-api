@@ -38,6 +38,15 @@ export const ARTICLE_SHARE_INCLUDE = {
   },
 } as const;
 
+/** Minimal fitnessShare fields needed to build FitnessSharePreviewDto. */
+export const FITNESS_SHARE_INCLUDE = {
+  select: {
+    id: true,
+    shareType: true,
+    snapshot: true,
+  },
+} as const;
+
 /**
  * Include shape for an embedded/quoted post. Deliberately shallow (no further nesting)
  * to avoid unbounded recursion and keep query cost proportional.
@@ -46,12 +55,14 @@ export const QUOTED_POST_INCLUDE = {
   ...POST_BASE_INCLUDE,
   poll: { include: { options: { orderBy: { position: 'asc' as const } } } },
   article: ARTICLE_SHARE_INCLUDE,
+  fitnessShare: FITNESS_SHARE_INCLUDE,
 } as const;
 
 export const POST_WITH_POLL_INCLUDE = {
   ...POST_BASE_INCLUDE,
   poll: { include: { options: { orderBy: { position: 'asc' as const } } } },
   article: ARTICLE_SHARE_INCLUDE,
+  fitnessShare: FITNESS_SHARE_INCLUDE,
   quotedPost: { include: QUOTED_POST_INCLUDE },
 } as const;
 

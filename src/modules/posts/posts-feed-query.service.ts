@@ -8,7 +8,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { toCommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
-import { ARTICLE_SHARE_INCLUDE, QUOTED_POST_INCLUDE } from '../../common/prisma-includes/post.include';
+import { ARTICLE_SHARE_INCLUDE, FITNESS_SHARE_INCLUDE, QUOTED_POST_INCLUDE } from '../../common/prisma-includes/post.include';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { collapseFeedByRoot, type FeedCollapsedItem } from '../../common/feed-collapse/collapse-by-root';
 import { applyCollapsedThreadSummary } from '../../common/feed-collapse/collapsed-thread-summary';
@@ -3408,6 +3408,8 @@ export class PostsFeedQueryService {
         media: { orderBy: { position: 'asc' } },
         poll: { include: { options: { orderBy: { position: 'asc' } } } },
         mentions: { include: { user: { select: MENTION_USER_SELECT } } },
+        article: ARTICLE_SHARE_INCLUDE,
+        fitnessShare: FITNESS_SHARE_INCLUDE,
         quotedPost: { include: QUOTED_POST_INCLUDE },
       },
     });
@@ -3535,6 +3537,7 @@ export class PostsFeedQueryService {
             poll: { include: { options: { orderBy: { position: 'asc' } } } },
             mentions: { include: { user: { select: MENTION_USER_SELECT } } },
             article: ARTICLE_SHARE_INCLUDE,
+            fitnessShare: FITNESS_SHARE_INCLUDE,
             quotedPost: { include: QUOTED_POST_INCLUDE },
           },
         })
@@ -3599,6 +3602,8 @@ export class PostsFeedQueryService {
         media: { orderBy: { position: 'asc' } },
         poll: { include: { options: { orderBy: { position: 'asc' } } } },
         mentions: { include: { user: { select: MENTION_USER_SELECT } } },
+        article: ARTICLE_SHARE_INCLUDE,
+        fitnessShare: FITNESS_SHARE_INCLUDE,
         quotedPost: { include: QUOTED_POST_INCLUDE },
       },
     });

@@ -86,7 +86,7 @@ export type PostDto = {
   editCount: number;
   body: string;
   deletedAt: string | null;
-  kind: 'regular' | 'checkin' | 'repost' | 'articleShare' | 'status';
+  kind: 'regular' | 'checkin' | 'repost' | 'articleShare' | 'status' | 'fitnessShare';
   checkinDayKey: string | null;
   checkinPrompt: string | null;
   visibility: PostVisibility;
@@ -139,6 +139,8 @@ export type PostDto = {
   repostedByCount?: number;
   /** For kind='articleShare': the shared article preview. */
   article?: import('./article.dto').ArticleSharePreviewDto;
+  /** For kind='fitnessShare': the fitness share preview (frozen snapshot). */
+  fitnessShare?: import('./fitness.dto').FitnessSharePreviewDto;
   internal?: {
     boostScore: number | null;
     boostScoreUpdatedAt: string | null;
@@ -559,6 +561,17 @@ export function toPostDto(
         }
       : {}),
     ...(opts?.groupPreview !== undefined ? { groupPreview: opts.groupPreview } : {}),
+    ...(() => {
+      const fs = (post as { fitnessShare?: { id: string; shareType: string; snapshot: unknown } | null }).fitnessShare;
+      if (!fs) return {};
+      return {
+        fitnessShare: {
+          id: fs.id,
+          shareType: fs.shareType as import('./fitness.dto').FitnessSharePreviewDto['shareType'],
+          snapshot: fs.snapshot as import('./fitness.dto').FitnessShareSnapshotDto,
+        },
+      };
+    })(),
     viewerCanAccess: true,
     author: {
       id: post.user.id,

@@ -359,6 +359,20 @@ export const envSchema = z.object({
   ),
 
   // PostHog product analytics (optional; events silently no-op when unset)
+  // ─── Strava integration ─────────────────────────────────────────────────
+  STRAVA_CLIENT_ID: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  STRAVA_CLIENT_SECRET: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  STRAVA_WEBHOOK_VERIFY_TOKEN: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+
   POSTHOG_API_KEY: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),

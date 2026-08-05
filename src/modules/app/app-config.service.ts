@@ -29,6 +29,12 @@ export type R2Config = {
   publicBaseUrl?: string;
 };
 
+export type StravaConfig = {
+  clientId: string;
+  clientSecret: string;
+  webhookVerifyToken: string;
+};
+
 export type StripeConfig = {
   secretKey: string;
   webhookSecret: string;
@@ -307,6 +313,14 @@ export class AppConfigService {
   giphyApiKey(): string | null {
     const v = this.config.get<string>('GIPHY_API_KEY')?.trim() ?? '';
     return v ? v : null;
+  }
+
+  strava(): StravaConfig | null {
+    const clientId = this.config.get<string>('STRAVA_CLIENT_ID')?.trim() ?? '';
+    const clientSecret = this.config.get<string>('STRAVA_CLIENT_SECRET')?.trim() ?? '';
+    const webhookVerifyToken = this.config.get<string>('STRAVA_WEBHOOK_VERIFY_TOKEN')?.trim() ?? '';
+    if (!clientId || !clientSecret) return null;
+    return { clientId, clientSecret, webhookVerifyToken: webhookVerifyToken || 'moh-strava-verify' };
   }
 
   /** bible.helloao.org translation ID. Defaults to BSB (public domain, modern English). */
