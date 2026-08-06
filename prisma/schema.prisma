@@ -2935,6 +2935,8 @@ model FitnessActivity {
   avgHeartrate  Float?
   /** Peak heart rate during the activity (bpm). */
   maxHeartrate  Float?
+  /** Total elevation gain during the activity (meters). Populated for Strava; null for Apple Health. */
+  totalElevationM Float?
   /** Normalized fingerprint: used to identify duplicates across providers. */
   dedupeKey     String?
   /** Provider id this row was deduplicated against (the winner's id). */

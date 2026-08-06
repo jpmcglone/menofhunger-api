@@ -19,6 +19,7 @@ export type NormalizedActivity = {
   calories: number | null;
   avgHeartrate: number | null;
   maxHeartrate: number | null;
+  totalElevationM: number | null;
 };
 
 function buildDedupeKey(a: NormalizedActivity): string {
@@ -79,6 +80,7 @@ export class FitnessIngestService {
               calories: act.calories,
               avgHeartrate: act.avgHeartrate,
               maxHeartrate: act.maxHeartrate,
+              totalElevationM: act.totalElevationM,
             },
           });
           inserted++;
@@ -113,6 +115,7 @@ export class FitnessIngestService {
             calories: act.calories,
             avgHeartrate: act.avgHeartrate,
             maxHeartrate: act.maxHeartrate,
+            totalElevationM: act.totalElevationM,
           },
         });
         inserted++;

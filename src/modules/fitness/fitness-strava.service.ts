@@ -199,6 +199,7 @@ export class FitnessStravaService {
       calories: typeof a.calories === 'number' && a.calories > 0 ? a.calories : null,
       avgHeartrate: typeof a.average_heartrate === 'number' && a.average_heartrate > 0 ? a.average_heartrate : null,
       maxHeartrate: typeof a.max_heartrate === 'number' && a.max_heartrate > 0 ? a.max_heartrate : null,
+      totalElevationM: typeof a.total_elevation_gain === 'number' && a.total_elevation_gain > 0 ? a.total_elevation_gain : null,
     };
   }
 

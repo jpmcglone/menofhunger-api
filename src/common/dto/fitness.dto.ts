@@ -25,6 +25,8 @@ export type FitnessActivityDto = {
   calories: number | null;
   avgHeartrate: number | null;
   maxHeartrate: number | null;
+  /** Total elevation gain in meters. Populated for Strava; null for Apple Health. */
+  totalElevationM: number | null;
 };
 
 // ─── Daily summary ───────────────────────────────────────────────────────────
@@ -76,6 +78,7 @@ export type FitnessActivitySnapshotDto = {
   calories: number | null;
   avgHeartrate: number | null;
   maxHeartrate: number | null;
+  totalElevationM: number | null;
 };
 
 export type FitnessWeightSnapshotDto = {

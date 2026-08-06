@@ -6,7 +6,7 @@ import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
-import { CHECKIN_PROMPTS } from './checkin-prompts';
+import { CHECKIN_PROMPTS, isKnownCheckinPrompt } from './checkin-prompts';
 import { dayIndexEastern, easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
@@ -192,9 +192,15 @@ export class CheckinsService {
     };
   }
 
-  async createTodayCheckin(params: { userId: string; body: string; visibility: PostVisibility; now?: Date }) {
+  async createTodayCheckin(params: { userId: string; body: string; visibility: PostVisibility; clientPrompt?: string; now?: Date }) {
     const now = params.now ?? new Date();
-    const { dayKey, prompt } = pickCheckinPrompt(now);
+    const { dayKey, prompt: serverPrompt } = pickCheckinPrompt(now);
+    // Use the prompt the client actually showed the user (if it's a known prompt text).
+    // This prevents the ET-midnight skew where a user writes their answer before midnight
+    // but submits after, causing the server to store the next day's prompt against their answer.
+    const prompt = (params.clientPrompt && isKnownCheckinPrompt(params.clientPrompt))
+      ? params.clientPrompt
+      : serverPrompt;
 
     if (params.visibility !== 'verifiedOnly' && params.visibility !== 'premiumOnly') {
       throw new BadRequestException('Check-ins must be verified-only or premium-only.');

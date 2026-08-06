@@ -51,6 +51,7 @@ function toActivityDto(a: {
   calories: number | null;
   avgHeartrate: number | null;
   maxHeartrate: number | null;
+  totalElevationM: number | null;
 }): FitnessActivityDto {
   return {
     id: a.id,
@@ -65,6 +66,7 @@ function toActivityDto(a: {
     calories: a.calories,
     avgHeartrate: a.avgHeartrate,
     maxHeartrate: a.maxHeartrate,
+    totalElevationM: a.totalElevationM,
   };
 }
 
@@ -113,7 +115,7 @@ export class FitnessService {
         where: { userId, dedupedFromId: null },
         orderBy: { startedAt: 'desc' },
         take: RECENT_ACTIVITIES_LIMIT,
-        select: { id: true, provider: true, activityType: true, startedAt: true, endedAt: true, durationSec: true, distanceM: true, effortScore: true, stepsCount: true, calories: true, avgHeartrate: true, maxHeartrate: true },
+        select: { id: true, provider: true, activityType: true, startedAt: true, endedAt: true, durationSec: true, distanceM: true, effortScore: true, stepsCount: true, calories: true, avgHeartrate: true, maxHeartrate: true, totalElevationM: true },
       }),
       this.getWeekSummaries(userId),
       this.prisma.fitnessBodyMetric.findMany({
@@ -352,6 +354,7 @@ export class FitnessService {
       calories?: number | null;
       avgHeartrate?: number | null;
       maxHeartrate?: number | null;
+      totalElevationM?: number | null;
     }>;
     bodyMetrics?: Array<{ externalId: string; weightKg: number; measuredAt: string }>;
     vo2maxReadings?: Array<{ externalId: string; vo2maxMlKgMin: number; measuredAt: string }>;
@@ -360,11 +363,20 @@ export class FitnessService {
   }): Promise<{ activitiesInserted: number; activitiesDeduped: number; metricsUpserted: number }> {
     let metricsUpserted = 0;
 
-    if (payload.activities?.length) {
-      // Ensure HealthKit connection row exists.
+    const hasAnyData =
+      (payload.activities?.length ?? 0) > 0 ||
+      (payload.bodyMetrics?.length ?? 0) > 0 ||
+      (payload.vo2maxReadings?.length ?? 0) > 0 ||
+      (payload.sleepMinutes?.length ?? 0) > 0 ||
+      (payload.hrv?.length ?? 0) > 0;
+
+    if (hasAnyData) {
+      // Ensure HealthKit connection row exists whenever any payload is non-empty,
+      // including sleep/HRV/VO2-only syncs that would otherwise leave the user
+      // showing "not connected" despite Apple Health being active.
       await this.prisma.fitnessConnection.upsert({
         where: { userId_provider: { userId, provider: 'apple_health' } },
-        create: { userId, provider: 'apple_health', status: 'active' },
+        create: { userId, provider: 'apple_health', status: 'active', lastSyncAt: new Date() },
         update: { lastSyncAt: new Date(), status: 'active' },
       });
     }
@@ -382,6 +394,7 @@ export class FitnessService {
       calories: a.calories && a.calories > 0 ? a.calories : null,
       avgHeartrate: a.avgHeartrate && a.avgHeartrate > 0 ? a.avgHeartrate : null,
       maxHeartrate: a.maxHeartrate && a.maxHeartrate > 0 ? a.maxHeartrate : null,
+      totalElevationM: a.totalElevationM && a.totalElevationM > 0 ? a.totalElevationM : null,
     }));
 
     const { inserted, deduped } = activities.length > 0
@@ -425,14 +438,6 @@ export class FitnessService {
         where: { userId_dayKey: { userId, dayKey: h.dayKey } },
         create: { userId, dayKey: h.dayKey, hrvMs: h.hrvMs },
         update: { hrvMs: h.hrvMs },
-      });
-    }
-
-    if (payload.activities?.length || payload.bodyMetrics?.length) {
-      await this.prisma.fitnessConnection.upsert({
-        where: { userId_provider: { userId, provider: 'apple_health' } },
-        create: { userId, provider: 'apple_health', status: 'active', lastSyncAt: new Date() },
-        update: { lastSyncAt: new Date(), status: 'active' },
       });
     }
 
@@ -599,6 +604,7 @@ export class FitnessService {
           calories: activity.calories,
           avgHeartrate: activity.avgHeartrate,
           maxHeartrate: activity.maxHeartrate,
+          totalElevationM: activity.totalElevationM,
         },
       };
     }

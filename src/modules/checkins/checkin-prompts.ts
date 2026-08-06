@@ -320,3 +320,10 @@ function interleavePrompts(primary: string[], secondary: string[]): string[] {
 
 export const CHECKIN_PROMPTS: string[] = interleavePrompts(CORE_CHECKIN_PROMPTS, CONVERSATION_STARTER_PROMPTS);
 
+
+const KNOWN_PROMPT_SET = new Set(CHECKIN_PROMPTS);
+
+/** Returns true if the given text is one of the known check-in prompts. */
+export function isKnownCheckinPrompt(text: string): boolean {
+  return KNOWN_PROMPT_SET.has(text);
+}

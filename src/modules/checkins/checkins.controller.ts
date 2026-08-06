@@ -11,6 +11,13 @@ import { CheckinsService } from './checkins.service';
 const createSchema = z.object({
   body: z.string().trim().min(1).max(1000),
   visibility: z.enum(['verifiedOnly', 'premiumOnly']),
+  /**
+   * The prompt text the client actually showed the user.
+   * Sending this ensures the stored prompt matches what the user responded to —
+   * without it, a submission that crosses ET midnight stores the new day's prompt
+   * against an answer written for yesterday's prompt.
+   */
+  prompt: z.string().trim().min(1).max(500).optional(),
 });
 
 const leaderboardQuerySchema = z.object({
@@ -90,6 +97,7 @@ export class CheckinsController {
       userId,
       body: parsed.body,
       visibility: parsed.visibility,
+      clientPrompt: parsed.prompt,
     });
     return {
       data: {

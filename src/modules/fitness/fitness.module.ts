@@ -9,11 +9,12 @@ import { FitnessService } from './fitness.service';
 import { FitnessStravaService } from './fitness-strava.service';
 import { FitnessIngestService } from './fitness-ingest.service';
 import { FitnessStravaGuard } from './fitness-strava.guard';
+import { FitnessCron } from './fitness.cron';
 
 @Module({
   imports: [AuthModule, PrismaModule, PostsModule, RedisModule],
   controllers: [FitnessController],
-  providers: [FitnessService, FitnessStravaService, FitnessIngestService, VerifiedGuard, FitnessStravaGuard],
+  providers: [FitnessService, FitnessStravaService, FitnessIngestService, VerifiedGuard, FitnessStravaGuard, FitnessCron],
   exports: [FitnessService],
 })
 export class FitnessModule {}
