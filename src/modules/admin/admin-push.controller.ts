@@ -39,13 +39,36 @@ export class AdminPushController {
       };
     }
 
-    await this.apns.sendToUser(userId, {
+    const results = await this.apns.sendDiagnosticToUser(userId, {
       title: 'Test iOS push',
       body: 'APNs is working.',
       url: '/notifications',
     });
 
-    return { data: { sent: true } };
+    const succeeded = results.filter((r) => r.success);
+    const failed = results.filter((r) => !r.success);
+
+    if (succeeded.length > 0 && failed.length === 0) {
+      return { data: { sent: true } };
+    }
+
+    if (succeeded.length > 0) {
+      const errDetail = failed.map((r) => `[…${r.token}/${r.environment}] ${r.error}`).join('; ');
+      return {
+        data: {
+          sent: true,
+          message: `Delivered to ${succeeded.length} device(s). ${failed.length} failed: ${errDetail}`,
+        },
+      };
+    }
+
+    const errDetail = failed.map((r) => `[…${r.token}/${r.environment}] ${r.error}`).join('; ');
+    return {
+      data: {
+        sent: false,
+        message: `APNs delivery failed on all ${failed.length} device(s): ${errDetail}`,
+      },
+    };
   }
 
   /** Send a test push via Web Push (VAPID) to the admin's browser subscriptions. */

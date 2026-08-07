@@ -164,4 +164,57 @@ describe('ApnsPushService', () => {
     await expect(svc.sendToUser('user-1', { title: 'Hello' })).resolves.toBeUndefined();
     expect(prisma.apnsDeviceToken.deleteMany).not.toHaveBeenCalled();
   });
+
+  it('sendDiagnosticToUser returns success result per token when APNs accepts', async () => {
+    const { svc } = makeService({
+      tokens: [
+        { id: 't1', token: 'abc1234500000001', environment: 'production' },
+        { id: 't2', token: 'abc1234500000002', environment: 'sandbox' },
+      ],
+    });
+    const results = await svc.sendDiagnosticToUser('user-1', { title: 'Test', body: 'Works', url: '/notifications' });
+    expect(results).toHaveLength(2);
+    expect(results[0]).toEqual({ token: '00000001', environment: 'production', success: true });
+    expect(results[1]).toEqual({ token: '00000002', environment: 'sandbox', success: true });
+  });
+
+  it('sendDiagnosticToUser surfaces the APNs error reason instead of swallowing it', async () => {
+    const { svc, prisma } = makeService({
+      tokens: [{ id: 't1', token: 'tok-bad00000000', environment: 'production' }],
+    });
+    sendMock.mockRejectedValue(
+      new MockApnsError({
+        statusCode: 400,
+        notification: {},
+        response: { reason: 'BadDeviceToken', timestamp: Date.now() },
+      }),
+    );
+    const results = await svc.sendDiagnosticToUser('user-1', { title: 'Test', body: 'Works', url: '/notifications' });
+    expect(results).toHaveLength(1);
+    expect(results[0].success).toBe(false);
+    expect(results[0].error).toMatch(/BadDeviceToken/);
+  });
+
+  it('sendDiagnosticToUser prunes dead tokens (410) and reports failure', async () => {
+    const { svc, prisma } = makeService({
+      tokens: [{ id: 't1', token: 'tok-dead00000000', environment: 'production' }],
+    });
+    sendMock.mockRejectedValue(
+      new MockApnsError({
+        statusCode: 410,
+        notification: {},
+        response: { reason: 'Unregistered', timestamp: Date.now() },
+      }),
+    );
+    const results = await svc.sendDiagnosticToUser('user-1', { title: 'Test', body: 'Works', url: '/notifications' });
+    expect(results[0].success).toBe(false);
+    expect(prisma.apnsDeviceToken.deleteMany).toHaveBeenCalledWith({ where: { id: 't1' } });
+  });
+
+  it('sendDiagnosticToUser returns empty array when APNs is not configured', async () => {
+    const { svc } = makeService({ configured: false });
+    const results = await svc.sendDiagnosticToUser('user-1', { title: 'Test', body: 'Works', url: '/notifications' });
+    expect(results).toEqual([]);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
 });

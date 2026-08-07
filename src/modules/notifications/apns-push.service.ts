@@ -135,13 +135,74 @@ export class ApnsPushService {
     }
   }
 
+  /**
+   * Diagnostic-only: sends a test push to every device token the user has and
+   * returns per-token results including the raw APNs error reason. Only call this
+   * from admin/test endpoints — production pushes use sendToUser() instead.
+   */
+  async sendDiagnosticToUser(
+    recipientUserId: string,
+    params: { title: string; body: string; url: string },
+  ): Promise<Array<{ token: string; environment: string; success: boolean; error?: string }>> {
+    const cfg = this.appConfig.apns();
+    if (!cfg) return [];
+
+    const tokens = await this.prisma.apnsDeviceToken.findMany({
+      where: { userId: recipientUserId },
+      select: { id: true, token: true, environment: true },
+    });
+    if (tokens.length === 0) return [];
+
+    const results: Array<{ token: string; environment: string; success: boolean; error?: string }> =
+      [];
+
+    for (const row of tokens) {
+      const environment: ApnsEnvironment = row.environment === 'sandbox' ? 'sandbox' : 'production';
+      // Always create a fresh client for diagnostics so a cached bad client doesn't mask errors.
+      const client = this.freshClientFor(environment, cfg);
+      const notification = new ApnsNotification(row.token, {
+        alert: { title: params.title, body: params.body },
+        sound: NOTIFICATION_PUSH_SOUND,
+        badge: 0,
+        data: { url: params.url },
+      });
+      try {
+        await client.send(notification);
+        results.push({ token: row.token.slice(-8), environment, success: true });
+      } catch (err) {
+        const reason = err instanceof ApnsError ? err.reason : String(err);
+        const statusCode = err instanceof ApnsError ? String(err.statusCode) : undefined;
+        results.push({
+          token: row.token.slice(-8),
+          environment,
+          success: false,
+          error: statusCode ? `${statusCode} ${reason}` : reason,
+        });
+        if (err instanceof ApnsError && (err.statusCode === 410 || PRUNE_REASONS.has(err.reason))) {
+          await this.prisma.apnsDeviceToken.deleteMany({ where: { id: row.id } }).catch(() => {});
+        }
+      }
+    }
+    return results;
+  }
+
   private clientFor(
     environment: ApnsEnvironment,
     cfg: NonNullable<ReturnType<AppConfigService['apns']>>,
   ): ApnsClient {
     const existing = this.clients[environment];
     if (existing) return existing;
-    const client = new ApnsClient({
+    const client = this.freshClientFor(environment, cfg);
+    this.clients[environment] = client;
+    return client;
+  }
+
+  /** Always constructs a new ApnsClient (not cached). Used by diagnostics. */
+  private freshClientFor(
+    environment: ApnsEnvironment,
+    cfg: NonNullable<ReturnType<AppConfigService['apns']>>,
+  ): ApnsClient {
+    return new ApnsClient({
       team: cfg.teamId,
       keyId: cfg.keyId,
       signingKey: cfg.privateKey,
@@ -149,8 +210,6 @@ export class ApnsPushService {
       host: environment === 'sandbox' ? Host.development : Host.production,
       requestTimeout: 10_000,
     });
-    this.clients[environment] = client;
-    return client;
   }
 
   private soundForKind(kind?: string): string {
