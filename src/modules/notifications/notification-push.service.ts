@@ -260,6 +260,12 @@ export class NotificationPushService {
         body: snippet ?? 'Open to view your coin activity.',
       };
     }
+    if (kind === 'group_join_request') {
+      return {
+        title: `${actorName} asked to join your group`,
+        body: snippet ?? 'Open to review the request.',
+      };
+    }
     if (kind === 'crew_invite_received') {
       return {
         title: `${actorName} invited you to their crew`,
@@ -386,6 +392,18 @@ export class NotificationPushService {
         body: snippet ?? 'Open to read it.',
       };
     }
+    if (kind === 'checkin_reminder') {
+      return {
+        title: titleFromFallback || 'Have you checked in today?',
+        body: snippet ?? 'Post your check-in to keep your streak alive.',
+      };
+    }
+    if (kind === 'on_this_day') {
+      return {
+        title: titleFromFallback || 'On this day',
+        body: snippet ?? 'Open to revisit your check-in.',
+      };
+    }
     if (kind === 'word_of_the_day') {
       return {
         title: titleFromFallback || 'Good morning',
@@ -423,6 +441,26 @@ export class NotificationPushService {
       return {
         title: `${actorName} ${titleFromFallback}`,
         ...(snippet ? { body: snippet } : { body: 'Open to view it.' }),
+      };
+    }
+    if (kind === 'generic') {
+      return {
+        title: titleFromFallback || 'New activity',
+        body: snippet ?? 'Open to view it.',
+      };
+    }
+    // These kinds do not currently send push notifications, but explicit copy keeps a future
+    // delivery path from falling back to technical or generic text.
+    if (kind === 'community_group_post') {
+      return {
+        title: titleFromFallback || 'New group post',
+        body: snippet ?? 'Open to read it.',
+      };
+    }
+    if (kind === 'marv_not_in_group') {
+      return {
+        title: titleFromFallback || 'Group update',
+        body: snippet ?? 'Open to view the update.',
       };
     }
     return {
@@ -810,8 +848,6 @@ export class NotificationPushService {
           tag,
           renotify: false,
           kind: 'crew_streak_advanced',
-          // System event — sourceLabel is allowed (and helpful) here.
-          sourceLabel: 'Crew streak',
         });
       } catch (err) {
         this.logger.warn(`[push] Failed to send crew-streak-advanced push: ${err instanceof Error ? err.message : String(err)}`);
@@ -877,7 +913,6 @@ export class NotificationPushService {
           tag,
           renotify: false,
           kind: 'crew_streak_broken',
-          sourceLabel: 'Crew streak',
         });
       } catch (err) {
         this.logger.warn(`[push] Failed to send crew-streak-broken push: ${err instanceof Error ? err.message : String(err)}`);
@@ -931,7 +966,6 @@ export class NotificationPushService {
         badge: '/android-chrome-192x192.png',
         renotify: true,
         kind: 'message',
-        sourceLabel: 'From chat',
       });
     } catch (err) {
       this.logger.warn(`[push] Failed to send DM web push: ${err instanceof Error ? err.message : String(err)}`);

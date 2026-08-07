@@ -781,7 +781,6 @@ export class NotificationWriterService {
       body: bodySnippet ?? null,
       subjectPostId: null,
       subjectUserId: null,
-      sourceLabel: 'From notifications',
     });
 
     return { notified: true };
@@ -886,7 +885,6 @@ export class NotificationWriterService {
       body: null,
       subjectPostId: null,
       subjectUserId: null,
-      sourceLabel: 'From notifications',
     });
   }
 
@@ -982,7 +980,6 @@ export class NotificationWriterService {
       subjectPostId: null,
       subjectUserId: null,
       url: `/g/${group?.slug ?? subjectGroupId}`,
-      sourceLabel: 'From notifications',
     });
   }
 
@@ -1641,7 +1638,6 @@ export class NotificationWriterService {
           fallbackTitle: title,
           body,
           url,
-          sourceLabel: kind,
         });
       });
 
@@ -1767,7 +1763,6 @@ export class NotificationWriterService {
           fallbackTitle: title,
           body,
           url,
-          sourceLabel: kind,
         });
       });
 
@@ -1900,7 +1895,6 @@ export class NotificationWriterService {
           fallbackTitle: 'On this day',
           body,
           url: `/p/${postId}`,
-          sourceLabel: kind,
         });
       });
 
