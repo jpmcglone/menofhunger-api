@@ -100,9 +100,12 @@ export interface SideEffectPayloads {
     actorUserId: string | null;
     fallbackTitle?: string | null;
     body?: string | null;
+    actorPostId?: string | null;
     subjectArticleId?: string | null;
     subjectPostId?: string | null;
     subjectUserId?: string | null;
+    subjectGroupId?: string | null;
+    subjectCommunityGroupInviteId?: string | null;
     url?: string | null;
     notificationId?: string | null;
     sourceLabel?: string;

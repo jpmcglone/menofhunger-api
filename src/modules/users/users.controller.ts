@@ -28,6 +28,7 @@ import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
 import { PresenceService } from '../presence/presence.service';
 import { totalUserArticlesWhere, totalUserPostsWhere } from '../../common/content-counts';
+import type { LocationBrowseResponseDto } from './location-browse.dto';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -368,10 +369,14 @@ export class UsersController {
     },
   })
   @Get('by-location')
-  async byLocation(@CurrentUserId() viewerUserId: string, @Query() query: unknown) {
+  async byLocation(
+    @CurrentUserId() viewerUserId: string,
+    @Query() query: unknown,
+  ): Promise<{ data: LocationBrowseResponseDto }> {
     const { state, zip, city, county, limit = 10 } = byLocationSchema.parse(query);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const stateDisplay = STATE_NAMES[state.toUpperCase()] ?? state;
+    const stateCode = state.toUpperCase();
+    const stateDisplay = STATE_NAMES[stateCode] ?? stateCode;
 
     const baseWhere = { usernameIsSet: true, bannedAt: null };
 
@@ -393,9 +398,12 @@ export class UsersController {
 
     // Run sequentially: each section excludes IDs collected by earlier (closer) sections.
     const zipRows = zip ? await fetchSection({ locationZip: zip }) : [];
-    const cityRows = city ? await fetchSection({ locationCity: city, locationState: state }) : [];
-    const countyRows = county ? await fetchSection({ locationCounty: county, locationState: state }) : [];
-    const stateRows = await fetchSection({ locationState: state });
+    const cityRows = city ? await fetchSection({ locationCity: city, locationState: stateCode }) : [];
+    const countyRows = county ? await fetchSection({ locationCounty: county, locationState: stateCode }) : [];
+    const stateRows = await fetchSection({ locationState: stateCode });
+    const memberCount = await this.prisma.user.count({
+      where: { ...baseWhere, locationState: stateCode },
+    });
 
     const allRows = [...zipRows, ...cityRows, ...countyRows, ...stateRows];
     const rel = await this.followsService.batchRelationshipForUserIds({
@@ -414,11 +422,11 @@ export class UsersController {
         }),
       );
 
-    const sections = [
-      ...(zip ? [{ key: 'sameZip', label: 'Same ZIP code', users: mapUsers(zipRows) }] : []),
-      ...(city ? [{ key: 'sameCity', label: 'Same city', users: mapUsers(cityRows) }] : []),
-      ...(county ? [{ key: 'sameCounty', label: 'Same county', users: mapUsers(countyRows) }] : []),
-      { key: 'sameState', label: `Members in ${stateDisplay}`, users: mapUsers(stateRows) },
+    const sections: LocationBrowseResponseDto['sections'] = [
+      ...(zip ? [{ key: 'sameZip' as const, label: 'Same ZIP code', users: mapUsers(zipRows) }] : []),
+      ...(city ? [{ key: 'sameCity' as const, label: 'Same city', users: mapUsers(cityRows) }] : []),
+      ...(county ? [{ key: 'sameCounty' as const, label: 'Same county', users: mapUsers(countyRows) }] : []),
+      { key: 'sameState' as const, label: `Members in ${stateDisplay}`, users: mapUsers(stateRows) },
     ];
 
     return {
@@ -427,9 +435,10 @@ export class UsersController {
           ...(zip ? { zip } : {}),
           ...(city ? { city } : {}),
           ...(county ? { county } : {}),
-          state,
+          state: stateCode,
           stateDisplay,
         },
+        memberCount,
         sections,
       },
     };

@@ -2,6 +2,9 @@ import { Controller, Post, Req, UseGuards } from '@nestjs/common';
 import { AdminGuard, type AdminRequest } from './admin.guard';
 import { ApnsPushService } from '../notifications/apns-push.service';
 import { NotificationPushService } from '../notifications/notification-push.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { AppConfigService } from '../app/app-config.service';
+import { publicAssetUrl } from '../../common/assets/public-asset-url';
 
 /**
  * Admin-only endpoints to fire a test push on a specific channel.
@@ -17,6 +20,8 @@ export class AdminPushController {
   constructor(
     private readonly apns: ApnsPushService,
     private readonly push: NotificationPushService,
+    private readonly prisma: PrismaService,
+    private readonly appConfig: AppConfigService,
   ) {}
 
   /** Send a test push via APNs (native iOS) to the admin's registered devices. */
@@ -39,10 +44,36 @@ export class AdminPushController {
       };
     }
 
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        username: true,
+        name: true,
+        avatarKey: true,
+        avatarUpdatedAt: true,
+      },
+    });
+    const frontendBase =
+      this.appConfig.pushFrontendBaseUrl() ??
+      this.appConfig.allowedOrigins()[0]?.trim() ??
+      'https://menofhunger.com';
+    const logoUrl = `${frontendBase.replace(/\/$/, '')}/images/logo-black-bg-small.png`;
+    const avatarUrl =
+      publicAssetUrl({
+        publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
+        key: user?.avatarKey,
+        updatedAt: user?.avatarUpdatedAt,
+      }) ?? logoUrl;
+
     const results = await this.apns.sendDiagnosticToUser(userId, {
       title: 'Test iOS push',
-      body: 'APNs is working.',
+      subtitle: 'Rich notification preview',
+      body: 'iOS APNs is working — avatar, image, and grouping included.',
       url: '/notifications',
+      avatarUrl,
+      mediaUrl: logoUrl,
+      actorUsername: user?.username ?? 'menofhunger',
+      actorName: user?.name ?? user?.username ?? 'Men of Hunger',
     });
 
     const succeeded = results.filter((r) => r.success);

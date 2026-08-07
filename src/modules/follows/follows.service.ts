@@ -20,6 +20,7 @@ const RECOMMENDATION_POOL_MULTIPLIER = 8;
 const RECOMMENDATION_MAX_POOL_SIZE = 200;
 const RECOMMENDATION_JITTER_MAX = 7;
 const RECOMMENDATION_FRESHNESS_DAYS = 90;
+const RECOMMENDATION_SAME_STATE_WEIGHT = 10;
 
 type RecommendationRow = {
   id: string;
@@ -36,6 +37,7 @@ type RecommendationRow = {
   mutualCount: number;
   overlapCount: number;
   followsViewer: boolean;
+  sameState: boolean;
 };
 
 export type FollowRelationship = {
@@ -117,7 +119,8 @@ export class FollowsService {
     const relevance =
       Math.min(Math.max(row.mutualCount, 0), 5) * 24 +
       Math.min(Math.max(row.overlapCount, 0), 4) * 16 +
-      (row.followsViewer ? 12 : 0);
+      (row.followsViewer ? 12 : 0) +
+      (row.sameState ? RECOMMENDATION_SAME_STATE_WEIGHT : 0);
     const jitter = this.recommendationJitter(`${params.viewerUserId}:${row.id}:${params.seed}`) * RECOMMENDATION_JITTER_MAX;
 
     return relevance + trust + profileQuality + freshness + jitter;
@@ -183,7 +186,7 @@ export class FollowsService {
    *
    * Ranking:
    * - build a larger eligible pool than requested
-   * - score mutual follows, shared interests, inbound follows, trust, profile quality, and capped freshness
+   * - score mutual follows, shared interests, same-state proximity, inbound follows, trust, profile quality, and capped freshness
    * - apply small seeded jitter so refresh can vary without letting weak candidates jump strong ones
    */
   async recommendUsersToFollow(params: {
@@ -204,7 +207,7 @@ export class FollowsService {
 
     const rows = await this.prisma.$queryRaw<RecommendationRow[]>(Prisma.sql`
       WITH viewer AS (
-        SELECT u."interests"
+        SELECT u."interests", u."locationState"
         FROM "User" u
         WHERE u."id" = ${viewerUserId}
       ),
@@ -256,7 +259,12 @@ export class FollowsService {
           FROM "Follow" inbound
           WHERE inbound."followerId" = u."id"
             AND inbound."followingId" = ${viewerUserId}
-        ) AS "followsViewer"
+        ) AS "followsViewer",
+        (
+          NULLIF(TRIM(u."locationState"), '') IS NOT NULL
+          AND NULLIF(TRIM(v."locationState"), '') IS NOT NULL
+          AND UPPER(TRIM(u."locationState")) = UPPER(TRIM(v."locationState"))
+        ) AS "sameState"
       FROM "User" u
       CROSS JOIN viewer v
       LEFT JOIN mutuals m ON m."userId" = u."id"
@@ -272,6 +280,7 @@ export class FollowsService {
       ORDER BY
         COALESCE(m."mutualCount", 0) DESC,
         "overlapCount" DESC,
+        "sameState" DESC,
         "followsViewer" DESC,
         (u."verifiedStatus" <> 'none') DESC,
         u."premiumPlus" DESC,
@@ -319,6 +328,11 @@ export class FollowsService {
 
     // Use Postgres array overlap (&&) and array_length of the intersection.
     const arenaRows = await this.prisma.$queryRaw<RecommendationRow[]>(Prisma.sql`
+      WITH viewer AS (
+        SELECT u."locationState"
+        FROM "User" u
+        WHERE u."id" = ${viewerUserId}
+      )
       SELECT
         u."id",
         u."username",
@@ -344,8 +358,14 @@ export class FollowsService {
           FROM "Follow" inbound
           WHERE inbound."followerId" = u."id"
             AND inbound."followingId" = ${viewerUserId}
-        ) AS "followsViewer"
+        ) AS "followsViewer",
+        (
+          NULLIF(TRIM(u."locationState"), '') IS NOT NULL
+          AND NULLIF(TRIM(v."locationState"), '') IS NOT NULL
+          AND UPPER(TRIM(u."locationState")) = UPPER(TRIM(v."locationState"))
+        ) AS "sameState"
       FROM "User" u
+      CROSS JOIN viewer v
       WHERE
         u."usernameIsSet" = true
         AND u."bannedAt" IS NULL
@@ -359,6 +379,7 @@ export class FollowsService {
         )
       ORDER BY
         "overlapCount" DESC,
+        "sameState" DESC,
         "followsViewer" DESC,
         (u."verifiedStatus" <> 'none') DESC,
         u."premiumPlus" DESC,

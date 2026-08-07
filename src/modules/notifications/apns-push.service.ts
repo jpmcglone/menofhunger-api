@@ -81,6 +81,16 @@ export class ApnsPushService {
       /** Collapse identifier (mirrors the web push tag). Max 64 bytes per APNs. */
       collapseId?: string | null;
       badge?: number | null;
+      mutableContent?: boolean;
+      threadId?: string | null;
+      category?: string | null;
+      subtitle?: string | null;
+      avatarUrl?: string | null;
+      mediaUrl?: string | null;
+      actorUsername?: string | null;
+      actorName?: string | null;
+      groupInviteId?: string | null;
+      postId?: string | null;
     },
   ): Promise<void> {
     const cfg = this.appConfig.apns();
@@ -103,16 +113,30 @@ export class ApnsPushService {
     if (params.url) data.url = params.url;
     if (params.notificationId) data.notificationId = params.notificationId;
     if (params.kind) data.kind = params.kind;
+    if (params.avatarUrl) data.avatarUrl = params.avatarUrl;
+    if (params.mediaUrl) data.mediaUrl = params.mediaUrl;
+    if (params.actorUsername) data.actorUsername = params.actorUsername;
+    if (params.actorName) data.actorName = params.actorName;
+    if (params.groupInviteId) data.groupInviteId = params.groupInviteId;
+    if (params.postId) data.postId = params.postId;
 
     const deadTokenIds: string[] = [];
     for (const row of tokens) {
       const environment: ApnsEnvironment = row.environment === 'sandbox' ? 'sandbox' : 'production';
       const client = this.clientFor(environment, cfg);
+      const subtitle = (params.subtitle ?? '').trim();
       const notification = new ApnsNotification(row.token, {
-        alert: { title: params.title, body: (params.body ?? '').trim() || ' ' },
+        alert: {
+          title: params.title,
+          ...(subtitle ? { subtitle } : {}),
+          body: (params.body ?? '').trim() || ' ',
+        },
         sound: this.soundForKind(params.kind),
         badge: Math.max(0, Math.floor(badge || 0)),
         ...(collapseId ? { collapseId } : {}),
+        ...(params.mutableContent ? { mutableContent: true } : {}),
+        ...(params.threadId ? { threadId: params.threadId } : {}),
+        ...(params.category ? { category: params.category } : {}),
         data,
       });
       try {
@@ -142,7 +166,16 @@ export class ApnsPushService {
    */
   async sendDiagnosticToUser(
     recipientUserId: string,
-    params: { title: string; body: string; url: string },
+    params: {
+      title: string;
+      body: string;
+      url: string;
+      subtitle?: string | null;
+      avatarUrl?: string | null;
+      mediaUrl?: string | null;
+      actorUsername?: string | null;
+      actorName?: string | null;
+    },
   ): Promise<Array<{ token: string; environment: string; success: boolean; error?: string }>> {
     const cfg = this.appConfig.apns();
     if (!cfg) return [];
@@ -160,11 +193,25 @@ export class ApnsPushService {
       const environment: ApnsEnvironment = row.environment === 'sandbox' ? 'sandbox' : 'production';
       // Always create a fresh client for diagnostics so a cached bad client doesn't mask errors.
       const client = this.freshClientFor(environment, cfg);
+      const subtitle = (params.subtitle ?? '').trim();
       const notification = new ApnsNotification(row.token, {
-        alert: { title: params.title, body: params.body },
+        alert: {
+          title: params.title,
+          ...(subtitle ? { subtitle } : {}),
+          body: params.body,
+        },
         sound: NOTIFICATION_PUSH_SOUND,
         badge: 0,
-        data: { url: params.url },
+        mutableContent: true,
+        threadId: 'test-ios-push',
+        data: {
+          url: params.url,
+          kind: 'generic',
+          avatarUrl: params.avatarUrl ?? undefined,
+          mediaUrl: params.mediaUrl ?? undefined,
+          actorUsername: params.actorUsername ?? undefined,
+          actorName: params.actorName ?? undefined,
+        },
       });
       try {
         await client.send(notification);

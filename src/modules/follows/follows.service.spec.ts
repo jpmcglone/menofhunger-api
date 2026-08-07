@@ -16,6 +16,7 @@ function makeRow(overrides: Partial<any> = {}) {
     mutualCount: 0,
     overlapCount: 0,
     followsViewer: false,
+    sameState: false,
     ...overrides,
   };
 }
@@ -108,6 +109,28 @@ describe('FollowsService recommendations ranking', () => {
     });
 
     expect(result.users.map((u) => u.id)).toEqual(['shared-interests', 'trusted']);
+  });
+
+  it('ranks same-state candidates above otherwise similar candidates', async () => {
+    const { service } = makeService([
+      makeRow({
+        id: 'different-state',
+        username: 'different',
+      }),
+      makeRow({
+        id: 'same-state',
+        username: 'nearby',
+        sameState: true,
+      }),
+    ]);
+
+    const result = await service.recommendUsersToFollow({
+      viewerUserId: 'viewer',
+      limit: 2,
+      seed: 'refresh-a',
+    });
+
+    expect(result.users.map((u) => u.id)).toEqual(['same-state', 'different-state']);
   });
 
   it('allows close candidates to rotate when the refresh seed changes', async () => {

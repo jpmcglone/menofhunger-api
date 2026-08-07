@@ -133,6 +133,49 @@ describe('ApnsPushService', () => {
     expect(first.options.data).toEqual(expect.objectContaining({ url: '/p/abc', kind: 'comment' }));
   });
 
+  it('sendToUser includes rich alert metadata and custom navigation fields', async () => {
+    const { svc } = makeService({
+      tokens: [{ id: 't1', token: 'tok-1', environment: 'production' }],
+    });
+    await svc.sendToUser('user-1', {
+      title: 'Alice replied to your post',
+      subtitle: 'Reply to your post',
+      body: 'Great post!',
+      kind: 'comment',
+      mutableContent: true,
+      threadId: 'post-root-1',
+      category: 'moh.category.reply',
+      avatarUrl: 'https://cdn.example.com/alice.jpg',
+      mediaUrl: 'https://cdn.example.com/reply.jpg',
+      actorUsername: 'alice',
+      actorName: 'Alice',
+      groupInviteId: 'invite-1',
+      postId: 'parent-post-1',
+    });
+
+    const notification = sendMock.mock.calls[0][0];
+    expect(notification.options).toEqual(
+      expect.objectContaining({
+        alert: {
+          title: 'Alice replied to your post',
+          subtitle: 'Reply to your post',
+          body: 'Great post!',
+        },
+        mutableContent: true,
+        threadId: 'post-root-1',
+        category: 'moh.category.reply',
+        data: expect.objectContaining({
+          avatarUrl: 'https://cdn.example.com/alice.jpg',
+          mediaUrl: 'https://cdn.example.com/reply.jpg',
+          actorUsername: 'alice',
+          actorName: 'Alice',
+          groupInviteId: 'invite-1',
+          postId: 'parent-post-1',
+        }),
+      }),
+    );
+  });
+
   it('sendToUser prunes dead tokens on 410/BadDeviceToken and keeps the rest', async () => {
     const { svc, prisma } = makeService({
       tokens: [
@@ -165,21 +208,47 @@ describe('ApnsPushService', () => {
     expect(prisma.apnsDeviceToken.deleteMany).not.toHaveBeenCalled();
   });
 
-  it('sendDiagnosticToUser returns success result per token when APNs accepts', async () => {
+  it('sendDiagnosticToUser sends a rich, platform-labeled preview and returns per-token success', async () => {
     const { svc } = makeService({
       tokens: [
         { id: 't1', token: 'abc1234500000001', environment: 'production' },
         { id: 't2', token: 'abc1234500000002', environment: 'sandbox' },
       ],
     });
-    const results = await svc.sendDiagnosticToUser('user-1', { title: 'Test', body: 'Works', url: '/notifications' });
+    const results = await svc.sendDiagnosticToUser('user-1', {
+      title: 'Test iOS push',
+      subtitle: 'Rich notification preview',
+      body: 'iOS APNs is working.',
+      url: '/notifications',
+      avatarUrl: 'https://cdn.example.com/avatar.jpg',
+      mediaUrl: 'https://menofhunger.com/images/logo-black-bg-small.png',
+      actorUsername: 'alice',
+      actorName: 'Alice',
+    });
     expect(results).toHaveLength(2);
     expect(results[0]).toEqual({ token: '00000001', environment: 'production', success: true });
     expect(results[1]).toEqual({ token: '00000002', environment: 'sandbox', success: true });
+    expect(sendMock.mock.calls[0][0].options).toEqual(
+      expect.objectContaining({
+        alert: {
+          title: 'Test iOS push',
+          subtitle: 'Rich notification preview',
+          body: 'iOS APNs is working.',
+        },
+        mutableContent: true,
+        threadId: 'test-ios-push',
+        data: expect.objectContaining({
+          avatarUrl: 'https://cdn.example.com/avatar.jpg',
+          mediaUrl: 'https://menofhunger.com/images/logo-black-bg-small.png',
+          actorUsername: 'alice',
+          actorName: 'Alice',
+        }),
+      }),
+    );
   });
 
   it('sendDiagnosticToUser surfaces the APNs error reason instead of swallowing it', async () => {
-    const { svc, prisma } = makeService({
+    const { svc } = makeService({
       tokens: [{ id: 't1', token: 'tok-bad00000000', environment: 'production' }],
     });
     sendMock.mockRejectedValue(

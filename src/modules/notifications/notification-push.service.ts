@@ -526,8 +526,8 @@ export class NotificationPushService {
       return { sent: false, message: 'No push subscription for this account. Enable notifications first.' };
     }
     await this.sendWebPushToRecipient(userId, {
-      title: 'Test notification',
-      body: 'If you see this, push is working.',
+      title: 'Test web push',
+      body: 'Web Push is working.',
       subjectPostId: null,
       test: true,
     });
@@ -589,6 +589,15 @@ export class NotificationPushService {
       renotify?: boolean;
       kind?: string;
       sourceLabel?: string;
+      subtitle?: string | null;
+      threadId?: string | null;
+      category?: string | null;
+      avatarUrl?: string | null;
+      mediaUrl?: string | null;
+      actorUsername?: string | null;
+      actorName?: string | null;
+      groupInviteId?: string | null;
+      postId?: string | null;
       /** @deprecated Use suppressActiveWebChannel instead. Kept for call-site compat; maps to suppressActiveWebChannel. */
       suppressActiveChannels?: boolean;
       suppressActiveWebChannel?: boolean;
@@ -643,6 +652,16 @@ export class NotificationPushService {
           notificationId: params.notificationId ?? null,
           kind,
           collapseId: tag,
+          mutableContent: Boolean(params.avatarUrl || params.mediaUrl),
+          subtitle: params.subtitle ?? null,
+          threadId: params.threadId ?? null,
+          category: params.category ?? null,
+          avatarUrl: params.avatarUrl ?? null,
+          mediaUrl: params.mediaUrl ?? null,
+          actorUsername: params.actorUsername ?? null,
+          actorName: params.actorName ?? null,
+          groupInviteId: params.groupInviteId ?? null,
+          postId: params.postId ?? null,
         })
         .catch((err) => {
           this.logger.warn(`[apns] Failed to send push (${kind}): ${err instanceof Error ? err.message : String(err)}`);
@@ -971,9 +990,29 @@ export class NotificationPushService {
     }
   }
 
+  private pushCategory(kind: NotificationKind, hasReplyPost: boolean): string | null {
+    if ((kind === 'comment' || kind === 'mention') && hasReplyPost) return 'moh.category.reply';
+    if (kind === 'follow') return 'moh.category.follow';
+    if (kind === 'community_group_invite_received') return 'moh.category.groupInvite';
+    return null;
+  }
+
+  private pushSubtitle(kind: NotificationKind, groupName?: string | null): string | null {
+    const group = (groupName ?? '').trim();
+    if (group) return group;
+    if (kind === 'comment') return 'Reply to your post';
+    if (kind === 'mention') return 'Mentioned you in a post';
+    if (kind === 'follow') return 'New follower';
+    if (kind === 'boost' || kind === 'repost') return 'Activity on your post';
+    if (kind === 'followed_post' || kind === 'checkin_post') return 'New post';
+    if (kind === 'status_update') return 'Status update';
+    return null;
+  }
+
   /**
    * Standard actor-driven push for a notification kind: checks prefs, loads the
-   * actor for copy/icon, and sends. Used by the writer after creating rows.
+   * actor plus current post/group context for rich APNs fields, and sends. Used
+   * by the writer after creating rows.
    */
   async sendKindPushForActor(params: {
     recipientUserId: string;
@@ -981,9 +1020,12 @@ export class NotificationPushService {
     actorUserId: string | null;
     fallbackTitle?: string | null;
     body?: string | null;
+    actorPostId?: string | null;
     subjectArticleId?: string | null;
     subjectPostId?: string | null;
     subjectUserId?: string | null;
+    subjectGroupId?: string | null;
+    subjectCommunityGroupInviteId?: string | null;
     url?: string | null;
     notificationId?: string | null;
     sourceLabel?: string;
@@ -992,8 +1034,11 @@ export class NotificationPushService {
     try {
       const prefs = await this.preferences.getPreferencesInternal(recipientUserId);
       if (!this.shouldSendPushForKind(prefs, kind)) return;
-      const actor = actorUserId
-        ? await this.prisma.user.findUnique({
+      const mediaPostId = params.actorPostId ?? params.subjectPostId ?? null;
+      const threadPostId = params.subjectPostId ?? params.actorPostId ?? null;
+      const [actor, mediaPost, threadPost, group] = await Promise.all([
+        actorUserId
+          ? this.prisma.user.findUnique({
             where: { id: actorUserId },
             select: {
               id: true,
@@ -1003,7 +1048,42 @@ export class NotificationPushService {
               avatarUpdatedAt: true,
             },
           })
-        : null;
+          : null,
+        mediaPostId
+          ? this.prisma.post.findUnique({
+              where: { id: mediaPostId },
+              select: {
+                id: true,
+                deletedAt: true,
+                rootId: true,
+                media: {
+                  where: { deletedAt: null },
+                  orderBy: { position: 'asc' },
+                  take: 1,
+                  select: {
+                    kind: true,
+                    source: true,
+                    r2Key: true,
+                    thumbnailR2Key: true,
+                    url: true,
+                  },
+                },
+              },
+            })
+          : null,
+        threadPostId && threadPostId !== mediaPostId
+          ? this.prisma.post.findUnique({
+              where: { id: threadPostId },
+              select: { id: true, deletedAt: true, rootId: true },
+            })
+          : null,
+        params.subjectGroupId
+          ? this.prisma.communityGroup.findUnique({
+              where: { id: params.subjectGroupId },
+              select: { slug: true, name: true, avatarImageUrl: true, deletedAt: true },
+            })
+          : null,
+      ]);
       const pushCopy = this.buildPushCopy({
         kind,
         actor,
@@ -1019,13 +1099,36 @@ export class NotificationPushService {
             updatedAt: actor.avatarUpdatedAt,
           })
         : null;
+      const currentGroup = group?.deletedAt ? null : group;
+      const firstMedia = mediaPost?.deletedAt ? null : mediaPost?.media[0];
+      const mediaKey =
+        firstMedia?.kind === 'video' ? firstMedia.thumbnailR2Key : firstMedia?.r2Key;
+      const mediaUrl =
+        publicAssetUrl({ publicBaseUrl, key: mediaKey ?? null }) ??
+        (firstMedia?.source === 'giphy' ? firstMedia.url?.trim() || null : null);
+      const resolvedThreadPost = threadPost ?? mediaPost;
+      const threadId = params.subjectGroupId
+        ? `group-${params.subjectGroupId}`
+        : kind === 'follow'
+          ? 'notif-follows'
+          : resolvedThreadPost
+            ? `post-${resolvedThreadPost.rootId ?? resolvedThreadPost.id}`
+            : null;
+      const postId =
+        kind === 'comment' || kind === 'mention'
+          ? params.subjectPostId ?? params.actorPostId ?? null
+          : params.actorPostId ?? params.subjectPostId ?? null;
+      const groupUrl =
+        currentGroup && params.subjectGroupId
+          ? `/g/${currentGroup.slug || params.subjectGroupId}`
+          : null;
       this.sendWebPushToRecipient(recipientUserId, {
         title: pushCopy.title,
         body: pushCopy.body,
         notificationId: params.notificationId ?? undefined,
         subjectPostId: params.subjectPostId ?? null,
         subjectUserId: params.subjectUserId ?? null,
-        url: params.url ?? null,
+        url: params.url ?? groupUrl,
         tag: this.buildPushTag({
           recipientUserId,
           kind,
@@ -1034,6 +1137,15 @@ export class NotificationPushService {
           subjectUserId: params.subjectUserId ?? null,
         }),
         icon,
+        avatarUrl: icon || currentGroup?.avatarImageUrl?.trim() || null,
+        mediaUrl,
+        subtitle: this.pushSubtitle(kind, currentGroup?.name),
+        threadId,
+        category: this.pushCategory(kind, Boolean(postId)),
+        actorUsername: actor?.username ?? null,
+        actorName: actor?.name ?? null,
+        groupInviteId: params.subjectCommunityGroupInviteId ?? null,
+        postId,
         badge: '/android-chrome-192x192.png',
         renotify: true,
         kind,

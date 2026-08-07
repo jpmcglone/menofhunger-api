@@ -238,9 +238,12 @@ export class NotificationWriterService {
       actorUserId: actorUserId ?? null,
       fallbackTitle,
       body,
+      actorPostId: actorPostId ?? null,
       subjectArticleId: subjectArticleId ?? null,
       subjectPostId: subjectPostId ?? null,
       subjectUserId: subjectUserId ?? null,
+      subjectGroupId: subjectGroupId ?? null,
+      subjectCommunityGroupInviteId: subjectCommunityGroupInviteId ?? null,
       url: pushUrl,
       notificationId: notification.id,
     });
@@ -374,8 +377,10 @@ export class NotificationWriterService {
             actorUserId,
             fallbackTitle: 'boosted your post',
             body: bodySnippet ?? null,
+            actorPostId: null,
             subjectPostId: subjectPostId ?? null,
             subjectUserId: null,
+            notificationId: res.notificationId,
           });
         }
 
@@ -502,9 +507,11 @@ export class NotificationWriterService {
             actorUserId,
             fallbackTitle: title,
             body: null,
+            actorPostId: actorPostId ?? null,
             subjectPostId: subjectPostId ?? null,
             subjectUserId: null,
             url: actorPostId ? `/p/${actorPostId}` : `/p/${subjectPostId}`,
+            notificationId: res.notificationId,
           });
         }
 
@@ -781,6 +788,9 @@ export class NotificationWriterService {
       body: bodySnippet ?? null,
       subjectPostId: null,
       subjectUserId: null,
+      subjectGroupId: groupId,
+      subjectCommunityGroupInviteId: inviteId,
+      notificationId: result.notificationId,
     });
 
     return { notified: true };
@@ -885,6 +895,9 @@ export class NotificationWriterService {
       body: null,
       subjectPostId: null,
       subjectUserId: null,
+      subjectGroupId: groupId,
+      subjectCommunityGroupInviteId: inviteId,
+      notificationId: result.notificationId,
     });
   }
 
@@ -965,12 +978,9 @@ export class NotificationWriterService {
     actorUserId: string | null;
     kind: NotificationKind;
     subjectGroupId: string;
+    notificationId: string;
   }): Promise<void> {
-    const { recipientUserId, actorUserId, kind, subjectGroupId } = params;
-    const group = await this.prisma.communityGroup?.findUnique({
-      where: { id: subjectGroupId },
-      select: { slug: true },
-    });
+    const { recipientUserId, actorUserId, kind, subjectGroupId, notificationId } = params;
     this.sideEffects.dispatch('notification.push', {
       recipientUserId,
       kind,
@@ -979,7 +989,8 @@ export class NotificationWriterService {
       body: null,
       subjectPostId: null,
       subjectUserId: null,
-      url: `/g/${group?.slug ?? subjectGroupId}`,
+      subjectGroupId,
+      notificationId,
     });
   }
 
@@ -1008,6 +1019,7 @@ export class NotificationWriterService {
         actorUserId: joinerUserId,
         kind: 'community_group_member_joined',
         subjectGroupId: groupId,
+        notificationId: result.notificationId,
       });
     }
   }
@@ -1034,7 +1046,13 @@ export class NotificationWriterService {
     });
     await this.emitGroupNotification(recipientUserId, result.notificationId, result.undeliveredCount);
     if (result.isNew) {
-      void this.pushGroupNotification({ recipientUserId, actorUserId, kind, subjectGroupId: groupId });
+      void this.pushGroupNotification({
+        recipientUserId,
+        actorUserId,
+        kind,
+        subjectGroupId: groupId,
+        notificationId: result.notificationId,
+      });
     }
   }
 
@@ -1062,6 +1080,7 @@ export class NotificationWriterService {
         actorUserId,
         kind: 'community_group_member_removed',
         subjectGroupId: groupId,
+        notificationId: result.notificationId,
       });
     }
   }
@@ -1090,6 +1109,7 @@ export class NotificationWriterService {
         actorUserId,
         kind: 'community_group_disbanded',
         subjectGroupId: groupId,
+        notificationId: result.notificationId,
       });
     }
   }

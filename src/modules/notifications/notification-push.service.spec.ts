@@ -24,6 +24,7 @@ function makePrisma(opts?: {
 }) {
   return {
     pushSubscription: {
+      count: jest.fn(async () => (opts?.pushSubscriptions ?? []).length),
       findMany: jest.fn(async () => opts?.pushSubscriptions ?? [
         { id: 'sub-1', endpoint: 'https://push.example.com/1', p256dh: 'p256dh-val', auth: 'auth-val' },
       ]),
@@ -44,6 +45,12 @@ function makePrisma(opts?: {
     user: {
       findUnique: jest.fn(async () => null),
     },
+    post: {
+      findUnique: jest.fn(async () => null),
+    },
+    communityGroup: {
+      findUnique: jest.fn(async () => null),
+    },
   } as any;
 }
 
@@ -60,7 +67,7 @@ function makeAppConfig(opts?: { vapid?: boolean; apns?: boolean }) {
         ? { keyId: 'KEY1', teamId: 'TEAM1', privateKey: '---key---', bundleId: 'com.example.app' }
         : null,
     ),
-    r2: jest.fn(() => null),
+    r2: jest.fn(() => ({ publicBaseUrl: 'https://cdn.example.com' })),
   } as any;
 }
 
@@ -76,6 +83,7 @@ function makeApns(opts?: { configured?: boolean }) {
   const apnsSendToUser = jest.fn(async () => {});
   const svc = {
     configured: jest.fn(() => opts?.configured ?? true),
+    hasTokens: jest.fn(async () => true),
     sendToUser: apnsSendToUser,
   } as unknown as ApnsPushService;
   return { svc, apnsSendToUser };
@@ -183,6 +191,33 @@ describe('NotificationPushService — per-channel suppression', () => {
   beforeEach(() => {
     webpush.sendNotification.mockReset();
     webpush.sendNotification.mockResolvedValue({});
+  });
+
+  it('labels the test notification as web push', async () => {
+    const prisma = makePrisma({
+      pushSubscriptions: [
+        {
+          id: 'sub-1',
+          endpoint: 'https://push.example.com/1',
+          p256dh: 'p256dh-val',
+          auth: 'auth-val',
+        },
+      ],
+    });
+    const { svc } = makeService({ prisma });
+
+    await expect(svc.sendTestPush('user-1')).resolves.toEqual({ sent: true });
+
+    const payload = JSON.parse(webpush.sendNotification.mock.calls[0][1]) as {
+      title: string;
+      body: string;
+    };
+    expect(payload).toEqual(
+      expect.objectContaining({
+        title: 'Test web push',
+        body: 'Web Push is working.',
+      }),
+    );
   });
 
   it('sends to both channels when user is not active on either', async () => {
@@ -426,5 +461,130 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
     expect(apnsSendToUser).toHaveBeenCalledTimes(1);
     // Web is not active so it also fires.
     expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('enriches reply APNs with actor, media, parent post, category, and root thread', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'actor-1',
+      username: 'alice',
+      name: 'Alice',
+      avatarKey: 'avatars/alice.jpg',
+      avatarUpdatedAt: null,
+    });
+    prisma.post.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
+      where.id === 'reply-1'
+        ? {
+            id: 'reply-1',
+            deletedAt: null,
+            rootId: 'root-1',
+            media: [
+              {
+                kind: 'image',
+                r2Key: 'posts/reply.jpg',
+                thumbnailR2Key: null,
+              },
+            ],
+          }
+        : { id: 'parent-1', deletedAt: null, rootId: 'root-1' },
+    );
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendKindPushForActor({
+      recipientUserId: 'user-1',
+      kind: 'comment',
+      actorUserId: 'actor-1',
+      actorPostId: 'reply-1',
+      subjectPostId: 'parent-1',
+      body: 'Great post!',
+      notificationId: 'notif-1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        title: 'Alice replied to your post',
+        subtitle: 'Reply to your post',
+        category: 'moh.category.reply',
+        threadId: 'post-root-1',
+        actorUsername: 'alice',
+        actorName: 'Alice',
+        avatarUrl: 'https://cdn.example.com/avatars/alice.jpg',
+        mediaUrl: 'https://cdn.example.com/posts/reply.jpg',
+        postId: 'parent-1',
+        mutableContent: true,
+      }),
+    );
+  });
+
+  it('does not expose a post reply action for article comments', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'actor-1',
+      username: 'alice',
+      name: 'Alice',
+      avatarKey: 'avatars/alice.jpg',
+      avatarUpdatedAt: null,
+    });
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendKindPushForActor({
+      recipientUserId: 'user-1',
+      kind: 'comment',
+      actorUserId: 'actor-1',
+      subjectArticleId: 'article-1',
+      notificationId: 'notif-1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        category: null,
+        postId: null,
+      }),
+    );
+  });
+
+  it('uses current group context for invite subtitle, avatar, thread, and action category', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'actor-1',
+      username: 'alice',
+      name: 'Alice',
+      avatarKey: null,
+      avatarUpdatedAt: null,
+    });
+    prisma.communityGroup.findUnique.mockResolvedValue({
+      slug: 'builders',
+      name: 'Builders',
+      avatarImageUrl: 'https://cdn.example.com/groups/builders.jpg',
+      deletedAt: null,
+    });
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendKindPushForActor({
+      recipientUserId: 'user-1',
+      kind: 'community_group_invite_received',
+      actorUserId: 'actor-1',
+      subjectGroupId: 'group-1',
+      subjectCommunityGroupInviteId: 'invite-1',
+      notificationId: 'notif-1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        title: 'Alice invited you to a group',
+        subtitle: 'Builders',
+        category: 'moh.category.groupInvite',
+        threadId: 'group-group-1',
+        avatarUrl: 'https://cdn.example.com/groups/builders.jpg',
+        groupInviteId: 'invite-1',
+        url: '/g/builders',
+      }),
+    );
   });
 });
