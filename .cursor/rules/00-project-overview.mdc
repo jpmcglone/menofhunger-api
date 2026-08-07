@@ -6,10 +6,13 @@ alwaysApply: true
 ## API contract (must follow)
 - **Success**: `{ data: T }` (or `{ data: T[], pagination }` for lists)
 - **Errors**: `{ meta: { status, errors: [...] } }` (global exception filter)
+  - Clients surface these through shared safe helpers only — web `getSafeUserErrorMessage`
+    (`menofhunger-www/utils/api-error.ts`), iOS `safeUserFacingMessage()`
+    (`ErrorExtensions.swift`). Never render raw transport/decoding text to users.
 - **Controllers**: return the envelope explicitly (don’t return raw payloads)
 
 ## When you change an API response
-- Update `menofhunger-api/src/common/dto/**`
+- Update the owning DTO (`src/common/dto/**` or the domain module's `*.dto.ts`)
 - Update `menofhunger-www/types/api.ts`
 - Run `npx nuxi typecheck` + `node scripts/validate-api-types.mjs` (www)
 - If iOS consumes the response, update the matching `menofhunger-ios/MenOfHunger/**/Model` type and add/adjust a decoding test.

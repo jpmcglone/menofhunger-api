@@ -65,9 +65,8 @@ export class ScriptureService {
     const verses = await this.fetchVerses(translation, entry.apiId, ref.chapter);
     if (!verses) return null;
 
-    const sliced = verses.filter(
-      (v) => v.number >= ref.verseStart && (ref.verseEnd === null || v.number <= ref.verseEnd),
-    );
+    const verseEnd = ref.verseEnd ?? ref.verseStart;
+    const sliced = verses.filter((v) => v.number >= ref.verseStart && v.number <= verseEnd);
     if (!sliced.length) return null;
 
     return {

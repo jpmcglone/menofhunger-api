@@ -1,0 +1,30 @@
+---
+description: Keep notification rows and lock-screen push copy human-readable and free of internal identifiers
+globs: src/modules/notifications/**/*.ts
+alwaysApply: false
+---
+
+# Notification Copy Is a User-Facing Contract
+
+`NotificationKind`, job names, enum values, and database identifiers are never display copy.
+
+## Push copy
+
+- Every push-capable `NotificationKind` has an explicit human-readable title/body path.
+- Never pass a raw kind (`checkin_reminder`, `followed_article`, etc.) as `sourceLabel`, title,
+  subtitle, or body.
+- `sourceLabel` is optional display context only (person/group/article name). Omit it when it adds
+  no value; do not invent generic text such as "From notifications".
+- Fallback copy must still be specific and readable. Never expose snake_case, camelCase identifiers,
+  "Notification", "New activity", or serialized payload fragments.
+- Keep lock-screen copy concise and understandable without opening the app.
+
+## Tests
+
+- Maintain a table-driven test over every `NotificationKind` that can reach APNs.
+- Reject snake_case/internal names and generic fallback text in both title and body.
+- Add a targeted assertion whenever a new notification kind or source-label branch is introduced.
+- Preview representative pushes with and without optional actor/group/content context.
+
+Notification database titles/bodies, in-app rows, websocket payloads, and APNs copy may have
+different lengths, but they must describe the same event with the same user-facing terminology.

@@ -200,7 +200,7 @@ describe('NotificationPushService — per-channel suppression', () => {
     expect(prisma.pushCoalesce.upsert).toHaveBeenCalledTimes(1);
   });
 
-  it('skips APNs but sends web when user is active on iOS only', async () => {
+  it('always sends APNs even when user is active on iOS — client decides whether to show banner', async () => {
     const { svc, apnsSendToUser } = makeService({
       presence: makePresence({ iosActive: true, webActive: false }),
     });
@@ -208,9 +208,11 @@ describe('NotificationPushService — per-channel suppression', () => {
       title: 'New reply',
       tag: 'notif-comment-post-p1',
       kind: 'comment',
-      suppressActiveChannels: true,
+      suppressActiveWebChannel: true,
     });
-    expect(apnsSendToUser).not.toHaveBeenCalled();
+    // iOS always receives the push; UNUserNotificationCenterDelegate handles display.
+    expect(apnsSendToUser).toHaveBeenCalledTimes(1);
+    // Web is not active, so web push fires too.
     expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
   });
 
@@ -228,7 +230,7 @@ describe('NotificationPushService — per-channel suppression', () => {
     expect(webpush.sendNotification).not.toHaveBeenCalled();
   });
 
-  it('skips both channels and does NOT record coalesce when active on both', async () => {
+  it('sends APNs and skips web (no coalesce recorded) when active on both', async () => {
     const { svc, apnsSendToUser, prisma } = makeService({
       presence: makePresence({ iosActive: true, webActive: true }),
     });
@@ -236,9 +238,11 @@ describe('NotificationPushService — per-channel suppression', () => {
       title: 'New reply',
       tag: 'notif-comment-post-p1',
       kind: 'comment',
-      suppressActiveChannels: true,
+      suppressActiveWebChannel: true,
     });
-    expect(apnsSendToUser).not.toHaveBeenCalled();
+    // iOS always fires.
+    expect(apnsSendToUser).toHaveBeenCalledTimes(1);
+    // Web is suppressed (user is online); coalesce is not recorded so the next offline event isn't blocked.
     expect(webpush.sendNotification).not.toHaveBeenCalled();
     expect(prisma.pushCoalesce.upsert).not.toHaveBeenCalled();
   });
@@ -403,7 +407,7 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
     expect(webpush.sendNotification).not.toHaveBeenCalled();
   });
 
-  it('skips APNs only when user is active on iOS (web still fires)', async () => {
+  it('always sends APNs even when user is active on iOS (web still fires since web not active)', async () => {
     const prisma = {
       ...makePrisma(),
       user: { findUnique: jest.fn(async () => ({ id: 'actor-1', username: 'bob', name: 'Bob', avatarKey: null, avatarUpdatedAt: null })) },
@@ -418,7 +422,9 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
       actorUserId: 'actor-1',
     });
     await new Promise((r) => setTimeout(r, 10));
-    expect(apnsSendToUser).not.toHaveBeenCalled();
+    // iOS always receives the push regardless of presence.
+    expect(apnsSendToUser).toHaveBeenCalledTimes(1);
+    // Web is not active so it also fires.
     expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
   });
 });

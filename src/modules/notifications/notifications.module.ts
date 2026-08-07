@@ -52,6 +52,8 @@ import { OnThisDayCron } from './on-this-day.cron';
     NotificationsEmailCron,
     NotificationsReplyNudgeCron,
     OnThisDayCron,
+    NotificationPushService,
+    ApnsPushService,
   ],
 })
 export class NotificationsModule {}

@@ -37,6 +37,7 @@ import { CoinsModule } from '../coins/coins.module';
 import { CrewModule } from '../crew/crew.module';
 import { AdminCrewsController } from './admin-crews.controller';
 import { AdminImpersonationController } from './admin-impersonation.controller';
+import { AdminPushController } from './admin-push.controller';
 import { UploadsModule } from '../uploads/uploads.module';
 
 @Module({
@@ -78,6 +79,7 @@ import { UploadsModule } from '../uploads/uploads.module';
     AdminAffiliateController,
     AdminCrewsController,
     AdminImpersonationController,
+    AdminPushController,
   ],
   providers: [AdminGuard, AdminImageReviewService, AdminHashtagsService, AdminDailyDigestCron],
   exports: [AdminDailyDigestCron],

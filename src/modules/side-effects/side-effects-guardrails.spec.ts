@@ -80,6 +80,9 @@ const ALLOWED_DIRECT_NOTIFICATION_USERS: Record<string, string> = {
   'modules/auth/auth.controller.ts': 'reads undelivered counts for the session payload',
   // The notifications module's own HTTP surface (read + read-state endpoints).
   'modules/notifications/notifications.controller.ts': 'the notifications read/read-state API',
+  // Admin-only test-push tool: sends directly to the requesting admin's own devices, no
+  // side-effect fan-out needed. This is diagnostic tooling, not a user-facing mutation.
+  'modules/admin/admin-push.controller.ts': 'admin tool that fires a test push to the admin\'s own devices',
 };
 
 describe('notification writes go through the side-effects seam', () => {

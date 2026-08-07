@@ -42,7 +42,7 @@ Rationale: `npm test` can take 30–90 seconds per run. In a multi-phase plan th
 
 When you add or change a response shape:
 
-1. Update the DTO under `src/common/dto/**`.
+1. Update the owning DTO under `src/common/dto/**` or the domain module's `*.dto.ts`.
 2. Mirror the change in `menofhunger-www/types/api.ts`.
 3. If iOS consumes the response, update the matching model under `menofhunger-ios/MenOfHunger/**/Model` and add/adjust a decoding test.
 4. From `menofhunger-www/`: `npx nuxi typecheck` and `node scripts/validate-api-types.mjs` must both pass.
