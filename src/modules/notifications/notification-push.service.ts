@@ -4,6 +4,9 @@ import * as webpush from 'web-push';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceService } from '../presence/presence.service';
+import { CacheService } from '../redis/cache.service';
+import { RedisKeys } from '../redis/redis-keys';
+import { CacheTtl } from '../redis/cache-ttl';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import type { NotificationPreferencesDto } from '../../common/dto';
 import { NotificationPreferencesService } from './notification-preferences.service';
@@ -14,7 +17,8 @@ export type PushActorContext = {
   username: string | null;
   name: string | null;
   avatarKey: string | null;
-  avatarUpdatedAt: Date | null;
+  /** Accepts a Date or an ISO string — publicAssetUrl handles both. */
+  avatarUpdatedAt: Date | string | null;
 };
 
 /** Coalesce window (ms) per push kind to reduce fatigue. */
@@ -53,7 +57,27 @@ export class NotificationPushService {
     private readonly presence: PresenceService,
     private readonly preferences: NotificationPreferencesService,
     private readonly apnsPush: ApnsPushService,
+    private readonly cache: CacheService,
   ) {}
+
+  /**
+   * Fetch the minimal user fields needed for APNs rich content. Result is cached
+   * in Redis for 5 minutes so fan-out jobs for the same actor (e.g. 10k followers
+   * of a new post) avoid N identical DB reads for the same row.
+   */
+  private async getActorMini(userId: string): Promise<PushActorContext | null> {
+    return this.cache.getOrSetNullableJson<PushActorContext>({
+      enabled: Boolean(userId),
+      key: RedisKeys.pushActorMini(userId),
+      ttlSeconds: CacheTtl.pushActorMiniSeconds,
+      nullTtlSeconds: CacheTtl.pushActorMiniNullSeconds,
+      compute: () =>
+        this.prisma.user.findUnique({
+          where: { id: userId },
+          select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true },
+        }),
+    });
+  }
 
   /** True if at least one push channel (Web Push VAPID or native APNs) can send. */
   private pushChannelConfigured(): boolean {
@@ -652,7 +676,7 @@ export class NotificationPushService {
           notificationId: params.notificationId ?? null,
           kind,
           collapseId: tag,
-          mutableContent: Boolean(params.avatarUrl || params.mediaUrl),
+          mutableContent: Boolean(params.avatarUrl || params.mediaUrl || params.actorUsername),
           subtitle: params.subtitle ?? null,
           threadId: params.threadId ?? null,
           category: params.category ?? null,
@@ -770,16 +794,7 @@ export class NotificationPushService {
     } catch {
       // Best-effort: if prefs read fails, default to sending.
     }
-    const actor = await this.prisma.user.findUnique({
-      where: { id: params.actorUserId },
-      select: {
-        id: true,
-        username: true,
-        name: true,
-        avatarKey: true,
-        avatarUpdatedAt: true,
-      },
-    });
+    const actor = await this.getActorMini(params.actorUserId);
     if (!actor) return;
     const actorName = this.actorDisplayName(actor);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
@@ -800,6 +815,9 @@ export class NotificationPushService {
       badge: '/android-chrome-192x192.png',
       renotify: false,
       kind: 'reply_nudge',
+      avatarUrl: icon,
+      actorUsername: actor.username,
+      actorName: actor.name,
     });
   }
 
@@ -962,10 +980,7 @@ export class NotificationPushService {
     const body = this.trimPushBody(params.body, 150) ?? 'Open chat to read the message.';
     const url = `/chat?c=${encodeURIComponent(params.conversationId)}`;
     const tag = `message-conversation-${params.conversationId}`;
-    const senderUser = await this.prisma.user.findUnique({
-      where: { id: params.senderUserId },
-      select: { avatarKey: true, avatarUpdatedAt: true },
-    });
+    const senderUser = await this.getActorMini(params.senderUserId);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const icon = senderUser
       ? publicAssetUrl({
@@ -984,6 +999,9 @@ export class NotificationPushService {
         badge: '/android-chrome-192x192.png',
         renotify: true,
         kind: 'message',
+        avatarUrl: icon,
+        actorUsername: senderUser?.username ?? null,
+        actorName: senderUser?.name ?? null,
       });
     } catch (err) {
       this.logger.warn(`[push] Failed to send DM web push: ${err instanceof Error ? err.message : String(err)}`);
@@ -1037,18 +1055,7 @@ export class NotificationPushService {
       const mediaPostId = params.actorPostId ?? params.subjectPostId ?? null;
       const threadPostId = params.subjectPostId ?? params.actorPostId ?? null;
       const [actor, mediaPost, threadPost, group] = await Promise.all([
-        actorUserId
-          ? this.prisma.user.findUnique({
-            where: { id: actorUserId },
-            select: {
-              id: true,
-              username: true,
-              name: true,
-              avatarKey: true,
-              avatarUpdatedAt: true,
-            },
-          })
-          : null,
+        actorUserId ? this.getActorMini(actorUserId) : null,
         mediaPostId
           ? this.prisma.post.findUnique({
               where: { id: mediaPostId },

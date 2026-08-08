@@ -2,6 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ApnsClient, ApnsError, Host, Notification as ApnsNotification } from 'apns2';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
+import { CacheService } from '../redis/cache.service';
+import { RedisKeys } from '../redis/redis-keys';
+import { CacheTtl } from '../redis/cache-ttl';
 
 export type ApnsEnvironment = 'production' | 'sandbox';
 
@@ -28,6 +31,7 @@ export class ApnsPushService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
+    private readonly cache: CacheService,
   ) {}
 
   configured(): boolean {
@@ -43,6 +47,13 @@ export class ApnsPushService {
     if (!token) return;
     const environment: ApnsEnvironment = params.environment === 'sandbox' ? 'sandbox' : 'production';
 
+    // Rebind first so we know the old userId before overwriting.
+    const existing = await this.prisma.apnsDeviceToken.findUnique({
+      where: { token },
+      select: { userId: true },
+    });
+    const prevUserId = existing?.userId;
+
     await this.prisma.apnsDeviceToken.upsert({
       where: { token },
       create: { userId, token, environment, lastSeenAt: new Date() },
@@ -50,6 +61,12 @@ export class ApnsPushService {
       // (account switch on the same phone), rebind it to the current user.
       update: { userId, environment, lastSeenAt: new Date() },
     });
+
+    // Invalidate token cache for the new owner (and prior owner if it changed).
+    void this.cache.del(RedisKeys.pushApnsTokens(userId)).catch(() => undefined);
+    if (prevUserId && prevUserId !== userId) {
+      void this.cache.del(RedisKeys.pushApnsTokens(prevUserId)).catch(() => undefined);
+    }
   }
 
   /** Remove an APNs device token (logout). Only deletes the caller's own binding. */
@@ -57,6 +74,7 @@ export class ApnsPushService {
     const trimmed = (token ?? '').trim();
     if (!trimmed) return;
     await this.prisma.apnsDeviceToken.deleteMany({ where: { userId, token: trimmed } });
+    void this.cache.del(RedisKeys.pushApnsTokens(userId)).catch(() => undefined);
   }
 
   /** True if the user has at least one registered device token. */
@@ -96,9 +114,16 @@ export class ApnsPushService {
     const cfg = this.appConfig.apns();
     if (!cfg) return;
 
-    const tokens = await this.prisma.apnsDeviceToken.findMany({
-      where: { userId: recipientUserId },
-      select: { id: true, token: true, environment: true },
+    type TokenRow = { id: string; token: string; environment: string };
+    const tokens = await this.cache.getOrSetJson<TokenRow[]>({
+      enabled: Boolean(recipientUserId),
+      key: RedisKeys.pushApnsTokens(recipientUserId),
+      ttlSeconds: CacheTtl.pushApnsTokensSeconds,
+      compute: () =>
+        this.prisma.apnsDeviceToken.findMany({
+          where: { userId: recipientUserId },
+          select: { id: true, token: true, environment: true },
+        }),
     });
     if (tokens.length === 0) return;
 
@@ -156,6 +181,8 @@ export class ApnsPushService {
       await this.prisma.apnsDeviceToken
         .deleteMany({ where: { id: { in: deadTokenIds } } })
         .catch(() => {});
+      // Prune dead tokens from the cache so subsequent sends don't retry them.
+      void this.cache.del(RedisKeys.pushApnsTokens(recipientUserId)).catch(() => undefined);
     }
   }
 

@@ -221,6 +221,20 @@ export const RedisKeys = {
     return `scripture:${clean(translation)}:${clean(bookId)}:${chapter}`;
   },
 
+  // Push delivery caches
+  /** Actor mini-profile (avatarKey, username, name) for APNs rich content. */
+  pushActorMini(userId: string): string {
+    return `push:actor:mini:${clean(userId)}`;
+  },
+  /** Notification preferences for a recipient. Invalidated on updatePreferences. */
+  pushPrefs(userId: string): string {
+    return `push:prefs:${clean(userId)}`;
+  },
+  /** APNs device tokens for a user. Invalidated on register/unregister/prune. */
+  pushApnsTokens(userId: string): string {
+    return `push:apns:tokens:${clean(userId)}`;
+  },
+
   // Spaces lobby counts — global snapshot (updated on every join/leave)
   spacesLobbyCounts(): string {
     return 'spaces:lobbyCounts';

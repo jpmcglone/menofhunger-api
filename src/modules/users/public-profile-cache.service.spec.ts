@@ -47,5 +47,12 @@ describe('PublicProfileCacheService', () => {
     expect(res).toEqual({ id: 'user_1', username: 'same' });
     expect(redis.del).not.toHaveBeenCalled();
   });
+
+  it('invalidateForUser clears the push actor mini-profile cache so updated avatars reach APNs immediately', async () => {
+    const { svc, redis } = makeService({ profileVersion: 1 });
+    await svc.invalidateForUser({ id: 'user-42', username: 'alice' });
+    const deletedKeys: string[] = redis.del.mock.calls.flat();
+    expect(deletedKeys).toContain(RedisKeys.pushActorMini('user-42'));
+  });
 });
 

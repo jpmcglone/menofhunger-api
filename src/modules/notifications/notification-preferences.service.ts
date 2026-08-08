@@ -1,21 +1,37 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CacheService } from '../redis/cache.service';
+import { RedisKeys } from '../redis/redis-keys';
+import { CacheTtl } from '../redis/cache-ttl';
 import type { NotificationPreferencesDto } from '../../common/dto';
 
 /**
  * Notification preference storage. Owns the upsert-on-read row lifecycle and
  * the email-verification gate on email-channel preferences.
+ *
+ * Preferences are cached in Redis for 5 minutes to avoid a DB round-trip on
+ * every notification push. The cache is invalidated on every write so users see
+ * their setting changes reflected in the next push cycle.
  */
 @Injectable()
 export class NotificationPreferencesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
+  ) {}
 
   /** Raw preferences row (creates defaults on first read). Internal shape, not the DTO. */
   async getPreferencesInternal(userId: string) {
-    return await this.prisma.notificationPreferences.upsert({
-      where: { userId },
-      create: { userId },
-      update: {},
+    return await this.cache.getOrSetJson({
+      enabled: Boolean(userId),
+      key: RedisKeys.pushPrefs(userId),
+      ttlSeconds: CacheTtl.pushPrefsSeconds,
+      compute: () =>
+        this.prisma.notificationPreferences.upsert({
+          where: { userId },
+          create: { userId },
+          update: {},
+        }),
     });
   }
 
@@ -25,6 +41,7 @@ export class NotificationPreferencesService {
   }
 
   async updatePreferences(userId: string, patch: Partial<NotificationPreferencesDto>): Promise<NotificationPreferencesDto> {
+    void this.cache.del(RedisKeys.pushPrefs(userId)).catch(() => undefined);
     // Email prefs are only meaningful for verified emails. Keep the stored settings,
     // but prevent toggling them until the user verifies their email.
     const wantsEmailPatch =
@@ -56,6 +73,7 @@ export class NotificationPreferencesService {
       create: { userId, ...(effectivePatch as any) },
       update: effectivePatch as any,
     });
+    void this.cache.setJson(RedisKeys.pushPrefs(userId), updated, { ttlSeconds: CacheTtl.pushPrefsSeconds }).catch(() => undefined);
     return this.toDto(updated);
   }
 

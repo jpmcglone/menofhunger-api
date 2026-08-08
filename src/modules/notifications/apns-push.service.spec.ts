@@ -53,6 +53,25 @@ const apnsConfig = {
   bundleId: 'com.menofhunger.app',
 };
 
+function makeCache() {
+  const store = new Map<string, unknown>();
+  return {
+    store,
+    getOrSetJson: jest.fn(async ({ key, compute }: { key: string; compute: () => Promise<unknown> }) => {
+      if (store.has(key)) return store.get(key);
+      const v = await compute();
+      store.set(key, v);
+      return v;
+    }),
+    setJson: jest.fn(async (key: string, value: unknown) => {
+      store.set(key, value);
+    }),
+    del: jest.fn(async (...keys: string[]) => {
+      for (const k of keys) store.delete(k);
+    }),
+  };
+}
+
 function makeService(opts?: { configured?: boolean; tokens?: Array<{ id: string; token: string; environment: string }> }) {
   const configured = opts?.configured ?? true;
   const prisma = {
@@ -61,6 +80,7 @@ function makeService(opts?: { configured?: boolean; tokens?: Array<{ id: string;
       deleteMany: jest.fn(async () => ({ count: 1 })),
       count: jest.fn(async () => (opts?.tokens?.length ?? 0)),
       findMany: jest.fn(async () => opts?.tokens ?? []),
+      findUnique: jest.fn(),
     },
     notification: {
       count: jest.fn(async () => 3),
@@ -70,8 +90,9 @@ function makeService(opts?: { configured?: boolean; tokens?: Array<{ id: string;
     apns: jest.fn(() => (configured ? apnsConfig : null)),
     apnsConfigured: jest.fn(() => configured),
   };
-  const svc = new ApnsPushService(prisma as any, appConfig as any);
-  return { svc, prisma, appConfig };
+  const cache = makeCache();
+  const svc = new ApnsPushService(prisma as any, appConfig as any, cache as any);
+  return { svc, prisma, appConfig, cache };
 }
 
 describe('ApnsPushService', () => {
@@ -285,5 +306,60 @@ describe('ApnsPushService', () => {
     const results = await svc.sendDiagnosticToUser('user-1', { title: 'Test', body: 'Works', url: '/notifications' });
     expect(results).toEqual([]);
     expect(sendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('ApnsPushService — token cache', () => {
+  beforeEach(() => {
+    sendMock.mockReset();
+    sendMock.mockResolvedValue({});
+  });
+
+  it('sendToUser reads tokens from DB on first call and from cache on the second', async () => {
+    const { svc, prisma } = makeService({
+      tokens: [{ id: 't1', token: 'tok-cached', environment: 'production' }],
+    });
+    await svc.sendToUser('user-1', { title: 'First' });
+    await svc.sendToUser('user-1', { title: 'Second' });
+    // Only one DB query for tokens across both sends.
+    expect(prisma.apnsDeviceToken.findMany).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('unregisterToken invalidates the token cache', async () => {
+    const { svc, cache } = makeService();
+    await svc.unregisterToken('user-1', 'tok-abc');
+    expect(cache.del).toHaveBeenCalledWith(expect.stringContaining('push:apns:tokens:user-1'));
+  });
+
+  it('registerToken invalidates the cache for the new user', async () => {
+    const { svc, cache } = makeService();
+    await svc.registerToken('user-1', { token: 'new-token', environment: 'production' });
+    expect(cache.del).toHaveBeenCalledWith(expect.stringContaining('push:apns:tokens:user-1'));
+  });
+
+  it('registerToken also invalidates cache for the previous owner when a token is stolen', async () => {
+    const { svc, prisma, cache } = makeService();
+    prisma.apnsDeviceToken.findUnique.mockResolvedValue({ userId: 'user-old' });
+    await svc.registerToken('user-new', { token: 'shared-token', environment: 'production' });
+    const delCalls = cache.del.mock.calls.flat();
+    expect(delCalls.some((k: string) => k.includes('user-new'))).toBe(true);
+    expect(delCalls.some((k: string) => k.includes('user-old'))).toBe(true);
+  });
+
+  it('sendToUser invalidates cache when dead tokens are pruned', async () => {
+    const { svc, prisma, cache } = makeService({
+      tokens: [{ id: 't1', token: 'tok-dead', environment: 'production' }],
+    });
+    sendMock.mockRejectedValue(
+      new MockApnsError({
+        statusCode: 410,
+        notification: {},
+        response: { reason: 'Unregistered', timestamp: Date.now() },
+      }),
+    );
+    await svc.sendToUser('user-1', { title: 'Hello' });
+    expect(prisma.apnsDeviceToken.deleteMany).toHaveBeenCalled();
+    expect(cache.del).toHaveBeenCalledWith(expect.stringContaining('push:apns:tokens:user-1'));
   });
 });

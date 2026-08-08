@@ -72,9 +72,15 @@ function buildServices(prismaOverrides: Record<string, any>) {
     ...prismaOverrides,
   } as any;
 
-  const preferences = new NotificationPreferencesService(prisma);
-  const apnsPush = new ApnsPushService(prisma, stubAppConfig);
-  const push = new NotificationPushService(prisma, stubAppConfig, stubPresence as any, preferences, apnsPush);
+  const noopCache: any = {
+    getOrSetJson: async ({ compute }: any) => compute(),
+    getOrSetNullableJson: async ({ compute }: any) => compute(),
+    setJson: async () => {},
+    del: async () => {},
+  };
+  const preferences = new NotificationPreferencesService(prisma, noopCache);
+  const apnsPush = new ApnsPushService(prisma, stubAppConfig, noopCache);
+  const push = new NotificationPushService(prisma, stubAppConfig, stubPresence as any, preferences, apnsPush, noopCache);
   const readState = new NotificationReadStateService(prisma, stubPresenceRealtime as any, stubPosthog as any);
   const postVisibility = new PostVisibilityReadService(prisma, stubAppConfig, stubViewerContext as any);
   const query = new NotificationQueryService(prisma, stubAppConfig, postVisibility, readState);

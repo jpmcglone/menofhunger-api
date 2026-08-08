@@ -102,6 +102,31 @@ function makePresence(opts?: { iosActive?: boolean; webActive?: boolean; isOnlin
   } as any;
 }
 
+function makeCache() {
+  const store = new Map<string, unknown>();
+  return {
+    store,
+    getOrSetJson: jest.fn(async ({ key, compute }: { key: string; compute: () => Promise<unknown> }) => {
+      if (store.has(key)) return store.get(key);
+      const v = await compute();
+      store.set(key, v);
+      return v;
+    }),
+    getOrSetNullableJson: jest.fn(async ({ key, compute }: { key: string; compute: () => Promise<unknown> }) => {
+      if (store.has(key)) return store.get(key) ?? null;
+      const v = await compute();
+      store.set(key, v);
+      return v ?? null;
+    }),
+    setJson: jest.fn(async (key: string, value: unknown) => {
+      store.set(key, value);
+    }),
+    del: jest.fn(async (...keys: string[]) => {
+      for (const k of keys) store.delete(k);
+    }),
+  };
+}
+
 function makeService(opts?: {
   prisma?: any;
   vapid?: boolean;
@@ -109,14 +134,16 @@ function makeService(opts?: {
   preferences?: NotificationPreferencesService;
   apns?: { svc: ApnsPushService; apnsSendToUser: jest.Mock };
   presence?: any;
+  cache?: ReturnType<typeof makeCache>;
 }) {
   const prisma = opts?.prisma ?? makePrisma();
   const appConfig = makeAppConfig({ vapid: opts?.vapid ?? true, apns: opts?.apnsConfigured ?? true });
   const prefs = opts?.preferences ?? makePreferences();
   const { svc: apnsSvc, apnsSendToUser } = opts?.apns ?? makeApns();
   const presence = opts?.presence ?? makePresence();
-  const svc = new NotificationPushService(prisma, appConfig, presence, prefs, apnsSvc);
-  return { svc, prisma, appConfig, prefs, apnsSvc, apnsSendToUser, presence };
+  const cache = opts?.cache ?? makeCache();
+  const svc = new NotificationPushService(prisma, appConfig, presence, prefs, apnsSvc, cache as any);
+  return { svc, prisma, appConfig, prefs, apnsSvc, apnsSendToUser, presence, cache };
 }
 
 const notificationKinds = [
@@ -518,6 +545,65 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
     );
   });
 
+  it('sendMessagePush passes actorUsername, actorName, and avatarUrl to APNs', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'sender-1',
+      username: 'brett',
+      name: 'Brett Murphy',
+      avatarKey: 'avatars/brett.jpg',
+      avatarUpdatedAt: null,
+    });
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendMessagePush({
+      recipientUserId: 'user-1',
+      senderUserId: 'sender-1',
+      senderName: 'Brett Murphy',
+      body: 'Hey man',
+      conversationId: 'conv-1',
+    });
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        mutableContent: true,
+        actorUsername: 'brett',
+        actorName: 'Brett Murphy',
+        avatarUrl: 'https://cdn.example.com/avatars/brett.jpg',
+      }),
+    );
+  });
+
+  it('sendMessagePush still sends when sender has no avatar', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'sender-1',
+      username: 'brett',
+      name: 'Brett Murphy',
+      avatarKey: null,
+      avatarUpdatedAt: null,
+    });
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendMessagePush({
+      recipientUserId: 'user-1',
+      senderUserId: 'sender-1',
+      senderName: 'Brett Murphy',
+      body: 'Hey man',
+      conversationId: 'conv-1',
+    });
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        mutableContent: true, // actorUsername drives this
+        actorUsername: 'brett',
+        avatarUrl: null,
+      }),
+    );
+  });
+
   it('does not expose a post reply action for article comments', async () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockResolvedValue({
@@ -544,6 +630,82 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
         category: null,
         postId: null,
       }),
+    );
+  });
+
+  it('sets mutableContent true for actor with avatar', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'actor-1',
+      username: 'peter',
+      name: 'Peter Finn',
+      avatarKey: 'avatars/peter.jpg',
+      avatarUpdatedAt: null,
+    });
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendKindPushForActor({
+      recipientUserId: 'user-1',
+      kind: 'followed_post',
+      actorUserId: 'actor-1',
+      actorPostId: 'post-1',
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        mutableContent: true,
+        avatarUrl: 'https://cdn.example.com/avatars/peter.jpg',
+        actorUsername: 'peter',
+        actorName: 'Peter Finn',
+      }),
+    );
+  });
+
+  it('sets mutableContent true for actor WITHOUT avatar so NSE can still donate a Communication Intent', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'actor-1',
+      username: 'anthony',
+      name: 'Anthony Navarro',
+      avatarKey: null,   // no profile photo
+      avatarUpdatedAt: null,
+    });
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendKindPushForActor({
+      recipientUserId: 'user-1',
+      kind: 'nudge',
+      actorUserId: 'actor-1',
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        mutableContent: true,   // must be true so NSE runs even without avatar
+        avatarUrl: null,
+        actorUsername: 'anthony',
+      }),
+    );
+  });
+
+  it('sets mutableContent false for system notifications with no actor', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue(null); // no actor
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendKindPushForActor({
+      recipientUserId: 'user-1',
+      kind: 'word_of_the_day',
+      actorUserId: null,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ mutableContent: false }),
     );
   });
 
@@ -586,5 +748,126 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
         url: '/g/builders',
       }),
     );
+  });
+});
+
+describe('NotificationPushService — sendReplyNudgePush', () => {
+  beforeEach(() => {
+    webpush.sendNotification.mockReset();
+    webpush.sendNotification.mockResolvedValue({});
+  });
+
+  it('passes actorUsername, actorName, and avatarUrl to APNs', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'actor-1',
+      username: 'alice',
+      name: 'Alice',
+      avatarKey: 'avatars/alice.jpg',
+      avatarUpdatedAt: null,
+    });
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendReplyNudgePush({
+      recipientUserId: 'user-1',
+      actorUserId: 'actor-1',
+      notificationId: 'notif-1',
+      actorPostId: 'post-1',
+      bodySnippet: 'Great post!',
+    });
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        mutableContent: true,
+        actorUsername: 'alice',
+        actorName: 'Alice',
+        avatarUrl: 'https://cdn.example.com/avatars/alice.jpg',
+      }),
+    );
+  });
+
+  it('still sends when actor has no avatar', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'actor-1',
+      username: 'alice',
+      name: 'Alice',
+      avatarKey: null,
+      avatarUpdatedAt: null,
+    });
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendReplyNudgePush({
+      recipientUserId: 'user-1',
+      actorUserId: 'actor-1',
+      notificationId: 'notif-1',
+      actorPostId: null,
+    });
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        mutableContent: true,
+        actorUsername: 'alice',
+        avatarUrl: null,
+      }),
+    );
+  });
+});
+
+describe('NotificationPushService — actor mini-profile cache', () => {
+  beforeEach(() => {
+    webpush.sendNotification.mockReset();
+    webpush.sendNotification.mockResolvedValue({});
+  });
+
+  it('sendKindPushForActor reads actor from DB on first call and from cache on the second', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'actor-1',
+      username: 'alice',
+      name: 'Alice',
+      avatarKey: null,
+      avatarUpdatedAt: null,
+    });
+    const { svc } = makeService({ prisma });
+
+    await svc.sendKindPushForActor({ recipientUserId: 'user-1', kind: 'follow', actorUserId: 'actor-1' });
+    await svc.sendKindPushForActor({ recipientUserId: 'user-2', kind: 'follow', actorUserId: 'actor-1' });
+    // Both fan-out sends are for the same actor — only one DB call.
+    expect(prisma.user.findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it('sendReplyNudgePush reads actor from DB on first call and from cache on the second', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'actor-1',
+      username: 'alice',
+      name: 'Alice',
+      avatarKey: null,
+      avatarUpdatedAt: null,
+    });
+    const { svc } = makeService({ prisma });
+
+    await svc.sendReplyNudgePush({ recipientUserId: 'user-1', actorUserId: 'actor-1', notificationId: 'n1', actorPostId: null });
+    await svc.sendReplyNudgePush({ recipientUserId: 'user-2', actorUserId: 'actor-1', notificationId: 'n2', actorPostId: null });
+    expect(prisma.user.findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it('sendMessagePush reads sender from DB on first call and from cache on the second', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'sender-1',
+      username: 'bob',
+      name: 'Bob',
+      avatarKey: null,
+      avatarUpdatedAt: null,
+    });
+    const { svc } = makeService({ prisma });
+
+    await svc.sendMessagePush({ recipientUserId: 'user-1', senderUserId: 'sender-1', senderName: 'Bob', conversationId: 'conv-1' });
+    await svc.sendMessagePush({ recipientUserId: 'user-2', senderUserId: 'sender-1', senderName: 'Bob', conversationId: 'conv-1' });
+    expect(prisma.user.findUnique).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,4 +1,13 @@
 export const CacheTtl = {
+  // Push delivery caches — kept short because correctness matters more than hit rate.
+  /** Actor avatar/name for rich APNs enrichment. 5-min lag on profile changes is fine for push. */
+  pushActorMiniSeconds: 5 * 60,
+  /** Notification preferences per recipient. Invalidated explicitly on updatePreferences. */
+  pushPrefsSeconds: 5 * 60,
+  /** APNs device tokens per user. Invalidated explicitly on register/unregister to stop pushes after logout. */
+  pushApnsTokensSeconds: 15 * 60,
+  /** Null-result TTL for deleted/missing actor users — prevents stampede on the DB. */
+  pushActorMiniNullSeconds: 30,
   // Anonymous read caches (fast invalidation via version bumps).
   anonFeedSeconds: 30,
   authFeedSeconds: 15,

@@ -69,8 +69,12 @@ export class PublicProfileCacheService<T extends { id: string; username: string 
     const u = (user.username ?? '').trim().toLowerCase();
     if (!id) return;
 
-    // Version bump is the primary invalidation mechanism.
+    // Version bump is the primary invalidation mechanism for the public profile cache.
     await this.cacheInvalidation.bumpProfile(id);
+
+    // Also clear the push actor mini-profile cache so rich APNs notifications immediately
+    // reflect the updated avatar / name on the very next fan-out job.
+    void this.redis.del(RedisKeys.pushActorMini(id)).catch(() => undefined);
 
     // Cleanup helpers (best-effort): remove username resolver and any legacy unversioned keys.
     const legacyKeys = [

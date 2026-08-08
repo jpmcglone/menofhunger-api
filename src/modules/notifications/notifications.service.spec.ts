@@ -20,10 +20,18 @@ type FacadeDeps = {
 
 const stubPresenceRedis = { isOnline: jest.fn(async () => false), isIdle: jest.fn(async () => false) };
 
+/** Minimal pass-through cache for specs that don't test caching behaviour. */
+const noopCache: any = {
+  getOrSetJson: async ({ compute }: any) => compute(),
+  getOrSetNullableJson: async ({ compute }: any) => compute(),
+  setJson: async () => {},
+  del: async () => {},
+};
+
 function buildFacade(deps: FacadeDeps) {
-  const preferences = new NotificationPreferencesService(deps.prisma);
-  const apnsPush = new ApnsPushService(deps.prisma, deps.appConfig);
-  const push = new NotificationPushService(deps.prisma, deps.appConfig, deps.presence, preferences, apnsPush);
+  const preferences = new NotificationPreferencesService(deps.prisma, noopCache);
+  const apnsPush = new ApnsPushService(deps.prisma, deps.appConfig, noopCache);
+  const push = new NotificationPushService(deps.prisma, deps.appConfig, deps.presence, preferences, apnsPush, noopCache);
   const readState = new NotificationReadStateService(deps.prisma, deps.presenceRealtime, deps.posthog);
   const postVisibility = new PostVisibilityReadService(deps.prisma, deps.appConfig, deps.viewerContextService);
   const query = new NotificationQueryService(deps.prisma, deps.appConfig, postVisibility, readState);
