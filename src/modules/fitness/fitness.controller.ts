@@ -129,15 +129,15 @@ export class FitnessController {
   }
 
   @Delete('strava/disconnect')
-  @HttpCode(HttpStatus.NO_CONTENT)
   async disconnectStrava(@CurrentUserId() userId: string) {
     await this.fitness.disconnectStrava(userId);
+    return { data: null };
   }
 
   @Delete('apple_health/disconnect')
-  @HttpCode(HttpStatus.NO_CONTENT)
   async disconnectAppleHealth(@CurrentUserId() userId: string) {
     await this.fitness.disconnectAppleHealth(userId);
+    return { data: null };
   }
 
   // ─── Manual sync ───────────────────────────────────────────────────────────

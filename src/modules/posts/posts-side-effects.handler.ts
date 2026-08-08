@@ -117,7 +117,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     // Re-read the body so a retry carries the post's current text, not a request-time snapshot.
     const post = await this.prisma.post.findFirst({
       where: { id: postId, deletedAt: null },
-      select: { body: true },
+      select: { body: true, kind: true },
     });
     if (!post) return;
 
@@ -126,6 +126,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       actorUserId,
       subjectPostId: postId,
       bodySnippet: (post.body ?? '').trim().slice(0, 150) || null,
+      subjectPostKind: post.kind,
     });
   }
 

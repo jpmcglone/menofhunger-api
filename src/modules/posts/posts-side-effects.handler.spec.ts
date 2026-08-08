@@ -131,9 +131,9 @@ describe('PostsSideEffectsHandler post.deleted', () => {
 describe('PostsSideEffectsHandler post.engagement.changed', () => {
   const base = { postId: 'p1', recipientUserId: 'author', actorUserId: 'booster' };
 
-  function withBody(body: string) {
+  function withBody(body: string, kind = 'regular') {
     const ctx = makeHandler();
-    ctx.deps.prisma.post.findFirst = jest.fn(async () => ({ body }));
+    ctx.deps.prisma.post.findFirst = jest.fn(async () => ({ body, kind }));
     ctx.deps.notifications.upsertBoostNotification = jest.fn(async () => undefined);
     ctx.deps.notifications.deleteBoostNotification = jest.fn(async () => undefined);
     ctx.deps.notifications.deleteRepostNotification = jest.fn(async () => undefined);
@@ -146,7 +146,25 @@ describe('PostsSideEffectsHandler post.engagement.changed', () => {
     await (handler as any).onEngagementChanged({ ...base, kind: 'boost', active: true });
 
     expect(deps.notifications.upsertBoostNotification).toHaveBeenCalledWith(
-      expect.objectContaining({ subjectPostId: 'p1', bodySnippet: 'edited body' }),
+      expect.objectContaining({
+        subjectPostId: 'p1',
+        bodySnippet: 'edited body',
+        subjectPostKind: 'regular',
+      }),
+    );
+  });
+
+  it('titles status boosts as status', async () => {
+    const { handler, deps } = withBody('feeling strong', 'status');
+
+    await (handler as any).onEngagementChanged({ ...base, kind: 'boost', active: true });
+
+    expect(deps.notifications.upsertBoostNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subjectPostId: 'p1',
+        bodySnippet: 'feeling strong',
+        subjectPostKind: 'status',
+      }),
     );
   });
 

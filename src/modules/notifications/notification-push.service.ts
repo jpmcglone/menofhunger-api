@@ -226,7 +226,9 @@ export class NotificationPushService {
         };
       }
       return {
-        title: `${actorName} boosted your post`,
+        title: titleFromFallback
+          ? `${actorName} ${titleFromFallback}`
+          : `${actorName} boosted your post`,
         body: snippet ?? 'Your post is getting traction.',
       };
     }

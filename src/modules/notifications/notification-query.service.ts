@@ -783,6 +783,7 @@ export class NotificationQueryService {
         select: {
           id: true,
           body: true,
+          kind: true,
           visibility: true,
           media: {
             where: { deletedAt: null },
@@ -818,7 +819,11 @@ export class NotificationQueryService {
             return { url: url || '', thumbnailUrl, kind: (m as { kind: string }).kind };
           })
           .filter((m) => m.url);
-        subjectPostPreview = { bodySnippet, media };
+        subjectPostPreview = {
+          bodySnippet,
+          media,
+          kind: (p as { kind?: string }).kind ?? null,
+        };
         const vis = (p as { visibility?: string }).visibility;
         subjectTier = vis === 'premiumOnly' ? 'premium' : vis === 'verifiedOnly' ? 'verified' : null;
         if (vis === 'public' || vis === 'verifiedOnly' || vis === 'premiumOnly' || vis === 'onlyMe') {

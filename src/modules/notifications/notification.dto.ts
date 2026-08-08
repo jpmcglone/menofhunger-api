@@ -15,6 +15,8 @@ export type NotificationActorDto = {
 export type SubjectPostPreviewDto = {
   bodySnippet: string | null;
   media: Array<{ url: string; thumbnailUrl: string | null; kind: string }>;
+  /** Post kind when known (e.g. `status`) so clients can render status-specific copy/UI. */
+  kind?: string | null;
 };
 
 /** Preview of the subject article for display in the notification row. */

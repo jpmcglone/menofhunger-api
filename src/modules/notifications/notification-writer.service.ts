@@ -295,10 +295,13 @@ export class NotificationWriterService {
     actorUserId: string;
     subjectPostId: string;
     bodySnippet?: string | null;
+    subjectPostKind?: string | null;
   }) {
-    const { recipientUserId, actorUserId, subjectPostId, bodySnippet } = params;
+    const { recipientUserId, actorUserId, subjectPostId, bodySnippet, subjectPostKind } = params;
     // Never notify a user about their own boost.
     if (actorUserId && actorUserId === recipientUserId) return;
+    const boostTitle =
+      subjectPostKind === 'status' ? 'boosted your status' : 'boosted your post';
     const maxAttempts = 3;
     // Resolve presence before the transaction so the Redis call doesn't extend it.
     const presentAt = await this.presentAtForRecipient(recipientUserId);
@@ -319,7 +322,11 @@ export class NotificationWriterService {
             if (existing) {
               await tx.notification.update({
                 where: { id: existing.id },
-                data: { createdAt: new Date(), body: bodySnippet ?? undefined },
+                data: {
+                  createdAt: new Date(),
+                  body: bodySnippet ?? undefined,
+                  title: boostTitle,
+                },
               });
               return { kind: 'updated' as const, notificationId: existing.id, undeliveredCount: null as number | null };
             }
@@ -330,7 +337,7 @@ export class NotificationWriterService {
                 kind: 'boost',
                 actorUserId,
                 subjectPostId,
-                title: 'boosted your post',
+                title: boostTitle,
                 body: bodySnippet ?? undefined,
                 presentAt: presentAt ?? undefined,
               },
@@ -375,7 +382,7 @@ export class NotificationWriterService {
             recipientUserId,
             kind: 'boost',
             actorUserId,
-            fallbackTitle: 'boosted your post',
+            fallbackTitle: boostTitle,
             body: bodySnippet ?? null,
             actorPostId: null,
             subjectPostId: subjectPostId ?? null,
