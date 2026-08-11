@@ -12,6 +12,8 @@ export type ApnsEnvironment = 'production' | 'sandbox';
 const PRUNE_REASONS = new Set(['BadDeviceToken', 'Unregistered', 'DeviceTokenNotForTopic']);
 const NOTIFICATION_PUSH_SOUND = 'notification.caf';
 const MESSAGE_PUSH_SOUND = 'new-message.caf';
+/** Collapse id so rapid badge syncs replace each other instead of queuing. */
+const BADGE_SYNC_COLLAPSE_ID = 'badge-sync';
 
 /**
  * Native iOS push (APNs) delivery via HTTP/2 token-based auth (.p8 key).
@@ -27,6 +29,8 @@ const MESSAGE_PUSH_SOUND = 'new-message.caf';
 export class ApnsPushService {
   private readonly logger = new Logger(ApnsPushService.name);
   private clients: Partial<Record<ApnsEnvironment, ApnsClient>> = {};
+  /** Last badge-only value sent per user — skip no-op syncs in this process. */
+  private readonly lastBadgeByUserId = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -35,7 +39,11 @@ export class ApnsPushService {
   ) {}
 
   configured(): boolean {
-    return this.appConfig.apnsConfigured();
+    try {
+      return this.appConfig.apnsConfigured();
+    } catch {
+      return false;
+    }
   }
 
   /** Upsert an APNs device token for a user (idempotent; steals from a prior account on the same device). */
@@ -84,8 +92,65 @@ export class ApnsPushService {
   }
 
   /**
-   * Send an alert push to all of a user's devices. Badge defaults to the user's
-   * undelivered notification count so the app icon mirrors the in-app bell.
+   * App icon badge = bell undelivered + groups undelivered — matches iOS
+   * `notificationCount + groupsUnreadTotal`.
+   */
+  async computeAppIconBadge(userId: string): Promise<number> {
+    const uid = (userId ?? '').trim();
+    if (!uid) return 0;
+    const [user, groupsUnread] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: uid },
+        select: { undeliveredNotificationCount: true },
+      }),
+      this.prisma.notification.count({
+        where: {
+          recipientUserId: uid,
+          kind: 'community_group_post',
+          deliveredAt: null,
+        },
+      }),
+    ]);
+    const bell = Math.max(0, Math.floor(Number(user?.undeliveredNotificationCount) || 0));
+    const groups = Math.max(0, Math.floor(groupsUnread || 0));
+    return bell + groups;
+  }
+
+  /**
+   * Badge-only APNs (no alert/sound) so the home-screen icon updates while the
+   * app is backgrounded after mark-delivered / mark-read / group-seen.
+   */
+  async sendBadgeOnly(recipientUserId: string, badge?: number | null): Promise<void> {
+    const uid = (recipientUserId ?? '').trim();
+    if (!uid || !this.configured()) return;
+
+    const next =
+      typeof badge === 'number' && Number.isFinite(badge)
+        ? Math.max(0, Math.floor(badge))
+        : await this.computeAppIconBadge(uid);
+    if (this.lastBadgeByUserId.get(uid) === next) return;
+    this.lastBadgeByUserId.set(uid, next);
+
+    await this.deliverToTokens(uid, (token) => {
+      return new ApnsNotification(token, {
+        badge: next,
+        collapseId: BADGE_SYNC_COLLAPSE_ID,
+      });
+    });
+  }
+
+  /** Fire-and-forget badge sync used from read-state paths. Never throws. */
+  syncAppIconBadge(recipientUserId: string, badge?: number | null): void {
+    void this.sendBadgeOnly(recipientUserId, badge).catch((err) => {
+      this.logger.warn(
+        `[apns] badge sync failed for ${recipientUserId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
+
+  /**
+   * Send an alert push to all of a user's devices. Badge defaults to bell + groups
+   * undelivered so the app icon mirrors the in-app badge.
    */
   async sendToUser(
     recipientUserId: string,
@@ -114,24 +179,10 @@ export class ApnsPushService {
     const cfg = this.appConfig.apns();
     if (!cfg) return;
 
-    type TokenRow = { id: string; token: string; environment: string };
-    const tokens = await this.cache.getOrSetJson<TokenRow[]>({
-      enabled: Boolean(recipientUserId),
-      key: RedisKeys.pushApnsTokens(recipientUserId),
-      ttlSeconds: CacheTtl.pushApnsTokensSeconds,
-      compute: () =>
-        this.prisma.apnsDeviceToken.findMany({
-          where: { userId: recipientUserId },
-          select: { id: true, token: true, environment: true },
-        }),
-    });
-    if (tokens.length === 0) return;
-
     const badge =
       params.badge ??
-      (await this.prisma.notification
-        .count({ where: { recipientUserId, deliveredAt: null } })
-        .catch(() => 0));
+      (await this.computeAppIconBadge(recipientUserId).catch(() => 0));
+    this.lastBadgeByUserId.set(recipientUserId, Math.max(0, Math.floor(badge || 0)));
 
     const collapseId = (params.collapseId ?? '').slice(0, 64) || undefined;
     const data: Record<string, unknown> = {};
@@ -145,12 +196,9 @@ export class ApnsPushService {
     if (params.groupInviteId) data.groupInviteId = params.groupInviteId;
     if (params.postId) data.postId = params.postId;
 
-    const deadTokenIds: string[] = [];
-    for (const row of tokens) {
-      const environment: ApnsEnvironment = row.environment === 'sandbox' ? 'sandbox' : 'production';
-      const client = this.clientFor(environment, cfg);
+    await this.deliverToTokens(recipientUserId, (token) => {
       const subtitle = (params.subtitle ?? '').trim();
-      const notification = new ApnsNotification(row.token, {
+      return new ApnsNotification(token, {
         alert: {
           title: params.title,
           ...(subtitle ? { subtitle } : {}),
@@ -164,26 +212,7 @@ export class ApnsPushService {
         ...(params.category ? { category: params.category } : {}),
         data,
       });
-      try {
-        await client.send(notification);
-      } catch (err) {
-        if (err instanceof ApnsError && (err.statusCode === 410 || PRUNE_REASONS.has(err.reason))) {
-          deadTokenIds.push(row.id);
-        } else {
-          this.logger.warn(
-            `[apns] Failed to send push to user ${recipientUserId}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-    }
-
-    if (deadTokenIds.length > 0) {
-      await this.prisma.apnsDeviceToken
-        .deleteMany({ where: { id: { in: deadTokenIds } } })
-        .catch(() => {});
-      // Prune dead tokens from the cache so subsequent sends don't retry them.
-      void this.cache.del(RedisKeys.pushApnsTokens(recipientUserId)).catch(() => undefined);
-    }
+    });
   }
 
   /**
@@ -211,20 +240,14 @@ export class ApnsPushService {
       where: { userId: recipientUserId },
       select: { id: true, token: true, environment: true },
     });
-    if (tokens.length === 0) return [];
-
-    const results: Array<{ token: string; environment: string; success: boolean; error?: string }> =
-      [];
-
+    const results: Array<{ token: string; environment: string; success: boolean; error?: string }> = [];
     for (const row of tokens) {
       const environment: ApnsEnvironment = row.environment === 'sandbox' ? 'sandbox' : 'production';
-      // Always create a fresh client for diagnostics so a cached bad client doesn't mask errors.
       const client = this.freshClientFor(environment, cfg);
-      const subtitle = (params.subtitle ?? '').trim();
       const notification = new ApnsNotification(row.token, {
         alert: {
           title: params.title,
-          ...(subtitle ? { subtitle } : {}),
+          ...((params.subtitle ?? '').trim() ? { subtitle: (params.subtitle ?? '').trim() } : {}),
           body: params.body,
         },
         sound: NOTIFICATION_PUSH_SOUND,
@@ -258,6 +281,51 @@ export class ApnsPushService {
       }
     }
     return results;
+  }
+
+  private async deliverToTokens(
+    recipientUserId: string,
+    build: (token: string) => InstanceType<typeof ApnsNotification>,
+  ): Promise<void> {
+    const cfg = this.appConfig.apns();
+    if (!cfg) return;
+
+    type TokenRow = { id: string; token: string; environment: string };
+    const tokens = await this.cache.getOrSetJson<TokenRow[]>({
+      enabled: Boolean(recipientUserId),
+      key: RedisKeys.pushApnsTokens(recipientUserId),
+      ttlSeconds: CacheTtl.pushApnsTokensSeconds,
+      compute: () =>
+        this.prisma.apnsDeviceToken.findMany({
+          where: { userId: recipientUserId },
+          select: { id: true, token: true, environment: true },
+        }),
+    });
+    if (tokens.length === 0) return;
+
+    const deadTokenIds: string[] = [];
+    for (const row of tokens) {
+      const environment: ApnsEnvironment = row.environment === 'sandbox' ? 'sandbox' : 'production';
+      const client = this.clientFor(environment, cfg);
+      try {
+        await client.send(build(row.token));
+      } catch (err) {
+        if (err instanceof ApnsError && (err.statusCode === 410 || PRUNE_REASONS.has(err.reason))) {
+          deadTokenIds.push(row.id);
+        } else {
+          this.logger.warn(
+            `[apns] Failed to send push to user ${recipientUserId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+    }
+
+    if (deadTokenIds.length > 0) {
+      await this.prisma.apnsDeviceToken
+        .deleteMany({ where: { id: { in: deadTokenIds } } })
+        .catch(() => {});
+      void this.cache.del(RedisKeys.pushApnsTokens(recipientUserId)).catch(() => undefined);
+    }
   }
 
   private clientFor(

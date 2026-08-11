@@ -85,6 +85,9 @@ function makeService(opts?: { configured?: boolean; tokens?: Array<{ id: string;
     notification: {
       count: jest.fn(async () => 3),
     },
+    user: {
+      findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 0 })),
+    },
   };
   const appConfig = {
     apns: jest.fn(() => (configured ? apnsConfig : null)),
@@ -138,13 +141,15 @@ describe('ApnsPushService', () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 
-  it('sendToUser sends one notification per device token with badge = undelivered count', async () => {
-    const { svc } = makeService({
+  it('sendToUser sends one notification per device token with badge = bell + groups', async () => {
+    const { svc, prisma } = makeService({
       tokens: [
         { id: 't1', token: 'tok-1', environment: 'production' },
         { id: 't2', token: 'tok-2', environment: 'sandbox' },
       ],
     });
+    prisma.user.findUnique.mockResolvedValue({ undeliveredNotificationCount: 2 });
+    prisma.notification.count.mockResolvedValue(1);
     await svc.sendToUser('user-1', { title: 'New reply', body: 'Someone replied', url: '/p/abc', kind: 'comment' });
     expect(sendMock).toHaveBeenCalledTimes(2);
     const first = sendMock.mock.calls[0][0];
@@ -361,5 +366,34 @@ describe('ApnsPushService — token cache', () => {
     await svc.sendToUser('user-1', { title: 'Hello' });
     expect(prisma.apnsDeviceToken.deleteMany).toHaveBeenCalled();
     expect(cache.del).toHaveBeenCalledWith(expect.stringContaining('push:apns:tokens:user-1'));
+  });
+
+  it('sendBadgeOnly sends badge without alert/sound and coalesces identical values', async () => {
+    const { svc, prisma } = makeService({
+      tokens: [{ id: 't1', token: 'tok-1', environment: 'production' }],
+    });
+    prisma.user.findUnique.mockResolvedValue({ undeliveredNotificationCount: 0 });
+    prisma.notification.count.mockResolvedValue(0);
+    await svc.sendBadgeOnly('user-1');
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const first = sendMock.mock.calls[0][0];
+    expect(first.options.badge).toBe(0);
+    expect(first.options.alert).toBeUndefined();
+    expect(first.options.sound).toBeUndefined();
+    expect(first.options.collapseId).toBe('badge-sync');
+
+    await svc.sendBadgeOnly('user-1', 0);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+
+    await svc.sendBadgeOnly('user-1', 4);
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock.mock.calls[1][0].options.badge).toBe(4);
+  });
+
+  it('computeAppIconBadge sums bell undelivered and group undelivered', async () => {
+    const { svc, prisma } = makeService();
+    prisma.user.findUnique.mockResolvedValue({ undeliveredNotificationCount: 5 });
+    prisma.notification.count.mockResolvedValue(2);
+    await expect(svc.computeAppIconBadge('user-1')).resolves.toBe(7);
   });
 });

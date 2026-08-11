@@ -145,7 +145,10 @@ export class PresenceRealtimeService {
     }
   }
 
-  emitNotificationsUpdated(userId: string, payload: { undeliveredCount: number }): void {
+  emitNotificationsUpdated(
+    userId: string,
+    payload: { undeliveredCount: number; clearedPostIds?: string[] },
+  ): void {
     this.emitToUser(userId, 'notifications:updated', payload);
   }
 

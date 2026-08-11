@@ -3,6 +3,7 @@ import { Prisma, type NotificationKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
+import { ApnsPushService } from './apns-push.service';
 
 export type NotificationUnreadByKind = Partial<Record<NotificationKind | 'all', number>>;
 
@@ -39,7 +40,21 @@ export class NotificationReadStateService {
     private readonly prisma: PrismaService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly posthog: PosthogService,
+    private readonly apnsPush: ApnsPushService,
   ) {}
+
+  /** Bell + groups undelivered → badge-only APNs (best-effort, never throws). */
+  private syncAppIconBadge(recipientUserId: string): void {
+    this.apnsPush.syncAppIconBadge(recipientUserId);
+  }
+
+  private emitBellUpdated(
+    recipientUserId: string,
+    payload: { undeliveredCount: number; clearedPostIds?: string[] },
+  ): void {
+    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, payload);
+    this.syncAppIconBadge(recipientUserId);
+  }
 
   undeliveredBellWhere(recipientUserId: string): Prisma.NotificationWhereInput {
     return {
@@ -133,6 +148,7 @@ export class NotificationReadStateService {
     try {
       const { total, byGroupId } = await this.getGroupsUnread(recipientUserId);
       this.presenceRealtime.emitGroupsUnreadChanged(recipientUserId, { total, byGroupId });
+      this.syncAppIconBadge(recipientUserId);
     } catch (err) {
       this.logger.debug(`[notifications] Failed to emit groups unread: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -178,7 +194,7 @@ export class NotificationReadStateService {
       // Return accurate count from actual rows (handles drifted counters).
       return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
     });
-    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
+    this.emitBellUpdated(recipientUserId, {
       undeliveredCount,
     });
     // Groups badges also clear when the user opens the notifications page.
@@ -210,7 +226,7 @@ export class NotificationReadStateService {
       return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
     });
 
-    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
+    this.emitBellUpdated(recipientUserId, {
       undeliveredCount,
     });
     return { undeliveredCount };
@@ -292,8 +308,9 @@ export class NotificationReadStateService {
       // Return accurate count from actual rows (handles drifted counters).
       return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
     });
-    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
+    this.emitBellUpdated(recipientUserId, {
       undeliveredCount,
+      ...(postId ? { clearedPostIds: [postId] } : {}),
     });
     // markReadBySubject can clear comment notifications (e.g. opening the post via tap).
     void this.emitWaitingCountForUser(recipientUserId);
@@ -324,7 +341,7 @@ export class NotificationReadStateService {
       }
       return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
     });
-    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
+    this.emitBellUpdated(recipientUserId, { undeliveredCount });
   }
 
   /**
@@ -369,7 +386,7 @@ export class NotificationReadStateService {
       return { changed: true as const, undeliveredCount };
     });
     if (res.changed) {
-      this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
+      this.emitBellUpdated(recipientUserId, {
         undeliveredCount: res.undeliveredCount ?? 0,
       });
     }
@@ -410,7 +427,7 @@ export class NotificationReadStateService {
       return { changed: true as const, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
     });
     if (res.changed) {
-      this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
+      this.emitBellUpdated(recipientUserId, {
         undeliveredCount: res.undeliveredCount ?? 0,
       });
       if (notification?.kind === 'comment') {
@@ -461,7 +478,7 @@ export class NotificationReadStateService {
       return { changed: true as const, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
     });
     if (res.changed) {
-      this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
+      this.emitBellUpdated(recipientUserId, {
         undeliveredCount: res.undeliveredCount ?? 0,
       });
     }
@@ -510,7 +527,7 @@ export class NotificationReadStateService {
       });
       return { changedCount: readRes.count, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
     });
-    if (res.changedCount > 0) this.presenceRealtime.emitNotificationsUpdated(recipient, { undeliveredCount: res.undeliveredCount ?? 0 });
+    if (res.changedCount > 0) this.emitBellUpdated(recipient, { undeliveredCount: res.undeliveredCount ?? 0 });
     return res.changedCount;
   }
 
@@ -556,7 +573,7 @@ export class NotificationReadStateService {
       });
       return { changedCount: nudgedRes.count, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
     });
-    if (res.changedCount > 0) this.presenceRealtime.emitNotificationsUpdated(recipient, { undeliveredCount: res.undeliveredCount ?? 0 });
+    if (res.changedCount > 0) this.emitBellUpdated(recipient, { undeliveredCount: res.undeliveredCount ?? 0 });
     return res.changedCount;
   }
 
@@ -589,7 +606,7 @@ export class NotificationReadStateService {
       });
       return { changed: true as const, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
     });
-    if (res.changed) this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount: res.undeliveredCount ?? 0 });
+    if (res.changed) this.emitBellUpdated(recipientUserId, { undeliveredCount: res.undeliveredCount ?? 0 });
     return res.changed;
   }
 
@@ -635,7 +652,7 @@ export class NotificationReadStateService {
       });
       return { changedCount: ignoredRes.count, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
     });
-    if (res.changedCount > 0) this.presenceRealtime.emitNotificationsUpdated(recipient, { undeliveredCount: res.undeliveredCount ?? 0 });
+    if (res.changedCount > 0) this.emitBellUpdated(recipient, { undeliveredCount: res.undeliveredCount ?? 0 });
     return res.changedCount;
   }
 
@@ -661,7 +678,7 @@ export class NotificationReadStateService {
       }
       return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
     });
-    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
+    this.emitBellUpdated(recipientUserId, {
       undeliveredCount,
     });
     // markAllRead clears every comment notification too.

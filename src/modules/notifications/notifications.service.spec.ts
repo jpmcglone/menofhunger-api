@@ -32,7 +32,7 @@ function buildFacade(deps: FacadeDeps) {
   const preferences = new NotificationPreferencesService(deps.prisma, noopCache);
   const apnsPush = new ApnsPushService(deps.prisma, deps.appConfig, noopCache);
   const push = new NotificationPushService(deps.prisma, deps.appConfig, deps.presence, preferences, apnsPush, noopCache);
-  const readState = new NotificationReadStateService(deps.prisma, deps.presenceRealtime, deps.posthog);
+  const readState = new NotificationReadStateService(deps.prisma, deps.presenceRealtime, deps.posthog, apnsPush);
   const postVisibility = new PostVisibilityReadService(deps.prisma, deps.appConfig, deps.viewerContextService);
   const query = new NotificationQueryService(deps.prisma, deps.appConfig, postVisibility, readState);
   // Stands in for the side-effects worker: runs the push handler inline so push assertions
@@ -1042,6 +1042,45 @@ describe('NotificationReadStateService.markReadBySubject — community_group_pos
     const groupClause = txUpdateCall?.where?.OR?.find((c: any) => c.subjectGroupId === 'g1');
     expect(groupClause).toBeDefined();
     expect(groupClause?.kind?.not).toBe('community_group_post');
+  });
+
+  it('emits clearedPostIds when marking by postId', async () => {
+    const updateMany = jest.fn(async () => ({ count: 1 }));
+    const executeRaw = jest.fn(async () => []);
+    const count = jest.fn(async () => 2);
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitNotificationsWaitingChanged: jest.fn(),
+      emitGroupsUnreadChanged: jest.fn(),
+    } as any;
+    const prisma = {
+      notification: { updateMany, count, groupBy: jest.fn(async () => []) },
+      user: { findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 2 })) },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          notification: { updateMany, count },
+          user: { update: jest.fn(async () => ({})) },
+          $executeRaw: executeRaw,
+        }),
+      ),
+      $executeRaw: executeRaw,
+    } as any;
+    const { readState } = buildFacade({
+      prisma,
+      appConfig: { r2: jest.fn(() => null) } as any,
+      presenceRealtime,
+      presence: { isUserViewingConversation: jest.fn(() => false) } as any,
+      jobs: { enqueueCron: jest.fn() } as any,
+      posthog: { capture: jest.fn() } as any,
+      viewerContextService: { getViewer: jest.fn(async () => null) } as any,
+    });
+
+    await readState.markReadBySubject('u1', { postId: 'post-42' });
+
+    expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalledWith('u1', {
+      undeliveredCount: 2,
+      clearedPostIds: ['post-42'],
+    });
   });
 });
 

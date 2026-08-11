@@ -81,7 +81,7 @@ function buildServices(prismaOverrides: Record<string, any>) {
   const preferences = new NotificationPreferencesService(prisma, noopCache);
   const apnsPush = new ApnsPushService(prisma, stubAppConfig, noopCache);
   const push = new NotificationPushService(prisma, stubAppConfig, stubPresence as any, preferences, apnsPush, noopCache);
-  const readState = new NotificationReadStateService(prisma, stubPresenceRealtime as any, stubPosthog as any);
+  const readState = new NotificationReadStateService(prisma, stubPresenceRealtime as any, stubPosthog as any, apnsPush);
   const postVisibility = new PostVisibilityReadService(prisma, stubAppConfig, stubViewerContext as any);
   const query = new NotificationQueryService(prisma, stubAppConfig, postVisibility, readState);
   // Stands in for the side-effects worker: runs the push handler inline so these tests keep
