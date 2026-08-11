@@ -173,6 +173,20 @@ export class SpacesService {
     return this.toDto(updated, { viewerUserId: userId });
   }
 
+  /**
+   * System path: flip an abandoned live space offline (owner left / empty lobby sweep).
+   * Returns true when a row was updated.
+   */
+  async deactivateIfActive(spaceId: string): Promise<boolean> {
+    const id = String(spaceId ?? '').trim();
+    if (!id) return false;
+    const result = await this.prisma.space.updateMany({
+      where: { id, isActive: true },
+      data: { isActive: false },
+    });
+    return result.count > 0;
+  }
+
   async activateSpaceByOwnerId(ownerId: string): Promise<void> {
     const space = await this.prisma.space.findUnique({
       where: { ownerId },
@@ -325,23 +339,28 @@ export class SpacesService {
     return this.getSpaceById(id, userId);
   }
 
-  /** Lobby: live spaces + upcoming scheduled spaces. */
+  /** Lobby: live spaces + upcoming scheduled + viewer's own space (even if offline). */
   async listLobbySpaces(viewerUserId?: string | null): Promise<SpaceDto[]> {
     const now = new Date();
+    const viewerId = String(viewerUserId ?? '').trim() || null;
+    const or: Array<{ isActive: true } | { scheduledAt: { gt: Date } } | { ownerId: string }> = [
+      { isActive: true },
+      { scheduledAt: { gt: now } },
+    ];
+    if (viewerId) or.push({ ownerId: viewerId });
+
     const spaces = await this.prisma.space.findMany({
-      where: {
-        OR: [{ isActive: true }, { scheduledAt: { gt: now } }],
-      },
+      where: { OR: or },
       include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
       orderBy: { createdAt: 'desc' },
     });
 
     const counts = this.spacesPresence.getLobbyCountsBySpaceId();
-    const subscribedIds = viewerUserId
+    const subscribedIds = viewerId
       ? new Set(
           (
             await this.prisma.spaceScheduleSubscriber.findMany({
-              where: { userId: viewerUserId, spaceId: { in: spaces.map((s) => s.id) } },
+              where: { userId: viewerId, spaceId: { in: spaces.map((s) => s.id) } },
               select: { spaceId: true },
             })
           ).map((r) => r.spaceId),
@@ -351,14 +370,18 @@ export class SpacesService {
     const dtos = await Promise.all(
       spaces.map((s) =>
         this.toDto(s, {
-          viewerUserId,
+          viewerUserId: viewerId,
           listenerCountOverride: counts[s.id],
           viewerSubscribedOverride: subscribedIds.has(s.id),
         }),
       ),
     );
 
+    // Own space first, then live (by listeners), then soonest schedule.
     return dtos.sort((a, b) => {
+      const aOwn = viewerId && a.owner?.id === viewerId ? 1 : 0;
+      const bOwn = viewerId && b.owner?.id === viewerId ? 1 : 0;
+      if (aOwn !== bOwn) return bOwn - aOwn;
       if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
       if (a.isActive && b.isActive) return b.listenerCount - a.listenerCount;
       const aAt = a.scheduledAt ? Date.parse(a.scheduledAt) : Number.POSITIVE_INFINITY;

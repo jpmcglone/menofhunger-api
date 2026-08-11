@@ -6,6 +6,7 @@ import { SpacesChatService } from './spaces-chat.service';
 import { SpacesController } from './spaces.controller';
 import { SpacesPresenceService } from './spaces-presence.service';
 import { SpacesService } from './spaces.service';
+import { SpacesIdleCleanupCron } from './spaces-idle-cleanup.cron';
 import { SpacesSideEffectsHandler } from './spaces-side-effects.handler';
 import { WatchPartyStateService } from './watch-party-state.service';
 
@@ -18,6 +19,7 @@ import { WatchPartyStateService } from './watch-party-state.service';
     SpacesChatService,
     WatchPartyStateService,
     SpacesSideEffectsHandler,
+    SpacesIdleCleanupCron,
   ],
   exports: [SpacesService, SpacesPresenceService, SpacesChatService, WatchPartyStateService],
 })

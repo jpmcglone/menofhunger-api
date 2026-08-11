@@ -67,11 +67,18 @@ export class SpacesGatewayHandler {
     return ownerId;
   }
 
-  /** Remove a socket from owner-election maps and re-elect primary when needed. */
-  private clearOwnerSocket(socketId: string, ownerSpaceId: string, opts?: { pauseWatchParty?: boolean }): void {
+  /**
+   * Remove a socket from owner-election maps and re-elect primary when needed.
+   * Returns true when no owner sockets remain for the space (room is leaderless).
+   */
+  private clearOwnerSocket(
+    socketId: string,
+    ownerSpaceId: string,
+    opts?: { pauseWatchParty?: boolean },
+  ): boolean {
     const spaceId = String(ownerSpaceId ?? '').trim();
     const sid = String(socketId ?? '').trim();
-    if (!spaceId || !sid) return;
+    if (!spaceId || !sid) return false;
 
     const ownerSockets = this.ownerSocketsBySpaceId.get(spaceId);
     if (ownerSockets) {
@@ -98,6 +105,18 @@ export class SpacesGatewayHandler {
         }
       }
     }
+
+    const ownerGone = (this.ownerSocketsBySpaceId.get(spaceId)?.size ?? 0) === 0;
+    if (ownerGone) {
+      // Last owner tab left — close the live space so it doesn't linger in the lobby.
+      void this.spaces
+        .deactivateIfActive(spaceId)
+        .then((did) => {
+          if (did) this.emitSpacesLobbyCounts();
+        })
+        .catch(() => undefined);
+    }
+    return ownerGone;
   }
 
   // ─── Fan-out helpers ────────────────────────────────────────────────

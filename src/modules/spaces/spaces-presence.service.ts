@@ -20,9 +20,50 @@ export class SpacesPresenceService {
   private readonly pausedBySpace = new Map<string, Set<string>>();
   /** spaceId -> Set<userId> (subset of usersBySpace: muted members) */
   private readonly mutedBySpace = new Map<string, Set<string>>();
+  /** spaceId -> epoch ms when the lobby last became empty (local instance). */
+  private readonly emptySinceBySpaceId = new Map<string, number>();
 
   isValidSpaceId(spaceId: string): boolean {
     return Boolean((spaceId ?? '').trim());
+  }
+
+  /** Mark occupied so the empty-lobby idle sweep resets. */
+  private noteOccupied(spaceId: string): void {
+    const id = (spaceId ?? '').trim();
+    if (!id) return;
+    this.emptySinceBySpaceId.delete(id);
+  }
+
+  /** Stamp empty-since once when the last member leaves. */
+  private noteEmpty(spaceId: string): void {
+    const id = (spaceId ?? '').trim();
+    if (!id) return;
+    if (!this.emptySinceBySpaceId.has(id)) {
+      this.emptySinceBySpaceId.set(id, Date.now());
+    }
+  }
+
+  /** Epoch ms when this instance last saw the lobby go empty, or null if occupied/unknown. */
+  getEmptySinceMs(spaceIdRaw: string): number | null {
+    const id = (spaceIdRaw ?? '').trim();
+    if (!id) return null;
+    if ((this.usersBySpace.get(id)?.size ?? 0) > 0) return null;
+    return this.emptySinceBySpaceId.get(id) ?? null;
+  }
+
+  /**
+   * Ensure an empty-since stamp exists for a vacant lobby (used by the idle sweep
+   * for spaces that became live without ever joining this instance).
+   */
+  ensureEmptyStamp(spaceIdRaw: string): number | null {
+    const id = (spaceIdRaw ?? '').trim();
+    if (!id) return null;
+    if ((this.usersBySpace.get(id)?.size ?? 0) > 0) {
+      this.noteOccupied(id);
+      return null;
+    }
+    this.noteEmpty(id);
+    return this.emptySinceBySpaceId.get(id) ?? null;
   }
 
   join(params: { socketId: string; userId: string; spaceId: string }): { prevSpaceId: string | null; prevRoomSpaceId: string | null } {
@@ -42,7 +83,10 @@ export class SpacesPresenceService {
       const set = this.usersBySpace.get(prev.spaceId);
       if (set) {
         set.delete(userId);
-        if (set.size === 0) this.usersBySpace.delete(prev.spaceId);
+        if (set.size === 0) {
+          this.usersBySpace.delete(prev.spaceId);
+          this.noteEmpty(prev.spaceId);
+        }
       }
       const pausedSet = this.pausedBySpace.get(prev.spaceId);
       if (pausedSet) {
@@ -62,6 +106,7 @@ export class SpacesPresenceService {
       this.usersBySpace.set(spaceId, nextSet);
     }
     nextSet.add(userId);
+    this.noteOccupied(spaceId);
 
     const pausedSet = this.pausedBySpace.get(spaceId);
     if (pausedSet) {
@@ -192,7 +237,10 @@ export class SpacesPresenceService {
     const set = this.usersBySpace.get(meta.spaceId);
     if (set) {
       set.delete(meta.userId);
-      if (set.size === 0) this.usersBySpace.delete(meta.spaceId);
+      if (set.size === 0) {
+        this.usersBySpace.delete(meta.spaceId);
+        this.noteEmpty(meta.spaceId);
+      }
     }
     const pausedSet = this.pausedBySpace.get(meta.spaceId);
     if (pausedSet) {
