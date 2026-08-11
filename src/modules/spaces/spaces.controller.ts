@@ -4,7 +4,7 @@ import { ApiTags } from '@nestjs/swagger';
 import type { SpaceDto, SpaceLobbyCountsDto, SpaceReactionDto } from '../../common/dto';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
-import { CurrentUserId } from '../users/users.decorator';
+import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { SpacesService } from './spaces.service';
 import { SpacesPresenceService } from './spaces-presence.service';
 import { RedisService } from '../redis/redis.service';
@@ -24,6 +24,10 @@ const setModeSchema = z.object({
   mode: z.enum(['NONE', 'WATCH_PARTY', 'RADIO']),
   watchPartyUrl: z.string().trim().max(2000).nullish(),
   radioStreamUrl: z.string().trim().max(2000).nullish(),
+});
+
+const setScheduleSchema = z.object({
+  scheduledAt: z.string().datetime({ offset: true }).or(z.string().datetime()),
 });
 
 @ApiTags('Radio & Spaces')
@@ -48,8 +52,8 @@ export class SpacesController {
 
   @UseGuards(OptionalAuthGuard)
   @Get()
-  async list(): Promise<{ data: SpaceDto[] }> {
-    const spaces = await this.spaces.listActiveSpaces();
+  async list(@OptionalCurrentUserId() userId?: string | null): Promise<{ data: SpaceDto[] }> {
+    const spaces = await this.spaces.listLobbySpaces(userId ?? null);
     return { data: spaces };
   }
 
@@ -75,15 +79,21 @@ export class SpacesController {
 
   @UseGuards(OptionalAuthGuard)
   @Get('by-username/:username')
-  async getByUsername(@Param('username') username: string): Promise<{ data: SpaceDto }> {
-    const space = await this.spaces.getSpaceByOwnerUsername(username);
+  async getByUsername(
+    @Param('username') username: string,
+    @OptionalCurrentUserId() userId?: string | null,
+  ): Promise<{ data: SpaceDto }> {
+    const space = await this.spaces.getSpaceByOwnerUsername(username, userId ?? null);
     return { data: space };
   }
 
   @UseGuards(OptionalAuthGuard)
   @Get(':id')
-  async getById(@Param('id') id: string): Promise<{ data: SpaceDto }> {
-    const space = await this.spaces.getSpaceById(id);
+  async getById(
+    @Param('id') id: string,
+    @OptionalCurrentUserId() userId?: string | null,
+  ): Promise<{ data: SpaceDto }> {
+    const space = await this.spaces.getSpaceById(id, userId ?? null);
     return { data: space };
   }
 
@@ -130,6 +140,52 @@ export class SpacesController {
   ): Promise<{ data: SpaceDto }> {
     const parsed = setModeSchema.parse(body);
     const space = await this.spaces.setMode(id, userId, parsed);
+    return { data: space };
+  }
+
+  @UseGuards(AuthGuard)
+  @Post(':id/schedule')
+  @HttpCode(HttpStatus.OK)
+  async setSchedule(
+    @Param('id') id: string,
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ): Promise<{ data: SpaceDto }> {
+    const parsed = setScheduleSchema.parse(body);
+    const space = await this.spaces.setSchedule(id, userId, parsed.scheduledAt);
+    return { data: space };
+  }
+
+  @UseGuards(AuthGuard)
+  @Delete(':id/schedule')
+  @HttpCode(HttpStatus.OK)
+  async clearSchedule(
+    @Param('id') id: string,
+    @CurrentUserId() userId: string,
+  ): Promise<{ data: SpaceDto }> {
+    const space = await this.spaces.clearSchedule(id, userId);
+    return { data: space };
+  }
+
+  @UseGuards(AuthGuard)
+  @Post(':id/schedule/subscribe')
+  @HttpCode(HttpStatus.OK)
+  async subscribe(
+    @Param('id') id: string,
+    @CurrentUserId() userId: string,
+  ): Promise<{ data: SpaceDto }> {
+    const space = await this.spaces.subscribeToSchedule(id, userId);
+    return { data: space };
+  }
+
+  @UseGuards(AuthGuard)
+  @Delete(':id/schedule/subscribe')
+  @HttpCode(HttpStatus.OK)
+  async unsubscribe(
+    @Param('id') id: string,
+    @CurrentUserId() userId: string,
+  ): Promise<{ data: SpaceDto }> {
+    const space = await this.spaces.unsubscribeFromSchedule(id, userId);
     return { data: space };
   }
 

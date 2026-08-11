@@ -25,6 +25,7 @@ import { ArticlesTrendingScoreCron } from '../articles/articles-trending-score.c
 import { CrewJobsCron } from '../crew/crew-jobs.cron';
 import { ScheduledPostsPublishCron } from '../posts/scheduled-posts-publish.cron';
 import { NotificationWriterService } from '../notifications/notification-writer.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 
 @Processor(MOH_BACKGROUND_QUEUE)
 export class JobsProcessor extends WorkerHost {
@@ -54,6 +55,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly crewJobs: CrewJobsCron,
     private readonly scheduledPostsPublish: ScheduledPostsPublishCron,
     private readonly notificationWriter: NotificationWriterService,
+    private readonly sideEffects: SideEffectsService,
   ) {
     super();
   }
@@ -162,6 +164,30 @@ export class JobsProcessor extends WorkerHost {
         case JOBS.postsScheduledPublishSweep:
           await this.scheduledPostsPublish.runPublishDue();
           return { ok: true };
+        case JOBS.spaceReminderDay: {
+          const spaceId = String(job.data?.spaceId ?? '').trim();
+          const scheduledAtMs = Number(job.data?.scheduledAtMs ?? 0);
+          if (spaceId && Number.isFinite(scheduledAtMs) && scheduledAtMs > 0) {
+            this.sideEffects.dispatch('space.schedule.reminder', {
+              spaceId,
+              kind: 'space_reminder_day',
+              scheduledAtMs,
+            });
+          }
+          return { ok: true };
+        }
+        case JOBS.spaceReminderSoon: {
+          const spaceId = String(job.data?.spaceId ?? '').trim();
+          const scheduledAtMs = Number(job.data?.scheduledAtMs ?? 0);
+          if (spaceId && Number.isFinite(scheduledAtMs) && scheduledAtMs > 0) {
+            this.sideEffects.dispatch('space.schedule.reminder', {
+              spaceId,
+              kind: 'space_reminder_soon',
+              scheduledAtMs,
+            });
+          }
+          return { ok: true };
+        }
         default:
           // Marv jobs (`marvin.*`) run on a separate queue handled by `MarvinProcessor`;
           // they should never land here.

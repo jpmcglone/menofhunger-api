@@ -120,6 +120,10 @@ export class NotificationsService {
     return this.writer.upsertMarvNotInGroupNotification(...args);
   }
 
+  upsertSpaceScheduleNotification(...args: Parameters<NotificationWriterService['upsertSpaceScheduleNotification']>) {
+    return this.writer.upsertSpaceScheduleNotification(...args);
+  }
+
   fanOutStatusUpdateNotifications(...args: Parameters<NotificationWriterService['fanOutStatusUpdateNotifications']>) {
     return this.writer.fanOutStatusUpdateNotifications(...args);
   }

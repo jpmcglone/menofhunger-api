@@ -125,6 +125,10 @@ enum NotificationKind {
   on_this_day
   premium_started
   premium_ended
+  space_reminder_day
+  space_reminder_soon
+  space_live
+  space_schedule_cancelled
 }
 
 enum CoinTransferKind {
@@ -532,6 +536,7 @@ model User {
   crewTransferBallots        CrewOwnerTransferBallot[] @relation("CrewOwnerTransferBallot_user")
 
   space Space?
+  spaceScheduleSubscriptions SpaceScheduleSubscriber[]
 
   // Referral / recruitment
   /**
@@ -1254,11 +1259,36 @@ model Space {
 
   isActive Boolean @default(false)
 
+  /**
+   * One upcoming go-live time (UTC). Null means no schedule.
+   * Cleared when the host goes live or cancels.
+   */
+  scheduledAt DateTime?
+
   mode           SpaceMode @default(NONE)
   watchPartyUrl  String?   @db.VarChar(2000)
   radioStreamUrl String?   @db.VarChar(2000)
 
+  scheduleSubscribers SpaceScheduleSubscriber[]
+  notifications       Notification[]            @relation("Notification_subjectSpace")
+
   @@index([isActive])
+  @@index([scheduledAt])
+}
+
+model SpaceScheduleSubscriber {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  spaceId String
+  space   Space  @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, userId])
+  @@index([userId, createdAt])
+  @@index([spaceId, createdAt])
 }
 
 model Post {
@@ -1967,6 +1997,11 @@ model Notification {
    * SetNull on delete so the notification survives conversation cleanup.
    */
   subjectConversationId         String?
+  /**
+   * Space this notification is about (schedule reminders / live / cancelled).
+   * SetNull on delete so the notification row can still explain the event.
+   */
+  subjectSpaceId                String?
   title                         String?
   body                          String?
 
@@ -1982,6 +2017,7 @@ model Notification {
   subjectCrewInvite           CrewInvite?           @relation("Notification_subjectCrewInvite", fields: [subjectCrewInviteId], references: [id], onDelete: SetNull)
   subjectCommunityGroupInvite CommunityGroupInvite? @relation("Notification_subjectCommunityGroupInvite", fields: [subjectCommunityGroupInviteId], references: [id], onDelete: SetNull)
   subjectConversation         MessageConversation?  @relation("Notification_subjectConversation", fields: [subjectConversationId], references: [id], onDelete: SetNull)
+  subjectSpace                Space?                @relation("Notification_subjectSpace", fields: [subjectSpaceId], references: [id], onDelete: SetNull)
 
   @@index([recipientUserId, createdAt])
   @@index([recipientUserId, deliveredAt])
@@ -1992,6 +2028,7 @@ model Notification {
   @@index([actorPostId])
   @@index([subjectPostId])
   @@index([subjectArticleId])
+  @@index([subjectSpaceId])
   // Common list ordering/pagination: ORDER BY createdAt DESC, id DESC.
   @@index([recipientUserId, createdAt(sort: Desc), id(sort: Desc)])
 }

@@ -95,6 +95,10 @@ export type NotificationDto = {
     | null;
   /** Conversation this notification is about (used for `message` kind). */
   subjectConversationId: string | null;
+  /** Space this notification is about (schedule reminders / live / cancelled). */
+  subjectSpaceId: string | null;
+  /** Owner username for deep-linking to `/s/:username` when subjectSpaceId is set. */
+  subjectSpaceOwnerUsername: string | null;
   title: string | null;
   body: string | null;
   /** When set (e.g. boost), for quote + stacked images / video thumbnail in the UI. */

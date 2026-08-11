@@ -65,6 +65,10 @@ export const JOBS = {
   crewTransferVotesExpire: 'crew.transferVotesExpire',
   crewInactiveOwnerAutoTransfer: 'crew.inactiveOwnerAutoTransfer',
 
+  // Spaces schedule reminders
+  spaceReminderDay: 'space.reminder.day',
+  spaceReminderSoon: 'space.reminder.soon',
+
   // Marvin (the AI helper)
   marvinReplyPublic: 'marvin.reply.public',
   marvinReplyPrivate: 'marvin.reply.private',

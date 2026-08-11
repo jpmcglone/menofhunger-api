@@ -135,7 +135,7 @@ export function nextQuotePublishUtcMs(now: Date): number {
  * Find the UTC timestamp corresponding to hh:mm ET on the ET calendar date of `ref`.
  * Scans UTC hours (DST-safe).
  */
-function etLocalToUtcMs(ref: Date, hh: number, mm: number): number {
+export function etLocalToUtcMs(ref: Date, hh: number, mm: number): number {
   const { yyyy, mm: etMm, dd } = easternParts(ref);
   for (let utcH = 0; utcH <= 23; utcH++) {
     const cand = new Date(Date.UTC(yyyy, etMm - 1, dd, utcH, mm, 0));

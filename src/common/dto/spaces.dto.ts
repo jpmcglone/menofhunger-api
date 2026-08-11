@@ -13,11 +13,17 @@ export type SpaceDto = {
   title: string;
   description: string | null;
   isActive: boolean;
+  /** ISO upcoming go-live time, or null when unscheduled. */
+  scheduledAt: string | null;
   mode: 'NONE' | 'WATCH_PARTY' | 'RADIO';
   watchPartyUrl: string | null;
   radioStreamUrl: string | null;
   owner: SpaceOwnerDto;
   listenerCount: number;
+  /** Whether the authenticated viewer is subscribed to schedule reminders. */
+  viewerSubscribed: boolean;
+  /** Count of Notify-me subscribers (always included; cheap aggregate). */
+  subscriberCount: number;
 };
 
 export type SpaceListenerDto = {

@@ -25,6 +25,7 @@ export type CreateNotificationParams = {
   subjectCrewInviteId?: string | null;
   subjectCommunityGroupInviteId?: string | null;
   subjectConversationId?: string | null;
+  subjectSpaceId?: string | null;
   title?: string | null;
   body?: string | null;
 };
@@ -101,6 +102,7 @@ export class NotificationWriterService {
       subjectCrewInviteId,
       subjectCommunityGroupInviteId,
       subjectConversationId,
+      subjectSpaceId,
       title,
       body,
     } = params;
@@ -148,6 +150,10 @@ export class NotificationWriterService {
         account_verified: "You're verified",
         premium_started: "You're Premium",
         premium_ended: 'Your Premium ended',
+        space_reminder_day: 'Space today',
+        space_reminder_soon: 'Space starting soon',
+        space_live: 'Space is live',
+        space_schedule_cancelled: 'Space cancelled',
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
@@ -170,6 +176,7 @@ export class NotificationWriterService {
           subjectCrewInviteId: subjectCrewInviteId ?? undefined,
           subjectCommunityGroupInviteId: subjectCommunityGroupInviteId ?? undefined,
           subjectConversationId: subjectConversationId ?? undefined,
+          subjectSpaceId: subjectSpaceId ?? undefined,
           title: fallbackTitle ?? undefined,
           body: body ?? undefined,
           presentAt: presentAt ?? undefined,
@@ -215,21 +222,38 @@ export class NotificationWriterService {
     // Web push is optional (VAPID + user preference).
     const commentHash = subjectArticleCommentId ? `#comment-${subjectArticleCommentId}` : '';
     // Route to the article page for all article-related notification kinds.
-    const pushUrl = subjectArticleId && (
-      kind === 'comment' || kind === 'mention' || kind === 'followed_article' || kind === 'boost'
-    )
-      ? `/a/${subjectArticleId}${commentHash}`
-      : kind === 'comment' && actorPostId
-        ? `/p/${actorPostId}`
-        : kind === 'mention' && actorPostId
+    let pushUrl: string | null =
+      subjectArticleId && (
+        kind === 'comment' || kind === 'mention' || kind === 'followed_article' || kind === 'boost'
+      )
+        ? `/a/${subjectArticleId}${commentHash}`
+        : kind === 'comment' && actorPostId
           ? `/p/${actorPostId}`
-          : (kind === 'followed_post' || kind === 'checkin_post') && subjectPostId
-            ? `/p/${subjectPostId}`
-          : kind === 'boost' && subjectPostId
-            ? `/p/${subjectPostId}`
-            : kind === 'coin_transfer'
-              ? '/coins'
-              : null;
+          : kind === 'mention' && actorPostId
+            ? `/p/${actorPostId}`
+            : (kind === 'followed_post' || kind === 'checkin_post') && subjectPostId
+              ? `/p/${subjectPostId}`
+            : kind === 'boost' && subjectPostId
+              ? `/p/${subjectPostId}`
+              : kind === 'coin_transfer'
+                ? '/coins'
+                : null;
+
+    if (
+      !pushUrl &&
+      subjectSpaceId &&
+      (kind === 'space_reminder_day' ||
+        kind === 'space_reminder_soon' ||
+        kind === 'space_live' ||
+        kind === 'space_schedule_cancelled')
+    ) {
+      const space = await this.prisma.space.findUnique({
+        where: { id: subjectSpaceId },
+        select: { owner: { select: { username: true } } },
+      });
+      const username = (space?.owner?.username ?? '').trim();
+      if (username) pushUrl = `/s/${encodeURIComponent(username)}`;
+    }
     // Intentionally omit sourceLabel for actor-driven pushes: the actor's words
     // (snippet) are the most valuable byte budget. sourceLabel is reserved for
     // system-originated pushes (streak reminders, daily prompt, message channel).
@@ -1998,6 +2022,117 @@ export class NotificationWriterService {
       subjectUserId: kind === 'premium_started' ? recipientUserId : undefined,
       title,
       body,
+    });
+  }
+
+  /**
+   * Upsert a space schedule notification for one recipient.
+   * Keyed by (recipient, subjectSpaceId, kind) so cancel/live can resurface
+   * and replace prior reminder rows for the same space.
+   */
+  async upsertSpaceScheduleNotification(params: {
+    recipientUserId: string;
+    kind: 'space_reminder_day' | 'space_reminder_soon' | 'space_live' | 'space_schedule_cancelled';
+    spaceId: string;
+    actorUserId?: string | null;
+    title: string;
+    body?: string | null;
+  }): Promise<void> {
+    const { recipientUserId, kind, spaceId, actorUserId, title, body } = params;
+    if (actorUserId && actorUserId === recipientUserId) return;
+
+    const presentAt = await this.presentAtForRecipient(recipientUserId);
+    const { notificationId, undeliveredCount } = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.notification.findFirst({
+        where: { recipientUserId, kind, subjectSpaceId: spaceId },
+        select: { id: true, deliveredAt: true },
+      });
+
+      if (existing) {
+        const wasDelivered = existing.deliveredAt != null;
+        await tx.notification.update({
+          where: { id: existing.id },
+          data: {
+            createdAt: new Date(),
+            deliveredAt: null,
+            readAt: null,
+            ignoredAt: null,
+            title,
+            body: body ?? null,
+            actorUserId: actorUserId ?? null,
+            presentAt: presentAt ?? null,
+          },
+        });
+        if (wasDelivered) {
+          await tx.user.update({
+            where: { id: recipientUserId },
+            data: { undeliveredNotificationCount: { increment: 1 } },
+          });
+        }
+        const undeliveredCount = await tx.notification.count({
+          where: this.readState.undeliveredBellWhere(recipientUserId),
+        });
+        return { notificationId: existing.id, undeliveredCount };
+      }
+
+      const created = await tx.notification.create({
+        data: {
+          recipientUserId,
+          kind,
+          subjectSpaceId: spaceId,
+          actorUserId: actorUserId ?? undefined,
+          title,
+          body: body ?? undefined,
+          presentAt: presentAt ?? undefined,
+        },
+        select: { id: true },
+      });
+      await tx.user.update({
+        where: { id: recipientUserId },
+        data: { undeliveredNotificationCount: { increment: 1 } },
+      });
+      const undeliveredCount = await tx.notification.count({
+        where: this.readState.undeliveredBellWhere(recipientUserId),
+      });
+      return { notificationId: created.id, undeliveredCount };
+    });
+
+    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
+
+    try {
+      const dto = await this.query.buildNotificationDtoForRecipient({
+        recipientUserId,
+        notificationId,
+      });
+      if (dto) {
+        this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
+      }
+    } catch (err) {
+      this.logger.debug(`[notifications] Failed to emit notifications:new: ${err}`);
+    }
+
+    let pushUrl: string | null = null;
+    const space = await this.prisma.space.findUnique({
+      where: { id: spaceId },
+      select: { owner: { select: { username: true } } },
+    });
+    const username = (space?.owner?.username ?? '').trim();
+    if (username) pushUrl = `/s/${encodeURIComponent(username)}`;
+
+    this.sideEffects.dispatch('notification.push', {
+      recipientUserId,
+      kind,
+      actorUserId: actorUserId ?? null,
+      fallbackTitle: title,
+      body: body ?? null,
+      actorPostId: null,
+      subjectArticleId: null,
+      subjectPostId: null,
+      subjectUserId: null,
+      subjectGroupId: null,
+      subjectCommunityGroupInviteId: null,
+      url: pushUrl,
+      notificationId,
     });
   }
 }

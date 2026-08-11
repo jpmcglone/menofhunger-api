@@ -293,6 +293,32 @@ export interface SideEffectPayloads {
     recruitedById: string | null;
     source: 'auto_referral' | 'auto_signup';
   };
+
+  // ─── Spaces schedule ──────────────────────────────────────────────────
+  /** Host went live — fan out `space_live` to schedule subscribers. */
+  'space.schedule.live': {
+    spaceId: string;
+  };
+  /** Schedule cleared or space deleted — fan out `space_schedule_cancelled`. */
+  'space.schedule.cancelled': {
+    spaceId: string;
+    ownerUserId: string;
+    spaceTitle: string;
+    ownerUsername: string | null;
+    /** When set (e.g. space delete), use these IDs instead of re-reading subscribers. */
+    recipientUserIds?: string[];
+  };
+  /** Schedule time changed — fan out cancel-style “rescheduled” copy then subscribers keep their sub. */
+  'space.schedule.rescheduled': {
+    spaceId: string;
+    scheduledAt: string; // ISO
+  };
+  /** Delayed reminder job fired (day-of or 15-min). Handler re-reads DB. */
+  'space.schedule.reminder': {
+    spaceId: string;
+    kind: 'space_reminder_day' | 'space_reminder_soon';
+    scheduledAtMs: number;
+  };
 }
 
 export type SideEffectName = keyof SideEffectPayloads;

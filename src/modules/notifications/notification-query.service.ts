@@ -321,6 +321,20 @@ export class NotificationQueryService {
       subjectCommunityGroupInvites.map((inv) => [inv.id, inv.status] as const),
     );
 
+    const subjectSpaceIds = [
+      ...new Set(raw.map((n) => n.subjectSpaceId).filter(Boolean) as string[]),
+    ];
+    const subjectSpaces =
+      subjectSpaceIds.length > 0
+        ? await this.prisma.space.findMany({
+            where: { id: { in: subjectSpaceIds } },
+            select: { id: true, owner: { select: { username: true } } },
+          })
+        : [];
+    const subjectSpaceOwnerUsernameById = new Map(
+      subjectSpaces.map((s) => [s.id, (s.owner.username ?? '').trim() || null] as const),
+    );
+
     const dtos: NotificationDto[] = raw.map((n) => {
       const actorPreview = n.kind === 'repost' && n.actorPostId ? subjectPreviewByPostId.get(n.actorPostId) ?? null : null;
       const hasActorPreview = Boolean(actorPreview?.bodySnippet || actorPreview?.media?.length);
@@ -349,6 +363,9 @@ export class NotificationQueryService {
       const notificationPost =
         (notificationPostId ? notificationPostDtoById.get(notificationPostId) ?? null : null)
         ?? (n.kind === 'repost' && n.subjectPostId ? notificationPostDtoById.get(n.subjectPostId) ?? null : null);
+      const subjectSpaceOwnerUsername = n.subjectSpaceId
+        ? subjectSpaceOwnerUsernameById.get(n.subjectSpaceId) ?? null
+        : null;
       return this.toNotificationDto(
         n,
         publicBaseUrl,
@@ -363,6 +380,7 @@ export class NotificationQueryService {
         subjectCrewName,
         subjectCommunityGroupInviteStatus,
         notificationPost,
+        subjectSpaceOwnerUsername,
       );
     });
 
@@ -660,6 +678,7 @@ export class NotificationQueryService {
       subjectCrewInviteId?: string | null;
       subjectCommunityGroupInviteId?: string | null;
       subjectConversationId?: string | null;
+      subjectSpaceId?: string | null;
       title: string | null;
       body: string | null;
       actor: {
@@ -685,6 +704,7 @@ export class NotificationQueryService {
     subjectCrewName: string | null = null,
     subjectCommunityGroupInviteStatus: NotificationDto['subjectCommunityGroupInviteStatus'] = null,
     post: PostDto | null = null,
+    subjectSpaceOwnerUsername: string | null = null,
   ): NotificationDto {
     let actor: NotificationActorDto | null = null;
     if (n.actor && !(n.actor as { bannedAt?: Date | null }).bannedAt) {
@@ -727,6 +747,8 @@ export class NotificationQueryService {
       subjectCommunityGroupInviteId: n.subjectCommunityGroupInviteId ?? null,
       subjectCommunityGroupInviteStatus: subjectCommunityGroupInviteStatus ?? null,
       subjectConversationId: n.subjectConversationId ?? null,
+      subjectSpaceId: n.subjectSpaceId ?? null,
+      subjectSpaceOwnerUsername: subjectSpaceOwnerUsername ?? null,
       title: n.title,
       body: n.body,
       subjectPostPreview: subjectPostPreview ?? null,
@@ -907,6 +929,15 @@ export class NotificationQueryService {
       subjectCommunityGroupInviteStatus = inv?.status ?? null;
     }
 
+    let subjectSpaceOwnerUsername: string | null = null;
+    if (n.subjectSpaceId) {
+      const space = await this.prisma.space.findUnique({
+        where: { id: n.subjectSpaceId },
+        select: { owner: { select: { username: true } } },
+      });
+      subjectSpaceOwnerUsername = (space?.owner?.username ?? '').trim() || null;
+    }
+
     return this.toNotificationDto(
       n,
       publicBaseUrl,
@@ -921,6 +952,7 @@ export class NotificationQueryService {
       subjectCrewName,
       subjectCommunityGroupInviteStatus,
       post,
+      subjectSpaceOwnerUsername,
     );
   }
 }

@@ -59,6 +59,19 @@ export class JobsService {
     });
   }
 
+  /** Remove a delayed/waiting job by id if it still exists (no-op when missing). */
+  async removeById(name: JobName, jobId: string): Promise<void> {
+    const id = (jobId ?? '').trim();
+    if (!id) return;
+    const job = await this.queueFor(name).getJob(id);
+    if (!job) return;
+    try {
+      await job.remove();
+    } catch {
+      // Already active/completed — ignore.
+    }
+  }
+
   jobNames() {
     return JOBS;
   }
