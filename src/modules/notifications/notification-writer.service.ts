@@ -2039,7 +2039,8 @@ export class NotificationWriterService {
     body?: string | null;
   }): Promise<void> {
     const { recipientUserId, kind, spaceId, actorUserId, title, body } = params;
-    if (actorUserId && actorUserId === recipientUserId) return;
+    // Hosts are auto-subscribed to their own schedule reminders/live pings, so
+    // actor === recipient is allowed here (unlike social notifications).
 
     const presentAt = await this.presentAtForRecipient(recipientUserId);
     const { notificationId, undeliveredCount } = await this.prisma.$transaction(async (tx) => {

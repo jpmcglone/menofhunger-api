@@ -10,6 +10,7 @@ import { SpacesPresenceService } from './spaces-presence.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
+import { compareLobbySpaces } from './spaces-lobby-sort';
 
 const SOON_MS = 15 * 60 * 1000;
 
@@ -57,7 +58,11 @@ export class SpacesService {
       include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
     });
     if (!space) throw new NotFoundException();
-    return this.toDto(space, { viewerUserId });
+    await this.ensureOwnerSubscribedIfScheduled(space);
+    return this.toDto(space, {
+      viewerUserId,
+      subscriberCountOverride: await this.countNonOwnerSubscribers(space.id, space.ownerId),
+    });
   }
 
   async getSpaceByOwnerUsername(username: string, viewerUserId?: string | null): Promise<SpaceDto> {
@@ -72,7 +77,11 @@ export class SpacesService {
       include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
     });
     if (!space) throw new NotFoundException();
-    return this.toDto(space, { viewerUserId });
+    await this.ensureOwnerSubscribedIfScheduled(space);
+    return this.toDto(space, {
+      viewerUserId,
+      subscriberCountOverride: await this.countNonOwnerSubscribers(space.id, space.ownerId),
+    });
   }
 
   async getSpaceByOwnerId(ownerId: string, viewerUserId?: string | null): Promise<SpaceDto | null> {
@@ -81,7 +90,11 @@ export class SpacesService {
       include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
     });
     if (!space) return null;
-    return this.toDto(space, { viewerUserId });
+    await this.ensureOwnerSubscribedIfScheduled(space);
+    return this.toDto(space, {
+      viewerUserId,
+      subscriberCountOverride: await this.countNonOwnerSubscribers(space.id, space.ownerId),
+    });
   }
 
   async getOwnerIdForSpace(spaceId: string): Promise<string | null> {
@@ -256,6 +269,9 @@ export class SpacesService {
       include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
     });
 
+    // Host gets the ~15 min heads-up (not day-of / live — see side-effects handler).
+    await this.ensureOwnerScheduleSubscription(id, userId);
+
     if (previousMs != null) {
       await this.cancelReminderJobs(id, previousMs);
     }
@@ -268,7 +284,11 @@ export class SpacesService {
       });
     }
 
-    return this.toDto(updated, { viewerUserId: userId });
+    return this.toDto(updated, {
+      viewerUserId: userId,
+      viewerSubscribedOverride: true,
+      subscriberCountOverride: await this.countNonOwnerSubscribers(id, userId),
+    });
   }
 
   async clearSchedule(id: string, userId: string): Promise<SpaceDto> {
@@ -312,13 +332,11 @@ export class SpacesService {
       select: { id: true, ownerId: true, scheduledAt: true },
     });
     if (!space) throw new NotFoundException();
-    if (space.ownerId === userId) {
-      throw new BadRequestException('You cannot subscribe to your own space schedule.');
-    }
     if (!space.scheduledAt || space.scheduledAt.getTime() <= Date.now()) {
       throw new BadRequestException('This space has no upcoming schedule.');
     }
 
+    // Owner is already auto-subscribed on setSchedule; treat as idempotent.
     await this.prisma.spaceScheduleSubscriber.upsert({
       where: { spaceId_userId: { spaceId: id, userId } },
       create: { spaceId: id, userId },
@@ -329,8 +347,14 @@ export class SpacesService {
   }
 
   async unsubscribeFromSchedule(id: string, userId: string): Promise<SpaceDto> {
-    const space = await this.prisma.space.findUnique({ where: { id }, select: { id: true } });
+    const space = await this.prisma.space.findUnique({
+      where: { id },
+      select: { id: true, ownerId: true },
+    });
     if (!space) throw new NotFoundException();
+    if (space.ownerId === userId) {
+      throw new BadRequestException('Host reminders stay on for your scheduled space.');
+    }
 
     await this.prisma.spaceScheduleSubscriber.deleteMany({
       where: { spaceId: id, userId },
@@ -355,17 +379,45 @@ export class SpacesService {
       orderBy: { createdAt: 'desc' },
     });
 
+    // Backfill host auto-subscribe for any upcoming schedule (covers spaces scheduled
+    // before host reminders were automatic).
+    const upcoming = spaces.filter((s) => s.scheduledAt != null && s.scheduledAt.getTime() > now.getTime());
+    if (upcoming.length > 0) {
+      await this.prisma.spaceScheduleSubscriber.createMany({
+        data: upcoming.map((s) => ({ spaceId: s.id, userId: s.ownerId })),
+        skipDuplicates: true,
+      });
+    }
+
     const counts = this.spacesPresence.getLobbyCountsBySpaceId();
-    const subscribedIds = viewerId
-      ? new Set(
-          (
-            await this.prisma.spaceScheduleSubscriber.findMany({
-              where: { userId: viewerId, spaceId: { in: spaces.map((s) => s.id) } },
-              select: { spaceId: true },
-            })
-          ).map((r) => r.spaceId),
-        )
-      : new Set<string>();
+    const spaceIds = spaces.map((s) => s.id);
+    const ownerIds = [...new Set(spaces.map((s) => s.ownerId))];
+
+    const [allSubRows, followRows] = await Promise.all([
+      spaceIds.length > 0
+        ? this.prisma.spaceScheduleSubscriber.findMany({
+            where: { spaceId: { in: spaceIds } },
+            select: { spaceId: true, userId: true },
+          })
+        : Promise.resolve([] as Array<{ spaceId: string; userId: string }>),
+      viewerId && ownerIds.length > 0
+        ? this.prisma.follow.findMany({
+            where: { followerId: viewerId, followingId: { in: ownerIds } },
+            select: { followingId: true },
+          })
+        : Promise.resolve([] as Array<{ followingId: string }>),
+    ]);
+
+    const subscribedIds = new Set<string>();
+    const ownerBySpaceId = new Map(spaces.map((s) => [s.id, s.ownerId]));
+    const nonOwnerCountBySpaceId = new Map<string, number>();
+    for (const row of allSubRows) {
+      if (viewerId && row.userId === viewerId) subscribedIds.add(row.spaceId);
+      if (row.userId === ownerBySpaceId.get(row.spaceId)) continue;
+      nonOwnerCountBySpaceId.set(row.spaceId, (nonOwnerCountBySpaceId.get(row.spaceId) ?? 0) + 1);
+    }
+
+    const followingOwnerIds = new Set(followRows.map((r) => r.followingId));
 
     const dtos = await Promise.all(
       spaces.map((s) =>
@@ -373,21 +425,15 @@ export class SpacesService {
           viewerUserId: viewerId,
           listenerCountOverride: counts[s.id],
           viewerSubscribedOverride: subscribedIds.has(s.id),
+          subscriberCountOverride: nonOwnerCountBySpaceId.get(s.id) ?? 0,
+          viewerFollowsOwnerOverride: Boolean(
+            viewerId && s.ownerId !== viewerId && followingOwnerIds.has(s.ownerId),
+          ),
         }),
       ),
     );
 
-    // Own space first, then live (by listeners), then soonest schedule.
-    return dtos.sort((a, b) => {
-      const aOwn = viewerId && a.owner?.id === viewerId ? 1 : 0;
-      const bOwn = viewerId && b.owner?.id === viewerId ? 1 : 0;
-      if (aOwn !== bOwn) return bOwn - aOwn;
-      if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
-      if (a.isActive && b.isActive) return b.listenerCount - a.listenerCount;
-      const aAt = a.scheduledAt ? Date.parse(a.scheduledAt) : Number.POSITIVE_INFINITY;
-      const bAt = b.scheduledAt ? Date.parse(b.scheduledAt) : Number.POSITIVE_INFINITY;
-      return aAt - bAt;
-    });
+    return dtos.sort((a, b) => compareLobbySpaces(a, b, { viewerId, followingOwnerIds }));
   }
 
   /** @deprecated Prefer listLobbySpaces — kept name for call-site clarity during transition. */
@@ -500,6 +546,24 @@ export class SpacesService {
     return rows.map((r) => r.userId);
   }
 
+  /** Host is always on the reminder list for an upcoming schedule. */
+  private async ensureOwnerScheduleSubscription(spaceId: string, ownerId: string): Promise<void> {
+    await this.prisma.spaceScheduleSubscriber.upsert({
+      where: { spaceId_userId: { spaceId, userId: ownerId } },
+      create: { spaceId, userId: ownerId },
+      update: {},
+    });
+  }
+
+  private async ensureOwnerSubscribedIfScheduled(space: {
+    id: string;
+    ownerId: string;
+    scheduledAt: Date | null;
+  }): Promise<void> {
+    if (!space.scheduledAt || space.scheduledAt.getTime() <= Date.now()) return;
+    await this.ensureOwnerScheduleSubscription(space.id, space.ownerId);
+  }
+
   /** Day-of reminder still valid for this schedule instant? */
   isDayReminderStillValid(scheduledAt: Date, scheduledAtMs: number, now = Date.now()): boolean {
     if (scheduledAt.getTime() !== scheduledAtMs) return false;
@@ -539,6 +603,8 @@ export class SpacesService {
       viewerUserId?: string | null;
       listenerCountOverride?: number;
       viewerSubscribedOverride?: boolean;
+      subscriberCountOverride?: number;
+      viewerFollowsOwnerOverride?: boolean;
     },
   ): Promise<SpaceDto> {
     const owner: SpaceOwnerDto = {
@@ -567,6 +633,31 @@ export class SpacesService {
       viewerSubscribed = Boolean(row);
     }
 
+    let viewerFollowsOwner = opts?.viewerFollowsOwnerOverride ?? false;
+    if (
+      opts?.viewerFollowsOwnerOverride === undefined &&
+      opts?.viewerUserId &&
+      opts.viewerUserId !== space.owner.id
+    ) {
+      const follow = await this.prisma.follow.findUnique({
+        where: {
+          followerId_followingId: {
+            followerId: opts.viewerUserId,
+            followingId: space.owner.id,
+          },
+        },
+        select: { followerId: true },
+      });
+      viewerFollowsOwner = Boolean(follow);
+    }
+
+    const subscriberCount =
+      opts?.subscriberCountOverride ??
+      Math.max(
+        0,
+        (space._count?.scheduleSubscribers ?? 0) - (space.scheduledAt != null ? 1 : 0),
+      );
+
     return {
       id: space.id,
       title: space.title,
@@ -579,7 +670,14 @@ export class SpacesService {
       owner,
       listenerCount,
       viewerSubscribed,
-      subscriberCount: space._count?.scheduleSubscribers ?? 0,
+      subscriberCount,
+      viewerFollowsOwner,
     };
+  }
+
+  private async countNonOwnerSubscribers(spaceId: string, ownerId: string): Promise<number> {
+    return this.prisma.spaceScheduleSubscriber.count({
+      where: { spaceId, userId: { not: ownerId } },
+    });
   }
 }

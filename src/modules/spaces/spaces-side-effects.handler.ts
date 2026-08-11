@@ -39,8 +39,11 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
 
   private async onLive(payload: SideEffectPayloads['space.schedule.live']): Promise<void> {
     const snap = await this.spaces.getScheduleSnapshot(payload.spaceId);
-    // Schedule is cleared on activate — still fan out to whoever subscribed.
-    const recipients = await this.spaces.listSubscriberUserIds(payload.spaceId);
+    // Schedule is cleared on activate — still fan out to subscribers.
+    // Host already knows they're going live; skip self.
+    const recipients = (await this.spaces.listSubscriberUserIds(payload.spaceId)).filter(
+      (id) => id !== snap?.ownerUserId,
+    );
     if (recipients.length === 0) return;
 
     const title = snap ? `${snap.title} is live` : 'Space is live';
@@ -60,8 +63,9 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
   }
 
   private async onCancelled(payload: SideEffectPayloads['space.schedule.cancelled']): Promise<void> {
-    const recipients =
-      payload.recipientUserIds ?? (await this.spaces.listSubscriberUserIds(payload.spaceId));
+    const recipients = (
+      payload.recipientUserIds ?? (await this.spaces.listSubscriberUserIds(payload.spaceId))
+    ).filter((id) => id !== payload.ownerUserId);
     if (recipients.length === 0) return;
 
     const title = `${payload.spaceTitle} cancelled`;
@@ -82,7 +86,9 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
   private async onRescheduled(payload: SideEffectPayloads['space.schedule.rescheduled']): Promise<void> {
     const snap = await this.spaces.getScheduleSnapshot(payload.spaceId);
     if (!snap?.scheduledAt) return;
-    const recipients = await this.spaces.listSubscriberUserIds(payload.spaceId);
+    const recipients = (await this.spaces.listSubscriberUserIds(payload.spaceId)).filter(
+      (id) => id !== snap.ownerUserId,
+    );
     if (recipients.length === 0) return;
 
     const when = formatScheduleWhen(payload.scheduledAt);
@@ -107,11 +113,15 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     if (snap.scheduledAt.getTime() !== payload.scheduledAtMs) return;
     if (snap.scheduledAt.getTime() <= Date.now()) return;
 
-    const recipients = await this.spaces.listSubscriberUserIds(payload.spaceId);
+    const isDay = payload.kind === 'space_reminder_day';
+    // Host only wants the ~15 min heads-up — not the morning "today" ping.
+    let recipients = await this.spaces.listSubscriberUserIds(payload.spaceId);
+    if (isDay) {
+      recipients = recipients.filter((id) => id !== snap.ownerUserId);
+    }
     if (recipients.length === 0) return;
 
     const when = formatScheduleWhen(snap.scheduledAt);
-    const isDay = payload.kind === 'space_reminder_day';
     const title = isDay ? `${snap.title} today` : `${snap.title} starting soon`;
     const body = isDay
       ? when

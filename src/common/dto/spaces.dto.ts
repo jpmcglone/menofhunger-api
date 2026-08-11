@@ -22,8 +22,10 @@ export type SpaceDto = {
   listenerCount: number;
   /** Whether the authenticated viewer is subscribed to schedule reminders. */
   viewerSubscribed: boolean;
-  /** Count of Notify-me subscribers (always included; cheap aggregate). */
+  /** Count of Notify-me subscribers excluding the host (host is always reminded). */
   subscriberCount: number;
+  /** Whether the authenticated viewer follows this space's owner. */
+  viewerFollowsOwner: boolean;
 };
 
 export type SpaceListenerDto = {
