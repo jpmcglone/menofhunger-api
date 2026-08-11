@@ -373,10 +373,20 @@ export class PresenceService {
       if (set.size === 0) {
         this.userSockets.delete(meta.userId);
         this.lastConnectAt.delete(meta.userId);
+        this.clearPersistThrottle(meta.userId);
         return { userId: meta.userId, isNowOffline: true };
       }
     }
     return { userId: meta.userId, isNowOffline: false };
+  }
+
+  /** Drop DAU/lastSeen throttle entries when a user goes fully offline. */
+  clearPersistThrottle(userId: string): void {
+    const uid = (userId ?? '').trim();
+    if (!uid) return;
+    this.lastSeenPersistedAt.delete(uid);
+    this.dailyActivityPersistedAt.delete(uid);
+    this.dailyActivityDayKeyByUserId.delete(uid);
   }
 
   /**

@@ -32,7 +32,13 @@ export class JobsService {
     payload: TPayload,
     opts?: JobsOptions,
   ): Promise<Job<TPayload, any, string>> {
-    return await this.queueFor(name).add(name, payload, opts);
+    // Default cleanup so one-off jobs (articles, Marv replies, etc.) don't retain
+    // completed/failed rows in Redis forever. Callers can still override.
+    return await this.queueFor(name).add(name, payload, {
+      removeOnComplete: true,
+      removeOnFail: { count: 50 },
+      ...opts,
+    });
   }
 
   /**

@@ -346,10 +346,17 @@ export class MessagesService {
         requestUnreadCount: counts.requests,
       });
       const state = this.unreadEmitState.get(userId);
-      if (state) state.lastEmitAt = Date.now();
-      else this.unreadEmitState.set(userId, { timer: null, lastEmitAt: Date.now() });
+      if (state) {
+        state.lastEmitAt = Date.now();
+        // Drop idle entries so the map doesn't grow with every user who ever
+        // received an unread emit on this process. A pending timer means another
+        // emit is already queued — keep the entry.
+        if (!state.timer) this.unreadEmitState.delete(userId);
+      }
     } catch (err) {
       this.logger.warn(`emitUnreadCounts failed for userId=${userId}: ${(err as Error)?.message ?? String(err)}`);
+      const state = this.unreadEmitState.get(userId);
+      if (state && !state.timer) this.unreadEmitState.delete(userId);
     }
   }
 

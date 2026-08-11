@@ -50,14 +50,54 @@ export class SpacesGatewayHandler {
 
   private async getCachedSpaceOwnerId(spaceId: string): Promise<string | null> {
     const now = Date.now();
+    // Opportunistic prune so expired spaceIds don't linger for the process lifetime.
+    if (this.spaceOwnerCache.size > 64) {
+      for (const [id, entry] of this.spaceOwnerCache) {
+        if (entry.expiresAt <= now) this.spaceOwnerCache.delete(id);
+      }
+    }
     const cached = this.spaceOwnerCache.get(spaceId);
     if (cached && cached.expiresAt > now) return cached.ownerId;
+    if (cached) this.spaceOwnerCache.delete(spaceId);
 
     const ownerId = await this.spaces.getOwnerIdForSpace(spaceId);
     if (ownerId) {
       this.spaceOwnerCache.set(spaceId, { ownerId, expiresAt: now + this.SPACE_OWNER_CACHE_TTL_MS });
     }
     return ownerId;
+  }
+
+  /** Remove a socket from owner-election maps and re-elect primary when needed. */
+  private clearOwnerSocket(socketId: string, ownerSpaceId: string, opts?: { pauseWatchParty?: boolean }): void {
+    const spaceId = String(ownerSpaceId ?? '').trim();
+    const sid = String(socketId ?? '').trim();
+    if (!spaceId || !sid) return;
+
+    const ownerSockets = this.ownerSocketsBySpaceId.get(spaceId);
+    if (ownerSockets) {
+      ownerSockets.delete(sid);
+      if (ownerSockets.size === 0) this.ownerSocketsBySpaceId.delete(spaceId);
+    }
+
+    const wasPrimary = this.primaryOwnerSocketBySpaceId.get(spaceId) === sid;
+    if (wasPrimary) {
+      this.primaryOwnerSocketBySpaceId.delete(spaceId);
+      const remaining = ownerSockets ? [...ownerSockets] : [];
+      if (remaining.length > 0) {
+        const newPrimaryId = remaining[remaining.length - 1]!;
+        this.primaryOwnerSocketBySpaceId.set(spaceId, newPrimaryId);
+        const newPrimarySocket = this.context.server.sockets.sockets.get(newPrimaryId);
+        newPrimarySocket?.emit('spaces:watchPartyOwnerPromoted', { spaceId });
+      } else if (opts?.pauseWatchParty) {
+        const pausedState = this.watchPartyState.pauseAtCurrentPosition(spaceId);
+        if (pausedState) {
+          const room = spaceRoom(spaceId);
+          const out = { spaceId, ...pausedState };
+          this.context.server.to(room).emit('spaces:watchPartyState', out);
+          void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:watchPartyState', payload: out }).catch(() => undefined);
+        }
+      }
+    }
   }
 
   // ─── Fan-out helpers ────────────────────────────────────────────────
@@ -125,43 +165,16 @@ export class SpacesGatewayHandler {
     try {
       const ownerSpaceId = String((client.data as any)?.ownerSpaceId ?? '').trim() || null;
       const spaceLeft = this.spacesPresence.onDisconnect(socketId);
+      // Always clear owner-socket maps for this socket. Leaving an owned space by
+      // joining elsewhere used to leave stale entries because cleanup only ran when
+      // ownerSpaceId === left.spaceId.
+      if (ownerSpaceId) {
+        this.clearOwnerSocket(socketId, ownerSpaceId, {
+          pauseWatchParty: Boolean(spaceLeft?.wasActive && spaceLeft.spaceId === ownerSpaceId),
+        });
+        (client.data as any).ownerSpaceId = null;
+      }
       if (spaceLeft?.wasActive) {
-        // If the owner's socket dropped, pause all viewers at the current position.
-        if (ownerSpaceId && ownerSpaceId === spaceLeft.spaceId) {
-          // Remove from the owner-socket set.
-          const ownerSockets = this.ownerSocketsBySpaceId.get(ownerSpaceId);
-          if (ownerSockets) {
-            ownerSockets.delete(socketId);
-          }
-
-          const wasPrimary = this.primaryOwnerSocketBySpaceId.get(ownerSpaceId) === socketId;
-          if (wasPrimary) {
-            this.primaryOwnerSocketBySpaceId.delete(ownerSpaceId);
-
-            // Re-elect another owner socket if one is still connected. That tab
-            // gets `spaces:watchPartyOwnerPromoted` so it clears `isReplacedOwner`
-            // and can start driving playback again.
-            const remaining = ownerSockets ? [...ownerSockets].filter((id) => id !== socketId) : [];
-            if (remaining.length > 0) {
-              const newPrimaryId = remaining[remaining.length - 1]!;
-              this.primaryOwnerSocketBySpaceId.set(ownerSpaceId, newPrimaryId);
-              const newPrimarySocket = this.context.server.sockets.sockets.get(newPrimaryId);
-              newPrimarySocket?.emit('spaces:watchPartyOwnerPromoted', { spaceId: ownerSpaceId });
-            }
-          }
-
-          if (ownerSockets && ownerSockets.size === 0) {
-            this.ownerSocketsBySpaceId.delete(ownerSpaceId);
-          }
-
-          const pausedState = this.watchPartyState.pauseAtCurrentPosition(ownerSpaceId);
-          if (pausedState) {
-            const room = spaceRoom(ownerSpaceId);
-            const out = { spaceId: ownerSpaceId, ...pausedState };
-            this.context.server.to(room).emit('spaces:watchPartyState', out);
-            void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:watchPartyState', payload: out }).catch(() => undefined);
-          }
-        }
         void this.emitSpaceMembers(spaceLeft.spaceId);
         this.emitSpacesLobbyCounts();
         const spaceUserId = String(spaceLeft.userId ?? fallbackUserId ?? '').trim();
@@ -235,6 +248,14 @@ export class SpacesGatewayHandler {
       if (!isActive) return;
     }
 
+    // Clear prior owner-socket tracking when this socket moves to another space
+    // (owned or not). Otherwise owner maps retain stale socket ids forever.
+    const prevOwnerSpaceId = String((client.data as any)?.ownerSpaceId ?? '').trim() || null;
+    if (prevOwnerSpaceId && prevOwnerSpaceId !== spaceId) {
+      this.clearOwnerSocket(client.id, prevOwnerSpaceId, { pauseWatchParty: true });
+      (client.data as any).ownerSpaceId = null;
+    }
+
     // Auto-activate on owner join, and elect this socket as the primary control socket.
     if (isOwner) {
       (client.data as any).ownerSpaceId = spaceId;
@@ -254,6 +275,8 @@ export class SpacesGatewayHandler {
         const prevSocket = this.context.server.sockets.sockets.get(prevPrimarySocketId);
         prevSocket?.emit('spaces:watchPartyOwnerReplaced', { spaceId });
       }
+    } else {
+      (client.data as any).ownerSpaceId = null;
     }
 
     const { prevSpaceId, prevRoomSpaceId } = this.spacesPresence.join({ socketId: client.id, userId, spaceId });
@@ -291,26 +314,13 @@ export class SpacesGatewayHandler {
     const left = this.spacesPresence.leave(client.id);
     this.spacesPresence.clearRoomForSocket(client.id);
     if (roomSpaceId) client.leave(spaceRoom(roomSpaceId));
+    if (ownerSpaceId) {
+      this.clearOwnerSocket(client.id, ownerSpaceId, {
+        pauseWatchParty: Boolean(left?.wasActive && left.spaceId === ownerSpaceId),
+      });
+      (client.data as any).ownerSpaceId = null;
+    }
     if (left?.wasActive) {
-      // If the owner deliberately leaves, pause all viewers at the current position.
-      if (ownerSpaceId && ownerSpaceId === left.spaceId) {
-        // Remove from the owner-socket set; clear primary if it was this socket.
-        const ownerSockets = this.ownerSocketsBySpaceId.get(ownerSpaceId);
-        if (ownerSockets) {
-          ownerSockets.delete(client.id);
-          if (ownerSockets.size === 0) this.ownerSocketsBySpaceId.delete(ownerSpaceId);
-        }
-        if (this.primaryOwnerSocketBySpaceId.get(ownerSpaceId) === client.id) {
-          this.primaryOwnerSocketBySpaceId.delete(ownerSpaceId);
-        }
-        const pausedState = this.watchPartyState.pauseAtCurrentPosition(ownerSpaceId);
-        if (pausedState) {
-          const room = spaceRoom(ownerSpaceId);
-          const out = { spaceId: ownerSpaceId, ...pausedState };
-          this.context.server.to(room).emit('spaces:watchPartyState', out);
-          void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:watchPartyState', payload: out }).catch(() => undefined);
-        }
-      }
       await this.emitSpaceMembers(left.spaceId);
       this.emitSpacesLobbyCounts();
 

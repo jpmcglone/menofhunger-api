@@ -104,6 +104,8 @@ describe('PresenceRedisStateService.sweepOfflineUsers', () => {
 
     const rawRedis = {
       zrange: jest.fn(async () => [staleUserId, liveUserId]),
+      // pruneStaleSocketMembers: empty sets for both users in this scenario
+      smembers: jest.fn(async () => []),
       // staleUserId has 0 sockets; liveUserId has 1
       scard: jest.fn(async (key: string) => (key.includes(liveUserId) ? 1 : 0)),
       zrem: jest.fn(async () => 1),
@@ -120,7 +122,10 @@ describe('PresenceRedisStateService.sweepOfflineUsers', () => {
     } as any;
 
     const appConfig = { presenceIdleDisconnectMinutes: jest.fn(() => 10) } as any;
-    const presence = { persistLastOnlineAt: jest.fn() } as any;
+    const presence = {
+      persistLastOnlineAt: jest.fn(),
+      clearPersistThrottle: jest.fn(),
+    } as any;
     const svc = new PresenceRedisStateService(redis, appConfig, presence);
 
     await svc.sweepOfflineUsers();
@@ -128,6 +133,7 @@ describe('PresenceRedisStateService.sweepOfflineUsers', () => {
     // Only the stale user should have lastOnlineAt persisted.
     expect(presence.persistLastOnlineAt).toHaveBeenCalledWith(staleUserId);
     expect(presence.persistLastOnlineAt).not.toHaveBeenCalledWith(liveUserId);
+    expect(presence.clearPersistThrottle).toHaveBeenCalledWith(staleUserId);
   });
 });
 

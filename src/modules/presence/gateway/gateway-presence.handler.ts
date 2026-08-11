@@ -205,6 +205,7 @@ export class PresenceStatusHandler {
         try {
           this.cancelUserTimers(userId);
           this.presence.persistLastOnlineAt(userId);
+          this.userPresenceNonce.delete(userId);
           await this.emitOffline(userId);
         } catch {
           // best-effort

@@ -535,7 +535,62 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
     return ids;
   }
 
-  // TTL fallback: periodically prune users that have no sockets left.
+  /**
+   * Drop `presence:user:{id}:sockets` members whose socket heartbeat key is gone.
+   * Socket keys TTL-expire on crash, but set members only leave via unregister — without
+   * this, zombies keep users "online" and inflate platform lookups forever.
+   */
+  async pruneStaleSocketMembers(userId: string): Promise<number> {
+    const uid = String(userId ?? '').trim();
+    if (!uid) return 0;
+    const userSocketsKey = RedisKeys.presenceUserSockets(uid);
+    let members: string[] = [];
+    try {
+      members = (await this.redis.raw().smembers(userSocketsKey)) ?? [];
+    } catch {
+      return 0;
+    }
+    if (members.length === 0) return 0;
+
+    const stale: string[] = [];
+    const refs: Array<{ member: string; instanceId: string; socketId: string }> = [];
+    for (const member of members) {
+      const parsed = this.parseMember(member);
+      if (!parsed) {
+        stale.push(member);
+        continue;
+      }
+      refs.push({ member, ...parsed });
+    }
+
+    if (refs.length > 0) {
+      const pipe = this.redis.raw().pipeline();
+      for (const ref of refs) {
+        pipe.exists(RedisKeys.presenceSocket(ref.instanceId, ref.socketId));
+      }
+      let results: Array<[Error | null, unknown]> | null = null;
+      try {
+        results = await pipe.exec();
+      } catch {
+        results = null;
+      }
+      for (let i = 0; i < refs.length; i++) {
+        const exists = Number(results?.[i]?.[1] ?? 0) === 1;
+        if (!exists) stale.push(refs[i]!.member);
+      }
+    }
+
+    if (stale.length === 0) return 0;
+    try {
+      await this.redis.raw().srem(userSocketsKey, ...stale);
+    } catch {
+      return 0;
+    }
+    return stale.length;
+  }
+
+  // TTL fallback: periodically prune zombie socket-set members, then mark users
+  // with no remaining sockets as offline.
   @Interval(30_000)
   async sweepOfflineUsers(): Promise<void> {
     // Keep this bounded; we only need eventual correctness for crash cleanup.
@@ -550,6 +605,7 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
     for (const userId of userIds) {
       const uid = String(userId ?? '').trim();
       if (!uid) continue;
+      await this.pruneStaleSocketMembers(uid).catch(() => 0);
       let remaining = 0;
       try {
         remaining = await this.redis.raw().scard(RedisKeys.presenceUserSockets(uid));
@@ -561,6 +617,7 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
       // No sockets tracked => offline. Persist lastOnlineAt so the user appears in
       // "recently around" even if the process crashed before handleDisconnect ran.
       this.presence.persistLastOnlineAt(uid);
+      this.presence.clearPersistThrottle(uid);
       await Promise.allSettled([
         this.redis.raw().zrem(RedisKeys.presenceOnlineZset(), uid),
         this.redis.raw().srem(RedisKeys.presenceIdleSet(), uid),
