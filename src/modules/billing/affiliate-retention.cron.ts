@@ -39,7 +39,11 @@ export class AffiliateRetentionCron {
         where: {
           referralBonusGrantedAt: { not: null, lte: cutoff },
           premium: true,
-          recruitedBy: { affiliateAt: { not: null } },
+          recruitedBy: {
+            affiliateAt: { not: null },
+            // Recruiter must still be Premium (gifted counts) to earn.
+            OR: [{ premium: true }, { premiumPlus: true }],
+          },
           affiliateEarningsAsRecruit: {
             none: { type: 'premium60d' },
           },

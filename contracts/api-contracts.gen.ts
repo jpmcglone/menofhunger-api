@@ -284,6 +284,12 @@ export type AdminAnalyticsDto = {
   follows: TimeSeriesPoint[];
   retention: AdminAnalyticsRetentionRow[];
   engagement: AdminAnalyticsEngagementDto;
+  /**
+   * All-time landing-eligible men/posts/views + authorship concentration.
+   * Same filters and semantics as the public homepage (`GET /meta/landing` stats).
+   * Not range-filtered.
+   */
+  landing: LandingStatsDto;
   monetization: AdminAnalyticsMonetizationDto;
   coins: AdminAnalyticsCoinsDto;
   articles: AdminAnalyticsArticlesDto;
@@ -1020,6 +1026,23 @@ export type LandingMenBreakdownDto = {
    * (same post filters as `LandingPostBreakdownDto.total`).
    */
   contributors: number;
+  /** Distinct verified men who authored ≥1 landing-eligible original (non-reply) post. */
+  originalAuthors: number;
+  /**
+   * Share of landing-eligible content written by the single most prolific author.
+   * Integer percent 0–100, rounded; denominator is `LandingPostBreakdownDto.total`.
+   */
+  topAuthorSharePercent: number;
+  /**
+   * Share of landing-eligible content written by the five most prolific authors.
+   * Integer percent 0–100, rounded; denominator is `LandingPostBreakdownDto.total`.
+   */
+  top5SharePercent: number;
+  /**
+   * Median posts+replies among contributors only (men with ≥1 eligible item).
+   * Integer, rounded; 0 when there are no contributors.
+   */
+  medianPostsPerContributor: number;
 };
 
 export type LandingPostBreakdownDto = {
@@ -1050,9 +1073,29 @@ export type LandingViewsBreakdownDto = {
   total: number;
 };
 
+/**
+ * Published articles by landing-eligible authors (same author filters as posts).
+ * Drafts / deleted / onlyMe excluded. Views match Article.viewCount (person×article).
+ */
+export type LandingArticleBreakdownDto = {
+  /** visibility = 'public'. */
+  public: number;
+  /** visibility = 'verifiedOnly'. */
+  verified: number;
+  /** visibility = 'premiumOnly'. */
+  premium: number;
+  /** public + verified + premium. */
+  total: number;
+  /** Distinct authors of landing-eligible published articles. */
+  authors: number;
+  /** Sum of Article.viewCount on landing-eligible articles. */
+  views: number;
+};
+
 export type LandingStatsDto = {
   men: LandingMenBreakdownDto;
   posts: LandingPostBreakdownDto;
+  articles: LandingArticleBreakdownDto;
   views: LandingViewsBreakdownDto;
 };
 

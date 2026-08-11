@@ -90,6 +90,15 @@ const DEFAULT_STATS_ROW = {
   premium_men: 5n,
   verified_men: 27n,
   contributors: 18n,
+  original_authors: 12n,
+  top_author_posts: 10n,
+  top5_posts: 25n,
+  median_posts: 3,
+  public_articles: 8n,
+  verified_articles: 3n,
+  premium_articles: 1n,
+  article_authors: 5n,
+  article_views: 400n,
   total_views: 1200n,
   premium_views: 400n,
   verified_views: 500n,
@@ -148,7 +157,17 @@ describe('LandingService', () => {
     const { service, cache } = makeService();
     const snapshot = await service.getSnapshot(NOW);
 
-    expect(snapshot.stats.men).toEqual({ premium: 5, verified: 27, total: 32, contributors: 18 });
+    // top author 10/42 ≈ 24%, top5 25/42 ≈ 60%
+    expect(snapshot.stats.men).toEqual({
+      premium: 5,
+      verified: 27,
+      total: 32,
+      contributors: 18,
+      originalAuthors: 12,
+      topAuthorSharePercent: 24,
+      top5SharePercent: 60,
+      medianPostsPerContributor: 3,
+    });
     expect(snapshot.stats.posts).toEqual({
       public: 30,
       verified: 10,
@@ -156,6 +175,14 @@ describe('LandingService', () => {
       original: 28,
       replies: 14,
       total: 42,
+    });
+    expect(snapshot.stats.articles).toEqual({
+      public: 8,
+      verified: 3,
+      premium: 1,
+      total: 12,
+      authors: 5,
+      views: 400,
     });
     // guest = total − (premium + verified + unverified) = 1200 − 1100
     expect(snapshot.stats.views).toEqual({
@@ -281,7 +308,16 @@ describe('LandingService', () => {
     const prisma = makePrisma({ statsRows: [] });
     const { service } = makeService(prisma);
     const snapshot = await service.getSnapshot(NOW);
-    expect(snapshot.stats.men).toEqual({ premium: 0, verified: 0, total: 0, contributors: 0 });
+    expect(snapshot.stats.men).toEqual({
+      premium: 0,
+      verified: 0,
+      total: 0,
+      contributors: 0,
+      originalAuthors: 0,
+      topAuthorSharePercent: 0,
+      top5SharePercent: 0,
+      medianPostsPerContributor: 0,
+    });
     expect(snapshot.stats.posts).toEqual({
       public: 0,
       verified: 0,
@@ -289,6 +325,14 @@ describe('LandingService', () => {
       original: 0,
       replies: 0,
       total: 0,
+    });
+    expect(snapshot.stats.articles).toEqual({
+      public: 0,
+      verified: 0,
+      premium: 0,
+      total: 0,
+      authors: 0,
+      views: 0,
     });
     expect(snapshot.stats.views).toEqual({
       premium: 0,

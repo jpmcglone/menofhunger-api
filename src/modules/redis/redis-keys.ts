@@ -124,7 +124,7 @@ export const RedisKeys = {
 
   /** Public marketing landing snapshot (stats + strips). */
   landingSnapshot(): string {
-    return 'cache:landing:snapshot:v1';
+    return 'cache:landing:snapshot:v3';
   },
 
   // Throttle key for runMeChecks — set after checks run, TTL 2 min.

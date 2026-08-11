@@ -1,3 +1,5 @@
+import type { LandingStatsDto } from './landing.dto';
+
 export type AnalyticsRange = '7d' | '30d' | '3m' | '1y' | 'all';
 export type AnalyticsGranularity = 'day' | 'week' | 'month';
 
@@ -242,6 +244,12 @@ export type AdminAnalyticsDto = {
   follows: TimeSeriesPoint[];
   retention: AdminAnalyticsRetentionRow[];
   engagement: AdminAnalyticsEngagementDto;
+  /**
+   * All-time landing-eligible men/posts/views + authorship concentration.
+   * Same filters and semantics as the public homepage (`GET /meta/landing` stats).
+   * Not range-filtered.
+   */
+  landing: LandingStatsDto;
   monetization: AdminAnalyticsMonetizationDto;
   coins: AdminAnalyticsCoinsDto;
   articles: AdminAnalyticsArticlesDto;

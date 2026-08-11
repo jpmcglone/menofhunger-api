@@ -5,6 +5,11 @@ import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
+import {
+  articleBodyContainsKey,
+  matchStoredAssetToKey,
+  scrubKeyFromArticleBody,
+} from './admin-image-review.references';
 
 // ============================================================
 // REFERENCE TYPES — shapes returned by resolveAllReferences()
@@ -65,8 +70,11 @@ type PollRef = {
 
 type ArticleRef = {
   articleId: string;
+  slug: string;
   title: string | null;
   authorId: string;
+  /** Cover thumbnail (Article.thumbnailR2Key) vs TipTap body embed. */
+  isInline: boolean;
 };
 
 export type AssetPrimaryType =
@@ -79,6 +87,7 @@ export type AssetPrimaryType =
   | 'crew'
   | 'poll'
   | 'article'
+  | 'article_inline'
   | 'orphan';
 
 type AssetRefs = {
@@ -262,6 +271,7 @@ export class AdminImageReviewService {
    *   Crew.coverImageUrl             (full URL — crew wide banner)
    *   PostPollOption.imageR2Key    (poll option images)
    *   Article.thumbnailR2Key       (article cover thumbnails)
+   *   Article.body (TipTap JSON)   (inline article-media/ images via attrs.src URL)
    * ============================================================
    */
   private async resolveAllReferences(keys: string[]): Promise<Map<string, AssetRefs>> {
@@ -376,9 +386,8 @@ export class AdminImageReviewService {
       }
     }
 
-    // ── 4. CommunityGroup + Crew (stored as full URLs) ─────────────────────
-    // Build a URL → key reverse-lookup so we can match full-URL fields back
-    // to the raw R2 key we're resolving.
+    // ── 4. CommunityGroup + Crew (full CDN URL, or rarely a raw R2 key) ─────
+    // Match exact URL, URL without ?v=, raw key, or pathname suffix /{key}.
     const urlToKey = new Map<string, string>();
     const publicBase = this.cfg.r2()?.publicBaseUrl ?? null;
     if (publicBase) {
@@ -388,40 +397,152 @@ export class AdminImageReviewService {
       }
     } else {
       this.logger.warn(
-        '[media-review] R2 publicBaseUrl not configured — group/crew references cannot be resolved by URL',
+        '[media-review] R2 publicBaseUrl not configured — group/crew URL matching is limited to raw keys / path suffix',
       );
     }
 
-    if (urlToKey.size > 0) {
-      const urlArr = [...urlToKey.keys()];
+    const urlArr = [...urlToKey.keys()];
+    const groupOrCrewWhere: Prisma.CommunityGroupWhereInput = {
+      OR: [
+        ...(urlArr.length
+          ? [{ avatarImageUrl: { in: urlArr } }, { coverImageUrl: { in: urlArr } }]
+          : []),
+        { avatarImageUrl: { in: keyArr } },
+        { coverImageUrl: { in: keyArr } },
+      ],
+    };
 
-      const groupRows = await this.prisma.communityGroup.findMany({
-        where: { OR: [{ avatarImageUrl: { in: urlArr } }, { coverImageUrl: { in: urlArr } }] },
+    const groupRows = await this.prisma.communityGroup.findMany({
+      where: groupOrCrewWhere,
+      select: { id: true, slug: true, name: true, avatarImageUrl: true, coverImageUrl: true },
+    });
+    for (const g of groupRows) {
+      const avatarKey = matchStoredAssetToKey(g.avatarImageUrl, keySet, urlToKey);
+      if (avatarKey) {
+        result.get(avatarKey)!.groups.push({
+          groupId: g.id,
+          slug: g.slug,
+          name: g.name,
+          isAvatar: true,
+          isCover: false,
+        });
+      }
+      const coverKey = matchStoredAssetToKey(g.coverImageUrl, keySet, urlToKey);
+      if (coverKey) {
+        result.get(coverKey)!.groups.push({
+          groupId: g.id,
+          slug: g.slug,
+          name: g.name,
+          isAvatar: false,
+          isCover: true,
+        });
+      }
+    }
+
+    // Path-suffix fallback for host/CDN drift (exact IN miss). Cap scan size.
+    const unresolvedForGroups = [...keySet].filter((k) => result.get(k)!.groups.length === 0);
+    if (unresolvedForGroups.length > 0 && unresolvedForGroups.length <= 40) {
+      const suffixGroups = await this.prisma.communityGroup.findMany({
+        where: {
+          OR: unresolvedForGroups.flatMap((k) => [
+            { avatarImageUrl: { contains: k } },
+            { coverImageUrl: { contains: k } },
+          ]),
+        },
         select: { id: true, slug: true, name: true, avatarImageUrl: true, coverImageUrl: true },
+        take: 200,
       });
-      for (const g of groupRows) {
-        if (g.avatarImageUrl && urlToKey.has(g.avatarImageUrl)) {
-          const key = urlToKey.get(g.avatarImageUrl)!;
-          result.get(key)!.groups.push({ groupId: g.id, slug: g.slug, name: g.name, isAvatar: true, isCover: false });
+      for (const g of suffixGroups) {
+        const avatarKey = matchStoredAssetToKey(g.avatarImageUrl, keySet, urlToKey);
+        if (avatarKey && !result.get(avatarKey)!.groups.some((x) => x.groupId === g.id && x.isAvatar)) {
+          result.get(avatarKey)!.groups.push({
+            groupId: g.id,
+            slug: g.slug,
+            name: g.name,
+            isAvatar: true,
+            isCover: false,
+          });
         }
-        if (g.coverImageUrl && urlToKey.has(g.coverImageUrl)) {
-          const key = urlToKey.get(g.coverImageUrl)!;
-          result.get(key)!.groups.push({ groupId: g.id, slug: g.slug, name: g.name, isAvatar: false, isCover: true });
+        const coverKey = matchStoredAssetToKey(g.coverImageUrl, keySet, urlToKey);
+        if (coverKey && !result.get(coverKey)!.groups.some((x) => x.groupId === g.id && x.isCover)) {
+          result.get(coverKey)!.groups.push({
+            groupId: g.id,
+            slug: g.slug,
+            name: g.name,
+            isAvatar: false,
+            isCover: true,
+          });
         }
       }
+    }
 
-      const crewRows = await this.prisma.crew.findMany({
-        where: { OR: [{ avatarImageUrl: { in: urlArr } }, { coverImageUrl: { in: urlArr } }] },
+    const crewRows = await this.prisma.crew.findMany({
+      where: {
+        OR: [
+          ...(urlArr.length
+            ? [{ avatarImageUrl: { in: urlArr } }, { coverImageUrl: { in: urlArr } }]
+            : []),
+          { avatarImageUrl: { in: keyArr } },
+          { coverImageUrl: { in: keyArr } },
+        ],
+      },
+      select: { id: true, slug: true, name: true, avatarImageUrl: true, coverImageUrl: true },
+    });
+    for (const c of crewRows) {
+      const avatarKey = matchStoredAssetToKey(c.avatarImageUrl, keySet, urlToKey);
+      if (avatarKey) {
+        result.get(avatarKey)!.crews.push({
+          crewId: c.id,
+          slug: c.slug,
+          name: c.name ?? null,
+          isAvatar: true,
+          isCover: false,
+        });
+      }
+      const coverKey = matchStoredAssetToKey(c.coverImageUrl, keySet, urlToKey);
+      if (coverKey) {
+        result.get(coverKey)!.crews.push({
+          crewId: c.id,
+          slug: c.slug,
+          name: c.name ?? null,
+          isAvatar: false,
+          isCover: true,
+        });
+      }
+    }
+
+    const unresolvedForCrews = [...keySet].filter((k) => result.get(k)!.crews.length === 0);
+    if (unresolvedForCrews.length > 0 && unresolvedForCrews.length <= 40) {
+      const suffixCrews = await this.prisma.crew.findMany({
+        where: {
+          OR: unresolvedForCrews.flatMap((k) => [
+            { avatarImageUrl: { contains: k } },
+            { coverImageUrl: { contains: k } },
+          ]),
+        },
         select: { id: true, slug: true, name: true, avatarImageUrl: true, coverImageUrl: true },
+        take: 200,
       });
-      for (const c of crewRows) {
-        if (c.avatarImageUrl && urlToKey.has(c.avatarImageUrl)) {
-          const key = urlToKey.get(c.avatarImageUrl)!;
-          result.get(key)!.crews.push({ crewId: c.id, slug: c.slug, name: c.name ?? null, isAvatar: true, isCover: false });
+      for (const c of suffixCrews) {
+        const avatarKey = matchStoredAssetToKey(c.avatarImageUrl, keySet, urlToKey);
+        if (avatarKey && !result.get(avatarKey)!.crews.some((x) => x.crewId === c.id && x.isAvatar)) {
+          result.get(avatarKey)!.crews.push({
+            crewId: c.id,
+            slug: c.slug,
+            name: c.name ?? null,
+            isAvatar: true,
+            isCover: false,
+          });
         }
-        if (c.coverImageUrl && urlToKey.has(c.coverImageUrl)) {
-          const key = urlToKey.get(c.coverImageUrl)!;
-          result.get(key)!.crews.push({ crewId: c.id, slug: c.slug, name: c.name ?? null, isAvatar: false, isCover: true });
+        const coverKey = matchStoredAssetToKey(c.coverImageUrl, keySet, urlToKey);
+        if (coverKey && !result.get(coverKey)!.crews.some((x) => x.crewId === c.id && x.isCover)) {
+          result.get(coverKey)!.crews.push({
+            crewId: c.id,
+            slug: c.slug,
+            name: c.name ?? null,
+            isAvatar: false,
+            isCover: true,
+          });
         }
       }
     }
@@ -445,18 +566,59 @@ export class AdminImageReviewService {
       });
     }
 
-    // ── 6. Article (thumbnailR2Key) ────────────────────────────────────────
-    const articleRows = await this.prisma.article.findMany({
+    // ── 6. Article cover thumbnails (thumbnailR2Key) ───────────────────────
+    const articleThumbRows = await this.prisma.article.findMany({
       where: { thumbnailR2Key: { in: keyArr } },
-      select: { id: true, title: true, thumbnailR2Key: true, authorId: true },
+      select: { id: true, slug: true, title: true, thumbnailR2Key: true, authorId: true },
     });
-    for (const a of articleRows) {
+    for (const a of articleThumbRows) {
       if (!a.thumbnailR2Key || !keySet.has(a.thumbnailR2Key)) continue;
       result.get(a.thumbnailR2Key)!.articles.push({
         articleId: a.id,
+        slug: a.slug,
         title: a.title ?? null,
         authorId: a.authorId,
+        isInline: false,
       });
+    }
+
+    // ── 7. Article inline TipTap body embeds (article-media/ URLs in JSON) ──
+    // Editors store full CDN URLs in image attrs.src; the R2 key is a substring.
+    // Only scan keys that still have zero references — those are the false-positive orphans.
+    const keysNeedingBodyScan = keyArr.filter((k) => {
+      const r = result.get(k)!;
+      return (
+        r.posts.length === 0 &&
+        r.messages.length === 0 &&
+        r.users.length === 0 &&
+        r.groups.length === 0 &&
+        r.crews.length === 0 &&
+        r.polls.length === 0 &&
+        r.articles.length === 0
+      );
+    });
+    if (keysNeedingBodyScan.length > 0) {
+      const bodyArticles = await this.prisma.article.findMany({
+        where: {
+          OR: keysNeedingBodyScan.map((k) => ({ body: { contains: k } })),
+        },
+        select: { id: true, slug: true, title: true, authorId: true, body: true },
+        take: 500,
+      });
+      for (const a of bodyArticles) {
+        for (const key of keysNeedingBodyScan) {
+          if (!articleBodyContainsKey(a.body, key)) continue;
+          const bucket = result.get(key)!;
+          if (bucket.articles.some((x) => x.articleId === a.id && x.isInline)) continue;
+          bucket.articles.push({
+            articleId: a.id,
+            slug: a.slug,
+            title: a.title ?? null,
+            authorId: a.authorId,
+            isInline: true,
+          });
+        }
+      }
     }
 
     // ── Determine primaryType for each key ─────────────────────────────────
@@ -467,7 +629,8 @@ export class AdminImageReviewService {
       else if (refs.groups.length > 0) refs.primaryType = 'group';
       else if (refs.crews.length > 0) refs.primaryType = 'crew';
       else if (refs.polls.length > 0) refs.primaryType = 'poll';
-      else if (refs.articles.length > 0) refs.primaryType = 'article';
+      else if (refs.articles.some((a) => !a.isInline)) refs.primaryType = 'article';
+      else if (refs.articles.some((a) => a.isInline)) refs.primaryType = 'article_inline';
       else if (refs.posts.some((p) => p.isThumbnail)) refs.primaryType = 'post_thumbnail';
       else if (refs.messages.some((m) => m.isThumbnail)) refs.primaryType = 'message_thumbnail';
       else refs.primaryType = 'orphan';
@@ -572,10 +735,13 @@ export class AdminImageReviewService {
           // New fields
           groupId: groupRef?.groupId ?? null,
           groupName: groupRef?.name ?? null,
+          groupSlug: groupRef?.slug ?? null,
           crewId: crewRef?.crewId ?? null,
           crewName: crewRef?.name ?? null,
+          crewSlug: crewRef?.slug ?? null,
           pollPostId: pollRef?.postId ?? null,
           articleId: articleRef?.articleId ?? null,
+          articleSlug: articleRef?.slug ?? null,
           messageId: msgRef?.messageId ?? null,
         });
         if (out.length >= take) break;
@@ -728,18 +894,63 @@ export class AdminImageReviewService {
         }
       }
 
-      // ── CommunityGroup avatar / cover (stored as full URL) ─────────────────
+      // ── CommunityGroup avatar / cover (URL, raw key, or URL containing key) ─
+      const groupUrlOrKey = [
+        ...(fullUrl ? [fullUrl] : []),
+        r2Key,
+      ];
+      const groupsHit = await tx.communityGroup.findMany({
+        where: {
+          OR: [
+            { avatarImageUrl: { in: groupUrlOrKey } },
+            { coverImageUrl: { in: groupUrlOrKey } },
+            { avatarImageUrl: { contains: r2Key } },
+            { coverImageUrl: { contains: r2Key } },
+          ],
+        },
+        select: { id: true, avatarImageUrl: true, coverImageUrl: true },
+        take: 50,
+      });
       let groupCount = 0;
-      let crewCount = 0;
-      if (fullUrl) {
-        const { count: ga } = await tx.communityGroup.updateMany({ where: { avatarImageUrl: fullUrl }, data: { avatarImageUrl: null } });
-        const { count: gc } = await tx.communityGroup.updateMany({ where: { coverImageUrl: fullUrl }, data: { coverImageUrl: null } });
-        groupCount = ga + gc;
+      for (const g of groupsHit) {
+        const data: Prisma.CommunityGroupUpdateInput = {};
+        if (g.avatarImageUrl && (g.avatarImageUrl === fullUrl || g.avatarImageUrl === r2Key || g.avatarImageUrl.includes(r2Key))) {
+          data.avatarImageUrl = null;
+        }
+        if (g.coverImageUrl && (g.coverImageUrl === fullUrl || g.coverImageUrl === r2Key || g.coverImageUrl.includes(r2Key))) {
+          data.coverImageUrl = null;
+        }
+        if (Object.keys(data).length) {
+          await tx.communityGroup.update({ where: { id: g.id }, data });
+          groupCount += 1;
+        }
+      }
 
-        // ── Crew avatar / cover (stored as full URL) ─────────────────────────
-        const { count: ca } = await tx.crew.updateMany({ where: { avatarImageUrl: fullUrl }, data: { avatarImageUrl: null } });
-        const { count: cc } = await tx.crew.updateMany({ where: { coverImageUrl: fullUrl }, data: { coverImageUrl: null } });
-        crewCount = ca + cc;
+      const crewsHit = await tx.crew.findMany({
+        where: {
+          OR: [
+            { avatarImageUrl: { in: groupUrlOrKey } },
+            { coverImageUrl: { in: groupUrlOrKey } },
+            { avatarImageUrl: { contains: r2Key } },
+            { coverImageUrl: { contains: r2Key } },
+          ],
+        },
+        select: { id: true, avatarImageUrl: true, coverImageUrl: true },
+        take: 50,
+      });
+      let crewCount = 0;
+      for (const c of crewsHit) {
+        const data: Prisma.CrewUpdateInput = {};
+        if (c.avatarImageUrl && (c.avatarImageUrl === fullUrl || c.avatarImageUrl === r2Key || c.avatarImageUrl.includes(r2Key))) {
+          data.avatarImageUrl = null;
+        }
+        if (c.coverImageUrl && (c.coverImageUrl === fullUrl || c.coverImageUrl === r2Key || c.coverImageUrl.includes(r2Key))) {
+          data.coverImageUrl = null;
+        }
+        if (Object.keys(data).length) {
+          await tx.crew.update({ where: { id: c.id }, data });
+          crewCount += 1;
+        }
       }
 
       // ── PostPollOption image ───────────────────────────────────────────────
@@ -748,11 +959,25 @@ export class AdminImageReviewService {
         data: { imageR2Key: null },
       });
 
-      // ── Article thumbnail ──────────────────────────────────────────────────
-      const { count: articleCount } = await tx.article.updateMany({
+      // ── Article cover thumbnail ────────────────────────────────────────────
+      const { count: articleThumbCount } = await tx.article.updateMany({
         where: { thumbnailR2Key: r2Key },
         data: { thumbnailR2Key: null },
       });
+
+      // ── Article TipTap body embeds (inline article-media) ──────────────────
+      const articlesWithBody = await tx.article.findMany({
+        where: { body: { contains: r2Key } },
+        select: { id: true, body: true },
+        take: 100,
+      });
+      let articleInlineCount = 0;
+      for (const art of articlesWithBody) {
+        const scrubbed = scrubKeyFromArticleBody(art.body, r2Key);
+        if (!scrubbed.changed) continue;
+        await tx.article.update({ where: { id: art.id }, data: { body: scrubbed.body } });
+        articleInlineCount += 1;
+      }
 
       return {
         postMediaCount: postMediaDirect.length,
@@ -763,7 +988,9 @@ export class AdminImageReviewService {
         groupCount,
         crewCount,
         pollOptionCount,
-        articleCount,
+        articleCount: articleThumbCount + articleInlineCount,
+        articleThumbCount,
+        articleInlineCount,
         invalidatedUsers,
       };
     });

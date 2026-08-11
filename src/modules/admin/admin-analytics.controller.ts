@@ -1,6 +1,7 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { LandingService } from '../landing/landing.service';
 import { AdminGuard } from './admin.guard';
 import type {
   AdminAnalyticsArticlesDto,
@@ -41,7 +42,10 @@ function toTimeSeries(rows: Array<{ bucket: Date; count: bigint }>) {
 @Controller('admin/analytics')
 @UseGuards(AdminGuard)
 export class AdminAnalyticsController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly landing: LandingService,
+  ) {}
 
   @Get()
   async getAnalytics(@Query('range') rangeParam = '30d') {
@@ -1162,6 +1166,9 @@ export class AdminAnalyticsController {
       giniCoefficient:      coinsGiniRaw[0]?.gini != null ? Number(coinsGiniRaw[0].gini) : null,
     };
 
+    // Same all-time landing stats shown on the public homepage (cached ~60s).
+    const landingSnapshot = await this.landing.getSnapshot(now);
+
     // ── Response ──────────────────────────────────────────────────────────────
 
     const data: AdminAnalyticsDto = {
@@ -1196,6 +1203,7 @@ export class AdminAnalyticsController {
         w4:         Number(r.retained_w4),
       })),
       engagement,
+      landing: landingSnapshot.stats,
       monetization: {
         free,
         payingPremium,

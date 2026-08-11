@@ -38,11 +38,19 @@ function makeSvc(prisma: any, realtime = makeRealtime(), appConfig = makeAppConf
 }
 
 /** Returns a recruit mock where the recruit joined AFTER affiliateAt (qualifies). */
-function makeQualifiedRecruitLookup(affiliateAt = AFFILIATE_AT) {
+function makeQualifiedRecruitLookup(
+  affiliateAt = AFFILIATE_AT,
+  recruiter: { premium?: boolean; premiumPlus?: boolean } = {},
+) {
   return {
     createdAt: AFTER_AFFILIATE_AT,
     recruitedById: 'recruiter-1',
-    recruitedBy: { id: 'recruiter-1', affiliateAt },
+    recruitedBy: {
+      id: 'recruiter-1',
+      affiliateAt,
+      premium: recruiter.premium ?? true,
+      premiumPlus: recruiter.premiumPlus ?? false,
+    },
   };
 }
 
@@ -80,7 +88,7 @@ describe('AffiliateService.maybeRecordEarning', () => {
     prisma.user.findUnique.mockResolvedValueOnce({
       createdAt: BEFORE_AFFILIATE_AT,
       recruitedById: 'recruiter-1',
-      recruitedBy: { id: 'recruiter-1', affiliateAt: AFFILIATE_AT },
+      recruitedBy: { id: 'recruiter-1', affiliateAt: AFFILIATE_AT, premium: true, premiumPlus: false },
     });
     const svc = makeSvc(prisma);
 
@@ -88,6 +96,36 @@ describe('AffiliateService.maybeRecordEarning', () => {
 
     expect(result).toEqual({ affiliateUserId: null });
     expect(prisma.affiliateEarning.create).not.toHaveBeenCalled();
+  });
+
+  it('no-ops when recruiter is enrolled but not currently Premium', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValueOnce(makeQualifiedRecruitLookup(AFFILIATE_AT, { premium: false }));
+    const svc = makeSvc(prisma);
+
+    const result = await svc.maybeRecordEarning('recruit-1', 'signup');
+
+    expect(result).toEqual({ affiliateUserId: null });
+    expect(prisma.affiliateEarning.create).not.toHaveBeenCalled();
+  });
+
+  it('records when recruiter has gifted Premium (premium=true, no paid sub implied)', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique
+      .mockResolvedValueOnce(makeQualifiedRecruitLookup(AFFILIATE_AT, { premium: true }))
+      .mockResolvedValueOnce({
+        id: 'recruit-1', username: 'recruit', name: 'Recruit',
+        premium: false, premiumPlus: false, isOrganization: false, stewardBadgeEnabled: false,
+        verifiedStatus: 'none', avatarKey: null, avatarUpdatedAt: null, bannedAt: null, isBot: false,
+        orgMemberships: [], createdAt: AFTER_AFFILIATE_AT, referralBonusGrantedAt: null,
+      });
+    prisma.affiliateEarning.create.mockResolvedValueOnce({});
+    const svc = makeSvc(prisma);
+
+    const result = await svc.maybeRecordEarning('recruit-1', 'signup');
+
+    expect(result).toEqual({ affiliateUserId: 'recruiter-1' });
+    expect(prisma.affiliateEarning.create).toHaveBeenCalled();
   });
 
   it('records signup earning ($1) when recruit joined after affiliateAt', async () => {
@@ -363,9 +401,9 @@ describe('AffiliateService.settleAffiliate', () => {
 // ─── setAffiliateStatus ───────────────────────────────────────────────────────
 
 describe('AffiliateService.setAffiliateStatus', () => {
-  it('enables affiliate by setting affiliateAt to now', async () => {
+  it('enables affiliate by setting affiliateAt to now when user is Premium', async () => {
     const prisma = makePrisma();
-    prisma.user.findUnique.mockResolvedValueOnce({ id: 'user-1' });
+    prisma.user.findUnique.mockResolvedValueOnce({ id: 'user-1', premium: true, premiumPlus: false });
     prisma.user.update.mockResolvedValueOnce({});
     const svc = makeSvc(prisma);
 
@@ -377,9 +415,18 @@ describe('AffiliateService.setAffiliateStatus', () => {
     });
   });
 
+  it('rejects enabling when user is not Premium', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValueOnce({ id: 'user-1', premium: false, premiumPlus: false });
+    const svc = makeSvc(prisma);
+
+    await expect(svc.setAffiliateStatus('user-1', true)).rejects.toThrow(BadRequestException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
   it('disables affiliate by setting affiliateAt to null', async () => {
     const prisma = makePrisma();
-    prisma.user.findUnique.mockResolvedValueOnce({ id: 'user-1' });
+    prisma.user.findUnique.mockResolvedValueOnce({ id: 'user-1', premium: false, premiumPlus: false });
     prisma.user.update.mockResolvedValueOnce({});
     const svc = makeSvc(prisma);
 

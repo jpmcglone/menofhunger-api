@@ -47,6 +47,15 @@ type StatsRow = {
   premium_men: bigint;
   verified_men: bigint;
   contributors: bigint;
+  original_authors: bigint;
+  top_author_posts: bigint;
+  top5_posts: bigint;
+  median_posts: number | null;
+  public_articles: bigint;
+  verified_articles: bigint;
+  premium_articles: bigint;
+  article_authors: bigint;
+  article_views: bigint;
   total_views: bigint;
   premium_views: bigint;
   verified_views: bigint;
@@ -97,7 +106,16 @@ export class LandingService {
                posts.reply_posts,
                men.premium_men,
                men.verified_men,
-               contributors.contributors,
+               concentration.contributors,
+               concentration.original_authors,
+               concentration.top_author_posts,
+               concentration.top5_posts,
+               concentration.median_posts,
+               articles.public_articles,
+               articles.verified_articles,
+               articles.premium_articles,
+               articles.article_authors,
+               articles.article_views,
                view_totals.total_views,
                view_tiers.premium_views,
                view_tiers.verified_views,
@@ -135,19 +153,58 @@ export class LandingService {
             AND u."verifiedStatus" != 'none'
         ) men
         CROSS JOIN (
-          -- Distinct verified men who authored ≥1 landing-eligible post/reply.
-          SELECT COUNT(DISTINCT p."userId")::bigint AS contributors
-          FROM "Post" p
-          JOIN "User" u ON u.id = p."userId"
-          WHERE p."deletedAt" IS NULL
-            AND p."isDraft" = false
-            AND p."kind" = 'regular'
-            AND p."visibility" IN ('public', 'verifiedOnly', 'premiumOnly')
+          -- Authorship concentration over landing-eligible content.
+          WITH eligible AS (
+            SELECT p."userId", p."parentId"
+            FROM "Post" p
+            JOIN "User" u ON u.id = p."userId"
+            WHERE p."deletedAt" IS NULL
+              AND p."isDraft" = false
+              AND p."kind" = 'regular'
+              AND p."visibility" IN ('public', 'verifiedOnly', 'premiumOnly')
+              AND u."bannedAt" IS NULL
+              AND u."usernameIsSet" = true
+              AND u."isOrganization" = false
+              AND u."verifiedStatus" != 'none'
+          ),
+          author_totals AS (
+            SELECT
+              e."userId",
+              COUNT(*)::int AS posts,
+              COUNT(*) FILTER (WHERE e."parentId" IS NULL)::int AS roots
+            FROM eligible e
+            GROUP BY e."userId"
+          ),
+          ranked AS (
+            SELECT posts, ROW_NUMBER() OVER (ORDER BY posts DESC, "userId") AS rn
+            FROM author_totals
+          )
+          SELECT
+            (SELECT COUNT(*)::bigint FROM author_totals) AS contributors,
+            (SELECT COUNT(*)::bigint FROM author_totals WHERE roots > 0) AS original_authors,
+            (SELECT COALESCE(MAX(posts), 0)::bigint FROM ranked WHERE rn = 1) AS top_author_posts,
+            (SELECT COALESCE(SUM(posts), 0)::bigint FROM ranked WHERE rn <= 5) AS top5_posts,
+            (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY posts) FROM author_totals) AS median_posts
+        ) concentration
+        CROSS JOIN (
+          -- Published articles by landing-eligible authors.
+          SELECT
+            COUNT(*) FILTER (WHERE a."visibility" = 'public')       AS public_articles,
+            COUNT(*) FILTER (WHERE a."visibility" = 'verifiedOnly') AS verified_articles,
+            COUNT(*) FILTER (WHERE a."visibility" = 'premiumOnly')  AS premium_articles,
+            COUNT(DISTINCT a."authorId")::bigint AS article_authors,
+            COALESCE(SUM(a."viewCount"), 0)::bigint AS article_views
+          FROM "Article" a
+          JOIN "User" u ON u.id = a."authorId"
+          WHERE a."deletedAt" IS NULL
+            AND a."isDraft" = false
+            AND a."publishedAt" IS NOT NULL
+            AND a."visibility" IN ('public', 'verifiedOnly', 'premiumOnly')
             AND u."bannedAt" IS NULL
             AND u."usernameIsSet" = true
             AND u."isOrganization" = false
             AND u."verifiedStatus" != 'none'
-        ) contributors
+        ) articles
         CROSS JOIN (
           -- Denormalized unique viewers (person×post), same semantics as Post.viewerCount.
           SELECT COALESCE(SUM(p."viewerCount"), 0)::bigint AS total_views
@@ -406,6 +463,15 @@ export class LandingService {
     const premiumMen = Number(stats?.premium_men ?? 0);
     const verifiedMen = Number(stats?.verified_men ?? 0);
     const contributors = Number(stats?.contributors ?? 0);
+    const originalAuthors = Number(stats?.original_authors ?? 0);
+    const topAuthorPosts = Number(stats?.top_author_posts ?? 0);
+    const top5Posts = Number(stats?.top5_posts ?? 0);
+    const medianPostsRaw = Number(stats?.median_posts ?? 0);
+    const publicArticles = Number(stats?.public_articles ?? 0);
+    const verifiedArticles = Number(stats?.verified_articles ?? 0);
+    const premiumArticles = Number(stats?.premium_articles ?? 0);
+    const articleAuthors = Number(stats?.article_authors ?? 0);
+    const articleViews = Math.max(0, Math.floor(Number(stats?.article_views ?? 0)));
     const totalViews = Math.max(0, Math.floor(Number(stats?.total_views ?? 0)));
     const premiumViews = Math.max(0, Math.floor(Number(stats?.premium_views ?? 0)));
     const verifiedViews = Math.max(0, Math.floor(Number(stats?.verified_views ?? 0)));
@@ -413,6 +479,9 @@ export class LandingService {
     const guestViews = Math.max(0, totalViews - (premiumViews + verifiedViews + unverifiedViews));
     const menTotal = premiumMen + verifiedMen;
     const postsTotal = publicPosts + verifiedPosts + premiumPosts;
+    const articlesTotal = publicArticles + verifiedArticles + premiumArticles;
+    const sharePercent = (part: number) =>
+      postsTotal > 0 ? Math.min(100, Math.max(0, Math.round((100 * part) / postsTotal))) : 0;
 
     return {
       stats: {
@@ -421,6 +490,11 @@ export class LandingService {
           verified: verifiedMen,
           total: menTotal,
           contributors: Math.min(Math.max(0, contributors), menTotal),
+          originalAuthors: Math.min(Math.max(0, originalAuthors), menTotal),
+          topAuthorSharePercent: sharePercent(topAuthorPosts),
+          top5SharePercent: sharePercent(top5Posts),
+          medianPostsPerContributor:
+            contributors > 0 ? Math.max(0, Math.round(Number.isFinite(medianPostsRaw) ? medianPostsRaw : 0)) : 0,
         },
         posts: {
           public: publicPosts,
@@ -429,6 +503,14 @@ export class LandingService {
           original: originalPosts,
           replies: replyPosts,
           total: postsTotal,
+        },
+        articles: {
+          public: publicArticles,
+          verified: verifiedArticles,
+          premium: premiumArticles,
+          total: articlesTotal,
+          authors: Math.max(0, articleAuthors),
+          views: articleViews,
         },
         views: {
           premium: premiumViews,

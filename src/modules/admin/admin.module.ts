@@ -39,6 +39,7 @@ import { AdminCrewsController } from './admin-crews.controller';
 import { AdminImpersonationController } from './admin-impersonation.controller';
 import { AdminPushController } from './admin-push.controller';
 import { UploadsModule } from '../uploads/uploads.module';
+import { LandingModule } from '../landing/landing.module';
 
 @Module({
   imports: [
@@ -61,6 +62,7 @@ import { UploadsModule } from '../uploads/uploads.module';
     CoinsModule,
     CrewModule,
     UploadsModule,
+    LandingModule,
   ],
   controllers: [
     AdminUsersController,

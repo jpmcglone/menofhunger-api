@@ -48,6 +48,7 @@ export class AffiliateService {
    * No-ops if:
    *   - The recruit has no recruiter.
    *   - The recruiter is not an affiliate at the time of the event.
+   *   - The recruiter is not currently Premium (gifted Premium counts).
    *   - The recruit signed up BEFORE the recruiter's affiliateAt date (outside pilot window).
    *   - The per-member cap has already been reached.
    *   - The earning already exists (idempotency via unique constraint).
@@ -58,11 +59,21 @@ export class AffiliateService {
       select: {
         createdAt: true,
         recruitedById: true,
-        recruitedBy: { select: { id: true, affiliateAt: true } },
+        recruitedBy: {
+          select: { id: true, affiliateAt: true, premium: true, premiumPlus: true },
+        },
       },
     });
 
     if (!recruit?.recruitedById || !recruit.recruitedBy?.affiliateAt) {
+      return { affiliateUserId: null };
+    }
+
+    // Pilot members must stay Premium (including gifted) to earn.
+    if (!isPremiumMember(recruit.recruitedBy)) {
+      this.logger.debug(
+        `[affiliate] Skipping ${type} for recruit=${recruitId}: recruiter=${recruit.recruitedBy.id} is not Premium`,
+      );
       return { affiliateUserId: null };
     }
 
@@ -216,10 +227,19 @@ export class AffiliateService {
     });
   }
 
-  /** Enable or disable affiliate status for a user. */
+  /** Enable or disable affiliate status for a user. Enabling requires Premium (gifted OK). */
   async setAffiliateStatus(userId: string, enable: boolean): Promise<void> {
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, premium: true, premiumPlus: true },
+    });
     if (!user) throw new NotFoundException('User not found.');
+
+    if (enable && !isPremiumMember(user)) {
+      throw new BadRequestException(
+        'Referral Pilot requires Premium. Grant or gift Premium first, then enable the pilot.',
+      );
+    }
 
     await this.prisma.user.update({
       where: { id: userId },
@@ -263,6 +283,11 @@ export class AffiliateService {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Paid or gifted Premium / Premium+ — the bar for pilot membership + earnings. */
+function isPremiumMember(user: { premium: boolean; premiumPlus: boolean }): boolean {
+  return Boolean(user.premium || user.premiumPlus);
+}
 
 function toAffiliateEarningDto(
   e: {
