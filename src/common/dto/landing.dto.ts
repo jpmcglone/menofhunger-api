@@ -22,9 +22,23 @@ export type LandingPostBreakdownDto = {
   total: number;
 };
 
+/**
+ * Site-wide unique views (person×post), matching per-post `viewerCount` semantics.
+ * Guests are derived as total − authenticated tier counts.
+ */
+export type LandingViewsBreakdownDto = {
+  premium: number;
+  verified: number;
+  unverified: number;
+  guest: number;
+  /** Sum of Post.viewerCount on landing-eligible posts. */
+  total: number;
+};
+
 export type LandingStatsDto = {
   men: LandingMenBreakdownDto;
   posts: LandingPostBreakdownDto;
+  views: LandingViewsBreakdownDto;
 };
 
 export type LandingTopPostDto = PostDto & {

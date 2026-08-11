@@ -87,6 +87,10 @@ const DEFAULT_STATS_ROW = {
   premium_posts: 2n,
   premium_men: 5n,
   verified_men: 27n,
+  total_views: 1200n,
+  premium_views: 400n,
+  verified_views: 500n,
+  unverified_views: 200n,
 };
 
 /** Identify which raw query is being called by looking for distinctive SQL fragments. */
@@ -129,17 +133,29 @@ function makeService(prismaOverride?: ReturnType<typeof makePrisma>) {
   const prisma = prismaOverride ?? makePrisma();
   const config = { r2: jest.fn(() => ({ publicBaseUrl: 'https://cdn.example.test' })) };
   const articles = { listTrending: jest.fn().mockResolvedValue([{ id: 'article-1', title: 'Trending' }]) };
-  const service = new LandingService(prisma as any, config as any, articles as any);
-  return { service, prisma, articles };
+  const cache = {
+    getOrSetJson: jest.fn(async ({ compute }: { compute: () => Promise<unknown> }) => compute()),
+  };
+  const service = new LandingService(prisma as any, config as any, articles as any, cache as any);
+  return { service, prisma, articles, cache };
 }
 
 describe('LandingService', () => {
-  it('maps stats to the men/posts breakdown shape', async () => {
-    const { service } = makeService();
+  it('maps stats to the men/posts/views breakdown shape', async () => {
+    const { service, cache } = makeService();
     const snapshot = await service.getSnapshot(NOW);
 
     expect(snapshot.stats.men).toEqual({ premium: 5, verified: 27, total: 32 });
     expect(snapshot.stats.posts).toEqual({ public: 30, verified: 10, premium: 2, total: 42 });
+    // guest = total − (premium + verified + unverified) = 1200 − 1100
+    expect(snapshot.stats.views).toEqual({
+      premium: 400,
+      verified: 500,
+      unverified: 200,
+      guest: 100,
+      total: 1200,
+    });
+    expect(cache.getOrSetJson).toHaveBeenCalled();
   });
 
   it('builds recentlyActiveMen from scored candidates (avatar required)', async () => {
@@ -257,6 +273,13 @@ describe('LandingService', () => {
     const snapshot = await service.getSnapshot(NOW);
     expect(snapshot.stats.men).toEqual({ premium: 0, verified: 0, total: 0 });
     expect(snapshot.stats.posts).toEqual({ public: 0, verified: 0, premium: 0, total: 0 });
+    expect(snapshot.stats.views).toEqual({
+      premium: 0,
+      verified: 0,
+      unverified: 0,
+      guest: 0,
+      total: 0,
+    });
   });
 
   it('total posts = sum of public + verified + premium', async () => {
@@ -271,6 +294,13 @@ describe('LandingService', () => {
     const snapshot = await service.getSnapshot(NOW);
     const { premium, verified, total } = snapshot.stats.men;
     expect(total).toBe(premium + verified);
+  });
+
+  it('views total = premium + verified + unverified + guest', async () => {
+    const { service } = makeService();
+    const snapshot = await service.getSnapshot(NOW);
+    const { premium, verified, unverified, guest, total } = snapshot.stats.views;
+    expect(total).toBe(premium + verified + unverified + guest);
   });
 
   it('uses the windowStart variable from the snapshot date', () => {

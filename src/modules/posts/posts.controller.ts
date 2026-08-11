@@ -1252,8 +1252,13 @@ export class PostsController {
     @Query() query: unknown,
     @Res({ passthrough: true }) httpRes: Response,
   ) {
-    const { cursor, limit } = z
-      .object({ cursor: z.string().optional(), limit: z.coerce.number().int().min(1).max(50).optional() })
+    const { cursor, limit, seed } = z
+      .object({
+        cursor: z.string().optional(),
+        limit: z.coerce.number().int().min(1).max(50).optional(),
+        /** Opaque client seed for soft shuffle; reuse across pages, rotate on remount. */
+        seed: z.string().trim().min(1).max(64).optional(),
+      })
       .parse(query);
     const viewerUserId = userId ?? null;
     const result = await this.posts.listDiscoverMore({
@@ -1261,6 +1266,7 @@ export class PostsController {
       postId: id,
       limit: limit ?? 8,
       cursor: cursor ?? null,
+      shuffleSeed: seed ?? null,
     });
     setReadCache(httpRes, { viewerUserId });
     return { data: result.posts, pagination: { nextCursor: result.nextCursor } };

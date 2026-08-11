@@ -3,6 +3,9 @@ import { Prisma } from '@prisma/client';
 import { AppConfigService } from '../app/app-config.service';
 import { ArticlesService } from '../articles/articles.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { CacheService } from '../redis/cache.service';
+import { CacheTtl } from '../redis/cache-ttl';
+import { RedisKeys } from '../redis/redis-keys';
 import type { LandingSnapshotDto } from '../../common/dto/landing.dto';
 import { toPostDto, toUserListDto, type UserListRow } from '../../common/dto';
 import type { PostWithAuthorAndMedia } from '../../common/dto/post.dto';
@@ -41,6 +44,10 @@ type StatsRow = {
   premium_posts: bigint;
   premium_men: bigint;
   verified_men: bigint;
+  total_views: bigint;
+  premium_views: bigint;
+  verified_views: bigint;
+  unverified_views: bigint;
 };
 
 const TOP_POSTS_SCAN_LIMIT = 40;
@@ -56,6 +63,7 @@ export class LandingService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly articles: ArticlesService,
+    private readonly cache: CacheService,
   ) {}
 
   private get publicBaseUrl(): string | null {
@@ -63,6 +71,17 @@ export class LandingService {
   }
 
   async getSnapshot(now = new Date()): Promise<LandingSnapshotDto> {
+    // Marketing homepage is CDN-cached for 60s; Redis avoids re-running the heavy
+    // PostView tier aggregate on every origin hit within that window.
+    return this.cache.getOrSetJson<LandingSnapshotDto>({
+      enabled: true,
+      key: RedisKeys.landingSnapshot(),
+      ttlSeconds: CacheTtl.landingSnapshotSeconds,
+      compute: () => this.computeSnapshot(now),
+    });
+  }
+
+  private async computeSnapshot(now: Date): Promise<LandingSnapshotDto> {
     const sevenDaysAgo = new Date(now.getTime() - 7 * 86400000);
     const windowStart = new Date(now.getTime() - ACTIVITY_WINDOW_DAYS * 86400000);
 
@@ -72,7 +91,11 @@ export class LandingService {
                posts.verified_posts,
                posts.premium_posts,
                men.premium_men,
-               men.verified_men
+               men.verified_men,
+               view_totals.total_views,
+               view_tiers.premium_views,
+               view_tiers.verified_views,
+               view_tiers.unverified_views
         FROM (
           SELECT
             COUNT(*) FILTER (WHERE p."visibility" = 'public')       AS public_posts,
@@ -97,6 +120,43 @@ export class LandingService {
             AND u."isOrganization" = false
             AND u."verifiedStatus" != 'none'
         ) men
+        CROSS JOIN (
+          -- Denormalized unique viewers (person×post), same semantics as Post.viewerCount.
+          SELECT COALESCE(SUM(p."viewerCount"), 0)::bigint AS total_views
+          FROM "Post" p
+          JOIN "User" u ON u.id = p."userId"
+          WHERE p."deletedAt" IS NULL
+            AND p."isDraft" = false
+            AND p."kind" = 'regular'
+            AND p."visibility" IN ('public', 'verifiedOnly', 'premiumOnly')
+            AND u."bannedAt" IS NULL
+            AND u."isOrganization" = false
+            AND u."verifiedStatus" != 'none'
+        ) view_totals
+        CROSS JOIN (
+          -- Authenticated unique views by tier (PostView is 1 row per user×post).
+          SELECT
+            COUNT(*) FILTER (WHERE vu.premium OR vu."premiumPlus") AS premium_views,
+            COUNT(*) FILTER (
+              WHERE vu."verifiedStatus" != 'none'
+                AND NOT (vu.premium OR vu."premiumPlus")
+            ) AS verified_views,
+            COUNT(*) FILTER (
+              WHERE vu."verifiedStatus" = 'none'
+                AND NOT (vu.premium OR vu."premiumPlus")
+            ) AS unverified_views
+          FROM "PostView" pv
+          JOIN "Post" p ON p.id = pv."postId"
+          JOIN "User" author ON author.id = p."userId"
+          JOIN "User" vu ON vu.id = pv."userId"
+          WHERE p."deletedAt" IS NULL
+            AND p."isDraft" = false
+            AND p."kind" = 'regular'
+            AND p."visibility" IN ('public', 'verifiedOnly', 'premiumOnly')
+            AND author."bannedAt" IS NULL
+            AND author."isOrganization" = false
+            AND author."verifiedStatus" != 'none'
+        ) view_tiers
       `),
       // Pass 1: active in the last 30 days with an avatar.
       this.prisma.$queryRaw<CandidateManRow[]>(Prisma.sql`
@@ -315,6 +375,11 @@ export class LandingService {
     const premiumPosts = Number(stats?.premium_posts ?? 0);
     const premiumMen = Number(stats?.premium_men ?? 0);
     const verifiedMen = Number(stats?.verified_men ?? 0);
+    const totalViews = Math.max(0, Math.floor(Number(stats?.total_views ?? 0)));
+    const premiumViews = Math.max(0, Math.floor(Number(stats?.premium_views ?? 0)));
+    const verifiedViews = Math.max(0, Math.floor(Number(stats?.verified_views ?? 0)));
+    const unverifiedViews = Math.max(0, Math.floor(Number(stats?.unverified_views ?? 0)));
+    const guestViews = Math.max(0, totalViews - (premiumViews + verifiedViews + unverifiedViews));
 
     return {
       stats: {
@@ -328,6 +393,13 @@ export class LandingService {
           verified: verifiedPosts,
           premium: premiumPosts,
           total: publicPosts + verifiedPosts + premiumPosts,
+        },
+        views: {
+          premium: premiumViews,
+          verified: verifiedViews,
+          unverified: unverifiedViews,
+          guest: guestViews,
+          total: totalViews,
         },
       },
       recentlyActiveMen,

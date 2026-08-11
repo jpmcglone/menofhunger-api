@@ -69,11 +69,13 @@ export class PostsDiscoverMoreService {
     postId: string;
     limit: number;
     cursor: string | null;
+    shuffleSeed?: string | null;
   }): Promise<{ posts: PostDto[]; nextCursor: string | null }> {
     const limit = Math.max(1, Math.min(50, Math.floor(params.limit || 8)));
     const viewerUserId = params.viewerUserId ?? null;
     const postId = (params.postId ?? '').trim();
     if (!postId) throw new NotFoundException('Post not found.');
+    const shuffleSeed = (params.shuffleSeed ?? '').trim() || null;
 
     const seed = await this.loadSeed(postId, viewerUserId);
     const signals = await this.resolveSeedSignals(seed);
@@ -178,6 +180,7 @@ export class PostsDiscoverMoreService {
           }
         : null,
       maxPerAuthor: 2,
+      shuffleSeed,
     });
 
     const { ids: pageIds, nextCursor } = pageDiscoverIds({

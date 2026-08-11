@@ -122,6 +122,11 @@ export const RedisKeys = {
     return `cache:posts:discoverMore:${clean(postId)}:v${Math.max(1, Math.floor(feedVer || 1))}`;
   },
 
+  /** Public marketing landing snapshot (stats + strips). */
+  landingSnapshot(): string {
+    return 'cache:landing:snapshot:v1';
+  },
+
   // Throttle key for runMeChecks — set after checks run, TTL 2 min.
   // While this key is present the expensive pinned-post/streak DB checks are skipped on /auth/me.
   meChecksThrottle(userId: string): string {

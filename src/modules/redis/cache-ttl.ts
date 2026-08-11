@@ -18,6 +18,8 @@ export const CacheTtl = {
   anonSearchPostsSeconds: 30,
   /** Post-context discover-more candidate id lists. */
   discoverMoreIdsSeconds: 10 * 60,
+  /** Public landing snapshot (matches controller Cache-Control max-age). */
+  landingSnapshotSeconds: 60,
 
   // External/shared caches.
   giphySeconds: 30,

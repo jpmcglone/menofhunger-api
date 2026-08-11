@@ -1430,6 +1430,8 @@ model Post {
   @@index([parentId, deletedAt, commentCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
   // New feed (sort=new) hot path: deleted + visibility filter + createdAt/id pagination.
   @@index([deletedAt, visibility, createdAt(sort: Desc), id(sort: Desc)])
+  // Landing stats: post counts + SUM(viewerCount) over live regular posts by visibility.
+  @@index([deletedAt, isDraft, kind, visibility])
   // Profile posts/replies hot path: user + deleted + visibility + createdAt/id pagination.
   @@index([userId, deletedAt, visibility, createdAt(sort: Desc), id(sort: Desc)])
   // Profile top-level tab: same as above, plus parentId NULL filter.

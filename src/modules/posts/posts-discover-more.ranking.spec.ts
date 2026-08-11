@@ -1,4 +1,5 @@
 import {
+  discoverUnitNoise,
   mergeDiscoverCandidates,
   pageDiscoverIds,
   rankDiscoverCandidates,
@@ -148,6 +149,45 @@ describe('posts-discover-more.ranking', () => {
     });
     expect(ids[0]).toBe('unseen');
     expect(ids).toContain('seen');
+  });
+
+  it('varies order with shuffle seed but stays stable for the same seed', () => {
+    const candidates = [
+      cand({ id: 'a', userId: 'u1', topics: ['faith'], trendingScore: 5 }),
+      cand({ id: 'b', userId: 'u2', topics: ['faith'], trendingScore: 5 }),
+      cand({ id: 'c', userId: 'u3', topics: ['faith'], trendingScore: 5 }),
+      cand({ id: 'd', userId: 'u4', topics: ['bible'], trendingScore: 5 }),
+    ];
+    const seededA = rankDiscoverCandidates({
+      candidates,
+      seed,
+      viewer: null,
+      nowMs,
+      shuffleSeed: 'session-1',
+    });
+    const seededAAgain = rankDiscoverCandidates({
+      candidates,
+      seed,
+      viewer: null,
+      nowMs,
+      shuffleSeed: 'session-1',
+    });
+    const seededB = rankDiscoverCandidates({
+      candidates,
+      seed,
+      viewer: null,
+      nowMs,
+      shuffleSeed: 'session-2',
+    });
+    expect(seededA).toEqual(seededAAgain);
+    expect(seededA).toHaveLength(4);
+    expect(new Set(seededA)).toEqual(new Set(['a', 'b', 'c', 'd']));
+    // Different seeds should almost always reorder near-ties; assert at least noise differs.
+    const noiseDiffers = ['a', 'b', 'c', 'd'].some(
+      (id) => discoverUnitNoise('session-1', id) !== discoverUnitNoise('session-2', id),
+    );
+    expect(noiseDiffers).toBe(true);
+    expect(seededA.join(',')).not.toBe(seededB.join(','));
   });
 
   it('paginates with last-id cursor', () => {

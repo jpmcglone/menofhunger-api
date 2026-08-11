@@ -20,6 +20,10 @@ export type CrewInviteStatus = 'pending' | 'accepted' | 'declined' | 'cancelled'
 export type CrewMemberRole = 'owner' | 'member'
 export type FeedbackCategory = 'bug' | 'feature' | 'account' | 'other'
 export type FeedbackStatus = 'new' | 'triaged' | 'resolved'
+export type FitnessActivityType = 'other' | 'run' | 'ride' | 'walk' | 'swim' | 'workout' | 'hike' | 'yoga'
+export type FitnessProvider = 'strava' | 'apple_health'
+export type FitnessShareType = 'activity' | 'weight' | 'progress'
+export type FitnessUnits = 'us' | 'metric'
 export type FollowVisibility = 'none' | 'all' | 'verified' | 'premium'
 export type MessageParticipantRole = 'owner' | 'member'
 export type MessageParticipantStatus = 'pending' | 'accepted'
@@ -865,6 +869,132 @@ export type FeedbackAdminDto = FeedbackDto & {
   } | null;
 };
 
+// ─── src/common/dto/fitness.dto.ts ─────────────────────────────────────────────
+
+export type FitnessConnectionDto = {
+  provider: FitnessProvider;
+  status: string;
+  lastSyncAt: string | null;
+  lastManualSyncAt: string | null;
+  providerUserId: string | null;
+};
+
+export type FitnessActivityDto = {
+  id: string;
+  provider: FitnessProvider;
+  activityType: FitnessActivityType;
+  startedAt: string;
+  endedAt: string | null;
+  durationSec: number;
+  distanceM: number | null;
+  effortScore: number | null;
+  stepsCount: number | null;
+  calories: number | null;
+  avgHeartrate: number | null;
+  maxHeartrate: number | null;
+  /** Total elevation gain in meters. Populated for Strava; null for Apple Health. */
+  totalElevationM: number | null;
+};
+
+export type FitnessDailySummaryDto = {
+  dayKey: string;
+  stepsCount: number | null;
+  workoutMinutes: number | null;
+  distanceM: number | null;
+  effortScore: number | null;
+  /** Only present when the viewer has premium. */
+  sleepMinutes?: number | null;
+  /** Only present when the viewer has premium. */
+  hrvMs?: number | null;
+};
+
+export type FitnessBodyMetricDto = {
+  id: string;
+  /** "weight" | "vo2max" */
+  kind: string;
+  /** kg for weight; ml/kg/min for vo2max */
+  weightKg: number;
+  measuredAt: string;
+  source: string;
+};
+
+export type FitnessGoalDto = {
+  id: string;
+  kind: string;
+  startKg: number | null;
+  targetKg: number | null;
+  startedAt: string;
+  completedAt: string | null;
+};
+
+export type FitnessActivitySnapshotDto = {
+  activityType: FitnessActivityType;
+  startedAt: string;
+  durationSec: number;
+  distanceM: number | null;
+  effortScore: number | null;
+  stepsCount: number | null;
+  calories: number | null;
+  avgHeartrate: number | null;
+  maxHeartrate: number | null;
+  totalElevationM: number | null;
+};
+
+export type FitnessWeightSnapshotDto = {
+  weightKg: number;
+  measuredAt: string;
+  previousWeightKg: number | null;
+  deltaKg: number | null;
+};
+
+export type FitnessProgressSnapshotDto = {
+  startKg: number | null;
+  currentKg: number | null;
+  targetKg: number | null;
+  startedAt: string;
+};
+
+export type FitnessShareSnapshotDto =
+  | { type: 'activity'; data: FitnessActivitySnapshotDto }
+  | { type: 'weight'; data: FitnessWeightSnapshotDto }
+  | { type: 'progress'; data: FitnessProgressSnapshotDto };
+
+export type FitnessSharePreviewDto = {
+  id: string;
+  shareType: FitnessShareType;
+  snapshot: FitnessShareSnapshotDto;
+};
+
+export type FitnessWeekSummaryDto = {
+  weekStart: string;
+  weekEnd: string;
+  totalSteps: number;
+  totalWorkoutMinutes: number;
+  totalDistanceM: number;
+  /** Sum of effort scores across all activities this week. */
+  totalEffort: number;
+  /** Number of distinct workout sessions this week. */
+  activityCount: number;
+  days: FitnessDailySummaryDto[];
+};
+
+export type FitnessPageDto = {
+  connections: FitnessConnectionDto[];
+  weekSummary: FitnessWeekSummaryDto;
+  recentActivities: FitnessActivityDto[];
+  units: FitnessUnits;
+  /** True when the viewer has the 'fitnessStrava' feature toggle and can connect Strava. */
+  stravaEnabled: boolean;
+  latestWeight: FitnessBodyMetricDto | null;
+  /** Up to 60 weight entries newest-first, for the sparkline + history list. */
+  weightHistory: FitnessBodyMetricDto[];
+  /** Most recent VO2 max reading, or null if none recorded. */
+  latestVo2Max: FitnessBodyMetricDto | null;
+  /** Up to 20 VO2 max entries newest-first, for trend display. */
+  vo2maxHistory: FitnessBodyMetricDto[];
+  activeGoal: FitnessGoalDto | null;
+};
+
 // ─── src/common/dto/hashtag.dto.ts ─────────────────────────────────────────────
 
 export type HashtagResultDto = {
@@ -898,9 +1028,23 @@ export type LandingPostBreakdownDto = {
   total: number;
 };
 
+/**
+ * Site-wide unique views (person×post), matching per-post `viewerCount` semantics.
+ * Guests are derived as total − authenticated tier counts.
+ */
+export type LandingViewsBreakdownDto = {
+  premium: number;
+  verified: number;
+  unverified: number;
+  guest: number;
+  /** Sum of Post.viewerCount on landing-eligible posts. */
+  total: number;
+};
+
 export type LandingStatsDto = {
   men: LandingMenBreakdownDto;
   posts: LandingPostBreakdownDto;
+  views: LandingViewsBreakdownDto;
 };
 
 export type LandingTopPostDto = PostDto & {
@@ -1289,7 +1433,7 @@ export type PostDto = {
   editCount: number;
   body: string;
   deletedAt: string | null;
-  kind: 'regular' | 'checkin' | 'repost' | 'articleShare' | 'status';
+  kind: 'regular' | 'checkin' | 'repost' | 'articleShare' | 'status' | 'fitnessShare';
   checkinDayKey: string | null;
   checkinPrompt: string | null;
   visibility: PostVisibility;
@@ -1342,6 +1486,8 @@ export type PostDto = {
   repostedByCount?: number;
   /** For kind='articleShare': the shared article preview. */
   article?: ArticleSharePreviewDto;
+  /** For kind='fitnessShare': the fitness share preview (frozen snapshot). */
+  fitnessShare?: FitnessSharePreviewDto;
   internal?: {
     boostScore: number | null;
     boostScoreUpdatedAt: string | null;
@@ -2568,6 +2714,8 @@ export type NotificationActorDto = {
 export type SubjectPostPreviewDto = {
   bodySnippet: string | null;
   media: Array<{ url: string; thumbnailUrl: string | null; kind: string }>;
+  /** Post kind when known (e.g. `status`) so clients can render status-specific copy/UI. */
+  kind?: string | null;
 };
 
 /** Preview of the subject article for display in the notification row. */
@@ -2662,4 +2810,4 @@ export type NotificationDto = {
 
 // ─── src/common/feature-toggles.ts ─────────────────────────────────────────────
 
-export type AppFeatureToggle = never;
+export type AppFeatureToggle = 'fitnessStrava';

@@ -30,6 +30,12 @@ export type DiscoverViewerSignals = {
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+/**
+ * Soft score jitter amplitude. Large enough to reorder near-ties across refreshes,
+ * small enough that strong hashtag/topic hits still win.
+ */
+export const DISCOVER_SHUFFLE_JITTER = 0.85;
+
 function overlapCount(a: string[], b: Set<string>): number {
   if (!a.length || !b.size) return 0;
   let n = 0;
@@ -39,11 +45,23 @@ function overlapCount(a: string[], b: Set<string>): number {
   return n;
 }
 
+/** Deterministic [0, 1) noise from seed + id (FNV-1a style). */
+export function discoverUnitNoise(seed: string, id: string): number {
+  const s = `${seed}:${id}`;
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) / 4294967296;
+}
+
 export function scoreDiscoverCandidate(
   c: DiscoverCandidate,
   seed: DiscoverSeedSignals,
   viewer: DiscoverViewerSignals | null,
   nowMs: number = Date.now(),
+  shuffleSeed: string | null = null,
 ): number {
   const seedTopics = new Set(seed.topics);
   const seedHashtags = new Set(seed.hashtags.map((h) => h.toLowerCase()));
@@ -64,6 +82,13 @@ export function scoreDiscoverCandidate(
   // Seed author is already on-screen; branch out slightly.
   const seedAuthorDemote = c.userId === seed.authorUserId ? 0.35 : 0;
 
+  // Client-supplied shuffle seed → deterministic jitter so refresh varies order
+  // while the same seed keeps cursor pagination stable across pages.
+  const shuffle =
+    shuffleSeed && shuffleSeed.trim()
+      ? (discoverUnitNoise(shuffleSeed.trim(), c.id) - 0.5) * 2 * DISCOVER_SHUFFLE_JITTER
+      : 0;
+
   return (
     3.0 * hashtagOverlap +
     2.0 * topicOverlap +
@@ -73,7 +98,8 @@ export function scoreDiscoverCandidate(
     0.5 * recency +
     unseenBoost -
     ownPostDemote -
-    seedAuthorDemote
+    seedAuthorDemote +
+    shuffle
   );
 }
 
@@ -108,13 +134,16 @@ export function rankDiscoverCandidates(params: {
   viewer: DiscoverViewerSignals | null;
   maxPerAuthor?: number;
   nowMs?: number;
+  /** Opaque client seed; same value across paginated pages, new value on remount. */
+  shuffleSeed?: string | null;
 }): string[] {
   const maxPerAuthor = Math.max(1, params.maxPerAuthor ?? 2);
+  const shuffleSeed = params.shuffleSeed ?? null;
   const scored = params.candidates
     .map((c) => ({
       id: c.id,
       userId: c.userId,
-      score: scoreDiscoverCandidate(c, params.seed, params.viewer, params.nowMs),
+      score: scoreDiscoverCandidate(c, params.seed, params.viewer, params.nowMs, shuffleSeed),
     }))
     .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 
