@@ -18,6 +18,9 @@ alwaysApply: false
 - Fallback copy must still be specific and readable. Never expose snake_case, camelCase identifiers,
   "Notification", "New activity", or serialized payload fragments.
 - Keep lock-screen copy concise and understandable without opening the app.
+- Name the action in title **and** subtitle: posted / checked in / replied / boosted / reposted /
+  nudged. iOS Communication notifications replace the alert title with the actor name, so the
+  subtitle is what preserves "Checked in" vs a bare body preview. Body may carry a content preview.
 
 ## Tests
 

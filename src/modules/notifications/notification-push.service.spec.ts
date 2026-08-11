@@ -212,6 +212,61 @@ describe('NotificationPushService — human-readable copy', () => {
     expect(copy.title).not.toBe('New notification');
     expect(copy.body).not.toBe('You have a new notification.');
   });
+
+  it.each([
+    {
+      kind: 'followed_post' as const,
+      fallbackTitle: 'posted',
+      body: 'Hitting the gym.',
+      title: 'Alice posted',
+    },
+    {
+      kind: 'checkin_post' as const,
+      fallbackTitle: 'checked in',
+      body: 'Day 12 — still hungry.',
+      title: 'Alice checked in',
+    },
+    {
+      kind: 'comment' as const,
+      fallbackTitle: 'replied to your post',
+      body: 'This is fire.',
+      title: 'Alice replied to your post',
+    },
+    {
+      kind: 'boost' as const,
+      fallbackTitle: 'boosted your post',
+      body: 'Original post preview',
+      title: 'Alice boosted your post',
+    },
+    {
+      kind: 'repost' as const,
+      fallbackTitle: 'reposted your post',
+      body: 'Original post preview',
+      title: 'Alice reposted your post',
+    },
+    {
+      kind: 'nudge' as const,
+      fallbackTitle: 'nudged you',
+      body: null,
+      title: 'Alice nudged you',
+    },
+  ])('$kind title names the action; body can carry a preview', ({ kind, fallbackTitle, body, title }) => {
+    const { svc } = makeService();
+    const copy = svc.buildPushCopy({
+      kind,
+      actor: {
+        id: 'actor-1',
+        username: 'alice',
+        name: 'Alice',
+        avatarKey: null,
+        avatarUpdatedAt: null,
+      },
+      fallbackTitle,
+      body,
+    });
+    expect(copy.title).toBe(title);
+    if (body) expect(copy.body).toBe(body);
+  });
 });
 
 describe('NotificationPushService — per-channel suppression', () => {
@@ -532,7 +587,7 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
       'user-1',
       expect.objectContaining({
         title: 'Alice replied to your post',
-        subtitle: 'Reply to your post',
+        subtitle: 'Replied to your post',
         category: 'moh.category.reply',
         threadId: 'post-root-1',
         actorUsername: 'alice',
@@ -746,6 +801,115 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
         avatarUrl: 'https://cdn.example.com/groups/builders.jpg',
         groupInviteId: 'invite-1',
         url: '/g/builders',
+      }),
+    );
+  });
+
+  it.each([
+    {
+      kind: 'checkin_post' as const,
+      fallbackTitle: 'checked in',
+      body: 'Day 12 — still hungry.',
+      subtitle: 'Checked in',
+      title: 'Alice checked in',
+    },
+    {
+      kind: 'followed_post' as const,
+      fallbackTitle: 'posted',
+      body: 'Hitting the gym.',
+      subtitle: 'Posted',
+      title: 'Alice posted',
+    },
+    {
+      kind: 'boost' as const,
+      fallbackTitle: 'boosted your post',
+      body: 'Original post preview',
+      subtitle: 'Boosted your post',
+      title: 'Alice boosted your post',
+    },
+    {
+      kind: 'repost' as const,
+      fallbackTitle: 'reposted your post',
+      body: 'Original post preview',
+      subtitle: 'Reposted your post',
+      title: 'Alice reposted your post',
+    },
+    {
+      kind: 'nudge' as const,
+      fallbackTitle: 'nudged you',
+      body: null,
+      subtitle: 'Nudged you',
+      title: 'Alice nudged you',
+    },
+    {
+      kind: 'comment' as const,
+      fallbackTitle: 'replied to your comment',
+      body: 'Agree.',
+      subtitle: 'Replied to your comment',
+      title: 'Alice replied to your comment',
+    },
+  ])(
+    'puts $kind action in the subtitle so Communication pushes keep context',
+    async ({ kind, fallbackTitle, body, subtitle, title }) => {
+      const prisma = makePrisma();
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'actor-1',
+        username: 'alice',
+        name: 'Alice',
+        avatarKey: null,
+        avatarUpdatedAt: null,
+      });
+      const { svc, apnsSendToUser } = makeService({ prisma });
+
+      await svc.sendKindPushForActor({
+        recipientUserId: 'user-1',
+        kind,
+        actorUserId: 'actor-1',
+        fallbackTitle,
+        body,
+        notificationId: 'notif-1',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(apnsSendToUser).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({ title, subtitle, ...(body ? { body } : {}) }),
+      );
+    },
+  );
+
+  it('folds the group name into invite action subtitles when both are present', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'actor-1',
+      username: 'alice',
+      name: 'Alice',
+      avatarKey: null,
+      avatarUpdatedAt: null,
+    });
+    prisma.communityGroup.findUnique.mockResolvedValue({
+      slug: 'builders',
+      name: 'Builders',
+      avatarImageUrl: 'https://cdn.example.com/groups/builders.jpg',
+      deletedAt: null,
+    });
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendKindPushForActor({
+      recipientUserId: 'user-1',
+      kind: 'community_group_invite_received',
+      actorUserId: 'actor-1',
+      subjectGroupId: 'group-1',
+      subjectCommunityGroupInviteId: 'invite-1',
+      fallbackTitle: 'invited you to their group',
+      notificationId: 'notif-1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        subtitle: 'Invited you to Builders',
       }),
     );
   });

@@ -41,6 +41,26 @@ function formatNameList(names: string[]): string {
   return `${head}, and ${list[list.length - 1]}`;
 }
 
+/** Sentence-case a short action phrase for lock-screen subtitles ("checked in" → "Checked in"). */
+function sentenceCaseAction(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+/**
+ * Prefer a concrete group name over generic "their/your/the/a group" phrasing
+ * so Communication-style pushes still name the group after the title becomes the actor.
+ */
+function actionWithGroupName(action: string, groupName: string): string {
+  const replaced = action
+    .replace(/\btheir group\b/i, groupName)
+    .replace(/\byour group\b/i, groupName)
+    .replace(/\bthe group\b/i, groupName)
+    .replace(/\ba group\b/i, groupName);
+  return replaced;
+}
+
 /**
  * Web Push delivery: subscription management, VAPID setup, per-kind copy,
  * coalescing, and the system-originated pushes (streak reminders, crew
@@ -246,13 +266,17 @@ export class NotificationPushService {
     }
     if (kind === 'followed_post') {
       return {
-        title: `${actorName} shared a new post`,
+        title: titleFromFallback
+          ? `${actorName} ${titleFromFallback}`
+          : `${actorName} posted`,
         body: snippet ?? 'Open to read it.',
       };
     }
     if (kind === 'checkin_post') {
       return {
-        title: `${actorName} checked in`,
+        title: titleFromFallback
+          ? `${actorName} ${titleFromFallback}`
+          : `${actorName} checked in`,
         body: snippet ?? 'Open to see their check-in.',
       };
     }
@@ -1017,15 +1041,43 @@ export class NotificationPushService {
     return null;
   }
 
-  private pushSubtitle(kind: NotificationKind, groupName?: string | null): string | null {
+  /**
+   * Lock-screen subtitle for APNs / web push.
+   *
+   * iOS Communication notifications (NSE + INSendMessageIntent) replace the alert
+   * title with the actor's display name. The verb/context therefore has to live here
+   * — otherwise a check-in looks like a bare post body under someone's name.
+   */
+  private pushSubtitle(
+    kind: NotificationKind,
+    groupName?: string | null,
+    fallbackTitle?: string | null,
+    subjectArticleId?: string | null,
+  ): string | null {
     const group = (groupName ?? '').trim();
+    const action = sentenceCaseAction(fallbackTitle ?? '');
+
+    if (group && action) return actionWithGroupName(action, group);
     if (group) return group;
-    if (kind === 'comment') return 'Reply to your post';
-    if (kind === 'mention') return 'Mentioned you in a post';
-    if (kind === 'follow') return 'New follower';
-    if (kind === 'boost' || kind === 'repost') return 'Activity on your post';
-    if (kind === 'followed_post' || kind === 'checkin_post') return 'New post';
-    if (kind === 'status_update') return 'Status update';
+    if (action) return action;
+
+    if (kind === 'comment') {
+      return subjectArticleId ? 'Replied to your article' : 'Replied to your post';
+    }
+    if (kind === 'mention') {
+      return subjectArticleId ? 'Mentioned you in an article' : 'Mentioned you';
+    }
+    if (kind === 'follow') return 'Followed you';
+    if (kind === 'boost') {
+      return subjectArticleId ? 'Boosted your article' : 'Boosted your post';
+    }
+    if (kind === 'repost') return 'Reposted your post';
+    if (kind === 'followed_post') return 'Posted';
+    if (kind === 'checkin_post') return 'Checked in';
+    if (kind === 'status_update') return 'Updated their status';
+    if (kind === 'nudge') return 'Nudged you';
+    if (kind === 'followed_article') return 'Published an article';
+    if (kind === 'message') return 'Sent you a message';
     return null;
   }
 
@@ -1148,7 +1200,12 @@ export class NotificationPushService {
         icon,
         avatarUrl: icon || currentGroup?.avatarImageUrl?.trim() || null,
         mediaUrl,
-        subtitle: this.pushSubtitle(kind, currentGroup?.name),
+        subtitle: this.pushSubtitle(
+          kind,
+          currentGroup?.name,
+          params.fallbackTitle ?? null,
+          params.subjectArticleId ?? null,
+        ),
         threadId,
         category: this.pushCategory(kind, Boolean(postId)),
         actorUsername: actor?.username ?? null,
