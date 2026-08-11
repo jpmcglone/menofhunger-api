@@ -98,6 +98,11 @@ export class PostsDiscoverMoreService {
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
 
+    // Never surface the viewer's own posts in "Discover more" — even one self-post
+    // breaks the "look elsewhere" mental model. Prefer a short list over a self hit.
+    const excludedAuthorIds = new Set(blockedAuthorIds);
+    if (viewerUserId) excludedAuthorIds.add(viewerUserId);
+
     const followingRows = viewerUserId
       ? await this.loadFollowedAuthorCandidateRows({
           viewerUserId,
@@ -123,7 +128,9 @@ export class PostsDiscoverMoreService {
               ...excludeCommunityGroupPostsWhere(),
               ...userNotBannedWhere(),
               visibility: { in: allowed },
-              ...(blockedAuthorIds.size ? { userId: { notIn: [...blockedAuthorIds] } } : {}),
+              ...(excludedAuthorIds.size
+                ? { userId: { notIn: [...excludedAuthorIds] } }
+                : {}),
             },
             select: {
               id: true,

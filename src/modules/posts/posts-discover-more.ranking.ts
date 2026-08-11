@@ -77,7 +77,7 @@ export function scoreDiscoverCandidate(
   // Soft discovery nudge: prefer unseen, but never hard-exclude seen.
   const unseenBoost =
     viewer && !viewer.viewedPostIds.has(c.id) ? 1.2 : 0;
-  // Own posts rarely feel like "discover".
+  // Defense in depth: request path hard-excludes own posts; keep a demote if one slips in.
   const ownPostDemote = viewer && c.userId === viewer.viewerUserId ? 2.0 : 0;
   // Seed author is already on-screen; branch out slightly.
   const seedAuthorDemote = c.userId === seed.authorUserId ? 0.35 : 0;

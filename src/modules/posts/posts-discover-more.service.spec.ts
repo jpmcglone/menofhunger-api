@@ -140,12 +140,32 @@ describe('PostsDiscoverMoreService', () => {
     const metaArgs = metaFindMany.mock.calls[0]?.[0] as { where?: Record<string, unknown> } | undefined;
     expect(metaArgs?.where).toMatchObject({
       ...userNotBannedWhere(),
-      userId: { notIn: ['blocked-user'] },
+      // Blocked authors + the viewer themselves (never show your own posts in Discover).
+      userId: { notIn: expect.arrayContaining(['blocked-user', 'viewer']) },
       isDraft: false,
       parentId: null,
       communityGroupId: null,
       deletedAt: null,
     });
+  });
+
+  it('hard-excludes the viewer own posts even when they are the only cached candidates', async () => {
+    const { service, metaFindMany } = makeService({
+      cachedIds: ['mine-1', 'mine-2'],
+      metaRows: [], // prisma filter drops them
+    });
+
+    const result = await service.listDiscoverMore({
+      viewerUserId: 'viewer',
+      postId: 'seed',
+      limit: 8,
+      cursor: null,
+    });
+
+    expect(result.posts).toEqual([]);
+    expect(metaFindMany).toHaveBeenCalled();
+    const metaArgs = metaFindMany.mock.calls[0]?.[0] as { where?: { userId?: { notIn?: string[] } } };
+    expect(metaArgs?.where?.userId?.notIn).toContain('viewer');
   });
 
   it('loads PostView rows for soft unseen ranking when authenticated', async () => {
