@@ -26,6 +26,7 @@ import {
 
 const BUCKET_TAKE = 20;
 const CACHED_ID_CAP = 80;
+const FOLLOWED_AUTHOR_SAMPLE = 100;
 
 type SeedRow = {
   id: string;
@@ -36,6 +37,15 @@ type SeedRow = {
   hashtags: string[];
   rootId: string | null;
   parentId: string | null;
+};
+
+type CandidateMetaRow = {
+  id: string;
+  userId: string;
+  topics: string[];
+  hashtags: string[];
+  trendingScore: number | null;
+  createdAt: Date;
 };
 
 /**
@@ -86,12 +96,25 @@ export class PostsDiscoverMoreService {
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
 
-    // Load lightweight rows for viewer re-rank + visibility/block filter.
+    const followingRows = viewerUserId
+      ? await this.loadFollowedAuthorCandidateRows({
+          viewerUserId,
+          seed,
+          blockedAuthorIds,
+          excludeIds: cachedIds,
+        })
+      : [];
+
+    const candidateIds = Array.from(
+      new Set([...cachedIds, ...followingRows.map((r) => r.id)]),
+    );
+
+    // Load lightweight rows for viewer re-rank + visibility/block/ban filter.
     const metaRows =
-      cachedIds.length > 0
+      candidateIds.length > 0
         ? await this.prisma.post.findMany({
             where: {
-              id: { in: cachedIds },
+              id: { in: candidateIds },
               ...notDeletedWhere(),
               isDraft: false,
               parentId: null,
@@ -112,21 +135,26 @@ export class PostsDiscoverMoreService {
         : [];
 
     const metaById = new Map(metaRows.map((r) => [r.id, r]));
-    // Preserve cache order, drop filtered-out ids.
-    const visibleOrdered = cachedIds.filter((id) => metaById.has(id));
+    // Preserve cache order, then append any following-only ids that survived filters.
+    const visibleOrdered = [
+      ...cachedIds.filter((id) => metaById.has(id)),
+      ...followingRows.map((r) => r.id).filter((id) => metaById.has(id) && !cachedIds.includes(id)),
+    ];
 
-    const [followedAuthorIds, followedTopics] = viewerUserId
+    const authorIdsForFollowCheck = metaRows.map((r) => r.userId);
+    const [followedAuthorIds, followedTopics, viewedPostIds] = viewerUserId
       ? await Promise.all([
-          this.loadFollowedAuthorsAmong(
-            viewerUserId,
-            metaRows.map((r) => r.userId),
-          ),
+          this.loadFollowedAuthorsAmong(viewerUserId, authorIdsForFollowCheck),
           this.loadFollowedTopics(viewerUserId),
+          this.loadViewedPostIds(viewerUserId, visibleOrdered),
         ])
-      : [new Set<string>(), new Set<string>()];
+      : [new Set<string>(), new Set<string>(), new Set<string>()];
 
+    const followingBucketIds = new Set(followingRows.map((r) => r.id));
     const candidates: DiscoverCandidate[] = visibleOrdered.map((id) => {
       const r = metaById.get(id)!;
+      const buckets: DiscoverCandidate['buckets'] = [];
+      if (followingBucketIds.has(id)) buckets.push('following');
       return {
         id: r.id,
         userId: r.userId,
@@ -134,7 +162,7 @@ export class PostsDiscoverMoreService {
         hashtags: Array.isArray(r.hashtags) ? r.hashtags : [],
         trendingScore: r.trendingScore ?? 0,
         createdAt: r.createdAt,
-        buckets: [],
+        buckets,
       };
     });
 
@@ -142,7 +170,12 @@ export class PostsDiscoverMoreService {
       candidates,
       seed: signals,
       viewer: viewerUserId
-        ? { followedAuthorIds, followedTopics }
+        ? {
+            viewerUserId,
+            followedAuthorIds,
+            followedTopics,
+            viewedPostIds,
+          }
         : null,
       maxPerAuthor: 2,
     });
@@ -344,6 +377,57 @@ export class PostsDiscoverMoreService {
     return ranked.slice(0, CACHED_ID_CAP);
   }
 
+  /**
+   * Request-path bucket: recent public posts from people the viewer follows.
+   * Kept off the shared Redis cache so it stays viewer-specific.
+   */
+  private async loadFollowedAuthorCandidateRows(params: {
+    viewerUserId: string;
+    seed: SeedRow;
+    blockedAuthorIds: Set<string>;
+    excludeIds: string[];
+  }): Promise<CandidateMetaRow[]> {
+    const follows = await this.prisma.follow.findMany({
+      where: {
+        followerId: params.viewerUserId,
+        ...(params.blockedAuthorIds.size
+          ? { followingId: { notIn: [...params.blockedAuthorIds] } }
+          : {}),
+      },
+      select: { followingId: true },
+      orderBy: { createdAt: 'desc' },
+      take: FOLLOWED_AUTHOR_SAMPLE,
+    });
+    const authorIds = follows
+      .map((f) => f.followingId)
+      .filter((id) => id && id !== params.seed.userId && id !== params.viewerUserId);
+    if (!authorIds.length) return [];
+
+    const excludeIds = Array.from(
+      new Set([...params.excludeIds, ...this.threadExcludeIds(params.seed)]),
+    );
+
+    return this.prisma.post.findMany({
+      where: {
+        AND: [
+          this.baseCandidateWhere(params.seed),
+          { userId: { in: authorIds } },
+          ...(excludeIds.length ? [{ id: { notIn: excludeIds } }] : []),
+        ],
+      },
+      select: {
+        id: true,
+        userId: true,
+        topics: true,
+        hashtags: true,
+        trendingScore: true,
+        createdAt: true,
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: BUCKET_TAKE,
+    });
+  }
+
   private async loadFollowedAuthorsAmong(viewerUserId: string, authorIds: string[]): Promise<Set<string>> {
     const ids = [...new Set(authorIds.map((id) => id.trim()).filter(Boolean))];
     if (!ids.length) return new Set();
@@ -361,5 +445,15 @@ export class PostsDiscoverMoreService {
       take: 100,
     });
     return new Set(rows.map((r) => r.topic));
+  }
+
+  private async loadViewedPostIds(viewerUserId: string, postIds: string[]): Promise<Set<string>> {
+    const ids = [...new Set(postIds.map((id) => id.trim()).filter(Boolean))];
+    if (!ids.length) return new Set();
+    const rows = await this.prisma.postView.findMany({
+      where: { userId: viewerUserId, postId: { in: ids } },
+      select: { postId: true },
+    });
+    return new Set(rows.map((r) => r.postId));
   }
 }

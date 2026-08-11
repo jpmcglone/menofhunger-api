@@ -4,6 +4,7 @@ import {
   rankDiscoverCandidates,
   scoreDiscoverCandidate,
   type DiscoverCandidate,
+  type DiscoverViewerSignals,
 } from './posts-discover-more.ranking';
 
 function cand(partial: Partial<DiscoverCandidate> & { id: string }): DiscoverCandidate {
@@ -15,6 +16,15 @@ function cand(partial: Partial<DiscoverCandidate> & { id: string }): DiscoverCan
     createdAt: partial.createdAt ?? new Date('2026-08-01T00:00:00.000Z'),
     buckets: partial.buckets ?? ['topic'],
     id: partial.id,
+  };
+}
+
+function viewer(partial?: Partial<DiscoverViewerSignals>): DiscoverViewerSignals {
+  return {
+    viewerUserId: partial?.viewerUserId ?? 'viewer',
+    followedAuthorIds: partial?.followedAuthorIds ?? new Set(),
+    followedTopics: partial?.followedTopics ?? new Set(),
+    viewedPostIds: partial?.viewedPostIds ?? new Set(),
   };
 }
 
@@ -47,13 +57,52 @@ describe('posts-discover-more.ranking', () => {
     const boosted = scoreDiscoverCandidate(
       cand({ id: '1', topics: ['faith'], userId: 'u1' }),
       seed,
-      {
+      viewer({
         followedAuthorIds: new Set(['u1']),
         followedTopics: new Set(['faith']),
-      },
+      }),
       nowMs,
     );
     expect(boosted).toBeGreaterThan(base);
+  });
+
+  it('boosts unseen posts over already-viewed posts for the viewer', () => {
+    const unseen = scoreDiscoverCandidate(
+      cand({ id: 'unseen', topics: ['faith'] }),
+      seed,
+      viewer({ viewedPostIds: new Set() }),
+      nowMs,
+    );
+    const seen = scoreDiscoverCandidate(
+      cand({ id: 'seen', topics: ['faith'] }),
+      seed,
+      viewer({ viewedPostIds: new Set(['seen']) }),
+      nowMs,
+    );
+    expect(unseen).toBeGreaterThan(seen);
+  });
+
+  it('soft-demotes the viewer own posts and the seed author', () => {
+    const other = scoreDiscoverCandidate(
+      cand({ id: '1', topics: ['faith'], userId: 'other' }),
+      seed,
+      viewer({ viewerUserId: 'viewer' }),
+      nowMs,
+    );
+    const own = scoreDiscoverCandidate(
+      cand({ id: '2', topics: ['faith'], userId: 'viewer' }),
+      seed,
+      viewer({ viewerUserId: 'viewer' }),
+      nowMs,
+    );
+    const seedAuthor = scoreDiscoverCandidate(
+      cand({ id: '3', topics: ['faith'], userId: 'seed-author' }),
+      seed,
+      viewer({ viewerUserId: 'viewer' }),
+      nowMs,
+    );
+    expect(other).toBeGreaterThan(own);
+    expect(other).toBeGreaterThan(seedAuthor);
   });
 
   it('merges bucket tags and dedupes by id', () => {
@@ -61,8 +110,9 @@ describe('posts-discover-more.ranking', () => {
       cand({ id: 'a', buckets: ['hashtag'], topics: ['faith'] }),
       cand({ id: 'a', buckets: ['topic'], topics: ['faith', 'bible'] }),
       cand({ id: 'b', buckets: ['trending'] }),
+      cand({ id: 'c', buckets: ['following'] }),
     ]);
-    expect(merged).toHaveLength(2);
+    expect(merged).toHaveLength(3);
     const a = merged.find((c) => c.id === 'a')!;
     expect(a.buckets.sort()).toEqual(['hashtag', 'topic']);
     expect(a.topics).toEqual(['faith', 'bible']);
@@ -84,6 +134,20 @@ describe('posts-discover-more.ranking', () => {
     expect(ids.filter((id) => id === '1' || id === '2' || id === '3')).toHaveLength(2);
     expect(ids).toContain('4');
     expect(ids).not.toContain('3');
+  });
+
+  it('ranks unseen above equally related seen posts', () => {
+    const ids = rankDiscoverCandidates({
+      candidates: [
+        cand({ id: 'seen', topics: ['faith'], trendingScore: 5 }),
+        cand({ id: 'unseen', topics: ['faith'], trendingScore: 5 }),
+      ],
+      seed,
+      viewer: viewer({ viewedPostIds: new Set(['seen']) }),
+      nowMs,
+    });
+    expect(ids[0]).toBe('unseen');
+    expect(ids).toContain('seen');
   });
 
   it('paginates with last-id cursor', () => {

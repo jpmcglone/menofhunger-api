@@ -11,7 +11,7 @@ export type DiscoverCandidate = {
   trendingScore: number;
   createdAt: Date;
   /** Which buckets contributed this row (for debugging / tests). */
-  buckets: Array<'hashtag' | 'topic' | 'author' | 'trending'>;
+  buckets: Array<'hashtag' | 'topic' | 'author' | 'trending' | 'following'>;
 };
 
 export type DiscoverSeedSignals = {
@@ -21,8 +21,11 @@ export type DiscoverSeedSignals = {
 };
 
 export type DiscoverViewerSignals = {
+  viewerUserId: string;
   followedAuthorIds: Set<string>;
   followedTopics: Set<string>;
+  /** Posts the viewer has already marked viewed (soft demote / unseen boost). */
+  viewedPostIds: Set<string>;
 };
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -53,6 +56,14 @@ export function scoreDiscoverCandidate(
   const ageDays = Math.max(0, (nowMs - c.createdAt.getTime()) / MS_PER_DAY);
   const recency = Math.exp(-ageDays / 14); // ~half-life 10 days
 
+  // Soft discovery nudge: prefer unseen, but never hard-exclude seen.
+  const unseenBoost =
+    viewer && !viewer.viewedPostIds.has(c.id) ? 1.2 : 0;
+  // Own posts rarely feel like "discover".
+  const ownPostDemote = viewer && c.userId === viewer.viewerUserId ? 2.0 : 0;
+  // Seed author is already on-screen; branch out slightly.
+  const seedAuthorDemote = c.userId === seed.authorUserId ? 0.35 : 0;
+
   return (
     3.0 * hashtagOverlap +
     2.0 * topicOverlap +
@@ -60,7 +71,9 @@ export function scoreDiscoverCandidate(
     1.0 * topicFollowOverlap +
     0.8 * Math.log1p(Math.max(0, c.trendingScore)) +
     0.5 * recency +
-    (c.userId === seed.authorUserId ? 0.3 : 0)
+    unseenBoost -
+    ownPostDemote -
+    seedAuthorDemote
   );
 }
 
