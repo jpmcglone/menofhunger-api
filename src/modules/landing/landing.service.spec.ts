@@ -85,8 +85,11 @@ const DEFAULT_STATS_ROW = {
   public_posts: 30n,
   verified_posts: 10n,
   premium_posts: 2n,
+  original_posts: 28n,
+  reply_posts: 14n,
   premium_men: 5n,
   verified_men: 27n,
+  contributors: 18n,
   total_views: 1200n,
   premium_views: 400n,
   verified_views: 500n,
@@ -145,8 +148,15 @@ describe('LandingService', () => {
     const { service, cache } = makeService();
     const snapshot = await service.getSnapshot(NOW);
 
-    expect(snapshot.stats.men).toEqual({ premium: 5, verified: 27, total: 32 });
-    expect(snapshot.stats.posts).toEqual({ public: 30, verified: 10, premium: 2, total: 42 });
+    expect(snapshot.stats.men).toEqual({ premium: 5, verified: 27, total: 32, contributors: 18 });
+    expect(snapshot.stats.posts).toEqual({
+      public: 30,
+      verified: 10,
+      premium: 2,
+      original: 28,
+      replies: 14,
+      total: 42,
+    });
     // guest = total − (premium + verified + unverified) = 1200 − 1100
     expect(snapshot.stats.views).toEqual({
       premium: 400,
@@ -271,8 +281,15 @@ describe('LandingService', () => {
     const prisma = makePrisma({ statsRows: [] });
     const { service } = makeService(prisma);
     const snapshot = await service.getSnapshot(NOW);
-    expect(snapshot.stats.men).toEqual({ premium: 0, verified: 0, total: 0 });
-    expect(snapshot.stats.posts).toEqual({ public: 0, verified: 0, premium: 0, total: 0 });
+    expect(snapshot.stats.men).toEqual({ premium: 0, verified: 0, total: 0, contributors: 0 });
+    expect(snapshot.stats.posts).toEqual({
+      public: 0,
+      verified: 0,
+      premium: 0,
+      original: 0,
+      replies: 0,
+      total: 0,
+    });
     expect(snapshot.stats.views).toEqual({
       premium: 0,
       verified: 0,

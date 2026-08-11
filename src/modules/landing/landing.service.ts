@@ -42,8 +42,11 @@ type StatsRow = {
   public_posts: bigint;
   verified_posts: bigint;
   premium_posts: bigint;
+  original_posts: bigint;
+  reply_posts: bigint;
   premium_men: bigint;
   verified_men: bigint;
+  contributors: bigint;
   total_views: bigint;
   premium_views: bigint;
   verified_views: bigint;
@@ -90,8 +93,11 @@ export class LandingService {
         SELECT posts.public_posts,
                posts.verified_posts,
                posts.premium_posts,
+               posts.original_posts,
+               posts.reply_posts,
                men.premium_men,
                men.verified_men,
+               contributors.contributors,
                view_totals.total_views,
                view_tiers.premium_views,
                view_tiers.verified_views,
@@ -100,7 +106,15 @@ export class LandingService {
           SELECT
             COUNT(*) FILTER (WHERE p."visibility" = 'public')       AS public_posts,
             COUNT(*) FILTER (WHERE p."visibility" = 'verifiedOnly') AS verified_posts,
-            COUNT(*) FILTER (WHERE p."visibility" = 'premiumOnly')  AS premium_posts
+            COUNT(*) FILTER (WHERE p."visibility" = 'premiumOnly')  AS premium_posts,
+            COUNT(*) FILTER (
+              WHERE p."parentId" IS NULL
+                AND p."visibility" IN ('public', 'verifiedOnly', 'premiumOnly')
+            ) AS original_posts,
+            COUNT(*) FILTER (
+              WHERE p."parentId" IS NOT NULL
+                AND p."visibility" IN ('public', 'verifiedOnly', 'premiumOnly')
+            ) AS reply_posts
           FROM "Post" p
           JOIN "User" u ON u.id = p."userId"
           WHERE p."deletedAt" IS NULL
@@ -120,6 +134,20 @@ export class LandingService {
             AND u."isOrganization" = false
             AND u."verifiedStatus" != 'none'
         ) men
+        CROSS JOIN (
+          -- Distinct verified men who authored ≥1 landing-eligible post/reply.
+          SELECT COUNT(DISTINCT p."userId")::bigint AS contributors
+          FROM "Post" p
+          JOIN "User" u ON u.id = p."userId"
+          WHERE p."deletedAt" IS NULL
+            AND p."isDraft" = false
+            AND p."kind" = 'regular'
+            AND p."visibility" IN ('public', 'verifiedOnly', 'premiumOnly')
+            AND u."bannedAt" IS NULL
+            AND u."usernameIsSet" = true
+            AND u."isOrganization" = false
+            AND u."verifiedStatus" != 'none'
+        ) contributors
         CROSS JOIN (
           -- Denormalized unique viewers (person×post), same semantics as Post.viewerCount.
           SELECT COALESCE(SUM(p."viewerCount"), 0)::bigint AS total_views
@@ -373,26 +401,34 @@ export class LandingService {
     const publicPosts = Number(stats?.public_posts ?? 0);
     const verifiedPosts = Number(stats?.verified_posts ?? 0);
     const premiumPosts = Number(stats?.premium_posts ?? 0);
+    const originalPosts = Number(stats?.original_posts ?? 0);
+    const replyPosts = Number(stats?.reply_posts ?? 0);
     const premiumMen = Number(stats?.premium_men ?? 0);
     const verifiedMen = Number(stats?.verified_men ?? 0);
+    const contributors = Number(stats?.contributors ?? 0);
     const totalViews = Math.max(0, Math.floor(Number(stats?.total_views ?? 0)));
     const premiumViews = Math.max(0, Math.floor(Number(stats?.premium_views ?? 0)));
     const verifiedViews = Math.max(0, Math.floor(Number(stats?.verified_views ?? 0)));
     const unverifiedViews = Math.max(0, Math.floor(Number(stats?.unverified_views ?? 0)));
     const guestViews = Math.max(0, totalViews - (premiumViews + verifiedViews + unverifiedViews));
+    const menTotal = premiumMen + verifiedMen;
+    const postsTotal = publicPosts + verifiedPosts + premiumPosts;
 
     return {
       stats: {
         men: {
           premium: premiumMen,
           verified: verifiedMen,
-          total: premiumMen + verifiedMen,
+          total: menTotal,
+          contributors: Math.min(Math.max(0, contributors), menTotal),
         },
         posts: {
           public: publicPosts,
           verified: verifiedPosts,
           premium: premiumPosts,
-          total: publicPosts + verifiedPosts + premiumPosts,
+          original: originalPosts,
+          replies: replyPosts,
+          total: postsTotal,
         },
         views: {
           premium: premiumViews,

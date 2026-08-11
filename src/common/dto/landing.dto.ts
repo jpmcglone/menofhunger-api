@@ -9,6 +9,11 @@ export type LandingMenBreakdownDto = {
   verified: number;
   /** premium + verified. */
   total: number;
+  /**
+   * Distinct verified men who authored ≥1 landing-eligible post or reply
+   * (same post filters as `LandingPostBreakdownDto.total`).
+   */
+  contributors: number;
 };
 
 export type LandingPostBreakdownDto = {
@@ -18,7 +23,11 @@ export type LandingPostBreakdownDto = {
   verified: number;
   /** visibility = 'premiumOnly'. */
   premium: number;
-  /** public + verified + premium (onlyMe excluded). */
+  /** Top-level posts (parentId IS NULL). */
+  original: number;
+  /** Replies/comments (parentId IS NOT NULL). */
+  replies: number;
+  /** public + verified + premium (onlyMe excluded). Equals original + replies. */
   total: number;
 };
 
