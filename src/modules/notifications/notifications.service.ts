@@ -160,6 +160,10 @@ export class NotificationsService {
     return this.readState.markReadBySubject(...args);
   }
 
+  markReadBySubjects(...args: Parameters<NotificationReadStateService['markReadBySubjects']>) {
+    return this.readState.markReadBySubjects(...args);
+  }
+
   markCrewInviteResolved(...args: Parameters<NotificationReadStateService['markCrewInviteResolved']>) {
     return this.readState.markCrewInviteResolved(...args);
   }

@@ -81,9 +81,6 @@ function buildServices(prismaOverrides: Record<string, any>) {
   const preferences = new NotificationPreferencesService(prisma, noopCache);
   const apnsPush = new ApnsPushService(prisma, stubAppConfig, noopCache);
   const push = new NotificationPushService(prisma, stubAppConfig, stubPresence as any, preferences, apnsPush, noopCache);
-  const readState = new NotificationReadStateService(prisma, stubPresenceRealtime as any, stubPosthog as any, apnsPush);
-  const postVisibility = new PostVisibilityReadService(prisma, stubAppConfig, stubViewerContext as any);
-  const query = new NotificationQueryService(prisma, stubAppConfig, postVisibility, readState);
   // Stands in for the side-effects worker: runs the push handler inline so these tests keep
   // asserting the real push payload (url, coalesce tag) through the new dispatch seam.
   const sideEffects = {
@@ -91,6 +88,9 @@ function buildServices(prismaOverrides: Record<string, any>) {
       if (name === 'notification.push') void push.sendKindPushForActor(payload);
     },
   } as any;
+  const readState = new NotificationReadStateService(prisma, stubPresenceRealtime as any, stubPosthog as any, sideEffects);
+  const postVisibility = new PostVisibilityReadService(prisma, stubAppConfig, stubViewerContext as any);
+  const query = new NotificationQueryService(prisma, stubAppConfig, postVisibility, readState);
   const writer = new NotificationWriterService(prisma, stubPresenceRealtime as any, stubPresenceRedis as any, stubJobs as any, sideEffects, query, readState);
   const svc = new NotificationsService(preferences, push, apnsPush, readState, query, writer);
   return { svc, prisma, push };

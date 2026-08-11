@@ -131,3 +131,34 @@ describe('PresenceRedisStateService.sweepOfflineUsers', () => {
   });
 });
 
+describe('PresenceRedisStateService.isUserActivelyOnIos', () => {
+  it('returns false when idle', async () => {
+    const redis = {
+      duplicate: jest.fn(() => ({ subscribe: jest.fn(), on: jest.fn(), quit: jest.fn(), disconnect: jest.fn() })),
+      raw: jest.fn(() => ({ sismember: jest.fn(async () => 1) })),
+    } as any;
+    const service = new PresenceRedisStateService(redis, { presenceIdleDisconnectMinutes: jest.fn(() => 10) } as any, {} as any);
+    await expect(service.isUserActivelyOnIos('u1')).resolves.toBe(false);
+  });
+
+  it('returns true when non-idle and platforms include ios', async () => {
+    const redis = {
+      duplicate: jest.fn(() => ({ subscribe: jest.fn(), on: jest.fn(), quit: jest.fn(), disconnect: jest.fn() })),
+      raw: jest.fn(() => ({ sismember: jest.fn(async () => 0) })),
+    } as any;
+    const service = new PresenceRedisStateService(redis, { presenceIdleDisconnectMinutes: jest.fn(() => 10) } as any, {} as any);
+    jest.spyOn(service, 'platformsByUserIds').mockResolvedValue(new Map([['u1', ['web', 'ios']]]));
+    await expect(service.isUserActivelyOnIos('u1')).resolves.toBe(true);
+  });
+
+  it('returns false when only web is present', async () => {
+    const redis = {
+      duplicate: jest.fn(() => ({ subscribe: jest.fn(), on: jest.fn(), quit: jest.fn(), disconnect: jest.fn() })),
+      raw: jest.fn(() => ({ sismember: jest.fn(async () => 0) })),
+    } as any;
+    const service = new PresenceRedisStateService(redis, { presenceIdleDisconnectMinutes: jest.fn(() => 10) } as any, {} as any);
+    jest.spyOn(service, 'platformsByUserIds').mockResolvedValue(new Map([['u1', ['web']]]));
+    await expect(service.isUserActivelyOnIos('u1')).resolves.toBe(false);
+  });
+});
+

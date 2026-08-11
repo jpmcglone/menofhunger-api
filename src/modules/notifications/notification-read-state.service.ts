@@ -3,7 +3,7 @@ import { Prisma, type NotificationKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
-import { ApnsPushService } from './apns-push.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 
 export type NotificationUnreadByKind = Partial<Record<NotificationKind | 'all', number>>;
 
@@ -40,12 +40,23 @@ export class NotificationReadStateService {
     private readonly prisma: PrismaService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly posthog: PosthogService,
-    private readonly apnsPush: ApnsPushService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
-  /** Bell + groups undelivered → badge-only APNs (best-effort, never throws). */
-  private syncAppIconBadge(recipientUserId: string): void {
-    this.apnsPush.syncAppIconBadge(recipientUserId);
+  /** Queue badge-only APNs (debounced in the worker). Never throws. */
+  private dispatchBadgeSync(
+    recipientUserId: string,
+    hints?: { undeliveredBellCount?: number; undeliveredGroupsCount?: number },
+  ): void {
+    this.sideEffects.dispatch('notification.badge.sync', {
+      recipientUserId,
+      ...(typeof hints?.undeliveredBellCount === 'number'
+        ? { undeliveredBellCount: hints.undeliveredBellCount }
+        : {}),
+      ...(typeof hints?.undeliveredGroupsCount === 'number'
+        ? { undeliveredGroupsCount: hints.undeliveredGroupsCount }
+        : {}),
+    });
   }
 
   private emitBellUpdated(
@@ -53,7 +64,7 @@ export class NotificationReadStateService {
     payload: { undeliveredCount: number; clearedPostIds?: string[] },
   ): void {
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, payload);
-    this.syncAppIconBadge(recipientUserId);
+    this.dispatchBadgeSync(recipientUserId, { undeliveredBellCount: payload.undeliveredCount });
   }
 
   undeliveredBellWhere(recipientUserId: string): Prisma.NotificationWhereInput {
@@ -148,7 +159,7 @@ export class NotificationReadStateService {
     try {
       const { total, byGroupId } = await this.getGroupsUnread(recipientUserId);
       this.presenceRealtime.emitGroupsUnreadChanged(recipientUserId, { total, byGroupId });
-      this.syncAppIconBadge(recipientUserId);
+      this.dispatchBadgeSync(recipientUserId, { undeliveredGroupsCount: total });
     } catch (err) {
       this.logger.debug(`[notifications] Failed to emit groups unread: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -160,16 +171,28 @@ export class NotificationReadStateService {
    * Read is set separately when the post is actually viewed on screen via `markReadBySubject({ postId })`.
    */
   async markGroupPostsDelivered(recipientUserId: string, groupId: string): Promise<void> {
-    await this.prisma.notification.updateMany({
-      where: {
-        recipientUserId,
-        kind: 'community_group_post',
-        subjectGroupId: groupId,
-        deliveredAt: null,
-      },
-      data: { deliveredAt: new Date() },
+    const deliveredRes = await this.prisma.$transaction(async (tx) => {
+      const res = await tx.notification.updateMany({
+        where: {
+          recipientUserId,
+          kind: 'community_group_post',
+          subjectGroupId: groupId,
+          deliveredAt: null,
+        },
+        data: { deliveredAt: new Date() },
+      });
+      if (res.count > 0) {
+        await tx.$executeRaw`
+          UPDATE "User"
+          SET "undeliveredGroupPostCount" = GREATEST(0, "undeliveredGroupPostCount" - ${res.count})
+          WHERE id = ${recipientUserId}
+        `;
+      }
+      return res.count;
     });
-    void this.emitGroupsUnreadForUser(recipientUserId);
+    if (deliveredRes > 0) {
+      void this.emitGroupsUnreadForUser(recipientUserId);
+    }
   }
 
   async markDelivered(recipientUserId: string): Promise<void> {
@@ -187,10 +210,17 @@ export class NotificationReadStateService {
         `;
       }
       // Also mark group-post badge rows as delivered (opening notifications clears all badges).
-      await tx.notification.updateMany({
+      const groupRes = await tx.notification.updateMany({
         where: { recipientUserId, kind: 'community_group_post', deliveredAt: null },
         data: { deliveredAt: new Date() },
       });
+      if (groupRes.count > 0) {
+        await tx.$executeRaw`
+          UPDATE "User"
+          SET "undeliveredGroupPostCount" = GREATEST(0, "undeliveredGroupPostCount" - ${groupRes.count})
+          WHERE id = ${recipientUserId}
+        `;
+      }
       // Return accurate count from actual rows (handles drifted counters).
       return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
     });
@@ -243,6 +273,11 @@ export class NotificationReadStateService {
     },
   ): Promise<void> {
     const { postId, userId, articleId, crewId, groupId } = params;
+    // Batch path for post-only clears (views, detail page).
+    if (postId && !userId && !articleId && !crewId && !groupId) {
+      await this.markReadBySubjects(recipientUserId, [postId]);
+      return;
+    }
     if (!postId && !userId && !articleId && !crewId && !groupId) return;
 
     // Back-compat: followed_post notifications were historically keyed only by actorUserId.
@@ -291,10 +326,14 @@ export class NotificationReadStateService {
         data: { readAt: now },
       });
 
-      // Also mark as delivered (seen) when visiting the post/profile, then emit updated count.
-      const deliveredWhere = { ...where, deliveredAt: null } as const;
+      // Deliver bell-counted matching rows (do not require readAt:null — we just set it).
       const deliveredRes = await tx.notification.updateMany({
-        where: deliveredWhere,
+        where: {
+          recipientUserId,
+          deliveredAt: null,
+          kind: { notIn: BELL_EXCLUDED_KINDS },
+          ...(or.length ? { OR: or } : {}),
+        },
         data: { deliveredAt: now },
       });
       if (deliveredRes.count > 0) {
@@ -314,8 +353,96 @@ export class NotificationReadStateService {
     });
     // markReadBySubject can clear comment notifications (e.g. opening the post via tap).
     void this.emitWaitingCountForUser(recipientUserId);
-    // Viewing a post also marks any community_group_post badge row for that post as read.
-    if (postId) void this.emitGroupsUnreadForUser(recipientUserId);
+  }
+
+  /**
+   * Mark notifications for many posts as read+seen in one shot (feed view batches).
+   * Single updateMany, one notifications:updated with clearedPostIds, one badge.sync.
+   */
+  async markReadBySubjects(recipientUserId: string, postIds: string[]): Promise<void> {
+    const uid = (recipientUserId ?? '').trim();
+    const ids = [...new Set((postIds ?? []).map((id) => (id ?? '').trim()).filter(Boolean))];
+    if (!uid || ids.length === 0) return;
+
+    const postOr = [{ subjectPostId: { in: ids } }, { actorPostId: { in: ids } }] as const;
+
+    const { undeliveredCount, groupsDelivered, readChanged, bellDelivered } =
+      await this.prisma.$transaction(async (tx) => {
+        const now = new Date();
+        const readRes = await tx.notification.updateMany({
+          where: {
+            recipientUserId: uid,
+            readAt: null,
+            OR: [...postOr],
+          },
+          data: { readAt: now },
+        });
+
+        const deliveredBell = await tx.notification.updateMany({
+          where: {
+            recipientUserId: uid,
+            deliveredAt: null,
+            kind: { notIn: BELL_EXCLUDED_KINDS },
+            OR: [...postOr],
+          },
+          data: { deliveredAt: now },
+        });
+        if (deliveredBell.count > 0) {
+          await tx.$executeRaw`
+            UPDATE "User"
+            SET "undeliveredNotificationCount" = GREATEST(0, "undeliveredNotificationCount" - ${deliveredBell.count})
+            WHERE id = ${uid}
+          `;
+        }
+
+        // Viewing a post also marks matching community_group_post badge rows delivered+read.
+        const deliveredGroups = await tx.notification.updateMany({
+          where: {
+            recipientUserId: uid,
+            kind: 'community_group_post',
+            deliveredAt: null,
+            OR: [...postOr],
+          },
+          data: { deliveredAt: now, readAt: now },
+        });
+        if (deliveredGroups.count > 0) {
+          await tx.$executeRaw`
+            UPDATE "User"
+            SET "undeliveredGroupPostCount" = GREATEST(0, "undeliveredGroupPostCount" - ${deliveredGroups.count})
+            WHERE id = ${uid}
+          `;
+        }
+
+        // Skip expensive count when nothing changed (idempotent re-views).
+        if (readRes.count === 0 && deliveredBell.count === 0 && deliveredGroups.count === 0) {
+          return {
+            undeliveredCount: 0,
+            groupsDelivered: 0,
+            readChanged: 0,
+            bellDelivered: 0,
+          };
+        }
+
+        const undelivered = await tx.notification.count({ where: this.undeliveredBellWhere(uid) });
+        return {
+          undeliveredCount: undelivered,
+          groupsDelivered: deliveredGroups.count,
+          readChanged: readRes.count,
+          bellDelivered: deliveredBell.count,
+        };
+      });
+
+    // Idempotent re-views: no socket/badge work when nothing was unread/undelivered.
+    if (readChanged === 0 && bellDelivered === 0 && groupsDelivered === 0) return;
+
+    this.emitBellUpdated(uid, {
+      undeliveredCount,
+      clearedPostIds: ids,
+    });
+    void this.emitWaitingCountForUser(uid);
+    if (groupsDelivered > 0) {
+      void this.emitGroupsUnreadForUser(uid);
+    }
   }
 
   /**

@@ -93,26 +93,17 @@ export class ApnsPushService {
 
   /**
    * App icon badge = bell undelivered + groups undelivered — matches iOS
-   * `notificationCount + groupsUnreadTotal`.
+   * `notificationCount + groupsUnreadTotal`. Uses denormalized User counters (O(1)).
    */
   async computeAppIconBadge(userId: string): Promise<number> {
     const uid = (userId ?? '').trim();
     if (!uid) return 0;
-    const [user, groupsUnread] = await Promise.all([
-      this.prisma.user.findUnique({
-        where: { id: uid },
-        select: { undeliveredNotificationCount: true },
-      }),
-      this.prisma.notification.count({
-        where: {
-          recipientUserId: uid,
-          kind: 'community_group_post',
-          deliveredAt: null,
-        },
-      }),
-    ]);
+    const user = await this.prisma.user.findUnique({
+      where: { id: uid },
+      select: { undeliveredNotificationCount: true, undeliveredGroupPostCount: true },
+    });
     const bell = Math.max(0, Math.floor(Number(user?.undeliveredNotificationCount) || 0));
-    const groups = Math.max(0, Math.floor(groupsUnread || 0));
+    const groups = Math.max(0, Math.floor(Number(user?.undeliveredGroupPostCount) || 0));
     return bell + groups;
   }
 

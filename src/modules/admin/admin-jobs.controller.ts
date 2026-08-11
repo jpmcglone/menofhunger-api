@@ -25,9 +25,11 @@ const hashtagBackfillSchema = z.object({
 });
 
 const postsTopicsBackfillSchema = z.object({
-  /** When true, recompute topics even if already set. */
+  /** When true, recompute topics even if already set (drains the lookback window). */
   wipeExisting: queryBoolean().optional(),
-  /** Batch size (posts per run). */
+  /** When true, loop batches until no matching posts remain (implied by wipeExisting). */
+  runUntilEmpty: queryBoolean().optional(),
+  /** Batch size (posts per batch). */
   batchSize: z.coerce.number().int().min(10).max(5_000).optional(),
   /** How far back to scan for posts. */
   lookbackDays: z.coerce.number().int().min(1).max(10_000).optional(),
@@ -175,6 +177,10 @@ export class AdminJobsController {
     return { data: { ok: true, jobId: String(job.id) } };
   }
 
+  /**
+   * One-shot after deploy (rebuild topics for discover-more):
+   * POST { wipeExisting: true, runUntilEmpty: true, batchSize: 500, lookbackDays: 3650 }
+   */
   @Post('posts-topics-backfill')
   async runPostsTopicsBackfill(@Body() body: unknown) {
     const parsed = postsTopicsBackfillSchema.parse(body ?? {});
@@ -182,6 +188,7 @@ export class AdminJobsController {
       JOBS.postsTopicsBackfill,
       {
       wipeExisting: Boolean(parsed.wipeExisting),
+      runUntilEmpty: Boolean(parsed.runUntilEmpty),
       batchSize: parsed.batchSize ?? undefined,
       lookbackDays: parsed.lookbackDays ?? undefined,
       },

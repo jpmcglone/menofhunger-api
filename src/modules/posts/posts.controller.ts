@@ -1243,6 +1243,29 @@ export class PostsController {
     return { data: dtos, pagination: { nextCursor: result.nextCursor } };
   }
 
+  @UseGuards(OptionalAuthGuard)
+  @Throttle(readThrottle)
+  @Get(':id/discover-more')
+  async listDiscoverMore(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('id') id: string,
+    @Query() query: unknown,
+    @Res({ passthrough: true }) httpRes: Response,
+  ) {
+    const { cursor, limit } = z
+      .object({ cursor: z.string().optional(), limit: z.coerce.number().int().min(1).max(50).optional() })
+      .parse(query);
+    const viewerUserId = userId ?? null;
+    const result = await this.posts.listDiscoverMore({
+      viewerUserId,
+      postId: id,
+      limit: limit ?? 8,
+      cursor: cursor ?? null,
+    });
+    setReadCache(httpRes, { viewerUserId });
+    return { data: result.posts, pagination: { nextCursor: result.nextCursor } };
+  }
+
   @UseGuards(AuthGuard)
   @Throttle({
     default: {

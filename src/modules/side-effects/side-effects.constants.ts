@@ -111,6 +111,15 @@ export interface SideEffectPayloads {
     sourceLabel?: string;
   };
   /**
+   * Debounced badge-only APNs sync after bell/groups undelivered counts change.
+   * Optional hints let the worker skip a recompute when both are known and unchanged.
+   */
+  'notification.badge.sync': {
+    recipientUserId: string;
+    undeliveredBellCount?: number;
+    undeliveredGroupsCount?: number;
+  };
+  /**
    * One chunk of a large notification fan-out. Large recipient sets are split into child
    * jobs so a single job never holds the worker (or the Prisma pool) for minutes.
    */

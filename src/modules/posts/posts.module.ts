@@ -17,6 +17,7 @@ import { PostsEngagementService } from './posts-engagement.service';
 import { PostsRankingService } from './posts-ranking.service';
 import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
 import { PostsFeedQueryService } from './posts-feed-query.service';
+import { PostsDiscoverMoreService } from './posts-discover-more.service';
 import { PostsMutationService } from './posts-mutation.service';
 import { PostsSideEffectsHandler } from './posts-side-effects.handler';
 import { ScheduledPostsService } from './scheduled-posts.service';
@@ -36,6 +37,7 @@ import { ScheduledPostsPublishCron } from './scheduled-posts-publish.cron';
     PostsRankingService,
     PostsViewerEnrichmentService,
     PostsFeedQueryService,
+    PostsDiscoverMoreService,
     PostsMutationService,
     // Lives in this module (not the worker-only consumers module) so the handler resolves in
     // every process — that's what lets SideEffectsService fall back to running it in-process

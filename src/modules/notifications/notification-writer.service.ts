@@ -571,12 +571,16 @@ export class NotificationWriterService {
     // `undeliveredNotificationCount`, so deleting them must NOT decrement it
     // (that would drift the bell badge). They drive the Groups badge instead.
     const undeliveredDeletedByRecipient = new Map<string, number>();
+    const undeliveredGroupDeletedByRecipient = new Map<string, number>();
     const groupBadgeRecipients = new Set<string>();
     for (const r of rows) {
       const uid = (r.recipientUserId ?? '').trim();
       if (!uid) continue;
       if (r.kind === 'community_group_post') {
         groupBadgeRecipients.add(uid);
+        if (r.deliveredAt == null) {
+          undeliveredGroupDeletedByRecipient.set(uid, (undeliveredGroupDeletedByRecipient.get(uid) ?? 0) + 1);
+        }
         continue;
       }
       if (r.deliveredAt != null) continue;
@@ -595,6 +599,13 @@ export class NotificationWriterService {
           select: { undeliveredNotificationCount: true },
         });
         updates.set(uid, user.undeliveredNotificationCount);
+      }
+      for (const [uid, delta] of undeliveredGroupDeletedByRecipient) {
+        if (delta <= 0) continue;
+        await tx.user.update({
+          where: { id: uid },
+          data: { undeliveredGroupPostCount: { decrement: delta } },
+        });
       }
       return updates;
     });
@@ -1241,9 +1252,8 @@ export class NotificationWriterService {
    * excluded from the main notification bell + feed but ARE included in email nudges so
    * members who were offline when the post arrived still get notified.
    *
-   * Does NOT increment `undeliveredNotificationCount` (those are bell-only) and does NOT
-   * emit `notifications:new` or `notifications:updated`. Emits `groups:unreadChanged`
-   * per recipient so badges update in real time.
+   * Increments `undeliveredGroupPostCount` (not the bell counter) and emits
+   * `groups:unreadChanged` per recipient so badges update in real time.
    */
   async createGroupPostBadgeNotifications(params: {
     actorUserId: string;
@@ -1274,6 +1284,11 @@ export class NotificationWriterService {
           createdAt: now,
         })),
         skipDuplicates: true,
+      });
+      // New posts don't re-badge the same (recipient, post); increment is safe per recipient.
+      await this.prisma.user.updateMany({
+        where: { id: { in: slice } },
+        data: { undeliveredGroupPostCount: { increment: 1 } },
       });
     }
 

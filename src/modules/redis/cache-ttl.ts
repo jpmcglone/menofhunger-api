@@ -16,6 +16,8 @@ export const CacheTtl = {
   anonTopicsListSeconds: 60,
   anonTopicPostsSeconds: 30,
   anonSearchPostsSeconds: 30,
+  /** Post-context discover-more candidate id lists. */
+  discoverMoreIdsSeconds: 10 * 60,
 
   // External/shared caches.
   giphySeconds: 30,

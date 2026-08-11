@@ -349,6 +349,19 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
     }
   }
 
+  /**
+   * Cross-instance: true when the user has a non-idle iOS socket somewhere.
+   * Used to skip badge-only APNs (socket already drives the icon); web-only
+   * presence must NOT suppress iOS home-screen badge sync.
+   */
+  async isUserActivelyOnIos(userId: string): Promise<boolean> {
+    const uid = String(userId ?? '').trim();
+    if (!uid) return false;
+    if (await this.isIdle(uid)) return false;
+    const platforms = (await this.platformsByUserIds([uid])).get(uid) ?? [];
+    return platforms.includes('ios');
+  }
+
   async isOnline(userId: string): Promise<boolean> {
     const uid = String(userId ?? '').trim();
     if (!uid) return false;

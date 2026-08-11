@@ -63,7 +63,13 @@ export class PostViewsService {
    * (userId, postId) pair are safe and will not double-count.
    * Emits a WebSocket event if this is the first (unique) view.
    */
-  async markViewed(userId: string | null | undefined, postId: string, anonViewerId?: string | null, source?: string | null): Promise<void> {
+  async markViewed(
+    userId: string | null | undefined,
+    postId: string,
+    anonViewerId?: string | null,
+    source?: string | null,
+    opts?: { skipMarkRead?: boolean },
+  ): Promise<void> {
     const uid = (userId ?? '').trim();
     const pid = (postId ?? '').trim();
     const anonId = sanitizeAnonViewerId(anonViewerId);
@@ -172,7 +178,9 @@ export class PostViewsService {
             patch: { viewerCount: result.viewerCount },
           });
         }
-        await this.notifications.markReadBySubject(uid, { postId: pid });
+        if (!opts?.skipMarkRead) {
+          await this.notifications.markReadBySubject(uid, { postId: pid });
+        }
         return;
       } else if (anonId) {
         const linkedIdentity = await this.prisma.viewerIdentity.findUnique({
@@ -260,8 +268,13 @@ export class PostViewsService {
 
     const expanded = await this.expandViewTargetIds(ids);
 
-    // Fire-and-forget each; they handle their own error logging
-    await Promise.all(expanded.map((pid) => this.markViewed(uid || null, pid, anonId, source)));
+    // Fire-and-forget each view write; mark-read is batched once below.
+    await Promise.all(
+      expanded.map((pid) => this.markViewed(uid || null, pid, anonId, source, { skipMarkRead: true })),
+    );
+    if (uid) {
+      await this.notifications.markReadBySubjects(uid, expanded);
+    }
   }
 
   /**

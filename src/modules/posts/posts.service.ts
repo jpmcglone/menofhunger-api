@@ -5,6 +5,7 @@ import { PostsDraftsService } from './posts-drafts.service';
 import { PostsEngagementService } from './posts-engagement.service';
 import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
 import { PostsFeedQueryService } from './posts-feed-query.service';
+import { PostsDiscoverMoreService } from './posts-discover-more.service';
 import { PostsMutationService } from './posts-mutation.service';
 
 export type { PostCounts } from './posts-feed.types';
@@ -14,6 +15,7 @@ export type { PostCounts } from './posts-feed.types';
  * stable surface; the actual logic lives in focused sub-services:
  *
  *   - PostsFeedQueryService        — read paths (feeds, threads, lookups, media grids)
+ *   - PostsDiscoverMoreService     — end-of-thread related posts
  *   - PostsMutationService         — create/update/delete + publish + side effects
  *   - PostsViewerEnrichmentService — viewer overlay data (boosted/bookmarked/blocks/tiers)
  *   - PostsEngagementService       — boost/repost mutations
@@ -30,6 +32,7 @@ export class PostsService {
     private readonly engagement: PostsEngagementService,
     private readonly enrichment: PostsViewerEnrichmentService,
     private readonly feedQuery: PostsFeedQueryService,
+    private readonly discoverMore: PostsDiscoverMoreService,
     private readonly mutation: PostsMutationService,
   ) {}
 
@@ -153,6 +156,10 @@ export class PostsService {
 
   listQuotes(...args: Parameters<PostsFeedQueryService['listQuotes']>) {
     return this.feedQuery.listQuotes(...args);
+  }
+
+  listDiscoverMore(...args: Parameters<PostsDiscoverMoreService['listDiscoverMore']>) {
+    return this.discoverMore.listDiscoverMore(...args);
   }
 
   listComments(...args: Parameters<PostsFeedQueryService['listComments']>) {

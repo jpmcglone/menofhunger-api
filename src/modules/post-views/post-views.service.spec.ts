@@ -41,7 +41,10 @@ describe('PostViewsService.markViewed', () => {
     const redis = { del: jest.fn(async () => undefined) };
     const presenceRealtime = { emitPostsLiveUpdated: jest.fn() };
     const posthog = { capture: jest.fn() };
-    const notifications = { markReadBySubject: jest.fn(async () => undefined) };
+    const notifications = {
+      markReadBySubject: jest.fn(async () => undefined),
+      markReadBySubjects: jest.fn(async () => undefined),
+    };
     const service = new PostViewsService(
       prisma as any,
       cache as any,
@@ -117,7 +120,10 @@ describe('PostViewsService.markViewedBatch', () => {
     const redis = { del: jest.fn(async () => undefined) };
     const presenceRealtime = { emitPostsLiveUpdated: jest.fn() };
     const posthog = { capture: jest.fn() };
-    const notifications = { markReadBySubject: jest.fn(async () => undefined) };
+    const notifications = {
+      markReadBySubject: jest.fn(async () => undefined),
+      markReadBySubjects: jest.fn(async () => undefined),
+    };
     const service = new PostViewsService(
       prisma as any,
       cache as any,
@@ -126,11 +132,11 @@ describe('PostViewsService.markViewedBatch', () => {
       posthog as any,
       notifications as any,
     );
-    return { service, prisma, findMany };
+    return { service, prisma, findMany, notifications };
   }
 
   it('expands flat repost and quoted post IDs into the batch', async () => {
-    const { service, prisma, findMany } = makeBatchService();
+    const { service, prisma, findMany, notifications } = makeBatchService();
     findMany.mockResolvedValueOnce([
       { id: 'repost-shell', kind: 'repost', repostedPostId: 'original', quotedPostId: null },
       { id: 'quote-post', kind: 'post', repostedPostId: null, quotedPostId: 'quoted' },
@@ -146,10 +152,19 @@ describe('PostViewsService.markViewedBatch', () => {
     });
     const marked = markViewed.mock.calls.map((c) => c[1]).sort();
     expect(marked).toEqual(['original', 'quote-post', 'quoted', 'repost-shell']);
+    for (const call of markViewed.mock.calls) {
+      expect(call[4]).toEqual({ skipMarkRead: true });
+    }
+    expect(notifications.markReadBySubjects).toHaveBeenCalledTimes(1);
+    expect(notifications.markReadBySubjects).toHaveBeenCalledWith(
+      'viewer',
+      expect.arrayContaining(['original', 'quote-post', 'quoted', 'repost-shell']),
+    );
+    expect(notifications.markReadBySubject).not.toHaveBeenCalled();
   });
 
   it('does not expand non-repost posts without quotedPostId', async () => {
-    const { service, findMany } = makeBatchService();
+    const { service, findMany, notifications } = makeBatchService();
     findMany.mockResolvedValueOnce([
       { id: 'plain', kind: 'post', repostedPostId: null, quotedPostId: null },
     ]);
@@ -159,6 +174,7 @@ describe('PostViewsService.markViewedBatch', () => {
     await service.markViewedBatch('viewer', ['plain'], null, 'feed_scroll');
 
     expect(markViewed).toHaveBeenCalledTimes(1);
-    expect(markViewed).toHaveBeenCalledWith('viewer', 'plain', null, 'feed_scroll');
+    expect(markViewed).toHaveBeenCalledWith('viewer', 'plain', null, 'feed_scroll', { skipMarkRead: true });
+    expect(notifications.markReadBySubjects).toHaveBeenCalledWith('viewer', ['plain']);
   });
 });

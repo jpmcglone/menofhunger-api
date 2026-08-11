@@ -117,6 +117,10 @@ export const RedisKeys = {
   anonCategoryPosts(category: string, paramsHash: string, feedVer: number): string {
     return `cache:topics:category:${encodeURIComponent(cleanLower(category))}:v${Math.max(1, Math.floor(feedVer || 1))}:${clean(paramsHash)}`;
   },
+  /** Post-context discover-more candidate ids (not viewer-specific). */
+  discoverMoreIds(postId: string, feedVer: number): string {
+    return `cache:posts:discoverMore:${clean(postId)}:v${Math.max(1, Math.floor(feedVer || 1))}`;
+  },
 
   // Throttle key for runMeChecks — set after checks run, TTL 2 min.
   // While this key is present the expensive pinned-post/streak DB checks are skipped on /auth/me.
@@ -233,6 +237,14 @@ export const RedisKeys = {
   /** APNs device tokens for a user. Invalidated on register/unregister/prune. */
   pushApnsTokens(userId: string): string {
     return `push:apns:tokens:${clean(userId)}`;
+  },
+  /** Debounce window for badge-only APNs sync (SET NX). */
+  badgeSyncDebounce(userId: string): string {
+    return `badge-sync:${clean(userId)}`;
+  },
+  /** Last badge value successfully sent via badge-only APNs. */
+  badgeSyncLastSent(userId: string): string {
+    return `badge-sync:last:${clean(userId)}`;
   },
 
   // Spaces lobby counts — global snapshot (updated on every join/leave)

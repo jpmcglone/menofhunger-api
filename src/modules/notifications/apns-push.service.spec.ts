@@ -86,7 +86,10 @@ function makeService(opts?: { configured?: boolean; tokens?: Array<{ id: string;
       count: jest.fn(async () => 3),
     },
     user: {
-      findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 0 })),
+      findUnique: jest.fn(async () => ({
+        undeliveredNotificationCount: 0,
+        undeliveredGroupPostCount: 0,
+      })),
     },
   };
   const appConfig = {
@@ -148,8 +151,10 @@ describe('ApnsPushService', () => {
         { id: 't2', token: 'tok-2', environment: 'sandbox' },
       ],
     });
-    prisma.user.findUnique.mockResolvedValue({ undeliveredNotificationCount: 2 });
-    prisma.notification.count.mockResolvedValue(1);
+    prisma.user.findUnique.mockResolvedValue({
+      undeliveredNotificationCount: 2,
+      undeliveredGroupPostCount: 1,
+    });
     await svc.sendToUser('user-1', { title: 'New reply', body: 'Someone replied', url: '/p/abc', kind: 'comment' });
     expect(sendMock).toHaveBeenCalledTimes(2);
     const first = sendMock.mock.calls[0][0];
@@ -372,8 +377,10 @@ describe('ApnsPushService — token cache', () => {
     const { svc, prisma } = makeService({
       tokens: [{ id: 't1', token: 'tok-1', environment: 'production' }],
     });
-    prisma.user.findUnique.mockResolvedValue({ undeliveredNotificationCount: 0 });
-    prisma.notification.count.mockResolvedValue(0);
+    prisma.user.findUnique.mockResolvedValue({
+      undeliveredNotificationCount: 0,
+      undeliveredGroupPostCount: 0,
+    });
     await svc.sendBadgeOnly('user-1');
     expect(sendMock).toHaveBeenCalledTimes(1);
     const first = sendMock.mock.calls[0][0];
@@ -390,10 +397,13 @@ describe('ApnsPushService — token cache', () => {
     expect(sendMock.mock.calls[1][0].options.badge).toBe(4);
   });
 
-  it('computeAppIconBadge sums bell undelivered and group undelivered', async () => {
+  it('computeAppIconBadge sums denormalized bell and group counters', async () => {
     const { svc, prisma } = makeService();
-    prisma.user.findUnique.mockResolvedValue({ undeliveredNotificationCount: 5 });
-    prisma.notification.count.mockResolvedValue(2);
+    prisma.user.findUnique.mockResolvedValue({
+      undeliveredNotificationCount: 5,
+      undeliveredGroupPostCount: 2,
+    });
     await expect(svc.computeAppIconBadge('user-1')).resolves.toBe(7);
+    expect(prisma.notification.count).not.toHaveBeenCalled();
   });
 });

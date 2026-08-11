@@ -409,6 +409,9 @@ model User {
   // Denormalized badge count for notifications where deliveredAt is still null.
   // Maintained atomically in NotificationsService.
   undeliveredNotificationCount Int                @default(0)
+  // Denormalized count of undelivered `community_group_post` badge rows (Groups nav).
+  // Maintained on create/deliver/delete of those rows — keeps app-icon badge O(1).
+  undeliveredGroupPostCount    Int                @default(0)
 
   // Private rewards / retention loops (self-only surfaces).
   coins                    Int                     @default(0)

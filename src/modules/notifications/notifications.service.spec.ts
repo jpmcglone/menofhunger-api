@@ -32,19 +32,19 @@ function buildFacade(deps: FacadeDeps) {
   const preferences = new NotificationPreferencesService(deps.prisma, noopCache);
   const apnsPush = new ApnsPushService(deps.prisma, deps.appConfig, noopCache);
   const push = new NotificationPushService(deps.prisma, deps.appConfig, deps.presence, preferences, apnsPush, noopCache);
-  const readState = new NotificationReadStateService(deps.prisma, deps.presenceRealtime, deps.posthog, apnsPush);
-  const postVisibility = new PostVisibilityReadService(deps.prisma, deps.appConfig, deps.viewerContextService);
-  const query = new NotificationQueryService(deps.prisma, deps.appConfig, postVisibility, readState);
   // Stands in for the side-effects worker: runs the push handler inline so push assertions
   // still exercise the real payload through the new dispatch seam.
   const sideEffects = {
-    dispatch: (name: string, payload: any) => {
+    dispatch: jest.fn((name: string, payload: any) => {
       if (name === 'notification.push') void push.sendKindPushForActor(payload);
-    },
+    }),
   } as any;
+  const readState = new NotificationReadStateService(deps.prisma, deps.presenceRealtime, deps.posthog, sideEffects);
+  const postVisibility = new PostVisibilityReadService(deps.prisma, deps.appConfig, deps.viewerContextService);
+  const query = new NotificationQueryService(deps.prisma, deps.appConfig, postVisibility, readState);
   const writer = new NotificationWriterService(deps.prisma, deps.presenceRealtime, deps.presenceRedis ?? stubPresenceRedis, deps.jobs, sideEffects, query, readState);
   const svc = new NotificationsService(preferences, push, apnsPush, readState, query, writer);
-  return { svc, preferences, push, apnsPush, readState, query, writer };
+  return { svc, preferences, push, apnsPush, readState, query, writer, sideEffects };
 }
 
 function makeService(overrides?: { prisma?: any }) {
@@ -933,14 +933,21 @@ describe('NotificationReadStateService.markGroupPostsDelivered', () => {
   it('sets deliveredAt for community_group_post rows in the given group and emits groups:unreadChanged', async () => {
     const groupBy = jest.fn(async () => [{ subjectGroupId: 'g1', _count: { _all: 2 } }]);
     const updateMany = jest.fn(async () => ({ count: 2 }));
+    const executeRaw = jest.fn(async () => []);
     const presenceRealtime = {
       emitNotificationsUpdated: jest.fn(),
       emitGroupsUnreadChanged: jest.fn(),
     } as any;
     const prisma = {
       notification: { updateMany, groupBy },
-      user: { findUnique: jest.fn() },
-      $transaction: jest.fn(),
+      user: { findUnique: jest.fn(), updateMany: jest.fn() },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          notification: { updateMany },
+          $executeRaw: executeRaw,
+        }),
+      ),
+      $executeRaw: executeRaw,
     } as any;
     const { readState } = buildFacade({
       prisma,
@@ -963,6 +970,7 @@ describe('NotificationReadStateService.markGroupPostsDelivered', () => {
       },
       data: { deliveredAt: expect.any(Date) },
     });
+    expect(executeRaw).toHaveBeenCalled();
     // Verify groups:unreadChanged is eventually emitted (emitGroupsUnreadForUser is best-effort/async)
     // Wait a tick for the void promise to resolve
     await new Promise((r) => setImmediate(r));
@@ -974,6 +982,7 @@ describe('NotificationReadStateService.markGroupPostsDelivered', () => {
 
   it('does NOT set readAt (seen-only, not read)', async () => {
     const updateMany = jest.fn(async () => ({ count: 1 }));
+    const executeRaw = jest.fn(async () => []);
     const presenceRealtime = {
       emitNotificationsUpdated: jest.fn(),
       emitGroupsUnreadChanged: jest.fn(),
@@ -981,7 +990,12 @@ describe('NotificationReadStateService.markGroupPostsDelivered', () => {
     const prisma = {
       notification: { updateMany, groupBy: jest.fn(async () => []) },
       user: { findUnique: jest.fn() },
-      $transaction: jest.fn(),
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          notification: { updateMany },
+          $executeRaw: executeRaw,
+        }),
+      ),
     } as any;
     const { readState } = buildFacade({
       prisma,
@@ -1082,6 +1096,87 @@ describe('NotificationReadStateService.markReadBySubject — community_group_pos
       clearedPostIds: ['post-42'],
     });
   });
+
+  it('markReadBySubjects emits all clearedPostIds once and dispatches badge.sync', async () => {
+    const updateMany = jest.fn(async () => ({ count: 2 }));
+    const executeRaw = jest.fn(async () => []);
+    const count = jest.fn(async () => 1);
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitNotificationsWaitingChanged: jest.fn(),
+      emitGroupsUnreadChanged: jest.fn(),
+    } as any;
+    const prisma = {
+      notification: { updateMany, count, groupBy: jest.fn(async () => []) },
+      user: { findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 1 })) },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          notification: { updateMany, count },
+          user: { update: jest.fn(async () => ({})) },
+          $executeRaw: executeRaw,
+        }),
+      ),
+      $executeRaw: executeRaw,
+    } as any;
+    const { readState, sideEffects } = buildFacade({
+      prisma,
+      appConfig: { r2: jest.fn(() => null) } as any,
+      presenceRealtime,
+      presence: { isUserViewingConversation: jest.fn(() => false) } as any,
+      jobs: { enqueueCron: jest.fn() } as any,
+      posthog: { capture: jest.fn() } as any,
+      viewerContextService: { getViewer: jest.fn(async () => null) } as any,
+    });
+
+    await readState.markReadBySubjects('u1', ['p1', 'p2', 'p1']);
+
+    expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalledTimes(1);
+    expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalledWith('u1', {
+      undeliveredCount: 1,
+      clearedPostIds: ['p1', 'p2'],
+    });
+    expect(sideEffects.dispatch).toHaveBeenCalledWith(
+      'notification.badge.sync',
+      expect.objectContaining({ recipientUserId: 'u1', undeliveredBellCount: 1 }),
+    );
+  });
+
+  it('markReadBySubjects skips socket/badge work when nothing changed', async () => {
+    const updateMany = jest.fn(async () => ({ count: 0 }));
+    const count = jest.fn(async () => 0);
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitNotificationsWaitingChanged: jest.fn(),
+      emitGroupsUnreadChanged: jest.fn(),
+    } as any;
+    const prisma = {
+      notification: { updateMany, count, groupBy: jest.fn(async () => []) },
+      user: { findUnique: jest.fn() },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          notification: { updateMany, count },
+          $executeRaw: jest.fn(async () => []),
+        }),
+      ),
+    } as any;
+    const { readState, sideEffects } = buildFacade({
+      prisma,
+      appConfig: { r2: jest.fn(() => null) } as any,
+      presenceRealtime,
+      presence: { isUserViewingConversation: jest.fn(() => false) } as any,
+      jobs: { enqueueCron: jest.fn() } as any,
+      posthog: { capture: jest.fn() } as any,
+      viewerContextService: { getViewer: jest.fn(async () => null) } as any,
+    });
+
+    await readState.markReadBySubjects('u1', ['p1', 'p2']);
+
+    expect(presenceRealtime.emitNotificationsUpdated).not.toHaveBeenCalled();
+    expect(sideEffects.dispatch).not.toHaveBeenCalledWith(
+      'notification.badge.sync',
+      expect.anything(),
+    );
+  });
 });
 
 // ─── NotificationWriterService.createGroupPostBadgeNotifications ─────────────
@@ -1096,7 +1191,10 @@ describe('NotificationWriterService.createGroupPostBadgeNotifications', () => {
     } as any;
     const prisma = {
       notification: { createMany, groupBy },
-      user: { findUnique: jest.fn() },
+      user: {
+        findUnique: jest.fn(),
+        updateMany: jest.fn(async () => ({ count: 2 })),
+      },
     } as any;
     const { writer } = buildFacade({
       prisma,
@@ -1123,6 +1221,10 @@ describe('NotificationWriterService.createGroupPostBadgeNotifications', () => {
         expect.objectContaining({ recipientUserId: 'm2', kind: 'community_group_post', subjectGroupId: 'g1' }),
       ]),
       skipDuplicates: true,
+    });
+    expect(prisma.user.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['m1', 'm2'] } },
+      data: { undeliveredGroupPostCount: { increment: 1 } },
     });
     // Actor should be excluded
     const createCalls = createMany.mock.calls as any[][];
@@ -1178,10 +1280,16 @@ describe('NotificationWriterService.deleteBySubjectPostId — community_group_po
 
     await writer.deleteBySubjectPostId('post-1');
 
-    // The bell counter must only be decremented for the non-group-post row (m2), never m1.
-    const decrementedUsers = userUpdate.mock.calls.map((c: any) => c[0]?.where?.id);
-    expect(decrementedUsers).toContain('m2');
-    expect(decrementedUsers).not.toContain('m1');
+    // Bell counter: only the non-group-post row (m2). Group counter: m1.
+    expect(userUpdate).toHaveBeenCalledWith({
+      where: { id: 'm2' },
+      data: { undeliveredNotificationCount: { decrement: 1 } },
+      select: { undeliveredNotificationCount: true },
+    });
+    expect(userUpdate).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: { undeliveredGroupPostCount: { decrement: 1 } },
+    });
 
     // The group badge for m1 must be refreshed.
     await new Promise((r) => setImmediate(r));

@@ -173,6 +173,7 @@ function makeService(
     engagement,
     enrichment,
     feedQuery,
+    { listDiscoverMore: jest.fn() } as any,
     mutation,
   );
 

@@ -49,13 +49,23 @@ export class NotificationsOrphanCleanupCron {
         { actorPost: { deletedAt: { not: null as null } } },
       ];
 
-      // Find undelivered orphans first so we can correct the denormalized counter.
+      // Find undelivered orphans first so we can correct the denormalized counters.
       const undelivered = await this.prisma.notification.groupBy({
         by: ['recipientUserId'],
         where: {
           OR: orphanOR,
           deliveredAt: null,
           kind: { notIn: BELL_EXCLUDED_KINDS },
+        },
+        _count: true,
+      });
+
+      const undeliveredGroups = await this.prisma.notification.groupBy({
+        by: ['recipientUserId'],
+        where: {
+          OR: orphanOR,
+          deliveredAt: null,
+          kind: 'community_group_post',
         },
         _count: true,
       });
@@ -71,6 +81,16 @@ export class NotificationsOrphanCleanupCron {
               undeliveredNotificationCount: { decrement: row._count },
             },
           });
+        });
+      }
+
+      if (undeliveredGroups.length > 0) {
+        await runInBatches(undeliveredGroups, FANOUT_CONCURRENCY, async (row) => {
+          await this.prisma.$executeRaw`
+            UPDATE "User"
+            SET "undeliveredGroupPostCount" = GREATEST(0, "undeliveredGroupPostCount" - ${row._count})
+            WHERE id = ${row.recipientUserId}
+          `;
         });
       }
 
