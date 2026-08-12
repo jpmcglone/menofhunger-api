@@ -147,6 +147,24 @@ describe('PresenceRealtimeService without a local socket server', () => {
     });
   });
 
+  it('publishes spaces:updated to the lobbies room cross-instance', () => {
+    const { service, presenceRedis } = makeServerlessService();
+    const payload = {
+      spaceId: 'space-1',
+      version: '2026-08-12T00:00:00.000Z',
+      reason: 'schedule_subscribe',
+      patch: { subscriberCount: 2 },
+    };
+
+    service.emitSpacesUpdated(payload);
+
+    expect(presenceRedis.publishEmitToRoom).toHaveBeenCalledWith({
+      room: 'spaces:lobbies',
+      event: 'spaces:updated',
+      payload,
+    });
+  });
+
   it('publishes global broadcasts cross-instance even with no server attached', () => {
     const { service, presenceRedis } = makeServerlessService();
 

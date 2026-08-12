@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { JobsModule } from '../jobs/jobs.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { RealtimeModule } from '../realtime/realtime.module';
 import { SpacesChatService } from './spaces-chat.service';
 import { SpacesController } from './spaces.controller';
 import { SpacesPresenceService } from './spaces-presence.service';
@@ -11,7 +12,7 @@ import { SpacesSideEffectsHandler } from './spaces-side-effects.handler';
 import { WatchPartyStateService } from './watch-party-state.service';
 
 @Module({
-  imports: [AuthModule, JobsModule, NotificationsModule],
+  imports: [AuthModule, JobsModule, NotificationsModule, RealtimeModule],
   controllers: [SpacesController],
   providers: [
     SpacesService,

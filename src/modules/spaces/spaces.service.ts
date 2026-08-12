@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException, ConflictException, BadRequestException } from '@nestjs/common';
 import type { SpaceMode } from '@prisma/client';
-import type { SpaceDto, SpaceOwnerDto, SpaceReactionDto } from '../../common/dto';
+import type { SpaceDto, SpaceOwnerDto, SpaceReactionDto, SpacesUpdatedPatchDto } from '../../common/dto';
 import { ALLOWED_REACTIONS, findReactionById } from '../../common/constants/reactions';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { easternDayKey, etLocalToUtcMs } from '../../common/time/eastern-day-key';
@@ -10,6 +10,7 @@ import { SpacesPresenceService } from './spaces-presence.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { compareLobbySpaces } from './spaces-lobby-sort';
 
 const SOON_MS = 15 * 60 * 1000;
@@ -32,6 +33,7 @@ export class SpacesService {
     private readonly spacesPresence: SpacesPresenceService,
     private readonly sideEffects: SideEffectsService,
     private readonly jobs: JobsService,
+    private readonly realtime: PresenceRealtimeService,
   ) {
     this.r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? '';
   }
@@ -170,7 +172,13 @@ export class SpacesService {
     }
     this.sideEffects.dispatch('space.schedule.live', { spaceId: id });
 
-    return this.toDto(updated, { viewerUserId: userId });
+    const dto = await this.toDto(updated, { viewerUserId: userId });
+    this.emitSpaceUpdated(id, 'activated', {
+      isActive: true,
+      scheduledAt: null,
+      subscriberCount: dto.subscriberCount,
+    });
+    return dto;
   }
 
   async deactivateSpace(id: string, userId: string): Promise<SpaceDto> {
@@ -183,7 +191,9 @@ export class SpacesService {
       data: { isActive: false },
       include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
     });
-    return this.toDto(updated, { viewerUserId: userId });
+    const dto = await this.toDto(updated, { viewerUserId: userId });
+    this.emitSpaceUpdated(id, 'deactivated', { isActive: false });
+    return dto;
   }
 
   /**
@@ -197,6 +207,9 @@ export class SpacesService {
       where: { id, isActive: true },
       data: { isActive: false },
     });
+    if (result.count > 0) {
+      this.emitSpaceUpdated(id, 'deactivated', { isActive: false });
+    }
     return result.count > 0;
   }
 
@@ -266,11 +279,17 @@ export class SpacesService {
       });
     }
 
-    return this.toDto(updated, {
+    const dto = await this.toDto(updated, {
       viewerUserId: userId,
       viewerSubscribedOverride: true,
       subscriberCountOverride: await this.countNonOwnerSubscribers(id, userId),
     });
+    this.emitSpaceUpdated(id, 'schedule_set', {
+      scheduledAt: dto.scheduledAt,
+      isActive: dto.isActive,
+      subscriberCount: dto.subscriberCount,
+    });
+    return dto;
   }
 
   async clearSchedule(id: string, userId: string): Promise<SpaceDto> {
@@ -305,7 +324,12 @@ export class SpacesService {
       ownerUsername: space.owner.username,
     });
 
-    return this.toDto(updated, { viewerUserId: userId });
+    const dto = await this.toDto(updated, { viewerUserId: userId });
+    this.emitSpaceUpdated(id, 'schedule_cleared', {
+      scheduledAt: null,
+      subscriberCount: dto.subscriberCount,
+    });
+    return dto;
   }
 
   async subscribeToSchedule(id: string, userId: string): Promise<SpaceDto> {
@@ -325,7 +349,9 @@ export class SpacesService {
       update: {},
     });
 
-    return this.getSpaceById(id, userId);
+    const dto = await this.getSpaceById(id, userId);
+    this.emitSpaceUpdated(id, 'schedule_subscribe', { subscriberCount: dto.subscriberCount });
+    return dto;
   }
 
   async unsubscribeFromSchedule(id: string, userId: string): Promise<SpaceDto> {
@@ -342,7 +368,9 @@ export class SpacesService {
       where: { spaceId: id, userId },
     });
 
-    return this.getSpaceById(id, userId);
+    const dto = await this.getSpaceById(id, userId);
+    this.emitSpaceUpdated(id, 'schedule_unsubscribe', { subscriberCount: dto.subscriberCount });
+    return dto;
   }
 
   /** Lobby: live spaces + upcoming scheduled + viewer's own space (even if offline). */
@@ -660,6 +688,16 @@ export class SpacesService {
   private async countNonOwnerSubscribers(spaceId: string, ownerId: string): Promise<number> {
     return this.prisma.spaceScheduleSubscriber.count({
       where: { spaceId, userId: { not: ownerId } },
+    });
+  }
+
+  /** Lobby room only — viewer-agnostic patch (no viewerSubscribed / viewerFollowsOwner). */
+  private emitSpaceUpdated(spaceId: string, reason: string, patch: SpacesUpdatedPatchDto): void {
+    this.realtime.emitSpacesUpdated({
+      spaceId,
+      version: new Date().toISOString(),
+      reason,
+      patch,
     });
   }
 }

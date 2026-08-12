@@ -44,6 +44,30 @@ export type SpaceLobbyCountsDto = {
   countsBySpaceId: Record<string, number>;
 };
 
+/**
+ * Shared (viewer-agnostic) space fields for live lobby/host UI.
+ * Do NOT include viewerSubscribed / viewerFollowsOwner — those are per-viewer.
+ */
+export type SpacesUpdatedPatchDto = Partial<{
+  title: string;
+  description: string | null;
+  isActive: boolean;
+  scheduledAt: string | null;
+  mode: 'NONE' | 'WATCH_PARTY' | 'RADIO';
+  watchPartyUrl: string | null;
+  radioStreamUrl: string | null;
+  /** Notify-me signups excluding the host. */
+  subscriberCount: number;
+}>;
+
+/** Broadcast to `spaces:lobbies` when schedule / notify signup / live state changes. */
+export type SpacesUpdatedPayloadDto = {
+  spaceId: string;
+  version: string;
+  reason: string;
+  patch: SpacesUpdatedPatchDto;
+};
+
 export type SpaceChatSenderDto = {
   id: string;
   username: string | null;

@@ -132,6 +132,22 @@ export class PresenceRealtimeService {
     this.emitBroadcast('wotd:like-updated', { likeCount, actorUserId, liked });
   }
 
+  /**
+   * Lobby subscribers (`spaces:lobbies` room) — schedule / Notify-me count / live flags.
+   * Payload is viewer-agnostic; clients merge `patch` onto their local Space without
+   * clobbering viewerSubscribed / viewerFollowsOwner.
+   */
+  emitSpacesUpdated(payload: {
+    spaceId: string;
+    version: string;
+    reason: string;
+    patch: Record<string, unknown>;
+  }): void {
+    const spaceId = String(payload?.spaceId ?? '').trim();
+    if (!spaceId) return;
+    this.emitToRoom('spaces:lobbies', 'spaces:updated', payload);
+  }
+
   disconnectUserSockets(userId: string): void {
     const server = this.getServerOrNull();
     if (!server) return;
