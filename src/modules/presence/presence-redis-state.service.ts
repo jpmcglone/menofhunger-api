@@ -280,45 +280,59 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
 
   /**
    * Persist this instance's local lobby counts, then return the sum across all
-   * live instances (crashed instances expire via TTL).
+   * live instances (crashed instances expire via TTL / empty prune).
    */
   async syncAndAggregateLobbyCounts(localCounts: Record<string, number>): Promise<Record<string, number>> {
     const inst = this.instanceId;
     const instKey = RedisKeys.spacesLobbyCountsInstance(inst);
     const setKey = RedisKeys.spacesLobbyCountsInstances();
-    const ttl = 120;
+    // Short TTL: ghost membership after a process death should clear quickly.
+    const ttl = 45;
     try {
       const raw = this.redis.raw();
+      const entries = Object.entries(localCounts).filter(([, n]) => Number(n) > 0);
       const pipe = raw.pipeline();
       pipe.del(instKey);
-      const entries = Object.entries(localCounts).filter(([, n]) => Number(n) > 0);
       if (entries.length > 0) {
         const flat: string[] = [];
         for (const [spaceId, n] of entries) {
           flat.push(spaceId, String(Math.max(0, Math.floor(n))));
         }
         pipe.hset(instKey, ...flat);
+        pipe.expire(instKey, ttl);
+        pipe.sadd(setKey, inst);
+      } else {
+        // No local members — drop this instance from the roster so empty
+        // processes don't keep the set warm for stale peers.
+        pipe.srem(setKey, inst);
       }
-      pipe.expire(instKey, ttl);
-      pipe.sadd(setKey, inst);
       pipe.expire(setKey, ttl);
       await pipe.exec();
 
       const instances = await raw.smembers(setKey);
       const totals: Record<string, number> = {};
-      if (instances.length === 0) return { ...localCounts };
+      if (instances.length === 0) return {};
       const getPipe = raw.pipeline();
       for (const id of instances) {
         getPipe.hgetall(RedisKeys.spacesLobbyCountsInstance(id));
       }
       const rows = await getPipe.exec();
-      for (const row of rows ?? []) {
-        const hash = (row?.[1] ?? {}) as Record<string, string>;
+      const prune: string[] = [];
+      for (let i = 0; i < instances.length; i++) {
+        const hash = (rows?.[i]?.[1] ?? {}) as Record<string, string>;
+        const keys = Object.keys(hash);
+        if (keys.length === 0) {
+          prune.push(instances[i]);
+          continue;
+        }
         for (const [spaceId, val] of Object.entries(hash)) {
           const n = Math.max(0, Math.floor(Number(val) || 0));
           if (!n) continue;
           totals[spaceId] = (totals[spaceId] ?? 0) + n;
         }
+      }
+      if (prune.length > 0) {
+        await raw.srem(setKey, ...prune);
       }
       return totals;
     } catch {

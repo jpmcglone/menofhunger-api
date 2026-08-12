@@ -593,6 +593,7 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
       expect.objectContaining({
         title: 'Alice replied to your post',
         subtitle: 'Replied to your post',
+        body: 'Replied to your post\nGreat post!',
         category: 'moh.category.reply',
         threadId: 'post-root-1',
         actorUsername: 'alice',
@@ -760,13 +761,33 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
       recipientUserId: 'user-1',
       kind: 'word_of_the_day',
       actorUserId: null,
+      fallbackTitle: 'Good morning!',
+      body: "Today's word is: Paleness — open for the definition.",
     });
     await new Promise((r) => setTimeout(r, 10));
 
     expect(apnsSendToUser).toHaveBeenCalledWith(
       'user-1',
-      expect.objectContaining({ mutableContent: false }),
+      expect.objectContaining({
+        mutableContent: false,
+        title: 'Good morning!',
+        body: "Today's word is: Paleness — open for the definition.",
+        subtitle: null,
+      }),
     );
+  });
+
+  it('does not echo system titles as subtitle (avoids Good morning / Good morning)', () => {
+    const { svc } = makeService();
+    const copy = svc.buildPushCopy({
+      kind: 'word_of_the_day',
+      actor: null,
+      fallbackTitle: 'Good morning!',
+      body: "Today's word is: Paleness — open for the definition.",
+    });
+    expect(copy.title).toBe('Good morning!');
+    expect(copy.body).toBe("Today's word is: Paleness — open for the definition.");
+    expect(copy.title).not.toBe(copy.body);
   });
 
   it('uses current group context for invite subtitle, avatar, thread, and action category', async () => {
@@ -854,7 +875,7 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
       title: 'Alice replied to your comment',
     },
   ])(
-    'puts $kind action in the subtitle so Communication pushes keep context',
+    'puts $kind action in the subtitle and folds it into the APNs body for Communication UI',
     async ({ kind, fallbackTitle, body, subtitle, title }) => {
       const prisma = makePrisma();
       prisma.user.findUnique.mockResolvedValue({
@@ -876,9 +897,15 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 10));
 
+      const expectedBody =
+        body != null && String(body).trim()
+          ? `${subtitle}\n${body}`
+          : kind === 'nudge'
+            ? 'Nudged you\nOpen notifications to respond.'
+            : subtitle;
       expect(apnsSendToUser).toHaveBeenCalledWith(
         'user-1',
-        expect.objectContaining({ title, subtitle, ...(body ? { body } : {}) }),
+        expect.objectContaining({ title, subtitle, body: expectedBody }),
       );
     },
   );

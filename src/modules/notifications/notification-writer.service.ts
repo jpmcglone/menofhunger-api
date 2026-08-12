@@ -1608,13 +1608,17 @@ export class NotificationWriterService {
     if (item === 'word') {
       const wotd = snap.websters1828 as Record<string, unknown> | null;
       const word = typeof wotd?.word === 'string' ? wotd.word : '';
-      title = 'Good morning';
-      body = word ? `Today\u2019s word: ${word}` : 'Check out today\u2019s word';
+      title = 'Good morning!';
+      body = word
+        ? `Today\u2019s word is: ${word} \u2014 open for the definition.`
+        : 'Open for today\u2019s word.';
     } else {
       const q = snap.quote as Record<string, unknown> | null;
       const author = typeof q?.author === 'string' ? q.author : '';
       title = 'Quote of the day';
-      body = author ? `By ${author}` : 'Check out today\u2019s quote';
+      body = author
+        ? `Today\u2019s quote is by ${author} \u2014 open to read it.`
+        : 'Open to read today\u2019s quote.';
     }
 
     const CHUNK = 500;

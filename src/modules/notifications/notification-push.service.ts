@@ -49,6 +49,26 @@ function sentenceCaseAction(value: string): string {
 }
 
 /**
+ * System / non-actor pushes. Their `fallbackTitle` IS the alert title — never reuse it
+ * as subtitle (that produces "Good morning" / "Good morning" on lock screen).
+ */
+const SYSTEM_PUSH_KINDS = new Set<NotificationKind>([
+  'word_of_the_day',
+  'quote_of_the_day',
+  'checkin_reminder',
+  'on_this_day',
+  'account_verified',
+  'premium_started',
+  'premium_ended',
+  'poll_results_ready',
+  'space_reminder_day',
+  'space_reminder_soon',
+  'space_live',
+  'space_schedule_cancelled',
+  'space_schedule_rescheduled',
+]);
+
+/**
  * Prefer a concrete group name over generic "their/your/the/a group" phrasing
  * so Communication-style pushes still name the group after the title becomes the actor.
  */
@@ -456,8 +476,8 @@ export class NotificationPushService {
     }
     if (kind === 'word_of_the_day') {
       return {
-        title: titleFromFallback || 'Good morning',
-        body: snippet ?? 'Open to see today\u2019s word.',
+        title: titleFromFallback || 'Good morning!',
+        body: snippet ?? 'Open for today\u2019s word.',
       };
     }
     if (kind === 'quote_of_the_day') {
@@ -724,10 +744,16 @@ export class NotificationPushService {
     // iOS / APNs: always deliver. The app's UNUserNotificationCenterDelegate decides
     // whether to surface a banner when foregrounded — that is a client-side concern.
     if (this.apnsPush.configured()) {
+      const apnsBody = this.apnsBodyWithVisibleAction({
+        kind,
+        body: body ?? '',
+        subtitle: params.subtitle ?? null,
+        actorUsername: params.actorUsername ?? null,
+      });
       this.apnsPush
         .sendToUser(recipientUserId, {
           title: params.title,
-          body,
+          body: apnsBody,
           url,
           notificationId: params.notificationId ?? null,
           kind,
@@ -871,6 +897,8 @@ export class NotificationPushService {
       badge: '/android-chrome-192x192.png',
       renotify: false,
       kind: 'reply_nudge',
+      // Communication UI replaces title with the sender name — keep the "waiting" cue visible.
+      subtitle: 'Still waiting to hear back',
       avatarUrl: icon,
       actorUsername: actor.username,
       actorName: actor.name,
@@ -1075,8 +1103,12 @@ export class NotificationPushService {
    * Lock-screen subtitle for APNs / web push.
    *
    * iOS Communication notifications (NSE + INSendMessageIntent) replace the alert
-   * title with the actor's display name. The verb/context therefore has to live here
-   * — otherwise a check-in looks like a bare post body under someone's name.
+   * title with the actor's display name. The verb/context therefore lives here —
+   * and is also folded into the body via `apnsBodyWithVisibleAction`, because the
+   * Communication UI often omits subtitle on the lock screen.
+   *
+   * System kinds must not echo `fallbackTitle` as subtitle — that title already is
+   * the bold first line (e.g. "Good morning" / "Good morning").
    */
   private pushSubtitle(
     kind: NotificationKind,
@@ -1085,6 +1117,10 @@ export class NotificationPushService {
     subjectArticleId?: string | null,
   ): string | null {
     const group = (groupName ?? '').trim();
+    if (SYSTEM_PUSH_KINDS.has(kind)) {
+      return group || null;
+    }
+
     const action = sentenceCaseAction(fallbackTitle ?? '');
 
     if (group && action) return actionWithGroupName(action, group);
@@ -1109,6 +1145,27 @@ export class NotificationPushService {
     if (kind === 'followed_article') return 'Published an article';
     if (kind === 'message') return 'Sent you a message';
     return null;
+  }
+
+  /**
+   * iOS Communication notifications replace the title with the sender name and
+   * often omit the subtitle. Fold the action into the body so lock-screen copy
+   * still says what happened (e.g. "Replied to your post\nWash sheets…").
+   * DMs stay message-style (name + body only).
+   */
+  private apnsBodyWithVisibleAction(params: {
+    kind: string;
+    body: string;
+    subtitle?: string | null;
+    actorUsername?: string | null;
+  }): string {
+    const snippet = (params.body ?? '').trim();
+    if (!params.actorUsername || params.kind === 'message') return snippet;
+    const action = (params.subtitle ?? '').trim();
+    if (!action) return snippet;
+    if (!snippet) return action;
+    if (snippet.toLowerCase().includes(action.toLowerCase())) return snippet;
+    return `${action}\n${snippet}`;
   }
 
   /**

@@ -174,7 +174,7 @@ export class SpacesGatewayHandler {
     this.context.server.emit('spaces:lobbyCounts', payload);
 
     void this.redis
-      .setJson(RedisKeys.spacesLobbyCounts(), countsBySpaceId, { ttlSeconds: 120 })
+      .setJson(RedisKeys.spacesLobbyCounts(), countsBySpaceId, { ttlSeconds: 30 })
       .catch(() => undefined);
 
     void this.presenceRedis.publishSpacesLobbyCounts(countsBySpaceId).catch(() => undefined);
@@ -389,9 +389,13 @@ export class SpacesGatewayHandler {
 
   handleSpacesLobbiesSubscribe(client: Socket): void {
     client.join('spaces:lobbies');
-    const payload: SpaceLobbyCountsDto = {
-      countsBySpaceId: this.spacesPresence.getLobbyCountsBySpaceId(),
-    };
+    void this.emitLobbyCountsToClient(client);
+  }
+
+  private async emitLobbyCountsToClient(client: Socket): Promise<void> {
+    const local = this.spacesPresence.getLobbyCountsBySpaceId();
+    const countsBySpaceId = await this.presenceRedis.syncAndAggregateLobbyCounts(local);
+    const payload: SpaceLobbyCountsDto = { countsBySpaceId };
     client.emit('spaces:lobbyCounts', payload);
   }
 

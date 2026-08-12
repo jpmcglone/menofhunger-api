@@ -5,6 +5,7 @@ import type { SpaceDto, SpaceLobbyCountsDto, SpaceReactionDto } from '../../comm
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
+import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
 import { SpacesService } from './spaces.service';
 import { SpacesPresenceService } from './spaces-presence.service';
 import { RedisService } from '../redis/redis.service';
@@ -36,6 +37,7 @@ export class SpacesController {
   constructor(
     private readonly spaces: SpacesService,
     private readonly spacesPresence: SpacesPresenceService,
+    private readonly presenceRedis: PresenceRedisStateService,
     private readonly redis: RedisService,
   ) {}
 
@@ -66,15 +68,14 @@ export class SpacesController {
   @UseGuards(OptionalAuthGuard)
   @Get('lobby-counts')
   async lobbyCountsHttp(): Promise<{ data: SpaceLobbyCountsDto }> {
-    let countsBySpaceId: Record<string, number> | null = null;
-    try {
-      countsBySpaceId = await this.redis.getJson<Record<string, number>>(RedisKeys.spacesLobbyCounts());
-    } catch {
-      // fall through to in-memory
-    }
-    return {
-      data: { countsBySpaceId: countsBySpaceId ?? this.spacesPresence.getLobbyCountsBySpaceId() },
-    };
+    // Always re-aggregate from live instance hashes — the Redis snapshot alone
+    // can linger after everyone leaves and inflate the Spaces nav "(N)" count.
+    const local = this.spacesPresence.getLobbyCountsBySpaceId();
+    const countsBySpaceId = await this.presenceRedis.syncAndAggregateLobbyCounts(local);
+    void this.redis
+      .setJson(RedisKeys.spacesLobbyCounts(), countsBySpaceId, { ttlSeconds: 30 })
+      .catch(() => undefined);
+    return { data: { countsBySpaceId } };
   }
 
   @UseGuards(OptionalAuthGuard)

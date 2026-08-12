@@ -143,8 +143,13 @@ export class PresenceStatusHandler {
 
     void (async () => {
       try {
-        const cached = await this.redis.getJson<Record<string, number>>(RedisKeys.spacesLobbyCounts());
-        const countsBySpaceId = cached ?? this.spacesPresence.getLobbyCountsBySpaceId();
+        // Live aggregate — never seed from the Redis snapshot alone (it can linger
+        // after lobbies empty and inflate the Spaces nav "(N)" count).
+        const local = this.spacesPresence.getLobbyCountsBySpaceId();
+        const countsBySpaceId = await this.presenceRedis.syncAndAggregateLobbyCounts(local);
+        void this.redis
+          .setJson(RedisKeys.spacesLobbyCounts(), countsBySpaceId, { ttlSeconds: 30 })
+          .catch(() => undefined);
         client.emit('spaces:lobbyCounts', { countsBySpaceId } satisfies SpaceLobbyCountsDto);
       } catch {
         // best-effort
