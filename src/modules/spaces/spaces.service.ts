@@ -200,24 +200,6 @@ export class SpacesService {
     return result.count > 0;
   }
 
-  async activateSpaceByOwnerId(ownerId: string): Promise<void> {
-    const space = await this.prisma.space.findUnique({
-      where: { ownerId },
-      select: { id: true, isActive: true, scheduledAt: true },
-    });
-    if (!space || space.isActive) return;
-
-    const previousScheduledAt = space.scheduledAt;
-    await this.prisma.space.update({
-      where: { id: space.id },
-      data: { isActive: true, scheduledAt: null },
-    });
-    if (previousScheduledAt) {
-      await this.cancelReminderJobs(space.id, previousScheduledAt.getTime());
-    }
-    this.sideEffects.dispatch('space.schedule.live', { spaceId: space.id });
-  }
-
   async setMode(
     id: string,
     userId: string,

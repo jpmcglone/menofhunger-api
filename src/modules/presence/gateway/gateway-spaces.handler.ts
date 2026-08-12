@@ -275,10 +275,10 @@ export class SpacesGatewayHandler {
       (client.data as any).ownerSpaceId = null;
     }
 
-    // Auto-activate on owner join, and elect this socket as the primary control socket.
+    // Elect this socket as the primary control socket. Going live is explicit
+    // (owner panel "Go live") — joining a scheduled/inactive space must not activate it.
     if (isOwner) {
       (client.data as any).ownerSpaceId = spaceId;
-      void this.spaces.activateSpaceByOwnerId(userId).catch(() => undefined);
 
       // Track in the full owner-socket set for this space (all tabs).
       if (!this.ownerSocketsBySpaceId.has(spaceId)) {

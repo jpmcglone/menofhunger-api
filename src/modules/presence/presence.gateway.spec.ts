@@ -141,7 +141,6 @@ function makeSpacesService(ownerId = OWNER_ID, mode: string = 'WATCH_PARTY') {
     getOwnerIdForSpace: jest.fn().mockResolvedValue(ownerId),
     getSpaceMode: jest.fn().mockResolvedValue(mode),
     isSpaceActive: jest.fn().mockResolvedValue(true),
-    activateSpaceByOwnerId: jest.fn().mockResolvedValue(undefined),
     getReactionById: jest.fn().mockReturnValue(null),
   } as any;
 }
