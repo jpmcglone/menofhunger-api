@@ -11,6 +11,7 @@ import {
   MARV_USER_LOOKUP_HINT,
   MARV_WEB_SEARCH_REQUIRED,
 } from '../marvin-prompt-instructions';
+import { marvMediaMarker } from './marvin-vision-media';
 
 export type MarvPromptUser = {
   userId: string;
@@ -46,6 +47,8 @@ export type MarvThreadPost = {
   checkinPrompt?: string | null;
   /** Poll attached to this post, if any. */
   poll?: MarvPoll | null;
+  /** Attached media kinds so the text prompt names images/GIFs/videos even without vision. */
+  media?: Array<{ kind: string }>;
 };
 
 export type MarvLinkPreview = {
@@ -53,6 +56,7 @@ export type MarvLinkPreview = {
   title?: string | null;
   description?: string | null;
   siteName?: string | null;
+  imageUrl?: string | null;
 };
 
 export type MarvGroupContext = {
@@ -137,6 +141,11 @@ export type MarvPromptInput = {
    * model it is seeing a single still frame, not an animation.
    */
   hasGifAttached?: boolean;
+  /**
+   * When true, at least one image/GIF/video poster was attached as a vision input.
+   * Tells the model to look at them rather than summarizing captions alone.
+   */
+  hasImagesAttached?: boolean;
 };
 
 export type MarvBuiltPrompt = {
@@ -253,6 +262,12 @@ export class MarvinPromptBuilderService {
       lines.push(MARV_WEB_SEARCH_REQUIRED);
     }
 
+    if (input.hasImagesAttached) {
+      lines.push(
+        'Attached images, GIFs, video posters, and link-preview images are part of this conversation — look at them. For a near-empty caption the image is the substance.',
+      );
+    }
+
     if (input.hasGifAttached) {
       lines.push(
         'NOTE: One or more GIFs were attached as images. You are seeing a single still frame per GIF — describe what is visible in that frame; do not assume motion or animation.',
@@ -264,8 +279,9 @@ export class MarvinPromptBuilderService {
       for (const lp of input.linkPreviews) {
         const site = lp.siteName ? ` — ${lp.siteName}` : '';
         const desc = lp.description ? ` — ${lp.description.slice(0, 120)}` : '';
+        const img = lp.imageUrl ? ' [preview image attached]' : '';
         const title = lp.title ?? lp.url;
-        lines.push(`  - "${title}"${site}${desc}`);
+        lines.push(`  - "${title}"${site}${desc}${img}`);
       }
     }
 
@@ -287,7 +303,7 @@ export class MarvinPromptBuilderService {
     if (p.checkinPrompt) {
       out.push(`  [Daily check-in prompt]: "${p.checkinPrompt.slice(0, 300)}"`);
     }
-    out.push(`  ${handle}${tag}: "${p.body.slice(0, 500)}"`);
+    out.push(`  ${handle}${tag}: "${p.body.slice(0, 500)}"${marvMediaMarker(p.media)}`);
     if (p.poll) {
       out.push(MarvinPromptBuilderService.renderPoll(p.poll));
     }

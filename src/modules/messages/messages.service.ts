@@ -945,6 +945,97 @@ export class MessagesService {
   }
 
   /**
+   * Find or create a bot↔user DM conversation without sending a message.
+   * Returns null when blocked, banned, or self-DM.
+   *
+   * Used when a canned bot DM needs an idempotency claim keyed on conversationId
+   * before the first message is written.
+   */
+  async ensureBotDirectConversation(params: {
+    botUserId: string;
+    recipientUserId: string;
+  }): Promise<string | null> {
+    const { botUserId, recipientUserId } = params;
+    if (botUserId === recipientUserId) return null;
+
+    const blocked = await this.isBlockedBetween(botUserId, recipientUserId);
+    if (blocked) {
+      this.logger.debug(
+        `[messages] ensureBotDirectConversation: skipping (blocked) ${botUserId}->${recipientUserId}.`,
+      );
+      return null;
+    }
+
+    const directKey = this.directKeyFor(botUserId, recipientUserId);
+    const existing = await this.prisma.messageConversation.findFirst({
+      where: { type: 'direct', directKey },
+      select: { id: true },
+    });
+    if (existing) return existing.id;
+
+    const recipient = await this.prisma.user.findUnique({
+      where: { id: recipientUserId },
+      select: { id: true, bannedAt: true },
+    });
+    if (!recipient) throw new NotFoundException('Recipient not found.');
+    if (recipient.bannedAt) {
+      this.logger.debug(
+        `[messages] ensureBotDirectConversation: skipping (recipient banned) ${botUserId}->${recipientUserId}.`,
+      );
+      return null;
+    }
+
+    const now = new Date();
+    try {
+      const conversation = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.messageConversation.create({
+          data: {
+            type: 'direct',
+            createdByUserId: botUserId,
+            directKey,
+            lastMessageAt: now,
+          },
+        });
+
+        // Bot conversations are auto-accepted on both sides — recipient should not see a
+        // "request" tab, since Marv only DMs in response to the user's own actions.
+        await tx.messageParticipant.createMany({
+          data: [
+            {
+              conversationId: created.id,
+              userId: botUserId,
+              role: 'owner' as const,
+              status: 'accepted' as const,
+              acceptedAt: now,
+              lastReadAt: now,
+            },
+            {
+              conversationId: created.id,
+              userId: recipientUserId,
+              role: 'member' as const,
+              status: 'accepted' as const,
+              acceptedAt: now,
+            },
+          ],
+        });
+
+        return created;
+      });
+      return conversation.id;
+    } catch (err) {
+      // Concurrent create on the same directKey — re-read the winner.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const raced = await this.prisma.messageConversation.findFirst({
+          where: { type: 'direct', directKey },
+          select: { id: true },
+        });
+        return raced?.id ?? null;
+      }
+      throw err;
+    }
+  }
+
+  /**
    * Send a direct message FROM a bot account TO a user, creating the direct conversation
    * if one doesn't already exist.
    *
@@ -970,133 +1061,16 @@ export class MessagesService {
       throw new BadRequestException('A bot cannot DM itself.');
     }
 
-    const blocked = await this.isBlockedBetween(botUserId, recipientUserId);
-    if (blocked) {
-      this.logger.debug(`[messages] sendBotDirectMessage: skipping (blocked) ${botUserId}->${recipientUserId}.`);
-      return null;
-    }
+    const conversationId = await this.ensureBotDirectConversation({ botUserId, recipientUserId });
+    if (!conversationId) return null;
 
-    const directKey = this.directKeyFor(botUserId, recipientUserId);
-    const existing = await this.prisma.messageConversation.findFirst({
-      where: { type: 'direct', directKey },
-      select: { id: true },
+    const sent = await this.sendMessage({
+      userId: botUserId,
+      conversationId,
+      body: trimmed,
+      media,
     });
-
-    if (existing) {
-      const sent = await this.sendMessage({ userId: botUserId, conversationId: existing.id, body: trimmed, media });
-      return { conversationId: existing.id, message: sent.message };
-    }
-
-    const recipient = await this.prisma.user.findUnique({
-      where: { id: recipientUserId },
-      select: { id: true, bannedAt: true },
-    });
-    if (!recipient) throw new NotFoundException('Recipient not found.');
-    if (recipient.bannedAt) {
-      this.logger.debug(`[messages] sendBotDirectMessage: skipping (recipient banned) ${botUserId}->${recipientUserId}.`);
-      return null;
-    }
-
-    const now = new Date();
-    const result = await this.prisma.$transaction(async (tx) => {
-      const conversation = await tx.messageConversation.create({
-        data: {
-          type: 'direct',
-          createdByUserId: botUserId,
-          directKey,
-          lastMessageAt: now,
-        },
-      });
-
-      // Bot conversations are auto-accepted on both sides — recipient should not see a
-      // "request" tab, since Marv only DMs in response to the user's own actions.
-      await tx.messageParticipant.createMany({
-        data: [
-          {
-            conversationId: conversation.id,
-            userId: botUserId,
-            role: 'owner' as const,
-            status: 'accepted' as const,
-            acceptedAt: now,
-            lastReadAt: now,
-          },
-          {
-            conversationId: conversation.id,
-            userId: recipientUserId,
-            role: 'member' as const,
-            status: 'accepted' as const,
-            acceptedAt: now,
-          },
-        ],
-      });
-
-      const message = await tx.message.create({
-        data: {
-          conversationId: conversation.id,
-          senderId: botUserId,
-          body: trimmed,
-          ...(media.length > 0
-            ? {
-                media: {
-                  createMany: {
-                    data: media.map((m) =>
-                      m.source === 'upload'
-                        ? {
-                            source: m.source,
-                            kind: m.kind,
-                            r2Key: m.r2Key,
-                            thumbnailR2Key: m.thumbnailR2Key ?? null,
-                            width: m.width ?? null,
-                            height: m.height ?? null,
-                            durationSeconds: m.durationSeconds ?? null,
-                            alt: m.alt ?? null,
-                          }
-                        : {
-                            source: m.source,
-                            kind: 'gif' as PostMediaKind,
-                            url: m.url,
-                            mp4Url: m.mp4Url ?? null,
-                            width: m.width ?? null,
-                            height: m.height ?? null,
-                            alt: m.alt ?? null,
-                          },
-                    ),
-                  },
-                },
-              }
-            : {}),
-        },
-        include: MESSAGE_INCLUDE,
-      });
-
-      await tx.messageConversation.update({
-        where: { id: conversation.id },
-        data: { lastMessageId: message.id, lastMessageAt: now },
-      });
-
-      return { conversationId: conversation.id, message };
-    });
-
-    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const dtoForBot = toMessageDto({ message: result.message, publicBaseUrl, viewerUserId: botUserId });
-    const dtoForRecipient = toMessageDto({ message: result.message, publicBaseUrl, viewerUserId: recipientUserId });
-
-    this.emitUnreadCounts(botUserId);
-    this.emitUnreadCounts(recipientUserId);
-    this.presenceRealtime.emitMessageCreated(botUserId, { conversationId: result.conversationId, message: dtoForBot });
-    this.presenceRealtime.emitMessageCreated(recipientUserId, {
-      conversationId: result.conversationId,
-      message: dtoForRecipient,
-    });
-    this.events.emitMessagePushRequested({
-      recipientUserId,
-      senderUserId: botUserId,
-      senderName: 'Marv',
-      body: trimmed || (media.length > 0 ? '📷 Sent a photo' : ''),
-      conversationId: result.conversationId,
-    });
-
-    return { conversationId: result.conversationId, message: dtoForRecipient };
+    return { conversationId, message: sent.message };
   }
 
   async createConversation(params: {

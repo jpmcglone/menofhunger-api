@@ -9,22 +9,22 @@ import { MarvinContextCardService } from './marvin-context-card.service';
  *  - posts marked `onlyMe`, `verifiedOnly`, or `premiumOnly`
  *  - emails / phone numbers
  *  - sentences containing crisis / medical vocabulary
- *
- * These tests exercise the redaction + visibility filters; they do not assert
- * the exact wording of generated cards (that's an integration concern).
  */
 
 function makeService(opts?: {
   aiText?: string | null;
   aiConfigured?: boolean;
-  /** Posts the Prisma mock should return for findMany. The test asserts on the where-clause. */
-  publicPosts?: Array<{ body: string }>;
+  publicPosts?: Array<{ body: string; media?: any[]; poll?: any }>;
   publicArticles?: Array<{ title: string; excerpt?: string }>;
+  existingCard?: { cardText: string; source: string; updatedAt: Date } | null;
+  interests?: string[];
 }) {
   const findManyPosts = jest.fn(async (_args: any) => {
     return (opts?.publicPosts ?? []).map((p, i) => ({
       body: p.body,
       createdAt: new Date(2026, 0, i + 1),
+      media: p.media ?? [],
+      poll: p.poll ?? null,
     }));
   });
 
@@ -37,13 +37,14 @@ function makeService(opts?: {
   });
 
   const prisma: any = {
+    $queryRaw: jest.fn(async () => []),
     user: {
       findUnique: jest.fn(async ({ where }: any) => {
         if (where.id === 'banned-user') return null;
         if (where.id === 'bot-user') {
           return baseUser({ id: 'bot-user', isBot: true });
         }
-        return baseUser({ id: where.id });
+        return baseUser({ id: where.id, interests: opts?.interests ?? ['woodworking'] });
       }),
       findFirst: jest.fn(async () => baseUser({ id: 'u-1', username: 'alice' })),
       findMany: jest.fn(async () => []),
@@ -52,8 +53,8 @@ function makeService(opts?: {
     article: { findMany: findManyArticles },
     follow: { count: jest.fn(async () => 0) },
     userContextCard: {
-      findUnique: jest.fn(async () => null),
-      upsert: jest.fn(async ({ create }: any) => create),
+      findUnique: jest.fn(async () => opts?.existingCard ?? null),
+      upsert: jest.fn(async ({ create, update }: any) => update ?? create),
     },
   };
 
@@ -71,12 +72,24 @@ function makeService(opts?: {
     })),
   };
 
+  const appConfig: any = {
+    marvOpenAI: () => ({
+      visionEnabled: true,
+      visionModes: ['fast', 'regular', 'smart'],
+      visionMaxImagesPerTurn: 4,
+    }),
+    r2: () => ({ publicBaseUrl: 'https://cdn.test' }),
+  };
+
+  const linkMetadata: any = { previewLinks: jest.fn(async () => []) };
+
   return {
-    service: new MarvinContextCardService(prisma, ai),
+    service: new MarvinContextCardService(prisma, ai, appConfig, linkMetadata),
     prisma,
     ai,
     findManyPosts,
     findManyArticles,
+    linkMetadata,
   };
 }
 
@@ -86,6 +99,7 @@ function baseUser(overrides: Record<string, any>) {
     username: 'alice',
     name: 'Alice',
     bio: 'Reader.',
+    interests: [],
     premium: false,
     premiumPlus: false,
     isOrganization: false,
@@ -107,6 +121,7 @@ describe('MarvinContextCardService — refreshCardForUser', () => {
       deletedAt: null,
       visibility: 'public',
     });
+    expect(args.take).toBe(12);
   });
 
   it('queries public published articles with the correct filter', async () => {
@@ -120,9 +135,110 @@ describe('MarvinContextCardService — refreshCardForUser', () => {
       isDraft: false,
       visibility: 'public',
     });
-    // Article title should be passed into the AI prompt.
     const aiCall = m.ai.respond.mock.calls[0]![0];
     expect(aiCall.userMessage).toContain('Faith & Fasting');
+  });
+
+  it('includes interests in the AI prompt', async () => {
+    const m = makeService({ interests: ['woodworking', 'scripture'] });
+    await m.service.refreshCardForUser('u-1');
+    const aiCall = m.ai.respond.mock.calls[0]![0];
+    expect(aiCall.userMessage).toContain('woodworking');
+    expect(aiCall.userMessage).toContain('scripture');
+  });
+
+  it('folds new posts into the existing card instead of starting from scratch', async () => {
+    const m = makeService({
+      existingCard: {
+        cardText: 'Alice writes about books.',
+        source: 'generated',
+        updatedAt: new Date('2026-01-01T00:00:00Z'),
+      },
+      publicPosts: [{ body: 'Just finished a walnut bench.' }],
+      aiText: 'Alice writes about books and lately has been posting shop projects, including a walnut bench.',
+    });
+    const result = await m.service.refreshCardForUser('u-1');
+    const postArgs = m.findManyPosts.mock.calls[0]![0];
+    expect(postArgs.where.createdAt).toEqual({ gt: new Date('2026-01-01T00:00:00Z') });
+    const aiCall = m.ai.respond.mock.calls[0]![0];
+    expect(aiCall.userMessage).toContain('Existing card:');
+    expect(aiCall.userMessage).toContain('Alice writes about books.');
+    expect(aiCall.userMessage).toContain('New public posts');
+    expect(aiCall.developerNote).toMatch(/fold in the NEW public activity/i);
+    expect(result).toMatch(/walnut bench/i);
+  });
+
+  it('skips the model when an existing card has no new public activity', async () => {
+    const m = makeService({
+      existingCard: {
+        cardText: 'Alice writes about books.',
+        source: 'generated',
+        updatedAt: new Date('2026-01-01T00:00:00Z'),
+      },
+      publicPosts: [],
+    });
+    const result = await m.service.refreshCardForUser('u-1');
+    expect(result).toBe('Alice writes about books.');
+    expect(m.ai.respond).not.toHaveBeenCalled();
+    expect(m.prisma.userContextCard.upsert).not.toHaveBeenCalled();
+  });
+
+  it('forceFull rebuilds even when nothing new has landed', async () => {
+    const m = makeService({
+      existingCard: {
+        cardText: 'Alice writes about books.',
+        source: 'generated',
+        updatedAt: new Date('2026-01-01T00:00:00Z'),
+      },
+      publicPosts: [{ body: 'An older post.' }],
+    });
+    await m.service.refreshCardForUser('u-1', { forceFull: true });
+    const postArgs = m.findManyPosts.mock.calls[0]![0];
+    expect(postArgs.where.createdAt).toBeUndefined();
+    expect(m.ai.respond).toHaveBeenCalled();
+  });
+
+  it('passes post images to vision', async () => {
+    const m = makeService({
+      publicPosts: [{
+        body: 'Shop day.',
+        media: [{ kind: 'image', source: 'upload', r2Key: 'posts/bench.jpg', url: null, thumbnailR2Key: null }],
+      }],
+    });
+    await m.service.refreshCardForUser('u-1');
+    const aiCall = m.ai.respond.mock.calls[0]![0];
+    expect(aiCall.imageUrls).toEqual(['https://cdn.test/posts/bench.jpg']);
+    expect(aiCall.userMessage).toMatch(/attached: image/i);
+  });
+
+  it('passes video posters, GIFs, polls, and link-preview images', async () => {
+    const m = makeService({
+      publicPosts: [{
+        body: 'Vote and watch https://example.com/build',
+        media: [
+          { kind: 'video', source: 'upload', r2Key: 'posts/clip.mp4', url: null, thumbnailR2Key: 'posts/clip.jpg' },
+          { kind: 'gif', source: 'giphy', r2Key: null, url: 'https://giphy.test/x.gif', thumbnailR2Key: null },
+        ],
+        poll: {
+          totalVoteCount: 3,
+          endsAt: null,
+          options: [{ text: 'Walnut', voteCount: 2 }, { text: 'Oak', voteCount: 1 }],
+        },
+      }],
+    });
+    m.linkMetadata.previewLinks.mockResolvedValueOnce([
+      { url: 'https://example.com/build', title: 'Build log', description: 'A bench.', siteName: 'Example', imageUrl: 'https://og.test/bench.jpg' },
+    ]);
+    await m.service.refreshCardForUser('u-1');
+    const aiCall = m.ai.respond.mock.calls[0]![0];
+    expect(aiCall.imageUrls).toEqual([
+      'https://cdn.test/posts/clip.jpg',
+      'https://giphy.test/x.gif',
+      'https://og.test/bench.jpg',
+    ]);
+    expect(aiCall.userMessage).toMatch(/attached: animated GIF \+ video/i);
+    expect(aiCall.userMessage).toContain('[poll: Walnut (2), Oak (1)]');
+    expect(aiCall.userMessage).toContain('[preview image attached]');
   });
 
   it('skips bot accounts entirely (no AI call, no upsert)', async () => {
@@ -142,7 +258,6 @@ describe('MarvinContextCardService — refreshCardForUser', () => {
     expect(result).not.toBeNull();
     expect(result).not.toMatch(/@example\.com/i);
     expect(result).not.toMatch(/415/);
-    // The redaction marker should appear at least once.
     expect(result).toContain('[redacted]');
   });
 
@@ -155,7 +270,6 @@ describe('MarvinContextCardService — refreshCardForUser', () => {
     expect(result).not.toBeNull();
     expect(result).not.toMatch(/medication/i);
     expect(result).not.toMatch(/depress/i);
-    // Non-sensitive content is preserved.
     expect(result).toMatch(/books/i);
     expect(result).toMatch(/hiking/i);
   });
@@ -164,17 +278,17 @@ describe('MarvinContextCardService — refreshCardForUser', () => {
     const m = makeService({ aiText: '' });
     const result = await m.service.refreshCardForUser('u-1');
     expect(result).not.toBeNull();
-    expect(result!.length).toBeLessThanOrEqual(800);
-    // Fallback names the user.
+    expect(result!.length).toBeLessThanOrEqual(1200);
     expect(result!.toLowerCase()).toContain('alice');
   });
 
   it('falls back deterministically when the AI is not configured', async () => {
-    const m = makeService({ aiConfigured: false });
+    const m = makeService({ aiConfigured: false, interests: ['woodworking'] });
     const result = await m.service.refreshCardForUser('u-1');
     expect(m.ai.respond).not.toHaveBeenCalled();
     expect(result).not.toBeNull();
     expect(result!.toLowerCase()).toContain('alice');
+    expect(result).toMatch(/woodworking/i);
   });
 });
 
@@ -183,5 +297,16 @@ describe('MarvinContextCardService — getCardText', () => {
     const m = makeService();
     const result = await m.service.getCardText('   ');
     expect(result).toBeNull();
+  });
+});
+
+describe('MarvinContextCardService — peekFallbackCard', () => {
+  it('returns a profile-only card without calling the model', async () => {
+    const m = makeService({ interests: ['woodworking'] });
+    const result = await m.service.peekFallbackCard('u-1');
+    expect(result).toMatch(/alice/i);
+    expect(result).toMatch(/woodworking/i);
+    expect(m.ai.respond).not.toHaveBeenCalled();
+    expect(m.prisma.userContextCard.upsert).not.toHaveBeenCalled();
   });
 });

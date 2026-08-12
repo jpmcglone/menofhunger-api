@@ -6,9 +6,16 @@ import { CacheService } from '../../redis/cache.service';
 import type { MarvAIToolCallContext } from './marvin-ai.service';
 import { MarvinBotIdentityService } from './marvin-bot-identity.service';
 import { MarvinContextCardService } from './marvin-context-card.service';
+import { ScriptureService } from '../../scripture/scripture.service';
+import { JobsService } from '../../jobs/jobs.service';
+import { JOBS } from '../../jobs/jobs.constants';
 
 const RECENT_MESSAGES_DEFAULT = 10;
 const RECENT_MESSAGES_MAX = 30;
+const SIMILAR_MEMBERS_DEFAULT = 5;
+const SIMILAR_MEMBERS_MAX = 8;
+const SIMILAR_CANDIDATE_LIMIT = 60;
+const CARD_SNIPPET_MAX = 280;
 
 const getUserBasicInfoSchema = z.object({ username: z.string().min(1).max(50) });
 const getUserContextCardSchema = z.object({ username: z.string().min(1).max(50) });
@@ -22,17 +29,29 @@ const getMyRecentChatMessagesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(RECENT_MESSAGES_MAX).optional(),
 });
 const fetchUrlContentSchema = z.object({ url: z.string().min(1).max(2_000) });
+const getBiblePassageSchema = z.object({ reference: z.string().min(1).max(120) });
+const findSimilarMembersSchema = z.object({
+  query: z.string().trim().min(1).max(120).optional(),
+  limit: z.coerce.number().int().min(1).max(SIMILAR_MEMBERS_MAX).optional(),
+});
+
+const STOPWORDS = new Set([
+  'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'is', 'are',
+  'was', 'were', 'be', 'been', 'i', 'me', 'my', 'we', 'our', 'you', 'your', 'he', 'she', 'they',
+  'them', 'his', 'her', 'their', 'this', 'that', 'from', 'as', 'by', 'about', 'into', 'who',
+]);
 
 // Per-tool TTLs (seconds). Tuned so the model's tool loop sees consistent data across
 // rounds, and a hot thread/user doesn't repeatedly hit Postgres while several premium
 // users mention @marv inside a few minutes.
 const TTL_USER_BASIC = 300; // 5 min — premium/verified rarely flip
-const TTL_USER_CARD = 300; // 5 min — refreshed on a 30-day cron, no rush
+const TTL_USER_CARD = 300; // 5 min — cards refresh on new public activity, not every tool call
 const TTL_POST = 30; // 30s — body edits should reflect quickly
 const TTL_THREAD_RECENT = 30; // 30s — replies arrive frequently
 const TTL_THREAD_SUMMARY = 300; // 5 min — only updated by summarize job
 const TTL_CHAT_RECENT = 15; // 15s — keep tight, the user's own chat
 const TTL_URL_CONTENT = 3_600; // 1 hour — page content is stable enough
+const TTL_SIMILAR = 300; // 5 min — membership/interest churn is slow
 const TTL_NEGATIVE = 60; // 1 min — dedupe "no_card"/"no_summary"/"fetch_failed" misses
 
 const MAX_URL_CONTENT_CHARS = 6_000; // Keeps the tool output inside the 8KB AI-layer cap
@@ -65,6 +84,8 @@ export class MarvinToolHandlersService {
     private readonly identity: MarvinBotIdentityService,
     private readonly cache: CacheService,
     private readonly contextCard: MarvinContextCardService,
+    private readonly scripture: ScriptureService,
+    private readonly jobs: JobsService,
   ) {}
 
   async dispatch(name: string, args: unknown, ctx: MarvAIToolCallContext): Promise<string> {
@@ -105,6 +126,10 @@ export class MarvinToolHandlersService {
         return await this.getMyRecentChatMessages(args, ctx);
       case 'fetch_url_content':
         return await this.fetchUrlContent(args);
+      case 'get_bible_passage':
+        return await this.getBiblePassage(args);
+      case 'find_similar_members':
+        return await this.findSimilarMembers(args, ctx);
       default:
         return { error: 'unknown_tool', name };
     }
@@ -187,33 +212,37 @@ export class MarvinToolHandlersService {
       },
     });
 
-    // No card yet — generate one on the fly so Marv always has context for the
-    // user he's talking to. This costs one extra "fast" model call but only
-    // happens once per user; subsequent calls hit the DB/cache.
+    // No card yet — return a cheap profile fallback and enqueue the real
+    // generation so this tool call never waits on the model.
     if (!card) {
-      this.logger.log(`[marv-tools] no context card for @${lower} — generating on the fly`);
+      this.logger.log(`[marv-tools] no context card for @${lower} — enqueueing refresh`);
       try {
         const user = await this.prisma.user.findFirst({
           where: { username: { equals: username, mode: 'insensitive' }, isBot: false, bannedAt: null },
           select: { id: true, username: true },
         });
         if (user) {
-          const cardText = await this.contextCard.refreshCardForUser(user.id);
-          if (cardText) {
+          await this.jobs
+            .enqueue(JOBS.marvinContextCardRefresh, { userId: user.id }, { jobId: `marvin-context-card-${user.id}` })
+            .catch((err) => {
+              this.logger.debug(
+                `[marv-tools] context-card enqueue skipped for @${lower}: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+          const fallback = await this.contextCard.peekFallbackCard(user.id);
+          if (fallback) {
             card = {
               username: user.username,
-              cardText: cardText.slice(0, 4_000),
-              source: 'generated',
+              cardText: fallback.slice(0, 4_000),
+              source: 'fallback',
               updatedAt: new Date().toISOString(),
             };
-            // Overwrite the negative-cache entry so the next tool call gets the real card.
-            await this.cache.setJson(cacheKey, { meta: card }, { ttlSeconds: TTL_USER_CARD });
-            this.logger.log(`[marv-tools] on-the-fly card generated for @${lower} len=${cardText.length}`);
+            await this.cache.setJson(cacheKey, { meta: card }, { ttlSeconds: TTL_NEGATIVE });
           }
         }
       } catch (err) {
         this.logger.warn(
-          `[marv-tools] on-the-fly card generation failed for @${lower}: ${err instanceof Error ? err.message : String(err)}`,
+          `[marv-tools] context-card fallback failed for @${lower}: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
@@ -240,6 +269,18 @@ export class MarvinToolHandlersService {
             rootId: true,
             parentId: true,
             user: { select: { username: true, name: true, isBot: true } },
+            media: {
+              where: { deletedAt: null },
+              select: { kind: true },
+              orderBy: { position: 'asc' },
+              take: 8,
+            },
+            poll: {
+              select: {
+                totalVoteCount: true,
+                options: { select: { text: true, voteCount: true }, orderBy: { position: 'asc' } },
+              },
+            },
           },
         });
         if (!post) return { error: 'post_not_found' };
@@ -255,6 +296,8 @@ export class MarvinToolHandlersService {
             displayName: post.user.name,
             isBot: post.user.isBot,
           },
+          media: (post.media ?? []).map((m) => m.kind),
+          poll: compactPoll(post.poll),
         };
       },
     });
@@ -281,6 +324,18 @@ export class MarvinToolHandlersService {
             body: true,
             createdAt: true,
             user: { select: { username: true, name: true, isBot: true } },
+            media: {
+              where: { deletedAt: null },
+              select: { kind: true },
+              orderBy: { position: 'asc' },
+              take: 8,
+            },
+            poll: {
+              select: {
+                totalVoteCount: true,
+                options: { select: { text: true, voteCount: true }, orderBy: { position: 'asc' } },
+              },
+            },
           },
         });
         if (!root) return { error: 'thread_not_found' };
@@ -296,6 +351,18 @@ export class MarvinToolHandlersService {
             createdAt: true,
             parentId: true,
             user: { select: { username: true, name: true, isBot: true } },
+            media: {
+              where: { deletedAt: null },
+              select: { kind: true },
+              orderBy: { position: 'asc' },
+              take: 8,
+            },
+            poll: {
+              select: {
+                totalVoteCount: true,
+                options: { select: { text: true, voteCount: true }, orderBy: { position: 'asc' } },
+              },
+            },
           },
           orderBy: [{ createdAt: 'desc' }],
           take: limit,
@@ -312,6 +379,8 @@ export class MarvinToolHandlersService {
               displayName: root.user.name,
               isBot: root.user.isBot,
             },
+            media: (root.media ?? []).map((m) => m.kind),
+            poll: compactPoll(root.poll),
           },
           replies: orderedReplies.map((p) => ({
             id: p.id,
@@ -323,6 +392,8 @@ export class MarvinToolHandlersService {
               displayName: p.user.name,
               isBot: p.user.isBot,
             },
+            media: (p.media ?? []).map((m) => m.kind),
+            poll: compactPoll(p.poll),
           })),
         };
       },
@@ -483,4 +554,187 @@ export class MarvinToolHandlersService {
     }
     return result;
   }
+
+  /**
+   * Non-AI scripture lookup via {@link ScriptureService} (bible.helloao.org + Redis).
+   * Use only when the user asks for a passage — do not volunteer Scripture.
+   */
+  private async getBiblePassage(rawArgs: unknown): Promise<unknown> {
+    const parsed = getBiblePassageSchema.safeParse(rawArgs);
+    if (!parsed.success) return { error: 'invalid_args' };
+    const { reference } = parsed.data;
+    const dto = await this.scripture.getRef(reference);
+    if (!dto) {
+      return {
+        error: 'not_found',
+        note: 'Could not resolve that scripture reference. Try a clearer form like "John 3:16" or "Romans 8:28-30".',
+      };
+    }
+    return {
+      reference: dto.reference,
+      translation: dto.translation,
+      translationName: dto.translationName,
+      text: dto.text.slice(0, 4_000),
+      verseCount: dto.verses.length,
+    };
+  }
+
+  /**
+   * Find members similar to the requester (or matching a free-text query) using
+   * `User.interests` overlap + simple `UserContextCard.cardText` token overlap.
+   * No AI / embeddings — public-safe fields only.
+   */
+  private async findSimilarMembers(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
+    const parsed = findSimilarMembersSchema.safeParse(rawArgs);
+    if (!parsed.success) return { error: 'invalid_args' };
+    const limit = parsed.data.limit ?? SIMILAR_MEMBERS_DEFAULT;
+    const query = (parsed.data.query ?? '').trim();
+    const requesterUserId = ctx.requesterUserId;
+    if (!requesterUserId) return { error: 'missing_requester' };
+
+    const queryHash = crypto
+      .createHash('sha1')
+      .update(`${requesterUserId}|${query.toLowerCase()}|${limit}`)
+      .digest('hex')
+      .slice(0, 16);
+
+    return await this.cache.getOrSetJson<unknown>({
+      enabled: true,
+      key: `marv:tool:similar:${queryHash}`,
+      ttlSeconds: TTL_SIMILAR,
+      compute: async () => {
+        const requester = await this.prisma.user.findUnique({
+          where: { id: requesterUserId },
+          select: {
+            interests: true,
+            contextCard: { select: { cardText: true } },
+          },
+        });
+        if (!requester) return { error: 'requester_not_found', members: [] };
+
+        const interestSeeds = new Set(
+          (requester.interests ?? []).map((i) => i.trim().toLowerCase()).filter(Boolean),
+        );
+        for (const token of tokenizeForSimilarity(query)) {
+          interestSeeds.add(token);
+        }
+        // Also seed from the requester's own card so "anyone like me?" works with no query.
+        if (!query) {
+          for (const token of tokenizeForSimilarity(requester.contextCard?.cardText ?? '')) {
+            interestSeeds.add(token);
+          }
+        }
+        const seeds = [...interestSeeds].slice(0, 24);
+        if (seeds.length === 0) {
+          return {
+            members: [],
+            note: 'No interests or query to match on. Ask the user what they are looking for.',
+          };
+        }
+
+        // Prefer structured interest overlap (Prisma hasSome). Also pull a small
+        // recent-card cohort so free-text queries can still match on cardText.
+        const requesterInterests = (requester.interests ?? []).filter(Boolean);
+        const byInterest =
+          requesterInterests.length > 0
+            ? await this.prisma.user.findMany({
+                where: {
+                  id: { not: requesterUserId },
+                  bannedAt: null,
+                  isBot: false,
+                  interests: { hasSome: requesterInterests },
+                },
+                select: {
+                  username: true,
+                  name: true,
+                  interests: true,
+                  contextCard: { select: { cardText: true } },
+                },
+                take: SIMILAR_CANDIDATE_LIMIT,
+              })
+            : [];
+
+        const byCard =
+          seeds.length > 0
+            ? await this.prisma.user.findMany({
+                where: {
+                  id: { not: requesterUserId },
+                  bannedAt: null,
+                  isBot: false,
+                  contextCard: {
+                    is: {
+                      OR: seeds.slice(0, 8).map((term) => ({
+                        cardText: { contains: term, mode: 'insensitive' as const },
+                      })),
+                    },
+                  },
+                },
+                select: {
+                  username: true,
+                  name: true,
+                  interests: true,
+                  contextCard: { select: { cardText: true } },
+                },
+                take: SIMILAR_CANDIDATE_LIMIT,
+              })
+            : [];
+
+        const seen = new Set<string>();
+        const merged = [...byInterest, ...byCard].filter((u) => {
+          const key = (u.username ?? '').toLowerCase();
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+        const scored = merged
+          .map((row) => {
+            const interestOverlap = (row.interests ?? [])
+              .map((i) => i.trim().toLowerCase())
+              .filter((i) => interestSeeds.has(i));
+            const cardLower = (row.contextCard?.cardText ?? '').toLowerCase();
+            const cardHits = seeds.filter((s) => s.length >= 3 && cardLower.includes(s));
+            const score = interestOverlap.length * 3 + cardHits.length;
+            const reasons: string[] = [];
+            if (interestOverlap.length) {
+              reasons.push(`shared interests: ${interestOverlap.slice(0, 4).join(', ')}`);
+            } else if (cardHits.length) {
+              reasons.push(`profile mentions: ${cardHits.slice(0, 4).join(', ')}`);
+            }
+            return {
+              username: row.username,
+              displayName: row.name,
+              cardSnippet: (row.contextCard?.cardText ?? '').slice(0, CARD_SNIPPET_MAX) || null,
+              reasons,
+              score,
+            };
+          })
+          .filter((m) => m.score > 0 && m.username)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit)
+          .map(({ score: _s, ...rest }) => rest);
+
+        return { members: scored, matchedOn: seeds.slice(0, 8) };
+      },
+    });
+  }
+}
+
+function tokenizeForSimilarity(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9+#]+/g)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 3 && !STOPWORDS.has(t))
+    .slice(0, 24);
+}
+
+function compactPoll(
+  poll: { totalVoteCount: number; options: Array<{ text: string; voteCount: number }> } | null | undefined,
+): { totalVoteCount: number; options: Array<{ text: string; voteCount: number }> } | null {
+  if (!poll) return null;
+  return {
+    totalVoteCount: poll.totalVoteCount,
+    options: poll.options.map((o) => ({ text: o.text, voteCount: o.voteCount })),
+  };
 }

@@ -15,7 +15,7 @@ import { MarvinUsageService } from '../services/marvin-usage.service';
 import { PresenceRealtimeService } from '../../presence/presence-realtime.service';
 import { MARV_ERROR_CODES, buildMarvIdempotencyKey } from '../marvin.constants';
 import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
-import { publicAssetUrl } from '../../../common/assets/public-asset-url';
+import { fillVisionSlots, resolveMarvVisionUrl } from '../services/marvin-vision-media';
 import { parseMentionsFromBody } from '../../../common/mentions/mention-regex';
 
 /**
@@ -177,8 +177,7 @@ export class MarvinPrivateReplyProcessor {
     }
 
     const mediaSelect = {
-      where: { kind: { not: 'video' as const } },
-      select: { id: true, kind: true, source: true, r2Key: true, url: true },
+      select: { id: true, kind: true, source: true, r2Key: true, url: true, thumbnailR2Key: true },
     };
 
     // 3. Load the message + sender + media + optional replyTo media.
@@ -277,7 +276,8 @@ export class MarvinPrivateReplyProcessor {
       `[marv] private-reply gate-pass step=routing requested=${requestedMode} effective=${effectiveMode} reason=${routed.reason} crisis=${routed.crisisDetected} webSearchDemanded=${routed.webSearchDemanded}`,
     );
 
-    // 6. Credit gate — must afford mode cost + vision + worst-case one web search.
+    // 6. Credit soft-check — mode + vision + one web search + one URL fetch. Hard reserve
+    // happens after rate-limit / AI-configured gates.
     const cost = this.credits.costForMode(effectiveMode);
     const creditCfg = this.appConfig.marvCredits();
     const openAICfg = this.appConfig.marvOpenAI();
@@ -287,10 +287,11 @@ export class MarvinPrivateReplyProcessor {
     const webSearchBuffer = openAICfg.webSearchEnabled && openAICfg.webSearchModes.includes(effectiveMode as string)
       ? creditCfg.webSearchCreditCost
       : 0;
-    const reservedCost = cost + visionCost + webSearchBuffer;
+    const urlFetchBuffer = creditCfg.urlFetchCreditCost;
+    const reservedCost = cost + visionCost + webSearchBuffer + urlFetchBuffer;
     const summary = await this.credits.refill(requestingUserId);
     this.logger.log(
-      `[marv] private-reply gate-pass step=credits balance=${summary.credits} cost=${cost} vision=${visionCost} webSearchBuffer=${webSearchBuffer} reserved=${reservedCost} ok=${summary.credits >= reservedCost}`,
+      `[marv] private-reply gate-pass step=credits balance=${summary.credits} cost=${cost} vision=${visionCost} webSearchBuffer=${webSearchBuffer} urlFetchBuffer=${urlFetchBuffer} reserved=${reservedCost} ok=${summary.credits >= reservedCost}`,
     );
     if (summary.credits < reservedCost) {
       this.logger.log(
@@ -390,6 +391,52 @@ export class MarvinPrivateReplyProcessor {
       return;
     }
 
+    // 8b. Hard-reserve credits before the AI turn.
+    let reservedHeld = 0;
+    let postSpend: Awaited<ReturnType<typeof this.credits.settle>> | null = null;
+    try {
+      postSpend = await this.credits.reserve(requestingUserId, reservedCost, {
+        recentSummary: { credits: summary.credits, lastRefilledAt: summary.lastRefilledAt },
+      });
+      reservedHeld = reservedCost;
+    } catch (err) {
+      if (err instanceof InsufficientMarvCreditsError) {
+        this.logger.log(
+          `[marv] private-reply EXIT reason=no_credits_at_reserve balance=${err.currentCredits} reserved=${reservedCost}`,
+        );
+        await this.canned.sendOutOfCreditsDm({
+          userId: requestingUserId,
+          currentCredits: err.currentCredits,
+          requiredCredits: reservedCost,
+          triggeringPostId: null,
+        });
+        await this.usage.recordEvent({
+          userId: requestingUserId,
+          source: 'private_session',
+          sourceId: conversationId,
+          rootPostId: null,
+          requestedMode,
+          effectiveMode,
+          creditsSpent: 0,
+          modelUsed: this.ai.modelForMode(effectiveMode),
+          routingReason: routed.reason,
+          errorCode: MARV_ERROR_CODES.noCredits,
+          latencyMs: Date.now() - startedAt,
+        });
+        return;
+      }
+      throw err;
+    }
+
+    const refundHeld = async () => {
+      if (reservedHeld <= 0) return;
+      const amount = reservedHeld;
+      reservedHeld = 0;
+      await this.credits.refund(requestingUserId, amount).catch((e) => {
+        this.logger.warn(`[marv] private-reply refund failed: ${String(e)}`);
+      });
+    };
+
     // Pull previous response id for chain memory.
     const sessionState = await this.prisma.marvinPrivateSessionState.findUnique({
       where: { conversationId },
@@ -399,8 +446,8 @@ export class MarvinPrivateReplyProcessor {
     // Collect image URLs: current message first, then replyTo fills remaining slots.
     const publicBase = this.appConfig.r2()?.publicBaseUrl ?? null;
 
-    const msgMedia = (msg.media ?? []).filter((m) => m.kind !== 'video');
-    const replyToMedia = (msg.replyTo?.media ?? []).filter((m) => m.kind !== 'video');
+    const msgMedia = msg.media ?? [];
+    const replyToMedia = msg.replyTo?.media ?? [];
     const totalMediaCount = msgMedia.length + replyToMedia.length;
     if (!visionActive && totalMediaCount > 0) {
       this.logger.warn(
@@ -412,17 +459,17 @@ export class MarvinPrivateReplyProcessor {
     const imageEntries: { resolvedUrl: string; kind: string }[] = [];
     for (const m of [...msgMedia, ...replyToMedia]) {
       if (imageEntries.length >= maxImages) break;
-      const resolved = m.source === 'upload' && m.r2Key
-        ? publicAssetUrl({ publicBaseUrl: publicBase, key: m.r2Key })
-        : (m.url ?? null);
+      const resolved = resolveMarvVisionUrl(m, publicBase);
       if (resolved) imageEntries.push({ resolvedUrl: resolved, kind: m.kind });
     }
-    const imageUrls = imageEntries.map((e) => e.resolvedUrl);
-    const hasGifAttached = imageEntries.some((e) => e.kind === 'gif');
-
-    // Collect link previews from user's message + replyTo body (read-only, no external fetch).
     const previewBodies = [text, msg.replyTo?.body ?? ''].filter(Boolean).join('\n');
     const linkPreviews = await this.linkMetadata.previewLinks(previewBodies);
+    const imageUrls = fillVisionSlots(
+      imageEntries.map((e) => e.resolvedUrl),
+      linkPreviews.map((p) => p.imageUrl),
+      maxImages,
+    );
+    const hasGifAttached = imageEntries.some((e) => e.kind === 'gif');
 
     // Extract @username mentions from the message (and replyTo) so Marv knows which
     // users are referenced and can call get_user_context_card / get_user_basic_info.
@@ -445,6 +492,7 @@ export class MarvinPrivateReplyProcessor {
       webSearchDemanded: routed.webSearchDemanded,
       linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,
       hasGifAttached: hasGifAttached || undefined,
+      hasImagesAttached: imageUrls.length > 0 || undefined,
     });
     // Show "Marv is typing…" to the user while the AI call is in flight. The
     // call can take 5–15s with tool loops, so we heartbeat below the client's
@@ -489,6 +537,7 @@ export class MarvinPrivateReplyProcessor {
         err instanceof Error ? err.stack : undefined,
       );
       stopTyping();
+      await refundHeld();
       const isNotConfigured = err instanceof MarvinAINotConfiguredError;
       const code = isNotConfigured ? MARV_ERROR_CODES.aiNotConfigured : MARV_ERROR_CODES.aiError;
       if (isNotConfigured) {
@@ -537,6 +586,7 @@ export class MarvinPrivateReplyProcessor {
 
     const replyText = (aiResult.text ?? '').trim();
     if (!replyText) {
+      await refundHeld();
       this.logger.warn(
         `[marv] private-reply EXIT reason=ai_no_text errorCode=${aiResult.errorCode ?? 'no_text'} resp=${aiResult.responseId} model=${aiResult.modelUsed} — sending transient-error DM`,
       );
@@ -571,6 +621,7 @@ export class MarvinPrivateReplyProcessor {
 
     const marvId = await this.identity.getMarvUserId();
     if (!marvId) {
+      await refundHeld();
       this.logger.error('[marv] private-reply EXIT reason=bot_user_missing — cannot send DM.');
       try {
         await this.canned.sendTransientErrorDm({ userId: requestingUserId });
@@ -592,8 +643,7 @@ export class MarvinPrivateReplyProcessor {
       return;
     }
 
-    // 9. Compute actual credit cost + charge before delivering.
-    // Pass the pre-check refill summary so spend can skip its inner refill SELECT.
+    // 9. Settle reservation to actual cost, then deliver.
     if (aiResult.responseId) {
       await this.prisma.marvinPrivateSessionState.upsert({
         where: { conversationId },
@@ -622,18 +672,15 @@ export class MarvinPrivateReplyProcessor {
       );
     }
 
-    let postSpend: Awaited<ReturnType<typeof this.credits.spend>> | null = null;
     try {
-      postSpend = await this.credits.spend(requestingUserId, totalCost, {
-        recentSummary: { credits: summary.credits, lastRefilledAt: summary.lastRefilledAt },
-      });
+      postSpend = await this.credits.settle(requestingUserId, reservedCost, totalCost);
+      reservedHeld = 0;
     } catch (err) {
-      stopTyping();
       if (err instanceof InsufficientMarvCreditsError) {
+        reservedHeld = 0;
         this.logger.warn(
-          `[marv] private-reply EXIT reason=no_credits_at_spend balance=${err.currentCredits} needed=${totalCost}`,
+          `[marv] private-reply EXIT reason=no_credits_at_settle balance=${err.currentCredits} needed=${totalCost}`,
         );
-        // Send the canned out-of-credits DM so the user understands why Marv stayed silent.
         try {
           await this.canned.sendOutOfCreditsDm({
             userId: requestingUserId,
@@ -658,9 +705,15 @@ export class MarvinPrivateReplyProcessor {
         });
         return;
       }
-      // Unexpected spend error — rethrow; outer catch will release the idempotency key.
+      await refundHeld();
       throw err;
     }
+
+    const refundSettled = async () => {
+      await this.credits.refund(requestingUserId, totalCost).catch((e) => {
+        this.logger.warn(`[marv] private-reply settled refund failed: ${String(e)}`);
+      });
+    };
 
     this.logger.log(
       `[marv] private-reply sending DM length=${replyText.length} to user=${requestingUserId}`,
@@ -680,11 +733,10 @@ export class MarvinPrivateReplyProcessor {
         `[marv] private-reply DM SEND FAILED: ${err instanceof Error ? err.message : String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
+      await refundSettled();
       try {
         await this.canned.sendTransientErrorDm({ userId: requestingUserId });
       } catch { /* best-effort */ }
-      // Credits already spent but delivery failed. Mark as delivered to prevent key
-      // deletion so a BullMQ retry can't produce a double-charge.
       delivered = true;
       await this.usage.recordEvent({
         userId: requestingUserId,
@@ -693,12 +745,11 @@ export class MarvinPrivateReplyProcessor {
         rootPostId: null,
         requestedMode,
         effectiveMode,
-        creditsSpent: totalCost,
+        creditsSpent: 0,
         modelUsed: aiResult.modelUsed,
         routingReason: routed.reason,
         responseId: aiResult.responseId,
         errorCode: MARV_ERROR_CODES.messageFailed,
-        postSpendSummary: postSpend,
         latencyMs: Date.now() - startedAt,
       }).catch(() => undefined);
       return;

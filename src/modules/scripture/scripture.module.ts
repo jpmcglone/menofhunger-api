@@ -8,5 +8,6 @@ import { ScriptureService } from './scripture.service';
   imports: [AuthModule, AppConfigModule],
   controllers: [ScriptureController],
   providers: [ScriptureService],
+  exports: [ScriptureService],
 })
 export class ScriptureModule {}

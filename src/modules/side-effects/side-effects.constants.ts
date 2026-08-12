@@ -272,6 +272,13 @@ export interface SideEffectPayloads {
     direction: 'started' | 'ended';
   };
   /**
+   * User just gained Premium — Marv sends a one-shot welcome DM.
+   * Dispatched from the billing premium-changed handler when direction is `started`.
+   */
+  'marv.premium.welcome': {
+    userId: string;
+  };
+  /**
    * Referral bonus was granted — one-time, once per recruit's first payment.
    * Handler calls syncGrantTrialToSubscription for both parties so any
    * active Stripe subscriptions defer their next charge to absorb the free month.

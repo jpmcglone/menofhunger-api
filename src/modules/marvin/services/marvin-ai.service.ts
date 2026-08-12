@@ -239,7 +239,8 @@ export class MarvinAIService {
       },
     };
 
-    // fetch_url_content is always available so Marv can read linked pages on demand.
+    // Local tools always registered in-code so they work even if the Stored Prompt
+    // tool list drifts. Keep the OpenAI Stored Prompt in sync for documentation.
     const tools: unknown[] = [
       {
         type: 'function',
@@ -255,6 +256,43 @@ export class MarvinAIService {
             },
           },
           required: ['url'],
+        },
+      },
+      {
+        type: 'function',
+        name: 'get_bible_passage',
+        description:
+          'Look up the exact text of a Bible passage by reference (non-AI lookup). Use ONLY when the user asks for Scripture or a specific verse/passage. Do not volunteer Scripture unprompted.',
+        parameters: {
+          type: 'object',
+          properties: {
+            reference: {
+              type: 'string',
+              description: 'A scripture reference such as "John 3:16" or "Romans 8:28-30".',
+            },
+          },
+          required: ['reference'],
+        },
+      },
+      {
+        type: 'function',
+        name: 'find_similar_members',
+        description:
+          'Find platform members similar to the requester or matching a short interest/query (interests + public profile cards). Use when the user asks who they should meet or if anyone else is into a topic.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description:
+                'Optional short topic or interest (e.g. "woodworking", "Texas", "fasting"). Omit to match the requester\'s own interests/profile.',
+            },
+            limit: {
+              type: 'integer',
+              description: 'Max members to return (1–8). Default 5.',
+            },
+          },
+          required: [],
         },
       },
     ];

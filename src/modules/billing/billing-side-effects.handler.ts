@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import type { SideEffectPayloads } from '../side-effects/side-effects.constants';
 import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { BillingService } from './billing.service';
 
 /**
@@ -12,6 +13,9 @@ import { BillingService } from './billing.service';
  *
  * The handler re-reads current DB state before writing so a delayed retry is safe:
  * if the DB already reflects the *opposite* of `direction`, the write is skipped.
+ *
+ * On `direction: 'started'`, also dispatches `marv.premium.welcome` so Marv can
+ * send its one-shot welcome DM without Billing importing Messages/Marv.
  */
 @Injectable()
 export class BillingSideEffectsHandler implements OnModuleInit {
@@ -20,6 +24,7 @@ export class BillingSideEffectsHandler implements OnModuleInit {
     private readonly notifications: NotificationsService,
     private readonly registry: SideEffectsRegistry,
     private readonly billing: BillingService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   onModuleInit(): void {
@@ -49,6 +54,10 @@ export class BillingSideEffectsHandler implements OnModuleInit {
       kind: direction === 'started' ? 'premium_started' : 'premium_ended',
       isPremiumPlus: user.premiumPlus,
     });
+
+    if (direction === 'started') {
+      this.sideEffects.dispatch('marv.premium.welcome', { userId });
+    }
   }
 
   /**

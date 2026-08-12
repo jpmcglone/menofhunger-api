@@ -22,6 +22,7 @@ import {
   type MarvThreadContextPost,
 } from '../services/marvin-thread-context.service';
 import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
+import { fillVisionSlots } from '../services/marvin-vision-media';
 /**
  * How often to re-emit `posts:typing` while the AI call is in flight.
  * The web client expires the indicator after 7 000ms (`usePostTyping.TYPING_TTL_MS`),
@@ -154,8 +155,8 @@ export class MarvinPublicReplyProcessor {
           select: { user: { select: { id: true, username: true } } },
         },
         media: {
-          where: { kind: { not: 'video' } },
-          select: { id: true, kind: true, source: true, r2Key: true, url: true, position: true },
+          where: { deletedAt: null },
+          select: { id: true, kind: true, source: true, r2Key: true, url: true, thumbnailR2Key: true, position: true },
           orderBy: { position: 'asc' },
         },
         poll: {
@@ -267,7 +268,9 @@ export class MarvinPublicReplyProcessor {
       `[marv] public-reply gate-pass step=routing requested=${requestedMode} effective=${effectiveMode} reason=${routed.reason} crisis=${routed.crisisDetected} webSearchDemanded=${routed.webSearchDemanded}`,
     );
 
-    // 6. Credit gate — must afford the routed cost + vision + worst-case one web search call.
+    // 6. Credit soft-check — must afford mode + vision + worst-case one web search + one URL fetch.
+    // Hard reserve happens after rate-limit / AI-configured gates so we don't hold credits on
+    // early exits. Soft check is a fast UX path (out-of-credits DM) without a ledger hold.
     const cost = this.credits.costForMode(effectiveMode);
     const creditCfg = this.appConfig.marvCredits();
     const openAICfg = this.appConfig.marvOpenAI();
@@ -277,14 +280,14 @@ export class MarvinPublicReplyProcessor {
       ? Math.min((post.media ?? []).length, openAICfg.visionMaxImagesPerTurn)
       : 0;
     const visionCost = triggeringPostImageCount * creditCfg.visionCreditCostPerImage;
-    // Buffer for at most one web search so the spend call can't fail post-success on a 1-search reply.
     const webSearchBuffer = openAICfg.webSearchEnabled && openAICfg.webSearchModes.includes(effectiveMode as string)
       ? creditCfg.webSearchCreditCost
       : 0;
-    const reservedCost = cost + visionCost + webSearchBuffer;
+    const urlFetchBuffer = creditCfg.urlFetchCreditCost;
+    const reservedCost = cost + visionCost + webSearchBuffer + urlFetchBuffer;
     const summary = await this.credits.refill(requestingUserId);
     this.logger.log(
-      `[marv] public-reply gate-pass step=credits balance=${summary.credits} cost=${cost} vision=${visionCost} webSearchBuffer=${webSearchBuffer} reserved=${reservedCost} ok=${summary.credits >= reservedCost}`,
+      `[marv] public-reply gate-pass step=credits balance=${summary.credits} cost=${cost} vision=${visionCost} webSearchBuffer=${webSearchBuffer} urlFetchBuffer=${urlFetchBuffer} reserved=${reservedCost} ok=${summary.credits >= reservedCost}`,
     );
     if (summary.credits < reservedCost) {
       this.logger.log(
@@ -404,6 +407,52 @@ export class MarvinPublicReplyProcessor {
       return;
     }
 
+    // 8b. Hard-reserve credits before the AI turn (ledger hold). Soft check above is not a hold.
+    let reservedHeld = 0;
+    let postSpend: Awaited<ReturnType<MarvinCreditService['settle']>> | null = null;
+    try {
+      postSpend = await this.credits.reserve(requestingUserId, reservedCost, {
+        recentSummary: { credits: summary.credits, lastRefilledAt: summary.lastRefilledAt },
+      });
+      reservedHeld = reservedCost;
+    } catch (err) {
+      if (err instanceof InsufficientMarvCreditsError) {
+        this.logger.log(
+          `[marv] public-reply EXIT reason=no_credits_at_reserve balance=${err.currentCredits} reserved=${reservedCost}`,
+        );
+        await this.canned.sendOutOfCreditsDm({
+          userId: requestingUserId,
+          currentCredits: err.currentCredits,
+          requiredCredits: reservedCost,
+          triggeringPostId: postId,
+        });
+        await this.usage.recordEvent({
+          userId: requestingUserId,
+          source: 'public_thread',
+          sourceId: postId,
+          rootPostId,
+          requestedMode,
+          effectiveMode,
+          creditsSpent: 0,
+          modelUsed: this.ai.modelForMode(effectiveMode),
+          routingReason: routed.reason,
+          errorCode: MARV_ERROR_CODES.noCredits,
+          latencyMs: Date.now() - startedAt,
+        });
+        return;
+      }
+      throw err;
+    }
+
+    const refundHeld = async () => {
+      if (reservedHeld <= 0) return;
+      const amount = reservedHeld;
+      reservedHeld = 0;
+      await this.credits.refund(requestingUserId, amount).catch((e) => {
+        this.logger.warn(`[marv] public-reply refund failed: ${String(e)}`);
+      });
+    };
+
     const referenced = post.mentions
       .map((m) => m.user.username ?? '')
       .filter((u) => u && u.toLowerCase() !== this.identity.marvUsernameLower());
@@ -412,7 +461,7 @@ export class MarvinPublicReplyProcessor {
     // Pre-fetch BIDIRECTIONAL thread context (ancestors above + replies below the
     // triggering post) so the model reasons about the whole conversation — not just a
     // flat recent-replies list. The rolling summary covers older posts beyond the window.
-    const { ancestors, triggeringPost, descendants, imageUrls, hasGifAttached } =
+    const { ancestors, triggeringPost, descendants, imageUrls: threadImageUrls, hasGifAttached } =
       await this.fetchBidirectionalContext(post.id, openAICfg);
     const rollingSummary = await this.threadSummary.getSummaryText(rootPostId).catch(() => null);
 
@@ -422,6 +471,11 @@ export class MarvinPublicReplyProcessor {
       ...descendants.slice(-3).map((p) => p.body),
     ].join('\n');
     const linkPreviews = await this.linkMetadata.previewLinks(recentBodies);
+    const imageUrls = fillVisionSlots(
+      threadImageUrls,
+      linkPreviews.map((p) => p.imageUrl),
+      visionActive ? openAICfg.visionMaxImagesPerTurn : 0,
+    );
 
     const built = this.promptBuilder.build({
       source: 'public_thread',
@@ -446,6 +500,7 @@ export class MarvinPublicReplyProcessor {
       webSearchDemanded: routed.webSearchDemanded,
       linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,
       hasGifAttached: hasGifAttached || undefined,
+      hasImagesAttached: imageUrls.length > 0 || undefined,
     });
     const aiStartedAt = Date.now();
     this.logger.log(
@@ -480,6 +535,7 @@ export class MarvinPublicReplyProcessor {
       );
     } catch (err) {
       stopTyping();
+      await refundHeld();
       const isNotConfigured = err instanceof MarvinAINotConfiguredError;
       const code = isNotConfigured ? MARV_ERROR_CODES.aiNotConfigured : MARV_ERROR_CODES.aiError;
       this.logger.error(
@@ -522,6 +578,7 @@ export class MarvinPublicReplyProcessor {
     const replyText = (aiResult.text ?? '').trim();
     if (!replyText) {
       stopTyping();
+      await refundHeld();
       this.logger.warn(
         `[marv] public-reply EXIT reason=ai_no_text errorCode=${aiResult.errorCode ?? 'no_text'} resp=${aiResult.responseId} model=${aiResult.modelUsed} — posting transient-error thread reply`,
       );
@@ -559,8 +616,7 @@ export class MarvinPublicReplyProcessor {
       return;
     }
 
-    // 9. Compute actual credit cost now that the AI turn is complete, then charge
-    // before delivering. Charging first ensures we never give away a free reply.
+    // 9. Settle reservation to actual cost, then deliver.
     const actualVisionCost = (aiResult.imagesAttached ?? 0) * creditCfg.visionCreditCostPerImage;
     const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * creditCfg.webSearchCreditCost;
     const urlFetchSurcharge = (aiResult.urlFetchCount ?? 0) * creditCfg.urlFetchCreditCost;
@@ -581,17 +637,25 @@ export class MarvinPublicReplyProcessor {
       );
     }
 
-    let postSpend: Awaited<ReturnType<MarvinCreditService['spend']>> | null = null;
     try {
-      postSpend = await this.credits.spend(requestingUserId, totalCost, {
-        recentSummary: { credits: summary.credits, lastRefilledAt: summary.lastRefilledAt },
-      });
+      postSpend = await this.credits.settle(requestingUserId, reservedCost, totalCost);
+      reservedHeld = 0; // held amount is now the settled totalCost (or refunded on settle failure)
     } catch (err) {
       stopTyping();
       if (err instanceof InsufficientMarvCreditsError) {
+        // settle() already refunded the reservation on overage failure
+        reservedHeld = 0;
         this.logger.warn(
-          `[marv] public-reply EXIT reason=no_credits_at_spend balance=${err.currentCredits} needed=${totalCost}`,
+          `[marv] public-reply EXIT reason=no_credits_at_settle balance=${err.currentCredits} needed=${totalCost}`,
         );
+        try {
+          await this.canned.sendOutOfCreditsDm({
+            userId: requestingUserId,
+            currentCredits: err.currentCredits,
+            requiredCredits: totalCost,
+            triggeringPostId: postId,
+          });
+        } catch { /* best-effort */ }
         await this.usage.recordEvent({
           userId: requestingUserId,
           source: 'public_thread',
@@ -608,18 +672,23 @@ export class MarvinPublicReplyProcessor {
         });
         return;
       }
-      // Unexpected spend error — rethrow so the outer catch can release the
-      // idempotency key (delivered is still false) and let BullMQ retry.
+      await refundHeld();
       throw err;
     }
+
+    // After settle, totalCost is what we've charged — refund this on deliver failure.
+    const refundSettled = async () => {
+      await this.credits.refund(requestingUserId, totalCost).catch((e) => {
+        this.logger.warn(`[marv] public-reply settled refund failed: ${String(e)}`);
+      });
+    };
 
     // Post the reply as Marv. createPost will mirror parent visibility automatically.
     const marvId = await this.identity.getMarvUserId();
     if (!marvId) {
       stopTyping();
       this.logger.error('[marv] Cannot post AI reply — Marv user not resolved.');
-      // Credits already spent; record the failure honestly. Mark as delivered to
-      // prevent key deletion — we do not want a double-charge on a BullMQ retry.
+      await refundSettled();
       delivered = true;
       await this.usage.recordEvent({
         userId: requestingUserId,
@@ -628,12 +697,11 @@ export class MarvinPublicReplyProcessor {
         rootPostId,
         requestedMode,
         effectiveMode,
-        creditsSpent: totalCost,
+        creditsSpent: 0,
         modelUsed: aiResult.modelUsed,
         routingReason: routed.reason,
         responseId: aiResult.responseId,
         errorCode: MARV_ERROR_CODES.botUserMissing,
-        postSpendSummary: postSpend,
         latencyMs: Date.now() - startedAt,
       }).catch(() => undefined);
       return;
@@ -664,9 +732,8 @@ export class MarvinPublicReplyProcessor {
         `[marv] public-reply POST CREATE FAILED parent=${postId}: ${err instanceof Error ? err.message : String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
-      // Credits already spent but delivery failed. Mark as delivered to prevent key
-      // deletion — we don't want a BullMQ retry that charges a second time for a post
-      // that will never land.
+      await refundSettled();
+      // Mark as delivered to prevent key deletion / retry that would re-run AI.
       delivered = true;
       await this.usage.recordEvent({
         userId: requestingUserId,
@@ -675,12 +742,11 @@ export class MarvinPublicReplyProcessor {
         rootPostId,
         requestedMode,
         effectiveMode,
-        creditsSpent: totalCost,
+        creditsSpent: 0,
         modelUsed: aiResult.modelUsed,
         routingReason: routed.reason,
         responseId: aiResult.responseId,
         errorCode: MARV_ERROR_CODES.postFailed,
-        postSpendSummary: postSpend,
         latencyMs: Date.now() - startedAt,
       }).catch(() => undefined);
       return;
@@ -833,6 +899,7 @@ export class MarvinPublicReplyProcessor {
         isMarv: p.isMarv,
         checkinPrompt: p.checkinPrompt,
         poll: p.poll ?? null,
+        media: p.media,
       });
 
       const ancestors = context.ancestors.map(toThreadPost);

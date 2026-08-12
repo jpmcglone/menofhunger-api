@@ -20,7 +20,7 @@ function makeService(initialBucket: Bucket = null) {
         bucket = { credits: data.credits, lastRefilledAt: data.lastRefilledAt };
         return { credits: bucket.credits, lastRefilledAt: bucket.lastRefilledAt };
       }),
-      // Atomic guarded decrement used by spend()
+      // Atomic guarded decrement used by reserve()/spend()
       updateMany: jest.fn(async ({ where, data }: any) => {
         if (!bucket) return { count: 0 };
         const cost = typeof data.credits?.decrement === 'number' ? data.credits.decrement : 0;
@@ -31,9 +31,11 @@ function makeService(initialBucket: Bucket = null) {
         };
         return { count: 1 };
       }),
-      upsert: jest.fn(async ({ create, update: _upd }: any) => {
+      upsert: jest.fn(async ({ create, update }: any) => {
         if (!bucket) {
           bucket = { credits: create.credits, lastRefilledAt: create.lastRefilledAt };
+        } else if (update && typeof update.credits === 'number') {
+          bucket = { credits: update.credits, lastRefilledAt: update.lastRefilledAt ?? bucket.lastRefilledAt };
         }
         return { credits: bucket.credits, lastRefilledAt: bucket.lastRefilledAt };
       }),
@@ -198,6 +200,53 @@ describe('MarvinCreditService', () => {
       expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(InsufficientMarvCreditsError);
       // Balance should be 0 after the one successful spend
       expect(bucket.credits).toBe(0);
+    });
+  });
+
+  describe('reserve / refund / settle', () => {
+    it('reserve decrements like spend', async () => {
+      const t0 = new Date('2026-01-01T00:00:00Z');
+      const { svc, getBucket } = makeService({ credits: 50, lastRefilledAt: t0 });
+      const summary = await svc.reserve('u1', 10, { now: t0 });
+      expect(summary.credits).toBe(40);
+      expect(getBucket()?.credits).toBe(40);
+    });
+
+    it('refund restores credits and caps at maxCredits', async () => {
+      const t0 = new Date('2026-01-01T00:00:00Z');
+      const { svc, getBucket } = makeService({ credits: 1495, lastRefilledAt: t0 });
+      const summary = await svc.refund('u1', 20, t0);
+      expect(summary.credits).toBe(1500);
+      expect(getBucket()?.credits).toBe(1500);
+    });
+
+    it('settle refunds the unused reservation when actual < reserved', async () => {
+      const t0 = new Date('2026-01-01T00:00:00Z');
+      const { svc, getBucket } = makeService({ credits: 50, lastRefilledAt: t0 });
+      await svc.reserve('u1', 10, { now: t0 });
+      expect(getBucket()?.credits).toBe(40);
+      const summary = await svc.settle('u1', 10, 4, { now: t0 });
+      expect(summary.credits).toBe(46);
+      expect(getBucket()?.credits).toBe(46);
+    });
+
+    it('settle charges the remainder when actual > reserved', async () => {
+      const t0 = new Date('2026-01-01T00:00:00Z');
+      const { svc, getBucket } = makeService({ credits: 50, lastRefilledAt: t0 });
+      await svc.reserve('u1', 4, { now: t0 });
+      const summary = await svc.settle('u1', 4, 7, { now: t0 });
+      expect(summary.credits).toBe(43);
+      expect(getBucket()?.credits).toBe(43);
+    });
+
+    it('settle refunds the reservation when the overage cannot be afforded', async () => {
+      const t0 = new Date('2026-01-01T00:00:00Z');
+      // Reserve 4 → balance 2. Actual 10 needs 6 more but only 2 left → refund reservation.
+      const { svc, getBucket } = makeService({ credits: 6, lastRefilledAt: t0 });
+      await svc.reserve('u1', 4, { now: t0 });
+      expect(getBucket()?.credits).toBe(2);
+      await expect(svc.settle('u1', 4, 10, { now: t0 })).rejects.toBeInstanceOf(InsufficientMarvCreditsError);
+      expect(getBucket()?.credits).toBe(6);
     });
   });
 

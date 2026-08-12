@@ -9,10 +9,15 @@ function makeService(opts?: {
     rootPostId: string;
     reason: Reason;
   }) => Promise<boolean>;
+  privateClaim?: boolean;
   postReturnsId?: string | null;
   messageReturnsId?: string | null;
+  marvEnabled?: boolean;
 }) {
-  const appConfig: any = { frontendBaseUrl: () => 'https://example.test' };
+  const appConfig: any = {
+    frontendBaseUrl: () => 'https://example.test',
+    marvBot: () => ({ enabled: opts?.marvEnabled !== false }),
+  };
   // Note: use explicit hasOwnProperty check rather than `??` so callers can pass
   // `marvUserId: null` to simulate "Marv user unresolved" — `null ?? 'marv-id'` would
   // wrongly fall through to the default.
@@ -33,6 +38,7 @@ function makeService(opts?: {
     })),
   };
   const messages: any = {
+    ensureBotDirectConversation: jest.fn(async () => 'c1'),
     sendBotDirectMessage: jest.fn(async (args: any) => {
       const id = opts?.messageReturnsId === undefined ? 'm-canned' : opts.messageReturnsId;
       return id ? { conversationId: 'c1', message: { id }, _args: args } : null;
@@ -41,6 +47,10 @@ function makeService(opts?: {
   const nonPremium: any = {
     tryClaim: jest.fn(opts?.threadClaim ?? (async () => true)),
     setMarvPostId: jest.fn(async () => undefined),
+  };
+  const privateCanned: any = {
+    tryClaim: jest.fn(async () => opts?.privateClaim !== false),
+    setMarvinMessageId: jest.fn(async () => undefined),
   };
   const credits: any = {
     msUntilCredits: jest.fn(() => 1000 * 60 * 60),
@@ -54,9 +64,10 @@ function makeService(opts?: {
     posts,
     messages,
     nonPremium,
+    privateCanned,
     credits,
   );
-  return { svc, posts, messages, nonPremium, identity };
+  return { svc, posts, messages, nonPremium, privateCanned, identity };
 }
 
 describe('MarvinCannedRepliesService', () => {
@@ -141,4 +152,47 @@ describe('MarvinCannedRepliesService', () => {
       expect(messages.sendBotDirectMessage).not.toHaveBeenCalled();
     });
   });
+
+  describe('sendPremiumWelcomeDm', () => {
+    it('claims the slot, sends a welcome DM, and records the message id', async () => {
+      const { svc, messages, privateCanned } = makeService();
+      const result = await svc.sendPremiumWelcomeDm('u1');
+      expect(result.messageId).toBe('m-canned');
+      expect(messages.ensureBotDirectConversation).toHaveBeenCalledWith({
+        botUserId: 'marv-id',
+        recipientUserId: 'u1',
+      });
+      expect(privateCanned.tryClaim).toHaveBeenCalledWith({
+        userId: 'u1',
+        conversationId: 'c1',
+        reason: 'premium_welcome',
+      });
+      expect(messages.sendBotDirectMessage).toHaveBeenCalledTimes(1);
+      const body = messages.sendBotDirectMessage.mock.calls[0][0].body as string;
+      expect(body).toMatch(/Welcome to Premium/i);
+      expect(body).toMatch(/@marv/);
+      expect(body).toMatch(/Catch me up/i);
+      expect(privateCanned.setMarvinMessageId).toHaveBeenCalledWith({
+        userId: 'u1',
+        conversationId: 'c1',
+        reason: 'premium_welcome',
+        marvinMessageId: 'm-canned',
+      });
+    });
+
+    it('skips send when the slot was already claimed', async () => {
+      const { svc, messages } = makeService({ privateClaim: false });
+      const result = await svc.sendPremiumWelcomeDm('u1');
+      expect(result.messageId).toBeNull();
+      expect(messages.sendBotDirectMessage).not.toHaveBeenCalled();
+    });
+
+    it('no-ops when Marv bot is disabled', async () => {
+      const { svc, messages } = makeService({ marvEnabled: false });
+      const result = await svc.sendPremiumWelcomeDm('u1');
+      expect(result.messageId).toBeNull();
+      expect(messages.ensureBotDirectConversation).not.toHaveBeenCalled();
+    });
+  });
 });
+

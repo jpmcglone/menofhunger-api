@@ -69,9 +69,26 @@ function makeService() {
     marvUsernameLower: jest.fn(() => 'marv'),
   };
   const fake = makeFakeCache();
-  const contextCard: any = { refreshCardForUser: jest.fn(async () => null) };
-  const svc = new MarvinToolHandlersService(prisma, identity, fake.cache, contextCard);
-  return { svc, prisma, identity, cache: fake, contextCard };
+  const contextCard: any = {
+    refreshCardForUser: jest.fn(async () => null),
+    peekFallbackCard: jest.fn(async () => 'Alice is a member on the platform.'),
+  };
+  const scripture: any = {
+    getRef: jest.fn(async (ref: string) =>
+      ref.toLowerCase().includes('john')
+        ? {
+            reference: 'John 3:16',
+            translation: 'BSB',
+            translationName: 'Berean Standard Bible',
+            text: 'For God so loved the world...',
+            verses: [{ number: 16, text: 'For God so loved the world...' }],
+          }
+        : null,
+    ),
+  };
+  const jobs: any = { enqueue: jest.fn(async () => undefined) };
+  const svc = new MarvinToolHandlersService(prisma, identity, fake.cache, contextCard, scripture, jobs);
+  return { svc, prisma, identity, cache: fake, contextCard, scripture, jobs };
 }
 
 const baseCtx: MarvAIToolCallContext = {
@@ -121,12 +138,29 @@ describe('MarvinToolHandlersService.dispatch', () => {
   });
 
   describe('get_user_context_card', () => {
-    it('returns no_card when no card row exists and on-the-fly generation does not yield one', async () => {
-      const { svc, prisma } = makeService();
+    it('returns no_card when no card row exists and the user cannot be resolved', async () => {
+      const { svc, prisma, jobs } = makeService();
       prisma.userContextCard.findFirst.mockResolvedValueOnce(null);
       prisma.user.findFirst.mockResolvedValueOnce(null);
       const out = await svc.dispatch('get_user_context_card', { username: 'eve' }, baseCtx);
       expect(JSON.parse(out)).toEqual({ error: 'no_card', note: expect.any(String) });
+      expect(jobs.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('enqueues a card refresh and returns a fallback without blocking on AI', async () => {
+      const { svc, prisma, jobs, contextCard } = makeService();
+      prisma.userContextCard.findFirst.mockResolvedValueOnce(null);
+      prisma.user.findFirst.mockResolvedValueOnce({ id: 'u-1', username: 'alice' });
+      const out = await svc.dispatch('get_user_context_card', { username: 'alice' }, baseCtx);
+      const parsed = JSON.parse(out);
+      expect(parsed.source).toBe('fallback');
+      expect(parsed.cardText).toMatch(/alice/i);
+      expect(contextCard.refreshCardForUser).not.toHaveBeenCalled();
+      expect(jobs.enqueue).toHaveBeenCalledWith(
+        'marvin.contextCard.refresh',
+        { userId: 'u-1' },
+        expect.objectContaining({ jobId: 'marvin-context-card-u-1' }),
+      );
     });
 
     it('returns the card for any non-banned user', async () => {
@@ -252,6 +286,52 @@ describe('MarvinToolHandlersService.dispatch', () => {
       expect(JSON.parse(b)).toEqual({ error: 'no_summary', note: expect.any(String) });
       expect(prisma.marvinThreadSummary.findUnique).toHaveBeenCalledTimes(1);
       expect(cache.counters().hits).toBe(1);
+    });
+  });
+
+  describe('get_bible_passage', () => {
+    it('returns passage text from ScriptureService', async () => {
+      const { svc, scripture } = makeService();
+      const raw = await svc.dispatch('get_bible_passage', { reference: 'John 3:16' }, baseCtx);
+      const parsed = JSON.parse(raw);
+      expect(parsed.reference).toBe('John 3:16');
+      expect(parsed.text).toContain('loved the world');
+      expect(scripture.getRef).toHaveBeenCalledWith('John 3:16');
+    });
+
+    it('returns not_found for unknown references', async () => {
+      const { svc } = makeService();
+      const raw = await svc.dispatch('get_bible_passage', { reference: 'NotABook 1:1' }, baseCtx);
+      expect(JSON.parse(raw).error).toBe('not_found');
+    });
+  });
+
+  describe('find_similar_members', () => {
+    it('ranks members by interest overlap', async () => {
+      const { svc, prisma } = makeService();
+      prisma.user = {
+        findUnique: jest.fn(async () => ({
+          interests: ['woodworking', 'fasting'],
+          contextCard: { cardText: 'Loves woodworking.' },
+        })),
+        findMany: jest.fn(async ({ where }: any) => {
+          if (where?.interests?.hasSome) {
+            return [
+              {
+                username: 'bob',
+                name: 'Bob',
+                interests: ['woodworking'],
+                contextCard: { cardText: 'Shop projects on weekends.' },
+              },
+            ];
+          }
+          return [];
+        }),
+      };
+      const raw = await svc.dispatch('find_similar_members', { query: 'woodworking' }, baseCtx);
+      const parsed = JSON.parse(raw);
+      expect(parsed.members[0].username).toBe('bob');
+      expect(parsed.members[0].reasons[0]).toMatch(/woodworking/);
     });
   });
 });

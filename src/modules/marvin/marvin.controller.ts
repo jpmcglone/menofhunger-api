@@ -18,6 +18,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type {
   MarvinCatchUpDto,
+  MarvinContextCardDto,
   MarvinCreditSummaryDto,
   MarvinMeDto,
   MarvinModeDto,
@@ -116,6 +117,29 @@ export class MarvinController {
       });
     }
     return { data: await this.buildMe(userId) };
+  }
+
+  /**
+   * What Marv currently knows about the viewer (public profile + public posts card).
+   * Read-only transparency — does not generate a card on miss.
+   */
+  @UseGuards(AuthGuard)
+  @Get('marvin/me/context-card')
+  async getMyContextCard(
+    @CurrentUserId() userId: string,
+  ): Promise<{ data: MarvinContextCardDto | null }> {
+    const card = await this.prisma.userContextCard.findUnique({
+      where: { userId },
+      select: { cardText: true, source: true, updatedAt: true },
+    });
+    if (!card) return { data: null };
+    return {
+      data: {
+        cardText: card.cardText,
+        source: card.source,
+        updatedAt: card.updatedAt.toISOString(),
+      },
+    };
   }
 
   /**

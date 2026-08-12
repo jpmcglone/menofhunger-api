@@ -19,6 +19,7 @@ import {
 } from './marvin-thread-context.service';
 import { MARV_ERROR_CODES } from '../marvin.constants';
 import { MARV_CONCISENESS } from '../marvin-prompt-instructions';
+import { fillVisionSlots, marvMediaMarker } from './marvin-vision-media';
 
 /**
  * Cache lifetime for a generated summary. Generous because the freshness marker — not the
@@ -216,17 +217,22 @@ export class MarvinCatchUpService {
           visionMaxImagesPerTurn: openAICfg.visionMaxImagesPerTurn,
           publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
         });
+        const merged = fillVisionSlots(
+          selected.imageUrls,
+          linkPreviews.map((p) => p.imageUrl),
+          openAICfg.visionMaxImagesPerTurn,
+        );
         hasGifAttached = selected.hasGifAttached;
         if (selected.totalImages > selected.imageUrls.length) {
           this.logger.log(
-            `[marv] catch-up image cap hit post=${postId}: ${selected.totalImages} found, sending ${selected.imageUrls.length} (cap=${openAICfg.visionMaxImagesPerTurn})`,
+            `[marv] catch-up image cap hit post=${postId}: ${selected.totalImages} found, sending ${merged.length} (cap=${openAICfg.visionMaxImagesPerTurn})`,
           );
         }
         // An attached image is itself a routing signal: a "testing" post with a photo IS the photo.
         // If the routed tier can't see images, upgrade to the cheapest vision-capable tier so the
         // image is never silently dropped (mirrors how sensitive topics force Smart).
         if (
-          selected.imageUrls.length > 0 &&
+          merged.length > 0 &&
           openAICfg.visionEnabled &&
           !openAICfg.visionModes.includes(effectiveMode as string)
         ) {
@@ -234,28 +240,44 @@ export class MarvinCatchUpService {
           if (visionTier) effectiveMode = visionTier;
         }
         const visionActive = openAICfg.visionEnabled && openAICfg.visionModes.includes(effectiveMode as string);
-        imageUrls = visionActive ? selected.imageUrls : [];
+        imageUrls = visionActive ? merged : [];
       }
 
-      // 7. Credit gate — reserve base + vision (per image) + worst-case one web search, mirroring
-      //    the @marv reply path so the spend can't fail after a successful, billable call.
+      // 7. Hard-reserve credits before the AI turn (mode + vision + one web search + one URL fetch).
       const cost = this.credits.costForMode(effectiveMode);
       const estimatedVisionCost = imageUrls.length * creditCfg.visionCreditCostPerImage;
       const webSearchBuffer =
         openAICfg.webSearchEnabled && openAICfg.webSearchModes.includes(effectiveMode as string)
           ? creditCfg.webSearchCreditCost
           : 0;
-      const reservedCost = cost + estimatedVisionCost + webSearchBuffer;
-      const balance = await this.credits.refill(userId);
-      if (balance.credits < reservedCost) {
-        throw new HttpException(
-          {
-            message: `You're out of Marv credits. You have ${Math.floor(balance.credits)}, this needs ${reservedCost}.`,
-            error: MARV_ERROR_CODES.noCredits,
-          },
-          HttpStatus.PAYMENT_REQUIRED,
-        );
+      const urlFetchBuffer = creditCfg.urlFetchCreditCost;
+      const reservedCost = cost + estimatedVisionCost + webSearchBuffer + urlFetchBuffer;
+      let reservedHeld = 0;
+      let postSpend: Awaited<ReturnType<MarvinCreditService['settle']>>;
+      try {
+        postSpend = await this.credits.reserve(userId, reservedCost);
+        reservedHeld = reservedCost;
+      } catch (err) {
+        if (err instanceof InsufficientMarvCreditsError) {
+          throw new HttpException(
+            {
+              message: `You're out of Marv credits. You have ${Math.floor(err.currentCredits)}, this needs ${reservedCost}.`,
+              error: MARV_ERROR_CODES.noCredits,
+            },
+            HttpStatus.PAYMENT_REQUIRED,
+          );
+        }
+        throw err;
       }
+
+      const refundHeld = async () => {
+        if (reservedHeld <= 0) return;
+        const amount = reservedHeld;
+        reservedHeld = 0;
+        await this.credits.refund(userId, amount).catch((e) => {
+          this.logger.warn(`[marv] catch-up refund failed: ${String(e)}`);
+        });
+      };
 
       // 8. Build the summarizer prompt + call the model. Real tools are available (same as
       //    mentions/chat) so Marv can look up user context cards, post details, etc.
@@ -280,6 +302,7 @@ export class MarvinCatchUpService {
           cacheKey: `marv:catchup:${rootPostId}`,
         });
       } catch (err) {
+        await refundHeld();
         this.logger.error(
           `[marv] catch-up AI call THREW post=${postId}: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -305,6 +328,7 @@ export class MarvinCatchUpService {
       const rawText = (aiResult.text ?? '').trim();
       const { summary, sections } = this.parseSections(rawText, context.descendants.length > 0);
       if (!summary) {
+        await refundHeld();
         await this.usage.recordEvent({
           userId,
           source: 'catch_up',
@@ -325,22 +349,19 @@ export class MarvinCatchUpService {
         );
       }
 
-      // 9. Spend credits + record usage (emits marv:credits-updated via postSpendSummary).
-      //    Charge the ACTUAL images the AI service confirmed it sent, plus web-search/url-fetch usage.
+      // 9. Settle reservation to actual cost + record usage (emits marv:credits-updated).
       const actualVisionCost = (aiResult.imagesAttached ?? 0) * creditCfg.visionCreditCostPerImage;
       const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * creditCfg.webSearchCreditCost;
       const urlFetchSurcharge = (aiResult.urlFetchCount ?? 0) * creditCfg.urlFetchCreditCost;
       const totalCost = cost + actualVisionCost + webSearchSurcharge + urlFetchSurcharge;
 
-      let postSpend: Awaited<ReturnType<MarvinCreditService['spend']>>;
       try {
-        postSpend = await this.credits.spend(userId, totalCost, {
-          recentSummary: { credits: balance.credits, lastRefilledAt: balance.lastRefilledAt },
-        });
+        postSpend = await this.credits.settle(userId, reservedCost, totalCost);
+        reservedHeld = 0;
       } catch (err) {
-        // Credits drained between the pre-check (step 7) and the spend — treat the same
-        // as the pre-check rejection: 402, no cache, honest usage event.
         const isInsufficient = err instanceof InsufficientMarvCreditsError;
+        if (!isInsufficient) await refundHeld();
+        else reservedHeld = 0; // settle already refunded the reservation on overage failure
         await this.usage.recordEvent({
           userId,
           source: 'catch_up',
@@ -679,7 +700,13 @@ export class MarvinCatchUpService {
       imageCount: number;
       hasGifAttached: boolean;
       rollingSummary?: string;
-      linkPreviews?: Array<{ url: string; title: string | null; description: string | null; siteName: string | null }>;
+      linkPreviews?: Array<{
+        url: string;
+        title: string | null;
+        description: string | null;
+        siteName: string | null;
+        imageUrl?: string | null;
+      }>;
       /** Present when the viewer has summarized this thread before — drives the SINCE section. */
       delta?: { previousSummary: string; sinceMs: number; newReplyCount: number };
     },
@@ -794,8 +821,9 @@ export class MarvinCatchUpService {
       for (const lp of linkPreviews) {
         const site = lp.siteName ? ` — ${lp.siteName}` : '';
         const desc = lp.description ? ` — ${lp.description.slice(0, 120)}` : '';
+        const img = lp.imageUrl ? ' [preview image attached]' : '';
         const title = lp.title ?? lp.url;
-        lines.push(`  - "${title}"${site}${desc}`);
+        lines.push(`  - "${title}"${site}${desc}${img}`);
       }
     }
 
@@ -812,17 +840,6 @@ export class MarvinCatchUpService {
     const handle = p.isMarv ? '@marv' : p.authorUsername ? `@${p.authorUsername}` : (p.authorDisplayName ?? 'someone');
     const checkin = p.checkinPrompt ? `[check-in: "${p.checkinPrompt.slice(0, 120)}"] ` : '';
     const poll = p.poll ? ` [poll: ${p.poll.options.map((o) => `${o.text} (${o.voteCount})`).join(', ')}]` : '';
-    return `${handle}: ${checkin}"${p.body}"${this.mediaMarker(p.media)}${poll}`;
-  }
-
-  /** Note attached media inline so even a non-vision summary acknowledges an image-only post. */
-  private mediaMarker(media: MarvThreadContextPost['media']): string {
-    if (!media || media.length === 0) return '';
-    const gifs = media.filter((m) => m.kind === 'gif').length;
-    const images = media.length - gifs;
-    const parts: string[] = [];
-    if (images > 0) parts.push(images === 1 ? 'image' : `${images} images`);
-    if (gifs > 0) parts.push(gifs === 1 ? 'animated GIF' : `${gifs} GIFs`);
-    return parts.length > 0 ? ` [attached: ${parts.join(' + ')}]` : '';
+    return `${handle}: ${checkin}"${p.body}"${marvMediaMarker(p.media)}${poll}`;
   }
 }

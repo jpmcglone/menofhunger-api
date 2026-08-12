@@ -1,5 +1,6 @@
 import { ForbiddenException, HttpException } from '@nestjs/common';
 import { MarvinCatchUpService } from './marvin-catch-up.service';
+import { InsufficientMarvCreditsError } from './marvin-credit.service';
 import { MarvinThreadContextService } from './marvin-thread-context.service';
 import type { MarvinCatchUpDto } from '../../../common/dto/marvin';
 
@@ -207,6 +208,30 @@ function makeService(opts?: {
       creditsPerDay: 40,
       lastRefilledAt: new Date(),
     })),
+    reserve: jest.fn(async (_userId: string, amount: number) => {
+      const bal = opts?.credits ?? 100;
+      if (bal < amount) {
+        throw new InsufficientMarvCreditsError(bal, amount);
+      }
+      return {
+        credits: bal - amount,
+        maxCredits: 1500,
+        creditsPerDay: 40,
+        lastRefilledAt: new Date(),
+      };
+    }),
+    settle: jest.fn(async () => ({
+      credits: (opts?.credits ?? 100) - (opts?.cost ?? 2),
+      maxCredits: 1500,
+      creditsPerDay: 40,
+      lastRefilledAt: new Date(),
+    })),
+    refund: jest.fn(async () => ({
+      credits: opts?.credits ?? 100,
+      maxCredits: 1500,
+      creditsPerDay: 40,
+      lastRefilledAt: new Date(),
+    })),
     spend: jest.fn(async () => ({
       credits: (opts?.credits ?? 100) - (opts?.cost ?? 2),
       maxCredits: 1500,
@@ -237,7 +262,7 @@ describe('MarvinCatchUpService', () => {
     expect(result.stale).toBe(false);
     expect(result.newReplies).toBe(0);
     expect(ai.respond).not.toHaveBeenCalled();
-    expect(credits.spend).not.toHaveBeenCalled();
+    expect(credits.reserve).not.toHaveBeenCalled();
   });
 
   it('forceRefresh never serves the cached summary and always regenerates (spending credits)', async () => {
@@ -247,7 +272,8 @@ describe('MarvinCatchUpService', () => {
     const { service, ai, credits } = makeService({ cached });
     const result = await service.catchUp({ userId: 'u-1', postId: 'focal', forceRefresh: true });
     expect(ai.respond).toHaveBeenCalledTimes(1);
-    expect(credits.spend).toHaveBeenCalledTimes(1);
+    expect(credits.reserve).toHaveBeenCalledTimes(1);
+    expect(credits.settle).toHaveBeenCalledTimes(1);
     expect(result.cached).toBe(false);
     expect(result.summary).not.toBe('stale cached summary');
   });
@@ -266,7 +292,7 @@ describe('MarvinCatchUpService', () => {
   it('rejects out-of-credits before spending', async () => {
     const { service, credits, ai } = makeService({ credits: 0, cost: 2 });
     await expect(service.catchUp({ userId: 'u-1', postId: 'focal' })).rejects.toBeInstanceOf(HttpException);
-    expect(credits.spend).not.toHaveBeenCalled();
+    expect(credits.reserve).toHaveBeenCalled();
     expect(ai.respond).not.toHaveBeenCalled();
   });
 
@@ -276,7 +302,8 @@ describe('MarvinCatchUpService', () => {
     expect(ai.respond).toHaveBeenCalledTimes(1);
     // A thread summary must synthesize, not narrate post-by-post.
     expect(ai.respond.mock.calls[0][0].developerNote).toContain('SYNTHESIZE');
-    expect(credits.spend).toHaveBeenCalledTimes(1);
+    expect(credits.reserve).toHaveBeenCalledTimes(1);
+    expect(credits.settle).toHaveBeenCalledTimes(1);
     expect(result.cached).toBe(false);
     expect(result.creditsSpent).toBe(2);
     expect(result.summary).toContain('thread');
@@ -306,6 +333,29 @@ describe('MarvinCatchUpService', () => {
     expect(aiArgs.developerNote).toContain('describe what they actually show');
     // And the rendered context notes the attachment so non-vision summaries still acknowledge it.
     expect(aiArgs.developerNote).toContain('[attached:');
+  });
+
+  it('attaches a video poster and a link-preview image', async () => {
+    const withMedia = makeContext();
+    withMedia.focal.media = [
+      { kind: 'video', source: 'upload', r2Key: 'posts/clip.mp4', url: null, thumbnailR2Key: 'posts/clip.jpg' },
+    ] as any;
+    withMedia.focal.body = 'watch this https://example.com/build';
+    const { service, ai, linkMetadata } = makeService({ context: withMedia });
+    linkMetadata.previewLinks.mockResolvedValueOnce([
+      {
+        url: 'https://example.com/build',
+        title: 'Build log',
+        description: 'A bench.',
+        siteName: 'Example',
+        imageUrl: 'https://og.test/bench.jpg',
+      },
+    ]);
+    await service.catchUp({ userId: 'u-1', postId: 'focal', requestedMode: 'regular' });
+    const aiArgs = ai.respond.mock.calls[0][0];
+    expect(aiArgs.imageUrls).toEqual(['https://cdn.test/posts/clip.jpg', 'https://og.test/bench.jpg']);
+    expect(aiArgs.developerNote).toContain('[attached: video]');
+    expect(aiArgs.developerNote).toContain('[preview image attached]');
   });
 
   it('upgrades to a vision-capable tier when the routed tier cannot see the attached image', async () => {
@@ -351,21 +401,22 @@ describe('MarvinCatchUpService', () => {
     // base mode cost = 2; AI confirms it sent 2 images; visionCreditCostPerImage = 1.
     const { service, credits } = makeService({ context: withMedia, cost: 2, imagesAttached: 2 });
     const result = await service.catchUp({ userId: 'u-1', postId: 'focal', requestedMode: 'regular' });
-    expect(credits.spend).toHaveBeenCalledTimes(1);
-    expect(credits.spend.mock.calls[0][1]).toBe(2 + 2 * 1); // mode + vision surcharge
+    expect(credits.reserve).toHaveBeenCalledTimes(1);
+    expect(credits.settle).toHaveBeenCalledTimes(1);
+    expect(credits.settle.mock.calls[0][2]).toBe(2 + 2 * 1); // mode + vision surcharge
     expect(result.creditsSpent).toBe(4);
   });
 
-  it('reserves base + vision + one web-search buffer before calling the model', async () => {
+  it('reserves base + vision + one web-search + one url-fetch buffer before calling the model', async () => {
     const withMedia = makeContext();
     withMedia.focal.media = [{ kind: 'image', source: 'upload', r2Key: 'posts/a.jpg', url: null }] as any;
-    // base=2, one image reserved at 1 each, web-search buffer=3 → needs 6; balance only 5.
+    // base=2, one image=1, web-search buffer=3, url-fetch buffer=1 → needs 7; balance only 5.
     const { service, ai, credits } = makeService({ context: withMedia, cost: 2, credits: 5 });
     await expect(service.catchUp({ userId: 'u-1', postId: 'focal', requestedMode: 'regular' })).rejects.toBeInstanceOf(
       HttpException,
     );
     expect(ai.respond).not.toHaveBeenCalled();
-    expect(credits.spend).not.toHaveBeenCalled();
+    expect(credits.reserve).toHaveBeenCalledWith('u-1', 7);
   });
 
   it('still summarizes a lone post with no thread (post itself + broader context)', async () => {
@@ -461,8 +512,8 @@ describe('MarvinCatchUpService', () => {
     const { service, ai, credits } = makeService({ context: withMedia, cost: 2 });
     const result = await service.catchUp({ userId: 'u-1', postId: 'focal', includeImages: false });
     expect(ai.respond.mock.calls[0][0].imageUrls).toBeUndefined();
-    // No vision surcharge reserved or spent.
-    expect(credits.refill).toHaveBeenCalledTimes(1);
+    // No vision surcharge reserved or spent (mode + webSearch buffer + urlFetch only).
+    expect(credits.reserve).toHaveBeenCalledWith('u-1', 2 + 3 + 1);
     expect(result.costBreakdown.vision).toBe(0);
   });
 
@@ -524,7 +575,7 @@ describe('MarvinCatchUpService soft invalidation', () => {
     // Still free, still no model call — the user gets value and can choose to update.
     expect(result.creditsSpent).toBe(0);
     expect(ai.respond).not.toHaveBeenCalled();
-    expect(credits.spend).not.toHaveBeenCalled();
+    expect(credits.reserve).not.toHaveBeenCalled();
   });
 
   it('flags edit-only drift as stale with zero new replies', async () => {
@@ -551,7 +602,8 @@ describe('MarvinCatchUpService soft invalidation', () => {
     expect(result.summary).not.toBe('summary of a much smaller thread');
     expect(result.cached).toBe(false);
     expect(ai.respond).toHaveBeenCalledTimes(1);
-    expect(credits.spend).toHaveBeenCalledTimes(1);
+    expect(credits.reserve).toHaveBeenCalledTimes(1);
+    expect(credits.settle).toHaveBeenCalledTimes(1);
   });
 
   it('ignores pre-soft-invalidation cache entries that carry no marker', async () => {
@@ -575,7 +627,7 @@ describe('MarvinCatchUpService soft invalidation', () => {
     expect(result?.newReplies).toBe(1);
     expect(result?.creditsSpent).toBe(0);
     expect(ai.respond).not.toHaveBeenCalled();
-    expect(credits.spend).not.toHaveBeenCalled();
+    expect(credits.reserve).not.toHaveBeenCalled();
   });
 
   it('peekCached returns null when the thread has outgrown the cached summary', async () => {
@@ -666,7 +718,7 @@ describe('MarvinCatchUpService.peekCached', () => {
     expect(result?.costBreakdown).toEqual({ mode: 0, vision: 0, webSearch: 0, urlFetch: 0 });
     // A peek must NEVER call the model or spend credits.
     expect(ai.respond).not.toHaveBeenCalled();
-    expect(credits.spend).not.toHaveBeenCalled();
+    expect(credits.reserve).not.toHaveBeenCalled();
   });
 
   it('returns null on a cache miss without generating or spending', async () => {
@@ -674,7 +726,7 @@ describe('MarvinCatchUpService.peekCached', () => {
     const result = await service.peekCached({ userId: 'u-1', postId: 'focal' });
     expect(result).toBeNull();
     expect(ai.respond).not.toHaveBeenCalled();
-    expect(credits.spend).not.toHaveBeenCalled();
+    expect(credits.reserve).not.toHaveBeenCalled();
   });
 
   it('serves an existing summary to a non-premium viewer as the upgrade funnel', async () => {
@@ -688,7 +740,7 @@ describe('MarvinCatchUpService.peekCached', () => {
     expect(result?.summary).toBe('someone already summarized this');
     expect(result?.creditsSpent).toBe(0);
     expect(ai.respond).not.toHaveBeenCalled();
-    expect(credits.spend).not.toHaveBeenCalled();
+    expect(credits.reserve).not.toHaveBeenCalled();
   });
 
   it('returns null for a non-premium viewer when nothing is cached (no free generation)', async () => {

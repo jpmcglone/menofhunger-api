@@ -2732,6 +2732,8 @@ enum MarvinCannedReplyReason {
   ai_not_configured
   /// Posted because the AI returned no text (e.g. token budget exhausted after retry).
   transient_error
+  /// One-shot welcome DM when the user first unlocks Premium.
+  premium_welcome
 }
 
 /**

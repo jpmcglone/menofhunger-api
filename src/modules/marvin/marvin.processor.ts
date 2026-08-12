@@ -72,6 +72,9 @@ export class MarvinProcessor extends WorkerHost implements OnModuleInit {
         case JOBS.marvinContextCardsRefresh:
           await this.contextCards.process();
           return { ok: true };
+        case JOBS.marvinContextCardRefresh:
+          await this.contextCards.processOne(String((job.data as { userId?: string } | null)?.userId ?? ''));
+          return { ok: true };
         case JOBS.marvinSummarizeThread:
           await this.summarizeThread.process(job.data ?? {});
           return { ok: true };

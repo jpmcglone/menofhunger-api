@@ -88,7 +88,7 @@ describe('MarvinAdminService.regenerateContextCard', () => {
       actingAdminUserId: 'admin-1',
       targetUserId: 'u-1',
     });
-    expect(m.contextCards.refreshCardForUser).toHaveBeenCalledWith('u-1');
+    expect(m.contextCards.refreshCardForUser).toHaveBeenCalledWith('u-1', { forceFull: true });
     expect(result.cardText).toBe('New card.');
   });
 

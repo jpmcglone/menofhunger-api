@@ -5,6 +5,7 @@ import { MessagesService } from '../../messages/messages.service';
 import { MarvinBotIdentityService } from './marvin-bot-identity.service';
 import { MarvinCreditService } from './marvin-credit.service';
 import { MarvinNonPremiumRepliesService } from './marvin-non-premium-replies.service';
+import { MarvinPrivateCannedRepliesService } from './marvin-private-canned-replies.service';
 
 const TIERS_PATH = '/tiers';
 
@@ -26,6 +27,9 @@ const TIERS_PATH = '/tiers';
  *    via the `ai_not_configured` reason; in DMs, Marv replies on every user message
  *    so the user can't miss the explanation. Without this, the request would silently
  *    no-op and the user would think Marv was ignoring them.
+ *
+ * 4. **User unlocks Premium** → one short welcome DM (`premium_welcome`), claimed via
+ *    `MarvinPrivateCannedReply` so retries never double-buzz.
  */
 @Injectable()
 export class MarvinCannedRepliesService {
@@ -37,6 +41,7 @@ export class MarvinCannedRepliesService {
     private readonly posts: PostsService,
     private readonly messages: MessagesService,
     private readonly nonPremium: MarvinNonPremiumRepliesService,
+    private readonly privateCanned: MarvinPrivateCannedRepliesService,
     private readonly credits: MarvinCreditService,
   ) {}
 
@@ -312,6 +317,96 @@ export class MarvinCannedRepliesService {
       reason: 'transient_error',
       body: "Something went sideways on my end — give it another shot in a moment.",
     });
+  }
+
+  /**
+   * One-shot welcome DM when the user first unlocks Premium.
+   * Claimed on `(userId, conversationId, premium_welcome)` before send so worker
+   * retries cannot double-deliver.
+   */
+  async sendPremiumWelcomeDm(userId: string): Promise<{ conversationId: string | null; messageId: string | null }> {
+    if (!this.appConfig.marvBot().enabled) {
+      return { conversationId: null, messageId: null };
+    }
+
+    const marvId = await this.identity.getMarvUserId();
+    if (!marvId) {
+      this.logger.warn('[marv-canned] premium-welcome DM SKIPPED — Marv user not resolved.');
+      return { conversationId: null, messageId: null };
+    }
+    if (userId === marvId) {
+      return { conversationId: null, messageId: null };
+    }
+
+    let conversationId: string | null = null;
+    try {
+      conversationId = await this.messages.ensureBotDirectConversation({
+        botUserId: marvId,
+        recipientUserId: userId,
+      });
+    } catch (err) {
+      this.logger.error(
+        `[marv-canned] premium-welcome ensure conversation FAILED: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+      return { conversationId: null, messageId: null };
+    }
+    if (!conversationId) {
+      this.logger.debug(`[marv-canned] premium-welcome DM SKIPPED user=${userId} (no conversation).`);
+      return { conversationId: null, messageId: null };
+    }
+
+    const claimed = await this.privateCanned.tryClaim({
+      userId,
+      conversationId,
+      reason: 'premium_welcome',
+    });
+    if (!claimed) {
+      this.logger.debug(
+        `[marv-canned] premium-welcome already claimed user=${userId} convo=${conversationId}; skipping.`,
+      );
+      return { conversationId, messageId: null };
+    }
+
+    const body = [
+      "Welcome to Premium — I'm Marv.",
+      'Tag @marv in a thread, message me here, or tap Catch me up on a long conversation.',
+      'Ask about members, or a Bible passage if you want one.',
+    ].join('\n');
+
+    try {
+      const result = await this.messages.sendBotDirectMessage({
+        botUserId: marvId,
+        recipientUserId: userId,
+        body,
+        media: [],
+      });
+      if (!result) {
+        this.logger.warn(
+          `[marv-canned] premium-welcome DM returned null user=${userId} (sendBotDirectMessage refused).`,
+        );
+        return { conversationId, messageId: null };
+      }
+      const messageId = result.message?.id ?? null;
+      if (messageId) {
+        await this.privateCanned.setMarvinMessageId({
+          userId,
+          conversationId: result.conversationId,
+          reason: 'premium_welcome',
+          marvinMessageId: messageId,
+        });
+      }
+      this.logger.log(
+        `[marv-canned] premium-welcome DM SENT user=${userId} convo=${result.conversationId} msg=${messageId ?? '?'}`,
+      );
+      return { conversationId: result.conversationId, messageId };
+    } catch (err) {
+      this.logger.error(
+        `[marv-canned] premium-welcome DM FAILED: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+      return { conversationId, messageId: null };
+    }
   }
 
   /**

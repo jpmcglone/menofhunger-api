@@ -3,7 +3,7 @@
  * here as a literal-string union so it travels cleanly to the web client without leaking
  * Prisma types across the API contract.
  */
-export type MarvinModeDto = 'fast' | 'regular' | 'smart';
+export type MarvinModeDto = 'auto' | 'fast' | 'regular' | 'smart';
 
 /** Source channel the request originated from. */
 export type MarvinSourceDto = 'public_thread' | 'private_session' | 'catch_up';

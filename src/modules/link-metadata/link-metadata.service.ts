@@ -290,7 +290,7 @@ export class LinkMetadataService {
    *
    * Silent-fail: any DB error returns [].
    */
-  async previewLinks(text: string): Promise<Array<{ url: string; title: string | null; description: string | null; siteName: string | null }>> {
+  async previewLinks(text: string): Promise<Array<{ url: string; title: string | null; description: string | null; siteName: string | null; imageUrl: string | null }>> {
     if (!text) return [];
     const urlRegex = /https?:\/\/[^\s"'>)]+/gi;
     const found = text.match(urlRegex) ?? [];
@@ -302,7 +302,7 @@ export class LinkMetadataService {
     try {
       const rows = await this.prisma.linkMetadata.findMany({
         where: { url: { in: urls } },
-        select: { url: true, title: true, description: true, siteName: true },
+        select: { url: true, title: true, description: true, siteName: true, imageUrl: true },
         take: 3,
       });
       return rows.map((r) => ({
@@ -310,6 +310,7 @@ export class LinkMetadataService {
         title: normalizeText(r.title),
         description: normalizeText(r.description),
         siteName: normalizeText(r.siteName),
+        imageUrl: normalizeText(r.imageUrl),
       }));
     } catch (err) {
       this.logger.warn(`[link-metadata] previewLinks DB error: ${err instanceof Error ? err.message : String(err)}`);

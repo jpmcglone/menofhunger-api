@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { publicAssetUrl } from '../../../common/assets/public-asset-url';
 import { MarvinBotIdentityService } from './marvin-bot-identity.service';
+import { resolveMarvVisionUrl } from './marvin-vision-media';
 
 /** Default cap on how many ancestor levels to walk up the parent chain. */
 const DEFAULT_ANCESTOR_LIMIT = 15;
@@ -17,6 +17,7 @@ export type MarvThreadContextMedia = {
   source: string;
   r2Key: string | null;
   url: string | null;
+  thumbnailR2Key: string | null;
 };
 
 export type MarvThreadContextPoll = {
@@ -134,8 +135,15 @@ export class MarvinThreadContextService {
             userId: true,
             user: { select: { username: true, name: true } },
             media: {
-              where: { kind: { not: 'video' } },
-              select: { kind: true, source: true, r2Key: true, url: true, position: true },
+              where: { deletedAt: null },
+              select: {
+                kind: true,
+                source: true,
+                r2Key: true,
+                url: true,
+                thumbnailR2Key: true,
+                position: true,
+              },
               orderBy: { position: 'asc' },
             },
             poll: {
@@ -170,6 +178,7 @@ export class MarvinThreadContextService {
           source: m.source,
           r2Key: m.r2Key,
           url: m.url,
+          thumbnailR2Key: m.thumbnailR2Key,
         })),
         poll: row.poll
           ? {
@@ -211,9 +220,9 @@ export class MarvinThreadContextService {
   }
 
   /**
-   * Select image URLs from across a collected conversation, resolving uploads against the public
-   * CDN base and keeping giphy/external URLs as-is. Videos are already excluded by `collect`.
-   * Includes EVERY image — multiple per post and throughout the thread — deduped by URL, up to
+   * Select vision URLs from across a collected conversation, resolving uploads against the public
+   * CDN base and keeping giphy/external URLs as-is. Videos contribute their poster thumbnail.
+   * Includes EVERY image/GIF/poster — multiple per post and throughout the thread — deduped by URL, up to
    * `visionMaxImagesPerTurn` (raise `MARV_VISION_MAX_IMAGES_PER_TURN` to include more). Shared by
    * "Catch me up" and the @marv reply path so both surfaces see the same media and bill identically.
    *
@@ -243,10 +252,7 @@ export class MarvinThreadContextService {
     let readingIndex = 0;
     for (const p of orderedPosts) {
       for (const m of p.media ?? []) {
-        const url =
-          m.source === 'upload' && m.r2Key
-            ? publicAssetUrl({ publicBaseUrl: opts.publicBaseUrl, key: m.r2Key })
-            : (m.url ?? null);
+        const url = resolveMarvVisionUrl(m, opts.publicBaseUrl);
         if (!url || seen.has(url)) continue;
         seen.add(url);
         // `depth` is 0 at the focal post, negative for ancestors, positive for descendants —

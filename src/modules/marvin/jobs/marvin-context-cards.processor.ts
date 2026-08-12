@@ -2,12 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { MarvinContextCardService } from '../services/marvin-context-card.service';
 
 /**
- * Worker handler for `marvin.contextCards.refresh`. Consumes the daily cron
- * tick from `MarvinContextCardsCron` and refreshes a bounded batch of stale
- * context cards. We deliberately do NOT process all users in one job:
- *  - keeps OpenAI spend predictable (admin can enlarge the batch via env later)
- *  - keeps each BullMQ job below a reasonable wall-clock limit
- *  - lets us back off cleanly if the AI provider is rate-limited
+ * Worker handler for context-card jobs.
+ *
+ * `marvin.contextCards.refresh` (daily cron): bounded batch of users with new
+ * public activity since their last card.
+ * `marvin.contextCard.refresh` (one-shot): generate/fold a single user's card,
+ * typically after a tool miss so the reply path never waits on the model.
  */
 @Injectable()
 export class MarvinContextCardsProcessor {
@@ -16,7 +16,7 @@ export class MarvinContextCardsProcessor {
   constructor(private readonly contextCards: MarvinContextCardService) {}
 
   async process(): Promise<void> {
-    const userIds = await this.contextCards.listStaleCardUserIds(30, 100);
+    const userIds = await this.contextCards.listUsersNeedingCardRefresh(100);
     if (!userIds.length) {
       this.logger.debug('[marv] context-cards refresh: nothing to do');
       return;
@@ -36,5 +36,11 @@ export class MarvinContextCardsProcessor {
       }
     }
     this.logger.log(`[marv] context-cards refresh done: ok=${ok} failed=${failed}`);
+  }
+
+  async processOne(userId: string): Promise<void> {
+    const id = (userId ?? '').trim();
+    if (!id) return;
+    await this.contextCards.refreshCardForUser(id);
   }
 }

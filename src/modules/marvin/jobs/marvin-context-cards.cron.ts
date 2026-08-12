@@ -5,13 +5,11 @@ import { JobsService } from '../../jobs/jobs.service';
 import { JOBS } from '../../jobs/jobs.constants';
 
 /**
- * Daily refresh of Marv's per-user context cards.
+ * Daily scan for Marv context cards that need a refresh.
  *
- * The cron emits a single BullMQ job; `JobsProcessor` then drives a batched
- * scan of stale cards via `MarvinContextCardService`. We don't refresh all
- * users in a single shot — that would be both expensive (N OpenAI calls) and
- * unnecessary, since each card is only consulted when Marv is actually asked
- * about that user.
+ * Activity-based: users with no card, or with new public posts/articles since
+ * the last write. The cron emits one BullMQ job; the processor then refreshes
+ * a bounded batch. We don't refresh all users in a single shot.
  */
 @Injectable()
 export class MarvinContextCardsCron {

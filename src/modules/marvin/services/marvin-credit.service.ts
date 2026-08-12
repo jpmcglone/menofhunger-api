@@ -7,10 +7,9 @@ import type { ResolvedMarvinMode } from './marvin-routing.service';
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
- * Window during which a {@link MarvinCreditService.spend} call may reuse a `recentSummary`
- * passed by the caller instead of re-running the inner refill SELECT. 5 seconds is well
- * within the time between a Marv reply's pre-check refill and the post-success spend,
- * but short enough that any meaningful accrual ("creditsPerDay" drift) is negligible.
+ * Window during which a {@link MarvinCreditService.reserve}/{@link MarvinCreditService.spend}
+ * call may reuse a `recentSummary` instead of re-running the inner refill SELECT. 5 seconds
+ * covers the gap between an early soft check and the hard reserve before the AI call.
  */
 const RECENT_REFILL_WINDOW_MS = 5_000;
 
@@ -33,9 +32,10 @@ export type MarvCreditSummary = MarvCreditState & {
  * - The bucket caps at `maxCredits` (default 1500); excess refill is dropped.
  * - `refill()` is idempotent: it computes elapsed time since `lastRefilledAt` and
  *   adds the proportional refill, capped to the bucket max.
- * - `spend()` uses an atomic guarded decrement (`UPDATE … SET credits = credits - cost
+ * - `reserve()` / `spend()` use an atomic guarded decrement (`UPDATE … SET credits = credits - cost
  *   WHERE credits >= cost`) so concurrent transactions serialize on the row lock and
  *   can never both succeed when there are only enough credits for one.
+ * - Paid paths use **reserve → AI → settle → deliver**, with `refund()` on AI/deliver failure.
  *
  * The service does NOT decide who can use Marv — that's `MarvinPublicReplyProcessor`'s
  * job. We just account for the credits.
@@ -81,49 +81,144 @@ export class MarvinCreditService {
   }
 
   /**
-   * Atomically refill + spend. Throws when the user can't afford the cost.
-   * Returns the post-spend bucket state so the caller can include it in the
-   * realtime "credits updated" emit.
+   * Atomically refill + decrement. Throws when the user can't afford the amount.
+   * Used before the AI turn so credits are held even if concurrent jobs race.
    *
-   * The decrement is issued as `UPDATE … SET credits = credits - cost WHERE credits >= cost`,
+   * The decrement is issued as `UPDATE … SET credits = credits - amount WHERE credits >= amount`,
    * which takes a row-level exclusive lock and prevents two concurrent transactions from
    * both succeeding on the same balance. The optional `recentSummary` fast path skips the
-   * inner refill SELECT when the caller refilled within {@link RECENT_REFILL_WINDOW_MS}
-   * (saves one Postgres round-trip); correctness is preserved by the WHERE guard.
+   * inner refill SELECT when the caller refilled within {@link RECENT_REFILL_WINDOW_MS}.
+   */
+  async reserve(
+    userId: string,
+    amount: number,
+    options?: { now?: Date; recentSummary?: MarvCreditState },
+  ): Promise<MarvCreditSummary> {
+    return await this.decrement(userId, amount, options);
+  }
+
+  /**
+   * Alias for {@link reserve}. Prefer reserve/settle on paid paths; spend remains for
+   * callers that charge a known amount in one step.
    */
   async spend(
     userId: string,
     cost: number,
     options?: { now?: Date; recentSummary?: MarvCreditState },
   ): Promise<MarvCreditSummary> {
-    if (!Number.isFinite(cost) || cost < 0) {
-      throw new Error(`Invalid Marv credit cost: ${cost}`);
+    return await this.reserve(userId, cost, options);
+  }
+
+  /**
+   * Return previously reserved credits (e.g. AI failed or delivery failed after settle).
+   * Caps the resulting balance at `maxCredits` so a refund cannot overflow the bucket.
+   */
+  async refund(userId: string, amount: number, now: Date = new Date()): Promise<MarvCreditSummary> {
+    if (!Number.isFinite(amount) || amount < 0) {
+      throw new Error(`Invalid Marv credit refund: ${amount}`);
+    }
+    const cfg = this.appConfig.marvCredits();
+    if (amount === 0) {
+      return await this.refill(userId, now);
+    }
+    return await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.marvinCreditBalance.findUnique({
+        where: { userId },
+        select: { credits: true, lastRefilledAt: true },
+      });
+      if (!existing) {
+        // Nothing to refund into — create a capped bucket with the refund amount.
+        const capped = Math.min(cfg.maxCredits, amount);
+        const created = await tx.marvinCreditBalance.upsert({
+          where: { userId },
+          create: { userId, credits: capped, lastRefilledAt: now },
+          update: {},
+          select: { credits: true, lastRefilledAt: true },
+        });
+        return {
+          credits: created.credits,
+          lastRefilledAt: created.lastRefilledAt,
+          maxCredits: cfg.maxCredits,
+          creditsPerDay: cfg.creditsPerDay,
+        };
+      }
+      const next = Math.min(cfg.maxCredits, existing.credits + amount);
+      const updated = await tx.marvinCreditBalance.update({
+        where: { userId },
+        data: { credits: next, lastRefilledAt: now },
+        select: { credits: true, lastRefilledAt: true },
+      });
+      return {
+        credits: updated.credits,
+        lastRefilledAt: updated.lastRefilledAt,
+        maxCredits: cfg.maxCredits,
+        creditsPerDay: cfg.creditsPerDay,
+      };
+    });
+  }
+
+  /**
+   * After a successful AI turn: adjust the held reservation to the actual cost.
+   * - actual < reserved → refund the delta
+   * - actual === reserved → no-op (return current summary)
+   * - actual > reserved → try to decrement the remainder; on failure refund the
+   *   original reservation and throw {@link InsufficientMarvCreditsError}
+   */
+  async settle(
+    userId: string,
+    reserved: number,
+    actual: number,
+    options?: { now?: Date },
+  ): Promise<MarvCreditSummary> {
+    if (!Number.isFinite(reserved) || reserved < 0 || !Number.isFinite(actual) || actual < 0) {
+      throw new Error(`Invalid Marv credit settle: reserved=${reserved} actual=${actual}`);
+    }
+    const now = options?.now ?? new Date();
+    if (actual < reserved) {
+      return await this.refund(userId, reserved - actual, now);
+    }
+    if (actual > reserved) {
+      try {
+        return await this.decrement(userId, actual - reserved, { now });
+      } catch (err) {
+        if (err instanceof InsufficientMarvCreditsError) {
+          // Release the held reservation so the user is not charged for a reply we won't deliver.
+          await this.refund(userId, reserved, now).catch(() => undefined);
+        }
+        throw err;
+      }
+    }
+    return await this.refill(userId, now);
+  }
+
+  private async decrement(
+    userId: string,
+    amount: number,
+    options?: { now?: Date; recentSummary?: MarvCreditState },
+  ): Promise<MarvCreditSummary> {
+    if (!Number.isFinite(amount) || amount < 0) {
+      throw new Error(`Invalid Marv credit cost: ${amount}`);
+    }
+    if (amount === 0) {
+      return await this.refill(userId, options?.now ?? new Date());
     }
     const now = options?.now ?? new Date();
     const cfg = this.appConfig.marvCredits();
     return await this.prisma.$transaction(async (tx) => {
-      // Refill accrues any elapsed credits (or reuses a very-recent snapshot for the
-      // fast path). This also serves as the early-rejection check.
       const refilled = await this.refillOrReuseTx(tx, userId, now, cfg, options?.recentSummary);
-      if (refilled.credits < cost) {
-        throw new InsufficientMarvCreditsError(refilled.credits, cost);
+      if (refilled.credits < amount) {
+        throw new InsufficientMarvCreditsError(refilled.credits, amount);
       }
-      // Atomic guarded decrement: the WHERE guard ensures a negative balance is
-      // impossible even if two transactions read the same pre-refill value concurrently.
-      // Postgres acquires a row-level exclusive lock for the duration of this statement,
-      // serializing concurrent spend calls on the same user row.
       const affected = await tx.marvinCreditBalance.updateMany({
-        where: { userId, credits: { gte: cost } },
-        data: { credits: { decrement: cost }, lastRefilledAt: now },
+        where: { userId, credits: { gte: amount } },
+        data: { credits: { decrement: amount }, lastRefilledAt: now },
       });
       if (affected.count === 0) {
-        // Another concurrent transaction drained the credits between our refill check
-        // and the decrement — re-read the committed balance for the error message.
         const fresh = await tx.marvinCreditBalance.findUnique({
           where: { userId },
           select: { credits: true },
         });
-        throw new InsufficientMarvCreditsError(fresh?.credits ?? 0, cost);
+        throw new InsufficientMarvCreditsError(fresh?.credits ?? 0, amount);
       }
       const updated = await tx.marvinCreditBalance.findUnique({
         where: { userId },

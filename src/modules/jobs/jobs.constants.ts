@@ -73,6 +73,7 @@ export const JOBS = {
   marvinReplyPublic: 'marvin.reply.public',
   marvinReplyPrivate: 'marvin.reply.private',
   marvinContextCardsRefresh: 'marvin.contextCards.refresh',
+  marvinContextCardRefresh: 'marvin.contextCard.refresh',
   marvinSummarizeThread: 'marvin.summarizeThread',
   marvinCostRollup: 'marvin.costRollup',
 } as const;
@@ -88,6 +89,7 @@ export const MARVIN_JOB_NAMES: ReadonlySet<JobName> = new Set<JobName>([
   JOBS.marvinReplyPublic,
   JOBS.marvinReplyPrivate,
   JOBS.marvinContextCardsRefresh,
+  JOBS.marvinContextCardRefresh,
   JOBS.marvinSummarizeThread,
   JOBS.marvinCostRollup,
 ]);

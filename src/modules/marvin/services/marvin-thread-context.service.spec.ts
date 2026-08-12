@@ -172,7 +172,7 @@ describe('MarvinThreadContextService', () => {
 function img(key: string) {
   return { kind: 'image', source: 'upload', r2Key: key, url: null };
 }
-function ctxPost(id: string, depth: number, media: Array<{ kind: string; source: string; r2Key: string | null; url: string | null }>) {
+function ctxPost(id: string, depth: number, media: Array<{ kind: string; source: string; r2Key: string | null; url: string | null; thumbnailR2Key?: string | null }>) {
   return {
     id,
     parentId: null,
@@ -186,7 +186,7 @@ function ctxPost(id: string, depth: number, media: Array<{ kind: string; source:
     editedAt: null,
     checkinPrompt: null,
     isMarv: false,
-    media,
+    media: media.map((m) => ({ thumbnailR2Key: null, ...m })),
     poll: null,
   };
 }
@@ -274,5 +274,23 @@ describe('MarvinThreadContextService.selectImageMedia', () => {
     );
     expect(result.imageUrls).toEqual([]);
     expect(result.totalImages).toBe(0);
+  });
+
+  it('includes video poster thumbnails and skips videos without one', () => {
+    const result = svc.selectImageMedia(
+      {
+        focal: ctxPost('focal', 0, [
+          { kind: 'video', source: 'upload', r2Key: 'posts/clip.mp4', url: null, thumbnailR2Key: 'posts/clip.jpg' },
+          { kind: 'video', source: 'upload', r2Key: 'posts/bare.mp4', url: null, thumbnailR2Key: null },
+          img('still.jpg'),
+        ]),
+        ancestors: [],
+        descendants: [],
+        totalDescendants: 0,
+        rootId: 'root',
+      } as any,
+      opts,
+    );
+    expect(result.imageUrls).toEqual(['https://cdn.test/posts/clip.jpg', 'https://cdn.test/still.jpg']);
   });
 });

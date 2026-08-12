@@ -120,6 +120,25 @@ describe('MarvinPromptBuilderService', () => {
     });
   });
 
+  describe('media rendering', () => {
+    it('names attached images, GIFs, and videos on the post line', () => {
+      const svc = makeService();
+      const threadContext: MarvThreadPost[] = [
+        {
+          id: 'p-1',
+          authorUsername: 'bob',
+          authorDisplayName: 'Bob',
+          body: 'Shop day',
+          createdAt: new Date().toISOString(),
+          poll: null,
+          media: [{ kind: 'image' }, { kind: 'gif' }, { kind: 'video' }],
+        },
+      ];
+      const built = svc.build({ ...baseInput, threadContext });
+      expect(built.developerNote).toContain('[attached: image + animated GIF + video]');
+    });
+  });
+
   describe('link preview rendering', () => {
     it('renders link previews at the end of the developer note', () => {
       const svc = makeService();
@@ -140,6 +159,15 @@ describe('MarvinPromptBuilderService', () => {
       ];
       const built = svc.build({ ...baseInput, linkPreviews });
       expect(built.developerNote).toContain('https://example.com/no-title');
+    });
+
+    it('marks a preview image when imageUrl is present', () => {
+      const svc = makeService();
+      const linkPreviews: MarvLinkPreview[] = [
+        { url: 'https://example.com', title: 'Example', description: null, siteName: null, imageUrl: 'https://og.test/x.jpg' },
+      ];
+      const built = svc.build({ ...baseInput, linkPreviews });
+      expect(built.developerNote).toContain('[preview image attached]');
     });
 
     it('skips link preview block when array is empty', () => {
@@ -166,6 +194,12 @@ describe('MarvinPromptBuilderService', () => {
       const svc = makeService();
       const built = svc.build({ ...baseInput, hasGifAttached: false });
       expect(built.developerNote).not.toContain('single still frame');
+    });
+
+    it('tells the model to look at attached images', () => {
+      const svc = makeService();
+      const built = svc.build({ ...baseInput, hasImagesAttached: true });
+      expect(built.developerNote).toContain('look at them');
     });
   });
 

@@ -267,7 +267,7 @@ export class MarvinAdminService {
       select: { id: true },
     });
     if (!target) throw new NotFoundException('User not found.');
-    const cardText = await this.contextCards.refreshCardForUser(args.targetUserId);
+    const cardText = await this.contextCards.refreshCardForUser(args.targetUserId, { forceFull: true });
     this.logger.log(
       `[marv] admin regenerated context card user=${args.targetUserId} (admin=${args.actingAdminUserId}) ${cardText ? 'ok' : 'skipped'}`,
     );

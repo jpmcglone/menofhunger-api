@@ -123,20 +123,19 @@ function makeProcessor(opts?: {
     })),
   };
 
+  const creditSummary = {
+    credits: opts?.credits ?? 100,
+    maxCredits: 1500,
+    creditsPerDay: 40,
+    lastRefilledAt: new Date(),
+  };
   const credits: any = {
     costForMode: jest.fn(() => 2),
-    refill: jest.fn(async () => ({
-      credits: opts?.credits ?? 100,
-      maxCredits: 1500,
-      creditsPerDay: 40,
-      lastRefilledAt: new Date(),
-    })),
-    spend: jest.fn(async () => ({
-      credits: (opts?.credits ?? 100) - 2,
-      maxCredits: 1500,
-      creditsPerDay: 40,
-      lastRefilledAt: new Date(),
-    })),
+    refill: jest.fn(async () => ({ ...creditSummary })),
+    reserve: jest.fn(async () => ({ ...creditSummary, credits: (opts?.credits ?? 100) - 2 })),
+    settle: jest.fn(async () => ({ ...creditSummary, credits: (opts?.credits ?? 100) - 2 })),
+    refund: jest.fn(async () => ({ ...creditSummary })),
+    spend: jest.fn(async () => ({ ...creditSummary, credits: (opts?.credits ?? 100) - 2 })),
     msUntilCredits: jest.fn(() => 60 * 60 * 1000),
   };
 
@@ -297,11 +296,12 @@ describe('MarvinPrivateReplyProcessor', () => {
       }),
     );
     expect(m.sessionStateUpsert).toHaveBeenCalled();
-    expect(m.credits.spend).toHaveBeenCalledWith(
+    expect(m.credits.reserve).toHaveBeenCalledWith(
       'u-requester',
-      2,
+      3,
       expect.objectContaining({ recentSummary: expect.any(Object) }),
     );
+    expect(m.credits.settle).toHaveBeenCalledWith('u-requester', 3, 2);
     expect(m.usage.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ creditsSpent: 2, source: 'private_session' }),
     );
@@ -537,7 +537,7 @@ describe('MarvinPrivateReplyProcessor', () => {
       });
       await m.processor.process({ conversationId: 'c-1', messageId: 'm-1', requestingUserId: 'u-requester' });
       // cost=2 (regular) + vision=2*2=4 = 6
-      expect(m.credits.spend).toHaveBeenCalledWith('u-requester', 6, expect.any(Object));
+      expect(m.credits.settle).toHaveBeenCalledWith('u-requester', 3, 6);
       expect(m.usage.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ creditsSpent: 6 }));
     });
   });
