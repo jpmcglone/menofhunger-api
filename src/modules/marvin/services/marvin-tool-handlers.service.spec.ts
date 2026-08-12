@@ -159,7 +159,7 @@ describe('MarvinToolHandlersService.dispatch', () => {
       expect(jobs.enqueue).toHaveBeenCalledWith(
         'marvin.contextCard.refresh',
         { userId: 'u-1' },
-        expect.objectContaining({ jobId: 'marvin-context-card-u-1' }),
+        expect.objectContaining({ jobId: 'marvin-context-card-u-1', delay: 30_000 }),
       );
     });
 

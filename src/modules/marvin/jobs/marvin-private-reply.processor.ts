@@ -120,6 +120,24 @@ export class MarvinPrivateReplyProcessor {
     };
   }
 
+  /**
+   * Drop a poisoned OpenAI conversation chain. Follow-up DMs that keep sending a
+   * stale `previous_response_id` (unfulfilled function calls, expired response)
+   * 400 forever and look like "something went sideways" on every retry.
+   */
+  private async forgetPrivateResponseChain(conversationId: string): Promise<void> {
+    try {
+      await this.prisma.marvinPrivateSessionState.updateMany({
+        where: { conversationId },
+        data: { lastResponseId: null },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[marv] failed to clear private session chain convo=${conversationId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   async process(payload: MarvinPrivateReplyJobPayload): Promise<void> {
     const startedAt = Date.now();
     const { conversationId, messageId, requestingUserId } = payload;
@@ -538,6 +556,7 @@ export class MarvinPrivateReplyProcessor {
       );
       stopTyping();
       await refundHeld();
+      await this.forgetPrivateResponseChain(conversationId);
       const isNotConfigured = err instanceof MarvinAINotConfiguredError;
       const code = isNotConfigured ? MARV_ERROR_CODES.aiNotConfigured : MARV_ERROR_CODES.aiError;
       if (isNotConfigured) {
@@ -587,6 +606,7 @@ export class MarvinPrivateReplyProcessor {
     const replyText = (aiResult.text ?? '').trim();
     if (!replyText) {
       await refundHeld();
+      await this.forgetPrivateResponseChain(conversationId);
       this.logger.warn(
         `[marv] private-reply EXIT reason=ai_no_text errorCode=${aiResult.errorCode ?? 'no_text'} resp=${aiResult.responseId} model=${aiResult.modelUsed} — sending transient-error DM`,
       );

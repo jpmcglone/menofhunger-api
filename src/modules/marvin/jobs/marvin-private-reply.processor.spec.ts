@@ -35,6 +35,7 @@ function makeProcessor(opts?: {
   const sessionStateFindUnique = jest.fn(async () =>
     opts?.previousResponseId == null ? null : { lastResponseId: opts.previousResponseId },
   );
+  const sessionStateUpdateMany = jest.fn(async () => ({ count: 1 }));
 
   const messageFindFirst = jest.fn(async () => ({
     id: 'm-1',
@@ -58,6 +59,7 @@ function makeProcessor(opts?: {
     marvinPrivateSessionState: {
       findUnique: sessionStateFindUnique,
       upsert: sessionStateUpsert,
+      updateMany: sessionStateUpdateMany,
     },
     message: { findFirst: messageFindFirst },
   };
@@ -223,6 +225,7 @@ function makeProcessor(opts?: {
     linkMetadata,
     sessionStateUpsert,
     sessionStateFindUnique,
+    sessionStateUpdateMany,
     appConfig,
   };
 }
@@ -320,6 +323,9 @@ describe('MarvinPrivateReplyProcessor', () => {
     expect(m.usage.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 'ai_no_text' }),
     );
+    expect(m.sessionStateUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { lastResponseId: null } }),
+    );
   });
 
   it('sends transient-error DM when the AI call throws a non-configured error', async () => {
@@ -337,6 +343,9 @@ describe('MarvinPrivateReplyProcessor', () => {
     expect(transientDm).toHaveBeenCalledWith({ userId: 'u-requester' });
     expect(m.usage.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 'ai_error' }),
+    );
+    expect(m.sessionStateUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { lastResponseId: null } }),
     );
   });
 

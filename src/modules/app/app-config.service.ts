@@ -666,12 +666,13 @@ export class AppConfigService {
     return {
       publicMaxInputTokens: this.readPositiveInt('MARV_PUBLIC_MAX_INPUT_TOKENS', 8000),
       privateMaxInputTokens: this.readPositiveInt('MARV_PRIVATE_MAX_INPUT_TOKENS', 4000),
-      // 1024 gives reasoning models (gpt-5.5, o-series) room to think before producing
-      // visible text. The actual reply is kept short by the system prompt, so in
-      // practice output_tokens land in the 50-120 range — but the cap must be high
-      // enough that thinking tokens don't exhaust the budget before any text is emitted.
-      // Override with MARV_MAX_OUTPUT_TOKENS in .env if you need to tune it.
-      maxOutputTokens: this.readPositiveInt('MARV_MAX_OUTPUT_TOKENS', 1024),
+      // Cap, not a target — billed tokens follow what the model actually emits.
+      // Reasoning models (gpt-5.4-mini/nano, gpt-5.5) spend this on thinking + tool-call
+      // JSON before any visible text. 1024 was exhausting mid-think on tool-heavy DMs
+      // ("tell me about @user"), which surfaced as the canned "something went sideways"
+      // reply. 4096 leaves room for a few tool rounds; the 80-word prompt still keeps
+      // the visible reply short. Override with MARV_MAX_OUTPUT_TOKENS in .env.
+      maxOutputTokens: this.readPositiveInt('MARV_MAX_OUTPUT_TOKENS', 4096),
       publicMaxPerUserPerHour: this.readPositiveInt('MARV_PUBLIC_MAX_PER_USER_PER_HOUR', 10),
       publicMaxPerUserPerDay: this.readPositiveInt('MARV_PUBLIC_MAX_PER_USER_PER_DAY', 30),
       publicThreadBurstLimit: this.readPositiveInt('MARV_PUBLIC_THREAD_BURST_LIMIT', 3),

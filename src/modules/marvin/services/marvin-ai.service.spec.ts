@@ -138,3 +138,95 @@ describe('MarvinAIService multimodal payload assembly', () => {
     expect(result.imagesAttached).toBe(2);
   });
 });
+
+function apiError(status: number, message: string): Error & { status: number } {
+  const err = new Error(message) as Error & { status: number };
+  err.status = status;
+  return err;
+}
+
+function makeIncompleteResponse(id: string) {
+  return {
+    id,
+    status: 'incomplete',
+    output: [],
+    usage: { input_tokens: 80, output_tokens: 1024, input_tokens_details: { cached_tokens: 0 } },
+  };
+}
+
+describe('MarvinAIService failure recovery', () => {
+  beforeEach(() => {
+    mockResponsesCreate.mockReset();
+  });
+
+  it('drops a stale previous_response_id and retries the same turn', async () => {
+    mockResponsesCreate
+      .mockRejectedValueOnce(apiError(400, 'No tool output found for function call call_abc'))
+      .mockResolvedValueOnce(makeSuccessResponse('recovered'));
+    const svc = makeService();
+    const result = await svc.respond({ ...baseReq, previousResponseId: 'resp-old' });
+    expect(result.text).toBe('recovered');
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(2);
+    expect(mockResponsesCreate.mock.calls[0]?.[0]?.previous_response_id).toBe('resp-old');
+    expect(mockResponsesCreate.mock.calls[1]?.[0]?.previous_response_id).toBeUndefined();
+  });
+
+  it('retries a 429 and then succeeds', async () => {
+    mockResponsesCreate
+      .mockRejectedValueOnce(apiError(429, 'Rate limit exceeded'))
+      .mockResolvedValueOnce(makeSuccessResponse('after backoff'));
+    const svc = makeService();
+    const result = await svc.respond({ ...baseReq });
+    expect(result.text).toBe('after backoff');
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it('recovers incomplete-with-no-text via a chained retry', async () => {
+    mockResponsesCreate
+      .mockResolvedValueOnce(makeIncompleteResponse('resp-incomplete'))
+      .mockResolvedValueOnce(makeSuccessResponse('finished thinking'));
+    const svc = makeService();
+    const result = await svc.respond({ ...baseReq });
+    expect(result.text).toBe('finished thinking');
+    expect(result.errorCode).toBeUndefined();
+    expect(mockResponsesCreate.mock.calls[1]?.[0]?.previous_response_id).toBe('resp-incomplete');
+    expect(mockResponsesCreate.mock.calls[1]?.[0]?.tool_choice).toBe('none');
+  });
+
+  it('falls back to a fresh answer-now turn when the chained retry is empty', async () => {
+    mockResponsesCreate
+      .mockResolvedValueOnce(makeIncompleteResponse('resp-incomplete'))
+      .mockResolvedValueOnce(makeIncompleteResponse('resp-retry'))
+      .mockResolvedValueOnce(makeSuccessResponse('fresh answer'));
+    const svc = makeService();
+    const result = await svc.respond({ ...baseReq });
+    expect(result.text).toBe('fresh answer');
+    expect(mockResponsesCreate.mock.calls[2]?.[0]?.previous_response_id).toBeUndefined();
+    expect(mockResponsesCreate.mock.calls[2]?.[0]?.tool_choice).toBe('none');
+  });
+
+  it('dispatches parallel tool calls in one round then replies', async () => {
+    mockResponsesCreate
+      .mockResolvedValueOnce({
+        id: 'resp-tools',
+        status: 'completed',
+        output: [
+          { type: 'function_call', call_id: 'c1', name: 'get_user_context_card', arguments: '{"username":"peter"}' },
+          { type: 'function_call', call_id: 'c2', name: 'get_user_context_card', arguments: '{"username":"lamarm"}' },
+        ],
+        usage: { input_tokens: 20, output_tokens: 10, input_tokens_details: { cached_tokens: 0 } },
+      })
+      .mockResolvedValueOnce(makeSuccessResponse('Peter and Lamar are both members.'));
+    const dispatchTool = jest.fn(async () => '{"ok":true}');
+    const svc = makeService();
+    const result = await svc.respond({ ...baseReq, dispatchTool });
+    expect(dispatchTool).toHaveBeenCalledTimes(2);
+    expect(result.text).toContain('Peter');
+    expect(result.toolCallCount).toBe(2);
+    const followUp = mockResponsesCreate.mock.calls[1]?.[0];
+    expect(followUp?.input).toEqual([
+      expect.objectContaining({ type: 'function_call_output', call_id: 'c1' }),
+      expect.objectContaining({ type: 'function_call_output', call_id: 'c2' }),
+    ]);
+  });
+});

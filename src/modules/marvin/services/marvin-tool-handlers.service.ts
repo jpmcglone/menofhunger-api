@@ -224,7 +224,15 @@ export class MarvinToolHandlersService {
         });
         if (user) {
           await this.jobs
-            .enqueue(JOBS.marvinContextCardRefresh, { userId: user.id }, { jobId: `marvin-context-card-${user.id}` })
+            .enqueue(
+              JOBS.marvinContextCardRefresh,
+              { userId: user.id },
+              {
+                jobId: `marvin-context-card-${user.id}`,
+                // Don't compete with the in-flight reply for OpenAI TPM.
+                delay: 30_000,
+              },
+            )
             .catch((err) => {
               this.logger.debug(
                 `[marv-tools] context-card enqueue skipped for @${lower}: ${err instanceof Error ? err.message : String(err)}`,
