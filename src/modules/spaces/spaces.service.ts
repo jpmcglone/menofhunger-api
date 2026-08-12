@@ -8,8 +8,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { SpacesPresenceService } from './spaces-presence.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
+import { FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { compareLobbySpaces } from './spaces-lobby-sort';
 
@@ -34,6 +36,7 @@ export class SpacesService {
     private readonly sideEffects: SideEffectsService,
     private readonly jobs: JobsService,
     private readonly realtime: PresenceRealtimeService,
+    private readonly notifications: NotificationsService,
   ) {
     this.r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? '';
   }
@@ -121,7 +124,12 @@ export class SpacesService {
       include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
     });
 
-    return this.toDto(updated, { viewerUserId: userId });
+    const dto = await this.toDto(updated, { viewerUserId: userId });
+    this.emitSpaceUpdated(id, 'updated', {
+      title: dto.title,
+      description: dto.description,
+    });
+    return dto;
   }
 
   async deleteSpace(id: string, userId: string): Promise<void> {
@@ -137,19 +145,29 @@ export class SpacesService {
     if (!space) throw new NotFoundException();
     if (space.ownerId !== userId) throw new ForbiddenException();
 
+    // Cancel-on-delete must write while the space row still exists (subjectSpaceId FK
+    // + push deep-link lookup). clearSchedule keeps the async side-effect path.
     if (space.scheduledAt) {
-      const recipientUserIds = await this.listSubscriberUserIds(id);
+      const recipientUserIds = (await this.listSubscriberUserIds(id)).filter(
+        (uid) => uid !== space.ownerId,
+      );
       await this.cancelReminderJobs(id, space.scheduledAt.getTime());
-      this.sideEffects.dispatch('space.schedule.cancelled', {
-        spaceId: id,
-        ownerUserId: space.ownerId,
-        spaceTitle: space.title,
-        ownerUsername: space.owner.username,
-        recipientUserIds,
+      const title = `${space.title} cancelled`;
+      const body = 'The scheduled space was cancelled.';
+      await runInBatches(recipientUserIds, FANOUT_CONCURRENCY, async (recipientUserId) => {
+        await this.notifications.upsertSpaceScheduleNotification({
+          recipientUserId,
+          kind: 'space_schedule_cancelled',
+          spaceId: id,
+          actorUserId: space.ownerId,
+          title,
+          body,
+        });
       });
     }
 
     await this.prisma.space.delete({ where: { id } });
+    this.emitSpaceUpdated(id, 'deleted', { deleted: true });
   }
 
   async activateSpace(id: string, userId: string): Promise<SpaceDto> {
@@ -169,10 +187,16 @@ export class SpacesService {
 
     if (previousScheduledAt) {
       await this.cancelReminderJobs(id, previousScheduledAt.getTime());
+      // Snapshot recipients before clearing Notify-me rows for the live fan-out.
+      const recipientUserIds = (await this.listSubscriberUserIds(id)).filter((uid) => uid !== userId);
+      this.sideEffects.dispatch('space.schedule.live', { spaceId: id, recipientUserIds });
     }
-    this.sideEffects.dispatch('space.schedule.live', { spaceId: id });
+    await this.clearNonOwnerSubscribers(id, userId);
 
-    const dto = await this.toDto(updated, { viewerUserId: userId });
+    const dto = await this.toDto(updated, {
+      viewerUserId: userId,
+      subscriberCountOverride: await this.countNonOwnerSubscribers(id, userId),
+    });
     this.emitSpaceUpdated(id, 'activated', {
       isActive: true,
       scheduledAt: null,
@@ -238,7 +262,13 @@ export class SpacesService {
       },
       include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
     });
-    return this.toDto(updated, { viewerUserId: userId });
+    const dto = await this.toDto(updated, { viewerUserId: userId });
+    this.emitSpaceUpdated(id, 'mode_changed', {
+      mode: dto.mode,
+      watchPartyUrl: dto.watchPartyUrl,
+      radioStreamUrl: dto.radioStreamUrl,
+    });
+    return dto;
   }
 
   async setSchedule(id: string, userId: string, scheduledAtRaw: string): Promise<SpaceDto> {
@@ -323,8 +353,12 @@ export class SpacesService {
       spaceTitle: space.title,
       ownerUsername: space.owner.username,
     });
+    await this.clearNonOwnerSubscribers(id, userId);
 
-    const dto = await this.toDto(updated, { viewerUserId: userId });
+    const dto = await this.toDto(updated, {
+      viewerUserId: userId,
+      subscriberCountOverride: await this.countNonOwnerSubscribers(id, userId),
+    });
     this.emitSpaceUpdated(id, 'schedule_cleared', {
       scheduledAt: null,
       subscriberCount: dto.subscriberCount,
@@ -444,11 +478,6 @@ export class SpacesService {
     );
 
     return dtos.sort((a, b) => compareLobbySpaces(a, b, { viewerId, followingOwnerIds }));
-  }
-
-  /** @deprecated Prefer listLobbySpaces — kept name for call-site clarity during transition. */
-  async listActiveSpaces(viewerUserId?: string | null): Promise<SpaceDto[]> {
-    return this.listLobbySpaces(viewerUserId);
   }
 
   async isSpaceActive(spaceId: string): Promise<boolean> {
@@ -663,10 +692,7 @@ export class SpacesService {
 
     const subscriberCount =
       opts?.subscriberCountOverride ??
-      Math.max(
-        0,
-        (space._count?.scheduleSubscribers ?? 0) - (space.scheduledAt != null ? 1 : 0),
-      );
+      (await this.countNonOwnerSubscribers(space.id, space.owner.id));
 
     return {
       id: space.id,
@@ -685,7 +711,14 @@ export class SpacesService {
     };
   }
 
-  private async countNonOwnerSubscribers(spaceId: string, ownerId: string): Promise<number> {
+  /** Notify-me rows for non-hosts; host stays subscribed for soon reminders while scheduled. */
+  private async clearNonOwnerSubscribers(spaceId: string, ownerId: string): Promise<void> {
+    await this.prisma.spaceScheduleSubscriber.deleteMany({
+      where: { spaceId, userId: { not: ownerId } },
+    });
+  }
+
+  async countNonOwnerSubscribers(spaceId: string, ownerId: string): Promise<number> {
     return this.prisma.spaceScheduleSubscriber.count({
       where: { spaceId, userId: { not: ownerId } },
     });

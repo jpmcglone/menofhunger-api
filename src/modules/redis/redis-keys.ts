@@ -256,6 +256,18 @@ export const RedisKeys = {
   spacesLobbyCounts(): string {
     return 'spaces:lobbyCounts';
   },
+  /** Per-instance local lobby counts (hash: spaceId → count). TTL'd so crashed instances expire. */
+  spacesLobbyCountsInstance(instanceId: string): string {
+    return `spaces:lobbyCounts:inst:${clean(instanceId)}`;
+  },
+  /** Set of instance ids that recently published lobby counts. */
+  spacesLobbyCountsInstances(): string {
+    return 'spaces:lobbyCounts:instances';
+  },
+  /** Epoch ms when a space lobby last became empty (shared across instances). */
+  spacesEmptySince(spaceId: string): string {
+    return `spaces:emptySince:${clean(spaceId)}`;
+  },
 
   // Watch Party — ephemeral playback state, survives server restarts via Redis
   watchPartyState(spaceId: string): string {

@@ -39,11 +39,11 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
 
   private async onLive(payload: SideEffectPayloads['space.schedule.live']): Promise<void> {
     const snap = await this.spaces.getScheduleSnapshot(payload.spaceId);
-    // Schedule is cleared on activate — still fan out to subscribers.
+    // Schedule is cleared on activate — still fan out to the pre-clear subscriber snapshot.
     // Host already knows they're going live; skip self.
-    const recipients = (await this.spaces.listSubscriberUserIds(payload.spaceId)).filter(
-      (id) => id !== snap?.ownerUserId,
-    );
+    const recipients = (
+      payload.recipientUserIds ?? (await this.spaces.listSubscriberUserIds(payload.spaceId))
+    ).filter((id) => id !== snap?.ownerUserId);
     if (recipients.length === 0) return;
 
     const title = snap ? `${snap.title} is live` : 'Space is live';
@@ -98,7 +98,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     await runInBatches(recipients, FANOUT_CONCURRENCY, async (recipientUserId) => {
       await this.notifications.upsertSpaceScheduleNotification({
         recipientUserId,
-        kind: 'space_schedule_cancelled',
+        kind: 'space_schedule_rescheduled',
         spaceId: payload.spaceId,
         actorUserId: snap.ownerUserId,
         title,
@@ -112,6 +112,12 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     if (!snap?.scheduledAt) return;
     if (snap.scheduledAt.getTime() !== payload.scheduledAtMs) return;
     if (snap.scheduledAt.getTime() <= Date.now()) return;
+    if (
+      payload.kind === 'space_reminder_day' &&
+      !this.spaces.isDayReminderStillValid(snap.scheduledAt, payload.scheduledAtMs)
+    ) {
+      return;
+    }
 
     const isDay = payload.kind === 'space_reminder_day';
     // Host only wants the ~15 min heads-up — not the morning "today" ping.

@@ -508,6 +508,12 @@ export class NotificationPushService {
         body: snippet ?? 'The scheduled space was cancelled.',
       };
     }
+    if (kind === 'space_schedule_rescheduled') {
+      return {
+        title: titleFromFallback || 'Space rescheduled',
+        body: snippet ?? 'The start time changed.',
+      };
+    }
     // Generic kind is used for one-off actor-driven events that don't have their own kind
     // (e.g. article emoji reactions). Prefix the DB title with the actor name when both
     // are present so the push reads like "Jane reacted to your article" with body=emoji.

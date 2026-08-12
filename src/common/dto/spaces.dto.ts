@@ -58,6 +58,8 @@ export type SpacesUpdatedPatchDto = Partial<{
   radioStreamUrl: string | null;
   /** Notify-me signups excluding the host. */
   subscriberCount: number;
+  /** Space row removed — clients should drop from lobby lists. */
+  deleted: boolean;
 }>;
 
 /** Broadcast to `spaces:lobbies` when schedule / notify signup / live state changes. */

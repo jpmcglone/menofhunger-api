@@ -129,6 +129,7 @@ enum NotificationKind {
   space_reminder_soon
   space_live
   space_schedule_cancelled
+  space_schedule_rescheduled
 }
 
 enum CoinTransferKind {

@@ -298,6 +298,8 @@ export interface SideEffectPayloads {
   /** Host went live — fan out `space_live` to schedule subscribers. */
   'space.schedule.live': {
     spaceId: string;
+    /** Snapshot before clearing non-owner subscribers on activate. */
+    recipientUserIds?: string[];
   };
   /** Schedule cleared or space deleted — fan out `space_schedule_cancelled`. */
   'space.schedule.cancelled': {

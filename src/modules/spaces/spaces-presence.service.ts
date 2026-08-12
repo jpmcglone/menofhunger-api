@@ -1,7 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
 
 /**
- * In-memory "who is in which space" state.
+ * In-memory "who is in which space" state (membership + mute/pause).
+ *
+ * Lobby *counts* and empty-since stamps are mirrored to Redis so idle cleanup
+ * and lobby badges work across API instances. Member lists and primary-owner
+ * election remain process-local (single-gateway sticky) — see gateway handler.
  *
  * - Deduped per user: a user can only be "in" one space at a time.
  * - A user is "in" a space once they select/enter it (not tied to music playback).
@@ -20,8 +25,8 @@ export class SpacesPresenceService {
   private readonly pausedBySpace = new Map<string, Set<string>>();
   /** spaceId -> Set<userId> (subset of usersBySpace: muted members) */
   private readonly mutedBySpace = new Map<string, Set<string>>();
-  /** spaceId -> epoch ms when the lobby last became empty (local instance). */
-  private readonly emptySinceBySpaceId = new Map<string, number>();
+
+  constructor(@Optional() private readonly presenceRedis: PresenceRedisStateService | null) {}
 
   isValidSpaceId(spaceId: string): boolean {
     return Boolean((spaceId ?? '').trim());
@@ -31,39 +36,29 @@ export class SpacesPresenceService {
   private noteOccupied(spaceId: string): void {
     const id = (spaceId ?? '').trim();
     if (!id) return;
-    this.emptySinceBySpaceId.delete(id);
+    void this.presenceRedis?.clearSpaceEmptySince(id);
   }
 
   /** Stamp empty-since once when the last member leaves. */
   private noteEmpty(spaceId: string): void {
     const id = (spaceId ?? '').trim();
     if (!id) return;
-    if (!this.emptySinceBySpaceId.has(id)) {
-      this.emptySinceBySpaceId.set(id, Date.now());
-    }
-  }
-
-  /** Epoch ms when this instance last saw the lobby go empty, or null if occupied/unknown. */
-  getEmptySinceMs(spaceIdRaw: string): number | null {
-    const id = (spaceIdRaw ?? '').trim();
-    if (!id) return null;
-    if ((this.usersBySpace.get(id)?.size ?? 0) > 0) return null;
-    return this.emptySinceBySpaceId.get(id) ?? null;
+    void this.presenceRedis?.ensureSpaceEmptySince(id, false);
   }
 
   /**
-   * Ensure an empty-since stamp exists for a vacant lobby (used by the idle sweep
-   * for spaces that became live without ever joining this instance).
+   * Ensure an empty-since stamp exists for a vacant lobby (used by the idle sweep).
+   * Uses Redis so a worker/API without local members still sees shared emptiness.
    */
-  ensureEmptyStamp(spaceIdRaw: string): number | null {
+  async ensureEmptyStamp(spaceIdRaw: string): Promise<number | null> {
     const id = (spaceIdRaw ?? '').trim();
     if (!id) return null;
-    if ((this.usersBySpace.get(id)?.size ?? 0) > 0) {
-      this.noteOccupied(id);
-      return null;
+    const locallyOccupied = (this.usersBySpace.get(id)?.size ?? 0) > 0;
+    if (this.presenceRedis) {
+      return this.presenceRedis.ensureSpaceEmptySince(id, locallyOccupied);
     }
-    this.noteEmpty(id);
-    return this.emptySinceBySpaceId.get(id) ?? null;
+    if (locallyOccupied) return null;
+    return Date.now();
   }
 
   join(params: { socketId: string; userId: string; spaceId: string }): { prevSpaceId: string | null; prevRoomSpaceId: string | null } {

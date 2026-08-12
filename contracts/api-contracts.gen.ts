@@ -27,7 +27,7 @@ export type FitnessUnits = 'us' | 'metric'
 export type FollowVisibility = 'none' | 'all' | 'verified' | 'premium'
 export type MessageParticipantRole = 'owner' | 'member'
 export type MessageParticipantStatus = 'pending' | 'accepted'
-export type NotificationKind = 'comment' | 'boost' | 'repost' | 'follow' | 'followed_post' | 'followed_article' | 'mention' | 'nudge' | 'poll_results_ready' | 'generic' | 'coin_transfer' | 'message' | 'group_join_request' | 'community_group_member_joined' | 'community_group_join_approved' | 'community_group_join_rejected' | 'community_group_member_removed' | 'community_group_disbanded' | 'crew_invite_received' | 'crew_invite_accepted' | 'crew_invite_declined' | 'crew_invite_cancelled' | 'crew_member_joined' | 'crew_member_left' | 'crew_member_kicked' | 'crew_owner_transferred' | 'crew_owner_transfer_vote' | 'crew_wall_mention' | 'crew_disbanded' | 'community_group_invite_received' | 'community_group_invite_accepted' | 'community_group_invite_declined' | 'community_group_invite_cancelled' | 'community_group_post' | 'marv_not_in_group' | 'status_update' | 'checkin_post' | 'word_of_the_day' | 'quote_of_the_day' | 'account_verified' | 'checkin_reminder' | 'on_this_day' | 'premium_started' | 'premium_ended' | 'space_reminder_day' | 'space_reminder_soon' | 'space_live' | 'space_schedule_cancelled'
+export type NotificationKind = 'comment' | 'boost' | 'repost' | 'follow' | 'followed_post' | 'followed_article' | 'mention' | 'nudge' | 'poll_results_ready' | 'generic' | 'coin_transfer' | 'message' | 'group_join_request' | 'community_group_member_joined' | 'community_group_join_approved' | 'community_group_join_rejected' | 'community_group_member_removed' | 'community_group_disbanded' | 'crew_invite_received' | 'crew_invite_accepted' | 'crew_invite_declined' | 'crew_invite_cancelled' | 'crew_member_joined' | 'crew_member_left' | 'crew_member_kicked' | 'crew_owner_transferred' | 'crew_owner_transfer_vote' | 'crew_wall_mention' | 'crew_disbanded' | 'community_group_invite_received' | 'community_group_invite_accepted' | 'community_group_invite_declined' | 'community_group_invite_cancelled' | 'community_group_post' | 'marv_not_in_group' | 'status_update' | 'checkin_post' | 'word_of_the_day' | 'quote_of_the_day' | 'account_verified' | 'checkin_reminder' | 'on_this_day' | 'premium_started' | 'premium_ended' | 'space_reminder_day' | 'space_reminder_soon' | 'space_live' | 'space_schedule_cancelled' | 'space_schedule_rescheduled'
 export type PostMediaKind = 'image' | 'gif' | 'video'
 export type PostMediaSource = 'upload' | 'giphy'
 export type PostVisibility = 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe'
@@ -2288,8 +2288,10 @@ export type SpaceDto = {
   listenerCount: number;
   /** Whether the authenticated viewer is subscribed to schedule reminders. */
   viewerSubscribed: boolean;
-  /** Count of Notify-me subscribers (always included; cheap aggregate). */
+  /** Count of Notify-me subscribers excluding the host (host is always reminded). */
   subscriberCount: number;
+  /** Whether the authenticated viewer follows this space's owner. */
+  viewerFollowsOwner: boolean;
 };
 
 export type SpaceListenerDto = {
@@ -2306,6 +2308,32 @@ export type SpaceListenerDto = {
 
 export type SpaceLobbyCountsDto = {
   countsBySpaceId: Record<string, number>;
+};
+
+/**
+ * Shared (viewer-agnostic) space fields for live lobby/host UI.
+ * Do NOT include viewerSubscribed / viewerFollowsOwner — those are per-viewer.
+ */
+export type SpacesUpdatedPatchDto = Partial<{
+  title: string;
+  description: string | null;
+  isActive: boolean;
+  scheduledAt: string | null;
+  mode: 'NONE' | 'WATCH_PARTY' | 'RADIO';
+  watchPartyUrl: string | null;
+  radioStreamUrl: string | null;
+  /** Notify-me signups excluding the host. */
+  subscriberCount: number;
+  /** Space row removed — clients should drop from lobby lists. */
+  deleted: boolean;
+}>;
+
+/** Broadcast to `spaces:lobbies` when schedule / notify signup / live state changes. */
+export type SpacesUpdatedPayloadDto = {
+  spaceId: string;
+  version: string;
+  reason: string;
+  patch: SpacesUpdatedPatchDto;
 };
 
 export type SpaceChatSenderDto = {

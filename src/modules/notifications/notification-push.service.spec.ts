@@ -195,6 +195,7 @@ const notificationKinds = [
   'space_reminder_soon',
   'space_live',
   'space_schedule_cancelled',
+  'space_schedule_rescheduled',
 ] as const satisfies readonly NotificationKind[];
 
 describe('NotificationPushService — human-readable copy', () => {

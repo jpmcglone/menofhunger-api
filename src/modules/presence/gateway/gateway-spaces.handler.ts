@@ -20,6 +20,10 @@ import { spaceRoom, spacesChatRoom } from './gateway-rooms';
  * typing, mode changes, and watch-party state/control — including the
  * owner-socket election that prevents multiple owner tabs from fighting over
  * playback control.
+ *
+ * Lobby *counts* are aggregated via Redis across instances. Member lists and
+ * primary-owner election remain process-local (single-gateway sticky); a
+ * multi-instance owner/member roster would need shared Redis membership.
  */
 @Injectable()
 export class SpacesGatewayHandler {
@@ -159,7 +163,12 @@ export class SpacesGatewayHandler {
   }
 
   emitSpacesLobbyCounts(): void {
-    const countsBySpaceId = this.spacesPresence.getLobbyCountsBySpaceId();
+    void this.emitSpacesLobbyCountsAsync();
+  }
+
+  private async emitSpacesLobbyCountsAsync(): Promise<void> {
+    const local = this.spacesPresence.getLobbyCountsBySpaceId();
+    const countsBySpaceId = await this.presenceRedis.syncAndAggregateLobbyCounts(local);
     const payload: SpaceLobbyCountsDto = { countsBySpaceId };
 
     this.context.server.emit('spaces:lobbyCounts', payload);
