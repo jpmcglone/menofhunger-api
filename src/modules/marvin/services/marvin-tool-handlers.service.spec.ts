@@ -247,6 +247,36 @@ describe('MarvinToolHandlersService.dispatch', () => {
       expect(cache.counters().hits).toBe(1);
     });
 
+    it('get_post: refuses private-group posts unless they are in the current thread', async () => {
+      const { svc, prisma } = makeService();
+      prisma.post.findFirst.mockResolvedValue(null);
+      await svc.dispatch('get_post', { postId: 'private-p' }, { ...baseCtx, rootPostId: undefined });
+      const where = prisma.post.findFirst.mock.calls[0][0].where;
+      expect(where.OR).toEqual([
+        { communityGroupId: null },
+        { communityGroup: { deletedAt: null, joinPolicy: 'open' } },
+      ]);
+      expect(where.OR).not.toContainEqual({ id: 'r-1' });
+    });
+
+    it('get_post: current-thread OR lets a private-group @marv mention still load', async () => {
+      const { svc, prisma } = makeService();
+      prisma.post.findFirst.mockResolvedValue({
+        id: 'p-1',
+        body: 'hello',
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        visibility: 'public',
+        rootId: 'r-1',
+        parentId: null,
+        user: { username: 'alice', name: 'Alice', isBot: false },
+      });
+      await svc.dispatch('get_post', { postId: 'p-1' }, baseCtx);
+      const where = prisma.post.findFirst.mock.calls[0][0].where;
+      expect(where.OR).toContainEqual({ communityGroupId: null });
+      expect(where.OR).toContainEqual({ id: 'r-1' });
+      expect(where.OR).toContainEqual({ rootId: 'r-1' });
+    });
+
     it('get_post_thread_recent_messages: same root + same limit → one DB pair', async () => {
       const { svc, prisma } = makeService();
       prisma.post.findFirst.mockResolvedValue({
@@ -279,6 +309,7 @@ describe('MarvinToolHandlersService.dispatch', () => {
 
     it('get_post_thread_summary: missing summary returns no_summary and dedupes', async () => {
       const { svc, prisma, cache } = makeService();
+      prisma.post.findFirst.mockResolvedValue({ id: 'r-1' });
       prisma.marvinThreadSummary.findUnique.mockResolvedValue(null);
       const a = await svc.dispatch('get_post_thread_summary', { rootPostId: 'r-1' }, baseCtx);
       const b = await svc.dispatch('get_post_thread_summary', { rootPostId: 'r-1' }, baseCtx);

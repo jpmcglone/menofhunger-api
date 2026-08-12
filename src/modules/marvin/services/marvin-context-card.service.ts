@@ -5,6 +5,7 @@ import { AppConfigService } from '../../app/app-config.service';
 import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
 import { MarvinAIService } from './marvin-ai.service';
 import { fillVisionSlots, marvMediaMarker, resolveMarvVisionUrl } from './marvin-vision-media';
+import { marvPublicProfilePostWhere } from './marvin-post-access';
 
 export type GeneratedContextCard = {
   cardText: string;
@@ -60,8 +61,10 @@ type CardArticle = { title: string; excerpt: string };
  * it rather than rewriting from scratch.
  *
  * SAFETY:
- *  - Source data is restricted to public profile + PUBLIC posts/articles.
- *    Direct messages, only-me, premium-only, and verified-only posts are excluded.
+ *  - Source data is restricted to public profile + PUBLIC posts/articles that are
+ *    not in a community group. Group posts (including private/approval groups) are
+ *    members-only even when visibility is `public`. Direct messages, only-me,
+ *    premium-only, and verified-only posts are excluded.
  *  - Sensitive terms are redacted post-generation.
  */
 @Injectable()
@@ -212,6 +215,7 @@ export class MarvinContextCardService {
             WHERE p."userId" = u.id
               AND p."deletedAt" IS NULL
               AND p.visibility::text = 'public'
+              AND p."communityGroupId" IS NULL
               AND p."createdAt" > c."updatedAt"
           )
           OR EXISTS (
@@ -268,6 +272,7 @@ export class MarvinContextCardService {
         userId,
         deletedAt: null,
         visibility: 'public',
+        ...marvPublicProfilePostWhere(),
         ...(since ? { createdAt: { gt: since } } : {}),
       },
       orderBy: { createdAt: 'desc' },

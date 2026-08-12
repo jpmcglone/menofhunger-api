@@ -120,6 +120,7 @@ describe('MarvinContextCardService — refreshCardForUser', () => {
       userId: 'u-1',
       deletedAt: null,
       visibility: 'public',
+      communityGroupId: null,
     });
     expect(args.take).toBe(12);
   });

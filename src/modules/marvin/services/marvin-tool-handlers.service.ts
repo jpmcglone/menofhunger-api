@@ -9,6 +9,7 @@ import { MarvinContextCardService } from './marvin-context-card.service';
 import { ScriptureService } from '../../scripture/scripture.service';
 import { JobsService } from '../../jobs/jobs.service';
 import { JOBS } from '../../jobs/jobs.constants';
+import { marvToolGroupAccessOr } from './marvin-post-access';
 
 const RECENT_MESSAGES_DEFAULT = 10;
 const RECENT_MESSAGES_MAX = 30;
@@ -251,16 +252,22 @@ export class MarvinToolHandlersService {
     return card;
   }
 
-  private async getPost(rawArgs: unknown, _ctx: MarvAIToolCallContext): Promise<unknown> {
+  private async getPost(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
     const parsed = getPostSchema.safeParse(rawArgs);
     if (!parsed.success) return { error: 'invalid_args' };
+    const scope = (ctx.rootPostId ?? '').trim() || '-';
     return await this.cache.getOrSetJson<unknown>({
       enabled: true,
-      key: `marv:tool:post:${parsed.data.postId}`,
+      key: `marv:tool:post:${parsed.data.postId}:root:${scope}`,
       ttlSeconds: TTL_POST,
       compute: async () => {
         const post = await this.prisma.post.findFirst({
-          where: { id: parsed.data.postId, deletedAt: null, visibility: { not: 'onlyMe' } },
+          where: {
+            id: parsed.data.postId,
+            deletedAt: null,
+            visibility: { not: 'onlyMe' },
+            OR: marvToolGroupAccessOr(ctx.rootPostId),
+          },
           select: {
             id: true,
             body: true,
@@ -312,13 +319,19 @@ export class MarvinToolHandlersService {
       return { error: 'thread_not_in_scope' };
     }
     const limit = Math.min(RECENT_MESSAGES_MAX, parsed.data.limit ?? RECENT_MESSAGES_DEFAULT);
+    const scope = (ctx.rootPostId ?? '').trim() || '-';
     return await this.cache.getOrSetJson<unknown>({
       enabled: true,
-      key: `marv:tool:thread-recent:${requestedRoot}:${limit}`,
+      key: `marv:tool:thread-recent:${requestedRoot}:${limit}:root:${scope}`,
       ttlSeconds: TTL_THREAD_RECENT,
       compute: async () => {
         const root = await this.prisma.post.findFirst({
-          where: { id: requestedRoot, deletedAt: null, visibility: { not: 'onlyMe' } },
+          where: {
+            id: requestedRoot,
+            deletedAt: null,
+            visibility: { not: 'onlyMe' },
+            OR: marvToolGroupAccessOr(ctx.rootPostId),
+          },
           select: {
             id: true,
             body: true,
@@ -344,6 +357,7 @@ export class MarvinToolHandlersService {
             rootId: requestedRoot,
             deletedAt: null,
             visibility: { not: 'onlyMe' },
+            OR: marvToolGroupAccessOr(ctx.rootPostId),
           },
           select: {
             id: true,
@@ -407,6 +421,7 @@ export class MarvinToolHandlersService {
       return { error: 'thread_not_in_scope' };
     }
     const rootPostId = parsed.data.rootPostId;
+    const scope = (ctx.rootPostId ?? '').trim() || '-';
     const result = await this.cache.getOrSetNullableJson<{
       rootPostId: string;
       summary: string;
@@ -414,10 +429,20 @@ export class MarvinToolHandlersService {
       updatedAt: string;
     }>({
       enabled: true,
-      key: `marv:tool:thread-summary:${rootPostId}`,
+      key: `marv:tool:thread-summary:${rootPostId}:root:${scope}`,
       ttlSeconds: TTL_THREAD_SUMMARY,
       nullTtlSeconds: TTL_NEGATIVE,
       compute: async () => {
+        const root = await this.prisma.post.findFirst({
+          where: {
+            id: rootPostId,
+            deletedAt: null,
+            visibility: { not: 'onlyMe' },
+            OR: marvToolGroupAccessOr(ctx.rootPostId),
+          },
+          select: { id: true },
+        });
+        if (!root) return null;
         const summary = await this.prisma.marvinThreadSummary.findUnique({
           where: { rootPostId },
           select: { summary: true, updatedAt: true, lastMessageIdIncluded: true },
