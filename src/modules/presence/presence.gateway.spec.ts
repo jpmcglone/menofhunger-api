@@ -117,6 +117,9 @@ function makePresenceRedis() {
     onlineByUserIds: jest.fn().mockResolvedValue(new Map<string, boolean>()),
     unregisterSocket: jest.fn().mockResolvedValue({ isNowOffline: false }),
     publishSpacesLobbyCounts: jest.fn().mockResolvedValue(undefined),
+    syncAndAggregateLobbyCounts: jest.fn(async (local: Record<string, number>) => ({ ...local })),
+    clearSpaceEmptySince: jest.fn().mockResolvedValue(undefined),
+    ensureSpaceEmptySince: jest.fn().mockResolvedValue(null),
   } as any;
 }
 

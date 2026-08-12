@@ -67,7 +67,7 @@ function build(overrides: {
 describe('SpacesService.deleteSpace', () => {
   it('writes cancel notifications before deleting the space row', async () => {
     const order: string[] = [];
-    const { service, prisma, notifications, realtime, sideEffects } = build({
+    const { service, notifications, realtime, sideEffects } = build({
       prisma: {
         space: {
           findUnique: jest.fn(async () => ({

@@ -97,6 +97,9 @@ function makePresenceRedis() {
     publishEmitToRoom: jest.fn().mockResolvedValue(undefined),
     publishUserSpaceChanged: jest.fn().mockResolvedValue(undefined),
     publishSpacesLobbyCounts: jest.fn().mockResolvedValue(undefined),
+    syncAndAggregateLobbyCounts: jest.fn(async (local: Record<string, number>) => ({ ...local })),
+    clearSpaceEmptySince: jest.fn().mockResolvedValue(undefined),
+    ensureSpaceEmptySince: jest.fn().mockResolvedValue(null),
   } as any;
 }
 
