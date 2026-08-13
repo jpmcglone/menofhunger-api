@@ -1268,7 +1268,9 @@ export class NotificationPushService {
           : params.actorPostId ?? params.subjectPostId ?? null;
       const groupUrl =
         currentGroup && params.subjectGroupId
-          ? `/g/${currentGroup.slug || params.subjectGroupId}`
+          ? `/g/${currentGroup.slug || params.subjectGroupId}${
+              kind === 'group_join_request' ? '/pending' : ''
+            }`
           : null;
       this.sendWebPushToRecipient(recipientUserId, {
         title: pushCopy.title,

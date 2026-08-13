@@ -81,6 +81,66 @@ describe('GroupsService.join — verification gate', () => {
   });
 });
 
+describe('GroupsService.join — join policy', () => {
+  it('approval groups stay pending (share links do not skip the gate)', async () => {
+    const upsert = jest.fn(async () => ({}));
+    const { service, sideEffects } = makeService({
+      user: { findUnique: jest.fn(async () => ({ verifiedStatus: 'manual' })) },
+      communityGroup: {
+        findFirst: jest.fn(async () => ({ ...FAKE_GROUP, joinPolicy: 'approval' })),
+      },
+      communityGroupMember: {
+        findUnique: jest.fn(async () => null),
+        upsert,
+      },
+    });
+
+    await expect(service.join({ viewerUserId: 'u1', groupId: 'g1' })).resolves.toEqual({
+      data: { ok: true, status: 'pending' },
+    });
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ status: 'pending' }),
+        update: expect.objectContaining({ status: 'pending' }),
+      }),
+    );
+    expect(sideEffects.dispatch).toHaveBeenCalledWith(
+      'group.join.requested',
+      expect.objectContaining({ groupId: 'g1', requestingUserId: 'u1' }),
+    );
+  });
+
+  it('open groups become active members', async () => {
+    const $transaction = jest.fn(async (fn: (tx: unknown) => Promise<void>) =>
+      fn({
+        communityGroupMember: {
+          findUnique: jest.fn(async () => null),
+          create: jest.fn(async () => ({})),
+        },
+        communityGroup: { update: jest.fn(async () => ({})) },
+      }),
+    );
+    const { service, sideEffects } = makeService({
+      user: { findUnique: jest.fn(async () => ({ verifiedStatus: 'manual' })) },
+      communityGroup: {
+        findFirst: jest.fn(async () => ({ ...FAKE_GROUP, joinPolicy: 'open' })),
+      },
+      communityGroupMember: {
+        findUnique: jest.fn(async () => null),
+      },
+      $transaction,
+    });
+
+    await expect(service.join({ viewerUserId: 'u1', groupId: 'g1' })).resolves.toEqual({
+      data: { ok: true, status: 'active' },
+    });
+    expect(sideEffects.dispatch).toHaveBeenCalledWith(
+      'group.member.joined',
+      expect.objectContaining({ groupId: 'g1', joinerUserId: 'u1' }),
+    );
+  });
+});
+
 describe('GroupsService.updateGroup — privacy transitions', () => {
   it('blocks private -> open transition with a BadRequestException', async () => {
     const { service, prisma } = makeService();

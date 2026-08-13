@@ -831,6 +831,40 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
     );
   });
 
+  it('routes join-request pushes to the pending-requests page', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'actor-1',
+      username: 'thomas',
+      name: 'Thomas',
+      avatarKey: null,
+      avatarUpdatedAt: null,
+    });
+    prisma.communityGroup.findUnique.mockResolvedValue({
+      slug: 'builders',
+      name: 'Builders',
+      avatarImageUrl: 'https://cdn.example.com/groups/builders.jpg',
+      deletedAt: null,
+    });
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendKindPushForActor({
+      recipientUserId: 'user-1',
+      kind: 'group_join_request',
+      actorUserId: 'actor-1',
+      subjectGroupId: 'group-1',
+      notificationId: 'notif-join',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        url: '/g/builders/pending',
+      }),
+    );
+  });
+
   it.each([
     {
       kind: 'checkin_post' as const,
