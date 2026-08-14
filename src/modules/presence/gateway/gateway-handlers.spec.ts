@@ -736,16 +736,17 @@ describe('SpacesGatewayHandler chat join/leave system messages', () => {
     expect(spacesChat.appendSystemMessage.mock.calls[0][0].event).toBe('leave');
   });
 
-  it('rejects non-owner chat subscribe while the space is inactive', async () => {
+  it('lets a visitor subscribe to chat while the space is idle', async () => {
     const { server, handler, spacesChat } = setup({ isSpaceActive: jest.fn().mockResolvedValue(false) });
-    const waiter = new FakeSocket('sock-w', { userId: SENDER.id, spaceChatUser: SENDER });
-    server.register(waiter);
+    const visitor = new FakeSocket('sock-w', { userId: SENDER.id, spaceChatUser: SENDER });
+    server.register(visitor);
 
-    await handler.handleSpacesChatSubscribe(waiter as any, { spaceId: SPACE_ID });
+    await handler.handleSpacesChatSubscribe(visitor as any, { spaceId: SPACE_ID });
 
-    expect(waiter.joined.has(`spacesChat:${SPACE_ID}`)).toBe(false);
-    expect(spacesChat.appendSystemMessage).not.toHaveBeenCalled();
-    expect(spacesChat.snapshot).not.toHaveBeenCalled();
+    expect(visitor.joined.has(`spacesChat:${SPACE_ID}`)).toBe(true);
+    expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
+    expect(spacesChat.snapshot).toHaveBeenCalled();
+    expect(visitor.lastEmitted('spaces:chatSnapshot')).toBeDefined();
   });
 
   it('allows the owner to subscribe to chat while the space is inactive', async () => {

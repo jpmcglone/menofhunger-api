@@ -80,8 +80,9 @@ export class SpacesGatewayHandler {
   }
 
   /**
-   * Owner may enter while inactive (setup / scheduled wait). Everyone else
-   * only after the space is live — otherwise join/chatSubscribe are silent no-ops.
+   * Opening `/s/:username` puts you in that room. `isActive` is "on air"
+   * (watch party / radio), not a door lock — idle hangouts still have a lobby
+   * and chat. Missing owner means the space is gone.
    */
   private async resolveSpaceAccess(
     userId: string,
@@ -89,9 +90,7 @@ export class SpacesGatewayHandler {
   ): Promise<{ ownerId: string; isOwner: boolean } | null> {
     const ownerId = await this.getCachedSpaceOwnerId(spaceId);
     if (!ownerId) return null;
-    const isOwner = ownerId === userId;
-    if (!isOwner && !(await this.spaces.isSpaceActive(spaceId))) return null;
-    return { ownerId, isOwner };
+    return { ownerId, isOwner: ownerId === userId };
   }
 
   private cancelOwnerGoneDeactivate(spaceId: string): void {
@@ -191,17 +190,16 @@ export class SpacesGatewayHandler {
         listeners = [];
         for (const id of userIds) {
           const u = byId.get(id);
-          if (!u) continue;
           listeners.push({
-            id: u.id,
-            username: u.username,
-            avatarUrl: u.avatarUrl ?? null,
-            premium: u.premium ?? false,
-            premiumPlus: u.premiumPlus ?? false,
-            isOrganization: u.isOrganization ?? false,
-            verifiedStatus: (u.verifiedStatus ?? 'none') as 'none' | 'identity' | 'manual',
-            paused: pausedSet.has(u.id),
-            muted: mutedSet.has(u.id),
+            id,
+            username: u?.username ?? null,
+            avatarUrl: u?.avatarUrl ?? null,
+            premium: u?.premium ?? false,
+            premiumPlus: u?.premiumPlus ?? false,
+            isOrganization: u?.isOrganization ?? false,
+            verifiedStatus: (u?.verifiedStatus ?? 'none') as 'none' | 'identity' | 'manual',
+            paused: pausedSet.has(id),
+            muted: mutedSet.has(id),
           });
         }
       } catch (err) {
@@ -490,8 +488,6 @@ export class SpacesGatewayHandler {
 
     await ((client.data as any).__ready as Promise<void> | undefined)?.catch?.(() => undefined);
 
-    // Same gate as spaces:join: waiters are not in the presence room and must not
-    // land in chat until the host goes live (owners can set up while inactive).
     const userId =
       (client.data as { userId?: string })?.userId ??
       this.presence.getUserIdForSocket(client.id) ??
@@ -510,8 +506,11 @@ export class SpacesGatewayHandler {
 
     (client.data as any).spaceChatSpaceId = spaceId;
     client.join(spacesChatRoom(spaceId));
-    client.emit('spaces:chatSnapshot', this.spacesChat.snapshot(spaceId));
+    // Append the join line first so the snapshot the joiner gets already
+    // includes it — a room broadcast alone can lose the race and show
+    // "No messages yet" with no "@you has joined".
     this.emitChatSystemIfSoleSocket(client, spaceId, 'join');
+    client.emit('spaces:chatSnapshot', this.spacesChat.snapshot(spaceId));
   }
 
   handleSpacesChatUnsubscribe(client: Socket): void {
