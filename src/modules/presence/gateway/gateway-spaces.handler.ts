@@ -746,10 +746,10 @@ export class SpacesGatewayHandler {
 
     const newWatchPartyUrl = mode === 'WATCH_PARTY' ? (String(payload?.watchPartyUrl ?? '').trim() || null) : null;
 
-    // Clear stale watch party state when no longer in WATCH_PARTY mode.
-    if (mode !== 'WATCH_PARTY') {
+    // Clear stale watch party state when leaving watch party or clearing the video.
+    if (mode !== 'WATCH_PARTY' || !newWatchPartyUrl) {
       this.watchPartyState.clearState(spaceId);
-    } else if (newWatchPartyUrl !== null) {
+    } else {
       // When staying in WATCH_PARTY mode but the video URL changes (or is set for
       // the first time), reset the state to paused-at-0 for the new video so late
       // joiners see the correct video + position even before the owner's player emits.

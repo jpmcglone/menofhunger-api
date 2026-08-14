@@ -307,9 +307,6 @@ export class SpacesService {
     if (!space) throw new NotFoundException();
     if (space.ownerId !== userId) throw new ForbiddenException();
 
-    if (data.mode === 'WATCH_PARTY' && !data.watchPartyUrl?.trim()) {
-      throw new BadRequestException('A YouTube URL is required for watch party mode.');
-    }
     if (data.mode === 'RADIO' && !data.radioStreamUrl?.trim()) {
       throw new BadRequestException('A stream URL is required for radio mode.');
     }
@@ -318,7 +315,7 @@ export class SpacesService {
       where: { id },
       data: {
         mode: data.mode,
-        watchPartyUrl: data.mode === 'WATCH_PARTY' ? (data.watchPartyUrl?.trim() ?? null) : null,
+        watchPartyUrl: data.mode === 'WATCH_PARTY' ? (data.watchPartyUrl?.trim() || null) : null,
         radioStreamUrl: data.mode === 'RADIO' ? (data.radioStreamUrl?.trim() ?? null) : null,
       },
       include: { owner: true, _count: { select: { scheduleSubscribers: true } } },

@@ -718,6 +718,20 @@ describe('PresenceGateway — watch party sync', () => {
       expect(watchPartyState.getState(SPACE_ID)!.isPlaying).toBe(true);
     });
 
+    it('clears state when watch party URL is removed', async () => {
+      const { gw, joinOwner, watchPartyState, ownerSocket } = makeFixture();
+      await joinOwner();
+      watchPartyState.setState(SPACE_ID, { videoUrl: VIDEO_URL, isPlaying: true, currentTime: 30, playbackRate: 1 });
+
+      await (gw as any).handleSpacesAnnounceMode(ownerSocket, {
+        spaceId: SPACE_ID,
+        mode: 'WATCH_PARTY',
+        watchPartyUrl: null,
+      });
+
+      expect(watchPartyState.getState(SPACE_ID)).toBeNull();
+    });
+
     it('clears state when switching away from WATCH_PARTY mode', async () => {
       const { gw, joinOwner, watchPartyState, ownerSocket } = makeFixture();
       await joinOwner();

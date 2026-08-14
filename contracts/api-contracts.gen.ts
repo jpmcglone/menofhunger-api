@@ -309,6 +309,11 @@ export type AdminAnalyticsDto = {
   asOf: string;
 };
 
+/** Marv briefing of the already-loaded admin analytics snapshot. */
+export type AdminAnalyticsBriefDto = {
+  brief: string;
+};
+
 // ─── src/common/dto/admin-email-samples.dto.ts ─────────────────────────────────
 
 export type AdminEmailSampleTypeDto =

@@ -478,6 +478,34 @@ describe('SpacesService.setMode playbackTitle', () => {
     fetchSpy.mockRestore();
   });
 
+  it('allows watch party mode without a YouTube URL', async () => {
+    const { service, realtime } = build({
+      prisma: {
+        space: {
+          findUnique: jest.fn(async () => ({ ownerId: 'owner-1' })),
+          update: jest.fn(async () => ownerRow({ mode: 'WATCH_PARTY', watchPartyUrl: null })),
+        },
+      },
+    });
+
+    const dto = await service.setMode('space-1', 'owner-1', {
+      mode: 'WATCH_PARTY',
+      watchPartyUrl: null,
+    });
+
+    expect(dto.mode).toBe('WATCH_PARTY');
+    expect(dto.watchPartyUrl).toBeNull();
+    expect(realtime.emitSpacesUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'mode_changed',
+        patch: expect.objectContaining({
+          mode: 'WATCH_PARTY',
+          watchPartyUrl: null,
+        }),
+      }),
+    );
+  });
+
   it('emits null playbackTitle for NONE', async () => {
     const getMetadata = jest.fn(async () => ({ title: 'nope' }));
     const { service, realtime } = build({

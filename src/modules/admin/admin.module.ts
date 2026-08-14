@@ -40,6 +40,8 @@ import { AdminImpersonationController } from './admin-impersonation.controller';
 import { AdminPushController } from './admin-push.controller';
 import { UploadsModule } from '../uploads/uploads.module';
 import { LandingModule } from '../landing/landing.module';
+import { MarvinModule } from '../marvin/marvin.module';
+import { AdminAnalyticsBriefService } from './admin-analytics-brief.service';
 
 @Module({
   imports: [
@@ -63,6 +65,7 @@ import { LandingModule } from '../landing/landing.module';
     CrewModule,
     UploadsModule,
     LandingModule,
+    MarvinModule,
   ],
   controllers: [
     AdminUsersController,
@@ -83,7 +86,7 @@ import { LandingModule } from '../landing/landing.module';
     AdminImpersonationController,
     AdminPushController,
   ],
-  providers: [AdminGuard, AdminImageReviewService, AdminHashtagsService, AdminDailyDigestCron],
+  providers: [AdminGuard, AdminImageReviewService, AdminHashtagsService, AdminDailyDigestCron, AdminAnalyticsBriefService],
   exports: [AdminDailyDigestCron],
 })
 export class AdminModule {}

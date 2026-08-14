@@ -268,3 +268,8 @@ export type AdminAnalyticsDto = {
   ai: AdminAnalyticsAIDto;
   asOf: string;
 };
+
+/** Marv briefing of the already-loaded admin analytics snapshot. */
+export type AdminAnalyticsBriefDto = {
+  brief: string;
+};
