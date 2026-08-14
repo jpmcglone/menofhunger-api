@@ -763,3 +763,81 @@ describe('SpacesGatewayHandler chat join/leave system messages', () => {
     expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('SpacesGatewayHandler chat react', () => {
+  const SPACE_ID = 'space-1';
+  const SENDER = {
+    id: 'u1',
+    username: 'ocaptain',
+    premium: false,
+    premiumPlus: false,
+    isOrganization: false,
+    verifiedStatus: 'none' as const,
+    stewardBadgeEnabled: true,
+  };
+
+  function setup() {
+    const server = new FakeServer();
+    const presence = makePresence();
+    const ctx = makeContext(presence, server);
+    const spacesChat = {
+      appendSystemMessage: jest.fn(),
+      snapshot: jest.fn().mockReturnValue({ spaceId: SPACE_ID, messages: [] }),
+    };
+    const spaces = {
+      getOwnerIdForSpace: jest.fn().mockResolvedValue('owner-1'),
+      isSpaceActive: jest.fn().mockResolvedValue(true),
+      getReactionById: jest.fn().mockImplementation((id: string) =>
+        id === 'strong' ? { id: 'strong', emoji: '💪', label: 'Strong' } : null,
+      ),
+    };
+    const handler = new SpacesGatewayHandler(
+      presence,
+      makePresenceRedis(),
+      {} as any,
+      spaces as any,
+      { isValidSpaceId: (id: string) => Boolean(id?.trim()), onDisconnect: jest.fn().mockReturnValue(null) } as any,
+      spacesChat as any,
+      {} as any,
+      {} as any,
+      new GatewayThrottleService(),
+      ctx,
+    );
+    return { server, handler, spaces };
+  }
+
+  it('broadcasts a chat reaction without requiring the message on the server', async () => {
+    const { server, handler } = setup();
+    const sock = new FakeSocket('sock-r', { userId: SENDER.id, spaceChatUser: SENDER, spaceChatSpaceId: SPACE_ID });
+    server.register(sock);
+    server.joinRoom(sock.id, `spacesChat:${SPACE_ID}`);
+
+    handler.handleSpacesChatReact(sock as any, {
+      spaceId: SPACE_ID,
+      messageId: 'local-only-msg',
+      reactionId: 'strong',
+    });
+
+    const ev = server.emitted.find((e) => e.event === 'spaces:chatReaction');
+    expect(ev?.payload).toMatchObject({
+      spaceId: SPACE_ID,
+      messageId: 'local-only-msg',
+      userId: SENDER.id,
+      username: 'ocaptain',
+      reactionId: 'strong',
+      emoji: '💪',
+    });
+  });
+
+  it('drops unknown reaction ids', () => {
+    const { server, handler } = setup();
+    const sock = new FakeSocket('sock-r', { userId: SENDER.id, spaceChatUser: SENDER, spaceChatSpaceId: SPACE_ID });
+    server.register(sock);
+    handler.handleSpacesChatReact(sock as any, {
+      spaceId: SPACE_ID,
+      messageId: 'm1',
+      reactionId: 'nope',
+    });
+    expect(server.emitted.some((e) => e.event === 'spaces:chatReaction')).toBe(false);
+  });
+});

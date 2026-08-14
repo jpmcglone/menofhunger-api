@@ -94,3 +94,25 @@ describe('SpacesChatService.appendSystemMessage', () => {
     ]);
   });
 });
+
+describe('SpacesChatService.appendMessage replyToId', () => {
+  it('forwards a parent id without requiring the parent to exist', () => {
+    const svc = new SpacesChatService();
+    const msg = svc.appendMessage({
+      spaceId: SPACE_ID,
+      sender: {
+        id: USER_ID,
+        username: 'ocaptain',
+        premium: false,
+        premiumPlus: false,
+        isOrganization: false,
+        verifiedStatus: 'none',
+        stewardBadgeEnabled: true,
+      },
+      body: 'later',
+      replyToId: 'missing-parent',
+    });
+    expect(msg?.kind).toBe('user');
+    expect(msg && msg.kind === 'user' ? msg.replyToId : null).toBe('missing-parent');
+  });
+});

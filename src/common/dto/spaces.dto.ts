@@ -99,6 +99,8 @@ export type SpaceChatMessageDto =
       media?: SpaceChatMediaItemDto[];
       createdAt: string; // ISO
       sender: SpaceChatSenderDto;
+      /** Parent id only. Clients resolve a snippet locally if they have that message. */
+      replyToId?: string | null;
     }
   | {
       id: string;
@@ -129,6 +131,16 @@ export type SpaceReactionDto = {
 export type SpaceReactionEventDto = {
   spaceId: string;
   userId: string;
+  reactionId: string;
+  emoji: string;
+};
+
+/** Live-only. Clients without the target message drop it. */
+export type SpaceChatReactionEventDto = {
+  spaceId: string;
+  messageId: string;
+  userId: string;
+  username: string | null;
   reactionId: string;
   emoji: string;
 };

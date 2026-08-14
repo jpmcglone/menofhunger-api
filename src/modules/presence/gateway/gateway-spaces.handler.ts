@@ -522,7 +522,10 @@ export class SpacesGatewayHandler {
     (client.data as any).spaceChatSpaceId = null;
   }
 
-  handleSpacesChatSend(client: Socket, payload: { spaceId?: string; body?: string; media?: unknown }): void {
+  handleSpacesChatSend(
+    client: Socket,
+    payload: { spaceId?: string; body?: string; media?: unknown; replyToId?: string },
+  ): void {
     const spaceId = String(payload?.spaceId ?? '').trim();
     const body = String(payload?.body ?? '');
     if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
@@ -541,13 +544,59 @@ export class SpacesGatewayHandler {
     const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
     if (!sender?.id) return;
 
-    const msg = this.spacesChat.appendMessage({ spaceId, sender, body, media: payload?.media });
+    const replyToId = String(payload?.replyToId ?? '').trim() || null;
+    const msg = this.spacesChat.appendMessage({
+      spaceId,
+      sender,
+      body,
+      media: payload?.media,
+      replyToId,
+    });
     if (!msg) return;
 
     const room = spacesChatRoom(spaceId);
     const out = { spaceId, message: msg };
     this.context.server.to(room).emit('spaces:chatMessage', out);
     void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
+  }
+
+  handleSpacesChatReact(
+    client: Socket,
+    payload: { spaceId?: string; messageId?: string; reactionId?: string },
+  ): void {
+    const spaceId = String(payload?.spaceId ?? '').trim();
+    const messageId = String(payload?.messageId ?? '').trim();
+    const reactionId = String(payload?.reactionId ?? '').trim();
+    if (!this.spacesPresence.isValidSpaceId(spaceId) || !messageId) return;
+
+    const subscribed = String((client.data as any)?.spaceChatSpaceId ?? '').trim();
+    if (!subscribed || subscribed !== spaceId) return;
+
+    const userId =
+      (client.data as { userId?: string })?.userId ??
+      this.presence.getUserIdForSocket(client.id) ??
+      null;
+    if (!userId) return;
+
+    const reaction = this.spaces.getReactionById(reactionId);
+    if (!reaction) return;
+
+    if (!this.throttle.shouldEmitReaction(`spaces:chatReaction:${userId}`, 400)) return;
+
+    const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
+    const room = spacesChatRoom(spaceId);
+    const out = {
+      spaceId,
+      messageId,
+      userId,
+      username: sender?.username ?? null,
+      reactionId: reaction.id,
+      emoji: reaction.emoji,
+    };
+    this.context.server.to(room).emit('spaces:chatReaction', out);
+    void this.presenceRedis
+      .publishEmitToRoom({ room, event: 'spaces:chatReaction', payload: out })
+      .catch(() => undefined);
   }
 
   handleSpacesReaction(client: Socket, payload: { spaceId?: string; reactionId?: string }): void {

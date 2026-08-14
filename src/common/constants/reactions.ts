@@ -3,6 +3,7 @@ import type { SpaceReactionDto } from '../dto';
 export const ALLOWED_REACTIONS: SpaceReactionDto[] = [
   { id: 'heart',    emoji: '❤️', label: 'Love' },
   { id: 'thumbsup', emoji: '👍', label: 'Thumbs up' },
+  { id: 'strong',   emoji: '💪', label: 'Strong' },
   { id: 'pray',     emoji: '🙏', label: 'Prayer' },
   { id: 'fire',     emoji: '🔥', label: 'Fire' },
   { id: 'cross',    emoji: '✝️', label: 'Cross' },

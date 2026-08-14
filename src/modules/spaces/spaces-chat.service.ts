@@ -133,7 +133,13 @@ export class SpacesChatService {
     return out.length > 0 ? out : undefined;
   }
 
-  appendMessage(params: { spaceId: string; sender: SpaceChatSenderDto; body: string; media?: unknown }): SpaceChatMessageDto | null {
+  appendMessage(params: {
+    spaceId: string;
+    sender: SpaceChatSenderDto;
+    body: string;
+    media?: unknown;
+    replyToId?: string | null;
+  }): SpaceChatMessageDto | null {
     const spaceId = String(params.spaceId ?? '').trim();
     if (!spaceId) return null;
     this.maybePrune();
@@ -147,6 +153,7 @@ export class SpacesChatService {
     st.lastWriteAtMs = now;
     st.seq += 1;
 
+    const replyToId = String(params.replyToId ?? '').trim() || null;
     const id = `${spaceId}:${now.toString(36)}:${st.seq.toString(36)}`;
     const createdAt = new Date(now).toISOString();
     const msg: SpaceChatMessageDto = {
@@ -157,6 +164,7 @@ export class SpacesChatService {
       ...(media ? { media } : {}),
       createdAt,
       sender: params.sender,
+      ...(replyToId ? { replyToId } : {}),
     };
 
     st.messages.push(msg);

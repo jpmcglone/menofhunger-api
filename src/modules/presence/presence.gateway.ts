@@ -168,8 +168,19 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   @SubscribeMessage('spaces:chatSend')
-  handleSpacesChatSend(client: Socket, payload: { spaceId?: string; body?: string; media?: unknown }): void {
+  handleSpacesChatSend(
+    client: Socket,
+    payload: { spaceId?: string; body?: string; media?: unknown; replyToId?: string },
+  ): void {
     this.spacesHandler.handleSpacesChatSend(client, payload);
+  }
+
+  @SubscribeMessage('spaces:chatReact')
+  handleSpacesChatReact(
+    client: Socket,
+    payload: { spaceId?: string; messageId?: string; reactionId?: string },
+  ): void {
+    this.spacesHandler.handleSpacesChatReact(client, payload);
   }
 
   @SubscribeMessage('spaces:reaction')
