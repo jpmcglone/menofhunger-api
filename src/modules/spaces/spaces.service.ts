@@ -14,6 +14,7 @@ import { JOBS } from '../jobs/jobs.constants';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { LinkMetadataService } from '../link-metadata/link-metadata.service';
+import { PosthogService } from '../../common/posthog/posthog.service';
 import { compareLobbySpaces } from './spaces-lobby-sort';
 import { resolveSpacePlaybackTitle } from './spaces-playback-title';
 import { fetchYouTubeOEmbedTitle } from './youtube-oembed-title';
@@ -41,6 +42,7 @@ export class SpacesService {
     private readonly realtime: PresenceRealtimeService,
     private readonly notifications: NotificationsService,
     private readonly linkMetadata: LinkMetadataService,
+    private readonly posthog: PosthogService,
   ) {
     this.r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? '';
   }
@@ -58,7 +60,9 @@ export class SpacesService {
       include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
     });
 
-    return this.toDto(space, { viewerUserId: userId });
+    const dto = await this.toDto(space, { viewerUserId: userId });
+    this.posthog.capture(userId, 'space_created', { space_id: space.id });
+    return dto;
   }
 
   async getSpaceById(id: string, viewerUserId?: string | null): Promise<SpaceDto> {
@@ -194,12 +198,13 @@ export class SpacesService {
 
     await this.prisma.space.delete({ where: { id } });
     this.emitSpaceUpdated(id, 'deleted', { deleted: true });
+    this.posthog.capture(userId, 'space_deleted', { space_id: id });
   }
 
   async activateSpace(id: string, userId: string): Promise<SpaceDto> {
     const space = await this.prisma.space.findUnique({
       where: { id },
-      select: { ownerId: true, scheduledAt: true },
+      select: { ownerId: true, scheduledAt: true, mode: true },
     });
     if (!space) throw new NotFoundException();
     if (space.ownerId !== userId) throw new ForbiddenException();
@@ -207,7 +212,7 @@ export class SpacesService {
     const previousScheduledAt = space.scheduledAt;
     const updated = await this.prisma.space.update({
       where: { id },
-      data: { isActive: true, scheduledAt: null },
+      data: { isActive: true, scheduledAt: null, activatedAt: new Date() },
       include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
     });
 
@@ -232,6 +237,11 @@ export class SpacesService {
       subscriberCount: dto.subscriberCount,
       playbackTitle: dto.playbackTitle,
     });
+    this.posthog.capture(userId, 'space_activated', {
+      space_id: id,
+      mode: dto.mode,
+      had_schedule: Boolean(previousScheduledAt),
+    });
     return dto;
   }
 
@@ -248,6 +258,11 @@ export class SpacesService {
     const dto = await this.toDto(updated, { viewerUserId: userId });
     this.emitSpaceUpdated(id, 'deactivated', { isActive: false });
     this.sideEffects.dispatch('space.schedule.ended', { spaceId: id });
+    this.posthog.capture(userId, 'space_deactivated', {
+      space_id: id,
+      mode: dto.mode,
+      reason: 'owner',
+    });
     return dto;
   }
 
@@ -265,6 +280,17 @@ export class SpacesService {
     if (result.count > 0) {
       this.emitSpaceUpdated(id, 'deactivated', { isActive: false });
       this.sideEffects.dispatch('space.schedule.ended', { spaceId: id });
+      const row = await this.prisma.space.findUnique({
+        where: { id },
+        select: { ownerId: true, mode: true },
+      });
+      if (row) {
+        this.posthog.capture(row.ownerId, 'space_deactivated', {
+          space_id: id,
+          mode: row.mode,
+          reason: 'idle',
+        });
+      }
     }
     return result.count > 0;
   }
@@ -274,7 +300,10 @@ export class SpacesService {
     userId: string,
     data: { mode: SpaceMode; watchPartyUrl?: string | null; radioStreamUrl?: string | null },
   ): Promise<SpaceDto> {
-    const space = await this.prisma.space.findUnique({ where: { id }, select: { ownerId: true } });
+    const space = await this.prisma.space.findUnique({
+      where: { id },
+      select: { ownerId: true, mode: true },
+    });
     if (!space) throw new NotFoundException();
     if (space.ownerId !== userId) throw new ForbiddenException();
 
@@ -300,6 +329,13 @@ export class SpacesService {
       watchPartyUrl: dto.watchPartyUrl,
       radioStreamUrl: dto.radioStreamUrl,
       playbackTitle: dto.playbackTitle,
+    });
+    this.posthog.capture(userId, 'space_mode_set', {
+      space_id: id,
+      mode: dto.mode,
+      from_mode: space.mode,
+      has_watch_party_url: Boolean(dto.watchPartyUrl),
+      has_radio_url: Boolean(dto.radioStreamUrl),
     });
     return dto;
   }
@@ -352,6 +388,11 @@ export class SpacesService {
       isActive: dto.isActive,
       subscriberCount: dto.subscriberCount,
     });
+    this.posthog.capture(userId, 'space_schedule_set', {
+      space_id: id,
+      scheduled_at: dto.scheduledAt,
+      is_reschedule: previousMs != null,
+    });
     return dto;
   }
 
@@ -396,6 +437,7 @@ export class SpacesService {
       scheduledAt: null,
       subscriberCount: dto.subscriberCount,
     });
+    this.posthog.capture(userId, 'space_schedule_cleared', { space_id: id });
     return dto;
   }
 
@@ -410,6 +452,10 @@ export class SpacesService {
     }
 
     // Owner is already auto-subscribed on setSchedule; treat as idempotent.
+    const existing = await this.prisma.spaceScheduleSubscriber.findUnique({
+      where: { spaceId_userId: { spaceId: id, userId } },
+      select: { id: true },
+    });
     await this.prisma.spaceScheduleSubscriber.upsert({
       where: { spaceId_userId: { spaceId: id, userId } },
       create: { spaceId: id, userId },
@@ -418,6 +464,9 @@ export class SpacesService {
 
     const dto = await this.getSpaceById(id, userId);
     this.emitSpaceUpdated(id, 'schedule_subscribe', { subscriberCount: dto.subscriberCount });
+    if (!existing && space.ownerId !== userId) {
+      this.posthog.capture(userId, 'space_schedule_subscribed', { space_id: id });
+    }
     return dto;
   }
 
@@ -431,12 +480,15 @@ export class SpacesService {
       throw new BadRequestException('Host reminders stay on for your scheduled space.');
     }
 
-    await this.prisma.spaceScheduleSubscriber.deleteMany({
+    const removed = await this.prisma.spaceScheduleSubscriber.deleteMany({
       where: { spaceId: id, userId },
     });
 
     const dto = await this.getSpaceById(id, userId);
     this.emitSpaceUpdated(id, 'schedule_unsubscribe', { subscriberCount: dto.subscriberCount });
+    if (removed.count > 0) {
+      this.posthog.capture(userId, 'space_schedule_unsubscribed', { space_id: id });
+    }
     return dto;
   }
 

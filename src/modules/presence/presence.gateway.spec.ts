@@ -240,6 +240,7 @@ function buildGateway(deps: {
     deps.redis,
     throttle,
     context,
+    { capture: jest.fn() } as any,
   );
   const radioHandler = new RadioGatewayHandler(
     deps.presence,

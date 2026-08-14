@@ -1261,6 +1261,12 @@ model Space {
   isActive Boolean @default(false)
 
   /**
+   * Last time the host went live. Kept after End so admin can count
+   * "went live in range" without an event log.
+   */
+  activatedAt DateTime?
+
+  /**
    * One upcoming go-live time (UTC). Null means no schedule.
    * Cleared when the host goes live or cancels.
    */
@@ -1275,6 +1281,7 @@ model Space {
 
   @@index([isActive])
   @@index([scheduledAt])
+  @@index([activatedAt])
 }
 
 model SpaceScheduleSubscriber {

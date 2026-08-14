@@ -9,6 +9,7 @@ function build(overrides: {
   spacesPresence?: Record<string, any>;
   appConfig?: Record<string, any>;
   linkMetadata?: Record<string, any>;
+  posthog?: Record<string, any>;
 } = {}) {
   const prisma: any = {
     space: {
@@ -58,6 +59,7 @@ function build(overrides: {
     ...overrides.linkMetadata,
   };
 
+  const posthog = { capture: jest.fn(), ...overrides.posthog };
   const service = new SpacesService(
     prisma,
     appConfig as any,
@@ -67,8 +69,9 @@ function build(overrides: {
     realtime as any,
     notifications as any,
     linkMetadata as any,
+    posthog as any,
   );
-  return { service, prisma, notifications, realtime, sideEffects, jobs, linkMetadata };
+  return { service, prisma, notifications, realtime, sideEffects, jobs, linkMetadata, posthog };
 }
 
 describe('SpacesService.deleteSpace', () => {
@@ -311,7 +314,10 @@ describe('SpacesService.deactivateIfActive', () => {
   it('dispatches ended only when a live space actually flipped off', async () => {
     const flipped = build({
       prisma: {
-        space: { updateMany: jest.fn(async () => ({ count: 1 })) },
+        space: {
+          updateMany: jest.fn(async () => ({ count: 1 })),
+          findUnique: jest.fn(async () => ({ ownerId: 'owner-1', mode: 'NONE' })),
+        },
       },
     });
     await expect(flipped.service.deactivateIfActive('space-1')).resolves.toBe(true);
@@ -544,6 +550,106 @@ describe('SpacesService.countNonOwnerSubscribers', () => {
     await expect(service.countNonOwnerSubscribers('space-1', 'owner-1')).resolves.toBe(3);
     expect(prisma.spaceScheduleSubscriber.count).toHaveBeenCalledWith({
       where: { spaceId: 'space-1', userId: { not: 'owner-1' } },
+    });
+  });
+});
+
+describe('SpacesService analytics', () => {
+  const ownerRow = {
+    id: 'space-1',
+    title: 'Hang',
+    description: null,
+    isActive: false,
+    scheduledAt: null,
+    mode: 'NONE' as const,
+    watchPartyUrl: null,
+    radioStreamUrl: null,
+    owner: {
+      id: 'owner-1',
+      username: 'host',
+      avatarKey: null,
+      avatarUpdatedAt: null,
+      premium: false,
+      premiumPlus: false,
+      isOrganization: false,
+      verifiedStatus: 'none',
+    },
+    _count: { scheduleSubscribers: 0 },
+  };
+
+  it('captures space_created', async () => {
+    const { service, posthog } = build({
+      prisma: {
+        space: {
+          findUnique: jest.fn(async () => null),
+          create: jest.fn(async () => ownerRow),
+        },
+      },
+    });
+    await service.createSpace('owner-1', { title: 'Hang' });
+    expect(posthog.capture).toHaveBeenCalledWith('owner-1', 'space_created', { space_id: 'space-1' });
+  });
+
+  it('captures space_activated and writes activatedAt', async () => {
+    const { service, prisma, posthog } = build({
+      prisma: {
+        space: {
+          findUnique: jest.fn(async () => ({ ownerId: 'owner-1', scheduledAt: null, mode: 'RADIO' })),
+          update: jest.fn(async () => ({ ...ownerRow, isActive: true, mode: 'RADIO' })),
+        },
+      },
+    });
+    await service.activateSpace('space-1', 'owner-1');
+    expect(prisma.space.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ isActive: true, activatedAt: expect.any(Date) }),
+    }));
+    expect(posthog.capture).toHaveBeenCalledWith('owner-1', 'space_activated', {
+      space_id: 'space-1',
+      mode: 'RADIO',
+      had_schedule: false,
+    });
+  });
+
+  it('captures space_deactivated with owner reason', async () => {
+    const { service, posthog } = build({
+      prisma: {
+        space: {
+          findUnique: jest.fn(async () => ({ ownerId: 'owner-1' })),
+          update: jest.fn(async () => ownerRow),
+        },
+      },
+    });
+    await service.deactivateSpace('space-1', 'owner-1');
+    expect(posthog.capture).toHaveBeenCalledWith('owner-1', 'space_deactivated', {
+      space_id: 'space-1',
+      mode: 'NONE',
+      reason: 'owner',
+    });
+  });
+
+  it('captures space_mode_set with from_mode', async () => {
+    const { service, posthog } = build({
+      prisma: {
+        space: {
+          findUnique: jest.fn(async () => ({ ownerId: 'owner-1', mode: 'NONE' })),
+          update: jest.fn(async () => ({
+            ...ownerRow,
+            mode: 'RADIO',
+            radioStreamUrl: 'https://ice1.somafm.com/dronezone-128-mp3',
+          })),
+        },
+      },
+    });
+    await service.setMode('space-1', 'owner-1', {
+      mode: 'RADIO',
+      radioStreamUrl: 'https://ice1.somafm.com/dronezone-128-mp3',
+    });
+    expect(posthog.capture).toHaveBeenCalledWith('owner-1', 'space_mode_set', {
+      space_id: 'space-1',
+      mode: 'RADIO',
+      from_mode: 'NONE',
+      has_watch_party_url: false,
+      has_radio_url: true,
     });
   });
 });

@@ -223,6 +223,8 @@ export type AdminAnalyticsSpacesTopRowDto = {
   mode: string;
   isActive: boolean;
   createdAt: string;
+  /** Last time this space went live, or null if it never has. */
+  activatedAt: string | null;
 };
 
 export type AdminAnalyticsSpacesDto = {
@@ -232,6 +234,14 @@ export type AdminAnalyticsSpacesDto = {
   activeSpaces: number;
   /** Spaces created within the selected range. */
   spacesCreatedInRange: number;
+  /** Spaces whose last go-live (`activatedAt`) falls in the selected range. */
+  wentLiveInRange: number;
+  /** Currently scheduled (upcoming) and not live. */
+  scheduledSpaces: number;
+  /** Notify-me subscribers excluding hosts, all time. */
+  notifyMeSubscribers: number;
+  /** Notify-me subscribers (excluding hosts) created in the selected range. */
+  notifyMeSubscribersInRange: number;
   /** All-time spaces by current mode (NONE / WATCH_PARTY / RADIO). */
   byMode: Record<string, number>;
   /** Time series — spaces created per bucket in the selected range. */

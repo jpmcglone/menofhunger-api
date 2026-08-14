@@ -14,6 +14,7 @@ import { PresenceRedisStateService } from '../presence-redis-state.service';
 import { GatewayContextService } from './gateway-context.service';
 import { GatewayThrottleService } from './gateway-throttle.service';
 import { spaceRoom, spacesChatRoom } from './gateway-rooms';
+import { PosthogService } from '../../../common/posthog/posthog.service';
 
 /**
  * Spaces domain: join/leave/pause/mute, lobby counts, space chat, reactions,
@@ -65,6 +66,7 @@ export class SpacesGatewayHandler {
     private readonly redis: RedisService,
     private readonly throttle: GatewayThrottleService,
     private readonly context: GatewayContextService,
+    private readonly posthog: PosthogService,
   ) {}
 
   private async getCachedSpaceOwnerId(spaceId: string): Promise<string | null> {
@@ -363,6 +365,17 @@ export class SpacesGatewayHandler {
     }
     client.join(spaceRoom(spaceId));
 
+    if (prevSpaceId !== spaceId) {
+      if (prevSpaceId) {
+        this.posthog.capture(userId, 'space_left', { space_id: prevSpaceId, reason: 'switch' });
+      }
+      this.posthog.capture(userId, 'space_joined', {
+        space_id: spaceId,
+        is_owner: isOwner,
+        member_count: this.spacesPresence.getMembersForSpace(spaceId).userIds.length,
+      });
+    }
+
     if (prevSpaceId && prevSpaceId !== spaceId) {
       await this.emitSpaceMembers(prevSpaceId);
     }
@@ -408,6 +421,7 @@ export class SpacesGatewayHandler {
         this.presence.getUserIdForSocket(client.id) ??
         null;
       if (userId) {
+        this.posthog.capture(userId, 'space_left', { space_id: left.spaceId, reason: 'leave' });
         const spaceChangedDto: UsersSpaceChangedPayloadDto = {
           userId,
           spaceId: null,
@@ -606,6 +620,12 @@ export class SpacesGatewayHandler {
     });
     if (!msg) return;
 
+    this.posthog.capture(userId, 'space_chat_sent', {
+      space_id: spaceId,
+      has_media: Array.isArray(payload.media) ? payload.media.length > 0 : Boolean(payload.media),
+      is_reply: Boolean(replyToId),
+    });
+
     const room = spacesChatRoom(spaceId);
     const out = { spaceId, message: msg };
     this.context.server.to(room).emit('spaces:chatMessage', out);
@@ -649,6 +669,10 @@ export class SpacesGatewayHandler {
     void this.presenceRedis
       .publishEmitToRoom({ room, event: 'spaces:chatReaction', payload: out })
       .catch(() => undefined);
+    this.posthog.capture(userId, 'space_chat_reaction_sent', {
+      space_id: spaceId,
+      reaction_id: reaction.id,
+    });
   }
 
   handleSpacesReaction(client: Socket, payload: { spaceId?: string; reactionId?: string }): void {
@@ -671,6 +695,10 @@ export class SpacesGatewayHandler {
     const out = { spaceId, userId, reactionId: reaction.id, emoji: reaction.emoji };
     this.context.server.to(room).emit('spaces:reaction', out);
     void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:reaction', payload: out }).catch(() => undefined);
+    this.posthog.capture(userId, 'space_reaction_sent', {
+      space_id: spaceId,
+      reaction_id: reaction.id,
+    });
   }
 
   handleSpacesTyping(client: Socket, payload: { spaceId?: string; typing?: boolean }): void {

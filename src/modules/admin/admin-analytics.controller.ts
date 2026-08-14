@@ -839,13 +839,22 @@ export class AdminAnalyticsController {
       spaceByModeRaw,
       spaceCreatedSeriesRaw,
       spaceTopRaw,
+      spaceSubscribersRaw,
     ] = await Promise.all([
-      // Summary counts: total, active, created in range.
-      this.prisma.$queryRaw<Array<{ total_spaces: bigint; active_spaces: bigint; created_in_range: bigint }>>(Prisma.sql`
+      // Summary counts: total, active, created / went live in range, scheduled.
+      this.prisma.$queryRaw<Array<{
+        total_spaces: bigint;
+        active_spaces: bigint;
+        created_in_range: bigint;
+        went_live_in_range: bigint;
+        scheduled_spaces: bigint;
+      }>>(Prisma.sql`
         SELECT
           COUNT(*)::bigint AS total_spaces,
           COUNT(*) FILTER (WHERE "isActive" = true)::bigint AS active_spaces,
-          COUNT(*) FILTER (WHERE "createdAt" >= ${since ?? new Date(0)}::timestamptz)::bigint AS created_in_range
+          COUNT(*) FILTER (WHERE "createdAt" >= ${since ?? new Date(0)}::timestamptz)::bigint AS created_in_range,
+          COUNT(*) FILTER (WHERE "activatedAt" IS NOT NULL AND "activatedAt" >= ${since ?? new Date(0)}::timestamptz)::bigint AS went_live_in_range,
+          COUNT(*) FILTER (WHERE "isActive" = false AND "scheduledAt" IS NOT NULL AND "scheduledAt" > NOW())::bigint AS scheduled_spaces
         FROM "Space"
       `),
 
@@ -868,7 +877,16 @@ export class AdminAnalyticsController {
       `),
 
       // Currently active spaces, most recently updated, with owner info.
-      this.prisma.$queryRaw<Array<{ id: string; owner_id: string; owner_username: string | null; title: string; mode: string; is_active: boolean; created_at: Date }>>`
+      this.prisma.$queryRaw<Array<{
+        id: string;
+        owner_id: string;
+        owner_username: string | null;
+        title: string;
+        mode: string;
+        is_active: boolean;
+        created_at: Date;
+        activated_at: Date | null;
+      }>>`
         SELECT
           s.id,
           s."ownerId" AS owner_id,
@@ -876,13 +894,25 @@ export class AdminAnalyticsController {
           s.title,
           s.mode,
           s."isActive" AS is_active,
-          s."createdAt" AS created_at
+          s."createdAt" AS created_at,
+          s."activatedAt" AS activated_at
         FROM "Space" s
         JOIN "User" u ON u.id = s."ownerId"
         WHERE s."isActive" = true
         ORDER BY s."updatedAt" DESC
         LIMIT 20
       `,
+
+      this.prisma.$queryRaw<Array<{ total_subscribers: bigint; subscribers_in_range: bigint }>>(Prisma.sql`
+        SELECT
+          COUNT(*) FILTER (WHERE sss."userId" <> s."ownerId")::bigint AS total_subscribers,
+          COUNT(*) FILTER (
+            WHERE sss."userId" <> s."ownerId"
+              AND sss."createdAt" >= ${since ?? new Date(0)}::timestamptz
+          )::bigint AS subscribers_in_range
+        FROM "SpaceScheduleSubscriber" sss
+        JOIN "Space" s ON s.id = sss."spaceId"
+      `),
     ]);
 
     // ── Marvin / AI queries ───────────────────────────────────────────────────
@@ -977,10 +1007,15 @@ export class AdminAnalyticsController {
     };
 
     const spaceSummary = spaceSummaryRaw[0];
+    const spaceSubscribers = spaceSubscribersRaw[0];
     const spacesBlock: AdminAnalyticsSpacesDto = {
       totalSpaces: Number(spaceSummary?.total_spaces ?? 0),
       activeSpaces: Number(spaceSummary?.active_spaces ?? 0),
       spacesCreatedInRange: Number(spaceSummary?.created_in_range ?? 0),
+      wentLiveInRange: Number(spaceSummary?.went_live_in_range ?? 0),
+      scheduledSpaces: Number(spaceSummary?.scheduled_spaces ?? 0),
+      notifyMeSubscribers: Number(spaceSubscribers?.total_subscribers ?? 0),
+      notifyMeSubscribersInRange: Number(spaceSubscribers?.subscribers_in_range ?? 0),
       byMode: Object.fromEntries(spaceByModeRaw.map((r) => [r.mode, Number(r.cnt)])),
       created: toTimeSeries(spaceCreatedSeriesRaw),
       topSpaces: spaceTopRaw.map((r) => ({
@@ -991,6 +1026,7 @@ export class AdminAnalyticsController {
         mode: r.mode,
         isActive: r.is_active,
         createdAt: r.created_at.toISOString(),
+        activatedAt: r.activated_at ? r.activated_at.toISOString() : null,
       })),
     };
 

@@ -682,6 +682,7 @@ describe('SpacesGatewayHandler chat join/leave system messages', () => {
       {} as any,
       new GatewayThrottleService(),
       ctx,
+      { capture: jest.fn() } as any,
     );
     return { server, handler, spacesChat, spaces };
   }
@@ -837,6 +838,7 @@ describe('SpacesGatewayHandler chat react', () => {
       {} as any,
       new GatewayThrottleService(),
       ctx,
+      { capture: jest.fn() } as any,
     );
     return { server, handler, spaces };
   }
