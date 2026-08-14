@@ -13,7 +13,9 @@ import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { LinkMetadataService } from '../link-metadata/link-metadata.service';
 import { compareLobbySpaces } from './spaces-lobby-sort';
+import { resolveSpacePlaybackTitle } from './spaces-playback-title';
 
 const SOON_MS = 15 * 60 * 1000;
 
@@ -37,6 +39,7 @@ export class SpacesService {
     private readonly jobs: JobsService,
     private readonly realtime: PresenceRealtimeService,
     private readonly notifications: NotificationsService,
+    private readonly linkMetadata: LinkMetadataService,
   ) {
     this.r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? '';
   }
@@ -226,6 +229,7 @@ export class SpacesService {
       isActive: true,
       scheduledAt: null,
       subscriberCount: dto.subscriberCount,
+      playbackTitle: dto.playbackTitle,
     });
     return dto;
   }
@@ -294,6 +298,7 @@ export class SpacesService {
       mode: dto.mode,
       watchPartyUrl: dto.watchPartyUrl,
       radioStreamUrl: dto.radioStreamUrl,
+      playbackTitle: dto.playbackTitle,
     });
     return dto;
   }
@@ -434,15 +439,19 @@ export class SpacesService {
     return dto;
   }
 
-  /** Lobby: live spaces + upcoming scheduled + viewer's own space (even if offline). */
+  /** Lobby: live + occupied + upcoming scheduled + viewer's own space (even if offline). */
   async listLobbySpaces(viewerUserId?: string | null): Promise<SpaceDto[]> {
     const now = new Date();
     const viewerId = String(viewerUserId ?? '').trim() || null;
-    const or: Array<{ isActive: true } | { scheduledAt: { gt: Date } } | { ownerId: string }> = [
-      { isActive: true },
-      { scheduledAt: { gt: now } },
-    ];
+    const counts = this.spacesPresence.getLobbyCountsBySpaceId();
+    const occupiedIds = Object.entries(counts)
+      .filter(([, n]) => Number(n) > 0)
+      .map(([id]) => id);
+    const or: Array<
+      { isActive: true } | { scheduledAt: { gt: Date } } | { ownerId: string } | { id: { in: string[] } }
+    > = [{ isActive: true }, { scheduledAt: { gt: now } }];
     if (viewerId) or.push({ ownerId: viewerId });
+    if (occupiedIds.length > 0) or.push({ id: { in: occupiedIds } });
 
     const spaces = await this.prisma.space.findMany({
       where: { OR: or },
@@ -460,7 +469,6 @@ export class SpacesService {
       });
     }
 
-    const counts = this.spacesPresence.getLobbyCountsBySpaceId();
     const spaceIds = spaces.map((s) => s.id);
     const ownerIds = [...new Set(spaces.map((s) => s.ownerId))];
 
@@ -721,6 +729,17 @@ export class SpacesService {
       opts?.subscriberCountOverride ??
       (await this.countNonOwnerSubscribers(space.id, space.owner.id));
 
+    const playbackTitle = await resolveSpacePlaybackTitle({
+      mode: space.mode,
+      watchPartyUrl: space.watchPartyUrl,
+      radioStreamUrl: space.radioStreamUrl,
+      getLinkTitle: async (url) => {
+        const meta = await this.linkMetadata.getMetadata(url);
+        const title = meta?.title?.trim();
+        return title || null;
+      },
+    });
+
     return {
       id: space.id,
       title: space.title,
@@ -730,6 +749,7 @@ export class SpacesService {
       mode: space.mode,
       watchPartyUrl: space.watchPartyUrl,
       radioStreamUrl: space.radioStreamUrl,
+      playbackTitle,
       owner,
       listenerCount,
       viewerSubscribed,

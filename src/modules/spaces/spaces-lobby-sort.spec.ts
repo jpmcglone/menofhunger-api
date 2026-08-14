@@ -58,6 +58,12 @@ describe('compareLobbySpaces', () => {
     ]);
   });
 
+  it('ranks a live room above an unfollowed scheduled space', () => {
+    const live = space({ id: 'live', isActive: true, listenerCount: 2 });
+    const scheduled = space({ id: 'soon', scheduledAt: '2026-08-15T00:00:00.000Z' });
+    expect(sort([scheduled, live]).map((s) => s.id)).toEqual(['live', 'soon']);
+  });
+
   it('ranks notifying above following even when follow has an earlier schedule', () => {
     const notifying = space({
       id: 'notify',

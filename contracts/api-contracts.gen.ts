@@ -1187,6 +1187,19 @@ export type MarvinCatchUpDto = {
   generatedAt: string;
 };
 
+// ─── src/common/dto/marvin/marvin-context-card.dto.ts ──────────────────────────
+
+/**
+ * Viewer's own Marv context card — what Marv currently knows from public profile/posts.
+ * Returned by `GET /marvin/me/context-card`. Null when no card has been generated yet.
+ */
+export type MarvinContextCardDto = {
+  cardText: string;
+  /** "generated" | "manual" | "hybrid" */
+  source: string;
+  updatedAt: string;
+};
+
 // ─── src/common/dto/marvin/marvin-credit-summary.dto.ts ────────────────────────
 
 /**
@@ -1264,7 +1277,7 @@ export type MarvinUpdatePreferencesBodyDto = {
  * here as a literal-string union so it travels cleanly to the web client without leaking
  * Prisma types across the API contract.
  */
-export type MarvinModeDto = 'fast' | 'regular' | 'smart';
+export type MarvinModeDto = 'auto' | 'fast' | 'regular' | 'smart';
 
 /** Source channel the request originated from. */
 export type MarvinSourceDto = 'public_thread' | 'private_session' | 'catch_up';
@@ -2284,6 +2297,8 @@ export type SpaceDto = {
   mode: 'NONE' | 'WATCH_PARTY' | 'RADIO';
   watchPartyUrl: string | null;
   radioStreamUrl: string | null;
+  /** YouTube OG title or radio station name when something is on; null when idle/unknown. */
+  playbackTitle: string | null;
   owner: SpaceOwnerDto;
   listenerCount: number;
   /** Whether the authenticated viewer is subscribed to schedule reminders. */
@@ -2322,6 +2337,7 @@ export type SpacesUpdatedPatchDto = Partial<{
   mode: 'NONE' | 'WATCH_PARTY' | 'RADIO';
   watchPartyUrl: string | null;
   radioStreamUrl: string | null;
+  playbackTitle: string | null;
   /** Notify-me signups excluding the host. */
   subscriberCount: number;
   /** Space row removed — clients should drop from lobby lists. */

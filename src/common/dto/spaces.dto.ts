@@ -18,6 +18,8 @@ export type SpaceDto = {
   mode: 'NONE' | 'WATCH_PARTY' | 'RADIO';
   watchPartyUrl: string | null;
   radioStreamUrl: string | null;
+  /** YouTube OG title or radio station name when something is on; null when idle/unknown. */
+  playbackTitle: string | null;
   owner: SpaceOwnerDto;
   listenerCount: number;
   /** Whether the authenticated viewer is subscribed to schedule reminders. */
@@ -56,6 +58,7 @@ export type SpacesUpdatedPatchDto = Partial<{
   mode: 'NONE' | 'WATCH_PARTY' | 'RADIO';
   watchPartyUrl: string | null;
   radioStreamUrl: string | null;
+  playbackTitle: string | null;
   /** Notify-me signups excluding the host. */
   subscriberCount: number;
   /** Space row removed — clients should drop from lobby lists. */

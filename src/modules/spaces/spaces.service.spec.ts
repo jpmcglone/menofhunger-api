@@ -8,6 +8,7 @@ function build(overrides: {
   jobs?: Record<string, any>;
   spacesPresence?: Record<string, any>;
   appConfig?: Record<string, any>;
+  linkMetadata?: Record<string, any>;
 } = {}) {
   const prisma: any = {
     space: {
@@ -52,6 +53,10 @@ function build(overrides: {
     r2: jest.fn(() => null),
     ...overrides.appConfig,
   };
+  const linkMetadata = {
+    getMetadata: jest.fn(async () => null),
+    ...overrides.linkMetadata,
+  };
 
   const service = new SpacesService(
     prisma,
@@ -61,8 +66,9 @@ function build(overrides: {
     jobs as any,
     realtime as any,
     notifications as any,
+    linkMetadata as any,
   );
-  return { service, prisma, notifications, realtime, sideEffects, jobs };
+  return { service, prisma, notifications, realtime, sideEffects, jobs, linkMetadata };
 }
 
 describe('SpacesService.deleteSpace', () => {
@@ -331,6 +337,159 @@ describe('SpacesService.isDayReminderStillValid', () => {
     expect(
       service.isDayReminderStillValid(scheduledAt, scheduledAt.getTime(), scheduledAt.getTime() + 1),
     ).toBe(false);
+  });
+});
+
+describe('SpacesService.setMode playbackTitle', () => {
+  function ownerRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'space-1',
+      title: "host's Space",
+      description: null,
+      isActive: true,
+      scheduledAt: null,
+      mode: 'NONE',
+      watchPartyUrl: null,
+      radioStreamUrl: null,
+      owner: {
+        id: 'owner-1',
+        username: 'host',
+        avatarKey: null,
+        avatarUpdatedAt: null,
+        premium: false,
+        premiumPlus: false,
+        isOrganization: false,
+        verifiedStatus: 'none',
+      },
+      _count: { scheduleSubscribers: 0 },
+      ...overrides,
+    };
+  }
+
+  it('emits the radio station name on mode_changed', async () => {
+    const { RADIO_STATIONS } = await import('../radio/radio.constants');
+    const station = RADIO_STATIONS[0]!;
+    const { service, realtime } = build({
+      prisma: {
+        space: {
+          findUnique: jest.fn(async () => ({ ownerId: 'owner-1' })),
+          update: jest.fn(async () =>
+            ownerRow({
+              mode: 'RADIO',
+              radioStreamUrl: station.streamUrl,
+            }),
+          ),
+        },
+      },
+    });
+
+    const dto = await service.setMode('space-1', 'owner-1', {
+      mode: 'RADIO',
+      radioStreamUrl: station.streamUrl,
+    });
+
+    expect(dto.playbackTitle).toBe(station.name);
+    expect(realtime.emitSpacesUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'mode_changed',
+        patch: expect.objectContaining({
+          mode: 'RADIO',
+          radioStreamUrl: station.streamUrl,
+          playbackTitle: station.name,
+        }),
+      }),
+    );
+  });
+
+  it('emits the YouTube OG title after prefetching metadata', async () => {
+    const getMetadata = jest.fn(async () => ({ title: 'Conference talk' }));
+    const { service, realtime, linkMetadata } = build({
+      prisma: {
+        space: {
+          findUnique: jest.fn(async () => ({ ownerId: 'owner-1' })),
+          update: jest.fn(async () =>
+            ownerRow({
+              mode: 'WATCH_PARTY',
+              watchPartyUrl: 'https://youtu.be/dQw4w9WgXcQ',
+            }),
+          ),
+        },
+      },
+      linkMetadata: { getMetadata },
+    });
+
+    const dto = await service.setMode('space-1', 'owner-1', {
+      mode: 'WATCH_PARTY',
+      watchPartyUrl: 'https://youtu.be/dQw4w9WgXcQ',
+    });
+
+    expect(linkMetadata.getMetadata).toHaveBeenCalledWith('https://youtu.be/dQw4w9WgXcQ');
+    expect(dto.playbackTitle).toBe('Conference talk');
+    expect(realtime.emitSpacesUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'mode_changed',
+        patch: expect.objectContaining({
+          mode: 'WATCH_PARTY',
+          playbackTitle: 'Conference talk',
+        }),
+      }),
+    );
+  });
+
+  it('emits null playbackTitle for NONE', async () => {
+    const getMetadata = jest.fn(async () => ({ title: 'nope' }));
+    const { service, realtime } = build({
+      prisma: {
+        space: {
+          findUnique: jest.fn(async () => ({ ownerId: 'owner-1' })),
+          update: jest.fn(async () => ownerRow({ mode: 'NONE' })),
+        },
+      },
+      linkMetadata: { getMetadata },
+    });
+
+    const dto = await service.setMode('space-1', 'owner-1', { mode: 'NONE' });
+    expect(dto.playbackTitle).toBeNull();
+    expect(getMetadata).not.toHaveBeenCalled();
+    expect(realtime.emitSpacesUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        patch: expect.objectContaining({ playbackTitle: null }),
+      }),
+    );
+  });
+});
+
+describe('SpacesService.listLobbySpaces', () => {
+  it('queries live, scheduled, own, and occupied rooms', async () => {
+    const findMany = jest.fn(async () => []);
+    const { service } = build({
+      prisma: {
+        space: { findMany },
+        spaceScheduleSubscriber: {
+          findMany: jest.fn(async () => []),
+          count: jest.fn(async () => 0),
+          createMany: jest.fn(),
+        },
+        follow: { findMany: jest.fn(async () => []) },
+      },
+      spacesPresence: {
+        getLobbyCountsBySpaceId: jest.fn(() => ({ 'occupied-1': 3 })),
+      },
+    });
+
+    await expect(service.listLobbySpaces('viewer-1')).resolves.toEqual([]);
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          OR: expect.arrayContaining([
+            { isActive: true },
+            { scheduledAt: { gt: expect.any(Date) } },
+            { ownerId: 'viewer-1' },
+            { id: { in: ['occupied-1'] } },
+          ]),
+        },
+      }),
+    );
   });
 });
 
