@@ -28,6 +28,7 @@ function build(overrides: {
   };
   const notifications = {
     upsertSpaceScheduleNotification: jest.fn(async () => undefined),
+    listRecipientIdsForSpaceNotification: jest.fn(async () => [] as string[]),
     ...overrides.notifications,
   };
   const realtime = {
@@ -108,6 +109,10 @@ describe('SpacesService.deleteSpace', () => {
       'space.schedule.cancelled',
       expect.anything(),
     );
+    expect(sideEffects.dispatch).not.toHaveBeenCalledWith(
+      'space.schedule.ended',
+      expect.anything(),
+    );
     expect(realtime.emitSpacesUpdated).toHaveBeenCalledWith(
       expect.objectContaining({
         spaceId: 'space-1',
@@ -116,10 +121,48 @@ describe('SpacesService.deleteSpace', () => {
       }),
     );
   });
+
+  it('retitles existing space_live rows before deleting so subjectSpaceId is still set', async () => {
+    const order: string[] = [];
+    const { service, notifications } = build({
+      prisma: {
+        space: {
+          findUnique: jest.fn(async () => ({
+            ownerId: 'owner-1',
+            title: "ocaptain's space",
+            scheduledAt: null,
+            owner: { username: 'ocaptain' },
+          })),
+          delete: jest.fn(async () => {
+            order.push('delete');
+          }),
+        },
+      },
+      notifications: {
+        listRecipientIdsForSpaceNotification: jest.fn(async () => ['sub-1']),
+        upsertSpaceScheduleNotification: jest.fn(async () => {
+          order.push('notify');
+        }),
+      },
+    });
+
+    await service.deleteSpace('space-1', 'owner-1');
+
+    expect(order).toEqual(['notify', 'delete']);
+    expect(notifications.upsertSpaceScheduleNotification).toHaveBeenCalledWith({
+      recipientUserId: 'sub-1',
+      kind: 'space_live',
+      spaceId: 'space-1',
+      actorUserId: 'owner-1',
+      title: "ocaptain's space was live",
+      body: "It's no longer live.",
+      resurface: false,
+    });
+  });
 });
 
 describe('SpacesService.activateSpace', () => {
-  it('dispatches live fan-out only when a schedule existed', async () => {
+  it('dispatches live fan-out with no new recipients when there was no schedule', async () => {
     const { service, prisma, sideEffects } = build({
       prisma: {
         space: {
@@ -160,7 +203,10 @@ describe('SpacesService.activateSpace', () => {
 
     await service.activateSpace('space-1', 'owner-1');
 
-    expect(sideEffects.dispatch).not.toHaveBeenCalledWith('space.schedule.live', expect.anything());
+    expect(sideEffects.dispatch).toHaveBeenCalledWith('space.schedule.live', {
+      spaceId: 'space-1',
+      recipientUserIds: [],
+    });
     expect(prisma.spaceScheduleSubscriber.deleteMany).toHaveBeenCalledWith({
       where: { spaceId: 'space-1', userId: { not: 'owner-1' } },
     });
@@ -213,6 +259,67 @@ describe('SpacesService.activateSpace', () => {
       recipientUserIds: ['sub-1'],
     });
     expect(prisma.spaceScheduleSubscriber.deleteMany).toHaveBeenCalled();
+  });
+});
+
+const SPACE_ROW = {
+  id: 'space-1',
+  title: 'Hang',
+  description: null,
+  isActive: false,
+  scheduledAt: null,
+  mode: 'NONE' as const,
+  watchPartyUrl: null,
+  radioStreamUrl: null,
+  owner: {
+    id: 'owner-1',
+    username: 'host',
+    avatarKey: null,
+    avatarUpdatedAt: null,
+    premium: false,
+    premiumPlus: false,
+    isOrganization: false,
+    verifiedStatus: 'none' as const,
+  },
+  _count: { scheduleSubscribers: 0 },
+};
+
+describe('SpacesService.deactivateSpace', () => {
+  it('dispatches ended so existing live notifications retitle in place', async () => {
+    const { service, sideEffects } = build({
+      prisma: {
+        space: {
+          findUnique: jest.fn(async () => ({ ownerId: 'owner-1' })),
+          update: jest.fn(async () => SPACE_ROW),
+        },
+      },
+    });
+
+    await service.deactivateSpace('space-1', 'owner-1');
+
+    expect(sideEffects.dispatch).toHaveBeenCalledWith('space.schedule.ended', { spaceId: 'space-1' });
+  });
+});
+
+describe('SpacesService.deactivateIfActive', () => {
+  it('dispatches ended only when a live space actually flipped off', async () => {
+    const flipped = build({
+      prisma: {
+        space: { updateMany: jest.fn(async () => ({ count: 1 })) },
+      },
+    });
+    await expect(flipped.service.deactivateIfActive('space-1')).resolves.toBe(true);
+    expect(flipped.sideEffects.dispatch).toHaveBeenCalledWith('space.schedule.ended', {
+      spaceId: 'space-1',
+    });
+
+    const skipped = build({
+      prisma: {
+        space: { updateMany: jest.fn(async () => ({ count: 0 })) },
+      },
+    });
+    await expect(skipped.service.deactivateIfActive('space-1')).resolves.toBe(false);
+    expect(skipped.sideEffects.dispatch).not.toHaveBeenCalled();
   });
 });
 

@@ -2045,6 +2045,11 @@ export class NotificationWriterService {
    * Upsert a space schedule notification for one recipient.
    * Keyed by (recipient, subjectSpaceId, kind) so cancel/live can resurface
    * and replace prior reminder rows for the same space.
+   *
+   * `resurface` (default true) bumps createdAt, marks unread, and sends push —
+   * used when the space goes live again. Pass false to rewrite copy in place
+   * ("was live") without moving the row, buzzing, or changing read state.
+   * Quiet updates no-op when no row exists.
    */
   async upsertSpaceScheduleNotification(params: {
     recipientUserId: string;
@@ -2053,10 +2058,40 @@ export class NotificationWriterService {
     actorUserId?: string | null;
     title: string;
     body?: string | null;
+    resurface?: boolean;
   }): Promise<void> {
     const { recipientUserId, kind, spaceId, actorUserId, title, body } = params;
+    const resurface = params.resurface !== false;
     // Hosts are auto-subscribed to their own schedule reminders/live pings, so
     // actor === recipient is allowed here (unlike social notifications).
+
+    if (!resurface) {
+      const existing = await this.prisma.notification.findFirst({
+        where: { recipientUserId, kind, subjectSpaceId: spaceId },
+        select: { id: true },
+      });
+      if (!existing) return;
+      await this.prisma.notification.update({
+        where: { id: existing.id },
+        data: {
+          title,
+          body: body ?? null,
+          actorUserId: actorUserId ?? null,
+        },
+      });
+      try {
+        const dto = await this.query.buildNotificationDtoForRecipient({
+          recipientUserId,
+          notificationId: existing.id,
+        });
+        if (dto) {
+          this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto, silent: true });
+        }
+      } catch (err) {
+        this.logger.debug(`[notifications] Failed to emit silent space_live patch: ${err}`);
+      }
+      return;
+    }
 
     const presentAt = await this.presentAtForRecipient(recipientUserId);
     const { notificationId, undeliveredCount } = await this.prisma.$transaction(async (tx) => {
@@ -2151,5 +2186,20 @@ export class NotificationWriterService {
       url: pushUrl,
       notificationId,
     });
+  }
+
+  /** Recipients who already have a space notification of this kind (one row per person). */
+  async listRecipientIdsForSpaceNotification(params: {
+    spaceId: string;
+    kind: 'space_live';
+  }): Promise<string[]> {
+    const spaceId = String(params.spaceId ?? '').trim();
+    if (!spaceId) return [];
+    const rows = await this.prisma.notification.findMany({
+      where: { subjectSpaceId: spaceId, kind: params.kind },
+      select: { recipientUserId: true },
+      distinct: ['recipientUserId'],
+    });
+    return rows.map((r) => r.recipientUserId);
   }
 }

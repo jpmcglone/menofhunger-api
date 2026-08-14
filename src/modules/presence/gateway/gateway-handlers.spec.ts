@@ -10,6 +10,7 @@ import { ContentSubscriptionsHandler } from './gateway-subscriptions.handler';
 import { MessagingGatewayHandler } from './gateway-messaging.handler';
 import { PresenceStatusHandler } from './gateway-presence.handler';
 import { CommunityGroupReadAccessService } from '../../viewer/community-group-read-access.service';
+import { SpacesGatewayHandler } from './gateway-spaces.handler';
 
 // ─── Lightweight fake socket.io infrastructure ──────────────────────────────
 
@@ -634,5 +635,130 @@ describe('PresenceStatusHandler — impersonated connections', () => {
     expect(presenceRedis.unregisterSocket).not.toHaveBeenCalled();
     expect(presence.persistLastOnlineAt).not.toHaveBeenCalled();
     expect(emitOffline).not.toHaveBeenCalled();
+  });
+});
+
+describe('SpacesGatewayHandler chat join/leave system messages', () => {
+  const SPACE_ID = 'space-1';
+  const SENDER = {
+    id: 'u1',
+    username: 'ocaptain',
+    premium: false,
+    premiumPlus: false,
+    isOrganization: false,
+    verifiedStatus: 'none' as const,
+    stewardBadgeEnabled: true,
+  };
+
+  function setup(spacesOverrides: Record<string, unknown> = {}) {
+    const server = new FakeServer();
+    const presence = makePresence();
+    const ctx = makeContext(presence, server);
+    const spacesChat = {
+      appendSystemMessage: jest.fn().mockImplementation((p: { event: string; spaceId: string; userId: string; username: string | null }) => ({
+        id: `sys-${p.event}`,
+        spaceId: p.spaceId,
+        kind: 'system',
+        body: `@${p.username} has ${p.event === 'join' ? 'joined' : 'left'} the chat`,
+        createdAt: new Date().toISOString(),
+        sender: null,
+        system: { firstEvent: p.event, lastEvent: p.event, userId: p.userId, username: p.username },
+      })),
+      snapshot: jest.fn().mockReturnValue({ spaceId: SPACE_ID, messages: [] }),
+    };
+    const spaces = {
+      getOwnerIdForSpace: jest.fn().mockResolvedValue('owner-1'),
+      isSpaceActive: jest.fn().mockResolvedValue(true),
+      ...spacesOverrides,
+    };
+    const handler = new SpacesGatewayHandler(
+      presence,
+      makePresenceRedis(),
+      {} as any,
+      spaces as any,
+      { isValidSpaceId: (id: string) => Boolean(id?.trim()), onDisconnect: jest.fn().mockReturnValue(null) } as any,
+      spacesChat as any,
+      {} as any,
+      {} as any,
+      new GatewayThrottleService(),
+      ctx,
+    );
+    return { server, handler, spacesChat, spaces };
+  }
+
+  it('emits join on first socket and leave only when the last socket unsubscribes', async () => {
+    const { server, handler, spacesChat } = setup();
+    const a = new FakeSocket('sock-a', { userId: SENDER.id, spaceChatUser: SENDER });
+    const b = new FakeSocket('sock-b', { userId: SENDER.id, spaceChatUser: SENDER });
+    server.register(a);
+    server.register(b);
+
+    await handler.handleSpacesChatSubscribe(a as any, { spaceId: SPACE_ID });
+    expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
+    expect(spacesChat.appendSystemMessage.mock.calls[0][0].event).toBe('join');
+
+    await handler.handleSpacesChatSubscribe(b as any, { spaceId: SPACE_ID });
+    expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
+
+    handler.handleSpacesChatUnsubscribe(a as any);
+    expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
+
+    handler.handleSpacesChatUnsubscribe(b as any);
+    expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(2);
+    expect(spacesChat.appendSystemMessage.mock.calls[1][0].event).toBe('leave');
+  });
+
+  it('does not emit leave on disconnect when another socket is still in the chat', async () => {
+    const { server, handler, spacesChat } = setup();
+    const a = new FakeSocket('sock-a', { userId: SENDER.id, spaceChatUser: SENDER });
+    const b = new FakeSocket('sock-b', { userId: SENDER.id, spaceChatUser: SENDER });
+    server.register(a);
+    server.register(b);
+
+    await handler.handleSpacesChatSubscribe(a as any, { spaceId: SPACE_ID });
+    await handler.handleSpacesChatSubscribe(b as any, { spaceId: SPACE_ID });
+    spacesChat.appendSystemMessage.mockClear();
+
+    handler.handleDisconnect(a as any, SENDER.id);
+    expect(spacesChat.appendSystemMessage).not.toHaveBeenCalled();
+  });
+
+  it('emits leave on disconnect when it is the last chat socket', async () => {
+    const { server, handler, spacesChat } = setup();
+    const a = new FakeSocket('sock-a', { userId: SENDER.id, spaceChatUser: SENDER });
+    server.register(a);
+
+    await handler.handleSpacesChatSubscribe(a as any, { spaceId: SPACE_ID });
+    spacesChat.appendSystemMessage.mockClear();
+
+    handler.handleDisconnect(a as any, SENDER.id);
+    expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
+    expect(spacesChat.appendSystemMessage.mock.calls[0][0].event).toBe('leave');
+  });
+
+  it('rejects non-owner chat subscribe while the space is inactive', async () => {
+    const { server, handler, spacesChat } = setup({ isSpaceActive: jest.fn().mockResolvedValue(false) });
+    const waiter = new FakeSocket('sock-w', { userId: SENDER.id, spaceChatUser: SENDER });
+    server.register(waiter);
+
+    await handler.handleSpacesChatSubscribe(waiter as any, { spaceId: SPACE_ID });
+
+    expect(waiter.joined.has(`spacesChat:${SPACE_ID}`)).toBe(false);
+    expect(spacesChat.appendSystemMessage).not.toHaveBeenCalled();
+    expect(spacesChat.snapshot).not.toHaveBeenCalled();
+  });
+
+  it('allows the owner to subscribe to chat while the space is inactive', async () => {
+    const { server, handler, spacesChat } = setup({
+      getOwnerIdForSpace: jest.fn().mockResolvedValue(SENDER.id),
+      isSpaceActive: jest.fn().mockResolvedValue(false),
+    });
+    const owner = new FakeSocket('sock-o', { userId: SENDER.id, spaceChatUser: SENDER });
+    server.register(owner);
+
+    await handler.handleSpacesChatSubscribe(owner as any, { spaceId: SPACE_ID });
+
+    expect(spacesChat.snapshot).toHaveBeenCalled();
+    expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
   });
 });

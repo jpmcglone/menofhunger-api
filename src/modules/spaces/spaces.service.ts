@@ -166,6 +166,28 @@ export class SpacesService {
       });
     }
 
+    // Quiet "was live" retitle must land while the Space row still exists —
+    // deleting SET NULLs subjectSpaceId, so an async ended job would miss the rows.
+    const liveRecipientIds = await this.notifications.listRecipientIdsForSpaceNotification({
+      spaceId: id,
+      kind: 'space_live',
+    });
+    if (liveRecipientIds.length > 0) {
+      const title = `${space.title} was live`;
+      const body = "It's no longer live.";
+      await runInBatches(liveRecipientIds, FANOUT_CONCURRENCY, async (recipientUserId) => {
+        await this.notifications.upsertSpaceScheduleNotification({
+          recipientUserId,
+          kind: 'space_live',
+          spaceId: id,
+          actorUserId: space.ownerId,
+          title,
+          body,
+          resurface: false,
+        });
+      });
+    }
+
     await this.prisma.space.delete({ where: { id } });
     this.emitSpaceUpdated(id, 'deleted', { deleted: true });
   }
@@ -187,10 +209,13 @@ export class SpacesService {
 
     if (previousScheduledAt) {
       await this.cancelReminderJobs(id, previousScheduledAt.getTime());
-      // Snapshot recipients before clearing Notify-me rows for the live fan-out.
-      const recipientUserIds = (await this.listSubscriberUserIds(id)).filter((uid) => uid !== userId);
-      this.sideEffects.dispatch('space.schedule.live', { spaceId: id, recipientUserIds });
     }
+    // Snapshot Notify-me recipients before clearing them. The handler also unions
+    // anyone who already has a space_live row (go-live-again with no new schedule).
+    const recipientUserIds = previousScheduledAt
+      ? (await this.listSubscriberUserIds(id)).filter((uid) => uid !== userId)
+      : [];
+    this.sideEffects.dispatch('space.schedule.live', { spaceId: id, recipientUserIds });
     await this.clearNonOwnerSubscribers(id, userId);
 
     const dto = await this.toDto(updated, {
@@ -217,6 +242,7 @@ export class SpacesService {
     });
     const dto = await this.toDto(updated, { viewerUserId: userId });
     this.emitSpaceUpdated(id, 'deactivated', { isActive: false });
+    this.sideEffects.dispatch('space.schedule.ended', { spaceId: id });
     return dto;
   }
 
@@ -233,6 +259,7 @@ export class SpacesService {
     });
     if (result.count > 0) {
       this.emitSpaceUpdated(id, 'deactivated', { isActive: false });
+      this.sideEffects.dispatch('space.schedule.ended', { spaceId: id });
     }
     return result.count > 0;
   }

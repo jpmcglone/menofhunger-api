@@ -308,6 +308,16 @@ export interface SideEffectPayloads {
     /** Snapshot before clearing non-owner subscribers on activate. */
     recipientUserIds?: string[];
   };
+  /**
+   * Host ended the space (or it went idle). Quietly retitle existing `space_live`
+   * rows to "was live" without bumping time, unread, or push.
+   * Delete writes this inline before the Space row is removed (FK SET NULL).
+   */
+  'space.schedule.ended': {
+    spaceId: string;
+    /** Fallback title if the space row is already gone. */
+    spaceTitle?: string;
+  };
   /** Schedule cleared or space deleted — fan out `space_schedule_cancelled`. */
   'space.schedule.cancelled': {
     spaceId: string;

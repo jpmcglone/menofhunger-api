@@ -30,10 +30,10 @@ function normalizeBody(raw: string): string {
 }
 
 function systemBodyFor(first: 'join' | 'leave', last: 'join' | 'leave', label: string): string {
-  const firstWord = first === 'join' ? 'joined' : 'left'
-  const lastWord = last === 'join' ? 'joined' : 'left'
-  const combined = firstWord === lastWord ? firstWord : `${firstWord} and ${lastWord}`
-  return normalizeBody(`${label} has ${combined} the chat`)
+  const firstWord = first === 'join' ? 'joined' : 'left';
+  const lastWord = last === 'join' ? 'joined' : 'left';
+  const combined = firstWord === lastWord ? firstWord : `${firstWord} and ${lastWord}`;
+  return normalizeBody(`${label} has ${combined} the chat`);
 }
 
 @Injectable()
@@ -179,7 +179,7 @@ export class SpacesChatService {
     const usernameRaw = (params.username ?? null) as string | null;
     const username = usernameRaw ? String(usernameRaw).trim() || null : null;
     const label = username ? `@${username}` : 'Someone';
-    const body = systemBodyFor(params.event, params.event, label)
+    const body = systemBodyFor(params.event, params.event, label);
     if (!body) return null;
     const clipped = body.length > this.maxBodyChars ? body.slice(0, this.maxBodyChars) : body;
 
@@ -192,14 +192,20 @@ export class SpacesChatService {
     const existingLast = st.messages.at(-1) ?? null;
 
     // If the most recent message is this same user's system message, collapse it (back-to-back only).
+    // Sliding window: firstEvent is the previous lastEvent, so leave→join reads
+    // "left and joined" instead of freezing the original join forever.
     if (
       existingLast &&
       existingLast.kind === 'system' &&
       existingLast.system?.userId === userId
     ) {
-      const prevFirst = (existingLast.system as any)?.firstEvent ?? (existingLast.system as any)?.event ?? 'join'
-      const firstEvent = (prevFirst === 'join' || prevFirst === 'leave') ? prevFirst : 'join'
-      const lastEvent = params.event
+      const prevLast = (existingLast.system as any)?.lastEvent ?? (existingLast.system as any)?.firstEvent ?? 'join';
+      const prevLastEvent = (prevLast === 'join' || prevLast === 'leave') ? prevLast : 'join';
+      if (prevLastEvent === params.event) {
+        return existingLast;
+      }
+      const firstEvent = prevLastEvent;
+      const lastEvent = params.event;
       const collapsedBodyRaw = systemBodyFor(firstEvent, lastEvent, label)
       const collapsedBody = collapsedBodyRaw.length > this.maxBodyChars
         ? collapsedBodyRaw.slice(0, this.maxBodyChars)

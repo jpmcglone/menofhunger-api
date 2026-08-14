@@ -83,9 +83,9 @@ const ALLOWED_DIRECT_NOTIFICATION_USERS: Record<string, string> = {
   // Admin-only test-push tool: sends directly to the requesting admin's own devices, no
   // side-effect fan-out needed. This is diagnostic tooling, not a user-facing mutation.
   'modules/admin/admin-push.controller.ts': 'admin tool that fires a test push to the admin\'s own devices',
-  // Cancel-on-delete must write while the Space row still exists (subjectSpaceId FK + push
-  // deep-link). Async side-effects would race the delete and drop the fan-out.
-  'modules/spaces/spaces.service.ts': 'cancel-on-delete notifications must land before space row delete',
+  // Cancel-on-delete and quiet "was live" retitles must write while the Space row still
+  // exists (subjectSpaceId FK SET NULL on delete). Async jobs would miss those rows.
+  'modules/spaces/spaces.service.ts': 'space-delete notifications must land before the space row is removed',
 };
 
 describe('notification writes go through the side-effects seam', () => {

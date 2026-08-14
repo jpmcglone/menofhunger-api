@@ -124,6 +124,10 @@ export class NotificationsService {
     return this.writer.upsertSpaceScheduleNotification(...args);
   }
 
+  listRecipientIdsForSpaceNotification(...args: Parameters<NotificationWriterService['listRecipientIdsForSpaceNotification']>) {
+    return this.writer.listRecipientIdsForSpaceNotification(...args);
+  }
+
   fanOutStatusUpdateNotifications(...args: Parameters<NotificationWriterService['fanOutStatusUpdateNotifications']>) {
     return this.writer.fanOutStatusUpdateNotifications(...args);
   }

@@ -32,18 +32,35 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
 
   onModuleInit(): void {
     this.registry.register('space.schedule.live', (p) => this.onLive(p));
+    this.registry.register('space.schedule.ended', (p) => this.onEnded(p));
     this.registry.register('space.schedule.cancelled', (p) => this.onCancelled(p));
     this.registry.register('space.schedule.rescheduled', (p) => this.onRescheduled(p));
     this.registry.register('space.schedule.reminder', (p) => this.onReminder(p));
+  }
+
+  private uniqueRecipientIds(ids: string[], skipUserId?: string | null): string[] {
+    const skip = (skipUserId ?? '').trim();
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of ids) {
+      const id = String(raw ?? '').trim();
+      if (!id || id === skip || seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    return out;
   }
 
   private async onLive(payload: SideEffectPayloads['space.schedule.live']): Promise<void> {
     const snap = await this.spaces.getScheduleSnapshot(payload.spaceId);
     // Schedule is cleared on activate — still fan out to the pre-clear subscriber snapshot.
     // Host already knows they're going live; skip self.
-    const recipients = (
-      payload.recipientUserIds ?? (await this.spaces.listSubscriberUserIds(payload.spaceId))
-    ).filter((id) => id !== snap?.ownerUserId);
+    const fromPayload = payload.recipientUserIds ?? (await this.spaces.listSubscriberUserIds(payload.spaceId));
+    const fromExisting = await this.notifications.listRecipientIdsForSpaceNotification({
+      spaceId: payload.spaceId,
+      kind: 'space_live',
+    });
+    const recipients = this.uniqueRecipientIds([...fromPayload, ...fromExisting], snap?.ownerUserId);
     if (recipients.length === 0) return;
 
     const title = snap ? `${snap.title} is live` : 'Space is live';
@@ -58,6 +75,32 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
         actorUserId,
         title,
         body,
+      });
+    });
+  }
+
+  private async onEnded(payload: SideEffectPayloads['space.schedule.ended']): Promise<void> {
+    const snap = await this.spaces.getScheduleSnapshot(payload.spaceId);
+    const recipients = await this.notifications.listRecipientIdsForSpaceNotification({
+      spaceId: payload.spaceId,
+      kind: 'space_live',
+    });
+    if (recipients.length === 0) return;
+
+    const spaceTitle = (snap?.title ?? payload.spaceTitle ?? '').trim();
+    const title = spaceTitle ? `${spaceTitle} was live` : 'Space was live';
+    const body = "It's no longer live.";
+    const actorUserId = snap?.ownerUserId ?? null;
+
+    await runInBatches(recipients, FANOUT_CONCURRENCY, async (recipientUserId) => {
+      await this.notifications.upsertSpaceScheduleNotification({
+        recipientUserId,
+        kind: 'space_live',
+        spaceId: payload.spaceId,
+        actorUserId,
+        title,
+        body,
+        resurface: false,
       });
     });
   }

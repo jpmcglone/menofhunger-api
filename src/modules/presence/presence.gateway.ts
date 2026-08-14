@@ -158,8 +158,8 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   @SubscribeMessage('spaces:chatSubscribe')
-  handleSpacesChatSubscribe(client: Socket, payload: { spaceId?: string }): void {
-    this.spacesHandler.handleSpacesChatSubscribe(client, payload);
+  handleSpacesChatSubscribe(client: Socket, payload: { spaceId?: string }): Promise<void> {
+    return this.spacesHandler.handleSpacesChatSubscribe(client, payload);
   }
 
   @SubscribeMessage('spaces:chatUnsubscribe')

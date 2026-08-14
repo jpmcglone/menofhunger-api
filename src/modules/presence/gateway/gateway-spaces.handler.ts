@@ -72,6 +72,21 @@ export class SpacesGatewayHandler {
   }
 
   /**
+   * Owner may enter while inactive (setup / scheduled wait). Everyone else
+   * only after the space is live — otherwise join/chatSubscribe are silent no-ops.
+   */
+  private async resolveSpaceAccess(
+    userId: string,
+    spaceId: string,
+  ): Promise<{ ownerId: string; isOwner: boolean } | null> {
+    const ownerId = await this.getCachedSpaceOwnerId(spaceId);
+    if (!ownerId) return null;
+    const isOwner = ownerId === userId;
+    if (!isOwner && !(await this.spaces.isSpaceActive(spaceId))) return null;
+    return { ownerId, isOwner };
+  }
+
+  /**
    * Remove a socket from owner-election maps and re-elect primary when needed.
    * Returns true when no owner sockets remain for the space (room is leaderless).
    */
@@ -228,21 +243,7 @@ export class SpacesGatewayHandler {
     // "left the chat" system message because spaces:chatUnsubscribe isn't sent.
     try {
       const chatSpaceId = String((client.data as any)?.spaceChatSpaceId ?? '').trim() || null;
-      const chatSender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
-      if (chatSpaceId && chatSender?.id) {
-        const leftMsg = this.spacesChat.appendSystemMessage({
-          spaceId: chatSpaceId,
-          event: 'leave',
-          userId: chatSender.id,
-          username: chatSender.username ?? null,
-        });
-        if (leftMsg) {
-          const chatRoom = spacesChatRoom(chatSpaceId);
-          const out = { spaceId: chatSpaceId, message: leftMsg };
-          this.context.server.to(chatRoom).emit('spaces:chatMessage', out);
-          void this.presenceRedis.publishEmitToRoom({ room: chatRoom, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
-        }
-      }
+      if (chatSpaceId) this.emitChatSystemIfSoleSocket(client, chatSpaceId, 'leave');
     } catch (err) {
       this.logger.warn(
         `[presence] disconnect chat cleanup failed socket=${socketId}: ${err instanceof Error ? err.message : String(err)}`,
@@ -267,14 +268,9 @@ export class SpacesGatewayHandler {
       null;
     if (!userId) return;
 
-    // Validate space existence: owner can join even if inactive, others require active
-    const ownerId = await this.getCachedSpaceOwnerId(spaceId);
-    if (!ownerId) return; // space doesn't exist
-    const isOwner = ownerId === userId;
-    if (!isOwner) {
-      const isActive = await this.spaces.isSpaceActive(spaceId);
-      if (!isActive) return;
-    }
+    const access = await this.resolveSpaceAccess(userId, spaceId);
+    if (!access) return;
+    const { isOwner } = access;
 
     // Clear prior owner-socket tracking when this socket moves to another space
     // (owned or not). Otherwise owner maps retain stale socket ids forever.
@@ -403,80 +399,78 @@ export class SpacesGatewayHandler {
     client.leave('spaces:lobbies');
   }
 
-  handleSpacesChatSubscribe(client: Socket, payload: { spaceId?: string }): void {
+  /** Other sockets for this user already subscribed to this space's chat (exclude `exceptSocketId`). */
+  private otherUserChatSockets(spaceId: string, userId: string, exceptSocketId: string): number {
+    const sockets = this.context.server?.sockets?.sockets;
+    if (!sockets) return 0;
+    let n = 0;
+    for (const sock of sockets.values()) {
+      if (sock.id === exceptSocketId) continue;
+      const sid = String((sock.data as { spaceChatSpaceId?: string } | undefined)?.spaceChatSpaceId ?? '').trim();
+      if (sid !== spaceId) continue;
+      const uid = String(
+        (sock.data as { userId?: string; spaceChatUser?: { id?: string } } | undefined)?.userId
+          ?? (sock.data as { spaceChatUser?: { id?: string } } | undefined)?.spaceChatUser?.id
+          ?? '',
+      ).trim();
+      if (uid === userId) n += 1;
+    }
+    return n;
+  }
+
+  /** Join when this is the user's first chat socket; leave when it is the last. */
+  private emitChatSystemIfSoleSocket(client: Socket, spaceId: string, event: 'join' | 'leave'): void {
+    const sender = ((client.data as { spaceChatUser?: SpaceChatSenderDto })?.spaceChatUser ?? null);
+    const userId = String(sender?.id ?? '').trim();
+    if (!sender?.id || !userId) return;
+    if (this.otherUserChatSockets(spaceId, userId, client.id) > 0) return;
+    const msg = this.spacesChat.appendSystemMessage({
+      spaceId,
+      event,
+      userId: sender.id,
+      username: sender.username ?? null,
+    });
+    if (!msg) return;
+    const room = spacesChatRoom(spaceId);
+    const out = { spaceId, message: msg };
+    this.context.server.to(room).emit('spaces:chatMessage', out);
+    void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
+  }
+
+  async handleSpacesChatSubscribe(client: Socket, payload: { spaceId?: string }): Promise<void> {
     const spaceId = String(payload?.spaceId ?? '').trim();
     if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
 
-    // Require authentication — unauthenticated clients must not receive the chat snapshot
-    // or live messages for a space they have not joined via spaces:join (which gates on auth).
+    await ((client.data as any).__ready as Promise<void> | undefined)?.catch?.(() => undefined);
+
+    // Same gate as spaces:join: waiters are not in the presence room and must not
+    // land in chat until the host goes live (owners can set up while inactive).
     const userId =
       (client.data as { userId?: string })?.userId ??
       this.presence.getUserIdForSocket(client.id) ??
       null;
     if (!userId) return;
+    if (!(await this.resolveSpaceAccess(userId, spaceId))) return;
 
     const prev = String((client.data as any)?.spaceChatSpaceId ?? '').trim() || null;
     if (prev && prev !== spaceId) {
       // Emit a leave system message for the old space before switching rooms.
       // Normally the client sends spaces:chatUnsubscribe first, but this guards
       // against races where chatSubscribe for the new space arrives first.
-      const prevSender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
-      if (prevSender?.id) {
-        const leftMsg = this.spacesChat.appendSystemMessage({
-          spaceId: prev,
-          event: 'leave',
-          userId: prevSender.id,
-          username: prevSender.username ?? null,
-        });
-        if (leftMsg) {
-          const prevRoom = spacesChatRoom(prev);
-          const leftOut = { spaceId: prev, message: leftMsg };
-          this.context.server.to(prevRoom).emit('spaces:chatMessage', leftOut);
-          void this.presenceRedis.publishEmitToRoom({ room: prevRoom, event: 'spaces:chatMessage', payload: leftOut }).catch(() => undefined);
-        }
-      }
+      this.emitChatSystemIfSoleSocket(client, prev, 'leave');
       client.leave(spacesChatRoom(prev));
     }
 
     (client.data as any).spaceChatSpaceId = spaceId;
     client.join(spacesChatRoom(spaceId));
     client.emit('spaces:chatSnapshot', this.spacesChat.snapshot(spaceId));
-
-    const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
-    const joinMsg = sender?.id
-      ? this.spacesChat.appendSystemMessage({
-          spaceId,
-          event: 'join',
-          userId: sender.id,
-          username: sender.username ?? null,
-        })
-      : null;
-    if (joinMsg) {
-      const room = spacesChatRoom(spaceId);
-      const out = { spaceId, message: joinMsg };
-      this.context.server.to(room).emit('spaces:chatMessage', out);
-      void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
-    }
+    this.emitChatSystemIfSoleSocket(client, spaceId, 'join');
   }
 
   handleSpacesChatUnsubscribe(client: Socket): void {
     const prev = String((client.data as any)?.spaceChatSpaceId ?? '').trim() || null;
     if (prev) {
-      const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
-      const leftMsg = sender?.id
-        ? this.spacesChat.appendSystemMessage({
-            spaceId: prev,
-            event: 'leave',
-            userId: sender.id,
-            username: sender.username ?? null,
-          })
-        : null;
-      if (leftMsg) {
-        const room = spacesChatRoom(prev);
-        const out = { spaceId: prev, message: leftMsg };
-        this.context.server.to(room).emit('spaces:chatMessage', out);
-        void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
-      }
+      this.emitChatSystemIfSoleSocket(client, prev, 'leave');
       client.leave(spacesChatRoom(prev));
     }
     (client.data as any).spaceChatSpaceId = null;
