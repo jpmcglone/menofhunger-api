@@ -16,6 +16,7 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { LinkMetadataService } from '../link-metadata/link-metadata.service';
 import { compareLobbySpaces } from './spaces-lobby-sort';
 import { resolveSpacePlaybackTitle } from './spaces-playback-title';
+import { fetchYouTubeOEmbedTitle } from './youtube-oembed-title';
 
 const SOON_MS = 15 * 60 * 1000;
 
@@ -734,6 +735,8 @@ export class SpacesService {
       watchPartyUrl: space.watchPartyUrl,
       radioStreamUrl: space.radioStreamUrl,
       getLinkTitle: async (url) => {
+        const youtubeTitle = await fetchYouTubeOEmbedTitle(url);
+        if (youtubeTitle) return youtubeTitle;
         const meta = await this.linkMetadata.getMetadata(url);
         const title = meta?.title?.trim();
         return title || null;

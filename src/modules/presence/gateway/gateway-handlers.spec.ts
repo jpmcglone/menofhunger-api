@@ -719,8 +719,14 @@ describe('SpacesGatewayHandler chat join/leave system messages', () => {
     await handler.handleSpacesChatSubscribe(b as any, { spaceId: SPACE_ID });
     spacesChat.appendSystemMessage.mockClear();
 
-    handler.handleDisconnect(a as any, SENDER.id);
-    expect(spacesChat.appendSystemMessage).not.toHaveBeenCalled();
+    jest.useFakeTimers();
+    try {
+      handler.handleDisconnect(a as any, SENDER.id);
+      jest.advanceTimersByTime(SpacesGatewayHandler.CHAT_LEAVE_DEBOUNCE_MS);
+      expect(spacesChat.appendSystemMessage).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('emits leave on disconnect when it is the last chat socket', async () => {
@@ -731,9 +737,38 @@ describe('SpacesGatewayHandler chat join/leave system messages', () => {
     await handler.handleSpacesChatSubscribe(a as any, { spaceId: SPACE_ID });
     spacesChat.appendSystemMessage.mockClear();
 
-    handler.handleDisconnect(a as any, SENDER.id);
-    expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
-    expect(spacesChat.appendSystemMessage.mock.calls[0][0].event).toBe('leave');
+    jest.useFakeTimers();
+    try {
+      handler.handleDisconnect(a as any, SENDER.id);
+      expect(spacesChat.appendSystemMessage).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(SpacesGatewayHandler.CHAT_LEAVE_DEBOUNCE_MS);
+      expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
+      expect(spacesChat.appendSystemMessage.mock.calls[0][0].event).toBe('leave');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('cancels a disconnect leave when the user resubscribes before the debounce', async () => {
+    const { server, handler, spacesChat } = setup();
+    const a = new FakeSocket('sock-a', { userId: SENDER.id, spaceChatUser: SENDER });
+    server.register(a);
+    await handler.handleSpacesChatSubscribe(a as any, { spaceId: SPACE_ID });
+    spacesChat.appendSystemMessage.mockClear();
+
+    const b = new FakeSocket('sock-b', { userId: SENDER.id, spaceChatUser: SENDER });
+    server.register(b);
+
+    jest.useFakeTimers();
+    try {
+      handler.handleDisconnect(a as any, SENDER.id);
+      await handler.handleSpacesChatSubscribe(b as any, { spaceId: SPACE_ID });
+      jest.advanceTimersByTime(SpacesGatewayHandler.CHAT_LEAVE_DEBOUNCE_MS);
+      const events = spacesChat.appendSystemMessage.mock.calls.map((c: [{ event: string }]) => c[0].event);
+      expect(events).not.toContain('leave');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('lets a visitor subscribe to chat while the space is idle', async () => {

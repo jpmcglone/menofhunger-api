@@ -402,6 +402,10 @@ describe('SpacesService.setMode playbackTitle', () => {
   });
 
   it('emits the YouTube OG title after prefetching metadata', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      json: async () => ({}),
+    } as Response);
     const getMetadata = jest.fn(async () => ({ title: 'Conference talk' }));
     const { service, realtime, linkMetadata } = build({
       prisma: {
@@ -434,6 +438,38 @@ describe('SpacesService.setMode playbackTitle', () => {
         }),
       }),
     );
+    fetchSpy.mockRestore();
+  });
+
+  it('prefers the YouTube oEmbed title over scraped OG', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ title: 'THE GREAT DEBATE' }),
+    } as Response);
+    const getMetadata = jest.fn(async () => ({ title: 'YouTube' }));
+    const { service, linkMetadata } = build({
+      prisma: {
+        space: {
+          findUnique: jest.fn(async () => ({ ownerId: 'owner-1' })),
+          update: jest.fn(async () =>
+            ownerRow({
+              mode: 'WATCH_PARTY',
+              watchPartyUrl: 'https://youtu.be/dQw4w9WgXcQ',
+            }),
+          ),
+        },
+      },
+      linkMetadata: { getMetadata },
+    });
+
+    const dto = await service.setMode('space-1', 'owner-1', {
+      mode: 'WATCH_PARTY',
+      watchPartyUrl: 'https://youtu.be/dQw4w9WgXcQ',
+    });
+
+    expect(dto.playbackTitle).toBe('THE GREAT DEBATE');
+    expect(linkMetadata.getMetadata).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 
   it('emits null playbackTitle for NONE', async () => {

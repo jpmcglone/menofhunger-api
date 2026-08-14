@@ -47,6 +47,13 @@ export class SpacesGatewayHandler {
   static readonly OWNER_GONE_GRACE_MS = 20_000;
   private readonly ownerGoneTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+  /**
+   * Disconnect leave is delayed so a reconnecting socket can subscribe first.
+   * Otherwise join-then-leave (new socket before old cleanup) reads backwards.
+   */
+  static readonly CHAT_LEAVE_DEBOUNCE_MS = 1_250;
+  private readonly pendingChatLeaves = new Map<string, ReturnType<typeof setTimeout>>();
+
   constructor(
     private readonly presence: PresenceService,
     private readonly presenceRedis: PresenceRedisStateService,
@@ -283,7 +290,10 @@ export class SpacesGatewayHandler {
     // "left the chat" system message because spaces:chatUnsubscribe isn't sent.
     try {
       const chatSpaceId = String((client.data as any)?.spaceChatSpaceId ?? '').trim() || null;
-      if (chatSpaceId) this.emitChatSystemIfSoleSocket(client, chatSpaceId, 'leave');
+      if (chatSpaceId) {
+        this.emitChatSystemIfSoleSocket(client, chatSpaceId, 'leave', { debounce: true });
+        (client.data as any).spaceChatSpaceId = null;
+      }
     } catch (err) {
       this.logger.warn(
         `[presence] disconnect chat cleanup failed socket=${socketId}: ${err instanceof Error ? err.message : String(err)}`,
@@ -463,12 +473,23 @@ export class SpacesGatewayHandler {
     return n;
   }
 
-  /** Join when this is the user's first chat socket; leave when it is the last. */
-  private emitChatSystemIfSoleSocket(client: Socket, spaceId: string, event: 'join' | 'leave'): void {
-    const sender = ((client.data as { spaceChatUser?: SpaceChatSenderDto })?.spaceChatUser ?? null);
-    const userId = String(sender?.id ?? '').trim();
-    if (!sender?.id || !userId) return;
-    if (this.otherUserChatSockets(spaceId, userId, client.id) > 0) return;
+  private chatLeaveKey(spaceId: string, userId: string): string {
+    return `${spaceId}:${userId}`;
+  }
+
+  private cancelPendingChatLeave(spaceId: string, userId: string): void {
+    const key = this.chatLeaveKey(spaceId, userId);
+    const timer = this.pendingChatLeaves.get(key);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.pendingChatLeaves.delete(key);
+  }
+
+  private flushChatSystemMessage(
+    spaceId: string,
+    event: 'join' | 'leave',
+    sender: SpaceChatSenderDto,
+  ): void {
     const msg = this.spacesChat.appendSystemMessage({
       spaceId,
       event,
@@ -480,6 +501,37 @@ export class SpacesGatewayHandler {
     const out = { spaceId, message: msg };
     this.context.server.to(room).emit('spaces:chatMessage', out);
     void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
+  }
+
+  /** Join when this is the user's first chat socket; leave when it is the last. */
+  private emitChatSystemIfSoleSocket(
+    client: Socket,
+    spaceId: string,
+    event: 'join' | 'leave',
+    opts?: { debounce?: boolean },
+  ): void {
+    const sender = ((client.data as { spaceChatUser?: SpaceChatSenderDto })?.spaceChatUser ?? null);
+    const userId = String(sender?.id ?? '').trim();
+    if (!sender?.id || !userId) return;
+
+    if (event === 'join') this.cancelPendingChatLeave(spaceId, userId);
+
+    if (event === 'leave' && opts?.debounce) {
+      this.cancelPendingChatLeave(spaceId, userId);
+      const key = this.chatLeaveKey(spaceId, userId);
+      const exceptSocketId = client.id;
+      const timer = setTimeout(() => {
+        this.pendingChatLeaves.delete(key);
+        if (this.otherUserChatSockets(spaceId, userId, exceptSocketId) > 0) return;
+        this.flushChatSystemMessage(spaceId, 'leave', sender);
+      }, SpacesGatewayHandler.CHAT_LEAVE_DEBOUNCE_MS);
+      timer.unref?.();
+      this.pendingChatLeaves.set(key, timer);
+      return;
+    }
+
+    if (this.otherUserChatSockets(spaceId, userId, client.id) > 0) return;
+    this.flushChatSystemMessage(spaceId, event, sender);
   }
 
   async handleSpacesChatSubscribe(client: Socket, payload: { spaceId?: string }): Promise<void> {
