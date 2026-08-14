@@ -229,30 +229,20 @@ describe('allPostIds includes embedded post IDs (source guardrail)', () => {
     'utf8',
   );
 
-  it('composeFeedPostDtos includes repostedPostMap.keys() in allPostIds', () => {
-    expect(feedQuerySource).toContain('repostedPostMap.keys()');
-    // Ensure it is near the allPostIds array construction (within the composeFeedPostDtos function)
-    const idx = feedQuerySource.indexOf('allPostIds = [');
+  it('composeFeedPostDtos seeds the ancestor CTE with reposted and quoted ids', () => {
+    expect(feedQuerySource).toContain('collectAncestorPostIds');
+    const idx = feedQuerySource.indexOf('const ancestorAndEmbedIds');
     const snippet = feedQuerySource.slice(idx, idx + 400);
-    expect(snippet).toContain('repostedPostMap.keys()');
-  });
-
-  it('composeFeedPostDtos includes quotedPostIds in allPostIds', () => {
-    const idx = feedQuerySource.indexOf('allPostIds = [');
-    const snippet = feedQuerySource.slice(idx, idx + 400);
+    expect(snippet).toContain('repostedPostIds');
     expect(snippet).toContain('quotedPostIds');
   });
 
-  it('profile feed path includes repostedPostMapUser.keys() in allPostIds', () => {
-    expect(controllerSource).toContain('repostedPostMapUser.keys()');
-    const idx = controllerSource.indexOf('allPostIds = [');
-    const snippet = controllerSource.slice(idx, idx + 400);
-    expect(snippet).toContain('repostedPostMapUser.keys()');
+  it('composeFeedPostDtos includes page + ancestor ids in overlay allPostIds', () => {
+    expect(feedQuerySource).toContain('allPostIds = [...pageIdSet, ...ancestorAndEmbedIds]');
   });
 
-  it('profile feed path includes quoted post ids in allPostIds', () => {
-    const idx = controllerSource.indexOf('allPostIds = [');
-    const snippet = controllerSource.slice(idx, idx + 400);
-    expect(snippet).toContain('quotedPostIds');
+  it('profile feed path uses composeFeedPostDtos', () => {
+    expect(controllerSource).toContain('this.posts.composeFeedPostDtos');
+    expect(controllerSource).not.toContain('repostedPostMapUser.keys()');
   });
 });

@@ -923,6 +923,7 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
         version: expect.any(String),
       }),
     );
+    expect(deps.cacheInvalidation.bumpFeedGlobal).not.toHaveBeenCalled();
   });
 
   it('unboostPost emits posts:liveUpdated to the post room with the new boostCount', async () => {
@@ -945,6 +946,7 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
         patch: { boostCount: 6 },
       }),
     );
+    expect(deps.cacheInvalidation.bumpFeedGlobal).not.toHaveBeenCalled();
   });
 
   it('boostPost still emits posts:interaction to actor + author for viewerHasBoosted UX', async () => {
@@ -1545,27 +1547,26 @@ describe('PostsService.listForYouFeed', () => {
 
   function isFollowedUnseenScan(args: any): boolean {
     const ands: any[] = args?.where?.AND ?? [];
-    return ands.some((c) => Array.isArray(c?.userId?.in)) &&
-      ands.some((c) => c?.views?.none?.userId === 'viewer');
+    const hasAuthorIn = ands.some((c) => Array.isArray(c?.userId?.in));
+    const hasWindow = ands.some((c) => c?.createdAt?.gte instanceof Date);
+    const orderByCreated = Array.isArray(args?.orderBy) && args.orderBy[0]?.createdAt === 'desc';
+    return hasAuthorIn && hasWindow && orderByCreated;
   }
 
   function isFriendEngagedScan(args: any): boolean {
     const ands: any[] = args?.where?.AND ?? [];
-    return ands.some(
-      (c) =>
-        Array.isArray(c?.OR) &&
-        c.OR.some((o: any) => o?.boosts?.some?.userId?.in) &&
-        c.OR.some((o: any) => o?.replies?.some?.userId?.in),
-    );
+    return ands.some((c) => Array.isArray(c?.id?.in)) &&
+      !ands.some((c) => Array.isArray(c?.userId?.in));
   }
 
   function isSecondDegreeScan(args: any): boolean {
     const ands: any[] = args?.where?.AND ?? [];
-    return ands.some((c) => Array.isArray(c?.userId?.in)) &&
-      ands.some((c) => c?.createdAt?.gte instanceof Date) &&
-      !ands.some((c) => c?.communityGroupId) &&
-      !ands.some((c) => c?.views?.none?.userId === 'viewer') &&
-      !isFriendEngagedScan(args);
+    const hasAuthorIn = ands.some((c) => Array.isArray(c?.userId?.in));
+    const hasWindow = ands.some((c) => c?.createdAt?.gte instanceof Date);
+    const orderByTrending = Array.isArray(args?.orderBy) && args.orderBy[0]?.trendingScore === 'desc';
+    return hasAuthorIn && hasWindow && orderByTrending
+      && !ands.some((c) => c?.communityGroupId)
+      && !ands.some((c) => c?.communityGroup);
   }
 
   function isMemberGroupScan(args: any): boolean {
@@ -1786,6 +1787,10 @@ describe('PostsService.listForYouFeed', () => {
         if (args?.where?.userId === 'viewer') {
           return viewerBoostedAuthorIds.map((authorId) => ({ post: { userId: authorId } }));
         }
+        // Friend-engaged prefetch: boosts by anyone the viewer follows.
+        if (Array.isArray(args?.where?.userId?.in) && args?.select?.postId) {
+          return friendBoostPostIds.map((id) => ({ postId: id }));
+        }
         const inSet: string[] = args?.where?.postId?.in ?? [];
         return friendBoostPostIds
           .filter((id) => inSet.includes(id))
@@ -1811,6 +1816,13 @@ describe('PostsService.listForYouFeed', () => {
       // is NOT requested, and userId is the viewer.
       if (args?.where?.userId === 'viewer' && args?.where?.parentId?.not === null) {
         return viewerRepliedToAuthorIds.map((authorId) => ({ parent: { userId: authorId } }));
+      }
+      // Friend-reply ID prefetch: parentId only, no candidate row fields.
+      if (args?.select?.parentId === true && !args?.select?.id) {
+        return friendReplyParentIds.map((id) => ({ parentId: id }));
+      }
+      if (args?.select?.repostedPostId === true) {
+        return [];
       }
       // Friend-replies: parentId.in + userId.in scoped to following set.
       if (args?.where?.parentId?.in && args?.where?.userId?.in) {
@@ -1959,6 +1971,23 @@ describe('PostsService.listForYouFeed', () => {
 
     const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 3, cursor: null, visibility: 'all' });
     expect(out.posts.map((p: any) => p.id)[0]).toBe('p-followed-new');
+  });
+
+  it('filters followed-unseen with viewed id notIn instead of views.none', async () => {
+    const { service, post } = setupForYou({
+      candidates: [cand('p-seen', 'u-follow', 10), cand('p-unseen', 'u-follow', 9)],
+      youFollowAuthorIds: ['u-follow'],
+      seenAtByPostId: { 'p-seen': new Date() },
+    });
+
+    await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+
+    const followedCall = (post.findMany as jest.Mock).mock.calls
+      .map((call) => call[0])
+      .find((args) => isFollowedUnseenScan(args));
+    const ands: any[] = followedCall?.where?.AND ?? [];
+    expect(ands.some((c) => c?.views?.none)).toBe(false);
+    expect(ands.some((c) => Array.isArray(c?.id?.notIn) && c.id.notIn.includes('p-seen'))).toBe(true);
   });
 
   it('bounds page-one scans and skips friend-engaged and second-degree discovery work', async () => {

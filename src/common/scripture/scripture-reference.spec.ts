@@ -37,6 +37,42 @@ describe('parseScriptureRefs', () => {
     expect(ref.verseEnd).toBe(18);
   });
 
+  it('matches comma-separated verses in one chapter', () => {
+    const [ref] = parseScriptureRefs('Eph 2:1,8');
+    expect(ref.reference).toBe('Ephesians 2:1,8');
+    expect(ref.verseStart).toBe(1);
+    expect(ref.verseEnd).toBeNull();
+    expect(ref.extraVerses).toEqual([{ start: 8, end: null }]);
+  });
+
+  it('matches chapter-only abbreviations like Rom 9', () => {
+    const [ref] = parseScriptureRefs('see Rom 9 for election');
+    expect(ref.reference).toBe('Romans 9');
+    expect(ref.chapter).toBe(9);
+    expect(ref.verseStart).toBeNull();
+  });
+
+  it('matches chapter-only inside a citation list', () => {
+    const refs = parseScriptureRefs('(Eph 2:1,8; John 6:44; Acts 13:48; Rom 9)');
+    expect(refs.map((r) => r.reference)).toEqual([
+      'Ephesians 2:1,8',
+      'John 6:44',
+      'Acts 13:48',
+      'Romans 9',
+    ]);
+  });
+
+  it('matches Psalm 23 as a whole-psalm citation', () => {
+    const [ref] = parseScriptureRefs('Pray Psalm 23');
+    expect(ref.reference).toBe('Psalms 23');
+    expect(ref.verseStart).toBeNull();
+  });
+
+  it('matches a period after the book abbreviation', () => {
+    const [ref] = parseScriptureRefs('Rom. 8:28');
+    expect(ref.reference).toBe('Romans 8:28');
+  });
+
   it('matches multiple refs in one string', () => {
     const refs = parseScriptureRefs('Romans 8:28 and Phil 4:13 are great');
     expect(refs).toHaveLength(2);
@@ -96,9 +132,20 @@ describe('parseScriptureRefs', () => {
 
   // ── Non-matches (false positive prevention) ────────────────────────────────
 
-  it('does NOT match a chapter-only ref', () => {
-    expect(parseScriptureRefs('Genesis 1')).toHaveLength(0);
-    expect(parseScriptureRefs('John 3')).toHaveLength(0);
+  it('matches unambiguous full-name chapter-only refs', () => {
+    const [ref] = parseScriptureRefs('Genesis 1');
+    expect(ref.reference).toBe('Genesis 1');
+    expect(ref.verseStart).toBeNull();
+  });
+
+  it('does NOT match ambiguous name + number in running prose', () => {
+    expect(parseScriptureRefs('Job 1')).toHaveLength(0);
+    expect(parseScriptureRefs('John 3 is coming over')).toHaveLength(0);
+  });
+
+  it('does match ambiguous names when they sit in a citation list', () => {
+    const refs = parseScriptureRefs('(Job 1; John 3)');
+    expect(refs.map((r) => r.reference)).toEqual(['Job 1', 'John 3']);
   });
 
   it('does NOT match a bare time', () => {
@@ -117,6 +164,10 @@ describe('parseScriptureRefs', () => {
   it('does NOT match when book immediately follows another word character', () => {
     // "aJohn 3:16" — "J" is preceded by "a"
     expect(parseScriptureRefs('aJohn 3:16')).toHaveLength(0);
+  });
+
+  it('does NOT match Amos via the "am" alias in ordinary prose', () => {
+    expect(parseScriptureRefs('I am 1 year in')).toHaveLength(0);
   });
 
   it('does NOT match a URL fragment that looks like a ref', () => {

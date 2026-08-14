@@ -220,3 +220,28 @@ describe('quoted-post visibility gate (Phase 2 failing tests)', () => {
     expect(dto.quotedPost?.body).toBe('');
   });
 });
+
+describe('list include has no nested quotedPost', () => {
+  const { POST_LIST_INCLUDE, POST_WITH_POLL_INCLUDE } = require('../../common/prisma-includes/post.include');
+  const { feedPostInclude } = require('./posts-feed.types');
+  const feedQuerySource = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, 'posts-feed-query.service.ts'),
+    'utf8',
+  );
+
+  it('POST_LIST_INCLUDE and feedPostInclude omit quotedPost', () => {
+    expect(feedPostInclude).toBe(POST_LIST_INCLUDE);
+    expect(POST_LIST_INCLUDE).not.toHaveProperty('quotedPost');
+  });
+
+  it('permalink include still nests quotedPost', () => {
+    expect(POST_WITH_POLL_INCLUDE).toHaveProperty('quotedPost');
+  });
+
+  it('getByIds uses feedPostInclude (quotes hydrate via quotedPostMap)', () => {
+    const idx = feedQuerySource.indexOf('async getByIds');
+    const snippet = feedQuerySource.slice(idx, idx + 1800);
+    expect(snippet).toContain('include: feedPostInclude');
+    expect(snippet).not.toContain('quotedPost: { include: QUOTED_POST_INCLUDE }');
+  });
+});

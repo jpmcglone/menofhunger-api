@@ -3,7 +3,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { CacheService } from '../redis/cache.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { CacheTtl } from '../redis/cache-ttl';
-import { lookupBook, parseScriptureRefs } from '../../common/scripture/scripture-reference';
+import { lookupBook, parseScriptureRefs, type ScriptureRef } from '../../common/scripture/scripture-reference';
 
 export type ScriptureVerse = {
   number: number;
@@ -45,6 +45,19 @@ const TRANSLATION_NAMES: Record<string, string> = {
   NASB: 'New American Standard Bible',
 };
 
+function addVerseSpan(wanted: Set<number>, start: number, end: number | null): void {
+  const to = end ?? start;
+  for (let n = start; n <= to; n++) wanted.add(n);
+}
+
+function sliceVerses(verses: ScriptureVerse[], ref: ScriptureRef): ScriptureVerse[] {
+  if (ref.verseStart == null) return verses;
+  const wanted = new Set<number>();
+  addVerseSpan(wanted, ref.verseStart, ref.verseEnd);
+  for (const extra of ref.extraVerses) addVerseSpan(wanted, extra.start, extra.end);
+  return verses.filter((v) => wanted.has(v.number));
+}
+
 @Injectable()
 export class ScriptureService {
   private readonly logger = new Logger(ScriptureService.name);
@@ -65,8 +78,7 @@ export class ScriptureService {
     const verses = await this.fetchVerses(translation, entry.apiId, ref.chapter);
     if (!verses) return null;
 
-    const verseEnd = ref.verseEnd ?? ref.verseStart;
-    const sliced = verses.filter((v) => v.number >= ref.verseStart && v.number <= verseEnd);
+    const sliced = sliceVerses(verses, ref);
     if (!sliced.length) return null;
 
     return {

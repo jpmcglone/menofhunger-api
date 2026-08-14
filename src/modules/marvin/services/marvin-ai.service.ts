@@ -305,7 +305,8 @@ export class MarvinAIService {
           properties: {
             reference: {
               type: 'string',
-              description: 'A scripture reference such as "John 3:16" or "Romans 8:28-30".',
+              description:
+                'A scripture reference such as "John 3:16", "Romans 8:28-30", "Rom 9", or "Eph 2:1,8".',
             },
           },
           required: ['reference'],

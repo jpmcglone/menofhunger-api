@@ -69,6 +69,11 @@ export const MARV_THREAD_TOOL_FALLBACK =
 export const MARV_DM_CONTEXT_HINT =
   'You may use get_my_recent_chat_messages to retrieve prior messages in this conversation. ';
 
+/** How Marv should write Bible refs so the app can highlight and look them up. */
+export const MARV_SCRIPTURE_CITE_HINT =
+  'When you cite Scripture, write it so the app can link it: "John 3:16", chapter-only "Rom 9" or "Psalm 23", ' +
+  'or comma lists like "Eph 2:1,8". ';
+
 /**
  * Reminds Marv that user profile lookup tools are always available, even in DM context.
  * Without this hint the model sometimes hallucinates that user lookups are "not available
@@ -79,6 +84,7 @@ export const MARV_USER_LOOKUP_HINT =
   'or get_user_context_card (detailed profile + public post summary). ' +
   'If someone asks who they should meet or whether anyone else is into a topic, call find_similar_members. ' +
   'If they ask for a Bible passage or verse, call get_bible_passage — do not invent Scripture. ' +
+  MARV_SCRIPTURE_CITE_HINT +
   'These tools work in any context — DM, thread, or otherwise.';
 
 /** Appended to thread replies when pre-fetched context is already injected. */

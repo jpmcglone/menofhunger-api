@@ -6,6 +6,10 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { PostVisibilityReadService } from '../viewer/post-visibility-read.service';
 import { NotificationReadStateService } from './notification-read-state.service';
+import { CacheService } from '../redis/cache.service';
+import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { CacheTtl } from '../redis/cache-ttl';
+import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
 import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectArticlePreviewDto, SubjectPostVisibility, SubjectTier } from './notification.dto';
 import type {
   NotificationFeedItemDto,
@@ -21,6 +25,15 @@ import { collapseFeedByRoot, type FeedCollapseMode, type FeedCollapsePrefer } fr
  */
 const PRIMARY_NOTIFICATION_KINDS = ['comment', 'mention', 'followed_post', 'status_update', 'checkin_post', 'follow', 'boost'] as const satisfies NotificationKind[];
 
+/** Kinds that embed a full PostDto card in the bell. Everything else uses subjectPostPreview. */
+const NOTIFICATION_POST_CARD_KINDS = new Set<NotificationKind>([
+  'comment',
+  'mention',
+  'followed_post',
+  'checkin_post',
+  'repost',
+]);
+
 /**
  * Notification feed reads: the bell list (with grouping), the
  * new-posts feed, and per-row DTO composition (also used by the writer for
@@ -33,6 +46,8 @@ export class NotificationQueryService {
     private readonly appConfig: AppConfigService,
     private readonly postVisibility: PostVisibilityReadService,
     private readonly readState: NotificationReadStateService,
+    private readonly cache?: CacheService,
+    private readonly cacheInvalidation?: CacheInvalidationService,
   ) {}
 
   notificationPostId(
@@ -47,6 +62,34 @@ export class NotificationQueryService {
   }
 
   async list(params: {
+    recipientUserId: string;
+    limit: number;
+    cursor: string | null;
+    kind?: NotificationKind | 'other';
+  }) {
+    const firstPage = !(params.cursor ?? '').trim();
+    if (!firstPage || !this.cache || !this.cacheInvalidation) {
+      return this.listUncached(params);
+    }
+
+    const ver = await this.cacheInvalidation.notificationsListVersion(params.recipientUserId);
+    const paramsHash = stableJsonHash({
+      limit: params.limit,
+      kind: params.kind ?? null,
+    });
+    return this.cache.getOrSetJsonWithLock({
+      enabled: true,
+      key: RedisKeys.notificationsList(params.recipientUserId, paramsHash, ver),
+      ttlSeconds: CacheTtl.authNotificationsPage1Seconds,
+      lockKey: RedisKeys.notificationsListLock(params.recipientUserId, paramsHash, ver),
+      lockTtlMs: 10_000,
+      lockWaitMs: 750,
+      computeAndSet: () => this.listUncached(params),
+      fallback: () => this.listUncached(params),
+    });
+  }
+
+  private async listUncached(params: {
     recipientUserId: string;
     limit: number;
     cursor: string | null;
@@ -69,25 +112,20 @@ export class NotificationQueryService {
       };
     }
 
-    const cursorWhere = await createdAtIdCursorWhere({
-      cursor,
-      lookup: async (id) =>
-        this.prisma.notification
-          .findUnique({
-            where: { id, recipientUserId },
-            select: { id: true, createdAt: true },
-          })
-          .then((r) => (r ? { id: r.id, createdAt: r.createdAt } : null)),
-    });
-
-    // Exclude notifications from blocked users (either direction).
-    const blockRows = await this.prisma.userBlock.findMany({
-      where: { OR: [{ blockerId: recipientUserId }, { blockedId: recipientUserId }] },
-      select: { blockerId: true, blockedId: true },
-    });
-    const blockedActorIds = blockRows.map((r) =>
-      r.blockerId === recipientUserId ? r.blockedId : r.blockerId,
-    );
+    const [cursorWhere, blockSets] = await Promise.all([
+      createdAtIdCursorWhere({
+        cursor,
+        lookup: async (id) =>
+          this.prisma.notification
+            .findUnique({
+              where: { id, recipientUserId },
+              select: { id: true, createdAt: true },
+            })
+            .then((r) => (r ? { id: r.id, createdAt: r.createdAt } : null)),
+      }),
+      this.postVisibility.viewerBlockSets(recipientUserId),
+    ]);
+    const blockedActorIds = [...blockSets.blockedByViewer, ...blockSets.viewerBlockedBy];
 
     const notifications = await this.prisma.notification.findMany({
       where: {
@@ -221,6 +259,7 @@ export class NotificationQueryService {
       ...new Set(
         raw
           .flatMap((n) => {
+            if (!NOTIFICATION_POST_CARD_KINDS.has(n.kind)) return [];
             const primary = this.notificationPostId(n);
             const fallback = n.kind === 'repost' ? n.subjectPostId : null;
             return [primary, fallback].filter(Boolean);
@@ -863,10 +902,12 @@ export class NotificationQueryService {
     }
 
     const notificationPostId = this.notificationPostId(n);
-    const notificationPostIds = [
-      notificationPostId,
-      n.kind === 'repost' ? n.subjectPostId : null,
-    ].filter((postId, index, arr): postId is string => Boolean(postId) && arr.indexOf(postId) === index);
+    const notificationPostIds = NOTIFICATION_POST_CARD_KINDS.has(n.kind)
+      ? [
+          notificationPostId,
+          n.kind === 'repost' ? n.subjectPostId : null,
+        ].filter((postId, index, arr): postId is string => Boolean(postId) && arr.indexOf(postId) === index)
+      : [];
     if (notificationPostIds.length > 0) {
       const visiblePosts = await this.postVisibility.getVisiblePostsByIds({
         viewerUserId: recipientUserId,

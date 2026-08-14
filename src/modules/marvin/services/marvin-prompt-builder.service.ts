@@ -7,6 +7,7 @@ import {
   MARV_FIRST_PERSON,
   MARV_NO_PROACTIVE_OFFERS,
   MARV_THREAD_TOOL_FALLBACK,
+  MARV_SCRIPTURE_CITE_HINT,
   MARV_THREAD_TOOL_OPTIONAL,
   MARV_USER_LOOKUP_HINT,
   MARV_WEB_SEARCH_REQUIRED,
@@ -226,7 +227,7 @@ export class MarvinPromptBuilderService {
         lines.push(
           'Do not repeat or paraphrase what YOU previously said. Build on it or answer the new question.',
         );
-        lines.push(MARV_THREAD_TOOL_OPTIONAL + MARV_CONCISENESS);
+        lines.push(MARV_THREAD_TOOL_OPTIONAL + MARV_SCRIPTURE_CITE_HINT + MARV_CONCISENESS);
       } else if (input.threadContext && input.threadContext.length > 0) {
         // Legacy flat rendering (oldest → newest), kept for callers that haven't moved
         // to the bidirectional fields.
@@ -235,9 +236,9 @@ export class MarvinPromptBuilderService {
         lines.push(
           'Do not repeat or paraphrase what YOU previously said. Build on it or answer the new question.',
         );
-        lines.push(MARV_THREAD_TOOL_OPTIONAL + MARV_CONCISENESS);
+        lines.push(MARV_THREAD_TOOL_OPTIONAL + MARV_SCRIPTURE_CITE_HINT + MARV_CONCISENESS);
       } else {
-        lines.push(MARV_THREAD_TOOL_FALLBACK + MARV_CONCISENESS);
+        lines.push(MARV_THREAD_TOOL_FALLBACK + MARV_SCRIPTURE_CITE_HINT + MARV_CONCISENESS);
       }
       lines.push('IMPORTANT: ' + MARV_NO_PROACTIVE_OFFERS);
     } else {

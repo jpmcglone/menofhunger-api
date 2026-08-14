@@ -58,11 +58,16 @@ export const QUOTED_POST_INCLUDE = {
   fitnessShare: FITNESS_SHARE_INCLUDE,
 } as const;
 
-export const POST_WITH_POLL_INCLUDE = {
+/** List/feed include: no nested quotedPost — quotes hydrate via quotedPostMap. */
+export const POST_LIST_INCLUDE = {
   ...POST_BASE_INCLUDE,
   poll: { include: { options: { orderBy: { position: 'asc' as const } } } },
   article: ARTICLE_SHARE_INCLUDE,
   fitnessShare: FITNESS_SHARE_INCLUDE,
+} as const;
+
+export const POST_WITH_POLL_INCLUDE = {
+  ...POST_LIST_INCLUDE,
   quotedPost: { include: QUOTED_POST_INCLUDE },
 } as const;
 

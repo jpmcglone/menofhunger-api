@@ -43,4 +43,24 @@ describe('ScriptureService', () => {
       text: 'Verse sixteen. Verse seventeen. Verse eighteen.',
     });
   });
+
+  it('returns the whole chapter for a chapter-only reference', async () => {
+    await expect(makeService().getRef('Rom 9')).resolves.toMatchObject({
+      reference: 'Romans 9',
+      verses: chapterVerses,
+    });
+  });
+
+  it('returns only the listed verses for a comma list', async () => {
+    await expect(makeService().getRef('John 3:16,18')).resolves.toEqual({
+      reference: 'John 3:16,18',
+      translation: 'BSB',
+      translationName: 'Berean Standard Bible',
+      verses: [
+        { number: 16, text: 'Verse sixteen.' },
+        { number: 18, text: 'Verse eighteen.' },
+      ],
+      text: 'Verse sixteen. Verse eighteen.',
+    });
+  });
 });

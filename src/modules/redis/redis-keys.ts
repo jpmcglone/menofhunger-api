@@ -43,6 +43,9 @@ export const RedisKeys = {
   verProfile(userId: string): string {
     return `ver:profile:${clean(userId)}`;
   },
+  verNotifications(userId: string): string {
+    return `ver:notifications:${clean(userId)}`;
+  },
 
   // Session cache (tokenHash -> userId/null)
   sessionUser(tokenHash: string): string {
@@ -92,6 +95,18 @@ export const RedisKeys = {
   },
   authPostsList(userId: string, paramsHash: string, feedVer: number): string {
     return `cache:posts:list:user:${clean(userId)}:v${feedVer}:${clean(paramsHash)}`;
+  },
+  anonPostsListLock(paramsHash: string, feedVer: number): string {
+    return `lock:posts:list:v${feedVer}:${clean(paramsHash)}`;
+  },
+  authPostsListLock(userId: string, paramsHash: string, feedVer: number): string {
+    return `lock:posts:list:user:${clean(userId)}:v${feedVer}:${clean(paramsHash)}`;
+  },
+  notificationsList(userId: string, paramsHash: string, listVer: number): string {
+    return `cache:notifications:list:user:${clean(userId)}:v${Math.max(1, Math.floor(listVer || 1))}:${clean(paramsHash)}`;
+  },
+  notificationsListLock(userId: string, paramsHash: string, listVer: number): string {
+    return `lock:notifications:list:user:${clean(userId)}:v${Math.max(1, Math.floor(listVer || 1))}:${clean(paramsHash)}`;
   },
   forYouRankedPage1(userId: string, paramsHash: string, feedVer: number): string {
     return `cache:posts:forYou:ranked:user:${clean(userId)}:v${feedVer}:${clean(paramsHash)}`;

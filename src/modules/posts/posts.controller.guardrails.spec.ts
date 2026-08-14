@@ -23,4 +23,12 @@ describe('PostsController media feed guardrails', () => {
     expect(src).toContain("OR: [{ trendingScore: 0 }, { trendingScore: null }]");
     expect(src).toContain("return toResult([...trendingPosts, ...fallbackSlice], hasMoreFallback);");
   });
+
+  it('caches authed For You first page with a stampede lock', () => {
+    const src = readFromRepo('src/modules/posts/posts.controller.ts');
+    expect(src).toContain('authForYouFirstPageCache');
+    expect(src).toContain('getOrSetJsonWithLock');
+    expect(src).toContain('authPostsListLock');
+    expect(src).toContain("? 'auth_foryou'");
+  });
 });

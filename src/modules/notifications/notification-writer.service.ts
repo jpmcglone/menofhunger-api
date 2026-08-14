@@ -10,6 +10,7 @@ import { FANOUT_CHUNK_SIZE } from '../side-effects/side-effects.constants';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { NotificationQueryService } from './notification-query.service';
 import { isBellCountedNotificationKind, NotificationReadStateService } from './notification-read-state.service';
+import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 
 export type CreateNotificationParams = {
   recipientUserId: string;
@@ -48,7 +49,16 @@ export class NotificationWriterService {
     private readonly sideEffects: SideEffectsService,
     private readonly query: NotificationQueryService,
     private readonly readState: NotificationReadStateService,
+    private readonly cacheInvalidation?: CacheInvalidationService,
   ) {}
+
+  private emitBellAndInvalidateList(
+    recipientUserId: string,
+    payload: { undeliveredCount: number },
+  ): void {
+    void this.cacheInvalidation?.bumpNotificationsList(recipientUserId);
+    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, payload);
+  }
 
   /**
    * Returns the current timestamp when the recipient is actively present
@@ -197,7 +207,7 @@ export class NotificationWriterService {
       return { notification, undeliveredCount };
     });
 
-    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
+    this.emitBellAndInvalidateList(recipientUserId, {
       undeliveredCount,
     });
 
@@ -387,7 +397,7 @@ export class NotificationWriterService {
         );
 
         if (res.kind === 'created' && typeof res.undeliveredCount === 'number') {
-          this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount: res.undeliveredCount });
+          this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount: res.undeliveredCount });
         }
 
         // Treat as a new notification row for UI ordering (without changing delivered/read).
@@ -454,7 +464,7 @@ export class NotificationWriterService {
       return user.undeliveredNotificationCount;
     });
     this.presenceRealtime.emitNotificationsDeleted(recipientUserId, { notificationIds: [existing.id] });
-    if (wasUndelivered) this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
+    if (wasUndelivered) this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount });
   }
 
   /**
@@ -524,7 +534,7 @@ export class NotificationWriterService {
         );
 
         if (res.kind === 'created' && typeof res.undeliveredCount === 'number') {
-          this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount: res.undeliveredCount });
+          this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount: res.undeliveredCount });
         }
 
         try {
@@ -585,7 +595,7 @@ export class NotificationWriterService {
       return user.undeliveredNotificationCount;
     });
     this.presenceRealtime.emitNotificationsDeleted(recipientUserId, { notificationIds: [existing.id] });
-    if (wasUndelivered) this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
+    if (wasUndelivered) this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount });
   }
 
   private async deleteNotificationRowsAndEmit(
@@ -651,7 +661,7 @@ export class NotificationWriterService {
     }
 
     for (const [uid, undeliveredCount] of updatedCountByRecipient) {
-      this.presenceRealtime.emitNotificationsUpdated(uid, { undeliveredCount });
+      this.emitBellAndInvalidateList(uid, { undeliveredCount });
     }
 
     // Bulk deletes can drop comment notifications (e.g. when the parent post is removed).
@@ -809,7 +819,7 @@ export class NotificationWriterService {
       return { kind: 'created' as const, notificationId: created.id, undeliveredCount };
     });
 
-    this.presenceRealtime.emitNotificationsUpdated(inviteeUserId, {
+    this.emitBellAndInvalidateList(inviteeUserId, {
       undeliveredCount: result.undeliveredCount,
     });
     try {
@@ -916,7 +926,7 @@ export class NotificationWriterService {
       return { kind: 'created' as const, notificationId: created.id, undeliveredCount };
     });
 
-    this.presenceRealtime.emitNotificationsUpdated(inviterUserId, {
+    this.emitBellAndInvalidateList(inviterUserId, {
       undeliveredCount: result.undeliveredCount,
     });
     try {
@@ -1011,7 +1021,7 @@ export class NotificationWriterService {
   }
 
   private async emitGroupNotification(recipientUserId: string, notificationId: string, undeliveredCount: number) {
-    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
+    this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount });
     try {
       const dto = await this.query.buildNotificationDtoForRecipient({ recipientUserId, notificationId });
       if (dto) this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
@@ -1212,7 +1222,7 @@ export class NotificationWriterService {
   }
 
   private async emitCrewNotification(recipientUserId: string, notificationId: string, undeliveredCount: number) {
-    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
+    this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount });
     try {
       const dto = await this.query.buildNotificationDtoForRecipient({ recipientUserId, notificationId });
       if (dto) this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
@@ -1476,7 +1486,7 @@ export class NotificationWriterService {
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
         );
 
-        this.presenceRealtime.emitNotificationsUpdated(recipientUserId, {
+        this.emitBellAndInvalidateList(recipientUserId, {
           undeliveredCount: res.undeliveredCount,
         });
 
@@ -1702,7 +1712,7 @@ export class NotificationWriterService {
         const undeliveredCount = await this.prisma.notification
           .count({ where: this.readState.undeliveredBellWhere(userId) })
           .catch(() => 0);
-        this.presenceRealtime.emitNotificationsUpdated(userId, { undeliveredCount });
+        this.emitBellAndInvalidateList(userId, { undeliveredCount });
 
         this.sideEffects.dispatch('notification.push', {
           recipientUserId: userId,
@@ -1827,7 +1837,7 @@ export class NotificationWriterService {
         const undeliveredCount = await this.prisma.notification
           .count({ where: this.readState.undeliveredBellWhere(userId) })
           .catch(() => 0);
-        this.presenceRealtime.emitNotificationsUpdated(userId, { undeliveredCount });
+        this.emitBellAndInvalidateList(userId, { undeliveredCount });
 
         this.sideEffects.dispatch('notification.push', {
           recipientUserId: userId,
@@ -1958,7 +1968,7 @@ export class NotificationWriterService {
         const undeliveredCount = await this.prisma.notification
           .count({ where: this.readState.undeliveredBellWhere(userId) })
           .catch(() => 0);
-        this.presenceRealtime.emitNotificationsUpdated(userId, { undeliveredCount });
+        this.emitBellAndInvalidateList(userId, { undeliveredCount });
 
         const body = yearsAgo === 1 ? 'You checked in 1 year ago today.' : `You checked in ${yearsAgo} years ago today.`;
         this.sideEffects.dispatch('notification.push', {
@@ -2104,7 +2114,7 @@ export class NotificationWriterService {
       return { notificationId: created.id, undeliveredCount };
     });
 
-    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, { undeliveredCount });
+    this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount });
 
     try {
       const dto = await this.query.buildNotificationDtoForRecipient({

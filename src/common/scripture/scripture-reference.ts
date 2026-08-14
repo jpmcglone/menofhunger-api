@@ -1,25 +1,34 @@
 /**
  * Scripture reference parsing and canonicalization.
  *
- * Matches `Book Chapter:Verse` with optional verse range (e.g. `John 3:16`,
- * `1 Cor 13:4-7`). Chapter-only refs (`Genesis 1`) are deliberately excluded
- * to avoid false positives in prose.
+ * Matches:
+ * - `Book Chapter:Verse` with optional range (`John 3:16`, `1 Cor 13:4-7`)
+ * - comma lists in the same chapter (`Eph 2:1,8`)
+ * - chapter-only refs (`Rom 9`, `Psalm 23`) when they look like citations,
+ *   not prose (`Job 1`, `I am 1`)
  *
  * Book table kept in sync with:
  * - `menofhunger-www/utils/scripture-reference.ts`
  * - `menofhunger-ios/MenOfHunger/Domain/Shared/Text/ScriptureReferenceParser.swift`
  */
 
+export type ScriptureVerseSpan = {
+  start: number;
+  end: number | null;
+};
+
 export type ScriptureRef = {
-  /** Canonical display form, e.g. "John 3:16" or "John 3:16-18". */
+  /** Canonical display form, e.g. "John 3:16", "Ephesians 2:1,8", or "Romans 9". */
   reference: string;
   /** bible.helloao.org book ID, e.g. "JHN". */
   bookId: string;
   /** Canonical book name, e.g. "John". */
   book: string;
   chapter: number;
-  verseStart: number;
+  /** null = entire chapter */
+  verseStart: number | null;
   verseEnd: number | null;
+  extraVerses: ScriptureVerseSpan[];
 };
 
 type BookEntry = {
@@ -139,13 +148,78 @@ const BOOK_ALT = buildBookPattern();
  * Capture groups:
  *   1 — book name or abbreviation as written
  *   2 — chapter number (1–3 digits)
- *   3 — verse start (1–3 digits)
- *   4 — verse end, present only for ranges like `3:16-18`
+ *   3 — optional verse spec (`16`, `16-18`, `1,8`, `1-3,8`)
  */
 export const SCRIPTURE_IN_TEXT_RE = new RegExp(
-  `(?<![A-Za-z0-9])(${BOOK_ALT})\\s+(\\d{1,3}):(\\d{1,3})(?:-(\\d{1,3}))?(?![A-Za-z])`,
+  `(?<![A-Za-z0-9])(${BOOK_ALT})\\.?\\s+(\\d{1,3})(?::(\\d{1,3}(?:\\s*-\\s*\\d{1,3})?(?:\\s*,\\s*\\d{1,3}(?:\\s*-\\s*\\d{1,3})?)*))?(?![A-Za-z0-9:])`,
   'gi',
 );
+
+/** Full names that are also common English words/names — chapter-only only in citation context. */
+const AMBIGUOUS_CHAPTER_ONLY = new Set([
+  'job',
+  'mark',
+  'john',
+  'luke',
+  'james',
+  'ruth',
+  'amos',
+  'jude',
+  'numbers',
+  'song',
+  'song of solomon',
+]);
+
+export function parseVerseSpec(spec: string | undefined): ScriptureVerseSpan[] | null {
+  if (!spec) return null;
+  const spans: ScriptureVerseSpan[] = [];
+  for (const part of spec.split(/\s*,\s*/)) {
+    const bits = part.split(/\s*-\s*/);
+    const start = parseInt(bits[0] ?? '', 10);
+    if (!Number.isFinite(start)) continue;
+    const endRaw = bits[1] !== undefined ? parseInt(bits[1], 10) : null;
+    spans.push({ start, end: endRaw !== null && Number.isFinite(endRaw) ? endRaw : null });
+  }
+  return spans.length ? spans : null;
+}
+
+export function formatScriptureReference(
+  book: string,
+  chapter: number,
+  spans: ScriptureVerseSpan[] | null,
+): string {
+  if (!spans?.length) return `${book} ${chapter}`;
+  const body = spans.map((s) => (s.end != null ? `${s.start}-${s.end}` : String(s.start))).join(',');
+  return `${book} ${chapter}:${body}`;
+}
+
+export function isCitationContext(text: string, start: number, end: number): boolean {
+  const before = text.slice(0, start).trimEnd();
+  const prev = before.charAt(before.length - 1);
+  if (prev === '(' || prev === ';' || prev === '[' || prev === ',') return true;
+  const after = text.slice(end).trimStart();
+  const next = after.charAt(0);
+  return next === ')' || next === ';' || next === ']' || next === ',' || next === '.';
+}
+
+export function acceptChapterOnly(
+  bookToken: string,
+  canonicalName: string,
+  text: string,
+  start: number,
+  end: number,
+): boolean {
+  if (isCitationContext(text, start, end)) return true;
+  const token = bookToken.trim().toLowerCase();
+  const compact = token.replace(/\s+/g, '');
+  if (token === 'ps' || token === 'psa' || token === 'psalm' || token === 'psalms') return true;
+  if (AMBIGUOUS_CHAPTER_ONLY.has(token) || AMBIGUOUS_CHAPTER_ONLY.has(canonicalName.toLowerCase())) {
+    return false;
+  }
+  const isAlias = token !== canonicalName.toLowerCase();
+  if (isAlias && compact.length >= 3) return true;
+  return !isAlias;
+}
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -162,17 +236,22 @@ export function parseScriptureRefs(text: string): ScriptureRef[] {
   for (const m of text.matchAll(re)) {
     const entry = lookupBook(m[1]);
     if (!entry) continue;
+    const raw = m[0];
+    const start = m.index ?? 0;
+    const spans = parseVerseSpec(m[3]);
+    if (!spans && !acceptChapterOnly(m[1], entry.name, text, start, start + raw.length)) {
+      continue;
+    }
     const chapter = parseInt(m[2], 10);
-    const verseStart = parseInt(m[3], 10);
-    const verseEnd = m[4] !== undefined ? parseInt(m[4], 10) : null;
-    const suffix = verseEnd !== null ? `-${verseEnd}` : '';
+    const first = spans?.[0];
     refs.push({
-      reference: `${entry.name} ${chapter}:${verseStart}${suffix}`,
+      reference: formatScriptureReference(entry.name, chapter, spans),
       bookId: entry.apiId,
       book: entry.name,
       chapter,
-      verseStart,
-      verseEnd,
+      verseStart: first?.start ?? null,
+      verseEnd: first?.end ?? null,
+      extraVerses: spans?.slice(1) ?? [],
     });
   }
   return refs;

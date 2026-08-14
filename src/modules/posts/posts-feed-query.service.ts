@@ -8,6 +8,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { toCommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
+import { collectAncestorPostIds } from '../../common/posts/collect-ancestor-post-ids';
 import { ARTICLE_SHARE_INCLUDE, FITNESS_SHARE_INCLUDE, QUOTED_POST_INCLUDE } from '../../common/prisma-includes/post.include';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { collapseFeedByRoot, type FeedCollapsedItem } from '../../common/feed-collapse/collapse-by-root';
@@ -578,27 +579,9 @@ export class PostsFeedQueryService {
     viewerUserId: string | null,
     seedParentIds: Array<string | null | undefined>,
   ): Promise<Map<string, FeedPost>> {
-    const seeds = [...new Set((seedParentIds ?? []).filter((id): id is string => Boolean(id)))];
-    if (seeds.length === 0) return new Map<string, FeedPost>();
-
-    // Single recursive CTE to walk the full ancestor chain in one DB round trip,
-    // instead of the previous while-loop that did N sequential queries (one per depth level).
-    // Depth is capped at 20 to prevent runaway recursion on circular references.
-    const allIds: Array<{ id: string }> = await this.prisma.$queryRawUnsafe(`
-      WITH RECURSIVE ancestors AS (
-        SELECT id, "parentId" FROM "Post" WHERE id = ANY($1) AND "deletedAt" IS NULL
-        UNION
-        SELECT p.id, p."parentId" FROM "Post" p
-        INNER JOIN ancestors a ON a."parentId" = p.id
-        WHERE p."deletedAt" IS NULL
-      )
-      SELECT DISTINCT id FROM ancestors
-    `, seeds);
-
-    const ids = allIds.map((r) => r.id);
+    const ids = await collectAncestorPostIds(this.prisma, seedParentIds);
     if (ids.length === 0) return new Map<string, FeedPost>();
 
-    // Single batched Prisma call for all ancestors with full includes.
     const rows = await this.getByIds({ viewerUserId, ids });
     return new Map(rows.map((p) => [p.id, p] as const));
   }
@@ -646,6 +629,7 @@ export class PostsFeedQueryService {
     filteredPosts: FeedPost[];
     collapsedItemsByItemId: Map<string, FeedCollapsedItem<PostAuthorDto>[]>;
     scoreByPostId?: Map<string, number>;
+    includeRestricted?: boolean;
   }): Promise<PostDto[]> {
     const { viewerUserId, filteredPosts, collapsedItemsByItemId } = params;
     const repostedPostIds = filteredPosts
@@ -656,73 +640,77 @@ export class PostsFeedQueryService {
       .map((p) => (p as { quotedPostId?: string | null }).quotedPostId)
       .filter((id): id is string => Boolean(id));
 
-    // viewer + repostedPostMap + quotedPostMap are independent of parentMap; fetch them in
-    // parallel first so we can include reposted originals' parentIds in the parent-map fetch.
-    const [viewer, repostedPostMap, quotedPostMap] = await Promise.all([
-      this.enrichment.viewerContext(viewerUserId),
-      this.collectRepostedMapForFeed(viewerUserId, repostedPostIds),
-      // Route quoted posts through the same viewer-gated getByIds path so visibility,
-      // block status, and tier gating are applied consistently.
-      this.collectRepostedMapForFeed(viewerUserId, quotedPostIds),
-    ]);
-
-    // Now build the parent map: include parentIds from page posts AND from reposted originals
-    // so a reposted reply renders with its thread context instead of a bare row.
-    const repostedOriginalParentIds = [...repostedPostMap.values()].map(
-      (p) => (p as { parentId?: string | null }).parentId ?? null,
-    );
-    const parentMap = await this.collectParentMapForFeed(viewerUserId, [
+    const pageIdSet = new Set(filteredPosts.map((p) => p.id));
+    const ancestorAndEmbedIds = await collectAncestorPostIds(this.prisma, [
       ...filteredPosts.map((p) => p.parentId),
-      ...repostedOriginalParentIds,
+      ...repostedPostIds,
+      ...quotedPostIds,
     ]);
+    const fetchIds = ancestorAndEmbedIds.filter((id) => !pageIdSet.has(id));
+    const allPostIds = [...pageIdSet, ...ancestorAndEmbedIds];
+
+    const [viewer, fetchedEmbeds, boosted, bookmarksByPostId, votedPollOptionIdByPostId, blockSets, repostedByPostId, viewedByPostId] =
+      await Promise.all([
+        this.enrichment.viewerContext(viewerUserId),
+        fetchIds.length ? this.getByIds({ viewerUserId, ids: fetchIds }) : Promise.resolve([] as FeedPost[]),
+        viewerUserId
+          ? this.enrichment.viewerBoostedPostIds({ viewerUserId, postIds: allPostIds })
+          : Promise.resolve(new Set<string>()),
+        viewerUserId
+          ? this.enrichment.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
+          : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
+        viewerUserId
+          ? this.enrichment.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
+          : Promise.resolve(new Map<string, string>()),
+        viewerUserId
+          ? this.enrichment.viewerBlockSets(viewerUserId)
+          : Promise.resolve({ blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() }),
+        viewerUserId
+          ? this.enrichment.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
+          : Promise.resolve(new Set<string>()),
+        viewerUserId
+          ? this.enrichment.viewerViewedPostIds({ viewerUserId, postIds: allPostIds })
+          : Promise.resolve(new Set<string>()),
+      ]);
+
+    const byId = new Map<string, FeedPost>();
+    for (const p of filteredPosts) byId.set(p.id, p);
+    for (const p of fetchedEmbeds) byId.set(p.id, p);
+
+    const quotedIdSet = new Set(quotedPostIds);
+    const repostedIdSet = new Set(repostedPostIds);
+    const parentMap = new Map<string, FeedPost>();
+    const repostedPostMap = new Map<string, FeedPost>();
+    const quotedPostMap = new Map<string, FeedPost>();
+    for (const id of ancestorAndEmbedIds) {
+      const row = byId.get(id);
+      if (!row) continue;
+      parentMap.set(id, row);
+      if (repostedIdSet.has(id)) repostedPostMap.set(id, row);
+      if (quotedIdSet.has(id)) quotedPostMap.set(id, row);
+    }
 
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-    // Include embedded post IDs (reposted originals + quoted posts) so their viewer state
-    // (viewerHasBoosted, viewerHasBookmarked, viewerHasReposted, viewerVotedPollOptionId) is
-    // fetched and available when attachParentChain recurses into them.
-    const allPostIds = [
-      ...filteredPosts.map((p) => p.id),
-      ...parentMap.keys(),
-      ...repostedPostMap.keys(),
-      ...quotedPostIds,
-    ];
-
-    const [
-      boosted,
-      bookmarksByPostId,
-      votedPollOptionIdByPostId,
-      blockSets,
-      repostedByPostId,
-      viewedByPostId,
-      internalByPostId,
-      scoreByPostIdResolved,
-    ] = await Promise.all([
-      viewerUserId
-        ? this.enrichment.viewerBoostedPostIds({ viewerUserId, postIds: allPostIds })
-        : Promise.resolve(new Set<string>()),
-      viewerUserId
-        ? this.enrichment.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
-        : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
-      viewerUserId
-        ? this.enrichment.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
-        : Promise.resolve(new Map<string, string>()),
-      viewerUserId
-        ? this.enrichment.viewerBlockSets(viewerUserId)
-        : Promise.resolve({ blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() }),
-      viewerUserId
-        ? this.enrichment.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
-        : Promise.resolve(new Set<string>()),
-      viewerUserId
-        ? this.enrichment.viewerViewedPostIds({ viewerUserId, postIds: allPostIds })
-        : Promise.resolve(new Set<string>()),
-      viewerHasAdmin ? this.ranking.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)) : Promise.resolve(null),
-      viewerHasAdmin
-        ? params.scoreByPostId
-          ? Promise.resolve(params.scoreByPostId)
-          : this.ranking.computeScoresForPostIds(allPostIds)
-        : Promise.resolve(undefined),
-    ]);
+    const [internalByPostId, scoreByPostIdResolved] = viewerHasAdmin
+      ? await Promise.all([
+          this.ranking.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)),
+          params.scoreByPostId
+            ? Promise.resolve(params.scoreByPostId)
+            : this.ranking.computeScoresForPostIds(allPostIds),
+        ])
+      : [null, undefined];
     const { blockedByViewer, viewerBlockedBy } = blockSets;
+
+    let viewerCanAccessByPostId: Map<string, boolean> | undefined;
+    if (params.includeRestricted && viewer) {
+      const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
+      viewerCanAccessByPostId = new Map(
+        [...byId.values()].map((post) => [
+          post.id,
+          allowed.includes(post.visibility) || post.userId === viewerUserId,
+        ]),
+      );
+    }
 
     const communityGroupIdsForPage = new Set<string>();
     const accCommunityGroupId = (row: { communityGroupId?: string | null } | null | undefined) => {
@@ -756,6 +744,7 @@ export class PostsFeedQueryService {
       quotedPostMap,
       groupPreviewByGroupId,
       viewedByPostId,
+      viewerCanAccessByPostId,
     });
 
     return filteredPosts.map((p) => {
@@ -1270,6 +1259,59 @@ export class PostsFeedQueryService {
       .slice(0, POSTS_RANKING.forYouSecondDegreeMaxAuthors)
       .map(([authorId]) => authorId);
 
+    // Prefetch ID sets in parallel with the trending/chrono scan so followed-unseen
+    // and friend-engaged lanes can use IN / NOT IN instead of correlated subqueries.
+    const prefetchTake = Math.min(500, Math.max(scanTake + 1, scanTake * 3));
+    const friendPrefetchNeeded = !isPage1 && viewerFollowingIds.length > 0;
+    const laneIdPrefetch = Promise.all([
+      followingCandidateIds.length > 0 && viewerUserId
+        ? this.prisma.postView.findMany({
+            where: {
+              userId: viewerUserId,
+              post: {
+                userId: { in: followingCandidateIds },
+                createdAt: { gte: followedSince },
+                deletedAt: null,
+              },
+            },
+            select: { postId: true },
+          })
+        : Promise.resolve([] as Array<{ postId: string }>),
+      friendPrefetchNeeded
+        ? this.prisma.boost.findMany({
+            where: { userId: { in: viewerFollowingIds } },
+            select: { postId: true },
+            orderBy: { createdAt: 'desc' },
+            take: prefetchTake,
+          })
+        : Promise.resolve([] as Array<{ postId: string }>),
+      friendPrefetchNeeded
+        ? this.prisma.post.findMany({
+            where: {
+              userId: { in: viewerFollowingIds },
+              parentId: { not: null },
+              deletedAt: null,
+            },
+            select: { parentId: true },
+            orderBy: { createdAt: 'desc' },
+            take: prefetchTake,
+          })
+        : Promise.resolve([] as Array<{ parentId: string | null }>),
+      friendPrefetchNeeded
+        ? this.prisma.post.findMany({
+            where: {
+              userId: { in: viewerFollowingIds },
+              kind: 'repost',
+              deletedAt: null,
+              repostedPostId: { not: null },
+            },
+            select: { repostedPostId: true },
+            orderBy: { createdAt: 'desc' },
+            take: prefetchTake,
+          })
+        : Promise.resolve([] as Array<{ repostedPostId: string | null }>),
+    ]);
+
     if (!fallbackOnly) {
       const trendingCursorWhere: Prisma.PostWhereInput[] =
         cursorRow && cursorRow.trendingScore != null && cursorRow.trendingScore > 0
@@ -1356,6 +1398,15 @@ export class PostsFeedQueryService {
       discoveryOverflow = discoveryOverflow || haveMoreChrono;
     }
 
+    const [viewedFromFollowed, friendBoostPrefetch, friendReplyPrefetch, friendRepostPrefetch] =
+      await laneIdPrefetch;
+    const viewedPostIds = [...new Set(viewedFromFollowed.map((r) => r.postId))];
+    const friendEngagedPostIds = [...new Set([
+      ...friendBoostPrefetch.map((r) => r.postId),
+      ...friendReplyPrefetch.map((r) => r.parentId).filter((id): id is string => Boolean(id)),
+      ...friendRepostPrefetch.map((r) => r.repostedPostId).filter((id): id is string => Boolean(id)),
+    ])];
+
     const [followedRowsRaw, friendRowsRaw, secondDegreeRowsRaw, memberGroupRowsRaw, openFollowGroupRowsRaw] = await Promise.all([
       followingCandidateIds.length > 0
         ? this.prisma.post.findMany({
@@ -1365,8 +1416,7 @@ export class PostsFeedQueryService {
                 ...servedWhere,
                 { userId: { in: followingCandidateIds } },
                 { createdAt: { gte: followedSince } },
-                // followingCandidateIds.length > 0 implies viewerUserId is non-null
-                { views: { none: { userId: viewerUserId! } } },
+                ...(viewedPostIds.length > 0 ? [{ id: { notIn: viewedPostIds } }] : []),
               ],
             },
             orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -1374,21 +1424,13 @@ export class PostsFeedQueryService {
             select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
           }) as Promise<ScannedRow[]>
         : Promise.resolve([] as ScannedRow[]),
-      !isPage1 && viewerFollowingIds.length > 0
+      friendEngagedPostIds.length > 0
         ? this.prisma.post.findMany({
             where: {
               AND: [
                 baseWhere,
                 ...servedWhere,
-                {
-                  OR: [
-                    { boosts: { some: { userId: { in: viewerFollowingIds } } } },
-                    { replies: { some: { userId: { in: viewerFollowingIds }, deletedAt: null } } },
-                    // Surface posts a followed user reposted — a flat repost is like a
-                    // "public endorsement" signal similar to a boost or comment.
-                    { reposts: { some: { userId: { in: viewerFollowingIds }, deletedAt: null } } },
-                  ],
-                },
+                { id: { in: friendEngagedPostIds } },
               ],
             },
             orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -3531,15 +3573,7 @@ export class PostsFeedQueryService {
     const fetched = missingIds.length
       ? await this.prisma.post.findMany({
           where: { id: { in: missingIds } },
-          include: {
-            user: { select: USER_LIST_SELECT },
-            media: { orderBy: { position: 'asc' } },
-            poll: { include: { options: { orderBy: { position: 'asc' } } } },
-            mentions: { include: { user: { select: MENTION_USER_SELECT } } },
-            article: ARTICLE_SHARE_INCLUDE,
-            fitnessShare: FITNESS_SHARE_INCLUDE,
-            quotedPost: { include: QUOTED_POST_INCLUDE },
-          },
+          include: feedPostInclude,
         })
       : [];
 

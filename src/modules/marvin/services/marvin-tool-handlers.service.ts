@@ -600,7 +600,7 @@ export class MarvinToolHandlersService {
     if (!dto) {
       return {
         error: 'not_found',
-        note: 'Could not resolve that scripture reference. Try a clearer form like "John 3:16" or "Romans 8:28-30".',
+        note: 'Could not resolve that scripture reference. Try a clearer form like "John 3:16", "Rom 9", or "Romans 8:28-30".',
       };
     }
     return {

@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
+import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 
 export type NotificationUnreadByKind = Partial<Record<NotificationKind | 'all', number>>;
 
@@ -41,6 +42,7 @@ export class NotificationReadStateService {
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly posthog: PosthogService,
     private readonly sideEffects: SideEffectsService,
+    private readonly cacheInvalidation?: CacheInvalidationService,
   ) {}
 
   /** Queue badge-only APNs (debounced in the worker). Never throws. */
@@ -65,6 +67,7 @@ export class NotificationReadStateService {
   ): void {
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, payload);
     this.dispatchBadgeSync(recipientUserId, { undeliveredBellCount: payload.undeliveredCount });
+    void this.cacheInvalidation?.bumpNotificationsList(recipientUserId);
   }
 
   undeliveredBellWhere(recipientUserId: string): Prisma.NotificationWhereInput {

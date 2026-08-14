@@ -44,7 +44,7 @@ function buildFacade(deps: FacadeDeps) {
   const query = new NotificationQueryService(deps.prisma, deps.appConfig, postVisibility, readState);
   const writer = new NotificationWriterService(deps.prisma, deps.presenceRealtime, deps.presenceRedis ?? stubPresenceRedis, deps.jobs, sideEffects, query, readState);
   const svc = new NotificationsService(preferences, push, apnsPush, readState, query, writer);
-  return { svc, preferences, push, apnsPush, readState, query, writer, sideEffects };
+  return { svc, preferences, push, apnsPush, readState, query, writer, sideEffects, postVisibility };
 }
 
 function makeService(overrides?: { prisma?: any }) {
@@ -60,6 +60,7 @@ function makeService(overrides?: { prisma?: any }) {
     postView: { findMany: jest.fn(async () => []) },
     communityGroup: { findMany: jest.fn(async () => []) },
     communityGroupMember: { findMany: jest.fn(async () => []) },
+    $queryRaw: jest.fn(async () => []),
   } as any;
   const prisma = overrides?.prisma
     ? {
@@ -76,6 +77,7 @@ function makeService(overrides?: { prisma?: any }) {
         communityGroup: { ...basePrisma.communityGroup, ...(overrides.prisma.communityGroup ?? {}) },
         communityGroupMember: { ...basePrisma.communityGroupMember, ...(overrides.prisma.communityGroupMember ?? {}) },
         postView: { ...basePrisma.postView, ...(overrides.prisma.postView ?? {}) },
+        $queryRaw: overrides.prisma.$queryRaw ?? basePrisma.$queryRaw,
       }
     : basePrisma;
 
@@ -94,8 +96,8 @@ function makeService(overrides?: { prisma?: any }) {
     allowedPostVisibilities: jest.fn(() => ['public', 'verifiedOnly', 'premiumOnly']),
   } as any;
 
-  const { svc, query } = buildFacade({ prisma, appConfig, presenceRealtime, presenceRedis, presence, jobs, posthog, viewerContextService });
-  return { svc, prisma, query };
+  const { svc, query, postVisibility } = buildFacade({ prisma, appConfig, presenceRealtime, presenceRedis, presence, jobs, posthog, viewerContextService });
+  return { svc, prisma, query, postVisibility };
 }
 
 function makePost(id: string, overrides: Record<string, any> = {}) {
@@ -246,6 +248,109 @@ describe('NotificationsService.list batching', () => {
 
     // Ensure list() doesn't fall back to per-notification builder.
     expect(buildSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not compose full PostDtos for boost or follow notifications', async () => {
+    const { svc, postVisibility } = makeService({
+      prisma: {
+        notification: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => [
+            {
+              id: 'n_boost',
+              createdAt: new Date('2026-02-02T00:00:00.000Z'),
+              kind: 'boost',
+              deliveredAt: null,
+              readAt: null,
+              ignoredAt: null,
+              nudgedBackAt: null,
+              actorUserId: 'a1',
+              actorPostId: null,
+              subjectPostId: 'p1',
+              subjectUserId: null,
+              title: 'boosted your post',
+              body: null,
+              actor: {
+                id: 'a1',
+                username: 'actor',
+                name: 'Actor',
+                avatarKey: null,
+                avatarUpdatedAt: null,
+                premium: false,
+                isOrganization: false,
+                verifiedStatus: 'none',
+              },
+            },
+            {
+              id: 'n_follow',
+              createdAt: new Date('2026-02-01T00:00:00.000Z'),
+              kind: 'follow',
+              deliveredAt: null,
+              readAt: null,
+              ignoredAt: null,
+              nudgedBackAt: null,
+              actorUserId: 'a2',
+              actorPostId: null,
+              subjectPostId: null,
+              subjectUserId: 'u_subject_1',
+              title: 'followed you',
+              body: null,
+              actor: {
+                id: 'a2',
+                username: 'actor2',
+                name: 'Actor2',
+                avatarKey: null,
+                avatarUpdatedAt: null,
+                premium: false,
+                isOrganization: false,
+                verifiedStatus: 'identity',
+              },
+            },
+          ]),
+          count: jest.fn(async () => 2),
+          groupBy: jest.fn(async () => []),
+        },
+        post: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => [
+            { id: 'p1', body: 'hello world', visibility: 'public', media: [] },
+          ]),
+        },
+        user: {
+          findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 2 })),
+          findMany: jest.fn(async () => [{ id: 'u_subject_1', premium: false, verifiedStatus: 'manual' }]),
+        },
+      } as any,
+    });
+
+    const composeSpy = jest.spyOn(postVisibility, 'composePostDtoMapForViewer');
+    const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null });
+
+    expect(composeSpy).not.toHaveBeenCalled();
+    const boostItem = res.items.find((item) =>
+      (item.type === 'single' && item.notification.kind === 'boost')
+      || (item.type === 'group' && item.group.kind === 'boost'),
+    );
+    const followItem = res.items.find((item) =>
+      (item.type === 'single' && item.notification.kind === 'follow')
+      || (item.type === 'group' && item.group.kind === 'follow'),
+    );
+    expect(boostItem).toBeDefined();
+    expect(followItem).toBeDefined();
+    if (boostItem?.type === 'single') {
+      expect(boostItem.notification.post).toBeNull();
+      expect(boostItem.notification.subjectPostPreview).toEqual(
+        expect.objectContaining({ bodySnippet: 'hello world' }),
+      );
+    }
+    if (boostItem?.type === 'group') {
+      expect(boostItem.group.latestSubjectPostPreview).toEqual(
+        expect.objectContaining({ bodySnippet: 'hello world' }),
+      );
+    }
+    if (followItem?.type === 'single') {
+      expect(followItem.notification.post).toBeNull();
+    }
   });
 
   it('uses the actor post as the repost notification preview target', async () => {

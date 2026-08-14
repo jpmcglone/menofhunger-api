@@ -3,7 +3,10 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { ViewerContextService } from './viewer-context.service';
+import { RedisService } from '../redis/redis.service';
+import { RedisKeys } from '../redis/redis-keys';
 import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
+import { collectAncestorPostIds } from '../../common/posts/collect-ancestor-post-ids';
 import { buildAttachParentChain } from '../posts/posts.utils';
 import { toPostDto, type PostDto } from '../../common/dto/post.dto';
 import { toCommunityGroupPreviewDto, type CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
@@ -25,7 +28,49 @@ export class PostVisibilityReadService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly viewerContextService: ViewerContextService,
+    private readonly redis?: RedisService,
   ) {}
+
+  /**
+   * Fetch the block relationship sets for a viewer (Redis-cached, 5 min).
+   * Same key as PostsViewerEnrichmentService.viewerBlockSets so both paths share hits.
+   */
+  async viewerBlockSets(viewerUserId: string): Promise<{ blockedByViewer: Set<string>; viewerBlockedBy: Set<string> }> {
+    const cacheKey = RedisKeys.viewerBlockSets(viewerUserId);
+    if (this.redis) {
+      try {
+        const cached = await this.redis.getJson<{ blockedByViewer: string[]; viewerBlockedBy: string[] }>(cacheKey);
+        if (cached) {
+          return {
+            blockedByViewer: new Set(cached.blockedByViewer),
+            viewerBlockedBy: new Set(cached.viewerBlockedBy),
+          };
+        }
+      } catch {
+        // Redis unavailable — fall through to DB.
+      }
+    }
+
+    const rows = await this.prisma.userBlock.findMany({
+      where: { OR: [{ blockerId: viewerUserId }, { blockedId: viewerUserId }] },
+      select: { blockerId: true, blockedId: true },
+    });
+    const blockedByViewer = new Set<string>();
+    const viewerBlockedBy = new Set<string>();
+    for (const row of rows) {
+      if (row.blockerId === viewerUserId) blockedByViewer.add(row.blockedId);
+      else viewerBlockedBy.add(row.blockerId);
+    }
+
+    if (this.redis) {
+      void this.redis.setJson(cacheKey, {
+        blockedByViewer: [...blockedByViewer],
+        viewerBlockedBy: [...viewerBlockedBy],
+      }, { ttlSeconds: 5 * 60 }).catch(() => undefined);
+    }
+
+    return { blockedByViewer, viewerBlockedBy };
+  }
 
   /** Fetch posts by id and filter to those the viewer is allowed to see, preserving input order. */
   async getVisiblePostsByIds(params: {
@@ -61,33 +106,21 @@ export class PostVisibilityReadService {
     return uniqueIds.map((id) => byId.get(id)).filter((p): p is (typeof visibleFetched)[number] => Boolean(p));
   }
 
-  /** Walk parent chains upward (batched) collecting every visible ancestor post. */
+  /** Walk parent chains upward in one CTE + one findMany. */
   async collectParentMapForViewer(
     viewerUserId: string,
     seedParentIds: Array<string | null | undefined>,
   ): Promise<Map<string, VisiblePost>> {
-    const parentMap = new Map<string, VisiblePost>();
-    let toFetch = new Set<string>((seedParentIds ?? []).filter((id): id is string => Boolean(id)));
-    while (toFetch.size > 0) {
-      const batch = [...toFetch].filter((id) => !parentMap.has(id));
-      if (batch.length === 0) break;
-      const rows = await this.getVisiblePostsByIds({
-        viewerUserId,
-        ids: batch,
-        includeDeleted: true,
-        excludeBannedAuthors: false,
-      });
-      const byId = new Map(rows.map((p) => [p.id, p] as const));
-      const next = new Set<string>();
-      for (const id of batch) {
-        const post = byId.get(id);
-        if (!post) continue;
-        parentMap.set(id, post);
-        if (post.parentId) next.add(post.parentId);
-      }
-      toFetch = next;
-    }
-    return parentMap;
+    const ids = await collectAncestorPostIds(this.prisma, seedParentIds);
+    if (ids.length === 0) return new Map<string, VisiblePost>();
+
+    const rows = await this.getVisiblePostsByIds({
+      viewerUserId,
+      ids,
+      includeDeleted: true,
+      excludeBannedAuthors: false,
+    });
+    return new Map(rows.map((p) => [p.id, p] as const));
   }
 
   /** Resolve reposted originals (visible to the viewer) keyed by post id. */

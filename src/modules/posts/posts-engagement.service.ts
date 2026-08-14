@@ -142,8 +142,8 @@ export class PostsEngagementService {
       // Best-effort
     }
 
-    // Popular/trending/featured feeds are boost-sensitive. Bump so anon caches shift instantly.
-    await this.cacheInvalidation.bumpFeedGlobal();
+    // Do not bumpFeedGlobal: boost counts patch over posts:live-updated, and flushing
+    // every feed cache on each tap makes home recompute composeFeedPostDtos constantly.
     this.ranking.enqueueScoreRefresh(id);
 
     if (res.createdCount === 1) {
@@ -224,8 +224,7 @@ export class PostsEngagementService {
       // Best-effort
     }
 
-    // Popular/trending/featured feeds are boost-sensitive. Bump so anon caches shift instantly.
-    await this.cacheInvalidation.bumpFeedGlobal();
+    // Do not bumpFeedGlobal: same reason as boostPost — counts patch over realtime.
     this.ranking.enqueueScoreRefresh(id);
 
     return { success: true, viewerHasBoosted: false, boostCount: res.boostCount };
