@@ -1716,6 +1716,11 @@ export type NotificationsDeletedPayloadDto = {
   notificationIds: string[];
 };
 
+/** Drop lock-screen APNs the user already saw in the matching in-app section. */
+export type NotificationsLockScreenClearPayloadDto = {
+  section: 'inbox' | 'groups';
+};
+
 /**
  * Cross-device/tab sync for message read state.
  * (We currently emit to the reader's own sockets only.)

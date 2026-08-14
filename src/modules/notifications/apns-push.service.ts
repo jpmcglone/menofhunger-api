@@ -130,6 +130,31 @@ export class ApnsPushService {
     });
   }
 
+  /**
+   * Silent APNs so a backgrounded iPhone can drop lock-screen banners the user
+   * already saw on web or in-app. No alert/sound — Notification Center only.
+   */
+  async sendClearDelivered(
+    recipientUserId: string,
+    section: 'inbox' | 'groups',
+  ): Promise<void> {
+    const uid = (recipientUserId ?? '').trim();
+    if (!uid || !this.configured()) return;
+    if (section !== 'inbox' && section !== 'groups') return;
+
+    const badge = await this.computeAppIconBadge(uid).catch(() => 0);
+    this.lastBadgeByUserId.set(uid, Math.max(0, Math.floor(badge || 0)));
+
+    await this.deliverToTokens(uid, (token) => {
+      return new ApnsNotification(token, {
+        badge: Math.max(0, Math.floor(badge || 0)),
+        contentAvailable: true,
+        collapseId: `clear-delivered-${section}`,
+        data: { clearDelivered: section },
+      });
+    });
+  }
+
   /** Fire-and-forget badge sync used from read-state paths. Never throws. */
   syncAppIconBadge(recipientUserId: string, badge?: number | null): void {
     void this.sendBadgeOnly(recipientUserId, badge).catch((err) => {

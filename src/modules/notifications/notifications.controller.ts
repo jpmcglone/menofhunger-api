@@ -50,6 +50,10 @@ const listQuerySchema = z.object({
   ]).optional(),
 });
 
+const lockScreenClearBodySchema = z.object({
+  section: z.enum(['inbox', 'groups']),
+});
+
 const markReadBodySchema = z.object({
   post_id: z.string().trim().min(1).optional(),
   user_id: z.string().trim().min(1).optional(),
@@ -316,6 +320,23 @@ export class NotificationsController {
   @Post('mark-delivered')
   async markDelivered(@CurrentUserId() userId: string) {
     await this.notifications.markDelivered(userId);
+    return { data: {} };
+  }
+
+  @UseGuards(AuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 180),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('lock-screen/clear')
+  async clearLockScreen(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = lockScreenClearBodySchema.parse(body);
+    this.notifications.clearLockScreen(userId, parsed.section);
     return { data: {} };
   }
 

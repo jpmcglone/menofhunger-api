@@ -61,6 +61,12 @@ export class NotificationReadStateService {
     });
   }
 
+  /** Drop lock-screen banners for a section the user just viewed. Never throws. */
+  dispatchLockScreenClear(recipientUserId: string, section: 'inbox' | 'groups'): void {
+    this.presenceRealtime.emitNotificationsLockScreenClear(recipientUserId, { section });
+    this.sideEffects.dispatch('notification.lockScreen.clear', { recipientUserId, section });
+  }
+
   private emitBellUpdated(
     recipientUserId: string,
     payload: { undeliveredCount: number; clearedPostIds?: string[] },
@@ -196,6 +202,7 @@ export class NotificationReadStateService {
     if (deliveredRes > 0) {
       void this.emitGroupsUnreadForUser(recipientUserId);
     }
+    this.dispatchLockScreenClear(recipientUserId, 'groups');
   }
 
   async markDelivered(recipientUserId: string): Promise<void> {
@@ -212,26 +219,14 @@ export class NotificationReadStateService {
           WHERE id = ${recipientUserId}
         `;
       }
-      // Also mark group-post badge rows as delivered (opening notifications clears all badges).
-      const groupRes = await tx.notification.updateMany({
-        where: { recipientUserId, kind: 'community_group_post', deliveredAt: null },
-        data: { deliveredAt: new Date() },
-      });
-      if (groupRes.count > 0) {
-        await tx.$executeRaw`
-          UPDATE "User"
-          SET "undeliveredGroupPostCount" = GREATEST(0, "undeliveredGroupPostCount" - ${groupRes.count})
-          WHERE id = ${recipientUserId}
-        `;
-      }
       // Return accurate count from actual rows (handles drifted counters).
       return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
     });
     this.emitBellUpdated(recipientUserId, {
       undeliveredCount,
     });
-    // Groups badges also clear when the user opens the notifications page.
-    void this.emitGroupsUnreadForUser(recipientUserId);
+    // Inbox only — group lock-screen banners stay until the user opens Groups.
+    this.dispatchLockScreenClear(recipientUserId, 'inbox');
   }
 
   async markNewPostsRead(recipientUserId: string): Promise<{ undeliveredCount: number }> {

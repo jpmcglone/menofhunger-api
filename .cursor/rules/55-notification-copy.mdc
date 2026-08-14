@@ -20,7 +20,8 @@ alwaysApply: false
 - Keep lock-screen copy concise and understandable without opening the app.
 - Name the action in title **and** subtitle: posted / checked in / replied / boosted / reposted /
   nudged. iOS Communication notifications replace the alert title with the actor name, so the
-  subtitle is what preserves "Checked in" vs a bare body preview. Body may carry a content preview.
+  subtitle is what preserves "Checked in:" vs a bare body preview. Action subtitles end with a
+  colon when a preview follows. Body may carry a content preview.
 
 ## Tests
 

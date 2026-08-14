@@ -592,8 +592,8 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
       'user-1',
       expect.objectContaining({
         title: 'Alice replied to your post',
-        subtitle: 'Replied to your post',
-        body: 'Replied to your post\nGreat post!',
+        subtitle: 'Replied to your post:',
+        body: 'Replied to your post:\nGreat post!',
         category: 'moh.category.reply',
         threadId: 'post-root-1',
         actorUsername: 'alice',
@@ -870,42 +870,42 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
       kind: 'checkin_post' as const,
       fallbackTitle: 'checked in',
       body: 'Day 12 — still hungry.',
-      subtitle: 'Checked in',
+      subtitle: 'Checked in:',
       title: 'Alice checked in',
     },
     {
       kind: 'followed_post' as const,
       fallbackTitle: 'posted',
       body: 'Hitting the gym.',
-      subtitle: 'Posted',
+      subtitle: 'Posted:',
       title: 'Alice posted',
     },
     {
       kind: 'boost' as const,
       fallbackTitle: 'boosted your post',
       body: 'Original post preview',
-      subtitle: 'Boosted your post',
+      subtitle: 'Boosted your post:',
       title: 'Alice boosted your post',
     },
     {
       kind: 'repost' as const,
       fallbackTitle: 'reposted your post',
       body: 'Original post preview',
-      subtitle: 'Reposted your post',
+      subtitle: 'Reposted your post:',
       title: 'Alice reposted your post',
     },
     {
       kind: 'nudge' as const,
       fallbackTitle: 'nudged you',
       body: null,
-      subtitle: 'Nudged you',
+      subtitle: 'Nudged you:',
       title: 'Alice nudged you',
     },
     {
       kind: 'comment' as const,
       fallbackTitle: 'replied to your comment',
       body: 'Agree.',
-      subtitle: 'Replied to your comment',
+      subtitle: 'Replied to your comment:',
       title: 'Alice replied to your comment',
     },
   ])(
@@ -935,7 +935,7 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
         body != null && String(body).trim()
           ? `${subtitle}\n${body}`
           : kind === 'nudge'
-            ? 'Nudged you\nOpen notifications to respond.'
+            ? 'Nudged you:\nOpen notifications to respond.'
             : subtitle;
       expect(apnsSendToUser).toHaveBeenCalledWith(
         'user-1',
@@ -975,7 +975,7 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
     expect(apnsSendToUser).toHaveBeenCalledWith(
       'user-1',
       expect.objectContaining({
-        subtitle: 'Invited you to Builders',
+        subtitle: 'Invited you to Builders:',
       }),
     );
   });

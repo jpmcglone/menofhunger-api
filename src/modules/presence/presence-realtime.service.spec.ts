@@ -125,12 +125,18 @@ describe('PresenceRealtimeService without a local socket server', () => {
     const { service, presence, presenceRedis } = makeServerlessService();
 
     service.emitNotificationsUpdated('user-1', { undeliveredCount: 3 });
+    service.emitNotificationsLockScreenClear('user-1', { section: 'inbox' });
 
     expect(presence.emitToUser).not.toHaveBeenCalled();
     expect(presenceRedis.publishEmitToUser).toHaveBeenCalledWith({
       userId: 'user-1',
       event: 'notifications:updated',
       payload: { undeliveredCount: 3 },
+    });
+    expect(presenceRedis.publishEmitToUser).toHaveBeenCalledWith({
+      userId: 'user-1',
+      event: 'notifications:lock-screen-clear',
+      payload: { section: 'inbox' },
     });
   });
 

@@ -48,6 +48,13 @@ function sentenceCaseAction(value: string): string {
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
+/** Lock-screen action lines read as a label before the preview: "Checked in:". */
+function withActionColon(value: string): string {
+  const text = value.trim();
+  if (!text) return '';
+  return /[:.!?]$/.test(text) ? text : `${text}:`;
+}
+
 /**
  * System / non-actor pushes. Their `fallbackTitle` IS the alert title — never reuse it
  * as subtitle (that produces "Good morning" / "Good morning" on lock screen).
@@ -1123,34 +1130,34 @@ export class NotificationPushService {
 
     const action = sentenceCaseAction(fallbackTitle ?? '');
 
-    if (group && action) return actionWithGroupName(action, group);
+    if (group && action) return withActionColon(actionWithGroupName(action, group));
     if (group) return group;
-    if (action) return action;
+    if (action) return withActionColon(action);
 
     if (kind === 'comment') {
-      return subjectArticleId ? 'Replied to your article' : 'Replied to your post';
+      return withActionColon(subjectArticleId ? 'Replied to your article' : 'Replied to your post');
     }
     if (kind === 'mention') {
-      return subjectArticleId ? 'Mentioned you in an article' : 'Mentioned you';
+      return withActionColon(subjectArticleId ? 'Mentioned you in an article' : 'Mentioned you');
     }
-    if (kind === 'follow') return 'Followed you';
+    if (kind === 'follow') return withActionColon('Followed you');
     if (kind === 'boost') {
-      return subjectArticleId ? 'Boosted your article' : 'Boosted your post';
+      return withActionColon(subjectArticleId ? 'Boosted your article' : 'Boosted your post');
     }
-    if (kind === 'repost') return 'Reposted your post';
-    if (kind === 'followed_post') return 'Posted';
-    if (kind === 'checkin_post') return 'Checked in';
-    if (kind === 'status_update') return 'Updated their status';
-    if (kind === 'nudge') return 'Nudged you';
-    if (kind === 'followed_article') return 'Published an article';
-    if (kind === 'message') return 'Sent you a message';
+    if (kind === 'repost') return withActionColon('Reposted your post');
+    if (kind === 'followed_post') return withActionColon('Posted');
+    if (kind === 'checkin_post') return withActionColon('Checked in');
+    if (kind === 'status_update') return withActionColon('Updated their status');
+    if (kind === 'nudge') return withActionColon('Nudged you');
+    if (kind === 'followed_article') return withActionColon('Published an article');
+    if (kind === 'message') return withActionColon('Sent you a message');
     return null;
   }
 
   /**
    * iOS Communication notifications replace the title with the sender name and
    * often omit the subtitle. Fold the action into the body so lock-screen copy
-   * still says what happened (e.g. "Replied to your post\nWash sheets…").
+   * still says what happened (e.g. "Replied to your post:\nWash sheets…").
    * DMs stay message-style (name + body only).
    */
   private apnsBodyWithVisibleAction(params: {
@@ -1164,7 +1171,8 @@ export class NotificationPushService {
     const action = (params.subtitle ?? '').trim();
     if (!action) return snippet;
     if (!snippet) return action;
-    if (snippet.toLowerCase().includes(action.toLowerCase())) return snippet;
+    const actionBare = action.replace(/[:.!?]+$/, '');
+    if (actionBare && snippet.toLowerCase().includes(actionBare.toLowerCase())) return snippet;
     return `${action}\n${snippet}`;
   }
 

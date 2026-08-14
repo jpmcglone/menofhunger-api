@@ -160,6 +160,10 @@ export class NotificationsService {
     return this.readState.markDelivered(...args);
   }
 
+  clearLockScreen(...args: Parameters<NotificationReadStateService['dispatchLockScreenClear']>) {
+    return this.readState.dispatchLockScreenClear(...args);
+  }
+
   markNewPostsRead(...args: Parameters<NotificationReadStateService['markNewPostsRead']>) {
     return this.readState.markNewPostsRead(...args);
   }

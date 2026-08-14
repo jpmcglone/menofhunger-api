@@ -1041,6 +1041,7 @@ describe('NotificationReadStateService.markGroupPostsDelivered', () => {
     const executeRaw = jest.fn(async () => []);
     const presenceRealtime = {
       emitNotificationsUpdated: jest.fn(),
+      emitNotificationsLockScreenClear: jest.fn(),
       emitGroupsUnreadChanged: jest.fn(),
     } as any;
     const prisma = {
@@ -1083,6 +1084,9 @@ describe('NotificationReadStateService.markGroupPostsDelivered', () => {
       'u1',
       expect.objectContaining({ total: expect.any(Number), byGroupId: expect.any(Object) }),
     );
+    expect(presenceRealtime.emitNotificationsLockScreenClear).toHaveBeenCalledWith('u1', {
+      section: 'groups',
+    });
   });
 
   it('does NOT set readAt (seen-only, not read)', async () => {
@@ -1090,6 +1094,7 @@ describe('NotificationReadStateService.markGroupPostsDelivered', () => {
     const executeRaw = jest.fn(async () => []);
     const presenceRealtime = {
       emitNotificationsUpdated: jest.fn(),
+      emitNotificationsLockScreenClear: jest.fn(),
       emitGroupsUnreadChanged: jest.fn(),
     } as any;
     const prisma = {
@@ -1118,6 +1123,59 @@ describe('NotificationReadStateService.markGroupPostsDelivered', () => {
     const callArg = calls[0]?.[0];
     expect(callArg?.data?.readAt).toBeUndefined();
     expect(callArg?.data?.deliveredAt).toBeInstanceOf(Date);
+    expect(presenceRealtime.emitNotificationsLockScreenClear).toHaveBeenCalledWith('u1', {
+      section: 'groups',
+    });
+  });
+});
+
+describe('NotificationReadStateService.markDelivered', () => {
+  it('marks bell rows delivered and clears inbox lock-screen, not group posts', async () => {
+    const updateMany = jest.fn(async () => ({ count: 3 }));
+    const count = jest.fn(async () => 0);
+    const executeRaw = jest.fn(async () => []);
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitNotificationsLockScreenClear: jest.fn(),
+      emitGroupsUnreadChanged: jest.fn(),
+    } as any;
+    const prisma = {
+      notification: { updateMany, count },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          notification: { updateMany, count },
+          $executeRaw: executeRaw,
+        }),
+      ),
+    } as any;
+    const { readState, sideEffects } = buildFacade({
+      prisma,
+      appConfig: { r2: jest.fn(() => null) } as any,
+      presenceRealtime,
+      presence: { isUserViewingConversation: jest.fn(() => false) } as any,
+      jobs: { enqueueCron: jest.fn() } as any,
+      posthog: { capture: jest.fn() } as any,
+      viewerContextService: { getViewer: jest.fn(async () => null) } as any,
+    });
+
+    await readState.markDelivered('u1');
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        recipientUserId: 'u1',
+        deliveredAt: null,
+        kind: { notIn: ['message', 'community_group_post'] },
+      },
+      data: { deliveredAt: expect.any(Date) },
+    });
+    expect(presenceRealtime.emitNotificationsLockScreenClear).toHaveBeenCalledWith('u1', {
+      section: 'inbox',
+    });
+    expect(sideEffects.dispatch).toHaveBeenCalledWith('notification.lockScreen.clear', {
+      recipientUserId: 'u1',
+      section: 'inbox',
+    });
+    expect(presenceRealtime.emitGroupsUnreadChanged).not.toHaveBeenCalled();
   });
 });
 

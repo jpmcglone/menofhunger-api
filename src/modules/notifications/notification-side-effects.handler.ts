@@ -42,6 +42,7 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
     this.registry.register('notification.push', (payload) => this.onPush(payload));
     this.registry.register('notification.fanout.chunk', (payload) => this.onFanoutChunk(payload));
     this.registry.register('notification.badge.sync', (payload) => this.onBadgeSync(payload));
+    this.registry.register('notification.lockScreen.clear', (payload) => this.onLockScreenClear(payload));
   }
 
   /**
@@ -136,5 +137,14 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
 
     await this.apns.sendBadgeOnly(userId, badge);
     await this.redis.setString(lastKey, String(badge), { ttlSeconds: 86_400 });
+  }
+
+  private async onLockScreenClear(
+    payload: SideEffectPayloads['notification.lockScreen.clear'],
+  ): Promise<void> {
+    const userId = (payload.recipientUserId ?? '').trim();
+    const section = payload.section === 'groups' ? 'groups' : payload.section === 'inbox' ? 'inbox' : null;
+    if (!userId || !section) return;
+    await this.apns.sendClearDelivered(userId, section);
   }
 }

@@ -397,6 +397,25 @@ describe('ApnsPushService — token cache', () => {
     expect(sendMock.mock.calls[1][0].options.badge).toBe(4);
   });
 
+  it('sendClearDelivered is a silent content-available push with the section', async () => {
+    const { svc, prisma } = makeService({
+      tokens: [{ id: 't1', token: 'tok-1', environment: 'production' }],
+    });
+    prisma.user.findUnique.mockResolvedValue({
+      undeliveredNotificationCount: 0,
+      undeliveredGroupPostCount: 2,
+    });
+    await svc.sendClearDelivered('user-1', 'inbox');
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const first = sendMock.mock.calls[0][0];
+    expect(first.options.alert).toBeUndefined();
+    expect(first.options.sound).toBeUndefined();
+    expect(first.options.contentAvailable).toBe(true);
+    expect(first.options.collapseId).toBe('clear-delivered-inbox');
+    expect(first.options.data).toEqual({ clearDelivered: 'inbox' });
+    expect(first.options.badge).toBe(2);
+  });
+
   it('computeAppIconBadge sums denormalized bell and group counters', async () => {
     const { svc, prisma } = makeService();
     prisma.user.findUnique.mockResolvedValue({

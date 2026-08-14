@@ -120,6 +120,14 @@ export interface SideEffectPayloads {
     undeliveredGroupsCount?: number;
   };
   /**
+   * Drop lock-screen APNs the user already saw in-app (inbox vs groups section).
+   * Separate from badge sync so debounce cannot swallow the clear.
+   */
+  'notification.lockScreen.clear': {
+    recipientUserId: string;
+    section: 'inbox' | 'groups';
+  };
+  /**
    * One chunk of a large notification fan-out. Large recipient sets are split into child
    * jobs so a single job never holds the worker (or the Prisma pool) for minutes.
    */
