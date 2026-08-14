@@ -39,6 +39,14 @@ export class SpacesGatewayHandler {
   /** Tracks ALL owner sockets per space (across tabs) so we can re-elect on primary disconnect. */
   private readonly ownerSocketsBySpaceId = new Map<string, Set<string>>();
 
+  /**
+   * Last-owner disconnect must not take the room offline immediately — a phone
+   * blip / Socket.IO reconnect would otherwise deactivate the space and every
+   * waiter’s re-join would silently fail. Explicit leave still ends it now.
+   */
+  static readonly OWNER_GONE_GRACE_MS = 20_000;
+  private readonly ownerGoneTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
   constructor(
     private readonly presence: PresenceService,
     private readonly presenceRedis: PresenceRedisStateService,
@@ -86,6 +94,29 @@ export class SpacesGatewayHandler {
     return { ownerId, isOwner };
   }
 
+  private cancelOwnerGoneDeactivate(spaceId: string): void {
+    const timer = this.ownerGoneTimers.get(spaceId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.ownerGoneTimers.delete(spaceId);
+  }
+
+  private scheduleOwnerGoneDeactivate(spaceId: string): void {
+    this.cancelOwnerGoneDeactivate(spaceId);
+    const timer = setTimeout(() => {
+      this.ownerGoneTimers.delete(spaceId);
+      if ((this.ownerSocketsBySpaceId.get(spaceId)?.size ?? 0) > 0) return;
+      void this.spaces
+        .deactivateIfActive(spaceId)
+        .then((did) => {
+          if (did) this.emitSpacesLobbyCounts();
+        })
+        .catch(() => undefined);
+    }, SpacesGatewayHandler.OWNER_GONE_GRACE_MS);
+    timer.unref?.();
+    this.ownerGoneTimers.set(spaceId, timer);
+  }
+
   /**
    * Remove a socket from owner-election maps and re-elect primary when needed.
    * Returns true when no owner sockets remain for the space (room is leaderless).
@@ -93,7 +124,7 @@ export class SpacesGatewayHandler {
   private clearOwnerSocket(
     socketId: string,
     ownerSpaceId: string,
-    opts?: { pauseWatchParty?: boolean },
+    opts?: { pauseWatchParty?: boolean; deactivateImmediately?: boolean },
   ): boolean {
     const spaceId = String(ownerSpaceId ?? '').trim();
     const sid = String(socketId ?? '').trim();
@@ -127,20 +158,24 @@ export class SpacesGatewayHandler {
 
     const ownerGone = (this.ownerSocketsBySpaceId.get(spaceId)?.size ?? 0) === 0;
     if (ownerGone) {
-      // Last owner tab left — close the live space so it doesn't linger in the lobby.
-      void this.spaces
-        .deactivateIfActive(spaceId)
-        .then((did) => {
-          if (did) this.emitSpacesLobbyCounts();
-        })
-        .catch(() => undefined);
+      if (opts?.deactivateImmediately) {
+        this.cancelOwnerGoneDeactivate(spaceId);
+        void this.spaces
+          .deactivateIfActive(spaceId)
+          .then((did) => {
+            if (did) this.emitSpacesLobbyCounts();
+          })
+          .catch(() => undefined);
+      } else {
+        this.scheduleOwnerGoneDeactivate(spaceId);
+      }
     }
     return ownerGone;
   }
 
   // ─── Fan-out helpers ────────────────────────────────────────────────
 
-  async emitSpaceMembers(spaceId: string): Promise<void> {
+  async emitSpaceMembers(spaceId: string, alsoTo?: Socket): Promise<void> {
     const sid = (spaceId ?? '').trim();
     if (!sid) return;
     const { userIds, pausedUserIds, mutedUserIds } = this.spacesPresence.getMembersForSpace(sid);
@@ -174,7 +209,14 @@ export class SpacesGatewayHandler {
       }
     }
 
-    this.context.server.to(room).emit('spaces:members', { spaceId: sid, members: listeners });
+    const payload = { spaceId: sid, members: listeners };
+    this.context.server.to(room).emit('spaces:members', payload);
+    // Joiner always gets the roster on their socket — room broadcast can miss
+    // the same tick as join(), which showed up as "0 here" after a reconnect
+    // or while impersonating.
+    if (alsoTo && alsoTo.connected !== false) {
+      alsoTo.emit('spaces:members', payload);
+    }
   }
 
   emitSpacesLobbyCounts(): void {
@@ -276,13 +318,17 @@ export class SpacesGatewayHandler {
     // (owned or not). Otherwise owner maps retain stale socket ids forever.
     const prevOwnerSpaceId = String((client.data as any)?.ownerSpaceId ?? '').trim() || null;
     if (prevOwnerSpaceId && prevOwnerSpaceId !== spaceId) {
-      this.clearOwnerSocket(client.id, prevOwnerSpaceId, { pauseWatchParty: true });
+      this.clearOwnerSocket(client.id, prevOwnerSpaceId, {
+        pauseWatchParty: true,
+        deactivateImmediately: true,
+      });
       (client.data as any).ownerSpaceId = null;
     }
 
     // Elect this socket as the primary control socket. Going live is explicit
     // (owner panel "Go live") — joining a scheduled/inactive space must not activate it.
     if (isOwner) {
+      this.cancelOwnerGoneDeactivate(spaceId);
       (client.data as any).ownerSpaceId = spaceId;
 
       // Track in the full owner-socket set for this space (all tabs).
@@ -312,7 +358,7 @@ export class SpacesGatewayHandler {
     if (prevSpaceId && prevSpaceId !== spaceId) {
       await this.emitSpaceMembers(prevSpaceId);
     }
-    await this.emitSpaceMembers(spaceId);
+    await this.emitSpaceMembers(spaceId, client);
     this.emitSpacesLobbyCounts();
 
     // Notify subscribers of this user that their space changed
@@ -341,6 +387,7 @@ export class SpacesGatewayHandler {
     if (ownerSpaceId) {
       this.clearOwnerSocket(client.id, ownerSpaceId, {
         pauseWatchParty: Boolean(left?.wasActive && left.spaceId === ownerSpaceId),
+        deactivateImmediately: true,
       });
       (client.data as any).ownerSpaceId = null;
     }

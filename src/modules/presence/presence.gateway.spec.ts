@@ -145,6 +145,7 @@ function makeSpacesService(ownerId = OWNER_ID, mode: string = 'WATCH_PARTY') {
     getSpaceMode: jest.fn().mockResolvedValue(mode),
     isSpaceActive: jest.fn().mockResolvedValue(true),
     getReactionById: jest.fn().mockReturnValue(null),
+    deactivateIfActive: jest.fn().mockResolvedValue(true),
   } as any;
 }
 
@@ -761,6 +762,82 @@ describe('PresenceGateway — watch party sync', () => {
       expect(modeEvent).toBeDefined();
       expect(modeEvent.mode).toBe('WATCH_PARTY');
       expect(modeEvent.watchPartyUrl).toBe(VIDEO_URL);
+    });
+  });
+
+  // ── Owner disconnect grace period ─────────────────────────────────────────
+
+  describe('owner disconnect — stay live across reconnect', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('does not deactivate immediately when the last owner socket drops', async () => {
+      const { gw, joinOwner, ownerSocket, spacesPresence, spacesService } = makeFixture();
+      await joinOwner();
+      spacesPresence.onDisconnect.mockReturnValueOnce({
+        userId: OWNER_ID,
+        spaceId: SPACE_ID,
+        wasActive: true,
+      });
+      (ownerSocket.data as any).ownerSpaceId = SPACE_ID;
+      gw.handleDisconnect(ownerSocket as any);
+
+      expect(spacesService.deactivateIfActive).not.toHaveBeenCalled();
+    });
+
+    it('deactivates after the grace period if the owner does not rejoin', async () => {
+      const { gw, joinOwner, ownerSocket, spacesPresence, spacesService } = makeFixture();
+      await joinOwner();
+      spacesPresence.onDisconnect.mockReturnValueOnce({
+        userId: OWNER_ID,
+        spaceId: SPACE_ID,
+        wasActive: true,
+      });
+      (ownerSocket.data as any).ownerSpaceId = SPACE_ID;
+      gw.handleDisconnect(ownerSocket as any);
+
+      await jest.advanceTimersByTimeAsync(SpacesGatewayHandler.OWNER_GONE_GRACE_MS);
+      expect(spacesService.deactivateIfActive).toHaveBeenCalledWith(SPACE_ID);
+    });
+
+    it('cancels scheduled deactivate when the owner rejoins before the grace elapses', async () => {
+      const { gw, joinOwner, ownerSocket, spacesPresence, spacesService, server } = makeFixture();
+      await joinOwner();
+      spacesPresence.onDisconnect.mockReturnValueOnce({
+        userId: OWNER_ID,
+        spaceId: SPACE_ID,
+        wasActive: true,
+      });
+      (ownerSocket.data as any).ownerSpaceId = SPACE_ID;
+      gw.handleDisconnect(ownerSocket as any);
+
+      const rejoin = new FakeSocket('socket-owner-rejoin', { userId: OWNER_ID });
+      server.register(rejoin);
+      server.joinRoom(rejoin.id, SPACE_ROOM);
+      await (gw as any).handleSpacesJoin(rejoin, { spaceId: SPACE_ID });
+
+      await jest.advanceTimersByTimeAsync(SpacesGatewayHandler.OWNER_GONE_GRACE_MS);
+      expect(spacesService.deactivateIfActive).not.toHaveBeenCalled();
+    });
+
+    it('deactivates immediately on explicit spaces:leave', async () => {
+      const { gw, joinOwner, ownerSocket, spacesService } = makeFixture();
+      await joinOwner();
+      await (gw as any).handleSpacesLeave(ownerSocket);
+      expect(spacesService.deactivateIfActive).toHaveBeenCalledWith(SPACE_ID);
+    });
+
+    it('unicasts spaces:members to the joining socket', async () => {
+      const { joinOwner, ownerSocket } = makeFixture();
+      await joinOwner();
+      expect(ownerSocket.lastEmitted('spaces:members')).toEqual({
+        spaceId: SPACE_ID,
+        members: [],
+      });
     });
   });
 
