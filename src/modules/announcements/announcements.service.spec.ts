@@ -186,6 +186,31 @@ describe('AnnouncementsService.getPending', () => {
     );
   });
 
+  it('keeps web and iOS cadence separate for the same user', async () => {
+    const { service, prisma } = makeService();
+    prisma.announcement.findMany.mockImplementation(async (args: any) => {
+      if (args?.where?.isAd === false) return [liveAnnouncement({ id: 'note-1' })];
+      return [];
+    });
+    prisma.announcementViewer.findMany.mockImplementation(async (args: any) => {
+      if (args?.where?.platform !== 'web') return [];
+      return [
+        {
+          announcementId: 'note-1',
+          lastPresentedAt: new Date(NOW.getTime() - 60 * 1000),
+          lastCompletedAt: new Date(NOW.getTime() - 60 * 1000),
+          lastOutcome: 'dismissed',
+          completedCount: 1,
+        },
+      ];
+    });
+
+    expect(await service.getPending({ userId: 'u1', platform: 'web', now: NOW })).toBeNull();
+    expect(await service.getPending({ userId: 'u1', platform: 'ios', now: NOW })).toEqual(
+      expect.objectContaining({ id: 'note-1' }),
+    );
+  });
+
   it('shows an unseen announcement on the next open even if another was just completed', async () => {
     const { service, prisma } = makeService();
     prisma.announcement.findMany.mockImplementation(async (args: any) => {
