@@ -193,6 +193,7 @@ export class AdminImageReviewService {
     //   banners/       — legacy
     //   article-thumbnails/ — article cover thumbnails
     //   article-media/      — inline images embedded in article body
+    //   announcement-images/ — admin announcement / ad heroes
     // ────────────────────────────────────────────────────────────────────────
     const prefixes = [
       `${prefix}uploads/`,
@@ -201,6 +202,7 @@ export class AdminImageReviewService {
       `${prefix}banners/`,
       `${prefix}article-thumbnails/`,
       `${prefix}article-media/`,
+      `${prefix}announcement-images/`,
     ].slice(0, opts?.maxPrefixes ?? 20);
 
     for (const pfx of prefixes) {

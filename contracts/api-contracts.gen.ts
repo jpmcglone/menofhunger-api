@@ -11,6 +11,8 @@
 
 // ─── Prisma enums (inlined) ───────────────────────────────────────────────
 
+export type AnnouncementDismissMethod = 'close_button' | 'backdrop' | 'escape' | 'swipe'
+export type AnnouncementStatus = 'draft' | 'published' | 'archived'
 export type BirthdayVisibility = 'none' | 'monthDay' | 'full'
 export type CommunityGroupInviteStatus = 'pending' | 'accepted' | 'declined' | 'cancelled' | 'expired'
 export type CommunityGroupJoinPolicy = 'open' | 'approval'
@@ -389,6 +391,37 @@ export type AdminAffiliateUserDto = {
 export type AdminAffiliateSettleDto = {
   settledCount: number;
   settledCents: number;
+};
+
+// ─── src/common/dto/announcement.dto.ts ────────────────────────────────────────
+
+export type AnnouncementDto = {
+  id: string;
+  isAd: boolean;
+  title: string;
+  body: string | null;
+  imageUrl: string | null;
+  ctaLabel: string | null;
+  ctaHref: string | null;
+};
+
+export type AnnouncementStatsDto = {
+  uniquePeople: number;
+  totalViews: number;
+  clicks: number;
+  abandoned: number;
+  ctr: number;
+  dismissMethods: Partial<Record<AnnouncementDismissMethod, number>>;
+};
+
+export type AnnouncementAdminDto = AnnouncementDto & {
+  status: AnnouncementStatus;
+  endsAt: string | null;
+  publishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  imageKey: string | null;
+  stats: AnnouncementStatsDto;
 };
 
 // ─── src/common/dto/article.dto.ts ─────────────────────────────────────────────

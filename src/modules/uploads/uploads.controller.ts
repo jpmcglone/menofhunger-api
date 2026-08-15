@@ -228,5 +228,31 @@ export class UploadsController {
     const result = await this.uploads.commitArticleMediaUpload(userId, key);
     return { data: result };
   }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('upload', 60),
+      ttl: rateLimitTtl('upload', 60),
+    },
+  })
+  @Post('announcement-image/init')
+  async initAnnouncementImage(@Body() body: unknown, @CurrentUserId() userId: string) {
+    const { contentType } = z.object({ contentType: z.string().min(1) }).parse(body);
+    const result = await this.uploads.initAnnouncementImageUpload(userId, contentType);
+    return { data: result };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('upload', 60),
+      ttl: rateLimitTtl('upload', 60),
+    },
+  })
+  @Post('announcement-image/commit')
+  async commitAnnouncementImage(@Body() body: unknown, @CurrentUserId() userId: string) {
+    const { key } = z.object({ key: z.string().min(1) }).parse(body);
+    const result = await this.uploads.commitAnnouncementImageUpload(userId, key);
+    return { data: result };
+  }
 }
 

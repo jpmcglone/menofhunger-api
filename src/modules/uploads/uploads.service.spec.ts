@@ -179,6 +179,27 @@ describe('UploadsService.initAvatarUpload', () => {
   });
 });
 
+describe('UploadsService.initAnnouncementImageUpload', () => {
+  it('hides the route from non-admins', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue({ siteAdmin: false });
+
+    await expect(service.initAnnouncementImageUpload('u1', 'image/png')).rejects.toThrow(
+      'Not Found',
+    );
+  });
+
+  it('uses announcement-images and 16:9 for admins', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue({ siteAdmin: true });
+
+    const result = await service.initAnnouncementImageUpload('u1', 'image/png');
+
+    expect(result.key).toMatch(/^dev\/announcement-images\/u1\/[0-9a-f-]+\.png$/);
+    expect(result.aspectRatio).toBe('16:9');
+  });
+});
+
 describe('UploadsService.initBannerUpload', () => {
   it('uses the covers prefix (not "banners") and advertises 3:1', async () => {
     const { service } = makeService();

@@ -485,6 +485,9 @@ model User {
   userSearches                 UserSearch[]
   userSearchTargets            UserSearch[]               @relation("UserSearchTarget")
   feedbacks                    Feedback[]
+  announcementsCreated         Announcement[]             @relation("Announcement_createdBy")
+  announcementViewers          AnnouncementViewer[]
+  announcementAudiences        AnnouncementAudience[]
   reportsMade                  Report[]                   @relation("Report_reporter")
   reportsReceived              Report[]                   @relation("Report_subjectUser")
   reportsResolved              Report[]                   @relation("Report_resolvedBy")
@@ -3133,6 +3136,127 @@ model MarvinGlobalSettings {
 /**
  * Pre-aggregated per-day cost rollup so the admin dashboard is instant.
  */
+enum AnnouncementStatus {
+  draft
+  published
+  archived
+}
+
+enum AnnouncementPlatform {
+  web
+  ios
+}
+
+enum AnnouncementEventType {
+  presented
+  viewed
+  dismissed
+  clicked
+  abandoned
+}
+
+enum AnnouncementDismissMethod {
+  close_button
+  backdrop
+  escape
+  swipe
+}
+
+enum AnnouncementOutcome {
+  presented
+  viewed
+  dismissed
+  clicked
+  abandoned
+}
+
+/**
+ * Admin-authored lodge notice or ad. Mid-session sockets are intentionally skipped —
+ * clients fetch on session start only.
+ */
+model Announcement {
+  id               String             @id @default(cuid())
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  isAd             Boolean            @default(false)
+  status           AnnouncementStatus @default(draft)
+  title            String
+  body             String?
+  imageKey         String?
+  imageUpdatedAt   DateTime?
+  ctaLabel         String?
+  ctaHref          String?
+  maxViews         Int                @default(1)
+  endsAt           DateTime?
+  publishedAt      DateTime?
+  createdByAdminId String
+  createdByAdmin   User               @relation("Announcement_createdBy", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+
+  viewers AnnouncementViewer[]
+  events  AnnouncementEvent[]
+
+  @@index([status, isAd, publishedAt])
+  @@index([status, endsAt])
+}
+
+/**
+ * First time we saw this viewer (user or anonymous). Drives the 12h new-viewer ad gate.
+ */
+model AnnouncementAudience {
+  viewerKey   String   @id
+  userId      String?
+  anonymousId String?
+  firstSeenAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([anonymousId])
+}
+
+model AnnouncementViewer {
+  id                String                     @id @default(cuid())
+  announcementId    String
+  viewerKey         String
+  userId            String?
+  anonymousId       String?
+  platform          AnnouncementPlatform
+  presentCount      Int                        @default(0)
+  viewCount         Int                        @default(0)
+  clickCount        Int                        @default(0)
+  abandonedCount    Int                        @default(0)
+  completedCount    Int                        @default(0)
+  lastPresentedAt   DateTime?
+  lastCompletedAt   DateTime?
+  lastOutcome       AnnouncementOutcome?
+  lastDismissMethod AnnouncementDismissMethod?
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, viewerKey, platform])
+  @@index([viewerKey, platform])
+  @@index([announcementId])
+}
+
+model AnnouncementEvent {
+  id             String                     @id @default(cuid())
+  announcementId String
+  viewerKey      String
+  platform       AnnouncementPlatform
+  type           AnnouncementEventType
+  dismissMethod  AnnouncementDismissMethod?
+  createdAt      DateTime                   @default(now())
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@index([announcementId, type])
+  @@index([viewerKey, platform, createdAt])
+}
+
 model MarvinCostRollup {
   id                String      @id @default(cuid())
   /**

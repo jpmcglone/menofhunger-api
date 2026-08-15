@@ -64,6 +64,7 @@ import { ExploreModule } from '../explore/explore.module';
 import { PublicModule } from '../public/public.module';
 import { ScriptureModule } from '../scripture/scripture.module';
 import { FitnessModule } from '../fitness/fitness.module';
+import { AnnouncementsModule } from '../announcements/announcements.module';
 
 // Module wiring is static; use env flags as a pragmatic switch for which processes host consumers.
 const RUN_JOB_CONSUMERS_RAW = (process.env.RUN_JOB_CONSUMERS ?? 'true').trim().toLowerCase();
@@ -145,6 +146,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     PublicModule,
     ScriptureModule,
     FitnessModule,
+    AnnouncementsModule,
     ...(RUN_JOB_CONSUMERS ? [JobsConsumersModule, SideEffectsConsumersModule] : []),
   ],
   controllers: [AppController],

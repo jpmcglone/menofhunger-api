@@ -27,3 +27,4 @@ export * from './crew.dto';
 export * from './marvin';
 export * from './scheduled-post.dto';
 export * from './site-config.dto';
+export * from './announcement.dto';
