@@ -12,8 +12,18 @@ export type GeneratedContextCard = {
   source: 'generated' | 'manual' | 'hybrid' | 'fallback';
 };
 
+export type LiveMemberCard = {
+  userId: string;
+  username: string;
+  cardText: string;
+  source: string;
+  updatedAt: Date;
+};
+
 const CARD_MAX_LENGTH = 1_200;
 const RECENT_POSTS_LIMIT = 12;
+const FALLBACK_POSTS_LIMIT = 5;
+const FALLBACK_POST_SNIPPET = 160;
 const RECENT_ARTICLES_LIMIT = 10;
 const SENSITIVE_TERMS = [
   'phone',
@@ -94,14 +104,18 @@ export class MarvinContextCardService {
   }
 
   /**
-   * Cheap profile-only card for a tool miss while the real generation job runs.
-   * Does not persist and does not call the model.
+   * Cheap public-profile card for a tool miss while the real generation job runs.
+   * Includes recent public post snippets so Marv can answer immediately without
+   * waiting on the model. Does not persist and does not call the model.
    */
   async peekFallbackCard(userId: string): Promise<string | null> {
     const user = await this.loadUser(userId);
     if (!user) return null;
-    const [followerCount, followingCount] = await this.followCounts(user.id);
-    return buildFallbackCard({
+    const [followerCount, followingCount, recentPosts] = await Promise.all([
+      ...this.followCountPromises(user.id),
+      this.loadPublicPosts(user.id, null),
+    ]);
+    const base = buildFallbackCard({
       displayName: user.name ?? user.username ?? 'a member',
       username: user.username ?? '',
       bio: (user.bio ?? '').trim(),
@@ -113,6 +127,63 @@ export class MarvinContextCardService {
       memberSince: user.createdAt,
       articleCount: 0,
     });
+    const postSnippets = recentPosts
+      .slice(0, FALLBACK_POSTS_LIMIT)
+      .map((p) => truncate((p.body ?? '').trim(), FALLBACK_POST_SNIPPET))
+      .filter(Boolean);
+    if (postSnippets.length === 0) return base;
+    return `${base} Recent public posts: ${postSnippets.map((s) => `"${s}"`).join('; ')}`.slice(
+      0,
+      CARD_MAX_LENGTH,
+    );
+  }
+
+  /**
+   * Resolve a member by username to a card Marv can use right now.
+   * Returns the persisted card when one exists; otherwise builds a live
+   * public-profile fallback, persists it so the next lookup hits Postgres,
+   * and returns that. Null only when the username is missing, a bot, or banned.
+   */
+  async ensureLiveCard(username: string): Promise<LiveMemberCard | null> {
+    const u = (username ?? '').trim();
+    if (!u) return null;
+    const user = await this.prisma.user.findFirst({
+      where: { username: { equals: u, mode: 'insensitive' }, isBot: false, bannedAt: null },
+      select: { id: true, username: true },
+    });
+    if (!user) return null;
+
+    const existing = await this.prisma.userContextCard.findUnique({
+      where: { userId: user.id },
+      select: { cardText: true, source: true, updatedAt: true },
+    });
+    if (existing?.cardText) {
+      return {
+        userId: user.id,
+        username: user.username ?? u,
+        cardText: existing.cardText,
+        source: existing.source,
+        updatedAt: existing.updatedAt,
+      };
+    }
+
+    const fallback = await this.peekFallbackCard(user.id);
+    if (!fallback) return null;
+
+    const row = await this.prisma.userContextCard.upsert({
+      where: { userId: user.id },
+      // A generated card may have landed between the read and this write — keep it.
+      update: {},
+      create: { userId: user.id, cardText: fallback, source: 'fallback' },
+      select: { cardText: true, source: true, updatedAt: true },
+    });
+    return {
+      userId: user.id,
+      username: user.username ?? u,
+      cardText: row.cardText,
+      source: row.source,
+      updatedAt: row.updatedAt,
+    };
   }
 
   /**

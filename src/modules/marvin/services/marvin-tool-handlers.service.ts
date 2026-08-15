@@ -17,6 +17,7 @@ const SIMILAR_MEMBERS_DEFAULT = 5;
 const SIMILAR_MEMBERS_MAX = 8;
 const SIMILAR_CANDIDATE_LIMIT = 60;
 const CARD_SNIPPET_MAX = 280;
+const PREFETCH_MEMBER_CARD_MAX = 8;
 
 const getUserBasicInfoSchema = z.object({ username: z.string().min(1).max(50) });
 const getUserContextCardSchema = z.object({ username: z.string().min(1).max(50) });
@@ -53,7 +54,7 @@ const TTL_THREAD_SUMMARY = 300; // 5 min — only updated by summarize job
 const TTL_CHAT_RECENT = 15; // 15s — keep tight, the user's own chat
 const TTL_URL_CONTENT = 3_600; // 1 hour — page content is stable enough
 const TTL_SIMILAR = 300; // 5 min — membership/interest churn is slow
-const TTL_NEGATIVE = 60; // 1 min — dedupe "no_card"/"no_summary"/"fetch_failed" misses
+const TTL_NEGATIVE = 60; // 1 min — dedupe "user_not_found"/"no_summary"/"fetch_failed" misses
 
 const MAX_URL_CONTENT_CHARS = 6_000; // Keeps the tool output inside the 8KB AI-layer cap
 const URL_FETCH_TIMEOUT_MS = 10_000;
@@ -69,12 +70,15 @@ const URL_FETCH_TIMEOUT_MS = 10_000;
  *  - `get_user_context_card` / `get_user_basic_info` filter banned users at the SQL layer
  *    (`bannedAt IS NULL`). Profile data Marv exposes is the same data any signed-in user
  *    can see by visiting the profile page, so there is no per-request username whitelist.
+ *  - A valid member always gets a card: the persisted summary if one exists, otherwise a
+ *    live public-profile fallback (bio / interests / recent public posts). `user_not_found`
+ *    is the only miss. Never tell the model the lookup is limited to "this session".
  *  - All post lookups skip soft-deleted posts AND `onlyMe` visibility.
  *  - All outputs are kept small (≤ ~8KB) — the AI service further clamps to 8KB anyway.
  *
  * Caching: Postgres reads are wrapped in a Redis read-through cache via
- * {@link CacheService.getOrSetJson}. Negative results (no_card / no_summary) are cached
- * with a shorter TTL so repeated misses don't hammer Postgres.
+ * {@link CacheService.getOrSetJson}. Negative results (user_not_found / no_summary) are
+ * cached with a shorter TTL so repeated misses don't hammer Postgres.
  */
 @Injectable()
 export class MarvinToolHandlersService {
@@ -116,7 +120,7 @@ export class MarvinToolHandlersService {
       case 'get_user_basic_info':
         return await this.getUserBasicInfo(args, ctx);
       case 'get_user_context_card':
-        return await this.getUserContextCard(args, ctx);
+        return await this.getUserContextCard(args);
       case 'get_post':
         return await this.getPost(args, ctx);
       case 'get_post_thread_recent_messages':
@@ -179,85 +183,89 @@ export class MarvinToolHandlersService {
     });
   }
 
-  private async getUserContextCard(rawArgs: unknown, _ctx: MarvAIToolCallContext): Promise<unknown> {
+  private async getUserContextCard(rawArgs: unknown): Promise<unknown> {
     const parsed = getUserContextCardSchema.safeParse(rawArgs);
     if (!parsed.success) return { error: 'invalid_args' };
-    const { username } = parsed.data;
-    const lower = username.toLowerCase();
+    return await this.lookupMemberCard(parsed.data.username);
+  }
 
+  /**
+   * Live member lookup used by `get_user_context_card` and by reply processors that
+   * prefetch @mentioned users into the prompt. A valid member always returns a card
+   * (persisted summary or live public-profile fallback). The AI card job is enqueued
+   * on fallback so the next turn can be richer — we do not wait on the model here.
+   */
+  async lookupMemberCard(username: string): Promise<
+    | { username: string | null; cardText: string; source: string; updatedAt: string }
+    | { error: 'user_not_found'; note: string }
+  > {
+    const lower = username.toLowerCase();
     const cacheKey = `marv:tool:user-card:${lower}`;
 
     type CardShape = { username: string | null; cardText: string; source: string; updatedAt: string };
 
-    let card = await this.cache.getOrSetNullableJson<CardShape>({
-      enabled: true,
-      key: cacheKey,
-      ttlSeconds: TTL_USER_CARD,
-      nullTtlSeconds: TTL_NEGATIVE,
-      compute: async () => {
-        // `bannedAt: null` ensures we don't surface a previously-cached card for a now-banned
-        // user. The on-the-fly generation path below has the same filter.
-        const row = await this.prisma.userContextCard.findFirst({
-          where: {
-            user: { username: { equals: username, mode: 'insensitive' }, bannedAt: null },
-          },
-          select: { cardText: true, source: true, updatedAt: true, user: { select: { username: true } } },
-        });
-        if (!row) return null;
-        return {
-          username: row.user.username,
-          cardText: row.cardText.slice(0, 4_000),
-          source: row.source,
-          updatedAt: row.updatedAt.toISOString(),
-        };
-      },
-    });
-
-    // No card yet — return a cheap profile fallback and enqueue the real
-    // generation so this tool call never waits on the model.
-    if (!card) {
-      this.logger.log(`[marv-tools] no context card for @${lower} — enqueueing refresh`);
-      try {
-        const user = await this.prisma.user.findFirst({
-          where: { username: { equals: username, mode: 'insensitive' }, isBot: false, bannedAt: null },
-          select: { id: true, username: true },
-        });
-        if (user) {
-          await this.jobs
-            .enqueue(
-              JOBS.marvinContextCardRefresh,
-              { userId: user.id },
-              {
-                jobId: `marvin-context-card-${user.id}`,
-                // Don't compete with the in-flight reply for OpenAI TPM.
-                delay: 30_000,
-              },
-            )
-            .catch((err) => {
-              this.logger.debug(
-                `[marv-tools] context-card enqueue skipped for @${lower}: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            });
-          const fallback = await this.contextCard.peekFallbackCard(user.id);
-          if (fallback) {
-            card = {
-              username: user.username,
-              cardText: fallback.slice(0, 4_000),
-              source: 'fallback',
-              updatedAt: new Date().toISOString(),
-            };
-            await this.cache.setJson(cacheKey, { meta: card }, { ttlSeconds: TTL_NEGATIVE });
-          }
-        }
-      } catch (err) {
-        this.logger.warn(
-          `[marv-tools] context-card fallback failed for @${lower}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
+    const cached = await this.cache.getJson<{ meta: CardShape | null }>(cacheKey);
+    if (cached && Object.prototype.hasOwnProperty.call(cached, 'meta')) {
+      if (cached.meta?.cardText) return cached.meta;
+      return { error: 'user_not_found', note: 'No member found with that username.' };
     }
 
-    if (!card) return { error: 'no_card', note: 'No context card available for this user.' };
+    const live = await this.contextCard.ensureLiveCard(username);
+    if (!live) {
+      await this.cache.setJson(cacheKey, { meta: null }, { ttlSeconds: TTL_NEGATIVE });
+      return { error: 'user_not_found', note: 'No member found with that username.' };
+    }
+
+    const card: CardShape = {
+      username: live.username,
+      cardText: live.cardText.slice(0, 4_000),
+      source: live.source,
+      updatedAt: live.updatedAt.toISOString(),
+    };
+
+    if (live.source === 'fallback') {
+      this.logger.log(`[marv-tools] live fallback card for @${lower} — enqueueing generated refresh`);
+      await this.jobs
+        .enqueue(
+          JOBS.marvinContextCardRefresh,
+          { userId: live.userId },
+          {
+            jobId: `marvin-context-card-${live.userId}`,
+            // Don't compete with the in-flight reply for OpenAI TPM.
+            delay: 30_000,
+          },
+        )
+        .catch((err) => {
+          this.logger.debug(
+            `[marv-tools] context-card enqueue skipped for @${lower}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      // Short TTL so the generated job can replace this shortly.
+      await this.cache.setJson(cacheKey, { meta: card }, { ttlSeconds: TTL_NEGATIVE });
+    } else {
+      await this.cache.setJson(cacheKey, { meta: card }, { ttlSeconds: TTL_USER_CARD });
+    }
+
     return card;
+  }
+
+  /**
+   * Prefetch cards for @mentioned members so the model has them before it answers.
+   * Caps the set so a long mention list cannot blow the developer note.
+   */
+  async lookupMemberCards(
+    usernames: string[],
+  ): Promise<Array<{ username: string; cardText: string | null }>> {
+    const unique = [
+      ...new Set(usernames.map((u) => u.trim()).filter(Boolean).map((u) => u.toLowerCase())),
+    ].slice(0, PREFETCH_MEMBER_CARD_MAX);
+    return await Promise.all(
+      unique.map(async (username) => {
+        const result = await this.lookupMemberCard(username);
+        if ('error' in result) return { username, cardText: null };
+        return { username: result.username ?? username, cardText: result.cardText };
+      }),
+    );
   }
 
   private async getPost(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {

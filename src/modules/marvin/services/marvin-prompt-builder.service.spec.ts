@@ -327,4 +327,46 @@ describe('MarvinPromptBuilderService', () => {
       expect(built.developerNote).not.toContain('Thread (oldest → newest)');
     });
   });
+
+  describe('member lookup hints', () => {
+    it('injects prefetched member cards and forbids session-limitation language', () => {
+      const svc = makeService();
+      const built = svc.build({
+        source: 'private_session',
+        requester: { userId: 'u-1', username: 'alice', displayName: 'Alice' },
+        currentQuestion: 'what do you know about @peter and @lamarm',
+        conversationId: 'c-1',
+        referencedMemberCards: [
+          { username: 'peter', cardText: 'Peter tracks morning weight and gym logs.' },
+          { username: 'lamarm', cardText: '@lamarm is a member, 3 months on the platform.' },
+        ],
+      });
+      expect(built.developerNote).toContain('Peter tracks morning weight');
+      expect(built.developerNote).toContain('@lamarm is a member');
+      expect(built.developerNote).toContain('Never say you lack access');
+      expect(built.developerNote).toContain('get_user_context_card');
+    });
+
+    it('marks unknown mentioned usernames as not found', () => {
+      const svc = makeService();
+      const built = svc.build({
+        ...baseInput,
+        referencedMemberCards: [{ username: 'nobody', cardText: null }],
+      });
+      expect(built.developerNote).toContain('@nobody: no member found with that username.');
+    });
+
+    it('tells Marv to look up mentioned members when cards were not prefetched', () => {
+      const svc = makeService();
+      const built = svc.build({
+        source: 'private_session',
+        requester: { userId: 'u-1', username: 'alice', displayName: 'Alice' },
+        currentQuestion: 'hey',
+        conversationId: 'c-1',
+        referencedUsernames: ['peter', 'lamarm'],
+      });
+      expect(built.developerNote).toContain('Members mentioned: @peter, @lamarm');
+      expect(built.developerNote).toContain('these tools work for any member');
+    });
+  });
 });

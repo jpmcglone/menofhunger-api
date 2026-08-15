@@ -489,12 +489,16 @@ export class MarvinPrivateReplyProcessor {
     );
     const hasGifAttached = imageEntries.some((e) => e.kind === 'gif');
 
-    // Extract @username mentions from the message (and replyTo) so Marv knows which
-    // users are referenced and can call get_user_context_card / get_user_basic_info.
+    // Extract @username mentions and prefetch their public profiles so Marv can
+    // answer immediately instead of claiming the lookup is unavailable.
     const marvLower = this.identity.marvUsernameLower();
     const mentionBodies = [text, msg.replyTo?.body ?? ''].filter(Boolean).join('\n');
     const referencedUsernames = parseMentionsFromBody(mentionBodies)
       .filter((u) => u.toLowerCase() !== marvLower);
+    const referencedMemberCards =
+      referencedUsernames.length > 0
+        ? await this.tools.lookupMemberCards(referencedUsernames)
+        : undefined;
 
     const built = this.promptBuilder.build({
       source: 'private_session',
@@ -506,6 +510,7 @@ export class MarvinPrivateReplyProcessor {
       currentQuestion: text,
       conversationId,
       referencedUsernames: referencedUsernames.length > 0 ? referencedUsernames : undefined,
+      referencedMemberCards,
       crisisDetected: routed.crisisDetected,
       webSearchDemanded: routed.webSearchDemanded,
       linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,

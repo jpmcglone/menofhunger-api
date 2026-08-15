@@ -54,7 +54,10 @@ function makeService(opts?: {
     follow: { count: jest.fn(async () => 0) },
     userContextCard: {
       findUnique: jest.fn(async () => opts?.existingCard ?? null),
-      upsert: jest.fn(async ({ create, update }: any) => update ?? create),
+      upsert: jest.fn(async ({ create, update }: any) => {
+        if (update && Object.keys(update).length > 0) return update;
+        return { ...create, updatedAt: new Date('2026-02-01T00:00:00Z') };
+      }),
     },
   };
 
@@ -309,5 +312,55 @@ describe('MarvinContextCardService — peekFallbackCard', () => {
     expect(result).toMatch(/woodworking/i);
     expect(m.ai.respond).not.toHaveBeenCalled();
     expect(m.prisma.userContextCard.upsert).not.toHaveBeenCalled();
+  });
+
+  it('includes recent public post snippets so Marv can answer before a generated card exists', async () => {
+    const m = makeService({
+      publicPosts: [{ body: 'Just finished a walnut bench.' }, { body: 'Fasting Wednesday.' }],
+    });
+    const result = await m.service.peekFallbackCard('u-1');
+    expect(result).toMatch(/walnut bench/i);
+    expect(result).toMatch(/Fasting Wednesday/i);
+    expect(m.ai.respond).not.toHaveBeenCalled();
+  });
+});
+
+describe('MarvinContextCardService — ensureLiveCard', () => {
+  it('returns the persisted card when one exists', async () => {
+    const m = makeService({
+      existingCard: {
+        cardText: 'Alice writes about books.',
+        source: 'generated',
+        updatedAt: new Date('2026-01-01T00:00:00Z'),
+      },
+    });
+    const result = await m.service.ensureLiveCard('alice');
+    expect(result).toMatchObject({
+      userId: 'u-1',
+      username: 'alice',
+      cardText: 'Alice writes about books.',
+      source: 'generated',
+    });
+    expect(m.prisma.userContextCard.upsert).not.toHaveBeenCalled();
+    expect(m.ai.respond).not.toHaveBeenCalled();
+  });
+
+  it('persists a live fallback when no card exists yet', async () => {
+    const m = makeService({ interests: ['woodworking'], publicPosts: [{ body: 'Shop day.' }] });
+    const result = await m.service.ensureLiveCard('alice');
+    expect(result?.source).toBe('fallback');
+    expect(result?.cardText).toMatch(/alice/i);
+    expect(result?.cardText).toMatch(/Shop day/i);
+    expect(m.prisma.userContextCard.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ userId: 'u-1', source: 'fallback' }),
+      }),
+    );
+    expect(m.ai.respond).not.toHaveBeenCalled();
+  });
+
+  it('returns null for an empty username', async () => {
+    const m = makeService();
+    expect(await m.service.ensureLiveCard('   ')).toBeNull();
   });
 });

@@ -41,11 +41,16 @@ function makeFakeCache() {
     return value;
   });
 
+  const getJson = jest.fn(async (key: string) => {
+    if (!store.has(key)) return null;
+    return store.get(key);
+  });
+
   const setJson = jest.fn(async (key: string, value: unknown) => {
     store.set(key, value);
   });
 
-  const cache: any = { getOrSetJson, getOrSetNullableJson, setJson };
+  const cache: any = { getOrSetJson, getOrSetNullableJson, getJson, setJson };
 
   return {
     cache,
@@ -72,6 +77,16 @@ function makeService() {
   const contextCard: any = {
     refreshCardForUser: jest.fn(async () => null),
     peekFallbackCard: jest.fn(async () => 'Alice is a member on the platform.'),
+    ensureLiveCard: jest.fn(async (username: string) => {
+      if (username.toLowerCase() === 'eve') return null;
+      return {
+        userId: 'u-1',
+        username: username.toLowerCase() === 'alice' ? 'alice' : username,
+        cardText: 'Alice is a member on the platform.',
+        source: 'fallback',
+        updatedAt: new Date('2026-01-01T00:00:00Z'),
+      };
+    }),
   };
   const scripture: any = {
     getRef: jest.fn(async (ref: string) =>
@@ -138,24 +153,21 @@ describe('MarvinToolHandlersService.dispatch', () => {
   });
 
   describe('get_user_context_card', () => {
-    it('returns no_card when no card row exists and the user cannot be resolved', async () => {
-      const { svc, prisma, jobs } = makeService();
-      prisma.userContextCard.findFirst.mockResolvedValueOnce(null);
-      prisma.user.findFirst.mockResolvedValueOnce(null);
+    it('returns user_not_found when the member cannot be resolved', async () => {
+      const { svc, jobs } = makeService();
       const out = await svc.dispatch('get_user_context_card', { username: 'eve' }, baseCtx);
-      expect(JSON.parse(out)).toEqual({ error: 'no_card', note: expect.any(String) });
+      expect(JSON.parse(out)).toEqual({ error: 'user_not_found', note: expect.any(String) });
       expect(jobs.enqueue).not.toHaveBeenCalled();
     });
 
-    it('enqueues a card refresh and returns a fallback without blocking on AI', async () => {
-      const { svc, prisma, jobs, contextCard } = makeService();
-      prisma.userContextCard.findFirst.mockResolvedValueOnce(null);
-      prisma.user.findFirst.mockResolvedValueOnce({ id: 'u-1', username: 'alice' });
+    it('enqueues a card refresh and returns a live fallback without blocking on AI', async () => {
+      const { svc, jobs, contextCard } = makeService();
       const out = await svc.dispatch('get_user_context_card', { username: 'alice' }, baseCtx);
       const parsed = JSON.parse(out);
       expect(parsed.source).toBe('fallback');
       expect(parsed.cardText).toMatch(/alice/i);
       expect(contextCard.refreshCardForUser).not.toHaveBeenCalled();
+      expect(contextCard.ensureLiveCard).toHaveBeenCalledWith('alice');
       expect(jobs.enqueue).toHaveBeenCalledWith(
         'marvin.contextCard.refresh',
         { userId: 'u-1' },
@@ -163,17 +175,29 @@ describe('MarvinToolHandlersService.dispatch', () => {
       );
     });
 
-    it('returns the card for any non-banned user', async () => {
-      const { svc, prisma } = makeService();
-      prisma.userContextCard.findFirst.mockResolvedValueOnce({
+    it('returns a persisted generated card without enqueueing', async () => {
+      const { svc, contextCard, jobs } = makeService();
+      contextCard.ensureLiveCard.mockResolvedValueOnce({
+        userId: 'u-1',
+        username: 'alice',
         cardText: 'Alice is a long-time member.',
         source: 'generated',
         updatedAt: new Date('2026-01-01T00:00:00Z'),
-        user: { username: 'alice' },
       });
       const out = await svc.dispatch('get_user_context_card', { username: 'alice' }, baseCtx);
       const parsed = JSON.parse(out);
       expect(parsed.cardText).toContain('Alice');
+      expect(parsed.source).toBe('generated');
+      expect(jobs.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('lookupMemberCards prefetches found and missing members', async () => {
+      const { svc } = makeService();
+      const cards = await svc.lookupMemberCards(['alice', 'eve', 'alice']);
+      expect(cards).toEqual([
+        { username: 'alice', cardText: 'Alice is a member on the platform.' },
+        { username: 'eve', cardText: null },
+      ]);
     });
   });
 
@@ -295,16 +319,14 @@ describe('MarvinToolHandlersService.dispatch', () => {
   });
 
   describe('Negative cache for misses', () => {
-    it('get_user_context_card: missing card returns no_card and dedupes the miss', async () => {
-      const { svc, prisma, cache } = makeService();
-      prisma.userContextCard.findFirst.mockResolvedValue(null);
-      const a = await svc.dispatch('get_user_context_card', { username: 'alice' }, baseCtx);
-      const b = await svc.dispatch('get_user_context_card', { username: 'alice' }, baseCtx);
-      expect(JSON.parse(a)).toEqual({ error: 'no_card', note: expect.any(String) });
-      expect(JSON.parse(b)).toEqual({ error: 'no_card', note: expect.any(String) });
-      // The DB miss happens once; the second call hits the negative cache.
-      expect(prisma.userContextCard.findFirst).toHaveBeenCalledTimes(1);
-      expect(cache.counters().hits).toBe(1);
+    it('get_user_context_card: unknown member returns user_not_found and dedupes the miss', async () => {
+      const { svc, contextCard, cache } = makeService();
+      const a = await svc.dispatch('get_user_context_card', { username: 'eve' }, baseCtx);
+      const b = await svc.dispatch('get_user_context_card', { username: 'eve' }, baseCtx);
+      expect(JSON.parse(a)).toEqual({ error: 'user_not_found', note: expect.any(String) });
+      expect(JSON.parse(b)).toEqual({ error: 'user_not_found', note: expect.any(String) });
+      expect(contextCard.ensureLiveCard).toHaveBeenCalledTimes(1);
+      expect(cache.get('marv:tool:user-card:eve')).toEqual({ meta: null });
     });
 
     it('get_post_thread_summary: missing summary returns no_summary and dedupes', async () => {

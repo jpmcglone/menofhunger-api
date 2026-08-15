@@ -168,7 +168,12 @@ function makeProcessor(opts?: {
     })),
   };
 
-  const tools: any = { dispatch: jest.fn(async () => '{}') };
+  const tools: any = {
+    dispatch: jest.fn(async () => '{}'),
+    lookupMemberCards: jest.fn(async (usernames: string[]) =>
+      usernames.map((username) => ({ username, cardText: null })),
+    ),
+  };
 
   const usage: any = {
     recordEvent: jest.fn(async () => undefined),

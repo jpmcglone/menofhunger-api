@@ -82,10 +82,13 @@ export const MARV_SCRIPTURE_CITE_HINT =
 export const MARV_USER_LOOKUP_HINT =
   'To learn about any platform member by username, call get_user_basic_info (tier, join date) ' +
   'or get_user_context_card (detailed profile + public post summary). ' +
+  'These tools work for EVERY member, not only people already in this conversation. ' +
+  'Never say you lack access "in this session" or "in this chat context" — if you need a profile, call the tool. ' +
+  'A fallback card is still real public profile information; share it. ' +
+  'If the tool says user_not_found, say you could not find that username. ' +
   'If someone asks who they should meet or whether anyone else is into a topic, call find_similar_members. ' +
   'If they ask for a Bible passage or verse, call get_bible_passage — do not invent Scripture. ' +
-  MARV_SCRIPTURE_CITE_HINT +
-  'These tools work in any context — DM, thread, or otherwise.';
+  MARV_SCRIPTURE_CITE_HINT;
 
 /** Appended to thread replies when pre-fetched context is already injected. */
 export const MARV_THREAD_TOOL_OPTIONAL =

@@ -453,9 +453,15 @@ export class MarvinPublicReplyProcessor {
       });
     };
 
-    const referenced = post.mentions
-      .map((m) => m.user.username ?? '')
-      .filter((u) => u && u.toLowerCase() !== this.identity.marvUsernameLower());
+    const referenced = [
+      ...new Set(
+        post.mentions
+          .map((m) => m.user.username ?? '')
+          .filter((u) => u && u.toLowerCase() !== this.identity.marvUsernameLower()),
+      ),
+    ];
+    const referencedMemberCards =
+      referenced.length > 0 ? await this.tools.lookupMemberCards(referenced) : undefined;
     const requesterRow = post.user;
 
     // Pre-fetch BIDIRECTIONAL thread context (ancestors above + replies below the
@@ -495,7 +501,8 @@ export class MarvinPublicReplyProcessor {
       triggeringPost,
       descendants,
       rollingSummary,
-      referencedUsernames: [...new Set(referenced)],
+      referencedUsernames: referenced,
+      referencedMemberCards,
       crisisDetected: routed.crisisDetected,
       webSearchDemanded: routed.webSearchDemanded,
       linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,
