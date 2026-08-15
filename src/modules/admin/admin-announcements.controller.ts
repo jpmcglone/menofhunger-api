@@ -5,9 +5,10 @@ import { AnnouncementsService } from '../announcements/announcements.service';
 import { AdminGuard } from './admin.guard';
 
 const writeSchema = z.object({
-  title: z.string().trim().min(1).max(120),
+  title: z.string().trim().max(120).optional().nullable(),
   body: z.string().trim().max(2000).optional().nullable(),
   isAd: z.boolean().optional(),
+  placement: z.enum(['overlay', 'inline']).optional(),
   ctaLabel: z.string().trim().max(40).optional().nullable(),
   ctaHref: z.string().trim().max(500).optional().nullable(),
   endsAt: z.string().datetime().optional().nullable(),
@@ -59,6 +60,11 @@ export class AdminAnnouncementsController {
   async archive(@Param('id') id: string) {
     return { data: await this.announcements.archive(id) };
   }
+
+  @Post(':id/reset')
+  async reset(@Param('id') id: string) {
+    return { data: await this.announcements.reset(id) };
+  }
 }
 
 function toWriteInput(parsed: z.infer<typeof writeSchema>) {
@@ -66,6 +72,7 @@ function toWriteInput(parsed: z.infer<typeof writeSchema>) {
     title: parsed.title,
     body: parsed.body,
     isAd: parsed.isAd,
+    placement: parsed.placement,
     ctaLabel: parsed.ctaLabel,
     ctaHref: parsed.ctaHref,
     imageKey: parsed.imageKey,

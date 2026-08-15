@@ -1,6 +1,7 @@
 import type {
   Announcement,
   AnnouncementDismissMethod,
+  AnnouncementPlacement,
   AnnouncementStatus,
 } from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
@@ -8,6 +9,7 @@ import { publicAssetUrl } from '../assets/public-asset-url';
 export type AnnouncementDto = {
   id: string;
   isAd: boolean;
+  placement: AnnouncementPlacement;
   title: string;
   body: string | null;
   imageUrl: string | null;
@@ -35,12 +37,13 @@ export type AnnouncementAdminDto = AnnouncementDto & {
 };
 
 export function toAnnouncementDto(
-  row: Pick<Announcement, 'id' | 'isAd' | 'title' | 'body' | 'imageKey' | 'imageUpdatedAt' | 'ctaLabel' | 'ctaHref'>,
+  row: Pick<Announcement, 'id' | 'isAd' | 'placement' | 'title' | 'body' | 'imageKey' | 'imageUpdatedAt' | 'ctaLabel' | 'ctaHref'>,
   publicAssetBaseUrl: string | null,
 ): AnnouncementDto {
   return {
     id: row.id,
     isAd: row.isAd,
+    placement: row.placement,
     title: row.title,
     body: row.body ?? null,
     imageUrl: publicAssetUrl({

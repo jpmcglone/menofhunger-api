@@ -17,6 +17,7 @@ function liveAnnouncement(overrides: Record<string, unknown> = {}) {
   return {
     id: 'a1',
     isAd: false,
+    placement: 'overlay',
     title: 'Lodge note',
     body: 'Hello',
     imageKey: null,
@@ -26,6 +27,8 @@ function liveAnnouncement(overrides: Record<string, unknown> = {}) {
     publishedAt: OLD,
     endsAt: null,
     status: 'published',
+    createdAt: OLD,
+    updatedAt: OLD,
     ...overrides,
   };
 }
@@ -38,6 +41,7 @@ function makeService(overrides: Record<string, any> = {}) {
       findUnique: jest.fn(async () => liveAnnouncement()),
       create: jest.fn(),
       update: jest.fn(),
+      deleteMany: jest.fn(),
     },
     announcementAudience: {
       upsert: jest.fn(async () => ({ firstSeenAt: OLD })),
@@ -51,6 +55,7 @@ function makeService(overrides: Record<string, any> = {}) {
       upsert: jest.fn(),
       update: jest.fn(),
       delete: jest.fn(),
+      deleteMany: jest.fn(),
       groupBy: jest.fn(async () => []),
     },
     announcementEvent: {
@@ -266,5 +271,18 @@ describe('AnnouncementsService.recordEvent', () => {
         }),
       }),
     );
+  });
+});
+
+describe('AnnouncementsService.reset', () => {
+  it('clears viewer rows so the item is unseen again', async () => {
+    const { service, prisma } = makeService();
+    prisma.announcement.findUnique.mockResolvedValue(liveAnnouncement({ id: 'note-1' }));
+
+    await service.reset('note-1');
+
+    expect(prisma.announcementViewer.deleteMany).toHaveBeenCalledWith({
+      where: { announcementId: 'note-1' },
+    });
   });
 });

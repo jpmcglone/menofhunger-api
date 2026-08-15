@@ -12,6 +12,7 @@
 // ─── Prisma enums (inlined) ───────────────────────────────────────────────
 
 export type AnnouncementDismissMethod = 'close_button' | 'backdrop' | 'escape' | 'swipe'
+export type AnnouncementPlacement = 'overlay' | 'inline'
 export type AnnouncementStatus = 'draft' | 'published' | 'archived'
 export type BirthdayVisibility = 'none' | 'monthDay' | 'full'
 export type CommunityGroupInviteStatus = 'pending' | 'accepted' | 'declined' | 'cancelled' | 'expired'
@@ -398,6 +399,7 @@ export type AdminAffiliateSettleDto = {
 export type AnnouncementDto = {
   id: string;
   isAd: boolean;
+  placement: AnnouncementPlacement;
   title: string;
   body: string | null;
   imageUrl: string | null;

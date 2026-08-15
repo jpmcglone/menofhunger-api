@@ -31,6 +31,7 @@ import {
 const LIVE_ANNOUNCEMENT_SELECT = {
   id: true,
   isAd: true,
+  placement: true,
   title: true,
   body: true,
   imageKey: true,
@@ -45,9 +46,10 @@ const LIVE_ANNOUNCEMENT_SELECT = {
 type LiveAnnouncement = Prisma.AnnouncementGetPayload<{ select: typeof LIVE_ANNOUNCEMENT_SELECT }>;
 
 export type AnnouncementWriteInput = {
-  title: string;
+  title?: string | null;
   body?: string | null;
   isAd?: boolean;
+  placement?: 'overlay' | 'inline';
   ctaLabel?: string | null;
   ctaHref?: string | null;
   endsAt?: Date | null;
@@ -269,6 +271,14 @@ export class AnnouncementsService {
     return toAnnouncementAdminDto(row, this.publicAssetBaseUrl(), stats);
   }
 
+  async reset(id: string): Promise<AnnouncementAdminDto> {
+    const existing = await this.prisma.announcement.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Announcement not found.');
+    await this.prisma.announcementViewer.deleteMany({ where: { announcementId: id } });
+    const stats = (await this.statsForIds([id])).get(id) ?? emptyAnnouncementStats();
+    return toAnnouncementAdminDto(existing, this.publicAssetBaseUrl(), stats);
+  }
+
   private toWriteData(
     input: AnnouncementWriteInput,
     existing?: Announcement,
@@ -276,20 +286,21 @@ export class AnnouncementsService {
     title: string;
     body: string | null;
     isAd: boolean;
+    placement: 'overlay' | 'inline';
     ctaLabel: string | null;
     ctaHref: string | null;
     endsAt: Date | null;
     imageKey: string | null;
     imageUpdatedAt: Date | null;
   } {
-    const title = input.title.trim();
-    if (!title) throw new BadRequestException('Title is required.');
+    const title = (input.title ?? existing?.title ?? '').trim();
     if (title.length > 120) throw new BadRequestException('Title must be 120 characters or fewer.');
 
     const body = input.body === undefined ? existing?.body ?? null : (input.body?.trim() || null);
     if (body && body.length > 2000) throw new BadRequestException('Body must be 2000 characters or fewer.');
 
     const isAd = input.isAd ?? existing?.isAd ?? false;
+    const placement = input.placement ?? existing?.placement ?? 'overlay';
 
     const ctaLabel = input.ctaLabel === undefined ? existing?.ctaLabel ?? null : (input.ctaLabel?.trim() || null);
     const ctaHref = input.ctaHref === undefined ? existing?.ctaHref ?? null : (input.ctaHref?.trim() || null);
@@ -309,10 +320,15 @@ export class AnnouncementsService {
           ? new Date()
           : null;
 
+    if (!title && !body && !imageKey) {
+      throw new BadRequestException('Add a title, body, or image.');
+    }
+
     return {
       title,
       body,
       isAd,
+      placement,
       ctaLabel,
       ctaHref,
       endsAt: input.endsAt === undefined ? existing?.endsAt ?? null : input.endsAt,

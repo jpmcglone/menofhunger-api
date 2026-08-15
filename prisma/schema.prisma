@@ -3147,6 +3147,11 @@ enum AnnouncementPlatform {
   ios
 }
 
+enum AnnouncementPlacement {
+  overlay
+  inline
+}
+
 enum AnnouncementEventType {
   presented
   viewed
@@ -3178,9 +3183,10 @@ model Announcement {
   id               String             @id @default(cuid())
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
-  isAd             Boolean            @default(false)
-  status           AnnouncementStatus @default(draft)
-  title            String
+  isAd             Boolean              @default(false)
+  status           AnnouncementStatus   @default(draft)
+  placement        AnnouncementPlacement @default(overlay)
+  title            String               @default("")
   body             String?
   imageKey         String?
   imageUpdatedAt   DateTime?
