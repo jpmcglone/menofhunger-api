@@ -10,6 +10,8 @@ import {
   MARV_THREAD_TOOL_OPTIONAL,
   MARV_USER_LOOKUP_HINT,
   MARV_WEB_SEARCH_REQUIRED,
+  renderGroupContextLines,
+  renderMemberBackgroundLines,
 } from '../marvin-prompt-instructions';
 import { marvMediaMarker } from './marvin-vision-media';
 
@@ -62,6 +64,9 @@ export type MarvLinkPreview = {
 export type MarvGroupContext = {
   name: string;
   description: string | null;
+  rules?: string | null;
+  joinPolicy?: 'open' | 'approval' | null;
+  memberCount?: number | null;
 };
 
 export type MarvPromptInput = {
@@ -194,15 +199,7 @@ export class MarvinPromptBuilderService {
       if (input.rootPostId) lines.push(`Thread root post id: ${input.rootPostId}.`);
 
       if (input.group) {
-        const groupName = input.group.name.trim();
-        const groupDescription = (input.group.description ?? '').trim();
-        lines.push(`This thread is inside the community group "${groupName}".`);
-        if (groupDescription) {
-          lines.push(`Group description: "${groupDescription.slice(0, 600)}"`);
-        }
-        lines.push(
-          'Keep your reply aligned with this group’s purpose, but still respond primarily to what is in the thread.',
-        );
+        lines.push(...renderGroupContextLines(input.group));
       }
 
       const hasBidirectional =
@@ -254,19 +251,9 @@ export class MarvinPromptBuilderService {
 
     lines.push(`Requester: ${requesterDisplay} ${requesterHandle} (id: ${input.requester.userId}).`);
 
-    const prefetched = (input.referencedMemberCards ?? []).filter((m) => (m.username ?? '').trim());
+    const prefetched = renderMemberBackgroundLines(input.referencedMemberCards ?? []);
     if (prefetched.length > 0) {
-      lines.push(
-        'Public profiles for members mentioned here (already looked up — use these. Never say you lack access in this session or chat context):',
-      );
-      for (const member of prefetched) {
-        const handle = member.username.replace(/^@/, '');
-        if (member.cardText && member.cardText.trim()) {
-          lines.push(`@${handle}: ${member.cardText.trim().slice(0, 1200)}`);
-        } else {
-          lines.push(`@${handle}: no member found with that username.`);
-        }
-      }
+      lines.push(...prefetched);
     } else if (referenced.length > 0) {
       lines.push(
         `Members mentioned: ${referenced.map((u) => '@' + u).join(', ')}. ` +

@@ -199,6 +199,15 @@ describe('MarvinToolHandlersService.dispatch', () => {
         { username: 'eve', cardText: null },
       ]);
     });
+
+    it('collectMentionedMemberCards reads @mentions first, then extra authors, and skips Marv', async () => {
+      const { svc } = makeService();
+      const cards = await svc.collectMentionedMemberCards({
+        bodies: ['hey @alice and @marv', 'also @eve'],
+        extraUsernames: ['bob', 'marv'],
+      });
+      expect(cards.map((c) => c.username)).toEqual(['alice', 'eve', 'bob']);
+    });
   });
 
   describe('get_post_thread_recent_messages thread scoping', () => {

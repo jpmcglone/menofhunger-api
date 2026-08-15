@@ -101,6 +101,13 @@ function makeContext() {
     ],
     totalDescendants: 1,
     rootId: 'root',
+    group: null as {
+      name: string;
+      description: string | null;
+      rules: string | null;
+      joinPolicy: 'open' | 'approval';
+      memberCount: number;
+    } | null,
   };
 }
 
@@ -241,7 +248,10 @@ function makeService(opts?: {
   };
   const usage: any = { recordEvent: jest.fn(async () => undefined) };
   const threadSummary: any = { getSummaryText: jest.fn(async () => null) };
-  const tools: any = { dispatch: jest.fn(async () => '{}') };
+  const tools: any = {
+    dispatch: jest.fn(async () => '{}'),
+    collectMentionedMemberCards: jest.fn(async () => []),
+  };
   const linkMetadata: any = { previewLinks: jest.fn(async () => []) };
 
   const service = new MarvinCatchUpService(
@@ -453,6 +463,39 @@ describe('MarvinCatchUpService', () => {
     expect(note).toContain('Never invent names, quotes, numbers');
     expect(note).toContain('omit it rather than guess');
     expect(note).toContain('background context, never as something said in the thread');
+    expect(note).toContain('public profile context, not thread content');
+  });
+
+  it('injects prefetched member background so the summary can know who is speaking', async () => {
+    const { service, ai, tools } = makeService();
+    tools.collectMentionedMemberCards.mockResolvedValueOnce([
+      { username: 'focalguy', cardText: 'Focal Guy posts about fasting.' },
+    ]);
+    await service.catchUp({ userId: 'u-1', postId: 'focal', requestedMode: 'regular' });
+    const note: string = ai.respond.mock.calls[0][0].developerNote;
+    expect(note).toContain('Background on members who appear here');
+    expect(note).toContain('Focal Guy posts about fasting.');
+    expect(note).toContain('Do not name them unless the question requires it');
+  });
+
+  it('injects community group name, rules, and membership when the thread is in a group', async () => {
+    const grouped = {
+      ...makeContext(),
+      group: {
+        name: 'Morning Fasters',
+        description: 'Men who fast together before sunrise.',
+        rules: 'No selling.',
+        joinPolicy: 'approval' as const,
+        memberCount: 12,
+      },
+    };
+    const { service, ai } = makeService({ context: grouped });
+    await service.catchUp({ userId: 'u-1', postId: 'focal', requestedMode: 'regular' });
+    const note: string = ai.respond.mock.calls[0][0].developerNote;
+    expect(note).toContain('community group "Morning Fasters"');
+    expect(note).toContain('Group rules: "No selling."');
+    expect(note).toContain('approval required to join');
+    expect(note).toContain('12 members');
   });
 
   // ── Sections ──────────────────────────────────────────────────────────────

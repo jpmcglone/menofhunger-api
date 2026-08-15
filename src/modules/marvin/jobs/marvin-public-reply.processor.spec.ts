@@ -85,14 +85,14 @@ function makeProcessor(opts?: {
       privateMaxPer10Minutes: 10,
     })),
     marvCredits: jest.fn(() => ({
-      monthlyCredits: 1200,
-      maxCredits: 1500,
-      creditsPerDay: 40,
+      monthlyCredits: 600,
+      maxCredits: 600,
+      creditsPerDay: 20,
       fastCost: 1,
       regularCost: 2,
       smartCost: 5,
-      webSearchCreditCost: 4,
-      visionCreditCostPerImage: 2,
+      webSearchCreditCost: 5,
+      visionCreditCostPerImage: 1,
       urlFetchCreditCost: 1,
     })),
     marvOpenAI: jest.fn(() => ({
@@ -125,8 +125,8 @@ function makeProcessor(opts?: {
 
   const creditSummary = {
     credits: opts?.credits ?? 100,
-    maxCredits: 1500,
-    creditsPerDay: 40,
+    maxCredits: 600,
+    creditsPerDay: 20,
     lastRefilledAt: new Date(),
   };
   const credits: any = {
@@ -170,6 +170,7 @@ function makeProcessor(opts?: {
 
   const tools: any = {
     dispatch: jest.fn(async () => '{}'),
+    collectMentionedMemberCards: jest.fn(async () => []),
     lookupMemberCards: jest.fn(async (usernames: string[]) =>
       usernames.map((username) => ({ username, cardText: null })),
     ),
@@ -214,6 +215,7 @@ function makeProcessor(opts?: {
       descendants: [],
       totalDescendants: 0,
       rootId: 'root-1',
+      group: null,
     })),
     // Delegate to the real (pure) selection so vision tests exercise the shared code path.
     selectImageMedia: (ctx: any, opts: any) =>
@@ -592,9 +594,9 @@ describe('MarvinPublicReplyProcessor', () => {
         toolCallCount: 0, webSearchCount: 0, imagesAttached: 2,
       });
       await m.processor.process({ postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' });
-      // mode cost=2 + vision=2*2=4 → total=6
-      expect(m.credits.settle).toHaveBeenCalledWith('u-requester', 3, 6);
-      expect(m.usage.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ creditsSpent: 6 }));
+      // mode cost=2 + vision=2*1=2 → total=4
+      expect(m.credits.settle).toHaveBeenCalledWith('u-requester', 3, 4);
+      expect(m.usage.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ creditsSpent: 4 }));
     });
   });
 });

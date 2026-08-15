@@ -18,7 +18,7 @@ import {
   type MarvThreadContextPost,
 } from './marvin-thread-context.service';
 import { MARV_ERROR_CODES } from '../marvin.constants';
-import { MARV_CONCISENESS } from '../marvin-prompt-instructions';
+import { MARV_CONCISENESS, renderGroupContextLines, renderMemberBackgroundLines } from '../marvin-prompt-instructions';
 import { fillVisionSlots, marvMediaMarker } from './marvin-vision-media';
 
 /**
@@ -279,15 +279,26 @@ export class MarvinCatchUpService {
         });
       };
 
-      // 8. Build the summarizer prompt + call the model. Real tools are available (same as
-      //    mentions/chat) so Marv can look up user context cards, post details, etc.
-      //    Native web search may engage for real-world context.
+      // 8. Build the summarizer prompt + call the model. Prefetch public profiles
+      //    for anyone who appears in the window so the summary can use who they
+      //    are without inventing it — or naming them unless it matters.
+      const threadPosts = [
+        ...context.ancestors,
+        ...(context.focal ? [context.focal] : []),
+        ...context.descendants,
+      ];
+      const memberCards = await this.tools.collectMentionedMemberCards({
+        bodies: threadPosts.map((p) => p.body),
+        extraUsernames: threadPosts.map((p) => p.authorUsername),
+      });
       const { developerNote, userMessage } = this.buildPrompt(context, {
         imageCount: imageUrls.length,
         hasGifAttached: hasGifAttached && imageUrls.length > 0,
         rollingSummary: rollingSummary ?? undefined,
         linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,
         delta: deltaContext ?? undefined,
+        memberCards: memberCards.length > 0 ? memberCards : undefined,
+        group: context.group ?? undefined,
       });
       let aiResult: Awaited<ReturnType<MarvinAIService['respond']>>;
       try {
@@ -709,9 +720,19 @@ export class MarvinCatchUpService {
       }>;
       /** Present when the viewer has summarized this thread before — drives the SINCE section. */
       delta?: { previousSummary: string; sinceMs: number; newReplyCount: number };
+      /** Public profiles for people who appear in the window — background, not thread content. */
+      memberCards?: Array<{ username: string; cardText: string | null }>;
+      /** Community group this thread lives in. */
+      group?: {
+        name: string;
+        description: string | null;
+        rules?: string | null;
+        joinPolicy?: 'open' | 'approval' | null;
+        memberCount?: number | null;
+      };
     },
   ): { developerNote: string; userMessage: string } {
-    const { imageCount, hasGifAttached, rollingSummary, linkPreviews, delta } = opts;
+    const { imageCount, hasGifAttached, rollingSummary, linkPreviews, delta, memberCards, group } = opts;
     const hasImages = imageCount > 0;
     const hasThread = context.ancestors.length > 0 || context.descendants.length > 0;
     const hasReplies = context.descendants.length > 0;
@@ -733,7 +754,10 @@ export class MarvinCatchUpService {
         'context, never as something said in the thread. ' +
         'Do NOT speculate about messages that might be posted later or about what you would "need." ' +
         'Stay neutral; no opinions or advice. ' +
-        'Never say "nothing to summarize."' +
+        'Never say "nothing to summarize." ' +
+        (group
+          ? 'The group name and info below are the venue — use them as background, not as thread content. '
+          : '') +
         (hasImages
           ? ` The ${imageCount > 1 ? `${imageCount} attached images are` : 'attached image is'} part of the ` +
             'conversation — describe what they actually show (scene, subject, any text in the image) as part ' +
@@ -748,8 +772,20 @@ export class MarvinCatchUpService {
     lines.push(
       'GROUNDING: Summarize ONLY what is actually written in this thread. ' +
         'Never invent names, quotes, numbers, claims, or details not present in the posts below. ' +
-        'If something is unclear or ambiguous, omit it rather than guess.',
+        'If something is unclear or ambiguous, omit it rather than guess. ' +
+        'Member background below is public profile context, not thread content — use it only to understand who is speaking.',
     );
+
+    if (group) {
+      lines.push('');
+      lines.push(...renderGroupContextLines(group));
+    }
+
+    const background = renderMemberBackgroundLines(memberCards ?? []);
+    if (background.length > 0) {
+      lines.push('');
+      lines.push(...background);
+    }
 
     // Sections format (only when there are replies)
     if (hasReplies) {

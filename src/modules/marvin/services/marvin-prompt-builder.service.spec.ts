@@ -235,6 +235,23 @@ describe('MarvinPromptBuilderService', () => {
       expect(built.developerNote).toContain('respond primarily to what is in the thread');
     });
 
+    it('includes group rules and membership when provided', () => {
+      const svc = makeService();
+      const built = svc.build({
+        ...baseInput,
+        group: {
+          name: 'Morning Fasters',
+          description: 'Men who fast together before sunrise.',
+          rules: 'No selling. Be kind.',
+          joinPolicy: 'approval',
+          memberCount: 42,
+        },
+      });
+      expect(built.developerNote).toContain('Group rules: "No selling. Be kind."');
+      expect(built.developerNote).toContain('approval required to join');
+      expect(built.developerNote).toContain('42 members');
+    });
+
     it('omits the description line when the group has no description', () => {
       const svc = makeService();
       const built = svc.build({
@@ -343,7 +360,8 @@ describe('MarvinPromptBuilderService', () => {
       });
       expect(built.developerNote).toContain('Peter tracks morning weight');
       expect(built.developerNote).toContain('@lamarm is a member');
-      expect(built.developerNote).toContain('Never say you lack access');
+      expect(built.developerNote).toContain('Background on members who appear here');
+      expect(built.developerNote).toContain('Do not name them unless the question requires it');
       expect(built.developerNote).toContain('get_user_context_card');
     });
 

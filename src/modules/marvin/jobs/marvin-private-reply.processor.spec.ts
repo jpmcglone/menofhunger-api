@@ -61,7 +61,7 @@ function makeProcessor(opts?: {
       upsert: sessionStateUpsert,
       updateMany: sessionStateUpdateMany,
     },
-    message: { findFirst: messageFindFirst },
+    message: { findFirst: messageFindFirst, findMany: jest.fn(async () => []) },
   };
 
   const appConfig: any = {
@@ -85,14 +85,14 @@ function makeProcessor(opts?: {
       privateMaxPer10Minutes: 10,
     })),
     marvCredits: jest.fn(() => ({
-      monthlyCredits: 1200,
-      maxCredits: 1500,
-      creditsPerDay: 40,
+      monthlyCredits: 600,
+      maxCredits: 600,
+      creditsPerDay: 20,
       fastCost: 1,
       regularCost: 2,
       smartCost: 5,
-      webSearchCreditCost: 4,
-      visionCreditCostPerImage: 2,
+      webSearchCreditCost: 5,
+      visionCreditCostPerImage: 1,
       urlFetchCreditCost: 1,
     })),
     marvOpenAI: jest.fn(() => ({
@@ -127,8 +127,8 @@ function makeProcessor(opts?: {
 
   const creditSummary = {
     credits: opts?.credits ?? 100,
-    maxCredits: 1500,
-    creditsPerDay: 40,
+    maxCredits: 600,
+    creditsPerDay: 20,
     lastRefilledAt: new Date(),
   };
   const credits: any = {
@@ -172,6 +172,7 @@ function makeProcessor(opts?: {
 
   const tools: any = {
     dispatch: jest.fn(async () => '{}'),
+    collectMentionedMemberCards: jest.fn(async () => []),
     lookupMemberCards: jest.fn(async (usernames: string[]) =>
       usernames.map((username) => ({ username, cardText: null })),
     ),
@@ -550,9 +551,9 @@ describe('MarvinPrivateReplyProcessor', () => {
         toolCallCount: 0, webSearchCount: 0, imagesAttached: 2,
       });
       await m.processor.process({ conversationId: 'c-1', messageId: 'm-1', requestingUserId: 'u-requester' });
-      // cost=2 (regular) + vision=2*2=4 = 6
-      expect(m.credits.settle).toHaveBeenCalledWith('u-requester', 3, 6);
-      expect(m.usage.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ creditsSpent: 6 }));
+      // cost=2 (regular) + vision=2*1=2 = 4
+      expect(m.credits.settle).toHaveBeenCalledWith('u-requester', 3, 4);
+      expect(m.usage.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ creditsSpent: 4 }));
     });
   });
 
@@ -577,7 +578,7 @@ describe('MarvinPrivateReplyProcessor', () => {
         replyTo: null,
       });
       await m.processor.process({ conversationId: 'c-1', messageId: 'm-1', requestingUserId: 'u-requester' });
-      // credits=3, reserved=2 (mode) + 4 (vision 2*2) = 6 > 3 → blocked
+      // credits=3, reserved=2 (mode) + 2 (vision 2*1) + url-fetch buffer = 5+ > 3 → blocked
       expect(m.ai.respond).not.toHaveBeenCalled();
       expect(m.canned.sendOutOfCreditsDm).toHaveBeenCalled();
       expect(m.usage.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ errorCode: 'no_credits' }));

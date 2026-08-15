@@ -46,6 +46,14 @@ export type MarvThreadContextPost = {
   poll: MarvThreadContextPoll | null;
 };
 
+export type MarvGroupVenue = {
+  name: string;
+  description: string | null;
+  rules: string | null;
+  joinPolicy: 'open' | 'approval';
+  memberCount: number;
+};
+
 export type MarvThreadContext = {
   /** The post the context was collected around. Null when it could not be loaded. */
   focal: MarvThreadContextPost | null;
@@ -57,6 +65,8 @@ export type MarvThreadContext = {
   totalDescendants: number;
   /** Thread root id (the focal post's own id when it is a root). */
   rootId: string | null;
+  /** Community group this thread lives in, when the focal post is in a group. */
+  group: MarvGroupVenue | null;
 };
 
 /**
@@ -98,6 +108,7 @@ export class MarvinThreadContextService {
       descendants: [],
       totalDescendants: 0,
       rootId: null,
+      group: null,
     };
     if (!focalPostId) return empty;
 
@@ -133,6 +144,17 @@ export class MarvinThreadContextService {
             editedAt: true,
             checkinPrompt: true,
             userId: true,
+            communityGroupId: true,
+            communityGroup: {
+              select: {
+                name: true,
+                description: true,
+                rules: true,
+                joinPolicy: true,
+                memberCount: true,
+                deletedAt: true,
+              },
+            },
             user: { select: { username: true, name: true } },
             media: {
               where: { deletedAt: null },
@@ -191,6 +213,17 @@ export class MarvinThreadContextService {
 
       const focalRow = byId.get(focalPostId);
       const focal = focalRow ? toPost(focalRow, 0) : null;
+      const groupRow = focalRow?.communityGroup;
+      const group: MarvGroupVenue | null =
+        groupRow && !groupRow.deletedAt
+          ? {
+              name: groupRow.name,
+              description: groupRow.description ?? null,
+              rules: groupRow.rules ?? null,
+              joinPolicy: groupRow.joinPolicy,
+              memberCount: groupRow.memberCount,
+            }
+          : null;
 
       const ancestors: MarvThreadContextPost[] = [];
       ancestorRows.forEach((r, idx) => {
@@ -210,6 +243,7 @@ export class MarvinThreadContextService {
         descendants,
         totalDescendants: descendantRows.length,
         rootId: focal?.rootId ?? focal?.id ?? null,
+        group,
       };
     } catch (err) {
       this.logger.warn(

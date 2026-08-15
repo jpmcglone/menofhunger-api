@@ -10,6 +10,7 @@ import { ScriptureService } from '../../scripture/scripture.service';
 import { JobsService } from '../../jobs/jobs.service';
 import { JOBS } from '../../jobs/jobs.constants';
 import { marvToolGroupAccessOr } from './marvin-post-access';
+import { parseMentionsFromBody } from '../../../common/mentions/mention-regex';
 
 const RECENT_MESSAGES_DEFAULT = 10;
 const RECENT_MESSAGES_MAX = 30;
@@ -266,6 +267,25 @@ export class MarvinToolHandlersService {
         return { username: result.username ?? username, cardText: result.cardText };
       }),
     );
+  }
+
+  /**
+   * Collect public-profile cards for everyone who appears in the text Marv is
+   * about to read: @mentions first (they keep the cap), then optional extra
+   * handles such as post authors. Shared by DM replies, thread replies, and catch-up.
+   */
+  async collectMentionedMemberCards(args: {
+    bodies?: Array<string | null | undefined>;
+    extraUsernames?: Array<string | null | undefined>;
+  }): Promise<Array<{ username: string; cardText: string | null }>> {
+    const fromBodies = (args.bodies ?? []).flatMap((body) => parseMentionsFromBody(body ?? ''));
+    const extra = (args.extraUsernames ?? [])
+      .map((u) => (u ?? '').trim())
+      .filter(Boolean);
+    const marvLower = this.identity.marvUsernameLower();
+    const usernames = [...fromBodies, ...extra].filter((u) => u.toLowerCase() !== marvLower);
+    if (usernames.length === 0) return [];
+    return await this.lookupMemberCards(usernames);
   }
 
   private async getPost(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {

@@ -48,6 +48,15 @@ function makeService(opts: {
       user: { username: p.username, name: p.name },
       media: [],
       poll: null,
+      communityGroupId: null as string | null,
+      communityGroup: null as {
+        name: string;
+        description: string | null;
+        rules: string | null;
+        joinPolicy: 'open' | 'approval';
+        memberCount: number;
+        deletedAt: Date | null;
+      } | null,
     })),
   );
 
@@ -100,6 +109,7 @@ describe('MarvinThreadContextService', () => {
       descendants: [],
       totalDescendants: 0,
       rootId: null,
+      group: null,
     });
     expect(queryRawUnsafe).not.toHaveBeenCalled();
   });
@@ -165,6 +175,46 @@ describe('MarvinThreadContextService', () => {
     const result = await service.collect({ focalPostId: 'focal' });
     expect(result.descendants[0]?.isMarv).toBe(true);
     expect(result.focal?.isMarv).toBe(false);
+  });
+
+  it('returns the community group on the focal post', async () => {
+    const { service, findMany } = makeService({
+      ancestorRows: [],
+      descendantRows: [],
+      postRows: [post('focal', null, null)],
+    });
+    findMany.mockResolvedValueOnce([
+      {
+        id: 'focal',
+        parentId: null,
+        rootId: null,
+        body: 'body focal',
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        editedAt: null,
+        checkinPrompt: null,
+        userId: 'u-focal',
+        user: { username: 'focal', name: 'FOCAL' },
+        media: [],
+        poll: null,
+        communityGroupId: 'g-1',
+        communityGroup: {
+          name: 'Morning Fasters',
+          description: 'Fast before sunrise.',
+          rules: 'No selling.',
+          joinPolicy: 'approval',
+          memberCount: 12,
+          deletedAt: null,
+        },
+      },
+    ]);
+    const result = await service.collect({ focalPostId: 'focal' });
+    expect(result.group).toEqual({
+      name: 'Morning Fasters',
+      description: 'Fast before sunrise.',
+      rules: 'No selling.',
+      joinPolicy: 'approval',
+      memberCount: 12,
+    });
   });
 });
 

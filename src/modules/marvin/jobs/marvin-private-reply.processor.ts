@@ -16,8 +16,6 @@ import { PresenceRealtimeService } from '../../presence/presence-realtime.servic
 import { MARV_ERROR_CODES, buildMarvIdempotencyKey } from '../marvin.constants';
 import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
 import { fillVisionSlots, resolveMarvVisionUrl } from '../services/marvin-vision-media';
-import { parseMentionsFromBody } from '../../../common/mentions/mention-regex';
-
 /**
  * How often to re-emit `messages:typing` while the AI call is in flight.
  * The web client expires the indicator after 3500ms of silence (see
@@ -489,16 +487,19 @@ export class MarvinPrivateReplyProcessor {
     );
     const hasGifAttached = imageEntries.some((e) => e.kind === 'gif');
 
-    // Extract @username mentions and prefetch their public profiles so Marv can
-    // answer immediately instead of claiming the lookup is unavailable.
-    const marvLower = this.identity.marvUsernameLower();
-    const mentionBodies = [text, msg.replyTo?.body ?? ''].filter(Boolean).join('\n');
-    const referencedUsernames = parseMentionsFromBody(mentionBodies)
-      .filter((u) => u.toLowerCase() !== marvLower);
-    const referencedMemberCards =
-      referencedUsernames.length > 0
-        ? await this.tools.lookupMemberCards(referencedUsernames)
-        : undefined;
+    // Prefetch public profiles for anyone @mentioned in this turn or recent
+    // messages in the same DM, so Marv has context even on a follow-up that
+    // does not repeat the handle.
+    const recentChat = await this.prisma.message.findMany({
+      where: { conversationId, deletedForAll: false },
+      select: { body: true },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+    const referencedMemberCards = await this.tools.collectMentionedMemberCards({
+      bodies: [text, msg.replyTo?.body, ...recentChat.map((m) => m.body)],
+    });
+    const referencedUsernames = referencedMemberCards.map((c) => c.username);
 
     const built = this.promptBuilder.build({
       source: 'private_session',
@@ -510,7 +511,7 @@ export class MarvinPrivateReplyProcessor {
       currentQuestion: text,
       conversationId,
       referencedUsernames: referencedUsernames.length > 0 ? referencedUsernames : undefined,
-      referencedMemberCards,
+      referencedMemberCards: referencedMemberCards.length > 0 ? referencedMemberCards : undefined,
       crisisDetected: routed.crisisDetected,
       webSearchDemanded: routed.webSearchDemanded,
       linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,

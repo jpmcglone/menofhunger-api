@@ -642,20 +642,21 @@ export class AppConfigService {
   }
 
   marvCredits(): MarvCreditConfig {
+    // Premium pays for ACCESS. Credits are a throttle so Marv stays a tool, not a
+    // companion — high margin on the subscription, honest relative prices on usage.
+    // Existing balances above the new cap clip on the next refill.
     return {
-      monthlyCredits: this.readPositiveInt('MARV_MONTHLY_CREDITS', 1200),
-      maxCredits: this.readPositiveInt('MARV_MAX_CREDITS', 1500),
-      creditsPerDay: this.readPositiveInt('MARV_CREDITS_PER_DAY', 40),
+      monthlyCredits: this.readPositiveInt('MARV_MONTHLY_CREDITS', 600),
+      maxCredits: this.readPositiveInt('MARV_MAX_CREDITS', 600),
+      creditsPerDay: this.readPositiveInt('MARV_CREDITS_PER_DAY', 20),
       fastCost: this.readPositiveInt('MARV_FAST_COST', 1),
       regularCost: this.readPositiveInt('MARV_REGULAR_COST', 2),
-      // Smart uses gpt-5.5 (~$0.02/req) vs regular gpt-5.4-mini (~$0.004/req) — bumped to 5
-      // so the per-credit USD cost is roughly even with regular mode.
+      // Smart uses gpt-5.5 (~$0.02/req) vs regular gpt-5.4-mini (~$0.004/req).
       smartCost: this.readPositiveInt('MARV_SMART_COST', 5),
-      // Each web_search_preview call costs ~$0.03 (OpenAI pricing). Bumped to 4 so the
-      // per-credit cost aligns with regular mode instead of being ~7x subsidized.
-      webSearchCreditCost: this.readPositiveInt('MARV_WEB_SEARCH_CREDIT_COST', 4),
-      // Extra credits per image sent to the vision model (~$0.002/image on gpt-5.4-mini).
-      visionCreditCostPerImage: this.readPositiveInt('MARV_VISION_CREDIT_COST_PER_IMAGE', 2),
+      // Web search is the expensive API (~$0.03/call). Same weight as a Smart turn.
+      webSearchCreditCost: this.readPositiveInt('MARV_WEB_SEARCH_CREDIT_COST', 5),
+      // Vision is cheap (~$0.002/image). One photo should not cost a full reply.
+      visionCreditCostPerImage: this.readPositiveInt('MARV_VISION_CREDIT_COST_PER_IMAGE', 1),
       // Extra credits per URL fetched via Jina Reader. Jina's public endpoint is free-tier,
       // so 1 credit per fetch keeps it cheap while still accounting for the network overhead.
       urlFetchCreditCost: this.readPositiveInt('MARV_URL_FETCH_CREDIT_COST', 1),

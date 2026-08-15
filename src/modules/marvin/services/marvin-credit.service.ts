@@ -28,8 +28,8 @@ export type MarvCreditSummary = MarvCreditState & {
 /**
  * Token-bucket Marv credit ledger.
  *
- * - Credits accrue continuously at `creditsPerDay` (default 40/day = 1200/month).
- * - The bucket caps at `maxCredits` (default 1500); excess refill is dropped.
+ * - Credits accrue continuously at `creditsPerDay` (default 20/day = 600/month).
+ * - The bucket caps at `maxCredits` (default 600); excess refill is dropped.
  * - `refill()` is idempotent: it computes elapsed time since `lastRefilledAt` and
  *   adds the proportional refill, capped to the bucket max.
  * - `reserve()` / `spend()` use an atomic guarded decrement (`UPDATE … SET credits = credits - cost

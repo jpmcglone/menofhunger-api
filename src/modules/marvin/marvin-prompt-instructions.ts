@@ -90,6 +90,60 @@ export const MARV_USER_LOOKUP_HINT =
   'If they ask for a Bible passage or verse, call get_bible_passage — do not invent Scripture. ' +
   MARV_SCRIPTURE_CITE_HINT;
 
+/**
+ * Intro line for prefetched member cards. These are background so Marv understands
+ * who is in the conversation — not a list of people he must name.
+ */
+export const MARV_MEMBER_BACKGROUND_INTRO =
+  'Background on members who appear here (public profile + public posts). ' +
+  'Use this to understand who they are. Do not name them unless the question requires it. ' +
+  'Never say you lack access in this session or chat context.';
+
+/** Venue context when Marv is answering inside a community group. */
+export function renderGroupContextLines(group: {
+  name: string;
+  description?: string | null;
+  rules?: string | null;
+  joinPolicy?: 'open' | 'approval' | null;
+  memberCount?: number | null;
+}): string[] {
+  const name = (group.name ?? '').trim();
+  if (!name) return [];
+  const lines = [`This conversation is inside the community group "${name}".`];
+  const description = (group.description ?? '').trim();
+  if (description) lines.push(`Group description: "${description.slice(0, 600)}"`);
+  const rules = (group.rules ?? '').trim();
+  if (rules) lines.push(`Group rules: "${rules.slice(0, 600)}"`);
+  const meta: string[] = [];
+  if (group.joinPolicy === 'approval') meta.push('approval required to join');
+  else if (group.joinPolicy === 'open') meta.push('open to join');
+  if (typeof group.memberCount === 'number') {
+    meta.push(`${group.memberCount} member${group.memberCount === 1 ? '' : 's'}`);
+  }
+  if (meta.length > 0) lines.push(`Group: ${meta.join(', ')}.`);
+  lines.push(
+    "Keep your reply aligned with this group’s purpose, but still respond primarily to what is in the thread.",
+  );
+  return lines;
+}
+
+export function renderMemberBackgroundLines(
+  cards: Array<{ username: string; cardText: string | null }>,
+): string[] {
+  const usable = cards.filter((m) => (m.username ?? '').trim());
+  if (usable.length === 0) return [];
+  const lines = [MARV_MEMBER_BACKGROUND_INTRO];
+  for (const member of usable) {
+    const handle = member.username.replace(/^@/, '');
+    if (member.cardText?.trim()) {
+      lines.push(`@${handle}: ${member.cardText.trim().slice(0, 1200)}`);
+    } else {
+      lines.push(`@${handle}: no member found with that username.`);
+    }
+  }
+  return lines;
+}
+
 /** Appended to thread replies when pre-fetched context is already injected. */
 export const MARV_THREAD_TOOL_OPTIONAL =
   'If you need more thread context, call get_post_thread_recent_messages. ';

@@ -19,6 +19,7 @@ import { JOBS } from '../../jobs/jobs.constants';
 import { MarvinThreadSummaryService } from '../services/marvin-thread-summary.service';
 import {
   MarvinThreadContextService,
+  type MarvGroupVenue,
   type MarvThreadContextPost,
 } from '../services/marvin-thread-context.service';
 import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
@@ -453,22 +454,19 @@ export class MarvinPublicReplyProcessor {
       });
     };
 
-    const referenced = [
-      ...new Set(
-        post.mentions
-          .map((m) => m.user.username ?? '')
-          .filter((u) => u && u.toLowerCase() !== this.identity.marvUsernameLower()),
-      ),
-    ];
-    const referencedMemberCards =
-      referenced.length > 0 ? await this.tools.lookupMemberCards(referenced) : undefined;
     const requesterRow = post.user;
 
     // Pre-fetch BIDIRECTIONAL thread context (ancestors above + replies below the
     // triggering post) so the model reasons about the whole conversation — not just a
     // flat recent-replies list. The rolling summary covers older posts beyond the window.
-    const { ancestors, triggeringPost, descendants, imageUrls: threadImageUrls, hasGifAttached } =
-      await this.fetchBidirectionalContext(post.id, openAICfg);
+    const {
+      ancestors,
+      triggeringPost,
+      descendants,
+      imageUrls: threadImageUrls,
+      hasGifAttached,
+      group: threadGroup,
+    } = await this.fetchBidirectionalContext(post.id, openAICfg);
     const rollingSummary = await this.threadSummary.getSummaryText(rootPostId).catch(() => null);
 
     // Collect link previews from triggering post + last 3 replies below it (read-only, no fetch).
@@ -483,6 +481,20 @@ export class MarvinPublicReplyProcessor {
       visionActive ? openAICfg.visionMaxImagesPerTurn : 0,
     );
 
+    const threadPosts = [
+      ...ancestors,
+      ...(triggeringPost ? [triggeringPost] : []),
+      ...descendants,
+    ];
+    const referencedMemberCards = await this.tools.collectMentionedMemberCards({
+      bodies: [post.body, ...threadPosts.map((p) => p.body)],
+      extraUsernames: [
+        ...post.mentions.map((m) => m.user.username),
+        ...threadPosts.map((p) => p.authorUsername),
+      ],
+    });
+    const referenced = referencedMemberCards.map((c) => c.username);
+
     const built = this.promptBuilder.build({
       source: 'public_thread',
       requester: {
@@ -493,16 +505,16 @@ export class MarvinPublicReplyProcessor {
       currentQuestion: post.body ?? '',
       triggeringPostId: post.id,
       rootPostId,
-      group:
-        postGroupId && post.communityGroup && !post.communityGroup.deletedAt
+      group: threadGroup
+        ?? (postGroupId && post.communityGroup && !post.communityGroup.deletedAt
           ? { name: post.communityGroup.name, description: post.communityGroup.description }
-          : undefined,
+          : undefined),
       ancestors,
       triggeringPost,
       descendants,
       rollingSummary,
-      referencedUsernames: referenced,
-      referencedMemberCards,
+      referencedUsernames: referenced.length > 0 ? referenced : undefined,
+      referencedMemberCards: referencedMemberCards.length > 0 ? referencedMemberCards : undefined,
       crisisDetected: routed.crisisDetected,
       webSearchDemanded: routed.webSearchDemanded,
       linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,
@@ -886,6 +898,7 @@ export class MarvinPublicReplyProcessor {
     descendants: MarvThreadPost[];
     imageUrls: string[];
     hasGifAttached: boolean;
+    group: MarvGroupVenue | null;
   }> {
     const emptyResult = {
       ancestors: [] as MarvThreadPost[],
@@ -893,6 +906,7 @@ export class MarvinPublicReplyProcessor {
       descendants: [] as MarvThreadPost[],
       imageUrls: [] as string[],
       hasGifAttached: false,
+      group: null as MarvGroupVenue | null,
     };
     try {
       const context = await this.threadContext.collect({ focalPostId: triggeringPostId });
@@ -920,7 +934,7 @@ export class MarvinPublicReplyProcessor {
         publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
       });
 
-      return { ancestors, triggeringPost, descendants, imageUrls, hasGifAttached };
+      return { ancestors, triggeringPost, descendants, imageUrls, hasGifAttached, group: context.group };
     } catch (err) {
       this.logger.warn(
         `[marv] fetchBidirectionalContext failed for focal=${triggeringPostId}: ${err instanceof Error ? err.message : String(err)}`,
