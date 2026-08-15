@@ -28,6 +28,7 @@ export type AnnouncementStatsDto = {
 
 export type AnnouncementAdminDto = AnnouncementDto & {
   status: AnnouncementStatus;
+  maxViews: number;
   endsAt: string | null;
   publishedAt: string | null;
   createdAt: string;
@@ -64,6 +65,7 @@ export function toAnnouncementAdminDto(
   return {
     ...toAnnouncementDto(row, publicAssetBaseUrl),
     status: row.status,
+    maxViews: row.maxViews,
     endsAt: row.endsAt ? row.endsAt.toISOString() : null,
     publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),

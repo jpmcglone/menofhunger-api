@@ -418,6 +418,7 @@ export type AnnouncementStatsDto = {
 
 export type AnnouncementAdminDto = AnnouncementDto & {
   status: AnnouncementStatus;
+  maxViews: number;
   endsAt: string | null;
   publishedAt: string | null;
   createdAt: string;

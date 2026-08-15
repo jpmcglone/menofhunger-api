@@ -6,6 +6,7 @@ import {
   isAnnouncementCadenceOpen,
   isAudienceEligibleForAds,
   isOnboarded,
+  hasRemainingViews,
   pickNextAd,
   pickNextAnnouncement,
   viewerKeyFor,
@@ -114,6 +115,13 @@ describe('announcements.selection', () => {
         now,
       ),
     ).toBe('oldest');
+  });
+
+  it('caps remaining views per person per platform', () => {
+    expect(hasRemainingViews(0, 1)).toBe(true);
+    expect(hasRemainingViews(1, 1)).toBe(false);
+    expect(hasRemainingViews(1, 2)).toBe(true);
+    expect(hasRemainingViews(2, 2)).toBe(false);
   });
 
   it('builds viewer keys from user first, then anonymous', () => {

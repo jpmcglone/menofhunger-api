@@ -24,6 +24,7 @@ function liveAnnouncement(overrides: Record<string, unknown> = {}) {
     imageUpdatedAt: null,
     ctaLabel: null,
     ctaHref: null,
+    maxViews: 1,
     publishedAt: OLD,
     endsAt: null,
     status: 'published',
@@ -167,10 +168,32 @@ describe('AnnouncementsService.getPending', () => {
     expect(result).toBeNull();
   });
 
-  it('holds a completed announcement for 24 hours, then shows it again', async () => {
+  it('does not show a completed announcement again when maxViews is 1', async () => {
     const { service, prisma } = makeService();
     prisma.announcement.findMany.mockImplementation(async (args: any) => {
       if (args?.where?.isAd === false) return [liveAnnouncement({ id: 'note-1' })];
+      return [];
+    });
+    prisma.announcementViewer.findMany.mockResolvedValue([
+      {
+        announcementId: 'note-1',
+        lastPresentedAt: new Date(NOW.getTime() - 2 * 60 * 60 * 1000),
+        lastCompletedAt: new Date(NOW.getTime() - 2 * 60 * 60 * 1000),
+        lastOutcome: 'dismissed',
+        completedCount: 1,
+      },
+    ]);
+
+    expect(await service.getPending({ userId: 'u1', platform: 'web', now: NOW })).toBeNull();
+
+    const later = new Date(NOW.getTime() + 25 * 60 * 60 * 1000);
+    expect(await service.getPending({ userId: 'u1', platform: 'web', now: later })).toBeNull();
+  });
+
+  it('shows again after cadence when maxViews still has room', async () => {
+    const { service, prisma } = makeService();
+    prisma.announcement.findMany.mockImplementation(async (args: any) => {
+      if (args?.where?.isAd === false) return [liveAnnouncement({ id: 'note-1', maxViews: 2 })];
       return [];
     });
     prisma.announcementViewer.findMany.mockResolvedValue([

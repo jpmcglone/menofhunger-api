@@ -1,5 +1,11 @@
 export const ANNOUNCEMENT_CADENCE_MS = 24 * 60 * 60 * 1000;
 export const AD_CADENCE_MS = 12 * 60 * 60 * 1000;
+export const ANNOUNCEMENT_MAX_VIEWS_MIN = 1;
+export const ANNOUNCEMENT_MAX_VIEWS_MAX = 10;
+
+export function hasRemainingViews(completedCount: number, maxViews: number): boolean {
+  return completedCount < maxViews;
+}
 
 export function isOnboarded(user: {
   usernameIsSet: boolean;

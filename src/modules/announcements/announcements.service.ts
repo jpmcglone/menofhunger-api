@@ -21,7 +21,10 @@ import {
 import {
   AD_CADENCE_MS,
   ANNOUNCEMENT_CADENCE_MS,
+  ANNOUNCEMENT_MAX_VIEWS_MAX,
+  ANNOUNCEMENT_MAX_VIEWS_MIN,
   canSeeAds,
+  hasRemainingViews,
   isAudienceEligibleForAds,
   isOnboarded,
   pickNextRotatingItem,
@@ -38,6 +41,7 @@ const LIVE_ANNOUNCEMENT_SELECT = {
   imageUpdatedAt: true,
   ctaLabel: true,
   ctaHref: true,
+  maxViews: true,
   publishedAt: true,
   endsAt: true,
   status: true,
@@ -54,6 +58,7 @@ export type AnnouncementWriteInput = {
   ctaHref?: string | null;
   endsAt?: Date | null;
   imageKey?: string | null;
+  maxViews?: number;
 };
 
 @Injectable()
@@ -292,6 +297,7 @@ export class AnnouncementsService {
     endsAt: Date | null;
     imageKey: string | null;
     imageUpdatedAt: Date | null;
+    maxViews: number;
   } {
     const title = (input.title ?? existing?.title ?? '').trim();
     if (title.length > 120) throw new BadRequestException('Title must be 120 characters or fewer.');
@@ -301,6 +307,12 @@ export class AnnouncementsService {
 
     const isAd = input.isAd ?? existing?.isAd ?? false;
     const placement = input.placement ?? existing?.placement ?? 'overlay';
+    const maxViews = input.maxViews ?? existing?.maxViews ?? 1;
+    if (!Number.isInteger(maxViews) || maxViews < ANNOUNCEMENT_MAX_VIEWS_MIN || maxViews > ANNOUNCEMENT_MAX_VIEWS_MAX) {
+      throw new BadRequestException(
+        `Max times per person must be ${ANNOUNCEMENT_MAX_VIEWS_MIN}–${ANNOUNCEMENT_MAX_VIEWS_MAX}.`,
+      );
+    }
 
     const ctaLabel = input.ctaLabel === undefined ? existing?.ctaLabel ?? null : (input.ctaLabel?.trim() || null);
     const ctaHref = input.ctaHref === undefined ? existing?.ctaHref ?? null : (input.ctaHref?.trim() || null);
@@ -334,6 +346,7 @@ export class AnnouncementsService {
       endsAt: input.endsAt === undefined ? existing?.endsAt ?? null : input.endsAt,
       imageKey,
       imageUpdatedAt,
+      maxViews,
     };
   }
 
@@ -366,9 +379,14 @@ export class AnnouncementsService {
     });
     if (abandoned) return abandoned;
 
+    const remaining = rows.filter((row) =>
+      hasRemainingViews(viewerById.get(row.id)?.completedCount ?? 0, row.maxViews),
+    );
+    if (remaining.length === 0) return null;
+
     const cadenceMs = isAd ? AD_CADENCE_MS : ANNOUNCEMENT_CADENCE_MS;
     const id = pickNextRotatingItem(
-      rows.map((row) => ({
+      remaining.map((row) => ({
         id: row.id,
         publishedAt: row.publishedAt ?? now,
         lastCompletedAt: viewerById.get(row.id)?.lastCompletedAt ?? null,
