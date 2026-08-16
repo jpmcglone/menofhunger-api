@@ -1020,6 +1020,7 @@ export class PostsFeedQueryService {
     }
 
     const feedVer = await this.cacheInvalidation.feedGlobalVersion();
+    const forYouUserVer = await this.cacheInvalidation.forYouUserVersion(viewerUserId);
     const paramsHash = stableJsonHash({
       endpoint: 'posts:forYou:ranked-page1',
       limit: params.limit,
@@ -1031,6 +1032,7 @@ export class PostsFeedQueryService {
       topLevelOnly: params.topLevelOnly ?? false,
       authorUserIds: (params.authorUserIds ?? []).map((id) => id.trim()).filter(Boolean).sort(),
       authorLocationState: params.authorLocationState?.trim().toUpperCase() || null,
+      forYouUserVer,
     });
     const key = RedisKeys.forYouRankedPage1(viewerUserId, paramsHash, feedVer);
     const lockKey = RedisKeys.forYouRankedPage1Lock(viewerUserId, paramsHash, feedVer);
@@ -1741,8 +1743,11 @@ export class PostsFeedQueryService {
           ? POSTS_RANKING.forYouFreshBoost24h
           : ageHours < 48
             ? POSTS_RANKING.forYouFreshBoost48h
-            : 1.0;
+            : ageHours < 72
+              ? POSTS_RANKING.forYouFreshBoost72h
+              : 1.0;
       const recencyMult = decay * freshBoost;
+      const replyMult = c.parentId ? POSTS_RANKING.forYouReplyMult : 1.0;
 
       // Base score is user-first, not content-first:
       //   - Friend-engaged: social proof (N follows who engaged × weight) dominates over global trending,
@@ -1777,7 +1782,17 @@ export class PostsFeedQueryService {
         jitterStrengthBase + (POSTS_RANKING.forYouSeenSaturationJitterMax - jitterStrengthBase) * saturationRamp,
       );
       const jitter = 1 + (seededUnitInterval(jitterSeed, c.id) * 2 - 1) * jitterStrength;
-      const adjusted = base * recencyMult * relMult * seenMult * friendMult * followedUnseenMult * secondDegreeMult * groupMult * jitter;
+      const adjusted =
+        base *
+        recencyMult *
+        relMult *
+        seenMult *
+        friendMult *
+        followedUnseenMult *
+        secondDegreeMult *
+        groupMult *
+        replyMult *
+        jitter;
       return { candidate: c, adjusted };
     });
 
@@ -1800,18 +1815,28 @@ export class PostsFeedQueryService {
     // verifiedOnly with few authors) never returns near-empty pages or churns its single
     // visible row as the seen-decay shuffles things between requests.
     const window = Math.max(1, POSTS_RANKING.forYouMaxPerAuthorWindow);
+    const replyWindow = Math.max(1, POSTS_RANKING.forYouMaxReplyWindow);
     const picked: typeof ranked = [];
     const pickedIdSet = new Set<string>();
     const skipped: typeof ranked = [];
 
     const recentAuthors: string[] = [];
     const recentRoots: string[] = [];
+    const recentWasReply: boolean[] = [];
     const pickFrom = (source: typeof ranked, maxPicked: number) => {
       for (const r of source) {
         if (picked.length >= maxPicked) break;
         if (pickedIdSet.has(r.candidate.id)) continue;
         const rootKey = r.candidate.parentId ?? r.candidate.id;
-        if (recentAuthors.includes(r.candidate.userId) || recentRoots.includes(rootKey)) {
+        const isReply = Boolean(r.candidate.parentId);
+        const hasUnpickedOriginal = source.some(
+          (x) => !x.candidate.parentId && !pickedIdSet.has(x.candidate.id),
+        );
+        if (
+          recentAuthors.includes(r.candidate.userId) ||
+          recentRoots.includes(rootKey) ||
+          (isReply && recentWasReply.includes(true) && hasUnpickedOriginal)
+        ) {
           skipped.push(r);
           continue;
         }
@@ -1819,8 +1844,10 @@ export class PostsFeedQueryService {
         pickedIdSet.add(r.candidate.id);
         recentAuthors.push(r.candidate.userId);
         recentRoots.push(rootKey);
+        recentWasReply.push(isReply);
         if (recentAuthors.length >= window) recentAuthors.shift();
         if (recentRoots.length >= window) recentRoots.shift();
+        if (recentWasReply.length >= replyWindow) recentWasReply.shift();
       }
     };
 

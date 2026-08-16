@@ -30,5 +30,6 @@ describe('PostsController media feed guardrails', () => {
     expect(src).toContain('getOrSetJsonWithLock');
     expect(src).toContain('authPostsListLock');
     expect(src).toContain("? 'auth_foryou'");
+    expect(src).toContain('forYouUserVer');
   });
 });

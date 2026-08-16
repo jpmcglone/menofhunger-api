@@ -54,3 +54,12 @@ describe('CacheInvalidationService.bumpNotificationsList', () => {
   });
 });
 
+describe('CacheInvalidationService.bumpForYouUser', () => {
+  it('increments the per-user For You version', async () => {
+    const { svc, rawObj } = makeService();
+    await svc.bumpForYouUser('user-1');
+    const incr = rawObj.incr as jest.Mock;
+    expect(incr.mock.calls.map((c) => c[0])).toContain(RedisKeys.verForYouUser('user-1'));
+  });
+});
+

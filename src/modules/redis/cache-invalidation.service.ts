@@ -95,6 +95,23 @@ export class CacheInvalidationService {
     }
   }
 
+  async forYouUserVersion(userId: string): Promise<number> {
+    const uid = String(userId ?? '').trim();
+    if (!uid) return 1;
+    return await this.readVersionOrDefault(RedisKeys.verForYouUser(uid), 1);
+  }
+
+  async bumpForYouUser(userId: string): Promise<number> {
+    const uid = String(userId ?? '').trim();
+    if (!uid) return 0;
+    try {
+      return await this.redis.raw().incr(RedisKeys.verForYouUser(uid));
+    } catch (err) {
+      this.logger.warn(`Failed to bump For You version userId=${uid}: ${err}`);
+      return await this.forYouUserVersion(uid);
+    }
+  }
+
   /**
    * Post writes can affect:
    * - feeds (new/popular/featured)

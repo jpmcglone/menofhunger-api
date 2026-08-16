@@ -73,6 +73,7 @@ function makeService(
   const cacheInvalidation: any = {
     bumpForPostWrite: jest.fn(async () => undefined),
     feedGlobalVersion: jest.fn(async () => 1),
+    forYouUserVersion: jest.fn(async () => 1),
   };
   const cache: any = {
     getOrSetJsonWithLock: jest.fn(async (params: any) => params.computeAndSet()),
@@ -2221,19 +2222,19 @@ describe('PostsService.listForYouFeed', () => {
   });
 
   it('orders posts strictly by recency when trending and relationship are equal (24h > 48h > 72h)', async () => {
-    // All three posts have identical `trendingScore` and stranger relationship. The only signal
-    // left is post age, so the result must be strictly newest-first across the 24h/48h/72h
-    // buckets the user described.
+    // Identical trending + stranger relationship. Age is the only signal: 24h > 48h > 72h,
+    // then the exponential tail keeps sliding (10-day still ranks, just last).
     const { service } = setupForYou({
       candidates: [
         cand('p-12h', 'u-a', 50, 12),
         cand('p-36h', 'u-b', 50, 36),
         cand('p-60h', 'u-c', 50, 60),
+        cand('p-10d', 'u-d', 50, 240),
       ],
     });
 
     const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
-    expect(out.posts.map((p: any) => p.id)).toEqual(['p-12h', 'p-36h', 'p-60h']);
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-12h', 'p-36h', 'p-60h', 'p-10d']);
   });
 
   it('lets a high-trending 72h post still beat a moderately-trending 6h post', async () => {
@@ -2433,6 +2434,51 @@ describe('PostsService.listForYouFeed', () => {
     // u-prolific candidate inside the 5-row window, picking fillers instead until the page is
     // full at 6.
     expect(ids).toEqual(['p1', 'p-a', 'p-b', 'p-c', 'p-d', 'p-e']);
+  });
+
+  it('prefers an original post over a reply at equal score and relationship', async () => {
+    const reply = cand('p-reply', 'u-a', 50, 1);
+    reply.parentId = 'someone-else';
+    const { service } = setupForYou({
+      candidates: [reply, cand('p-original', 'u-b', 50, 1)],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 2, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['p-original', 'p-reply']);
+  });
+
+  it('still surfaces a followed reply over a stranger original (people-centered)', async () => {
+    const reply = cand('p-michael-reply', 'u-michael', 10, 1);
+    reply.parentId = 'philip-post';
+    const { service } = setupForYou({
+      candidates: [reply, cand('p-stranger', 'u-stranger', 12, 1)],
+      youFollowAuthorIds: ['u-michael'],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 2, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)[0]).toBe('p-michael-reply');
+  });
+
+  it('spaces replies in the first pass when original posts are available', async () => {
+    const r1 = cand('r1', 'u-r1', 100, 1);
+    r1.parentId = 'root-1';
+    const r2 = cand('r2', 'u-r2', 99, 1);
+    r2.parentId = 'root-2';
+    const r3 = cand('r3', 'u-r3', 98, 1);
+    r3.parentId = 'root-3';
+    const { service } = setupForYou({
+      candidates: [
+        r1,
+        r2,
+        r3,
+        cand('p-a', 'u-a', 40, 1),
+        cand('p-b', 'u-b', 39, 1),
+        cand('p-c', 'u-c', 38, 1),
+      ],
+    });
+
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 4, cursor: null, visibility: 'all' });
+    expect(out.posts.map((p: any) => p.id)).toEqual(['r1', 'p-a', 'p-b', 'p-c']);
   });
 
   it('prefers root diversity in the first pass when one conversation has multiple high-ranked replies', async () => {

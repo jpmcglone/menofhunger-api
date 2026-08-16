@@ -398,8 +398,8 @@ export class PostsController {
 
     // Anon For You applies a per-request score jitter so each refresh shows a different order —
     // caching would freeze that order, so we skip the cache for anon For You.
-    // Authed For You page 1 is cached as a composed payload (15s); view-history churn
-    // is acceptable at that TTL, and a stampede lock prevents thundering herds.
+    // Authed For You page 1 is cached as a composed payload (15s) with a stampede lock.
+    // lastSeenAt refreshes bump a per-user For You version so the next refresh re-ranks.
     const anonCache = viewerUserId == null && !isForYou;
     const authForYouFirstPageCache =
       isForYou
@@ -424,6 +424,9 @@ export class PostsController {
     const feedVer = (anonCache || authFirstPageCache || authCursorCache || authForYouFirstPageCache)
       ? await this.cacheInvalidation.feedGlobalVersion()
       : null;
+    const forYouUserVer = authForYouFirstPageCache && viewerUserId
+      ? await this.cacheInvalidation.forYouUserVersion(viewerUserId)
+      : null;
     const cacheEnabled = Boolean(feedVer) && (anonCache || authFirstPageCache || authCursorCache || authForYouFirstPageCache);
     const paramsHash = cacheEnabled
       ? stableJsonHash({
@@ -437,6 +440,7 @@ export class PostsController {
           checkinDayKey,
           includeSelf,
           mediaOnly: parsed.mediaOnly ?? false,
+          forYouUserVer,
           topLevelOnly: parsed.topLevelOnly ?? false,
           authorUserIds,
           collapseByRoot: parsed.collapseByRoot ?? false,

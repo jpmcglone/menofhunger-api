@@ -6,7 +6,7 @@ describe('PostViewsService.markViewed', () => {
     const tx = {
       postView: {
         createMany: jest.fn(async () => ({ count: createdCount })),
-        update: jest.fn(async () => ({})),
+        updateMany: jest.fn(async () => ({ count: 1 })),
       },
       postAnonView: {
         deleteMany: jest.fn(async () => ({ count: 0 })),
@@ -39,6 +39,7 @@ describe('PostViewsService.markViewed', () => {
     };
     const cache = {};
     const redis = { del: jest.fn(async () => undefined) };
+    const cacheInvalidation = { bumpForYouUser: jest.fn(async () => 2) };
     const presenceRealtime = { emitPostsLiveUpdated: jest.fn() };
     const posthog = { capture: jest.fn() };
     const notifications = {
@@ -49,15 +50,16 @@ describe('PostViewsService.markViewed', () => {
       prisma as any,
       cache as any,
       redis as any,
+      cacheInvalidation as any,
       presenceRealtime as any,
       posthog as any,
       notifications as any,
     );
-    return { service, prisma, tx, redis, presenceRealtime, posthog, notifications };
+    return { service, prisma, tx, redis, cacheInvalidation, presenceRealtime, posthog, notifications };
   }
 
   it('updates repeat authenticated views without incrementing unique viewer count', async () => {
-    const { service, tx, redis, presenceRealtime, posthog, notifications } = makeService({ createdCount: 0 });
+    const { service, tx, redis, cacheInvalidation, presenceRealtime, posthog, notifications } = makeService({ createdCount: 0 });
 
     await service.markViewed('viewer', 'p1', null, 'feed_scroll');
 
@@ -65,18 +67,41 @@ describe('PostViewsService.markViewed', () => {
       data: [expect.objectContaining({ postId: 'p1', userId: 'viewer', seenCount: 1, lastSource: 'feed_scroll' })],
       skipDuplicates: true,
     });
-    expect(tx.postView.update).toHaveBeenCalledWith({
-      where: { postId_userId: { postId: 'p1', userId: 'viewer' } },
+    expect(tx.postView.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        postId: 'p1',
+        userId: 'viewer',
+        lastSeenAt: { lt: expect.any(Date) },
+      }),
       data: expect.objectContaining({
+        lastSeenAt: expect.any(Date),
         seenCount: { increment: 1 },
         lastSource: 'feed_scroll',
       }),
     });
     expect(tx.post.update).not.toHaveBeenCalled();
     expect(redis.del).not.toHaveBeenCalled();
+    expect(cacheInvalidation.bumpForYouUser).toHaveBeenCalledWith('viewer');
     expect(presenceRealtime.emitPostsLiveUpdated).not.toHaveBeenCalled();
     expect(posthog.capture).not.toHaveBeenCalled();
     expect(notifications.markReadBySubject).toHaveBeenCalledWith('viewer', { postId: 'p1' });
+  });
+
+  it('bumps For You on the first unique authenticated view', async () => {
+    const { service, cacheInvalidation } = makeService({ createdCount: 1 });
+
+    await service.markViewed('viewer', 'p1', null, 'feed_scroll');
+
+    expect(cacheInvalidation.bumpForYouUser).toHaveBeenCalledWith('viewer');
+  });
+
+  it('does not bump For You when a repeat view is still inside the last-seen buffer', async () => {
+    const { service, tx, cacheInvalidation } = makeService({ createdCount: 0 });
+    tx.postView.updateMany.mockResolvedValue({ count: 0 });
+
+    await service.markViewed('viewer', 'p1', null, 'feed_scroll');
+
+    expect(cacheInvalidation.bumpForYouUser).not.toHaveBeenCalled();
   });
 });
 
@@ -118,6 +143,7 @@ describe('PostViewsService.markViewedBatch', () => {
     };
     const cache = {};
     const redis = { del: jest.fn(async () => undefined) };
+    const cacheInvalidation = { bumpForYouUser: jest.fn(async () => 2) };
     const presenceRealtime = { emitPostsLiveUpdated: jest.fn() };
     const posthog = { capture: jest.fn() };
     const notifications = {
@@ -128,6 +154,7 @@ describe('PostViewsService.markViewedBatch', () => {
       prisma as any,
       cache as any,
       redis as any,
+      cacheInvalidation as any,
       presenceRealtime as any,
       posthog as any,
       notifications as any,

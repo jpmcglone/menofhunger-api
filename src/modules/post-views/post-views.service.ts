@@ -3,12 +3,14 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
 import { RedisService } from '../redis/redis.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
   ANON_VIEW_WEIGHT,
   LOGGED_IN_VIEW_WEIGHT,
   cutoffForAnonRecount,
+  cutoffForLastSeenRefresh,
   sanitizeAnonViewerId,
 } from '../views/view-tracking.utils';
 
@@ -53,14 +55,16 @@ export class PostViewsService {
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
     private readonly redis: RedisService,
+    private readonly cacheInvalidation: CacheInvalidationService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly posthog: PosthogService,
     private readonly notifications: NotificationsService,
   ) {}
 
   /**
-   * Record that a user viewed a post. Idempotent: multiple calls for the same
-   * (userId, postId) pair are safe and will not double-count.
+   * Record that a user viewed a post. Unique viewerCount stays 1 per user.
+   * Repeat authenticated views refresh lastSeenAt (and seenCount) after a short
+   * buffer so For You can suppress recently re-seen posts on the next refresh.
    * Emits a WebSocket event if this is the first (unique) view.
    */
   async markViewed(
@@ -126,18 +130,24 @@ export class PostViewsService {
 
           let viewerIncrementLocal = 0;
           let weightedIncrementLocal = 0;
+          let lastSeenRefreshed = created.count > 0;
           if (created.count > 0) {
             viewerIncrementLocal = consumedAnonCount > 0 ? 0 : 1;
             weightedIncrementLocal = consumedAnonCount > 0 ? 0.5 : LOGGED_IN_VIEW_WEIGHT;
           } else {
-            await tx.postView.update({
-              where: { postId_userId: { postId: pid, userId: uid } },
+            const refreshed = await tx.postView.updateMany({
+              where: {
+                postId: pid,
+                userId: uid,
+                lastSeenAt: { lt: cutoffForLastSeenRefresh(now) },
+              },
               data: {
                 lastSeenAt: now,
                 seenCount: { increment: 1 },
                 lastSource,
               },
             });
+            lastSeenRefreshed = refreshed.count > 0;
           }
 
           if (viewerIncrementLocal !== 0 || weightedIncrementLocal !== 0) {
@@ -149,14 +159,14 @@ export class PostViewsService {
               },
               select: { viewerCount: true },
             });
-            return { createdCount: created.count, viewerIncrementLocal, weightedIncrementLocal, viewerCount: updated.viewerCount };
+            return { createdCount: created.count, viewerIncrementLocal, weightedIncrementLocal, lastSeenRefreshed, viewerCount: updated.viewerCount };
           }
 
           const unchanged = await tx.post.findUnique({
             where: { id: pid },
             select: { viewerCount: true },
           });
-          return { createdCount: created.count, viewerIncrementLocal, weightedIncrementLocal, viewerCount: unchanged?.viewerCount ?? 0 };
+          return { createdCount: created.count, viewerIncrementLocal, weightedIncrementLocal, lastSeenRefreshed, viewerCount: unchanged?.viewerCount ?? 0 };
         });
 
         viewerIncrement = result.viewerIncrementLocal;
@@ -167,6 +177,9 @@ export class PostViewsService {
             source: lastSource ?? 'unknown',
             viewer_type: 'user',
           });
+        }
+        if (result.lastSeenRefreshed) {
+          void this.cacheInvalidation.bumpForYouUser(uid).catch(() => undefined);
         }
 
         if (viewerIncrement !== 0 || weightedIncrement !== 0) {

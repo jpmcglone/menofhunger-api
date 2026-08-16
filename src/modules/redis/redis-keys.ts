@@ -46,6 +46,9 @@ export const RedisKeys = {
   verNotifications(userId: string): string {
     return `ver:notifications:${clean(userId)}`;
   },
+  verForYouUser(userId: string): string {
+    return `ver:forYou:user:${clean(userId)}`;
+  },
 
   // Session cache (tokenHash -> userId/null)
   sessionUser(tokenHash: string): string {

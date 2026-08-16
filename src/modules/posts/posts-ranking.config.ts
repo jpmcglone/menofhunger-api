@@ -127,15 +127,23 @@ export const POSTS_RANKING = {
   forYouSecondDegreeMaxAuthors: 200,
   forYouSecondDegreePathBonusMax: 1.5,
   /**
-   * Strong freshness bias: posts in the last 24h dominate, then 48h, then 72h, with a low floor so
-   * months-old content can't ride a tall trendingScore back onto page one. A genuinely popular older
-   * post still wins when its raw trending is high enough — the floor is non-zero on purpose.
+   * Freshness: 24h dominates, then 48h, then 72h. After that the exponential tail keeps sliding
+   * down (not linear) but never reaches zero — the floor is high enough that a genuinely popular
+   * older post can still beat a quiet new one.
    */
-  forYouRecencyHalfLifeHours: 36,
-  forYouRecencyFloor: 0.1,
+  forYouRecencyHalfLifeHours: 48,
+  forYouRecencyFloor: 0.15,
   /** Explicit fresh-window boosts so 24h > 48h > 72h ordering is unambiguous at parity. */
-  forYouFreshBoost24h: 1.2,
-  forYouFreshBoost48h: 1.05,
+  forYouFreshBoost24h: 1.25,
+  forYouFreshBoost48h: 1.1,
+  forYouFreshBoost72h: 1.0,
+  /**
+   * Original posts/reposts beat replies at parity. A followed reply still clears a stranger
+   * original because relationship multipliers are larger than this haircut.
+   */
+  forYouReplyMult: 0.82,
+  /** At most one reply in any window of this many consecutive first-pass rows. */
+  forYouMaxReplyWindow: 3,
   /** Member-group posts should rank by relationship; open non-member groups stay lower-priority discovery. */
   forYouMemberGroupMult: 1.0,
   /** Demoted: open groups are weakly social and should not crowd the early feed. */
