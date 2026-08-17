@@ -301,7 +301,11 @@ describe('LandingService', () => {
   it('feeds listTrending with viewerUserId=null and limit=3', async () => {
     const { service, articles } = makeService();
     await service.getSnapshot(NOW);
-    expect(articles.listTrending).toHaveBeenCalledWith({ viewerUserId: null, limit: 3 });
+    expect(articles.listTrending).toHaveBeenCalledWith({
+      viewerUserId: null,
+      limit: 3,
+      fillIfShort: true,
+    });
   });
 
   it('returns zero counts when no stats row exists', async () => {

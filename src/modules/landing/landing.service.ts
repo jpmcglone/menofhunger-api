@@ -305,7 +305,7 @@ export class LandingService {
           p."createdAt" DESC
         LIMIT ${TOP_POSTS_SCAN_LIMIT}
       `),
-      this.articles.listTrending({ viewerUserId: null, limit: 3 }),
+      this.articles.listTrending({ viewerUserId: null, limit: 3, fillIfShort: true }),
     ]);
 
     // ── Score and rank the avatar strip ──────────────────────────────────────

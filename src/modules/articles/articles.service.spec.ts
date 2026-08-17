@@ -379,3 +379,73 @@ describe('ArticlesService.publish tier gates and daily limit', () => {
     await expect(service.publish('user-1', 'article-1')).rejects.toThrow(ForbiddenException);
   });
 });
+
+describe('ArticlesService.listTrending', () => {
+  function trendingRow(id: string) {
+    const now = new Date();
+    return {
+      id,
+      createdAt: now,
+      updatedAt: now,
+      publishedAt: now,
+      editedAt: null,
+      deletedAt: null,
+      title: id,
+      slug: id,
+      body: '{}',
+      excerpt: null,
+      thumbnailR2Key: null,
+      visibility: 'public',
+      isDraft: false,
+      lastSavedAt: now,
+      boostCount: 0,
+      commentCount: 0,
+      viewCount: 0,
+      author: {
+        id: 'author-1',
+        username: 'peter',
+        name: 'Peter',
+        bio: null,
+        articleBio: null,
+        avatarKey: null,
+        avatarUpdatedAt: null,
+        verifiedStatus: VerifiedStatus.none,
+        premium: false,
+        premiumPlus: false,
+        isOrganization: false,
+        stewardBadgeEnabled: true,
+        orgMemberships: [],
+      },
+      tags: [],
+      boosts: [],
+      reactions: [],
+    };
+  }
+
+  it('stays inside the 7-day scored window unless fillIfShort is set', async () => {
+    const { service, prisma } = makeService();
+    prisma.article.findMany.mockResolvedValueOnce([trendingRow('a1'), trendingRow('a2')]);
+
+    const result = await service.listTrending({ viewerUserId: null, limit: 3 });
+
+    expect(result.map((article) => article.id)).toEqual(['a1', 'a2']);
+    expect(prisma.article.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('backfills older published articles when the weekly set is short', async () => {
+    const { service, prisma } = makeService();
+    prisma.article.findMany
+      .mockResolvedValueOnce([trendingRow('a1'), trendingRow('a2')])
+      .mockResolvedValueOnce([trendingRow('a3')]);
+
+    const result = await service.listTrending({
+      viewerUserId: null,
+      limit: 3,
+      fillIfShort: true,
+    });
+
+    expect(result.map((article) => article.id)).toEqual(['a1', 'a2', 'a3']);
+    expect(prisma.article.findMany).toHaveBeenCalledTimes(2);
+    expect(prisma.article.findMany.mock.calls[1][0].where.id).toEqual({ notIn: ['a1', 'a2'] });
+  });
+});

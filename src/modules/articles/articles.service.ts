@@ -244,14 +244,20 @@ export class ArticlesService {
 
   // ─── List trending articles ──────────────────────────────────────────────────
 
-  async listTrending(opts: { viewerUserId?: string | null; limit?: number }) {
+  async listTrending(opts: {
+    viewerUserId?: string | null;
+    limit?: number;
+    /** When the 7-day scored set is short, backfill from older published articles. */
+    fillIfShort?: boolean;
+  }) {
     const limit = Math.min(opts.limit ?? 5, 20);
     const viewerCtx = opts.viewerUserId ? await this.viewer.getViewer(opts.viewerUserId) : null;
     const allowedVisibilities = this.viewer.allowedPostVisibilities(viewerCtx);
+    const include = this.articleIncludes(true, true, opts.viewerUserId);
 
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-    const articles = await this.prisma.article.findMany({
+    const recent = await this.prisma.article.findMany({
       where: {
         isDraft: false,
         deletedAt: null,
@@ -261,8 +267,25 @@ export class ArticlesService {
       },
       orderBy: [{ trendingScore: 'desc' }, { publishedAt: 'desc' }],
       take: limit,
-      include: this.articleIncludes(true, true, opts.viewerUserId),
+      include,
     }) as ArticleWithAuthor[];
+
+    let articles = recent;
+    if (opts.fillIfShort && recent.length < limit) {
+      const extra = await this.prisma.article.findMany({
+        where: {
+          isDraft: false,
+          deletedAt: null,
+          publishedAt: { not: null },
+          visibility: { in: allowedVisibilities },
+          id: { notIn: recent.map((article) => article.id) },
+        },
+        orderBy: [{ trendingScore: { sort: 'desc', nulls: 'last' } }, { publishedAt: 'desc' }],
+        take: limit - recent.length,
+        include,
+      }) as ArticleWithAuthor[];
+      articles = recent.concat(extra);
+    }
 
     return articles.map((a) =>
       toArticleDto(a, this.r2BaseUrl, {
