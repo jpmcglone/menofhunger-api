@@ -46,7 +46,10 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
   const posts: any = {};
   const appConfig: any = { r2: jest.fn(() => null) };
   const sideEffects: any = { dispatch: jest.fn() };
-  const redis: any = {};
+  const redis: any = {
+    getJson: jest.fn(async () => null),
+    setJson: jest.fn(async () => undefined),
+  };
 
   const marvIdentity: any = { cachedMarvUserId: jest.fn(() => null), getMarvUserId: jest.fn(async () => null) };
   const presenceRealtime: any = { emitGroupMarvChanged: jest.fn() };
@@ -1304,6 +1307,42 @@ describe('GroupsService.removeMember — Marv realtime', () => {
       groupId: 'g1',
       userId: MEMBER_ID,
       actorUserId: 'actor-1',
+    });
+  });
+});
+
+describe('GroupsService.listFeatured', () => {
+  it('skips membership lookup for anonymous viewers', async () => {
+    const memberFindMany = jest.fn();
+    const { service } = makeService({
+      communityGroup: {
+        findMany: jest.fn(async () => [{ ...FAKE_GROUP, isFeatured: true }]),
+      },
+      communityGroupMember: { findMany: memberFindMany },
+    });
+
+    const result = await service.listFeatured({ viewerUserId: null });
+    expect(memberFindMany).not.toHaveBeenCalled();
+    expect(result.data).toHaveLength(1);
+    expect((result.data[0] as { viewerMembership: unknown }).viewerMembership).toBeNull();
+  });
+
+  it('annotates membership for an authenticated viewer', async () => {
+    const memberFindMany = jest.fn(async () => [
+      { groupId: 'g1', status: 'active', role: 'member' },
+    ]);
+    const { service } = makeService({
+      communityGroup: {
+        findMany: jest.fn(async () => [{ ...FAKE_GROUP, isFeatured: true }]),
+      },
+      communityGroupMember: { findMany: memberFindMany },
+    });
+
+    const result = await service.listFeatured({ viewerUserId: 'u1' });
+    expect(memberFindMany).toHaveBeenCalled();
+    expect((result.data[0] as { viewerMembership: unknown }).viewerMembership).toEqual({
+      status: 'active',
+      role: 'member',
     });
   });
 });

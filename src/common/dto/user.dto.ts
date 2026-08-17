@@ -1,4 +1,4 @@
-import type { BirthdayVisibility, FollowVisibility, VerifiedStatus } from '@prisma/client';
+import type { BirthdayVisibility, FollowVisibility, HeardAboutUs, VerifiedStatus } from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
 import { sanitizeFeatureToggles, type AppFeatureToggle } from '../feature-toggles';
 
@@ -145,6 +145,10 @@ export type UserDto = {
   birthdate: string | null;
   interests: string[];
   menOnlyConfirmed: boolean;
+  heardAboutUs: HeardAboutUs | null;
+  heardAboutUsOther: string | null;
+  /** True when a recruiter is already linked (referral code is locked). */
+  hasRecruiter: boolean;
   siteAdmin: boolean;
   featureToggles: AppFeatureToggle[];
   bannedAt: string | null;
@@ -279,6 +283,9 @@ export type UserDtoRow = {
   birthdate: Date | null;
   interests: string[];
   menOnlyConfirmed: boolean;
+  heardAboutUs?: HeardAboutUs | null;
+  heardAboutUsOther?: string | null;
+  recruitedById?: string | null;
   siteAdmin: boolean;
   featureToggles: string[];
   bannedAt: Date | null;
@@ -333,6 +340,9 @@ export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = 
     birthdate: user.birthdate ? user.birthdate.toISOString() : null,
     interests: user.interests ?? [],
     menOnlyConfirmed: Boolean(user.menOnlyConfirmed),
+    heardAboutUs: user.heardAboutUs ?? null,
+    heardAboutUsOther: user.heardAboutUsOther ?? null,
+    hasRecruiter: Boolean(user.recruitedById),
     siteAdmin: user.siteAdmin,
     featureToggles: sanitizeFeatureToggles((user as any).featureToggles),
     bannedAt: user.bannedAt ? user.bannedAt.toISOString() : null,

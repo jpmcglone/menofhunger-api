@@ -11,6 +11,13 @@ import { AppConfigService } from '../app/app-config.service';
 import { FollowsService } from '../follows/follows.service';
 import { CurrentUserId, OptionalCurrentUserId } from './users.decorator';
 import { validateUsername } from './users.utils';
+import {
+  HEARD_ABOUT_US_OTHER_MAX,
+  HEARD_ABOUT_US_VALUES,
+  isFullyOnboarded,
+  resolveHeardAboutUs,
+  resolveOnboardingUsername,
+} from './onboarding.utils';
 import { toUserDto } from './user.dto';
 import { toUserListDto, type NudgeStateDto } from '../../common/dto';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
@@ -92,6 +99,8 @@ const onboardingSchema = z.object({
   interests: z.array(z.string().trim().min(1).max(40)).min(1).max(30).optional(),
   menOnlyConfirmed: z.boolean().optional(),
   locationQuery: z.union([z.string().trim().max(10), z.literal('')]).optional(),
+  heardAboutUs: z.enum(HEARD_ABOUT_US_VALUES).optional(),
+  heardAboutUsOther: z.string().trim().max(HEARD_ABOUT_US_OTHER_MAX).optional().nullable(),
 });
 
 const newestUsersSchema = z.object({
@@ -1118,11 +1127,8 @@ export class UsersController {
     const now = new Date();
     let emailChanged = false;
     let nextEmail: string | null = user.email ?? null;
+    let usernameFirstSet = false;
 
-    // Required onboarding acknowledgement: once true, it stays true.
-    if (!user.menOnlyConfirmed && parsed.menOnlyConfirmed !== true) {
-      throw new BadRequestException('Please confirm you’re joining as part of our men’s community to continue.');
-    }
     if (user.menOnlyConfirmed && parsed.menOnlyConfirmed === false) {
       throw new BadRequestException('This confirmation cannot be removed.');
     }
@@ -1180,22 +1186,28 @@ export class UsersController {
       data.interests = mapped;
     }
 
-    // Allow setting username here only if not already set.
     if (parsed.username !== undefined) {
-      const desired = parsed.username.trim();
-      if (!desired) throw new BadRequestException('Username is required.');
-      if (user.usernameIsSet) {
-        throw new ConflictException('Username is already set.');
+      const resolved = resolveOnboardingUsername({
+        desired: parsed.username,
+        currentUsername: user.username,
+        usernameIsSet: user.usernameIsSet,
+      });
+      if (resolved) {
+        data.username = resolved.username;
+        if ('usernameIsSet' in resolved) {
+          data.usernameIsSet = true;
+          usernameFirstSet = true;
+        }
       }
-      const validated = validateUsername(desired);
-      if (!validated.ok) throw new BadRequestException(validated.error);
+    }
 
-      try {
-        data.username = validated.username;
-        data.usernameIsSet = true;
-      } catch (err: unknown) {
-        throw err;
-      }
+    if (parsed.heardAboutUs !== undefined) {
+      const heard = resolveHeardAboutUs({
+        heardAboutUs: parsed.heardAboutUs,
+        heardAboutUsOther: parsed.heardAboutUsOther,
+      });
+      data.heardAboutUs = heard.heardAboutUs;
+      data.heardAboutUsOther = heard.heardAboutUsOther;
     }
 
     // Optional ZIP — silently ignored if invalid (non-blocking for onboarding).
@@ -1214,14 +1226,19 @@ export class UsersController {
       }
     }
 
+    const wasComplete = isFullyOnboarded(user);
+
     try {
       const updated = await this.prisma.user.update({
         where: { id: userId },
         data,
       });
 
-      if (parsed.username !== undefined && updated.username) {
+      if (usernameFirstSet && updated.username) {
         await this.ensureStarterFollowsOnFirstUsernameSet(userId, updated.username);
+      }
+
+      if (!wasComplete && isFullyOnboarded(updated) && updated.username) {
         this.posthog.capture(userId, 'onboarding_completed', { username: updated.username });
         const r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
         const avatarUrl = r2PublicBaseUrl && updated.avatarKey ? `${r2PublicBaseUrl}/${updated.avatarKey}` : null;

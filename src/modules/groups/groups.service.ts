@@ -212,8 +212,8 @@ export class GroupsService {
     return { data: dto };
   }
 
-  async listFeatured(params: { viewerUserId: string }) {
-    const cacheKey = RedisKeys.groupsFeatured(params.viewerUserId);
+  async listFeatured(params: { viewerUserId: string | null }) {
+    const cacheKey = RedisKeys.groupsFeatured(params.viewerUserId ?? 'anon');
     try {
       const cached = await this.redis.getJson<{ data: unknown[] }>(cacheKey);
       if (cached) return cached;
@@ -224,10 +224,12 @@ export class GroupsService {
       orderBy: [{ featuredOrder: 'asc' }, { createdAt: 'asc' }],
     });
     const groupIds = rows.map((r) => r.id);
-    const memberships = await this.prisma.communityGroupMember.findMany({
-      where: { userId: params.viewerUserId, groupId: { in: groupIds } },
-      select: { groupId: true, status: true, role: true },
-    });
+    const memberships = params.viewerUserId
+      ? await this.prisma.communityGroupMember.findMany({
+          where: { userId: params.viewerUserId, groupId: { in: groupIds } },
+          select: { groupId: true, status: true, role: true },
+        })
+      : [];
     const byGroup = new Map(memberships.map((m) => [m.groupId, m] as const));
     const result = {
       data: rows.map((g) => {

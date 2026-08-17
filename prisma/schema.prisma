@@ -69,6 +69,18 @@ enum BirthdayVisibility {
   full
 }
 
+enum HeardAboutUs {
+  friend
+  google
+  x
+  youtube
+  nxr
+  church
+  podcast
+  prefer_not
+  other
+}
+
 enum PostMediaKind {
   image
   gif
@@ -342,6 +354,9 @@ model User {
   interests                    String[]           @default([])
   // Required onboarding acknowledgement (app store friendly wording; enforced in app).
   menOnlyConfirmed             Boolean            @default(false)
+  // How the user heard about Men of Hunger (required while onboarding is still open).
+  heardAboutUs                 HeardAboutUs?
+  heardAboutUsOther            String?
   // True when the user has explicitly chosen a username.
   usernameIsSet                Boolean            @default(false)
   // Minimal admin flag (will be replaced by real roles later).

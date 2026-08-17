@@ -91,13 +91,13 @@ export class GroupsController {
     private readonly prisma: PrismaService,
   ) {}
 
-  @UseGuards(AuthGuard)
+  @UseGuards(OptionalAuthGuard)
   @Throttle({
     default: { limit: rateLimitLimit('publicRead', 120), ttl: rateLimitTtl('publicRead', 60) },
   })
   @Get('featured')
-  async featured(@CurrentUserId() viewerUserId: string) {
-    return await this.groups.listFeatured({ viewerUserId });
+  async featured(@OptionalCurrentUserId() viewerUserId: string | undefined) {
+    return await this.groups.listFeatured({ viewerUserId: viewerUserId ?? null });
   }
 
   @UseGuards(AuthGuard)
