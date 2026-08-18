@@ -6,7 +6,6 @@ export type RecruitDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: 'none' | 'identity' | 'manual';
   avatarUrl: string | null;
   orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;

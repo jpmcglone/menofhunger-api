@@ -73,6 +73,7 @@ export class NotificationReadStateService {
   ): void {
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, payload);
     this.dispatchBadgeSync(recipientUserId, { undeliveredBellCount: payload.undeliveredCount });
+    this.sideEffects.dispatch('account.cluster.badge', { userId: recipientUserId });
     void this.cacheInvalidation?.bumpNotificationsList(recipientUserId);
   }
 
@@ -169,6 +170,7 @@ export class NotificationReadStateService {
       const { total, byGroupId } = await this.getGroupsUnread(recipientUserId);
       this.presenceRealtime.emitGroupsUnreadChanged(recipientUserId, { total, byGroupId });
       this.dispatchBadgeSync(recipientUserId, { undeliveredGroupsCount: total });
+      this.sideEffects.dispatch('account.cluster.badge', { userId: recipientUserId });
     } catch (err) {
       this.logger.debug(`[notifications] Failed to emit groups unread: ${err instanceof Error ? err.message : String(err)}`);
     }

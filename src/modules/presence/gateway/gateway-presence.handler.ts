@@ -120,7 +120,6 @@ export class PresenceStatusHandler {
       premiumPlus: Boolean(userId && (user as any)?.premiumPlus),
       isOrganization: Boolean(userId && (user as any)?.isOrganization),
       verifiedStatus: ((userId ? user?.verifiedStatus : 'none') ?? 'none') as 'none' | 'identity' | 'manual',
-      stewardBadgeEnabled: Boolean(userId ? (user as any)?.stewardBadgeEnabled ?? true : true),
       siteAdmin: Boolean(userId && (user as any)?.siteAdmin),
     };
     (client.data as any).radioChatUser = {
@@ -130,7 +129,6 @@ export class PresenceStatusHandler {
       premiumPlus: Boolean(userId && (user as any)?.premiumPlus),
       isOrganization: Boolean(userId && (user as any)?.isOrganization),
       verifiedStatus: ((userId ? user?.verifiedStatus : 'none') ?? 'none') as 'none' | 'identity' | 'manual',
-      stewardBadgeEnabled: Boolean(userId ? (user as any)?.stewardBadgeEnabled ?? true : true),
     } satisfies RadioChatSenderDto;
     (client.data as any).spaceChatUser = (client.data as any).radioChatUser satisfies SpaceChatSenderDto;
     (client.data as any).postSubs = new Set<string>();

@@ -5,6 +5,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import { VerifiedGuard } from '../auth/verified.guard';
 import { AppConfigService } from '../app/app-config.service';
 import { CurrentUserId } from '../users/users.decorator';
+import { PersonAccountGuard } from '../pages/person-account.guard';
 import { toPostDto } from '../posts/post.dto';
 import { CheckinsService } from './checkins.service';
 
@@ -91,6 +92,7 @@ export class CheckinsController {
   }
 
   @Post()
+  @UseGuards(PersonAccountGuard)
   async create(@CurrentUserId() userId: string, @Body() body: unknown) {
     const parsed = createSchema.parse(body);
     const res = await this.checkins.createTodayCheckin({

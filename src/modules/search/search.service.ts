@@ -105,7 +105,7 @@ export type SearchUserRow = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
+  accountKind?: 'person' | 'page';
   verifiedStatus: VerifiedStatus;
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
@@ -290,7 +290,7 @@ export class SearchService {
       premium: boolean;
       premiumPlus: boolean;
       isOrganization: boolean;
-      stewardBadgeEnabled: boolean;
+      accountKind?: 'person' | 'page';
       verifiedStatus: VerifiedStatus;
       avatarKey: string | null;
       avatarUpdatedAt: Date | null;
@@ -324,8 +324,8 @@ export class SearchService {
           u."premium",
           u."premiumPlus",
           u."isOrganization",
-          u."stewardBadgeEnabled",
-          u."verifiedStatus",
+          u."accountKind",
+          u.          u."verifiedStatus",
           u."avatarKey",
           u."avatarUpdatedAt",
           u."lastOnlineAt"
@@ -441,7 +441,7 @@ export class SearchService {
           premium: true,
           premiumPlus: true,
           isOrganization: true,
-          stewardBadgeEnabled: true,
+          accountKind: true,
           verifiedStatus: true,
           avatarKey: true,
           avatarUpdatedAt: true,
@@ -550,7 +550,7 @@ export class SearchService {
       premium: u.premium,
       premiumPlus: u.premiumPlus,
       isOrganization: Boolean(u.isOrganization),
-      stewardBadgeEnabled: Boolean(u.stewardBadgeEnabled),
+      accountKind: u.accountKind ?? 'person',
       verifiedStatus: u.verifiedStatus,
       avatarKey: u.avatarKey,
       avatarUpdatedAt: u.avatarUpdatedAt,

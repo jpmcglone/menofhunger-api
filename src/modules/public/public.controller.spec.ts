@@ -32,7 +32,6 @@ const makeProfilePayload = (overrides: Record<string, unknown> = {}) => ({
   premium: false,
   premiumPlus: false,
   isOrganization: false,
-  stewardBadgeEnabled: false,
   verifiedStatus: 'none',
   avatarUrl: null,
   bannerUrl: null,

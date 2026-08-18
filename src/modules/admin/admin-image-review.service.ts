@@ -40,7 +40,6 @@ type UserRef = {
   name: string | null;
   premium: boolean;
   premiumPlus: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: string | null;
   isAvatar: boolean;
   isBanner: boolean;
@@ -362,7 +361,6 @@ export class AdminImageReviewService {
         name: true,
         premium: true,
         premiumPlus: true,
-        stewardBadgeEnabled: true,
         verifiedStatus: true,
         avatarKey: true,
         bannerKey: true,
@@ -375,7 +373,6 @@ export class AdminImageReviewService {
         name: u.name ?? null,
         premium: u.premium,
         premiumPlus: u.premiumPlus,
-        stewardBadgeEnabled: u.stewardBadgeEnabled,
         verifiedStatus: u.verifiedStatus ?? null,
         isAvatar: false,
         isBanner: false,
@@ -809,7 +806,6 @@ export class AdminImageReviewService {
           name: u.name,
           premium: u.premium,
           premiumPlus: u.premiumPlus,
-          stewardBadgeEnabled: u.stewardBadgeEnabled,
           verifiedStatus: u.verifiedStatus,
           isAvatar: u.isAvatar,
           isBanner: u.isBanner,

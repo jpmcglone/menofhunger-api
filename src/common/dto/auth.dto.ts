@@ -17,12 +17,37 @@ export type ImpersonationDto = {
   adminAvatarUrl: string | null;
 };
 
+/**
+ * Present on `GET /auth/me` when the current session is a person acting as a page.
+ * Describes the operator so clients can show a switcher / return-home affordance.
+ */
+export type AccountSwitchDto = {
+  operatorUserId: string;
+  operatorUsername: string | null;
+  operatorName: string | null;
+  operatorAvatarUrl: string | null;
+};
+
+export type SwitchableAccountDto = {
+  id: string;
+  username: string | null;
+  name: string | null;
+  avatarUrl: string | null;
+  accountKind: 'person' | 'page';
+  isOrganization: boolean;
+  isCurrent: boolean;
+  /** Bell + groups + chat unread for this identity. Hidden on the current row. */
+  unreadBadgeCount: number;
+};
+
 export type AuthMeDto = UserDto & {
   /** Published, non-deleted posts excluding only-me. Matches the profile total. */
   postCount: number | null;
   articleCount: number | null;
   /** Non-null only while a site admin is impersonating this user. */
   impersonation: ImpersonationDto | null;
+  /** Non-null while a person is acting as a page. */
+  accountSwitch: AccountSwitchDto | null;
   notificationUndeliveredCount: number;
   notificationUnreadCommentCount: number;
   groupsUnread: {

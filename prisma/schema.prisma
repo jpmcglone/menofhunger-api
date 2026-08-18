@@ -13,6 +13,15 @@ enum VerifiedStatus {
   manual
 }
 
+/**
+ * person: a man with a phone (the login identity).
+ * page: a phoneless profile operated by one or more persons.
+ */
+enum AccountKind {
+  person
+  page
+}
+
 enum PostVisibility {
   public
   verifiedOnly
@@ -305,7 +314,14 @@ enum SpaceMode {
 model User {
   id                           String             @id @default(cuid())
   createdAt                    DateTime           @default(now())
-  phone                        String             @unique
+  /**
+   * E.164 phone. Required for person accounts (the login key). Null for pages.
+   */
+  phone                        String?            @unique
+  /**
+   * person = man with a phone. page = phoneless profile someone operates.
+   */
+  accountKind                  AccountKind        @default(person)
   email                        String?            @unique
   /**
    * When the current email was verified by the user (null means unverified).
@@ -381,8 +397,6 @@ model User {
   premiumPlus                  Boolean            @default(false)
   // Organization account (special badge + avatar shape in clients).
   isOrganization               Boolean            @default(false)
-  // Premium+ opt-in steward badge shown across the app.
-  stewardBadgeEnabled          Boolean            @default(true)
   // Verified badge (more roles/permissions later).
   verifiedStatus               VerifiedStatus     @default(none)
   verifiedAt                   DateTime?
@@ -466,6 +480,19 @@ model User {
    * Sessions this user (a site admin) created by impersonating someone else.
    */
   impersonatedSessions     Session[]               @relation("SessionImpersonatedBy")
+  /**
+   * Page sessions this person is driving via the account switcher.
+   */
+  operatedSessions         Session[]               @relation("SessionOperatedBy")
+  /**
+   * Pages this person can switch into.
+   */
+  operatedPages            UserPageOperator[]      @relation("PageOperators")
+  /**
+   * Persons who can switch into this page.
+   */
+  pageOperators            UserPageOperator[]      @relation("OperatedPages")
+  parkedPhones             ParkedPhone[]
   impersonationsPerformed  AdminImpersonationLog[] @relation("ImpersonationAdmin")
   impersonationsReceived   AdminImpersonationLog[] @relation("ImpersonationTarget")
   posts                    Post[]
@@ -596,6 +623,7 @@ model User {
   fitnessShares                FitnessShare[]
 
   @@index([phone])
+  @@index([accountKind])
   @@index([lastSeenAt])
   @@index([referralCode])
   @@index([recruitedById])
@@ -615,6 +643,42 @@ model UserOrgMembership {
   @@id([userId, orgId])
   @@index([orgId])
   @@index([userId, createdAt])
+}
+
+/**
+ * Switch rights: a person who can act as a page (org or plain).
+ * Distinct from UserOrgMembership (public "belongs to" affiliation).
+ */
+model UserPageOperator {
+  operatorUserId String
+  pageUserId     String
+  createdAt      DateTime @default(now())
+
+  operator User @relation("PageOperators", fields: [operatorUserId], references: [id], onDelete: Cascade)
+  page     User @relation("OperatedPages", fields: [pageUserId], references: [id], onDelete: Cascade)
+
+  @@id([operatorUserId, pageUserId])
+  @@index([pageUserId])
+  @@index([operatorUserId, createdAt])
+}
+
+/**
+ * Phone numbers detached from an account when it was converted to a page.
+ * Auth treats these as unavailable until releaseAt so the old SIM cannot
+ * immediately become a new signup (or reclaim the page).
+ */
+model ParkedPhone {
+  id           String   @id @default(cuid())
+  createdAt    DateTime @default(now())
+  phone        String   @unique
+  formerUserId String
+  formerUser   User     @relation(fields: [formerUserId], references: [id], onDelete: Cascade)
+  parkedAt     DateTime @default(now())
+  releaseAt    DateTime
+  reason       String
+
+  @@index([releaseAt])
+  @@index([formerUserId])
 }
 
 model EmailActionToken {
@@ -1960,9 +2024,18 @@ model Session {
   impersonatedByUserId String?
   impersonatedBy       User?   @relation("SessionImpersonatedBy", fields: [impersonatedByUserId], references: [id], onDelete: Cascade)
 
+  /**
+   * Set when a person is acting as a page via the account switcher.
+   * Effective identity is `userId` (the page); this is the person driving it.
+   * Unlike impersonation, presence writes for the page and the session uses the normal TTL.
+   */
+  operatedByUserId String?
+  operatedBy       User?   @relation("SessionOperatedBy", fields: [operatedByUserId], references: [id], onDelete: Cascade)
+
   @@index([userId])
   @@index([expiresAt])
   @@index([impersonatedByUserId])
+  @@index([operatedByUserId])
 }
 
 /**

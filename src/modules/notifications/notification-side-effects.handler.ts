@@ -9,6 +9,8 @@ import { PresenceRedisStateService } from '../presence/presence-redis-state.serv
 import { NotificationPushService } from './notification-push.service';
 import { NotificationWriterService } from './notification-writer.service';
 import { ApnsPushService } from './apns-push.service';
+import { AccountSwitchService } from '../auth/account-switch.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 /** Collapse rapid badge syncs from feed scroll / mark-read bursts. */
 const BADGE_SYNC_DEBOUNCE_MS = 1_500;
@@ -36,6 +38,8 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
     private readonly redis: RedisService,
     private readonly presenceRedis: PresenceRedisStateService,
     private readonly sideEffects: SideEffectsService,
+    private readonly accountSwitch: AccountSwitchService,
+    private readonly presenceRealtime: PresenceRealtimeService,
   ) {}
 
   onModuleInit(): void {
@@ -43,6 +47,7 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
     this.registry.register('notification.fanout.chunk', (payload) => this.onFanoutChunk(payload));
     this.registry.register('notification.badge.sync', (payload) => this.onBadgeSync(payload));
     this.registry.register('notification.lockScreen.clear', (payload) => this.onLockScreenClear(payload));
+    this.registry.register('account.cluster.badge', (payload) => this.onClusterBadge(payload));
   }
 
   /**
@@ -112,30 +117,25 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
       return;
     }
 
-    let badge: number;
-    const bellHint = payload.undeliveredBellCount;
-    const groupsHint = payload.undeliveredGroupsCount;
-    if (
-      typeof bellHint === 'number' &&
-      Number.isFinite(bellHint) &&
-      typeof groupsHint === 'number' &&
-      Number.isFinite(groupsHint)
-    ) {
-      badge = Math.max(0, Math.floor(bellHint)) + Math.max(0, Math.floor(groupsHint));
-    } else {
-      badge = await this.apns.computeAppIconBadge(userId);
+    const tokenOwners = await this.accountSwitch.listTokenOwnerIds(userId);
+    const owners = tokenOwners.length > 0 ? tokenOwners : [userId];
+    for (const ownerId of owners) {
+      await this.syncBadgeForTokenOwner(ownerId);
     }
+  }
 
-    const lastKey = RedisKeys.badgeSyncLastSent(userId);
+  private async syncBadgeForTokenOwner(ownerId: string): Promise<void> {
+    const badge = await this.apns.computeAppIconBadge(ownerId);
+    const lastKey = RedisKeys.badgeSyncLastSent(ownerId);
     const lastRaw = await this.redis.getString(lastKey);
     if (lastRaw != null && Number(lastRaw) === badge) return;
 
-    if (await this.presenceRedis.isUserActivelyOnIos(userId)) {
+    if (await this.presenceRedis.isUserActivelyOnIos(ownerId)) {
       // Do not record lastSent — home-screen may still need APNs when iOS goes idle.
       return;
     }
 
-    await this.apns.sendBadgeOnly(userId, badge);
+    await this.apns.sendBadgeOnly(ownerId, badge);
     await this.redis.setString(lastKey, String(badge), { ttlSeconds: 86_400 });
   }
 
@@ -145,6 +145,21 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
     const userId = (payload.recipientUserId ?? '').trim();
     const section = payload.section === 'groups' ? 'groups' : payload.section === 'inbox' ? 'inbox' : null;
     if (!userId || !section) return;
-    await this.apns.sendClearDelivered(userId, section);
+    const tokenOwners = await this.accountSwitch.listTokenOwnerIds(userId);
+    const owners = tokenOwners.length > 0 ? tokenOwners : [userId];
+    for (const ownerId of owners) {
+      await this.apns.sendClearDelivered(ownerId, section);
+    }
+  }
+
+  private async onClusterBadge(payload: SideEffectPayloads['account.cluster.badge']): Promise<void> {
+    const userId = (payload.userId ?? '').trim();
+    if (!userId) return;
+    const cluster = await this.accountSwitch.listClusterUserIds(userId);
+    if (cluster.length <= 1) return;
+    const unreadBadgeCount = await this.accountSwitch.unreadBadgeCountForUser(userId);
+    for (const id of cluster) {
+      this.presenceRealtime.emitAccountsBadgeUpdated(id, { userId, unreadBadgeCount });
+    }
   }
 }

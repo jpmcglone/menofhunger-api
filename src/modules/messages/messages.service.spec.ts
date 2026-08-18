@@ -33,7 +33,8 @@ function makeService(overrides?: {
     getMarvUserId: jest.fn(async () => null),
   } as any;
 
-  const svc = new MessagesService(prisma, appConfig, presenceRealtime, events, redis, posthog, jobs, marvIdentity);
+  const sideEffects = { dispatch: jest.fn() } as any;
+  const svc = new MessagesService(prisma, appConfig, presenceRealtime, events, redis, posthog, jobs, marvIdentity, sideEffects);
   return { svc, prisma };
 }
 
@@ -151,7 +152,6 @@ describe('MessagesService unread count batching', () => {
                     premium: false,
                     premiumPlus: false,
                     isOrganization: false,
-                    stewardBadgeEnabled: true,
                     verifiedStatus: 'none',
                     avatarKey: null,
                     avatarUpdatedAt: null,
@@ -170,7 +170,6 @@ describe('MessagesService unread count batching', () => {
                     premium: false,
                     premiumPlus: false,
                     isOrganization: false,
-                    stewardBadgeEnabled: true,
                     verifiedStatus: 'none',
                     avatarKey: null,
                     avatarUpdatedAt: null,
@@ -200,7 +199,6 @@ describe('MessagesService unread count batching', () => {
                     premium: false,
                     premiumPlus: false,
                     isOrganization: false,
-                    stewardBadgeEnabled: true,
                     verifiedStatus: 'none',
                     avatarKey: null,
                     avatarUpdatedAt: null,
@@ -319,7 +317,7 @@ describe('MessagesService.createConversation — mutual-follow DM gate', () => {
           media: [],
           sender: {
             id: 'u1', username: 'alice', name: 'Alice', premium: opts.senderPremium, premiumPlus: false,
-            isOrganization: false, stewardBadgeEnabled: false, verifiedStatus: 'identity',
+            isOrganization: false, verifiedStatus: 'identity',
             avatarKey: null, avatarUpdatedAt: null,
           },
         })),
@@ -418,7 +416,7 @@ describe('MessagesService.createConversation — admin bypass', () => {
               media: [],
               sender: {
                 id: 'u1', username: 'admin', name: 'Admin', premium: false, premiumPlus: false,
-                isOrganization: false, stewardBadgeEnabled: false, verifiedStatus: 'none',
+                isOrganization: false, verifiedStatus: 'none',
                 avatarKey: null, avatarUpdatedAt: null,
               },
             })),

@@ -11,7 +11,6 @@ function makeUser(overrides: Record<string, unknown> = {}) {
     premium: false,
     premiumPlus: false,
     isOrganization: false,
-    stewardBadgeEnabled: true,
     verifiedStatus: 'manual',
     avatarKey: 'avatars/user-1.jpg',
     avatarUpdatedAt: null,

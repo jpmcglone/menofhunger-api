@@ -14,7 +14,7 @@ export type VerificationRequestPublicDto = {
 export type VerificationRequestAdminUserSummaryDto = {
   id: string;
   createdAt: string;
-  phone: string;
+  phone: string | null;
   email: string | null;
   username: string | null;
   usernameIsSet: boolean;

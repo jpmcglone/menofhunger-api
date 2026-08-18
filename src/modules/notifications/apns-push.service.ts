@@ -92,19 +92,32 @@ export class ApnsPushService {
   }
 
   /**
-   * App icon badge = bell undelivered + groups undelivered — matches iOS
-   * `notificationCount + groupsUnreadTotal`. Uses denormalized User counters (O(1)).
+   * App icon badge = bell + groups for this person plus every page they operate.
+   * Pages never own tokens; if called with a page id, return that page's own count.
    */
   async computeAppIconBadge(userId: string): Promise<number> {
     const uid = (userId ?? '').trim();
     if (!uid) return 0;
     const user = await this.prisma.user.findUnique({
       where: { id: uid },
-      select: { undeliveredNotificationCount: true, undeliveredGroupPostCount: true },
+      select: {
+        accountKind: true,
+        undeliveredNotificationCount: true,
+        undeliveredGroupPostCount: true,
+      },
     });
-    const bell = Math.max(0, Math.floor(Number(user?.undeliveredNotificationCount) || 0));
-    const groups = Math.max(0, Math.floor(Number(user?.undeliveredGroupPostCount) || 0));
-    return bell + groups;
+    const self = iconBadgeFromCounts(user);
+    if (!user || user.accountKind === 'page') return self;
+
+    const pages = await this.prisma.userPageOperator.findMany({
+      where: { operatorUserId: uid },
+      select: {
+        page: {
+          select: { undeliveredNotificationCount: true, undeliveredGroupPostCount: true },
+        },
+      },
+    });
+    return pages.reduce((sum, row) => sum + iconBadgeFromCounts(row.page), self);
   }
 
   /**
@@ -190,6 +203,9 @@ export class ApnsPushService {
       actorName?: string | null;
       groupInviteId?: string | null;
       postId?: string | null;
+      /** Logical recipient (page or person). Clients switch to this identity on tap. */
+      recipientUserId?: string | null;
+      recipientUsername?: string | null;
     },
   ): Promise<void> {
     const cfg = this.appConfig.apns();
@@ -211,6 +227,8 @@ export class ApnsPushService {
     if (params.actorName) data.actorName = params.actorName;
     if (params.groupInviteId) data.groupInviteId = params.groupInviteId;
     if (params.postId) data.postId = params.postId;
+    if (params.recipientUserId) data.recipientUserId = params.recipientUserId;
+    if (params.recipientUsername) data.recipientUsername = params.recipientUsername;
 
     await this.deliverToTokens(recipientUserId, (token) => {
       const subtitle = (params.subtitle ?? '').trim();
@@ -373,4 +391,12 @@ export class ApnsPushService {
   private soundForKind(kind?: string): string {
     return kind === 'message' ? MESSAGE_PUSH_SOUND : NOTIFICATION_PUSH_SOUND;
   }
+}
+
+function iconBadgeFromCounts(
+  user: { undeliveredNotificationCount?: number | null; undeliveredGroupPostCount?: number | null } | null | undefined,
+): number {
+  const bell = Math.max(0, Math.floor(Number(user?.undeliveredNotificationCount) || 0));
+  const groups = Math.max(0, Math.floor(Number(user?.undeliveredGroupPostCount) || 0));
+  return bell + groups;
 }

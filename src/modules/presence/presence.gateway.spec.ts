@@ -944,7 +944,6 @@ const TYPER_SENDER = {
   premiumPlus: false,
   isOrganization: false,
   verifiedStatus: 'none',
-  stewardBadgeEnabled: false,
 };
 
 function makePostTypingFixture() {

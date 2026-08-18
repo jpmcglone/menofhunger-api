@@ -38,6 +38,7 @@ import { CoinsService } from '../coins/coins.service';
 import { UsersLocationService } from '../users/users-location.service';
 import { UploadsService } from '../uploads/uploads.service';
 import { UserVerificationService } from '../verification/user-verification.service';
+import { PagesService } from '../pages/pages.service';
 
 const paginatedSearchSchema = z.object({
   q: z.string().optional(),
@@ -99,6 +100,7 @@ export class AdminUsersController {
     private readonly usersLocation: UsersLocationService,
     private readonly uploads: UploadsService,
     private readonly userVerification: UserVerificationService,
+    private readonly pages: PagesService,
   ) {}
 
   private get publicBaseUrl(): string | null {
@@ -111,7 +113,7 @@ export class AdminUsersController {
     return { ...toUserDto(user, this.publicBaseUrl), orgAffiliations: orgMap.get(user.id) ?? [] };
   }
 
-  private maskPhone(phone: string): string {
+  private maskPhone(phone: string | null): string {
     const trimmed = (phone ?? '').trim();
     if (!trimmed) return '';
     const visible = trimmed.slice(-2);
@@ -914,6 +916,35 @@ export class AdminUsersController {
     if (deleted.count === 0) throw new NotFoundException('Membership not found.');
 
     return { data: { success: true } };
+  }
+
+  @Post(':id/convert-to-page')
+  async convertToPage(@Param('id') id: string, @Body() body: unknown) {
+    const { operatorUserId } = z.object({ operatorUserId: z.string().min(1) }).parse(body);
+    const data = await this.pages.convertToPage(id, operatorUserId);
+    return { data };
+  }
+
+  @Get(':id/operators')
+  async listOperators(@Param('id') id: string) {
+    return { data: await this.pages.listOperators(id) };
+  }
+
+  @Post(':id/operators')
+  async addOperator(@Param('id') id: string, @Body() body: unknown) {
+    const { operatorUserId } = z.object({ operatorUserId: z.string().min(1) }).parse(body);
+    return { data: await this.pages.addOperator(id, operatorUserId) };
+  }
+
+  @Delete(':id/operators/:operatorUserId')
+  async removeOperator(@Param('id') id: string, @Param('operatorUserId') operatorUserId: string) {
+    await this.pages.removeOperator(id, operatorUserId);
+    return { data: { success: true } };
+  }
+
+  @Get(':id/operated-pages')
+  async listOperatedPages(@Param('id') id: string) {
+    return { data: await this.pages.listOperatedPages(id) };
   }
 
   @Post(':id/email/unverify')

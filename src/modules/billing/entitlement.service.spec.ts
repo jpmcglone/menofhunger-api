@@ -22,6 +22,9 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
         findUnique: jest.fn(),
         update: jest.fn(async () => ({})),
       },
+      userPageOperator: {
+        findMany: jest.fn(async () => []),
+      },
       subscriptionGrant: {
         updateMany: jest.fn(async () => ({ count: 0 })),
         create: jest.fn(async () => ({})),
@@ -68,6 +71,7 @@ function grantRow(overrides: Record<string, unknown> = {}) {
 function userRow(overrides: Record<string, unknown> = {}) {
   return {
     premium: false,
+    accountKind: 'person',
     verifiedStatus: 'identity',
     stripeSubscriptionStatus: null,
     stripeSubscriptionPriceId: null,

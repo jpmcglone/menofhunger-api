@@ -1,4 +1,4 @@
-import type { BirthdayVisibility, FollowVisibility, HeardAboutUs, VerifiedStatus } from '@prisma/client';
+import type { AccountKind, BirthdayVisibility, FollowVisibility, HeardAboutUs, VerifiedStatus } from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
 import { sanitizeFeatureToggles, type AppFeatureToggle } from '../feature-toggles';
 
@@ -56,7 +56,7 @@ export type UserListRow = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
+  accountKind?: AccountKind;
   verifiedStatus: VerifiedStatus;
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
@@ -74,7 +74,7 @@ export type UserListDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
+  accountKind?: AccountKind;
   verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
   orgAffiliations: OrgAffiliationDto[];
@@ -95,7 +95,7 @@ export function toUserListDto(
     premium: row.premium,
     premiumPlus: row.premiumPlus,
     isOrganization: Boolean(row.isOrganization),
-    stewardBadgeEnabled: Boolean(row.stewardBadgeEnabled),
+    accountKind: row.accountKind ?? 'person',
     verifiedStatus: row.verifiedStatus,
     avatarUrl: publicAssetUrl({
       publicBaseUrl,
@@ -124,7 +124,7 @@ export function toUserListDto(
 export type UserDto = {
   id: string;
   createdAt: string;
-  phone: string;
+  phone: string | null;
   email: string | null;
   emailVerifiedAt: string | null;
   emailVerificationRequestedAt: string | null;
@@ -157,7 +157,7 @@ export type UserDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
+  accountKind: AccountKind;
   verifiedStatus: VerifiedStatus;
   verifiedAt: string | null;
   unverifiedAt: string | null;
@@ -177,7 +177,7 @@ export type UserDto = {
 };
 
 export type AdminUserSensitiveFieldsDto = {
-  phone: string;
+  phone: string | null;
   email: string | null;
   birthdate: string | null;
 };
@@ -247,7 +247,6 @@ export type UserPreviewDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
   bannerUrl: string | null;
@@ -263,7 +262,7 @@ export type UserPreviewDto = {
 export type UserDtoRow = {
   id: string;
   createdAt: Date;
-  phone: string;
+  phone: string | null;
   email: string | null;
   emailVerifiedAt: Date | null;
   emailVerificationRequestedAt: Date | null;
@@ -295,7 +294,7 @@ export type UserDtoRow = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
+  accountKind?: AccountKind;
   verifiedStatus: VerifiedStatus;
   verifiedAt: Date | null;
   unverifiedAt: Date | null;
@@ -318,7 +317,7 @@ export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = 
   return {
     id: user.id,
     createdAt: user.createdAt.toISOString(),
-    phone: user.phone,
+    phone: user.phone ?? null,
     email: user.email ?? null,
     emailVerifiedAt: user.emailVerifiedAt ? user.emailVerifiedAt.toISOString() : null,
     emailVerificationRequestedAt: user.emailVerificationRequestedAt
@@ -352,7 +351,7 @@ export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = 
     premium: user.premium,
     premiumPlus: user.premiumPlus,
     isOrganization: Boolean(user.isOrganization),
-    stewardBadgeEnabled: Boolean(user.stewardBadgeEnabled),
+    accountKind: user.accountKind ?? 'person',
     verifiedStatus: user.verifiedStatus,
     verifiedAt: user.verifiedAt ? user.verifiedAt.toISOString() : null,
     unverifiedAt: user.unverifiedAt ? user.unverifiedAt.toISOString() : null,

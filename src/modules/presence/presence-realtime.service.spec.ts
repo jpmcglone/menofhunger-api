@@ -126,6 +126,7 @@ describe('PresenceRealtimeService without a local socket server', () => {
 
     service.emitNotificationsUpdated('user-1', { undeliveredCount: 3 });
     service.emitNotificationsLockScreenClear('user-1', { section: 'inbox' });
+    service.emitAccountsBadgeUpdated('user-1', { userId: 'news', unreadBadgeCount: 5 });
 
     expect(presence.emitToUser).not.toHaveBeenCalled();
     expect(presenceRedis.publishEmitToUser).toHaveBeenCalledWith({
@@ -137,6 +138,11 @@ describe('PresenceRealtimeService without a local socket server', () => {
       userId: 'user-1',
       event: 'notifications:lock-screen-clear',
       payload: { section: 'inbox' },
+    });
+    expect(presenceRedis.publishEmitToUser).toHaveBeenCalledWith({
+      userId: 'user-1',
+      event: 'accounts:badge-updated',
+      payload: { userId: 'news', unreadBadgeCount: 5 },
     });
   });
 

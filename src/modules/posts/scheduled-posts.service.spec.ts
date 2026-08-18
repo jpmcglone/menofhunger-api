@@ -31,7 +31,6 @@ function makeHoldingRow(overrides: Partial<Record<string, any>> = {}) {
       premium: true,
       premiumPlus: false,
       isOrganization: false,
-      stewardBadgeEnabled: false,
       verifiedStatus: 'verified',
       avatarKey: null,
       avatarUpdatedAt: null,

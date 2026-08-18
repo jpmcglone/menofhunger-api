@@ -25,3 +25,19 @@ export const IsImpersonating = createParamDecorator((_data: unknown, ctx: Execut
   return Boolean(req.user?.impersonatedByUserId);
 });
 
+export const CurrentAccountKind = createParamDecorator((_data: unknown, ctx: ExecutionContext) => {
+  const req = ctx.switchToHttp().getRequest<AuthedRequest>();
+  return req.user?.accountKind ?? 'person';
+});
+
+/**
+ * Person who owns this device's push tokens. Page sessions bind to the operator;
+ * a page with no operator returns null so we never register a token on the page.
+ */
+export const CurrentOperatorUserId = createParamDecorator((_data: unknown, ctx: ExecutionContext) => {
+  const req = ctx.switchToHttp().getRequest<AuthedRequest>();
+  if (req.user?.operatedByUserId) return req.user.operatedByUserId;
+  if (req.user?.accountKind === 'page') return null;
+  return req.user?.id ?? null;
+});
+

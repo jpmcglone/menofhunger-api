@@ -12,6 +12,9 @@ export type AuthedRequest = Request & {
      * can suppress side effects that would forge activity on the target's account.
      */
     impersonatedByUserId?: string | null;
+    /** Person driving a page session via the account switcher. */
+    operatedByUserId?: string | null;
+    accountKind?: 'person' | 'page';
   };
 };
 
@@ -30,7 +33,12 @@ export class AuthGuard implements CanActivate {
       this.auth.setSessionCookie(token, result.expiresAt, res);
     }
 
-    req.user = { id: result.user.id, impersonatedByUserId: result.impersonatedByUserId };
+    req.user = {
+      id: result.user.id,
+      impersonatedByUserId: result.impersonatedByUserId,
+      operatedByUserId: result.operatedByUserId,
+      accountKind: result.user.accountKind,
+    };
     return true;
   }
 }

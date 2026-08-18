@@ -26,7 +26,6 @@ export type PublicProfilePayload = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
   bannerUrl: string | null;
@@ -198,7 +197,6 @@ export class PublicProfilesService {
             premium: boolean;
             premiumPlus: boolean;
             isOrganization: boolean;
-            stewardBadgeEnabled: boolean;
             verifiedStatus: string;
             avatarKey: string | null;
             avatarUpdatedAt: Date | null;
@@ -212,7 +210,7 @@ export class PublicProfilesService {
             isBot: boolean;
           }>
         >`
-          SELECT "id", "createdAt", "username", "name", "bio", "website", "xUsername", "pickaxUsername", "locationDisplay", "locationZip", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "stewardBadgeEnabled", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt", "bannedAt", "checkinStreakDays", "longestStreakDays", "isBot"
+          SELECT "id", "createdAt", "username", "name", "bio", "website", "xUsername", "pickaxUsername", "locationDisplay", "locationZip", "locationCity", "locationCounty", "locationState", "locationCountry", "birthdate", "birthdayVisibility", "premium", "premiumPlus", "isOrganization", "verifiedStatus", "avatarKey", "avatarUpdatedAt", "bannerKey", "bannerUpdatedAt", "pinnedPostId", "lastOnlineAt", "bannedAt", "checkinStreakDays", "longestStreakDays", "isBot"
           FROM "User"
           WHERE (
             (${isUuidOrCuid} = true AND "id" = ${raw})
@@ -261,7 +259,6 @@ export class PublicProfilesService {
       premium: user.premium,
       premiumPlus: user.premiumPlus,
       isOrganization: user.isOrganization,
-      stewardBadgeEnabled: user.stewardBadgeEnabled,
       verifiedStatus: user.verifiedStatus,
       avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
       bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),

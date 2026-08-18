@@ -219,6 +219,7 @@ export class EntitlementService {
       where: { id: userId },
       select: {
         premium: true,
+        accountKind: true,
         verifiedStatus: true,
         stripeSubscriptionStatus: true,
         stripeSubscriptionPriceId: true,
@@ -279,7 +280,25 @@ export class EntitlementService {
     const grantExpiresAt = verified && effectiveGrants.length > 0 ? effectiveGrants[0]!.endsAt : null;
 
     // ── Effective tier = max(stripe, apple, grants) ─────────────────────────
-    const effectiveTier = maxTier(maxTier(grantTier, stripeTier), appleTier);
+    let effectiveTier = maxTier(maxTier(grantTier, stripeTier), appleTier);
+
+    // Pages inherit the best tier among their operators.
+    if (user.accountKind === 'page') {
+      const operators = await this.prisma.userPageOperator.findMany({
+        where: { pageUserId: userId },
+        select: { operator: { select: { premium: true, premiumPlus: true } } },
+      });
+      let inherited: EffectiveTier = 'none';
+      for (const row of operators) {
+        const opTier: EffectiveTier = row.operator.premiumPlus
+          ? 'premiumPlus'
+          : row.operator.premium
+            ? 'premium'
+            : 'none';
+        inherited = maxTier(inherited, opTier);
+      }
+      effectiveTier = maxTier(effectiveTier, inherited);
+    }
     const isPremiumPlus = effectiveTier === 'premiumPlus';
     const isPremium = effectiveTier !== 'none';
 
@@ -299,6 +318,16 @@ export class EntitlementService {
         userId,
         direction: isPremium ? 'started' : 'ended',
       });
+    }
+
+    if (user.accountKind === 'person') {
+      const pages = await this.prisma.userPageOperator.findMany({
+        where: { operatorUserId: userId },
+        select: { pageUserId: true },
+      });
+      for (const page of pages) {
+        await this.recomputeAndApply(page.pageUserId);
+      }
     }
 
     return {

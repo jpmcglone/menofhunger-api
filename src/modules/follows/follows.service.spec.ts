@@ -8,7 +8,6 @@ function makeRow(overrides: Partial<any> = {}) {
     premium: false,
     premiumPlus: false,
     isOrganization: false,
-    stewardBadgeEnabled: false,
     verifiedStatus: 'none',
     avatarKey: null,
     avatarUpdatedAt: null,

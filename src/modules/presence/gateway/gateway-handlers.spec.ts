@@ -647,7 +647,6 @@ describe('SpacesGatewayHandler chat join/leave system messages', () => {
     premiumPlus: false,
     isOrganization: false,
     verifiedStatus: 'none' as const,
-    stewardBadgeEnabled: true,
   };
 
   function setup(spacesOverrides: Record<string, unknown> = {}) {
@@ -809,7 +808,6 @@ describe('SpacesGatewayHandler chat react', () => {
     premiumPlus: false,
     isOrganization: false,
     verifiedStatus: 'none' as const,
-    stewardBadgeEnabled: true,
   };
 
   function setup() {

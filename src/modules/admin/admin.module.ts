@@ -44,6 +44,8 @@ import { MarvinModule } from '../marvin/marvin.module';
 import { AdminAnalyticsBriefService } from './admin-analytics-brief.service';
 import { AnnouncementsModule } from '../announcements/announcements.module';
 import { AdminAnnouncementsController } from './admin-announcements.controller';
+import { PagesModule } from '../pages/pages.module';
+import { AdminPagesController } from './admin-pages.controller';
 
 @Module({
   imports: [
@@ -69,6 +71,7 @@ import { AdminAnnouncementsController } from './admin-announcements.controller';
     LandingModule,
     MarvinModule,
     AnnouncementsModule,
+    PagesModule,
   ],
   controllers: [
     AdminUsersController,
@@ -89,6 +92,7 @@ import { AdminAnnouncementsController } from './admin-announcements.controller';
     AdminImpersonationController,
     AdminPushController,
     AdminAnnouncementsController,
+    AdminPagesController,
   ],
   providers: [AdminGuard, AdminImageReviewService, AdminHashtagsService, AdminDailyDigestCron, AdminAnalyticsBriefService],
   exports: [AdminDailyDigestCron],

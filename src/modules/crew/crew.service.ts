@@ -33,7 +33,6 @@ type OpenMemberEntry = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
   avatarKey?: string | null;
@@ -685,7 +684,6 @@ export class CrewService {
           premium: user.premium,
           premiumPlus: user.premiumPlus,
           isOrganization: Boolean(user.isOrganization),
-          stewardBadgeEnabled: Boolean(user.stewardBadgeEnabled),
           verifiedStatus: user.verifiedStatus,
           avatarUrl: publicAssetUrl({
             publicBaseUrl,

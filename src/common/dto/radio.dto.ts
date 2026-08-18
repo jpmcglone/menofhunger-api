@@ -33,7 +33,6 @@ export type RadioChatSenderDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: 'none' | 'identity' | 'manual';
-  stewardBadgeEnabled: boolean;
 };
 
 export type RadioChatMessageDto = {

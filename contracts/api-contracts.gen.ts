@@ -11,6 +11,7 @@
 
 // ─── Prisma enums (inlined) ───────────────────────────────────────────────
 
+export type AccountKind = 'person' | 'page'
 export type AnnouncementDismissMethod = 'close_button' | 'backdrop' | 'escape' | 'swipe'
 export type AnnouncementPlacement = 'overlay' | 'inline'
 export type AnnouncementStatus = 'draft' | 'published' | 'archived'
@@ -456,7 +457,6 @@ export type ArticleAuthorDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;
 };
@@ -542,12 +542,37 @@ export type ImpersonationDto = {
   adminAvatarUrl: string | null;
 };
 
+/**
+ * Present on `GET /auth/me` when the current session is a person acting as a page.
+ * Describes the operator so clients can show a switcher / return-home affordance.
+ */
+export type AccountSwitchDto = {
+  operatorUserId: string;
+  operatorUsername: string | null;
+  operatorName: string | null;
+  operatorAvatarUrl: string | null;
+};
+
+export type SwitchableAccountDto = {
+  id: string;
+  username: string | null;
+  name: string | null;
+  avatarUrl: string | null;
+  accountKind: 'person' | 'page';
+  isOrganization: boolean;
+  isCurrent: boolean;
+  /** Bell + groups + chat unread for this identity. Hidden on the current row. */
+  unreadBadgeCount: number;
+};
+
 export type AuthMeDto = UserDto & {
   /** Published, non-deleted posts excluding only-me. Matches the profile total. */
   postCount: number | null;
   articleCount: number | null;
   /** Non-null only while a site admin is impersonating this user. */
   impersonation: ImpersonationDto | null;
+  /** Non-null while a person is acting as a page. */
+  accountSwitch: AccountSwitchDto | null;
   notificationUndeliveredCount: number;
   notificationUnreadCommentCount: number;
   groupsUnread: {
@@ -616,8 +641,6 @@ export type BillingMeDto = {
     avatarUrl: string | null;
     premium: boolean;
     premiumPlus: boolean;
-    /** The recruiter's own opt-out for the steward shield; clients must honor it. */
-    stewardBadgeEnabled: boolean;
     verifiedStatus: 'none' | 'identity' | 'manual';
   } | null;
   /** How many users this user has recruited. */
@@ -1500,7 +1523,6 @@ export type PostAuthorDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
   orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;
@@ -1534,7 +1556,6 @@ export type PostMentionDto = {
   premium?: boolean;
   premiumPlus?: boolean;
   isOrganization?: boolean;
-  stewardBadgeEnabled?: boolean;
 };
 
 export type PostPollOptionDto = {
@@ -1746,7 +1767,6 @@ export type RadioChatSenderDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: 'none' | 'identity' | 'manual';
-  stewardBadgeEnabled: boolean;
 };
 
 export type RadioChatMessageDto = {
@@ -1789,6 +1809,12 @@ export type NotificationsDeletedPayloadDto = {
 /** Drop lock-screen APNs the user already saw in the matching in-app section. */
 export type NotificationsLockScreenClearPayloadDto = {
   section: 'inbox' | 'groups';
+};
+
+/** Cross-identity switcher badge. Emitted to the operator cluster when any identity's unread changes. */
+export type AccountsBadgeUpdatedPayloadDto = {
+  userId: string;
+  unreadBadgeCount: number;
 };
 
 /**
@@ -1855,7 +1881,6 @@ export type PublicProfileDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
   bannerUrl: string | null;
@@ -2182,7 +2207,6 @@ export type RecruitDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: 'none' | 'identity' | 'manual';
   avatarUrl: string | null;
   orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;
@@ -2436,7 +2460,6 @@ export type SpaceChatSenderDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: 'none' | 'identity' | 'manual';
-  stewardBadgeEnabled: boolean;
 };
 
 export type SpaceChatMediaItemDto = {
@@ -2593,7 +2616,7 @@ export type UserListDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
+  accountKind?: AccountKind;
   verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
   orgAffiliations: OrgAffiliationDto[];
@@ -2605,7 +2628,7 @@ export type UserListDto = {
 export type UserDto = {
   id: string;
   createdAt: string;
-  phone: string;
+  phone: string | null;
   email: string | null;
   emailVerifiedAt: string | null;
   emailVerificationRequestedAt: string | null;
@@ -2638,7 +2661,7 @@ export type UserDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
+  accountKind: AccountKind;
   verifiedStatus: VerifiedStatus;
   verifiedAt: string | null;
   unverifiedAt: string | null;
@@ -2658,7 +2681,7 @@ export type UserDto = {
 };
 
 export type AdminUserSensitiveFieldsDto = {
-  phone: string;
+  phone: string | null;
   email: string | null;
   birthdate: string | null;
 };
@@ -2728,7 +2751,6 @@ export type UserPreviewDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
   bannerUrl: string | null;
@@ -2757,7 +2779,7 @@ export type VerificationRequestPublicDto = {
 export type VerificationRequestAdminUserSummaryDto = {
   id: string;
   createdAt: string;
-  phone: string;
+  phone: string | null;
   email: string | null;
   username: string | null;
   usernameIsSet: boolean;

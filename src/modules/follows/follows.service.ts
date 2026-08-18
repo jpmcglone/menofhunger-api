@@ -29,7 +29,6 @@ type RecommendationRow = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
@@ -61,7 +60,6 @@ export type FollowListUser = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
   relationship: FollowRelationship;
@@ -142,7 +140,7 @@ export class FollowsService {
 
   private async buildFollowListUsers(params: {
     viewerUserId: string;
-    rows: Array<Pick<RecommendationRow, 'id' | 'username' | 'name' | 'premium' | 'premiumPlus' | 'isOrganization' | 'stewardBadgeEnabled' | 'verifiedStatus' | 'avatarKey' | 'avatarUpdatedAt' | 'createdAt'>>;
+    rows: Array<Pick<RecommendationRow, 'id' | 'username' | 'name' | 'premium' | 'premiumPlus' | 'isOrganization' | 'verifiedStatus' | 'avatarKey' | 'avatarUpdatedAt' | 'createdAt'>>;
   }): Promise<FollowListUser[]> {
     const { viewerUserId, rows } = params;
     if (rows.length === 0) return [];
@@ -241,8 +239,7 @@ export class FollowsService {
         u."premium",
         u."premiumPlus",
         u."isOrganization",
-        u."stewardBadgeEnabled",
-        u."verifiedStatus",
+        u.        u."verifiedStatus",
         u."avatarKey",
         u."avatarUpdatedAt",
         u."createdAt",
@@ -340,8 +337,7 @@ export class FollowsService {
         u."premium",
         u."premiumPlus",
         u."isOrganization",
-        u."stewardBadgeEnabled",
-        u."verifiedStatus",
+        u.        u."verifiedStatus",
         u."avatarKey",
         u."avatarUpdatedAt",
         u."createdAt",
@@ -424,7 +420,6 @@ export class FollowsService {
       premium: boolean;
       premiumPlus: boolean;
       isOrganization: boolean;
-      stewardBadgeEnabled: boolean;
       verifiedStatus: VerifiedStatus;
       avatarKey: string | null;
       avatarUpdatedAt: Date | null;
@@ -451,8 +446,7 @@ export class FollowsService {
         u."premium",
         u."premiumPlus",
         u."isOrganization",
-        u."stewardBadgeEnabled",
-        u."verifiedStatus",
+        u.        u."verifiedStatus",
         u."avatarKey",
         u."avatarUpdatedAt",
         u."createdAt"

@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@ne
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
-import { CurrentUserId, IsImpersonating } from '../users/users.decorator';
+import { CurrentOperatorUserId, CurrentUserId, IsImpersonating } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { NotificationsService } from './notifications.service';
 import type { NotificationPreferencesDto } from '../../common/dto';
@@ -197,11 +197,12 @@ export class NotificationsController {
   })
   @Post('push-subscribe')
   async pushSubscribe(
-    @CurrentUserId() userId: string,
+    @CurrentOperatorUserId() operatorUserId: string | null,
     @Body() body: unknown,
   ) {
+    if (!operatorUserId) return { data: {} };
     const parsed = pushSubscribeBodySchema.parse(body);
-    await this.notifications.pushSubscribe(userId, {
+    await this.notifications.pushSubscribe(operatorUserId, {
       endpoint: parsed.endpoint,
       keys: parsed.keys,
       userAgent: parsed.user_agent ?? null,
@@ -231,11 +232,12 @@ export class NotificationsController {
   })
   @Post('push-unsubscribe')
   async pushUnsubscribe(
+    @CurrentOperatorUserId() operatorUserId: string | null,
     @CurrentUserId() userId: string,
     @Body() body: unknown,
   ) {
     const parsed = pushUnsubscribeBodySchema.parse(body);
-    await this.notifications.pushUnsubscribe(userId, parsed.endpoint);
+    await this.notifications.pushUnsubscribe(operatorUserId ?? userId, parsed.endpoint);
     return { data: {} };
   }
 
@@ -248,7 +250,7 @@ export class NotificationsController {
   })
   @Post('apns/register')
   async apnsRegister(
-    @CurrentUserId() userId: string,
+    @CurrentOperatorUserId() operatorUserId: string | null,
     @IsImpersonating() isImpersonating: boolean,
     @Body() body: unknown,
   ) {
@@ -257,8 +259,8 @@ export class NotificationsController {
     // held it before. That is correct for a real account switch and wrong for
     // impersonation: it would hand the admin's phone to the target, sending the target's
     // pushes to the admin and silencing the admin's own — and it would outlive the session.
-    if (isImpersonating) return { data: {} };
-    await this.notifications.apnsRegister(userId, {
+    if (isImpersonating || !operatorUserId) return { data: {} };
+    await this.notifications.apnsRegister(operatorUserId, {
       token: parsed.token,
       environment: parsed.environment ?? 'production',
     });
@@ -274,11 +276,12 @@ export class NotificationsController {
   })
   @Post('apns/unregister')
   async apnsUnregister(
+    @CurrentOperatorUserId() operatorUserId: string | null,
     @CurrentUserId() userId: string,
     @Body() body: unknown,
   ) {
     const parsed = apnsUnregisterBodySchema.parse(body);
-    await this.notifications.apnsUnregister(userId, parsed.token);
+    await this.notifications.apnsUnregister(operatorUserId ?? userId, parsed.token);
     return { data: {} };
   }
 

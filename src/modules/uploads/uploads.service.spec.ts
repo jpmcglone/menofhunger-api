@@ -105,7 +105,6 @@ function fullUserRow(overrides: Record<string, unknown> = {}) {
     premium: false,
     premiumPlus: false,
     isOrganization: false,
-    stewardBadgeEnabled: false,
     verifiedStatus: 'none',
     verifiedAt: null,
     unverifiedAt: null,

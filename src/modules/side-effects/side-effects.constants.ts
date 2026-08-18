@@ -128,6 +128,13 @@ export interface SideEffectPayloads {
     section: 'inbox' | 'groups';
   };
   /**
+   * Patch switcher badges across an operator's identity cluster after bell, groups,
+   * or chat unread changes. Handler re-reads the count. No-op when the user has no pages.
+   */
+  'account.cluster.badge': {
+    userId: string;
+  };
+  /**
    * One chunk of a large notification fan-out. Large recipient sets are split into child
    * jobs so a single job never holds the worker (or the Prisma pool) for minutes.
    */

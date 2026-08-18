@@ -41,6 +41,8 @@ describe('AuthController.me', () => {
     } as any;
     const controller = new AuthController(auth, {} as any, moduleRef, {} as any, {
       describe: jest.fn(async () => null),
+    } as any, {
+      describe: jest.fn(async () => null),
     } as any);
 
     const result = await controller.me(
@@ -58,6 +60,7 @@ describe('AuthController.me', () => {
       postCount: 978,
       articleCount: 12,
       impersonation: null,
+      accountSwitch: null,
     });
     expect(crewInvites.countInboxPending).toHaveBeenCalledWith('user-1');
     // Defer to the canonical filters so /auth/me can't drift away from the
@@ -102,6 +105,8 @@ describe('AuthController.me', () => {
     } as any;
     const controller = new AuthController(auth, {} as any, moduleRef, {} as any, {
       describe: jest.fn(async () => null),
+    } as any, {
+      describe: jest.fn(async () => null),
     } as any);
 
     const result = await controller.me(
@@ -119,6 +124,7 @@ describe('AuthController.me', () => {
       postCount: null,
       articleCount: null,
       impersonation: null,
+      accountSwitch: null,
     });
   });
 
@@ -142,7 +148,9 @@ describe('AuthController.me', () => {
       })),
     } as any;
     const moduleRef = { get: jest.fn(() => null) } as any;
-    const controller = new AuthController(auth, {} as any, moduleRef, {} as any, impersonation);
+    const controller = new AuthController(auth, {} as any, moduleRef, {} as any, impersonation, {
+      describe: jest.fn(async () => null),
+    } as any);
 
     const result = await controller.me(
       { cookies: { [AUTH_COOKIE_NAME]: 'session-token' } } as any,
@@ -180,6 +188,7 @@ describe('AuthController browser handoff', () => {
       {} as any,
       {} as any,
       browserHandoff as any,
+      {} as any,
       {} as any,
     );
     return { controller, browserHandoff };

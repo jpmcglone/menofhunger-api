@@ -144,6 +144,7 @@ export class LandingService {
             AND p."kind" = 'regular'
             AND u."bannedAt" IS NULL
             AND u."isOrganization" = false
+            AND u."accountKind" = 'person'
             AND u."verifiedStatus" != 'none'
         ) posts
         CROSS JOIN (
@@ -154,6 +155,7 @@ export class LandingService {
           WHERE u."bannedAt" IS NULL
             AND u."usernameIsSet" = true
             AND u."isOrganization" = false
+            AND u."accountKind" = 'person'
             AND u."verifiedStatus" != 'none'
         ) men
         CROSS JOIN (
@@ -169,6 +171,7 @@ export class LandingService {
               AND u."bannedAt" IS NULL
               AND u."usernameIsSet" = true
               AND u."isOrganization" = false
+            AND u."accountKind" = 'person'
               AND u."verifiedStatus" != 'none'
           ),
           author_totals AS (
@@ -208,6 +211,7 @@ export class LandingService {
             AND u."bannedAt" IS NULL
             AND u."usernameIsSet" = true
             AND u."isOrganization" = false
+            AND u."accountKind" = 'person'
             AND u."verifiedStatus" != 'none'
         ) articles
         CROSS JOIN (
@@ -223,6 +227,7 @@ export class LandingService {
             AND p."visibility" IN ('public', 'verifiedOnly', 'premiumOnly')
             AND u."bannedAt" IS NULL
             AND u."isOrganization" = false
+            AND u."accountKind" = 'person'
             AND u."verifiedStatus" != 'none'
         ) view_totals
         CROSS JOIN (
@@ -247,6 +252,7 @@ export class LandingService {
             AND p."visibility" IN ('public', 'verifiedOnly', 'premiumOnly')
             AND author."bannedAt" IS NULL
             AND author."isOrganization" = false
+            AND author."accountKind" = 'person'
             AND author."verifiedStatus" != 'none'
         ) view_tiers
       `),
@@ -269,6 +275,7 @@ export class LandingService {
         WHERE u."bannedAt" IS NULL
           AND u."usernameIsSet" = true
           AND u."isOrganization" = false
+            AND u."accountKind" = 'person'
           AND u."isBot" = false
           AND u."verifiedStatus" != 'none'
           AND u."avatarKey" IS NOT NULL
@@ -338,6 +345,7 @@ export class LandingService {
         WHERE u."bannedAt" IS NULL
           AND u."usernameIsSet" = true
           AND u."isOrganization" = false
+            AND u."accountKind" = 'person'
           AND u."isBot" = false
           AND u."verifiedStatus" != 'none'
           AND u."avatarKey" IS NOT NULL
@@ -370,6 +378,7 @@ export class LandingService {
         WHERE u."bannedAt" IS NULL
           AND u."usernameIsSet" = true
           AND u."isOrganization" = false
+            AND u."accountKind" = 'person'
           AND u."isBot" = false
           AND u."verifiedStatus" != 'none'
           AND u.id != ALL(${afterPass2})

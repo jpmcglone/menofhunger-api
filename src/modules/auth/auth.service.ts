@@ -85,6 +85,10 @@ export interface SessionResult {
    * The effective identity is still `user`; this is the admin really driving it.
    */
   impersonatedByUserId: string | null;
+  /**
+   * Set when a person is acting as a page. Effective identity is still `user` (the page).
+   */
+  operatedByUserId: string | null;
 }
 
 @Injectable()
@@ -114,8 +118,21 @@ export class AuthService {
     return digits.length >= 2 ? `***${last2}` : '***';
   }
 
+  private async assertPhoneNotParked(phone: string, now = new Date()) {
+    const parked = await this.prisma.parkedPhone?.findUnique({
+      where: { phone },
+      select: { releaseAt: true },
+    });
+    if (parked && parked.releaseAt > now) {
+      throw new BadRequestException(
+        'This number is reserved after an account transfer. Try again later or contact support.',
+      );
+    }
+  }
+
   async startPhoneAuth(phone: string) {
     const now = new Date();
+    await this.assertPhoneNotParked(phone, now);
 
     const latest = await this.prisma.phoneOtp.findFirst({
       where: { phone },
@@ -192,11 +209,18 @@ export class AuthService {
   }
 
   async phoneExists(phone: string): Promise<boolean> {
-    const existing = await this.prisma.user.findUnique({
-      where: { phone },
-      select: { id: true },
-    });
-    return Boolean(existing);
+    const [existing, parked] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { phone },
+        select: { id: true },
+      }),
+      this.prisma.parkedPhone?.findUnique({
+        where: { phone },
+        select: { releaseAt: true },
+      }),
+    ]);
+    if (existing) return true;
+    return Boolean(parked && parked.releaseAt > new Date());
   }
 
   async verifyPhoneCode(phone: string, code: string, res: Response, referralCode?: string | null) {
@@ -217,6 +241,8 @@ export class AuthService {
 
     // Account state: reveal bans only after code submit (not during /start).
     // Also: do this *before* OTP checks so banned accounts don't require a started OTP.
+    await this.assertPhoneNotParked(phone, now);
+
     const existing = await this.prisma.user.findUnique({ where: { phone } });
     const isNewUser = !existing;
     const canRestorePendingDeletion = Boolean(
@@ -328,7 +354,6 @@ export class AuthService {
                 premium: false,
                 premiumPlus: false,
                 isOrganization: false,
-                stewardBadgeEnabled: false,
                 verifiedStatus: 'none',
                 avatarUrl: null,
                 orgAffiliations: [],
@@ -502,6 +527,7 @@ export class AuthService {
         sessionId: string;
         expiresAt: string;
         impersonatedByUserId?: string | null;
+        operatedByUserId?: string | null;
       }>(RedisKeys.sessionFull(tokenHash));
       if (cached) {
         return {
@@ -510,6 +536,7 @@ export class AuthService {
           expiresAt: new Date(cached.expiresAt),
           renewed: false,
           impersonatedByUserId: cached.impersonatedByUserId ?? null,
+          operatedByUserId: cached.operatedByUserId ?? null,
         };
       }
     } catch {
@@ -572,6 +599,7 @@ export class AuthService {
           sessionId: session.id,
           expiresAt: effectiveExpiresAt.toISOString(),
           impersonatedByUserId: session.impersonatedByUserId,
+          operatedByUserId: session.operatedByUserId,
         },
         { ttlMs },
       )
@@ -583,6 +611,7 @@ export class AuthService {
       expiresAt: effectiveExpiresAt,
       renewed,
       impersonatedByUserId: session.impersonatedByUserId,
+      operatedByUserId: session.operatedByUserId ?? null,
     };
   }
 
@@ -720,7 +749,7 @@ export class AuthService {
     // "sign out everywhere" wouldn't cover a device left mid-impersonation.
     const where: Prisma.SessionWhereInput = {
       revokedAt: null,
-      OR: [{ userId: id }, { impersonatedByUserId: id }],
+      OR: [{ userId: id }, { impersonatedByUserId: id }, { operatedByUserId: id }],
     };
     const sessions = await this.prisma.session.findMany({
       where,
@@ -797,12 +826,15 @@ export class AuthService {
     opts?: {
       /** Site admin id when this session is being minted for admin impersonation. */
       impersonatedByUserId?: string | null;
+      /** Person driving a page session via the account switcher. */
+      operatedByUserId?: string | null;
     },
   ) {
     const token = randomSessionToken();
     const tokenHash = hmacSha256Hex(this.appConfig.sessionHmacSecret(), token);
 
     const impersonatedByUserId = opts?.impersonatedByUserId ?? null;
+    const operatedByUserId = opts?.operatedByUserId ?? null;
     const now = new Date();
     // Impersonation sessions expire in an hour and are never renewed (see `_resolveSession`),
     // so an admin who forgets to exit loses access on their own rather than holding a
@@ -820,6 +852,7 @@ export class AuthService {
         tokenHash,
         expiresAt,
         impersonatedByUserId,
+        operatedByUserId,
       },
     });
 

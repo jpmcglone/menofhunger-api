@@ -19,7 +19,6 @@ export const ARTICLE_SHARE_AUTHOR_SELECT = {
   premium: true,
   premiumPlus: true,
   isOrganization: true,
-  stewardBadgeEnabled: true,
   verifiedStatus: true,
   avatarKey: true,
   avatarUpdatedAt: true,

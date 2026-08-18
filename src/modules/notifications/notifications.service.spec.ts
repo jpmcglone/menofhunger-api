@@ -135,7 +135,6 @@ function makePost(id: string, overrides: Record<string, any> = {}) {
       premium: false,
       premiumPlus: false,
       isOrganization: false,
-      stewardBadgeEnabled: true,
       verifiedStatus: 'none',
       avatarKey: null,
       avatarUpdatedAt: null,

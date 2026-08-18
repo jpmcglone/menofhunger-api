@@ -80,7 +80,6 @@ export type SpaceChatSenderDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: 'none' | 'identity' | 'manual';
-  stewardBadgeEnabled: boolean;
 };
 
 export type SpaceChatMediaItemDto = {

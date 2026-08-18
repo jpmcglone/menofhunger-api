@@ -86,10 +86,20 @@ function makeService(opts?: { configured?: boolean; tokens?: Array<{ id: string;
       count: jest.fn(async () => 3),
     },
     user: {
-      findUnique: jest.fn(async () => ({
+      findUnique: jest.fn(async (): Promise<{
+        accountKind: string;
+        undeliveredNotificationCount: number;
+        undeliveredGroupPostCount: number;
+      } | null> => ({
+        accountKind: 'person',
         undeliveredNotificationCount: 0,
         undeliveredGroupPostCount: 0,
       })),
+    },
+    userPageOperator: {
+      findMany: jest.fn(async (): Promise<
+        { page: { undeliveredNotificationCount: number; undeliveredGroupPostCount: number } }[]
+      > => []),
     },
   };
   const appConfig = {
@@ -152,6 +162,7 @@ describe('ApnsPushService', () => {
       ],
     });
     prisma.user.findUnique.mockResolvedValue({
+      accountKind: 'person',
       undeliveredNotificationCount: 2,
       undeliveredGroupPostCount: 1,
     });
@@ -162,6 +173,19 @@ describe('ApnsPushService', () => {
     expect(first.options.alert).toEqual({ title: 'New reply', body: 'Someone replied' });
     expect(first.options.badge).toBe(3);
     expect(first.options.data).toEqual(expect.objectContaining({ url: '/p/abc', kind: 'comment' }));
+  });
+
+  it('computeAppIconBadge sums the person plus operated pages', async () => {
+    const { svc, prisma } = makeService();
+    prisma.user.findUnique.mockResolvedValue({
+      accountKind: 'person',
+      undeliveredNotificationCount: 2,
+      undeliveredGroupPostCount: 1,
+    });
+    prisma.userPageOperator.findMany.mockResolvedValue([
+      { page: { undeliveredNotificationCount: 4, undeliveredGroupPostCount: 1 } },
+    ]);
+    await expect(svc.computeAppIconBadge('john')).resolves.toBe(8);
   });
 
   it('sendToUser includes rich alert metadata and custom navigation fields', async () => {
@@ -378,6 +402,7 @@ describe('ApnsPushService — token cache', () => {
       tokens: [{ id: 't1', token: 'tok-1', environment: 'production' }],
     });
     prisma.user.findUnique.mockResolvedValue({
+      accountKind: 'person',
       undeliveredNotificationCount: 0,
       undeliveredGroupPostCount: 0,
     });
@@ -402,6 +427,7 @@ describe('ApnsPushService — token cache', () => {
       tokens: [{ id: 't1', token: 'tok-1', environment: 'production' }],
     });
     prisma.user.findUnique.mockResolvedValue({
+      accountKind: 'person',
       undeliveredNotificationCount: 0,
       undeliveredGroupPostCount: 2,
     });
@@ -419,6 +445,7 @@ describe('ApnsPushService — token cache', () => {
   it('computeAppIconBadge sums denormalized bell and group counters', async () => {
     const { svc, prisma } = makeService();
     prisma.user.findUnique.mockResolvedValue({
+      accountKind: 'person',
       undeliveredNotificationCount: 5,
       undeliveredGroupPostCount: 2,
     });

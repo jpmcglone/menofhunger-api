@@ -24,6 +24,7 @@ import type {
   PostsTypingPayloadDto,
   UsersMeUpdatedPayloadDto,
   NotificationsDeletedPayloadDto,
+  AccountsBadgeUpdatedPayloadDto,
   NotificationsLockScreenClearPayloadDto,
   NotificationsNewPayloadDto,
   PostsInteractionPayloadDto,
@@ -167,6 +168,10 @@ export class PresenceRealtimeService {
     payload: { undeliveredCount: number; clearedPostIds?: string[] },
   ): void {
     this.emitToUser(userId, 'notifications:updated', payload);
+  }
+
+  emitAccountsBadgeUpdated(userId: string, payload: AccountsBadgeUpdatedPayloadDto): void {
+    this.emitToUser(userId, 'accounts:badge-updated', payload);
   }
 
   emitNotificationsLockScreenClear(

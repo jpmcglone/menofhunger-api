@@ -20,7 +20,7 @@ export const USER_LIST_SELECT = {
   premium: true,
   premiumPlus: true,
   isOrganization: true,
-  stewardBadgeEnabled: true,
+  accountKind: true,
   verifiedStatus: true,
   avatarKey: true,
   avatarUpdatedAt: true,
@@ -35,8 +35,7 @@ export const USER_LIST_SELECT = {
 } as const;
 
 /**
- * Mention payloads are rendered inline; keep this minimal but include tier/badge fields.
- * (Some older callsites only used `premium`/`verifiedStatus`; newer UI wants the full badge set.)
+ * Mention payloads are rendered inline; keep this minimal but include tier fields.
  */
 export const MENTION_USER_SELECT = {
   id: true,
@@ -45,7 +44,6 @@ export const MENTION_USER_SELECT = {
   premium: true,
   premiumPlus: true,
   isOrganization: true,
-  stewardBadgeEnabled: true,
 } as const;
 
 /** Select shape for `toUserDto` (auth/me). Keep explicit so future columns don't get auto-exposed. */
@@ -53,6 +51,7 @@ export const USER_DTO_SELECT = {
   id: true,
   createdAt: true,
   phone: true,
+  accountKind: true,
   email: true,
   emailVerifiedAt: true,
   emailVerificationRequestedAt: true,
@@ -84,7 +83,6 @@ export const USER_DTO_SELECT = {
   premium: true,
   premiumPlus: true,
   isOrganization: true,
-  stewardBadgeEnabled: true,
   verifiedStatus: true,
   verifiedAt: true,
   unverifiedAt: true,

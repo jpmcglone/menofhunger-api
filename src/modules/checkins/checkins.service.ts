@@ -476,7 +476,7 @@ export class CheckinsService {
     // since it depends on the calling user and is only needed for out-of-top-N viewers.
     type LeaderboardUser = {
       id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
-      isOrganization: boolean; stewardBadgeEnabled: boolean; verifiedStatus: string; avatarUrl: string | null;
+      isOrganization: boolean; verifiedStatus: string; avatarUrl: string | null;
       checkinStreakDays: number; longestStreakDays: number;
     };
     let cachedUsers: LeaderboardUser[] | null = null;
@@ -491,7 +491,6 @@ export class CheckinsService {
       premium: true,
       premiumPlus: true,
       isOrganization: true,
-      stewardBadgeEnabled: true,
       verifiedStatus: true,
       avatarKey: true,
       avatarUpdatedAt: true,
@@ -502,7 +501,7 @@ export class CheckinsService {
 
     const toDto = (u: {
       id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
-      isOrganization: boolean; stewardBadgeEnabled: boolean; verifiedStatus: string;
+      isOrganization: boolean; verifiedStatus: string;
       avatarKey: string | null; avatarUpdatedAt: Date | null; checkinStreakDays: number | null; longestStreakDays: number | null;
     }): LeaderboardUser => ({
       id: u.id,
@@ -511,7 +510,6 @@ export class CheckinsService {
       premium: u.premium,
       premiumPlus: u.premiumPlus,
       isOrganization: Boolean(u.isOrganization),
-      stewardBadgeEnabled: Boolean(u.stewardBadgeEnabled),
       verifiedStatus: u.verifiedStatus as string,
       avatarUrl: publicAssetUrl({
         publicBaseUrl: params.publicBaseUrl,
@@ -606,7 +604,7 @@ export class CheckinsService {
 
     type LeaderboardUser = {
       id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
-      isOrganization: boolean; stewardBadgeEnabled: boolean; verifiedStatus: string; avatarUrl: string | null;
+      isOrganization: boolean; verifiedStatus: string; avatarUrl: string | null;
       checkinStreakDays: number; longestStreakDays: number;
     };
     let cachedUsers: LeaderboardUser[] | null = null;
@@ -621,7 +619,6 @@ export class CheckinsService {
       premium: true,
       premiumPlus: true,
       isOrganization: true,
-      stewardBadgeEnabled: true,
       verifiedStatus: true,
       avatarKey: true,
       avatarUpdatedAt: true,
@@ -632,7 +629,7 @@ export class CheckinsService {
 
     const toDto = (u: {
       id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
-      isOrganization: boolean; stewardBadgeEnabled: boolean; verifiedStatus: string;
+      isOrganization: boolean; verifiedStatus: string;
       avatarKey: string | null; avatarUpdatedAt: Date | null; checkinStreakDays: number | null; longestStreakDays: number | null;
     }): LeaderboardUser => ({
       id: u.id,
@@ -641,7 +638,6 @@ export class CheckinsService {
       premium: u.premium,
       premiumPlus: u.premiumPlus,
       isOrganization: Boolean(u.isOrganization),
-      stewardBadgeEnabled: Boolean(u.stewardBadgeEnabled),
       verifiedStatus: u.verifiedStatus as string,
       avatarUrl: publicAssetUrl({
         publicBaseUrl: params.publicBaseUrl,
@@ -756,7 +752,7 @@ export class CheckinsService {
 
     type WeeklyLeaderboardUser = {
       id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
-      isOrganization: boolean; stewardBadgeEnabled: boolean; verifiedStatus: string; avatarUrl: string | null;
+      isOrganization: boolean; verifiedStatus: string; avatarUrl: string | null;
       checkinStreakDays: number; longestStreakDays: number; daysThisWeek: number;
     };
 
@@ -802,7 +798,6 @@ export class CheckinsService {
         premium: true,
         premiumPlus: true,
         isOrganization: true,
-        stewardBadgeEnabled: true,
         verifiedStatus: true,
         avatarKey: true,
         avatarUpdatedAt: true,
@@ -832,7 +827,6 @@ export class CheckinsService {
       premium: u.premium,
       premiumPlus: u.premiumPlus,
       isOrganization: Boolean(u.isOrganization),
-      stewardBadgeEnabled: Boolean(u.stewardBadgeEnabled),
       verifiedStatus: u.verifiedStatus as string,
       avatarUrl: publicAssetUrl({
         publicBaseUrl: params.publicBaseUrl,
@@ -858,7 +852,6 @@ export class CheckinsService {
           premium: true,
           premiumPlus: true,
           isOrganization: true,
-          stewardBadgeEnabled: true,
           verifiedStatus: true,
           avatarKey: true,
           avatarUpdatedAt: true,

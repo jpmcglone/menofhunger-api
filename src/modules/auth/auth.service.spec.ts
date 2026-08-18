@@ -44,11 +44,11 @@ function makeMinimalUser(overrides?: Record<string, unknown>) {
     premium: false,
     premiumPlus: false,
     isOrganization: false,
+    accountKind: 'person',
     verifiedStatus: 'none',
     verifiedAt: null,
     unverifiedAt: null,
     siteAdmin: false,
-    stewardBadgeEnabled: false,
     followVisibility: 'public',
     birthdayVisibility: 'monthDay',
     featureToggles: null,
@@ -60,7 +60,7 @@ function makeMinimalUser(overrides?: Record<string, unknown>) {
   };
 }
 
-function makeSession(overrides: { expiresAt: Date; user?: any; impersonatedByUserId?: string | null }) {
+function makeSession(overrides: { expiresAt: Date; user?: any; impersonatedByUserId?: string | null; operatedByUserId?: string | null }) {
   const user = overrides.user ?? makeMinimalUser();
   return {
     id: 'session-1',
@@ -71,6 +71,7 @@ function makeSession(overrides: { expiresAt: Date; user?: any; impersonatedByUse
     userId: user.id,
     user,
     impersonatedByUserId: overrides.impersonatedByUserId ?? null,
+    operatedByUserId: overrides.operatedByUserId ?? null,
   };
 }
 
@@ -96,6 +97,7 @@ function makeService(overrides?: { prisma?: any }) {
       post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
       user: { update: jest.fn() },
       phoneOtp: { findFirst: jest.fn(async () => null) },
+      parkedPhone: { findUnique: jest.fn(async () => null) },
     } as any);
 
   const appConfig = {
@@ -151,6 +153,7 @@ describe('AuthService.createSessionForUser', () => {
       expiresAt: expect.any(Date),
       // Ordinary logins are never impersonation sessions.
       impersonatedByUserId: null,
+      operatedByUserId: null,
     });
     expect(cookieCall[0]).toBe(AUTH_COOKIE_NAME);
     expect(cookieCall[2]).toEqual(
@@ -1197,7 +1200,7 @@ describe('revokeAllSessionsForUser', () => {
     // those rows are owned by the target, so `userId` alone would leave them alive.
     const expectedWhere = {
       revokedAt: null,
-      OR: [{ userId: 'user-1' }, { impersonatedByUserId: 'user-1' }],
+      OR: [{ userId: 'user-1' }, { impersonatedByUserId: 'user-1' }, { operatedByUserId: 'user-1' }],
     };
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expectedWhere }));
     expect(updateMany).toHaveBeenCalledWith({

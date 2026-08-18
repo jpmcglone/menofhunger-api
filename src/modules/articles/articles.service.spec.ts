@@ -413,7 +413,6 @@ describe('ArticlesService.listTrending', () => {
         premium: false,
         premiumPlus: false,
         isOrganization: false,
-        stewardBadgeEnabled: true,
         orgMemberships: [],
       },
       tags: [],

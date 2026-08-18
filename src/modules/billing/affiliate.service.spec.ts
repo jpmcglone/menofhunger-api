@@ -115,7 +115,7 @@ describe('AffiliateService.maybeRecordEarning', () => {
       .mockResolvedValueOnce(makeQualifiedRecruitLookup(AFFILIATE_AT, { premium: true }))
       .mockResolvedValueOnce({
         id: 'recruit-1', username: 'recruit', name: 'Recruit',
-        premium: false, premiumPlus: false, isOrganization: false, stewardBadgeEnabled: false,
+        premium: false, premiumPlus: false, isOrganization: false,
         verifiedStatus: 'none', avatarKey: null, avatarUpdatedAt: null, bannedAt: null, isBot: false,
         orgMemberships: [], createdAt: AFTER_AFFILIATE_AT, referralBonusGrantedAt: null,
       });
@@ -134,7 +134,7 @@ describe('AffiliateService.maybeRecordEarning', () => {
       .mockResolvedValueOnce(makeQualifiedRecruitLookup())
       .mockResolvedValueOnce({
         id: 'recruit-1', username: 'recruit', name: 'Recruit',
-        premium: false, premiumPlus: false, isOrganization: false, stewardBadgeEnabled: false,
+        premium: false, premiumPlus: false, isOrganization: false,
         verifiedStatus: 'none', avatarKey: null, avatarUpdatedAt: null, bannedAt: null, isBot: false,
         orgMemberships: [], createdAt: AFTER_AFFILIATE_AT, referralBonusGrantedAt: null,
       });
@@ -161,7 +161,7 @@ describe('AffiliateService.maybeRecordEarning', () => {
       .mockResolvedValueOnce(makeQualifiedRecruitLookup())
       .mockResolvedValueOnce({
         id: 'recruit-2', username: null, name: null,
-        premium: false, premiumPlus: false, isOrganization: false, stewardBadgeEnabled: false,
+        premium: false, premiumPlus: false, isOrganization: false,
         verifiedStatus: 'identity', avatarKey: null, avatarUpdatedAt: null, bannedAt: null, isBot: false,
         orgMemberships: [], createdAt: AFTER_AFFILIATE_AT, referralBonusGrantedAt: null,
       });
@@ -179,7 +179,7 @@ describe('AffiliateService.maybeRecordEarning', () => {
       .mockResolvedValueOnce(makeQualifiedRecruitLookup())
       .mockResolvedValueOnce({
         id: 'recruit-3', username: null, name: null,
-        premium: true, premiumPlus: false, isOrganization: false, stewardBadgeEnabled: false,
+        premium: true, premiumPlus: false, isOrganization: false,
         verifiedStatus: 'none', avatarKey: null, avatarUpdatedAt: null, bannedAt: null, isBot: false,
         orgMemberships: [], createdAt: AFTER_AFFILIATE_AT, referralBonusGrantedAt: null,
       });
@@ -198,7 +198,7 @@ describe('AffiliateService.maybeRecordEarning', () => {
       .mockResolvedValueOnce(makeQualifiedRecruitLookup())
       .mockResolvedValueOnce({
         id: 'recruit-4', username: null, name: null,
-        premium: true, premiumPlus: false, isOrganization: false, stewardBadgeEnabled: false,
+        premium: true, premiumPlus: false, isOrganization: false,
         verifiedStatus: 'none', avatarKey: null, avatarUpdatedAt: null, bannedAt: null, isBot: false,
         orgMemberships: [], createdAt: AFTER_AFFILIATE_AT, referralBonusGrantedAt: new Date(),
       });
@@ -253,7 +253,7 @@ describe('AffiliateService.maybeRecordEarning', () => {
       .mockResolvedValueOnce(makeQualifiedRecruitLookup())
       .mockResolvedValueOnce({
         id: 'recruit-1', username: 'u', name: 'N',
-        premium: false, premiumPlus: false, isOrganization: false, stewardBadgeEnabled: false,
+        premium: false, premiumPlus: false, isOrganization: false,
         verifiedStatus: 'none', avatarKey: null, avatarUpdatedAt: null, bannedAt: null, isBot: false,
         orgMemberships: [], createdAt: AFTER_AFFILIATE_AT, referralBonusGrantedAt: null,
       });

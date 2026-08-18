@@ -21,7 +21,6 @@ export type PostAuthorDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
   orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;
@@ -55,7 +54,6 @@ export type PostMentionDto = {
   premium?: boolean;
   premiumPlus?: boolean;
   isOrganization?: boolean;
-  stewardBadgeEnabled?: boolean;
 };
 
 export type PostPollOptionDto = {
@@ -179,7 +177,6 @@ export type PostMentionWithUser = {
     premium?: boolean;
     premiumPlus?: boolean;
     isOrganization?: boolean;
-    stewardBadgeEnabled?: boolean;
   };
 };
 
@@ -191,7 +188,6 @@ export type PostAuthorRow = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   avatarKey: string | null;
   avatarUpdatedAt: Date | null;
@@ -365,7 +361,6 @@ export function toPostDto(
             premium: m.user.premium ?? undefined,
             premiumPlus: m.user.premiumPlus ?? undefined,
             isOrganization: m.user.isOrganization ?? undefined,
-            stewardBadgeEnabled: m.user.stewardBadgeEnabled ?? undefined,
           }
         : null,
     )
@@ -412,7 +407,6 @@ export function toPostDto(
         premium: false,
         premiumPlus: false,
         isOrganization: false,
-        stewardBadgeEnabled: false,
         verifiedStatus: 'none',
         avatarUrl: null,
         orgAffiliations: [],
@@ -459,7 +453,6 @@ export function toPostDto(
         premium: post.user.premium,
         premiumPlus: post.user.premiumPlus,
         isOrganization: Boolean(post.user.isOrganization),
-        stewardBadgeEnabled: Boolean(post.user.stewardBadgeEnabled),
         verifiedStatus: post.user.verifiedStatus,
         avatarUrl: publicAssetUrl({
           publicBaseUrl: publicAssetBaseUrl,
@@ -586,7 +579,6 @@ export function toPostDto(
       premium: post.user.premium,
       premiumPlus: post.user.premiumPlus,
       isOrganization: Boolean(post.user.isOrganization),
-      stewardBadgeEnabled: Boolean(post.user.stewardBadgeEnabled),
       verifiedStatus: post.user.verifiedStatus,
       avatarUrl: publicAssetUrl({
         publicBaseUrl: publicAssetBaseUrl,
@@ -622,7 +614,6 @@ export function toPostAuthorDtoFromFeedRow(
       premium: false,
       premiumPlus: false,
       isOrganization: false,
-      stewardBadgeEnabled: false,
       verifiedStatus: 'none',
       avatarUrl: null,
       orgAffiliations: [],
@@ -636,7 +627,6 @@ export function toPostAuthorDtoFromFeedRow(
     premium: post.user.premium,
     premiumPlus: post.user.premiumPlus,
     isOrganization: Boolean(post.user.isOrganization),
-    stewardBadgeEnabled: Boolean(post.user.stewardBadgeEnabled),
     verifiedStatus: post.user.verifiedStatus,
     avatarUrl: publicAssetUrl({
       publicBaseUrl: publicAssetBaseUrl,

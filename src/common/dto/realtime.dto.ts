@@ -34,6 +34,12 @@ export type NotificationsLockScreenClearPayloadDto = {
   section: 'inbox' | 'groups';
 };
 
+/** Cross-identity switcher badge. Emitted to the operator cluster when any identity's unread changes. */
+export type AccountsBadgeUpdatedPayloadDto = {
+  userId: string;
+  unreadBadgeCount: number;
+};
+
 /**
  * Cross-device/tab sync for message read state.
  * (We currently emit to the reader's own sockets only.)
@@ -97,7 +103,6 @@ export type PublicProfileDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   avatarUrl: string | null;
   bannerUrl: string | null;

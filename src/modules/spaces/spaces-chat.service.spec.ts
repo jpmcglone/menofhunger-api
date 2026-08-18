@@ -80,7 +80,6 @@ describe('SpacesChatService.appendSystemMessage', () => {
         premiumPlus: false,
         isOrganization: false,
         verifiedStatus: 'none',
-        stewardBadgeEnabled: true,
       },
       body: 'hello',
     });
@@ -107,7 +106,6 @@ describe('SpacesChatService.appendMessage replyToId', () => {
         premiumPlus: false,
         isOrganization: false,
         verifiedStatus: 'none',
-        stewardBadgeEnabled: true,
       },
       body: 'later',
       replyToId: 'missing-parent',

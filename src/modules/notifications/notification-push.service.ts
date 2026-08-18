@@ -748,6 +748,18 @@ export class NotificationPushService {
       body = body ? `${body} · ${params.sourceLabel}` : params.sourceLabel;
     }
 
+    const recipient = await this.prisma.user.findUnique({
+      where: { id: recipientUserId },
+      select: { accountKind: true, username: true },
+    });
+    const tokenOwners = await this.tokenOwnersForRecipient(recipientUserId, recipient?.accountKind);
+    const recipientUsername = (recipient?.username ?? '').trim() || null;
+
+    const titleForOwner = (tokenOwnerId: string) => {
+      if (tokenOwnerId === recipientUserId || !recipientUsername) return params.title;
+      return `@${recipientUsername} · ${params.title}`;
+    };
+
     // iOS / APNs: always deliver. The app's UNUserNotificationCenterDelegate decides
     // whether to surface a banner when foregrounded — that is a client-side concern.
     if (this.apnsPush.configured()) {
@@ -757,51 +769,59 @@ export class NotificationPushService {
         subtitle: params.subtitle ?? null,
         actorUsername: params.actorUsername ?? null,
       });
-      this.apnsPush
-        .sendToUser(recipientUserId, {
-          title: params.title,
-          body: apnsBody,
-          url,
-          notificationId: params.notificationId ?? null,
-          kind,
-          collapseId: tag,
-          mutableContent: Boolean(params.avatarUrl || params.mediaUrl || params.actorUsername),
-          subtitle: params.subtitle ?? null,
-          threadId: params.threadId ?? null,
-          category: params.category ?? null,
-          avatarUrl: params.avatarUrl ?? null,
-          mediaUrl: params.mediaUrl ?? null,
-          actorUsername: params.actorUsername ?? null,
-          actorName: params.actorName ?? null,
-          groupInviteId: params.groupInviteId ?? null,
-          postId: params.postId ?? null,
-        })
-        .catch((err) => {
-          this.logger.warn(`[apns] Failed to send push (${kind}): ${err instanceof Error ? err.message : String(err)}`);
-        });
+      for (const tokenOwnerId of tokenOwners) {
+        this.apnsPush
+          .sendToUser(tokenOwnerId, {
+            title: titleForOwner(tokenOwnerId),
+            body: apnsBody,
+            url,
+            notificationId: params.notificationId ?? null,
+            kind,
+            collapseId: tag,
+            mutableContent: Boolean(params.avatarUrl || params.mediaUrl || params.actorUsername),
+            subtitle: params.subtitle ?? null,
+            threadId: params.threadId ?? null,
+            category: params.category ?? null,
+            avatarUrl: params.avatarUrl ?? null,
+            mediaUrl: params.mediaUrl ?? null,
+            actorUsername: params.actorUsername ?? null,
+            actorName: params.actorName ?? null,
+            groupInviteId: params.groupInviteId ?? null,
+            postId: params.postId ?? null,
+            recipientUserId,
+            recipientUsername,
+          })
+          .catch((err) => {
+            this.logger.warn(`[apns] Failed to send push (${kind}): ${err instanceof Error ? err.message : String(err)}`);
+          });
+      }
     }
 
-    // Web VAPID: suppress when the user is actively connected on the web — the realtime
-    // event already updated their badge. suppressActiveChannels is the legacy name for the same flag.
+    // Web VAPID: suppress when the *recipient* is actively connected on the web — the
+    // realtime event already updated their badge. suppressActiveChannels is the legacy name.
     const suppressWeb =
       (params.suppressActiveWebChannel === true || params.suppressActiveChannels === true) &&
       this.presence.isUserActivelyOnChannel(recipientUserId, 'web');
 
     if (!suppressWeb) {
-      await this.sendWebPushOnly(recipientUserId, {
-        payload: JSON.stringify({
-          title: params.title,
-          body,
-          notificationId: params.notificationId ?? undefined,
-          url,
-          tag,
-          kind,
-          icon: params.icon ?? undefined,
-          badge: params.badge ?? '/android-chrome-192x192.png',
-          renotify: Boolean(params.renotify),
-          test: params.test === true,
-        }),
-      });
+      for (const tokenOwnerId of tokenOwners) {
+        await this.sendWebPushOnly(tokenOwnerId, {
+          payload: JSON.stringify({
+            title: titleForOwner(tokenOwnerId),
+            body,
+            notificationId: params.notificationId ?? undefined,
+            url,
+            tag,
+            kind,
+            icon: params.icon ?? undefined,
+            badge: params.badge ?? '/android-chrome-192x192.png',
+            renotify: Boolean(params.renotify),
+            test: params.test === true,
+            recipientUserId,
+            recipientUsername,
+          }),
+        });
+      }
     } else {
       this.logger.debug(`[push] Suppressed web push for ${kind} — user ${recipientUserId} is active on web`);
       // Don't record coalesce: the user is online now but may miss the next event while offline.
@@ -811,6 +831,19 @@ export class NotificationPushService {
     if (!params.test) {
       await this.recordPushSent(recipientUserId, tag).catch(() => {});
     }
+  }
+
+  /** Pages never own devices — deliver to each operator. Persons keep their own tokens. */
+  private async tokenOwnersForRecipient(
+    recipientUserId: string,
+    accountKind?: string | null,
+  ): Promise<string[]> {
+    if (accountKind !== 'page') return [recipientUserId];
+    const operators = await this.prisma.userPageOperator.findMany({
+      where: { pageUserId: recipientUserId },
+      select: { operatorUserId: true },
+    });
+    return operators.map((row) => row.operatorUserId);
   }
 
   /** Web Push delivery to all browser subscriptions; prunes expired (410/404). */

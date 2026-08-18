@@ -5,6 +5,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import { VerifiedGuard } from '../auth/verified.guard';
 import { FitnessStravaGuard } from './fitness-strava.guard';
 import { CurrentUserId } from '../users/users.decorator';
+import { PersonAccountGuard } from '../pages/person-account.guard';
 import { AppConfigService } from '../app/app-config.service';
 import { FitnessService } from './fitness.service';
 
@@ -88,7 +89,7 @@ const createSharePostSchema = z.object({
 
 @ApiTags('Fitness')
 @Controller('fitness')
-@UseGuards(AuthGuard, VerifiedGuard)
+@UseGuards(AuthGuard, VerifiedGuard, PersonAccountGuard)
 export class FitnessController {
   constructor(
     private readonly fitness: FitnessService,

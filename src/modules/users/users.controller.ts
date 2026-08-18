@@ -52,7 +52,6 @@ type PreviewBatchEntry = {
   premium?: boolean;
   premiumPlus?: boolean;
   isOrganization?: boolean;
-  stewardBadgeEnabled?: boolean;
   verifiedStatus?: string;
 };
 
@@ -87,7 +86,6 @@ const profileSchema = z.object({
 const settingsSchema = z.object({
   followVisibility: z.enum(['all', 'verified', 'premium', 'none']).optional(),
   birthdayVisibility: z.enum(['none', 'monthDay', 'full']).optional(),
-  stewardBadgeEnabled: z.boolean().optional(),
 });
 
 const onboardingSchema = z.object({
@@ -160,7 +158,6 @@ type UserPreviewPayload = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: string;
   avatarUrl: string | null;
   bannerUrl: string | null;
@@ -677,8 +674,7 @@ export class UsersController {
    *
    * Returns one entry per requested username with `id` (null when the username
    * doesn't resolve to a real user) plus tier signals (`premium`, `premiumPlus`,
-   * `isOrganization`, `stewardBadgeEnabled`, `verifiedStatus`) that the chat UI
-   * uses to color the mention.
+   * `isOrganization`, `verifiedStatus`) that the chat UI uses to color the mention.
    *
    * Replaces the per-message GET /users/:username/preview fan-out that was
    * dispatched on chat mount — at 50 messages with a few mentions each, the old
@@ -718,7 +714,6 @@ export class UsersController {
         premium: true,
         premiumPlus: true,
         isOrganization: true,
-        stewardBadgeEnabled: true,
         verifiedStatus: true,
       },
     });
@@ -738,7 +733,6 @@ export class UsersController {
         premium: Boolean(found.premium),
         premiumPlus: Boolean(found.premiumPlus),
         isOrganization: Boolean(found.isOrganization),
-        stewardBadgeEnabled: Boolean(found.stewardBadgeEnabled),
         verifiedStatus: String(found.verifiedStatus ?? 'none'),
       };
     });
@@ -830,7 +824,6 @@ export class UsersController {
       premium: profile.premium,
       premiumPlus: profile.premiumPlus,
       isOrganization: Boolean((profile as any).isOrganization),
-      stewardBadgeEnabled: Boolean(profile.stewardBadgeEnabled),
       verifiedStatus: profile.verifiedStatus,
       avatarUrl: profile.avatarUrl,
       bannerUrl: profile.bannerUrl,
@@ -1089,23 +1082,11 @@ export class UsersController {
   async updateMySettings(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = settingsSchema.parse(body);
 
-    if (parsed.stewardBadgeEnabled !== undefined) {
-      const user = await this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { premiumPlus: true },
-      });
-      if (!user) throw new NotFoundException('User not found.');
-      if (!user.premiumPlus) {
-        throw new BadRequestException('Premium+ is required to change steward badge settings.');
-      }
-    }
-
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
         followVisibility: parsed.followVisibility,
         birthdayVisibility: parsed.birthdayVisibility,
-        ...(parsed.stewardBadgeEnabled !== undefined ? { stewardBadgeEnabled: parsed.stewardBadgeEnabled } : {}),
       },
     });
 

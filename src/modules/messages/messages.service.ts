@@ -42,6 +42,7 @@ import { PosthogService } from '../../common/posthog/posthog.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 
 const MESSAGE_UNREAD_CACHE_TTL_MS = 30_000;
 
@@ -65,7 +66,6 @@ const MESSAGE_SENDER_SELECT = {
   premium: true,
   premiumPlus: true,
   isOrganization: true,
-  stewardBadgeEnabled: true,
   verifiedStatus: true,
   avatarKey: true,
   avatarUpdatedAt: true,
@@ -119,6 +119,7 @@ export class MessagesService {
     private readonly posthog: PosthogService,
     private readonly jobs: JobsService,
     private readonly marvIdentity: MarvinBotIdentityService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   /**
@@ -207,7 +208,6 @@ export class MessagesService {
                 premium: true,
                 premiumPlus: true,
                 isOrganization: true,
-                stewardBadgeEnabled: true,
                 verifiedStatus: true,
                 avatarKey: true,
                 avatarUpdatedAt: true,
@@ -345,6 +345,7 @@ export class MessagesService {
         primaryUnreadCount: counts.primary,
         requestUnreadCount: counts.requests,
       });
+      this.sideEffects.dispatch('account.cluster.badge', { userId });
       const state = this.unreadEmitState.get(userId);
       if (state) {
         state.lastEmitAt = Date.now();
@@ -413,7 +414,6 @@ export class MessagesService {
                 premium: true,
                 premiumPlus: true,
                 isOrganization: true,
-                stewardBadgeEnabled: true,
                 verifiedStatus: true,
                 avatarKey: true,
                 avatarUpdatedAt: true,
@@ -528,7 +528,6 @@ export class MessagesService {
             premium: true,
             premiumPlus: true,
             isOrganization: true,
-            stewardBadgeEnabled: true,
             verifiedStatus: true,
             avatarKey: true,
             avatarUpdatedAt: true,
@@ -1687,7 +1686,6 @@ export class MessagesService {
             premium: true,
             premiumPlus: true,
             isOrganization: true,
-            stewardBadgeEnabled: true,
             verifiedStatus: true,
             avatarKey: true,
             avatarUpdatedAt: true,

@@ -17,7 +17,6 @@ const AUTHOR: PostWithAuthorAndMedia['user'] = {
   premium: false,
   premiumPlus: false,
   isOrganization: false,
-  stewardBadgeEnabled: false,
   verifiedStatus: 'identity',
   avatarKey: null,
   avatarUpdatedAt: null,

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Request } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUserId } from '../users/users.decorator';
+import { PersonAccountGuard } from '../pages/person-account.guard';
 import type { AffiliateSummaryDto, BillingCheckoutSessionDto, BillingMeDto, BillingPortalSessionDto, BillingTier, ReferralMeDto, RecruitDto } from '../../common/dto';
 import { BillingService } from './billing.service';
 import { ReferralService } from './referral.service';
@@ -50,6 +51,7 @@ export class BillingController {
 
   @UseGuards(AuthGuard)
   @Post('checkout-session')
+  @UseGuards(AuthGuard, PersonAccountGuard)
   async checkoutSession(@CurrentUserId() userId: string, @Body() body: unknown): Promise<{ data: BillingCheckoutSessionDto }> {
     const parsed = checkoutSchema.parse(body);
     return { data: await this.billing.createCheckoutSession({ userId, tier: parsed.tier as BillingTier }) };
@@ -62,6 +64,7 @@ export class BillingController {
    */
   @UseGuards(AuthGuard)
   @Post('checkout-session/sync')
+  @UseGuards(AuthGuard, PersonAccountGuard)
   async syncCheckoutSession(@CurrentUserId() userId: string, @Body() body: unknown): Promise<{ data: BillingMeDto }> {
     const parsed = checkoutSyncSchema.parse(body);
     return { data: await this.billing.syncCheckoutSession({ userId, sessionId: parsed.sessionId }) };
@@ -69,6 +72,7 @@ export class BillingController {
 
   @UseGuards(AuthGuard)
   @Post('portal-session')
+  @UseGuards(AuthGuard, PersonAccountGuard)
   async portalSession(@CurrentUserId() userId: string): Promise<{ data: BillingPortalSessionDto }> {
     return { data: await this.billing.createPortalSession({ userId }) };
   }
@@ -81,7 +85,7 @@ export class BillingController {
     return { data: await this.referral.getMyReferralInfo(userId) };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Put('referral/code')
   async setReferralCode(
     @CurrentUserId() userId: string,
@@ -97,7 +101,7 @@ export class BillingController {
     return { data: await this.referral.getMyRecruits(userId) };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Post('referral/set-recruiter')
   async setRecruiter(
     @CurrentUserId() userId: string,
@@ -149,7 +153,7 @@ export class BillingController {
    *
    * Requires a verified, authenticated user (mirrors the Stripe checkout guard).
    */
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Post('apple/verify')
   async appleVerify(
     @CurrentUserId() userId: string,

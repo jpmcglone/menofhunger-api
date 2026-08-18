@@ -21,6 +21,8 @@ export class OptionalAuthGuard implements CanActivate {
       (req as AuthedRequest).user = {
         id: result.user.id,
         impersonatedByUserId: result.impersonatedByUserId,
+        operatedByUserId: result.operatedByUserId,
+        accountKind: result.user.accountKind,
       };
     } else {
       (req as AuthedRequest).user = undefined;

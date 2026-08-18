@@ -1250,13 +1250,13 @@ export class ArticlesService {
         user: {
           select: {
             id: true, username: true, name: true, premium: true, premiumPlus: true,
-            isOrganization: true, stewardBadgeEnabled: true, verifiedStatus: true,
+            isOrganization: true, verifiedStatus: true,
             avatarKey: true, avatarUpdatedAt: true, bannedAt: true,
             orgMemberships: { include: { org: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } } } },
           },
         },
         media: true,
-        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, isOrganization: true, stewardBadgeEnabled: true } } } },
+        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, isOrganization: true } } } },
         article: { include: { author: { select: articleAuthorInclude } } },
       },
     });

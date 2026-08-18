@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUserId } from '../users/users.decorator';
+import { PersonAccountGuard } from '../pages/person-account.guard';
 import { toVerificationRequestPublicDto } from '../../common/dto';
 import { VerificationService } from './verification.service';
 
@@ -22,6 +23,7 @@ export class VerificationController {
   /** Start (or resume) identity verification. Provider integration comes later. */
   @ApiOperation({ summary: 'Create (or resume) an identity verification request' })
   @Post('request')
+  @UseGuards(PersonAccountGuard)
   async createRequest(@Body() body: unknown, @CurrentUserId() userId?: string) {
     const parsed = createRequestSchema.parse(body ?? {});
     const req = await this.verification.createRequestForUser({

@@ -31,8 +31,10 @@ import type { BrowserHandoffDto } from '../../common/dto';
 import { AuthGuard, type AuthedRequest } from './auth.guard';
 import { BrowserHandoffService } from './browser-handoff.service';
 import { ImpersonationService } from './impersonation.service';
+import { AccountSwitchService } from './account-switch.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { totalUserArticlesWhere, totalUserPostsWhere } from '../../common/content-counts';
+import { assertPersonAccount } from '../pages/pages.constants';
 
 const startSchema = z.object({
   phone: z.string().min(1),
@@ -87,6 +89,7 @@ export class AuthController {
     private readonly moduleRef: ModuleRef,
     private readonly browserHandoff: BrowserHandoffService,
     private readonly impersonation: ImpersonationService,
+    private readonly accountSwitch: AccountSwitchService,
   ) {}
 
   @ApiOperation({ summary: 'Send 6-digit login code via SMS' })
@@ -244,6 +247,7 @@ export class AuthController {
       postCountRes,
       articleCountRes,
       impersonationRes,
+      accountSwitchRes,
     ] = await Promise.allSettled([
       notifications?.getUndeliveredCount(user.id) ?? Promise.resolve(0),
       notifications?.getUnreadCommentCount(user.id) ?? Promise.resolve(0),
@@ -253,6 +257,7 @@ export class AuthController {
       prisma?.post.count({ where: totalUserPostsWhere(user.id) }) ?? Promise.resolve(null),
       prisma?.article.count({ where: totalUserArticlesWhere(user.id) }) ?? Promise.resolve(null),
       this.impersonation.describe(sessionResult.impersonatedByUserId),
+      this.accountSwitch.describe(sessionResult.operatedByUserId),
     ]);
 
     const notificationUndeliveredCount =
@@ -297,6 +302,8 @@ export class AuthController {
 
     const impersonation =
       impersonationRes.status === 'fulfilled' ? impersonationRes.value ?? null : null;
+    const accountSwitch =
+      accountSwitchRes.status === 'fulfilled' ? accountSwitchRes.value ?? null : null;
 
     return {
       data: {
@@ -309,8 +316,48 @@ export class AuthController {
         postCount,
         articleCount,
         impersonation,
+        accountSwitch,
       },
     };
+  }
+
+  @ApiOperation({ summary: 'List the person + pages this session can switch into' })
+  @UseGuards(AuthGuard)
+  @Get('accounts')
+  async listAccounts(@Req() req: AuthedRequest) {
+    const token = getSessionCookie(req);
+    const session = await this.auth.meFromSessionToken(token);
+    if (!session) throw new UnauthorizedException();
+    const data = await this.accountSwitch.listAccounts({
+      effectiveUserId: session.user.id,
+      operatedByUserId: session.operatedByUserId,
+      accountKind: session.user.accountKind,
+    });
+    return { data };
+  }
+
+  @ApiOperation({ summary: 'Switch this client’s session to a page or back to the person' })
+  @UseGuards(AuthGuard)
+  @Post('switch')
+  async switchAccount(
+    @Req() req: AuthedRequest,
+    @Res({ passthrough: true }) res: Response,
+    @Body() body: unknown,
+  ) {
+    const token = getSessionCookie(req);
+    const session = await this.auth.meFromSessionToken(token);
+    if (!session) throw new UnauthorizedException();
+    const parsed = z.object({ userId: z.string().min(1) }).parse(body);
+    const result = await this.accountSwitch.switchTo({
+      currentUserId: session.user.id,
+      operatedByUserId: session.operatedByUserId,
+      impersonatedByUserId: session.impersonatedByUserId,
+      accountKind: session.user.accountKind,
+      targetUserId: parsed.userId,
+      currentToken: token,
+      res,
+    });
+    return { data: result };
   }
 
   @ApiOperation({
@@ -346,6 +393,7 @@ export class AuthController {
     const userId = sessionResult?.user?.id;
     if (!userId) throw new UnauthorizedException('You must be signed in to delete your account.');
     assertNotImpersonating(sessionResult, 'delete this account');
+    assertPersonAccount(sessionResult.user.accountKind);
 
     const parsed = deleteAccountSchema.parse(body ?? {});
     const result = await this.accountDeletion.requestDeletion(userId, {

@@ -250,8 +250,7 @@ describe('SearchService.recordUserSearch', () => {
 describe('SearchService.searchUsers — ranking', () => {
   function makeUser(overrides: Partial<{
     id: string; username: string; name: string; bio: string;
-    premium: boolean; premiumPlus: boolean; isOrganization: boolean;
-    stewardBadgeEnabled: boolean; verifiedStatus: string;
+    premium: boolean; premiumPlus: boolean; isOrganization: boolean; verifiedStatus: string;
     avatarKey: null; avatarUpdatedAt: null; lastOnlineAt: Date | null; createdAt: Date;
   }>) {
     return {
@@ -263,7 +262,6 @@ describe('SearchService.searchUsers — ranking', () => {
       premium: overrides.premium ?? false,
       premiumPlus: overrides.premiumPlus ?? false,
       isOrganization: overrides.isOrganization ?? false,
-      stewardBadgeEnabled: overrides.stewardBadgeEnabled ?? false,
       verifiedStatus: (overrides.verifiedStatus ?? 'none') as any,
       avatarKey: null,
       avatarUpdatedAt: null,

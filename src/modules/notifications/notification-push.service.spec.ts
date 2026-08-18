@@ -43,7 +43,10 @@ function makePrisma(opts?: {
       count: jest.fn(async () => 2),
     },
     user: {
-      findUnique: jest.fn(async () => null),
+      findUnique: jest.fn(async () => ({ accountKind: 'person', username: 'alice' })),
+    },
+    userPageOperator: {
+      findMany: jest.fn(async () => []),
     },
     post: {
       findUnique: jest.fn(async () => null),
@@ -305,6 +308,44 @@ describe('NotificationPushService — per-channel suppression', () => {
         body: 'Web Push is working.',
       }),
     );
+  });
+
+  it('fans a page push to operator tokens with a titled prefix and recipientUserId', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ accountKind: 'page', username: 'menofhunger' });
+    prisma.userPageOperator.findMany.mockResolvedValue([
+      { operatorUserId: 'john' },
+      { operatorUserId: 'steve' },
+    ]);
+    const { svc, apnsSendToUser } = makeService({ prisma });
+    await svc.sendWebPushToRecipient('page-1', {
+      title: 'New reply',
+      tag: 'notif-comment-post-p1',
+      kind: 'comment',
+    });
+    expect(apnsSendToUser).toHaveBeenCalledTimes(2);
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'john',
+      expect.objectContaining({
+        title: '@menofhunger · New reply',
+        recipientUserId: 'page-1',
+        recipientUsername: 'menofhunger',
+      }),
+    );
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'steve',
+      expect.objectContaining({
+        title: '@menofhunger · New reply',
+        recipientUserId: 'page-1',
+      }),
+    );
+    expect(webpush.sendNotification).toHaveBeenCalledTimes(2);
+    const payload = JSON.parse(webpush.sendNotification.mock.calls[0][1]) as {
+      title: string;
+      recipientUserId: string;
+    };
+    expect(payload.title).toBe('@menofhunger · New reply');
+    expect(payload.recipientUserId).toBe('page-1');
   });
 
   it('sends to both channels when user is not active on either', async () => {
@@ -1065,8 +1106,11 @@ describe('NotificationPushService — actor mini-profile cache', () => {
 
     await svc.sendKindPushForActor({ recipientUserId: 'user-1', kind: 'follow', actorUserId: 'actor-1' });
     await svc.sendKindPushForActor({ recipientUserId: 'user-2', kind: 'follow', actorUserId: 'actor-1' });
-    // Both fan-out sends are for the same actor — only one DB call.
-    expect(prisma.user.findUnique).toHaveBeenCalledTimes(1);
+    // Actor mini-profile is cached. Recipient lookups for token-owner fanout are separate.
+    const actorReads = prisma.user.findUnique.mock.calls.filter(
+      (c: [{ where?: { id?: string } }]) => c[0]?.where?.id === 'actor-1',
+    );
+    expect(actorReads).toHaveLength(1);
   });
 
   it('sendReplyNudgePush reads actor from DB on first call and from cache on the second', async () => {
@@ -1082,7 +1126,10 @@ describe('NotificationPushService — actor mini-profile cache', () => {
 
     await svc.sendReplyNudgePush({ recipientUserId: 'user-1', actorUserId: 'actor-1', notificationId: 'n1', actorPostId: null });
     await svc.sendReplyNudgePush({ recipientUserId: 'user-2', actorUserId: 'actor-1', notificationId: 'n2', actorPostId: null });
-    expect(prisma.user.findUnique).toHaveBeenCalledTimes(1);
+    const actorReads = prisma.user.findUnique.mock.calls.filter(
+      (c: [{ where?: { id?: string } }]) => c[0]?.where?.id === 'actor-1',
+    );
+    expect(actorReads).toHaveLength(1);
   });
 
   it('sendMessagePush reads sender from DB on first call and from cache on the second', async () => {
@@ -1098,6 +1145,9 @@ describe('NotificationPushService — actor mini-profile cache', () => {
 
     await svc.sendMessagePush({ recipientUserId: 'user-1', senderUserId: 'sender-1', senderName: 'Bob', conversationId: 'conv-1' });
     await svc.sendMessagePush({ recipientUserId: 'user-2', senderUserId: 'sender-1', senderName: 'Bob', conversationId: 'conv-1' });
-    expect(prisma.user.findUnique).toHaveBeenCalledTimes(1);
+    const senderReads = prisma.user.findUnique.mock.calls.filter(
+      (c: [{ where?: { id?: string } }]) => c[0]?.where?.id === 'sender-1',
+    );
+    expect(senderReads).toHaveLength(1);
   });
 });

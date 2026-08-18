@@ -24,7 +24,6 @@ export type ArticleAuthorDto = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  stewardBadgeEnabled: boolean;
   verifiedStatus: VerifiedStatus;
   orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;
 };
@@ -146,7 +145,6 @@ export const articleAuthorInclude = {
   premium: true,
   premiumPlus: true,
   isOrganization: true,
-  stewardBadgeEnabled: true,
   verifiedStatus: true,
   avatarKey: true,
   avatarUpdatedAt: true,
@@ -183,7 +181,6 @@ export function toArticleAuthorDto(author: ArticleAuthorRow, publicAssetBaseUrl:
     premium: author.premium,
     premiumPlus: author.premiumPlus,
     isOrganization: Boolean(author.isOrganization),
-    stewardBadgeEnabled: Boolean(author.stewardBadgeEnabled),
     verifiedStatus: author.verifiedStatus,
     orgAffiliations: (author.orgMemberships ?? []).map((m) => ({
       id: m.org.id,
