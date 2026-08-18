@@ -1,7 +1,6 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { AccountKind } from '@prisma/client';
 import { PagesService } from './pages.service';
-import { PARKED_PHONE_REASON_CONVERT } from './pages.constants';
 
 function makeService(overrides: { prisma?: any; auth?: any; entitlements?: any } = {}) {
   const prisma: any = {
@@ -22,6 +21,7 @@ function makeService(overrides: { prisma?: any; auth?: any; entitlements?: any }
     },
     parkedPhone: {
       upsert: jest.fn(async () => ({})),
+      deleteMany: jest.fn(async () => ({ count: 0 })),
     },
     $transaction: jest.fn(async (fn: any) => fn(prisma)),
     ...overrides.prisma,
@@ -108,7 +108,7 @@ describe('PagesService.createPage', () => {
 });
 
 describe('PagesService.convertToPage', () => {
-  it('parks the phone, flips kind, and revokes sessions', async () => {
+  it('clears the phone, flips kind, and revokes sessions', async () => {
     const { svc, prisma, auth } = makeService();
     let converted = false;
     prisma.user.update.mockImplementation(async () => {
@@ -146,16 +146,21 @@ describe('PagesService.convertToPage', () => {
 
     await svc.convertToPage('src-1', 'op-1');
 
-    expect(prisma.parkedPhone.upsert).toHaveBeenCalledWith(
+    expect(prisma.user.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { phone: '+15550001111' },
-        create: expect.objectContaining({
-          phone: '+15550001111',
-          formerUserId: 'src-1',
-          reason: PARKED_PHONE_REASON_CONVERT,
+        where: { id: 'src-1' },
+        data: expect.objectContaining({
+          accountKind: AccountKind.page,
+          phone: null,
         }),
       }),
     );
+    expect(prisma.parkedPhone.upsert).not.toHaveBeenCalled();
+    expect(prisma.parkedPhone.deleteMany).toHaveBeenCalledWith({
+      where: {
+        OR: [{ formerUserId: 'src-1' }, { phone: '+15550001111' }],
+      },
+    });
     expect(auth.revokeAllSessionsForUser).toHaveBeenCalledWith('src-1');
     expect(prisma.userOrgMembership.create).toHaveBeenCalled();
   });

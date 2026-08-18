@@ -325,7 +325,7 @@ export class SearchService {
           u."premiumPlus",
           u."isOrganization",
           u."accountKind",
-          u.          u."verifiedStatus",
+          u."verifiedStatus",
           u."avatarKey",
           u."avatarUpdatedAt",
           u."lastOnlineAt"

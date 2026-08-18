@@ -1,11 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { HeardAboutUs } from '@prisma/client';
 
-/** Parked phones stay unavailable this long after a convert-to-page. */
-export const PARKED_PHONE_DAYS = 90;
-
-export const PARKED_PHONE_REASON_CONVERT = 'convert_to_page';
-
 /** Satisfies client onboarding age gates without inventing a real birthday. */
 export const PAGE_BIRTHDATE = new Date(Date.UTC(1990, 0, 1));
 

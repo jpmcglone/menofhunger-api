@@ -15,8 +15,6 @@ import {
   PAGE_BIRTHDATE,
   PAGE_HEARD_ABOUT_US,
   PAGE_ONBOARDING_INTERESTS,
-  PARKED_PHONE_DAYS,
-  PARKED_PHONE_REASON_CONVERT,
 } from './pages.constants';
 
 export type PageOperatorDto = {
@@ -155,39 +153,19 @@ export class PagesService {
     }
 
     const now = new Date();
-    const releaseAt = new Date(now.getTime() + PARKED_PHONE_DAYS * 24 * 60 * 60_000);
+    const releasedPhone = source.phone;
 
-    await this.prisma.$transaction(async (tx) => {
-      if (source.phone) {
-        await tx.parkedPhone.upsert({
-          where: { phone: source.phone },
-          create: {
-            phone: source.phone,
-            formerUserId: source.id,
-            parkedAt: now,
-            releaseAt,
-            reason: PARKED_PHONE_REASON_CONVERT,
-          },
-          update: {
-            formerUserId: source.id,
-            parkedAt: now,
-            releaseAt,
-            reason: PARKED_PHONE_REASON_CONVERT,
-          },
-        });
-      }
-
-      await tx.user.update({
-        where: { id: source.id },
-        data: {
-          accountKind: AccountKind.page,
-          phone: null,
-          ...(source.isOrganization
-            ? { verifiedStatus: 'manual' as const, verifiedAt: now, premium: true }
-            : {}),
-        },
-      });
+    await this.prisma.user.update({
+      where: { id: source.id },
+      data: {
+        accountKind: AccountKind.page,
+        phone: null,
+        ...(source.isOrganization
+          ? { verifiedStatus: 'manual' as const, verifiedAt: now, premium: true }
+          : {}),
+      },
     });
+    await this.releaseParkedPhone({ userId: source.id, phone: releasedPhone });
 
     await this.auth.revokeAllSessionsForUser(source.id);
     await this.linkOperator(source.id, operator.id, source.isOrganization);
@@ -203,6 +181,7 @@ export class PagesService {
       throw new BadRequestException('A user cannot operate themselves as a page.');
     }
     await this.linkOperator(page.id, operator.id, page.isOrganization);
+    await this.releasePagePhone(page.id);
     await this.entitlements.recomputeAndApply(page.id);
     return this.toOperatorDto(operator);
   }
@@ -217,6 +196,7 @@ export class PagesService {
 
   async listOperators(pageUserId: string): Promise<PageOperatorDto[]> {
     await this.requirePage(pageUserId);
+    await this.releasePagePhone(pageUserId);
     const rows = await this.prisma.userPageOperator.findMany({
       where: { pageUserId },
       orderBy: { createdAt: 'asc' },
@@ -272,6 +252,33 @@ export class PagesService {
       isOrganization: page.isOrganization,
       operators,
     };
+  }
+
+  /** Pages do not own a login phone. Drop it and any leftover park row. */
+  private async releasePagePhone(pageUserId: string): Promise<void> {
+    const page = await this.prisma.user.findUnique({
+      where: { id: pageUserId },
+      select: { id: true, phone: true },
+    });
+    if (!page) return;
+    if (page.phone) {
+      await this.prisma.user.update({
+        where: { id: page.id },
+        data: { phone: null },
+      });
+    }
+    await this.releaseParkedPhone({ userId: page.id, phone: page.phone });
+  }
+
+  private async releaseParkedPhone(params: { userId: string; phone: string | null }): Promise<void> {
+    await this.prisma.parkedPhone.deleteMany({
+      where: {
+        OR: [
+          { formerUserId: params.userId },
+          ...(params.phone ? [{ phone: params.phone }] : []),
+        ],
+      },
+    });
   }
 
   async isPhoneParked(phone: string, now = new Date()): Promise<boolean> {
