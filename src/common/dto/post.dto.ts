@@ -103,7 +103,10 @@ export type PostDto = {
   repostCount: number;
   /** Denormalized count of quote reposts (posts whose quotedPostId = this post's id). */
   quoteCount?: number;
+  /** Unique people (person × post). */
   viewerCount: number;
+  /** Accepted impressions, including revisits after the 30s gate. */
+  totalViewCount: number;
   parentId: string | null;
   /** When set, post lives in a community group (not shown on global feeds). */
   communityGroupId: string | null;
@@ -396,6 +399,7 @@ export function toPostDto(
       commentCount: post.commentCount ?? 0,
       repostCount: post.repostCount ?? 0,
       viewerCount: post.viewerCount ?? 0,
+      totalViewCount: post.totalViewCount ?? post.viewerCount ?? 0,
       parentId: post.parentId ?? null,
       communityGroupId: post.communityGroupId ?? null,
       mentions: [],
@@ -441,6 +445,7 @@ export function toPostDto(
       commentCount: post.commentCount ?? 0,
       repostCount: post.repostCount ?? 0,
       viewerCount: post.viewerCount ?? 0,
+      totalViewCount: post.totalViewCount ?? post.viewerCount ?? 0,
       parentId: post.parentId ?? null,
       communityGroupId: post.communityGroupId ?? null,
       ...(opts?.groupPreview ? { groupPreview: opts.groupPreview } : {}),
@@ -498,6 +503,7 @@ export function toPostDto(
     repostCount: post.repostCount ?? 0,
     quoteCount: (post as { quoteCount?: number }).quoteCount ?? 0,
     viewerCount: post.viewerCount ?? 0,
+    totalViewCount: (post as { totalViewCount?: number }).totalViewCount ?? post.viewerCount ?? 0,
     parentId: post.parentId ?? null,
     communityGroupId: post.communityGroupId ?? null,
     pinnedInGroupAt: post.pinnedInGroupAt

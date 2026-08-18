@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
@@ -14,14 +14,11 @@ const markViewedBatchSchema = z.object({
 
 @Controller()
 export class ArticleViewsController {
-  private readonly logger = new Logger(ArticleViewsController.name);
-
   constructor(private readonly articleViews: ArticleViewsService) {}
 
   /**
-   * Batch-mark articles as viewed by the authenticated user.
-   * Idempotent: safe to call multiple times for the same articles.
-   * Returns 204 No Content — fire-and-forget friendly.
+   * Batch-mark articles as viewed. Returns whether each id counted as unique and/or total.
+   * Old clients that ignore the body still work.
    */
   @UseGuards(OptionalAuthGuard)
   @Throttle({
@@ -31,19 +28,16 @@ export class ArticleViewsController {
     },
   })
   @Post('articles/views')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  async markViewed(@OptionalCurrentUserId() userId: string | undefined, @Body() body: unknown): Promise<void> {
+  @HttpCode(HttpStatus.OK)
+  async markViewed(@OptionalCurrentUserId() userId: string | undefined, @Body() body: unknown) {
     const parsed = markViewedBatchSchema.parse(body);
-    void this.articleViews
-      .markViewedBatch(
-        userId ?? null,
-        parsed.articleIds,
-        parsed.anon_id ?? null,
-        parsed.source ?? null,
-      )
-      .catch((err: unknown) => {
-        this.logger.warn(`markViewedBatch failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
+    const data = await this.articleViews.markViewedBatch(
+      userId ?? null,
+      parsed.articleIds,
+      parsed.anon_id ?? null,
+      parsed.source ?? null,
+    );
+    return { data };
   }
 
   /**

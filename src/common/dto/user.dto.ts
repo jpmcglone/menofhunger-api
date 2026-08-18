@@ -210,6 +210,7 @@ export type AdminUserRecentArticleDto = {
   isDraft: boolean;
   visibility: string;
   viewCount: number;
+  totalViewCount: number;
   boostCount: number;
   commentCount: number;
 };

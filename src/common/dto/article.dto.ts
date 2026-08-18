@@ -89,7 +89,10 @@ export type ArticleDto = {
   lastSavedAt: string;
   boostCount: number;
   commentCount: number;
+  /** Unique people (person × article). */
   viewCount: number;
+  /** Accepted impressions, including revisits after the 30s gate. */
+  totalViewCount: number;
   readingTimeMinutes: number;
   author: ArticleAuthorDto;
   reactions: ArticleReactionSummaryDto[];
@@ -262,6 +265,7 @@ export function toArticleDto(
     boostCount: article.boostCount,
     commentCount: article.commentCount,
     viewCount: article.viewCount,
+    totalViewCount: article.totalViewCount ?? article.viewCount,
     readingTimeMinutes: canAccess ? estimateReadingTimeMinutes(article.body) : 0,
     author: toArticleAuthorDto(article.author, publicAssetBaseUrl),
     reactions,

@@ -260,6 +260,7 @@ export type PostsLiveUpdatedPayloadDto = {
     deletedAt: string | null;
     commentCount: number;
     viewerCount: number;
+    totalViewCount: number;
     boostCount: number;
     bookmarkCount: number;
     repostCount: number;
@@ -314,6 +315,7 @@ export type ArticlesLiveUpdatedPayloadDto = {
   patch: Partial<{
     commentCount: number;
     viewCount: number;
+    totalViewCount: number;
     boostCount: number;
     reactions: ArticleReactionSummaryDto[];
   }>;

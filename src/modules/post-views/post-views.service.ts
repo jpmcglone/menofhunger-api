@@ -6,11 +6,14 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import type { PostViewAckDto } from '../../common/dto/view-ack.dto';
 import {
   ANON_VIEW_WEIGHT,
   LOGGED_IN_VIEW_WEIGHT,
+  VIEW_ROOM_EMIT_THROTTLE_MS,
   cutoffForAnonRecount,
   cutoffForLastSeenRefresh,
+  cutoffForTotalViewRecount,
   sanitizeAnonViewerId,
 } from '../views/view-tracking.utils';
 
@@ -27,7 +30,7 @@ function viewerCanAccessVisibility(
   const isVerified = viewer.verifiedStatus !== 'none' || isPremium;
   if (visibility === 'verifiedOnly') return isVerified;
   if (visibility === 'premiumOnly') return isPremium;
-  return false; // onlyMe — author check is handled before this is called
+  return false;
 }
 
 function breakdownCacheKey(postId: string): string {
@@ -44,7 +47,13 @@ export type PostViewBreakdown = {
   verified: number;
   unverified: number;
   guest: number;
+  /** Unique people — keep this name for shipped iOS. */
   total: number;
+  totalViewCount: number;
+  premiumTotal: number;
+  verifiedTotal: number;
+  unverifiedTotal: number;
+  guestTotal: number;
 };
 
 @Injectable()
@@ -62,10 +71,9 @@ export class PostViewsService {
   ) {}
 
   /**
-   * Record that a user viewed a post. Unique viewerCount stays 1 per user.
-   * Repeat authenticated views refresh lastSeenAt (and seenCount) after a short
-   * buffer so For You can suppress recently re-seen posts on the next refresh.
-   * Emits a WebSocket event if this is the first (unique) view.
+   * Record that a user viewed a post.
+   * Unique viewerCount stays 1 per person. Total increments on first look and
+   * again when lastImpressionAt is older than 30s.
    */
   async markViewed(
     userId: string | null | undefined,
@@ -73,32 +81,29 @@ export class PostViewsService {
     anonViewerId?: string | null,
     source?: string | null,
     opts?: { skipMarkRead?: boolean },
-  ): Promise<void> {
+  ): Promise<PostViewAckDto | null> {
     const uid = (userId ?? '').trim();
     const pid = (postId ?? '').trim();
     const anonId = sanitizeAnonViewerId(anonViewerId);
-    if (!pid || (!uid && !anonId)) return;
+    if (!pid || (!uid && !anonId)) return null;
 
     try {
-      // Fetch post with visibility so we can enforce access (author always allowed)
       const post = await this.prisma.post.findFirst({
         where: { id: pid, deletedAt: null },
         select: { id: true, visibility: true, userId: true },
       });
-      if (!post) return;
+      if (!post) return null;
 
-      // Fetch viewer for bot-exclusion and visibility checks. Bots never count as viewers.
       const viewer = uid
         ? await this.prisma.user.findFirst({
             where: { id: uid },
             select: { isBot: true, verifiedStatus: true, premium: true, premiumPlus: true },
           })
         : null;
-      if (viewer?.isBot) return;
+      if (viewer?.isBot) return null;
 
-      // Authors can always view their own posts; everyone else must meet the tier requirement.
-      if (uid && post.userId !== uid && !viewerCanAccessVisibility(post.visibility, viewer)) return;
-      if (!uid && post.visibility !== 'public') return;
+      if (uid && post.userId !== uid && !viewerCanAccessVisibility(post.visibility, viewer)) return null;
+      if (!uid && post.visibility !== 'public') return null;
 
       if (uid && anonId) {
         await this.prisma.viewerIdentity.upsert({
@@ -108,192 +113,299 @@ export class PostViewsService {
         });
       }
 
-      let weightedIncrement = 0;
-      let viewerIncrement = 0;
       if (uid) {
-        const now = new Date();
-        const lastSource = normalizeViewSource(source);
-        const result = await this.prisma.$transaction(async (tx) => {
-          const created = await tx.postView.createMany({
-            data: [{ postId: pid, userId: uid, lastSeenAt: now, seenCount: 1, lastSource }],
-            skipDuplicates: true,
-          });
-          // Upgrade path: if the same browser had an anon record, consume it
-          // so this identity is counted only once.
-          const consumedAnonCount = anonId
-            ? (
-                await tx.postAnonView.deleteMany({
-                  where: { postId: pid, anonId },
-                })
-              ).count
-            : 0;
-
-          let viewerIncrementLocal = 0;
-          let weightedIncrementLocal = 0;
-          let lastSeenRefreshed = created.count > 0;
-          if (created.count > 0) {
-            viewerIncrementLocal = consumedAnonCount > 0 ? 0 : 1;
-            weightedIncrementLocal = consumedAnonCount > 0 ? 0.5 : LOGGED_IN_VIEW_WEIGHT;
-          } else {
-            const refreshed = await tx.postView.updateMany({
-              where: {
-                postId: pid,
-                userId: uid,
-                lastSeenAt: { lt: cutoffForLastSeenRefresh(now) },
-              },
-              data: {
-                lastSeenAt: now,
-                seenCount: { increment: 1 },
-                lastSource,
-              },
-            });
-            lastSeenRefreshed = refreshed.count > 0;
-          }
-
-          if (viewerIncrementLocal !== 0 || weightedIncrementLocal !== 0) {
-            const updated = await tx.post.update({
-              where: { id: pid },
-              data: {
-                viewerCount: { increment: viewerIncrementLocal },
-                weightedViewCount: { increment: weightedIncrementLocal },
-              },
-              select: { viewerCount: true },
-            });
-            return { createdCount: created.count, viewerIncrementLocal, weightedIncrementLocal, lastSeenRefreshed, viewerCount: updated.viewerCount };
-          }
-
-          const unchanged = await tx.post.findUnique({
-            where: { id: pid },
-            select: { viewerCount: true },
-          });
-          return { createdCount: created.count, viewerIncrementLocal, weightedIncrementLocal, lastSeenRefreshed, viewerCount: unchanged?.viewerCount ?? 0 };
-        });
-
-        viewerIncrement = result.viewerIncrementLocal;
-        weightedIncrement = result.weightedIncrementLocal;
-        if (result.createdCount > 0) {
-          this.posthog.capture(uid, 'post_viewed', {
-            post_id: pid,
-            source: lastSource ?? 'unknown',
-            viewer_type: 'user',
-          });
-        }
-        if (result.lastSeenRefreshed) {
-          void this.cacheInvalidation.bumpForYouUser(uid).catch(() => undefined);
-        }
-
-        if (viewerIncrement !== 0 || weightedIncrement !== 0) {
-          void this.redis.del(breakdownCacheKey(pid)).catch(() => undefined);
-          this.presenceRealtime.emitPostsLiveUpdated(pid, {
-            postId: pid,
-            version: now.toISOString(),
-            reason: 'viewerCount',
-            patch: { viewerCount: result.viewerCount },
-          });
-        }
-        if (!opts?.skipMarkRead) {
-          await this.notifications.markReadBySubject(uid, { postId: pid });
-        }
-        return;
-      } else if (anonId) {
-        const linkedIdentity = await this.prisma.viewerIdentity.findUnique({
-          where: { anonId },
-          select: { userId: true },
-        });
-        if (linkedIdentity?.userId) {
-          const alreadyViewedAsUser = await this.prisma.postView.findUnique({
-            where: { postId_userId: { postId: pid, userId: linkedIdentity.userId } },
-            select: { postId: true },
-          });
-          if (alreadyViewedAsUser) return;
-        }
-
-        const now = new Date();
-        const created = await this.prisma.postAnonView.createMany({
-          data: [{ postId: pid, anonId, lastViewedAt: now }],
-          skipDuplicates: true,
-        });
-        if (created.count > 0) {
-          viewerIncrement = 1;
-          weightedIncrement = ANON_VIEW_WEIGHT;
-        } else {
-          const refreshed = await this.prisma.postAnonView.updateMany({
-            where: { postId: pid, anonId, lastViewedAt: { lt: cutoffForAnonRecount(now) } },
-            data: { lastViewedAt: now },
-          });
-          if (refreshed.count > 0) {
-            // Keep weighted engagement for trending, but do not increment unique viewerCount.
-            // This preserves "people saw this" semantics for viewerCount/breakdown totals.
-            viewerIncrement = 0;
-            weightedIncrement = ANON_VIEW_WEIGHT;
-          }
-        }
+        return await this.markAuthenticatedView(uid, pid, anonId, source, opts);
       }
-      if (weightedIncrement <= 0) return;
-
-      // First unique view: increment the denormalized counter atomically.
-      // For upgraded anon->user views, viewerIncrement is 0 while weighted is +0.5.
-      const updated = await this.prisma.post.update({
-        where: { id: pid },
-        data: {
-          viewerCount: { increment: viewerIncrement },
-          weightedViewCount: { increment: weightedIncrement },
-        },
-        select: { viewerCount: true },
-      });
-
-      // Invalidate breakdown cache so the next hover fetch is fresh
-      void this.redis.del(breakdownCacheKey(pid)).catch(() => undefined);
-
-      // Push live update to all sockets subscribed to this post
-      this.presenceRealtime.emitPostsLiveUpdated(pid, {
-        postId: pid,
-        version: new Date().toISOString(),
-        reason: 'viewerCount',
-        patch: { viewerCount: updated.viewerCount },
-      });
-
+      return await this.markAnonView(pid, anonId as string);
     } catch (err) {
       this.logger.warn(`markViewed failed for postId=${pid} userId=${uid}: ${String(err)}`);
+      return null;
     }
   }
 
-  /**
-   * Batch version of markViewed. Silently ignores invalid/missing posts.
-   * Caps at BATCH_MAX IDs to prevent abuse.
-   *
-   * When a post embeds another (flat repost via `repostedPostId`, or quote via
-   * `quotedPostId`), the embedded post is also marked viewed in the same batch
-   * so preview visibility counts toward both posts without an extra HTTP round-trip.
-   */
+  private async markAuthenticatedView(
+    uid: string,
+    pid: string,
+    anonId: string | null,
+    source?: string | null,
+    opts?: { skipMarkRead?: boolean },
+  ): Promise<PostViewAckDto | null> {
+    const now = new Date();
+    const lastSource = normalizeViewSource(source);
+    const result = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.postView.createMany({
+        data: [{
+          postId: pid,
+          userId: uid,
+          lastSeenAt: now,
+          seenCount: 1,
+          impressionCount: 1,
+          lastImpressionAt: now,
+          lastSource,
+        }],
+        skipDuplicates: true,
+      });
+      const consumedAnonCount = anonId
+        ? (await tx.postAnonView.deleteMany({ where: { postId: pid, anonId } })).count
+        : 0;
+
+      let viewerIncrementLocal = 0;
+      let weightedIncrementLocal = 0;
+      let totalIncrementLocal = 0;
+      let lastSeenRefreshed = created.count > 0;
+      if (created.count > 0) {
+        viewerIncrementLocal = consumedAnonCount > 0 ? 0 : 1;
+        weightedIncrementLocal = consumedAnonCount > 0 ? 0.5 : LOGGED_IN_VIEW_WEIGHT;
+        totalIncrementLocal = 1;
+      } else {
+        const refreshed = await tx.postView.updateMany({
+          where: {
+            postId: pid,
+            userId: uid,
+            lastSeenAt: { lt: cutoffForLastSeenRefresh(now) },
+          },
+          data: {
+            lastSeenAt: now,
+            seenCount: { increment: 1 },
+            lastSource,
+          },
+        });
+        lastSeenRefreshed = refreshed.count > 0;
+
+        const impressed = await tx.postView.updateMany({
+          where: {
+            postId: pid,
+            userId: uid,
+            lastImpressionAt: { lt: cutoffForTotalViewRecount(now) },
+          },
+          data: {
+            lastImpressionAt: now,
+            impressionCount: { increment: 1 },
+          },
+        });
+        if (impressed.count > 0) totalIncrementLocal = 1;
+      }
+
+      if (viewerIncrementLocal !== 0 || weightedIncrementLocal !== 0 || totalIncrementLocal !== 0) {
+        const updated = await tx.post.update({
+          where: { id: pid },
+          data: {
+            ...(viewerIncrementLocal !== 0 ? { viewerCount: { increment: viewerIncrementLocal } } : {}),
+            ...(weightedIncrementLocal !== 0 ? { weightedViewCount: { increment: weightedIncrementLocal } } : {}),
+            ...(totalIncrementLocal !== 0 ? { totalViewCount: { increment: totalIncrementLocal } } : {}),
+          },
+          select: { viewerCount: true, totalViewCount: true },
+        });
+        return {
+          createdCount: created.count,
+          viewerIncrementLocal,
+          weightedIncrementLocal,
+          totalIncrementLocal,
+          lastSeenRefreshed,
+          viewerCount: updated.viewerCount,
+          totalViewCount: updated.totalViewCount,
+        };
+      }
+
+      const unchanged = await tx.post.findUnique({
+        where: { id: pid },
+        select: { viewerCount: true, totalViewCount: true },
+      });
+      return {
+        createdCount: created.count,
+        viewerIncrementLocal,
+        weightedIncrementLocal,
+        totalIncrementLocal,
+        lastSeenRefreshed,
+        viewerCount: unchanged?.viewerCount ?? 0,
+        totalViewCount: unchanged?.totalViewCount ?? 0,
+      };
+    });
+
+    if (result.createdCount > 0) {
+      this.posthog.capture(uid, 'post_viewed', {
+        post_id: pid,
+        source: lastSource ?? 'unknown',
+        viewer_type: 'user',
+      });
+    }
+    if (result.lastSeenRefreshed) {
+      void this.cacheInvalidation.bumpForYouUser(uid).catch(() => undefined);
+    }
+
+    const uniqueCounted = result.viewerIncrementLocal !== 0;
+    const totalCounted = result.totalIncrementLocal !== 0;
+    if (uniqueCounted || totalCounted) {
+      void this.redis.del(breakdownCacheKey(pid)).catch(() => undefined);
+      await this.emitViewCounts(pid, {
+        viewerCount: result.viewerCount,
+        totalViewCount: result.totalViewCount,
+        uniqueCounted,
+        totalCounted,
+        actorUserId: uid,
+      });
+    }
+    if (!opts?.skipMarkRead) {
+      await this.notifications.markReadBySubject(uid, { postId: pid });
+    }
+    return {
+      id: pid,
+      uniqueCounted,
+      totalCounted,
+      viewerCount: result.viewerCount,
+      totalViewCount: result.totalViewCount,
+    };
+  }
+
+  private async markAnonView(pid: string, anonId: string): Promise<PostViewAckDto | null> {
+    const linkedIdentity = await this.prisma.viewerIdentity.findUnique({
+      where: { anonId },
+      select: { userId: true },
+    });
+    if (linkedIdentity?.userId) {
+      const alreadyViewedAsUser = await this.prisma.postView.findUnique({
+        where: { postId_userId: { postId: pid, userId: linkedIdentity.userId } },
+        select: { postId: true },
+      });
+      if (alreadyViewedAsUser) {
+        return this.markAuthenticatedView(linkedIdentity.userId, pid, anonId, 'anon_linked');
+      }
+    }
+
+    const now = new Date();
+    const created = await this.prisma.postAnonView.createMany({
+      data: [{
+        postId: pid,
+        anonId,
+        lastViewedAt: now,
+        impressionCount: 1,
+        lastImpressionAt: now,
+      }],
+      skipDuplicates: true,
+    });
+
+    let viewerIncrement = 0;
+    let weightedIncrement = 0;
+    let totalIncrement = 0;
+    if (created.count > 0) {
+      viewerIncrement = 1;
+      weightedIncrement = ANON_VIEW_WEIGHT;
+      totalIncrement = 1;
+    } else {
+      const refreshed = await this.prisma.postAnonView.updateMany({
+        where: { postId: pid, anonId, lastViewedAt: { lt: cutoffForAnonRecount(now) } },
+        data: { lastViewedAt: now },
+      });
+      if (refreshed.count > 0) {
+        weightedIncrement = ANON_VIEW_WEIGHT;
+      }
+      const impressed = await this.prisma.postAnonView.updateMany({
+        where: { postId: pid, anonId, lastImpressionAt: { lt: cutoffForTotalViewRecount(now) } },
+        data: {
+          lastImpressionAt: now,
+          impressionCount: { increment: 1 },
+        },
+      });
+      if (impressed.count > 0) totalIncrement = 1;
+    }
+
+    if (viewerIncrement === 0 && weightedIncrement <= 0 && totalIncrement === 0) {
+      const unchanged = await this.prisma.post.findUnique({
+        where: { id: pid },
+        select: { viewerCount: true, totalViewCount: true },
+      });
+      return {
+        id: pid,
+        uniqueCounted: false,
+        totalCounted: false,
+        viewerCount: unchanged?.viewerCount ?? 0,
+        totalViewCount: unchanged?.totalViewCount ?? 0,
+      };
+    }
+
+    const updated = await this.prisma.post.update({
+      where: { id: pid },
+      data: {
+        ...(viewerIncrement !== 0 ? { viewerCount: { increment: viewerIncrement } } : {}),
+        ...(weightedIncrement > 0 ? { weightedViewCount: { increment: weightedIncrement } } : {}),
+        ...(totalIncrement !== 0 ? { totalViewCount: { increment: totalIncrement } } : {}),
+      },
+      select: { viewerCount: true, totalViewCount: true },
+    });
+
+    void this.redis.del(breakdownCacheKey(pid)).catch(() => undefined);
+    await this.emitViewCounts(pid, {
+      viewerCount: updated.viewerCount,
+      totalViewCount: updated.totalViewCount,
+      uniqueCounted: viewerIncrement !== 0,
+      totalCounted: totalIncrement !== 0,
+    });
+
+    return {
+      id: pid,
+      uniqueCounted: viewerIncrement !== 0,
+      totalCounted: totalIncrement !== 0,
+      viewerCount: updated.viewerCount,
+      totalViewCount: updated.totalViewCount,
+    };
+  }
+
+  private async emitViewCounts(
+    postId: string,
+    opts: {
+      viewerCount: number;
+      totalViewCount: number;
+      uniqueCounted: boolean;
+      totalCounted: boolean;
+      actorUserId?: string;
+    },
+  ): Promise<void> {
+    const payload = {
+      postId,
+      version: new Date().toISOString(),
+      reason: opts.uniqueCounted ? 'viewerCount' : 'totalViewCount',
+      patch: { viewerCount: opts.viewerCount, totalViewCount: opts.totalViewCount },
+    };
+    if (opts.actorUserId && (opts.uniqueCounted || opts.totalCounted)) {
+      this.presenceRealtime.emitPostsLiveUpdatedToUser(opts.actorUserId, payload);
+    }
+    if (opts.uniqueCounted) {
+      this.presenceRealtime.emitPostsLiveUpdated(postId, payload);
+      return;
+    }
+    if (!opts.totalCounted) return;
+    const shouldEmit = await this.redis.setString(`view-emit:post:${postId}`, '1', {
+      ttlMs: VIEW_ROOM_EMIT_THROTTLE_MS,
+      onlyIfAbsent: true,
+    });
+    if (shouldEmit) {
+      this.presenceRealtime.emitPostsLiveUpdated(postId, payload);
+    }
+  }
+
   async markViewedBatch(
     userId: string | null | undefined,
     postIds: string[],
     anonViewerId?: string | null,
     source?: string | null,
-  ): Promise<void> {
+  ): Promise<PostViewAckDto[]> {
     const uid = (userId ?? '').trim();
     const anonId = sanitizeAnonViewerId(anonViewerId);
-    if ((!uid && !anonId) || !Array.isArray(postIds) || postIds.length === 0) return;
+    if ((!uid && !anonId) || !Array.isArray(postIds) || postIds.length === 0) return [];
 
     const ids = [...new Set(postIds.map((id) => (id ?? '').trim()).filter(Boolean))].slice(0, BATCH_MAX);
-    if (ids.length === 0) return;
+    if (ids.length === 0) return [];
 
     const expanded = await this.expandViewTargetIds(ids);
-
-    // Fire-and-forget each view write; mark-read is batched once below.
-    await Promise.all(
+    const acks = (await Promise.all(
       expanded.map((pid) => this.markViewed(uid || null, pid, anonId, source, { skipMarkRead: true })),
-    );
+    )).filter((ack): ack is PostViewAckDto => ack != null);
     if (uid) {
       await this.notifications.markReadBySubjects(uid, expanded);
     }
+    return acks;
   }
 
-  /**
-   * Expand a batch of post IDs to also include embedded preview targets
-   * (reposted original + quoted post). One query per batch; re-caps at BATCH_MAX.
-   */
   async expandViewTargetIds(ids: string[]): Promise<string[]> {
     if (ids.length === 0) return [];
 
@@ -311,12 +423,6 @@ export class PostViewsService {
     return [...out].slice(0, BATCH_MAX);
   }
 
-  /**
-   * Returns a breakdown of viewers by tier (cached for BREAKDOWN_TTL_SECONDS).
-   * premium: users with premium OR premiumPlus
-   * verified: verifiedStatus != 'none' AND NOT (premium OR premiumPlus)
-   * unverified: verifiedStatus == 'none' AND NOT (premium OR premiumPlus)
-   */
   async getBreakdown(
     postId: string,
     viewerUserId?: string | null,
@@ -327,12 +433,10 @@ export class PostViewsService {
 
     const post = await this.prisma.post.findFirst({
       where: { id: pid, deletedAt: null },
-      select: { visibility: true, userId: true, viewerCount: true },
+      select: { visibility: true, userId: true, viewerCount: true, totalViewCount: true },
     });
     if (!post) throw new NotFoundException('Post not found.');
 
-    // onlyMe posts expose their breakdown to the author only; all other visibility levels
-    // expose the aggregate tier counts publicly (matching the viewerCount already shown in feeds).
     const isSelf = Boolean(uid && post.userId === uid);
     if (!isSelf && post.visibility === 'onlyMe') {
       throw new NotFoundException('Post not found.');
@@ -340,28 +444,63 @@ export class PostViewsService {
 
     const computeBreakdown = async (): Promise<PostViewBreakdown> => {
       const rows = await this.prisma.$queryRaw<
-        Array<{ premium: bigint; verified: bigint; unverified: bigint }>
+        Array<{
+          premium: bigint;
+          verified: bigint;
+          unverified: bigint;
+          premium_total: bigint;
+          verified_total: bigint;
+          unverified_total: bigint;
+        }>
       >`
         SELECT
           COUNT(*) FILTER (WHERE u.premium OR u."premiumPlus")                                        AS premium,
           COUNT(*) FILTER (WHERE u."verifiedStatus" != 'none' AND NOT (u.premium OR u."premiumPlus")) AS verified,
-          COUNT(*) FILTER (WHERE u."verifiedStatus" = 'none'  AND NOT (u.premium OR u."premiumPlus")) AS unverified
+          COUNT(*) FILTER (WHERE u."verifiedStatus" = 'none'  AND NOT (u.premium OR u."premiumPlus")) AS unverified,
+          COALESCE(SUM(pv."impressionCount") FILTER (WHERE u.premium OR u."premiumPlus"), 0) AS premium_total,
+          COALESCE(SUM(pv."impressionCount") FILTER (
+            WHERE u."verifiedStatus" != 'none' AND NOT (u.premium OR u."premiumPlus")
+          ), 0) AS verified_total,
+          COALESCE(SUM(pv."impressionCount") FILTER (
+            WHERE u."verifiedStatus" = 'none' AND NOT (u.premium OR u."premiumPlus")
+          ), 0) AS unverified_total
         FROM "PostView" pv
         JOIN "User" u ON u.id = pv."userId"
         WHERE pv."postId" = ${pid}
       `;
 
-      const row = rows[0] ?? { premium: 0n, verified: 0n, unverified: 0n };
+      const row = rows[0] ?? {
+        premium: 0n,
+        verified: 0n,
+        unverified: 0n,
+        premium_total: 0n,
+        verified_total: 0n,
+        unverified_total: 0n,
+      };
       const premium = Number(row.premium ?? 0);
       const verified = Number(row.verified ?? 0);
       const unverified = Number(row.unverified ?? 0);
+      const premiumTotal = Number(row.premium_total ?? 0);
+      const verifiedTotal = Number(row.verified_total ?? 0);
+      const unverifiedTotal = Number(row.unverified_total ?? 0);
 
-      // Canonical total is the denormalized Post.viewerCount shown in feed rows/chips.
-      // Derive guest as the remainder so breakdown always sums to the displayed total.
       const total = Math.max(0, Math.floor(Number(post.viewerCount ?? 0)));
+      const totalViewCount = Math.max(0, Math.floor(Number(post.totalViewCount ?? total)));
       const guest = Math.max(0, total - (premium + verified + unverified));
+      const guestTotal = Math.max(0, totalViewCount - (premiumTotal + verifiedTotal + unverifiedTotal));
 
-      return { premium, verified, unverified, guest, total };
+      return {
+        premium,
+        verified,
+        unverified,
+        guest,
+        total,
+        totalViewCount,
+        premiumTotal,
+        verifiedTotal,
+        unverifiedTotal,
+        guestTotal,
+      };
     };
 
     if (options?.fresh) {

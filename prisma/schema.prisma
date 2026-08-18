@@ -1397,7 +1397,10 @@ model Post {
    * Backfilled by the add-quote-count migration; incremented/decremented alongside repostCount for quotes.
    */
   quoteCount                Int             @default(0)
+  /** Unique people (person × post). */
   viewerCount               Int             @default(0)
+  /** Accepted impressions, including revisits after the 30s gate. */
+  totalViewCount            Int             @default(0)
   weightedViewCount         Float           @default(0)
   boostScore                Float?
   boostScoreUpdatedAt       DateTime?
@@ -1833,12 +1836,14 @@ model Boost {
 }
 
 model PostView {
-  postId     String
-  userId     String
-  createdAt  DateTime @default(now())
-  lastSeenAt DateTime @default(now())
-  seenCount  Int      @default(1)
-  lastSource String?
+  postId            String
+  userId            String
+  createdAt         DateTime @default(now())
+  lastSeenAt        DateTime @default(now())
+  seenCount         Int      @default(1)
+  impressionCount   Int      @default(1)
+  lastImpressionAt  DateTime @default(now())
+  lastSource        String?
 
   post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1850,10 +1855,12 @@ model PostView {
 }
 
 model PostAnonView {
-  postId       String
-  anonId       String
-  createdAt    DateTime @default(now())
-  lastViewedAt DateTime @default(now())
+  postId           String
+  anonId           String
+  createdAt        DateTime @default(now())
+  lastViewedAt     DateTime @default(now())
+  impressionCount  Int      @default(1)
+  lastImpressionAt DateTime @default(now())
 
   post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
 
@@ -1873,9 +1880,11 @@ model ViewerIdentity {
 }
 
 model ArticleView {
-  articleId String
-  userId    String
-  createdAt DateTime @default(now())
+  articleId         String
+  userId            String
+  createdAt         DateTime @default(now())
+  impressionCount   Int      @default(1)
+  lastImpressionAt  DateTime @default(now())
 
   article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1885,10 +1894,12 @@ model ArticleView {
 }
 
 model ArticleAnonView {
-  articleId    String
-  anonId       String
-  createdAt    DateTime @default(now())
-  lastViewedAt DateTime @default(now())
+  articleId        String
+  anonId           String
+  createdAt        DateTime @default(now())
+  lastViewedAt     DateTime @default(now())
+  impressionCount  Int      @default(1)
+  lastImpressionAt DateTime @default(now())
 
   article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
 
@@ -2571,7 +2582,10 @@ model Article {
 
   boostCount        Int   @default(0)
   commentCount      Int   @default(0)
+  /** Unique people (person × article). */
   viewCount         Int   @default(0)
+  /** Accepted impressions, including revisits after the 30s gate. */
+  totalViewCount    Int   @default(0)
   weightedViewCount Float @default(0)
 
   // Tier-weighted boost total (premium 3 / verified 2 / unverified 1), refreshed from

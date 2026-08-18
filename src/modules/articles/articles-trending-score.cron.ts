@@ -168,8 +168,8 @@ export class ArticlesTrendingScoreCron {
     let total = 0;
 
     try {
-      // Pull published articles that have views and might have crossed a new milestone.
-      // Limit to articles with at least 50 views and whose last-notified milestone may be stale.
+      // Pull published articles that have unique people and might have crossed a new milestone.
+      // Limit to articles with at least 50 people and whose last-notified milestone may be stale.
       const articles = await this.prisma.article.findMany({
         where: {
           isDraft: false,
@@ -204,13 +204,13 @@ export class ArticlesTrendingScoreCron {
         if (updated.count !== 1) continue; // already handled by another run
 
         const titleSnippet = (article.title ?? 'Your article').slice(0, 80).trim();
-        const body = `${titleSnippet} has been read ${milestone.toLocaleString()} time${milestone === 1 ? '' : 's'}.`;
+        const body = `${titleSnippet} has been read by ${milestone.toLocaleString()} ${milestone === 1 ? 'person' : 'people'}.`;
 
         await this.notifications.create({
           recipientUserId: article.authorId,
           actorUserId: null,
           kind: 'generic',
-          title: `${milestone.toLocaleString()} views`,
+          title: `${milestone.toLocaleString()} people`,
           body,
           subjectArticleId: article.id,
           subjectPostId: null,

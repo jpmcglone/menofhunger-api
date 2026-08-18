@@ -28,3 +28,4 @@ export * from './marvin';
 export * from './scheduled-post.dto';
 export * from './site-config.dto';
 export * from './announcement.dto';
+export * from './view-ack.dto';

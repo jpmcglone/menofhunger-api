@@ -56,7 +56,9 @@ type StatsRow = {
   premium_articles: bigint;
   article_authors: bigint;
   article_views: bigint;
+  article_unique: bigint;
   total_views: bigint;
+  unique_views: bigint;
   premium_views: bigint;
   verified_views: bigint;
   unverified_views: bigint;
@@ -116,7 +118,9 @@ export class LandingService {
                articles.premium_articles,
                articles.article_authors,
                articles.article_views,
+               articles.article_unique,
                view_totals.total_views,
+               view_totals.unique_views,
                view_tiers.premium_views,
                view_tiers.verified_views,
                view_tiers.unverified_views
@@ -193,7 +197,8 @@ export class LandingService {
             COUNT(*) FILTER (WHERE a."visibility" = 'verifiedOnly') AS verified_articles,
             COUNT(*) FILTER (WHERE a."visibility" = 'premiumOnly')  AS premium_articles,
             COUNT(DISTINCT a."authorId")::bigint AS article_authors,
-            COALESCE(SUM(a."viewCount"), 0)::bigint AS article_views
+            COALESCE(SUM(a."totalViewCount"), 0)::bigint AS article_views,
+            COALESCE(SUM(a."viewCount"), 0)::bigint AS article_unique
           FROM "Article" a
           JOIN "User" u ON u.id = a."authorId"
           WHERE a."deletedAt" IS NULL
@@ -206,8 +211,10 @@ export class LandingService {
             AND u."verifiedStatus" != 'none'
         ) articles
         CROSS JOIN (
-          -- Denormalized unique viewers (person×post), same semantics as Post.viewerCount.
-          SELECT COALESCE(SUM(p."viewerCount"), 0)::bigint AS total_views
+          -- Impressions + unique people on landing-eligible posts.
+          SELECT
+            COALESCE(SUM(p."totalViewCount"), 0)::bigint AS total_views,
+            COALESCE(SUM(p."viewerCount"), 0)::bigint AS unique_views
           FROM "Post" p
           JOIN "User" u ON u.id = p."userId"
           WHERE p."deletedAt" IS NULL
@@ -472,11 +479,13 @@ export class LandingService {
     const premiumArticles = Number(stats?.premium_articles ?? 0);
     const articleAuthors = Number(stats?.article_authors ?? 0);
     const articleViews = Math.max(0, Math.floor(Number(stats?.article_views ?? 0)));
+    const articleUnique = Math.max(0, Math.floor(Number(stats?.article_unique ?? 0)));
     const totalViews = Math.max(0, Math.floor(Number(stats?.total_views ?? 0)));
+    const uniqueViews = Math.max(0, Math.floor(Number(stats?.unique_views ?? 0)));
     const premiumViews = Math.max(0, Math.floor(Number(stats?.premium_views ?? 0)));
     const verifiedViews = Math.max(0, Math.floor(Number(stats?.verified_views ?? 0)));
     const unverifiedViews = Math.max(0, Math.floor(Number(stats?.unverified_views ?? 0)));
-    const guestViews = Math.max(0, totalViews - (premiumViews + verifiedViews + unverifiedViews));
+    const guestViews = Math.max(0, uniqueViews - (premiumViews + verifiedViews + unverifiedViews));
     const menTotal = premiumMen + verifiedMen;
     const postsTotal = publicPosts + verifiedPosts + premiumPosts;
     const articlesTotal = publicArticles + verifiedArticles + premiumArticles;
@@ -511,6 +520,7 @@ export class LandingService {
           total: articlesTotal,
           authors: Math.max(0, articleAuthors),
           views: articleViews,
+          unique: articleUnique,
         },
         views: {
           premium: premiumViews,
@@ -518,6 +528,7 @@ export class LandingService {
           unverified: unverifiedViews,
           guest: guestViews,
           total: totalViews,
+          unique: uniqueViews,
         },
       },
       recentlyActiveMen,

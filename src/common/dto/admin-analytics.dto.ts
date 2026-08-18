@@ -24,6 +24,9 @@ export type AdminAnalyticsTopPostDto = {
   id: string;
   bodyPreview: string;
   authorUsername: string;
+  /** Unique people (Post.viewerCount). */
+  uniqueViewCount: number;
+  /** Total accepted impressions (Post.totalViewCount). */
   viewCount: number;
   boostCount: number;
   commentCount: number;
@@ -72,6 +75,9 @@ export type AdminAnalyticsTopArticleDto = {
   slug: string;
   visibility: string;
   authorUsername: string;
+  /** Unique people who first viewed in the selected range. */
+  uniqueViewCount: number;
+  /** Total impressions on those same viewer rows. */
   viewCount: number;
   boostCount: number;
   commentCount: number;
@@ -86,7 +92,9 @@ export type AdminAnalyticsArticleKpiDto = {
   totalDrafts: number;
   /** Unique authors who have published at least one article */
   uniqueAuthors: number;
-  /** Article views recorded in the selected range */
+  /** Unique logged-in people who first viewed an article in the selected range */
+  uniqueViewsInRange: number;
+  /** Sum of ArticleView.impressionCount for those first-seen-in-range rows */
   totalViewsInRange: number;
   /** Article boosts recorded in the selected range */
   totalBoostsInRange: number;
@@ -94,7 +102,7 @@ export type AdminAnalyticsArticleKpiDto = {
   totalReactionsInRange: number;
   /** Article comments (non-deleted) created in the selected range */
   totalCommentsInRange: number;
-  /** Average views per published article for articles published in the range */
+  /** Average unique people per article published in the range */
   avgViewsPerArticle: number;
 };
 

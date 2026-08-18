@@ -339,6 +339,7 @@ export class AdminDailyDigestCron {
         boostCount: number;
         commentCount: number;
         viewerCount: number;
+        totalViewCount: number;
         username: string | null;
         name: string | null;
         visibility: string;
@@ -348,8 +349,8 @@ export class AdminDailyDigestCron {
         const rawPost = await (this.prisma.post as any).findFirst({
           where: { deletedAt: null, parentId: null, createdAt: { gte: windowStart, lt: windowEnd }, trendingScore: { gt: 0 } },
           orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
-          select: { id: true, body: true, boostCount: true, commentCount: true, viewerCount: true, visibility: true, user: { select: { username: true, name: true } } },
-        }) as { id: string; body: string | null; boostCount: number; commentCount: number; viewerCount: number; visibility: string; user: { username: string | null; name: string | null } | null } | null;
+          select: { id: true, body: true, boostCount: true, commentCount: true, viewerCount: true, totalViewCount: true, visibility: true, user: { select: { username: true, name: true } } },
+        }) as { id: string; body: string | null; boostCount: number; commentCount: number; viewerCount: number; totalViewCount: number; visibility: string; user: { username: string | null; name: string | null } | null } | null;
 
         if (rawPost && !rawPost.body?.trim()?.startsWith('[deleted]')) {
           topPost = {
@@ -358,6 +359,7 @@ export class AdminDailyDigestCron {
             boostCount: rawPost.boostCount,
             commentCount: rawPost.commentCount,
             viewerCount: rawPost.viewerCount,
+            totalViewCount: rawPost.totalViewCount ?? rawPost.viewerCount,
             visibility: rawPost.visibility,
             username: rawPost.user?.username ?? null,
             name: rawPost.user?.name ?? null,
@@ -371,6 +373,7 @@ export class AdminDailyDigestCron {
         boostCount: number;
         commentCount: number;
         viewCount: number;
+        totalViewCount: number;
         username: string | null;
       };
       const topArticlesRaw = await this.prisma.article.findMany({
@@ -388,6 +391,7 @@ export class AdminDailyDigestCron {
           boostCount: true,
           commentCount: true,
           viewCount: true,
+          totalViewCount: true,
           author: { select: { username: true } },
         },
       });
@@ -398,6 +402,7 @@ export class AdminDailyDigestCron {
         boostCount: a.boostCount,
         commentCount: a.commentCount,
         viewCount: a.viewCount,
+        totalViewCount: a.totalViewCount ?? a.viewCount,
         username: a.author?.username ?? null,
       }));
 
@@ -459,6 +464,7 @@ export class AdminDailyDigestCron {
               boostCount: topPost.boostCount,
               commentCount: topPost.commentCount,
               viewerCount: topPost.viewerCount,
+              totalViewCount: topPost.totalViewCount,
               username: topPost.username,
             }
           : null,
@@ -469,6 +475,7 @@ export class AdminDailyDigestCron {
               boostCount: a.boostCount,
               commentCount: a.commentCount,
               viewCount: a.viewCount,
+              totalViewCount: a.totalViewCount,
               username: a.username,
             }))
           : [],
@@ -595,6 +602,7 @@ export class AdminDailyDigestCron {
       boostCount: number;
       commentCount: number;
       viewerCount: number;
+      totalViewCount: number;
       visibility: string;
       username: string | null;
       name: string | null;
@@ -606,6 +614,7 @@ export class AdminDailyDigestCron {
       boostCount: number;
       commentCount: number;
       viewCount: number;
+      totalViewCount: number;
       username: string | null;
     }>;
   }): string {
@@ -684,7 +693,8 @@ export class AdminDailyDigestCron {
         `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:12px;"><tr>` +
         `<td style="padding-right:14px;font-size:12px;color:#6b7280;">🔁 ${topPost.boostCount} boosts</td>` +
         `<td style="padding-right:14px;font-size:12px;color:#6b7280;">💬 ${topPost.commentCount} replies</td>` +
-        `<td style="font-size:12px;color:#6b7280;">👁 ${topPost.viewerCount} views</td>` +
+        `<td style="padding-right:14px;font-size:12px;color:#6b7280;">👤 ${topPost.viewerCount} people</td>` +
+        `<td style="font-size:12px;color:#6b7280;">👁 ${Math.max(topPost.viewerCount, topPost.totalViewCount)} views</td>` +
         `</tr></table>` +
         renderButton({ href: postUrl, label: 'View Post →', variant: 'secondary' });
 
@@ -700,7 +710,7 @@ export class AdminDailyDigestCron {
           return [
             `<div style="${idx > 0 ? 'margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6;' : ''}">`,
             `<a href="${escapeHtml(articleUrl)}" style="font-size:14px;line-height:1.6;color:#111827;text-decoration:none;font-weight:700;">${escapeHtml(truncate(article.title || 'Untitled article', 140))}</a>`,
-            `<div style="margin-top:4px;font-size:12px;color:#6b7280;">${escapeHtml(authorHandle)} · 👁 ${article.viewCount} · 🔁 ${article.boostCount} · 💬 ${article.commentCount}</div>`,
+            `<div style="margin-top:4px;font-size:12px;color:#6b7280;">${escapeHtml(authorHandle)} · 👤 ${article.viewCount} · 👁 ${Math.max(article.viewCount, article.totalViewCount)} · 🔁 ${article.boostCount} · 💬 ${article.commentCount}</div>`,
             article.excerpt
               ? `<div style="margin-top:4px;font-size:12px;line-height:1.6;color:#6b7280;">${escapeHtml(truncate(article.excerpt, 150))}</div>`
               : '',
@@ -846,8 +856,8 @@ export class AdminDailyDigestCron {
     activePremiumPlusCount: number;
     pendingCancellationCount: number;
     newSubscriberCount: number;
-    topPost: { id: string; body: string; username: string | null; boostCount: number; commentCount: number } | null;
-    topArticles: Array<{ id: string; title: string; username: string | null; boostCount: number; commentCount: number; viewCount: number }>;
+    topPost: { id: string; body: string; username: string | null; boostCount: number; commentCount: number; viewerCount: number; totalViewCount: number } | null;
+    topArticles: Array<{ id: string; title: string; username: string | null; boostCount: number; commentCount: number; viewCount: number; totalViewCount: number }>;
     baseUrl: string;
   }): string {
     const {
@@ -886,7 +896,7 @@ export class AdminDailyDigestCron {
       lines.push('── Top Post of the Day ────────────');
       if (topPost.username) lines.push(`@${topPost.username}`);
       lines.push(truncate(topPost.body, 200));
-      lines.push(`Boosts: ${topPost.boostCount}  Replies: ${topPost.commentCount}`);
+      lines.push(`Boosts: ${topPost.boostCount}  Replies: ${topPost.commentCount}  People: ${topPost.viewerCount}  Views: ${Math.max(topPost.viewerCount, topPost.totalViewCount)}`);
       lines.push(`${baseUrl}/p/${topPost.id}`);
     }
     if (topArticles.length > 0) {
@@ -895,7 +905,7 @@ export class AdminDailyDigestCron {
       for (const [idx, article] of topArticles.entries()) {
         const handle = article.username ? `@${article.username}` : '@unknown';
         lines.push(`${idx + 1}. ${truncate(article.title, 140)} (${handle})`);
-        lines.push(`   👁 ${article.viewCount}  🔁 ${article.boostCount}  💬 ${article.commentCount}`);
+        lines.push(`   👤 ${article.viewCount}  👁 ${Math.max(article.viewCount, article.totalViewCount)}  🔁 ${article.boostCount}  💬 ${article.commentCount}`);
         lines.push(`   ${baseUrl}/a/${article.id}`);
       }
     }

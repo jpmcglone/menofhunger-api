@@ -1,28 +1,40 @@
 import { PostViewsService } from './post-views.service';
 
 describe('PostViewsService.markViewed', () => {
-  function makeService(opts?: { createdCount?: number }) {
+  function makeService(opts?: { createdCount?: number; impressionCount?: number; lastSeenCount?: number }) {
     const createdCount = opts?.createdCount ?? 0;
+    const impressionCount = opts?.impressionCount ?? 0;
+    const lastSeenCount = opts?.lastSeenCount ?? 1;
     const tx = {
       postView: {
         createMany: jest.fn(async () => ({ count: createdCount })),
-        updateMany: jest.fn(async () => ({ count: 1 })),
+        updateMany: jest.fn(async (args: { where?: { lastImpressionAt?: unknown; lastSeenAt?: unknown } }) => {
+          if (args?.where?.lastImpressionAt) return { count: impressionCount };
+          if (args?.where?.lastSeenAt) return { count: lastSeenCount };
+          return { count: 0 };
+        }),
       },
       postAnonView: {
         deleteMany: jest.fn(async () => ({ count: 0 })),
       },
       post: {
-        update: jest.fn(async () => ({ viewerCount: 12 })),
-        findUnique: jest.fn(async () => ({ viewerCount: 12 })),
+        update: jest.fn(async () => ({ viewerCount: 12, totalViewCount: 13 })),
+        findUnique: jest.fn(async () => ({ viewerCount: 12, totalViewCount: 12 })),
       },
     };
     const prisma = {
       post: {
         findFirst: jest.fn(async () => ({ id: 'p1', visibility: 'public', userId: 'author' })),
-        update: jest.fn(async () => ({ viewerCount: 12 })),
+        update: jest.fn(async () => ({ viewerCount: 12, totalViewCount: 13 })),
+        findUnique: jest.fn(async () => ({ viewerCount: 12, totalViewCount: 12 })),
       },
       user: {
-        findFirst: jest.fn(async () => ({ verifiedStatus: 'identity', premium: false, premiumPlus: false })),
+        findFirst: jest.fn(async () => ({
+          isBot: false,
+          verifiedStatus: 'identity',
+          premium: false,
+          premiumPlus: false,
+        })),
       },
       viewerIdentity: {
         upsert: jest.fn(async () => ({})),
@@ -38,9 +50,15 @@ describe('PostViewsService.markViewed', () => {
       $transaction: jest.fn(async (fn: any) => fn(tx)),
     };
     const cache = {};
-    const redis = { del: jest.fn(async () => undefined) };
+    const redis = {
+      del: jest.fn(async () => undefined),
+      setString: jest.fn(async () => true),
+    };
     const cacheInvalidation = { bumpForYouUser: jest.fn(async () => 2) };
-    const presenceRealtime = { emitPostsLiveUpdated: jest.fn() };
+    const presenceRealtime = {
+      emitPostsLiveUpdated: jest.fn(),
+      emitPostsLiveUpdatedToUser: jest.fn(),
+    };
     const posthog = { capture: jest.fn() };
     const notifications = {
       markReadBySubject: jest.fn(async () => undefined),
@@ -59,10 +77,20 @@ describe('PostViewsService.markViewed', () => {
   }
 
   it('updates repeat authenticated views without incrementing unique viewer count', async () => {
-    const { service, tx, redis, cacheInvalidation, presenceRealtime, posthog, notifications } = makeService({ createdCount: 0 });
+    const { service, tx, redis, cacheInvalidation, presenceRealtime, posthog, notifications } = makeService({
+      createdCount: 0,
+      impressionCount: 0,
+    });
 
-    await service.markViewed('viewer', 'p1', null, 'feed_scroll');
+    const ack = await service.markViewed('viewer', 'p1', null, 'feed_scroll');
 
+    expect(ack).toEqual({
+      id: 'p1',
+      uniqueCounted: false,
+      totalCounted: false,
+      viewerCount: 12,
+      totalViewCount: 12,
+    });
     expect(tx.postView.createMany).toHaveBeenCalledWith({
       data: [expect.objectContaining({ postId: 'p1', userId: 'viewer', seenCount: 1, lastSource: 'feed_scroll' })],
       skipDuplicates: true,
@@ -87,17 +115,66 @@ describe('PostViewsService.markViewed', () => {
     expect(notifications.markReadBySubject).toHaveBeenCalledWith('viewer', { postId: 'p1' });
   });
 
-  it('bumps For You on the first unique authenticated view', async () => {
-    const { service, cacheInvalidation } = makeService({ createdCount: 1 });
+  it('increments total (not unique) when lastImpressionAt is older than 30s', async () => {
+    const { service, tx, presenceRealtime, redis } = makeService({
+      createdCount: 0,
+      impressionCount: 1,
+    });
 
-    await service.markViewed('viewer', 'p1', null, 'feed_scroll');
+    const ack = await service.markViewed('viewer', 'p1', null, 'feed_scroll');
 
+    expect(ack).toEqual({
+      id: 'p1',
+      uniqueCounted: false,
+      totalCounted: true,
+      viewerCount: 12,
+      totalViewCount: 13,
+    });
+    expect(tx.post.update).toHaveBeenCalledWith({
+      where: { id: 'p1' },
+      data: { totalViewCount: { increment: 1 } },
+      select: { viewerCount: true, totalViewCount: true },
+    });
+    expect(presenceRealtime.emitPostsLiveUpdatedToUser).toHaveBeenCalled();
+    expect(redis.setString).toHaveBeenCalledWith(
+      'view-emit:post:p1',
+      '1',
+      expect.objectContaining({ onlyIfAbsent: true }),
+    );
+    expect(presenceRealtime.emitPostsLiveUpdated).toHaveBeenCalledWith(
+      'p1',
+      expect.objectContaining({
+        patch: { viewerCount: 12, totalViewCount: 13 },
+      }),
+    );
+  });
+
+  it('bumps unique and total on the first authenticated view', async () => {
+    const { service, tx, cacheInvalidation, presenceRealtime, posthog } = makeService({ createdCount: 1 });
+
+    const ack = await service.markViewed('viewer', 'p1', null, 'feed_scroll');
+
+    expect(ack?.uniqueCounted).toBe(true);
+    expect(ack?.totalCounted).toBe(true);
+    expect(tx.post.update).toHaveBeenCalledWith({
+      where: { id: 'p1' },
+      data: expect.objectContaining({
+        viewerCount: { increment: 1 },
+        totalViewCount: { increment: 1 },
+      }),
+      select: { viewerCount: true, totalViewCount: true },
+    });
     expect(cacheInvalidation.bumpForYouUser).toHaveBeenCalledWith('viewer');
+    expect(presenceRealtime.emitPostsLiveUpdated).toHaveBeenCalled();
+    expect(posthog.capture).toHaveBeenCalled();
   });
 
   it('does not bump For You when a repeat view is still inside the last-seen buffer', async () => {
-    const { service, tx, cacheInvalidation } = makeService({ createdCount: 0 });
-    tx.postView.updateMany.mockResolvedValue({ count: 0 });
+    const { service, cacheInvalidation } = makeService({
+      createdCount: 0,
+      lastSeenCount: 0,
+      impressionCount: 0,
+    });
 
     await service.markViewed('viewer', 'p1', null, 'feed_scroll');
 
@@ -114,10 +191,15 @@ describe('PostViewsService.markViewedBatch', () => {
       post: {
         findMany,
         findFirst: jest.fn(async () => ({ id: 'p1', visibility: 'public', userId: 'author' })),
-        update: jest.fn(async () => ({ viewerCount: 1 })),
+        update: jest.fn(async () => ({ viewerCount: 1, totalViewCount: 1 })),
       },
       user: {
-        findFirst: jest.fn(async () => ({ verifiedStatus: 'identity', premium: false, premiumPlus: false })),
+        findFirst: jest.fn(async () => ({
+          isBot: false,
+          verifiedStatus: 'identity',
+          premium: false,
+          premiumPlus: false,
+        })),
       },
       viewerIdentity: {
         upsert: jest.fn(async () => ({})),
@@ -137,14 +219,14 @@ describe('PostViewsService.markViewedBatch', () => {
             update: jest.fn(async () => ({})),
           },
           postAnonView: { deleteMany: jest.fn(async () => ({ count: 0 })) },
-          post: { update: jest.fn(async () => ({ viewerCount: 1 })) },
+          post: { update: jest.fn(async () => ({ viewerCount: 1, totalViewCount: 1 })) },
         }),
       ),
     };
     const cache = {};
-    const redis = { del: jest.fn(async () => undefined) };
+    const redis = { del: jest.fn(async () => undefined), setString: jest.fn(async () => true) };
     const cacheInvalidation = { bumpForYouUser: jest.fn(async () => 2) };
-    const presenceRealtime = { emitPostsLiveUpdated: jest.fn() };
+    const presenceRealtime = { emitPostsLiveUpdated: jest.fn(), emitPostsLiveUpdatedToUser: jest.fn() };
     const posthog = { capture: jest.fn() };
     const notifications = {
       markReadBySubject: jest.fn(async () => undefined),
@@ -169,7 +251,13 @@ describe('PostViewsService.markViewedBatch', () => {
       { id: 'quote-post', kind: 'post', repostedPostId: null, quotedPostId: 'quoted' },
     ]);
 
-    const markViewed = jest.spyOn(service, 'markViewed').mockResolvedValue(undefined);
+    const markViewed = jest.spyOn(service, 'markViewed').mockResolvedValue({
+      id: 'p',
+      uniqueCounted: false,
+      totalCounted: false,
+      viewerCount: 1,
+      totalViewCount: 1,
+    });
 
     await service.markViewedBatch('viewer', ['repost-shell', 'quote-post'], null, 'feed_scroll');
 
@@ -196,7 +284,13 @@ describe('PostViewsService.markViewedBatch', () => {
       { id: 'plain', kind: 'post', repostedPostId: null, quotedPostId: null },
     ]);
 
-    const markViewed = jest.spyOn(service, 'markViewed').mockResolvedValue(undefined);
+    const markViewed = jest.spyOn(service, 'markViewed').mockResolvedValue({
+      id: 'plain',
+      uniqueCounted: true,
+      totalCounted: true,
+      viewerCount: 1,
+      totalViewCount: 1,
+    });
 
     await service.markViewedBatch('viewer', ['plain'], null, 'feed_scroll');
 

@@ -1251,11 +1251,13 @@ export class PostsMutationService {
                   where: { id: created.id },
                   data: {
                     viewerCount: { increment: 1 },
+                    totalViewCount: { increment: 1 },
                     weightedViewCount: { increment: LOGGED_IN_VIEW_WEIGHT },
                   },
-                  select: { viewerCount: true, weightedViewCount: true },
+                  select: { viewerCount: true, totalViewCount: true, weightedViewCount: true },
                 });
                 created.viewerCount = updatedCounts.viewerCount;
+                created.totalViewCount = updatedCounts.totalViewCount;
                 created.weightedViewCount = updatedCounts.weightedViewCount;
               }
             })();

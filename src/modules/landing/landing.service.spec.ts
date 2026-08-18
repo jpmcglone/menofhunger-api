@@ -51,6 +51,7 @@ function makePost(id: string, body: string) {
     commentCount: 1,
     repostCount: 0,
     viewerCount: 12,
+    totalViewCount: 12,
     weightedViewCount: 12,
     boostScore: null,
     boostScoreUpdatedAt: null,
@@ -99,7 +100,9 @@ const DEFAULT_STATS_ROW = {
   premium_articles: 1n,
   article_authors: 5n,
   article_views: 400n,
+  article_unique: 400n,
   total_views: 1200n,
+  unique_views: 1200n,
   premium_views: 400n,
   verified_views: 500n,
   unverified_views: 200n,
@@ -183,14 +186,16 @@ describe('LandingService', () => {
       total: 12,
       authors: 5,
       views: 400,
+      unique: 400,
     });
-    // guest = total − (premium + verified + unverified) = 1200 − 1100
+    // guest = unique − (premium + verified + unverified) = 1200 − 1100
     expect(snapshot.stats.views).toEqual({
       premium: 400,
       verified: 500,
       unverified: 200,
       guest: 100,
       total: 1200,
+      unique: 1200,
     });
     expect(cache.getOrSetJson).toHaveBeenCalled();
   });
@@ -337,6 +342,7 @@ describe('LandingService', () => {
       total: 0,
       authors: 0,
       views: 0,
+      unique: 0,
     });
     expect(snapshot.stats.views).toEqual({
       premium: 0,
@@ -344,6 +350,7 @@ describe('LandingService', () => {
       unverified: 0,
       guest: 0,
       total: 0,
+      unique: 0,
     });
   });
 

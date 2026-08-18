@@ -49,21 +49,23 @@ export type LandingPostBreakdownDto = {
 };
 
 /**
- * Site-wide unique views (person×post), matching per-post `viewerCount` semantics.
- * Guests are derived as total − authenticated tier counts.
+ * Site-wide post views. Tier rows are unique people; `total` is impressions.
+ * Guests are derived as unique − authenticated tier counts.
  */
 export type LandingViewsBreakdownDto = {
   premium: number;
   verified: number;
   unverified: number;
   guest: number;
-  /** Sum of Post.viewerCount on landing-eligible posts. */
+  /** Sum of Post.totalViewCount on landing-eligible posts. */
   total: number;
+  /** Sum of Post.viewerCount (unique people) on landing-eligible posts. */
+  unique: number;
 };
 
 /**
  * Published articles by landing-eligible authors (same author filters as posts).
- * Drafts / deleted / onlyMe excluded. Views match Article.viewCount (person×article).
+ * Drafts / deleted / onlyMe excluded.
  */
 export type LandingArticleBreakdownDto = {
   /** visibility = 'public'. */
@@ -76,8 +78,10 @@ export type LandingArticleBreakdownDto = {
   total: number;
   /** Distinct authors of landing-eligible published articles. */
   authors: number;
-  /** Sum of Article.viewCount on landing-eligible articles. */
+  /** Sum of Article.totalViewCount on landing-eligible articles. */
   views: number;
+  /** Sum of Article.viewCount (unique people) on landing-eligible articles. */
+  unique: number;
 };
 
 export type LandingStatsDto = {

@@ -68,6 +68,9 @@ export type AdminAnalyticsTopPostDto = {
   id: string;
   bodyPreview: string;
   authorUsername: string;
+  /** Unique people (Post.viewerCount). */
+  uniqueViewCount: number;
+  /** Total accepted impressions (Post.totalViewCount). */
   viewCount: number;
   boostCount: number;
   commentCount: number;
@@ -116,6 +119,9 @@ export type AdminAnalyticsTopArticleDto = {
   slug: string;
   visibility: string;
   authorUsername: string;
+  /** Unique people who first viewed in the selected range. */
+  uniqueViewCount: number;
+  /** Total impressions on those same viewer rows. */
   viewCount: number;
   boostCount: number;
   commentCount: number;
@@ -130,7 +136,9 @@ export type AdminAnalyticsArticleKpiDto = {
   totalDrafts: number;
   /** Unique authors who have published at least one article */
   uniqueAuthors: number;
-  /** Article views recorded in the selected range */
+  /** Unique logged-in people who first viewed an article in the selected range */
+  uniqueViewsInRange: number;
+  /** Sum of ArticleView.impressionCount for those first-seen-in-range rows */
   totalViewsInRange: number;
   /** Article boosts recorded in the selected range */
   totalBoostsInRange: number;
@@ -138,7 +146,7 @@ export type AdminAnalyticsArticleKpiDto = {
   totalReactionsInRange: number;
   /** Article comments (non-deleted) created in the selected range */
   totalCommentsInRange: number;
-  /** Average views per published article for articles published in the range */
+  /** Average unique people per article published in the range */
   avgViewsPerArticle: number;
 };
 
@@ -502,7 +510,10 @@ export type ArticleDto = {
   lastSavedAt: string;
   boostCount: number;
   commentCount: number;
+  /** Unique people (person × article). */
   viewCount: number;
+  /** Accepted impressions, including revisits after the 30s gate. */
+  totalViewCount: number;
   readingTimeMinutes: number;
   author: ArticleAuthorDto;
   reactions: ArticleReactionSummaryDto[];
@@ -1113,21 +1124,23 @@ export type LandingPostBreakdownDto = {
 };
 
 /**
- * Site-wide unique views (person×post), matching per-post `viewerCount` semantics.
- * Guests are derived as total − authenticated tier counts.
+ * Site-wide post views. Tier rows are unique people; `total` is impressions.
+ * Guests are derived as unique − authenticated tier counts.
  */
 export type LandingViewsBreakdownDto = {
   premium: number;
   verified: number;
   unverified: number;
   guest: number;
-  /** Sum of Post.viewerCount on landing-eligible posts. */
+  /** Sum of Post.totalViewCount on landing-eligible posts. */
   total: number;
+  /** Sum of Post.viewerCount (unique people) on landing-eligible posts. */
+  unique: number;
 };
 
 /**
  * Published articles by landing-eligible authors (same author filters as posts).
- * Drafts / deleted / onlyMe excluded. Views match Article.viewCount (person×article).
+ * Drafts / deleted / onlyMe excluded.
  */
 export type LandingArticleBreakdownDto = {
   /** visibility = 'public'. */
@@ -1140,8 +1153,10 @@ export type LandingArticleBreakdownDto = {
   total: number;
   /** Distinct authors of landing-eligible published articles. */
   authors: number;
-  /** Sum of Article.viewCount on landing-eligible articles. */
+  /** Sum of Article.totalViewCount on landing-eligible articles. */
   views: number;
+  /** Sum of Article.viewCount (unique people) on landing-eligible articles. */
+  unique: number;
 };
 
 export type LandingStatsDto = {
@@ -1567,7 +1582,10 @@ export type PostDto = {
   repostCount: number;
   /** Denormalized count of quote reposts (posts whose quotedPostId = this post's id). */
   quoteCount?: number;
+  /** Unique people (person × post). */
   viewerCount: number;
+  /** Accepted impressions, including revisits after the 30s gate. */
+  totalViewCount: number;
   parentId: string | null;
   /** When set, post lives in a community group (not shown on global feeds). */
   communityGroupId: string | null;
@@ -1956,6 +1974,7 @@ export type PostsLiveUpdatedPayloadDto = {
     deletedAt: string | null;
     commentCount: number;
     viewerCount: number;
+    totalViewCount: number;
     boostCount: number;
     bookmarkCount: number;
     repostCount: number;
@@ -2010,6 +2029,7 @@ export type ArticlesLiveUpdatedPayloadDto = {
   patch: Partial<{
     commentCount: number;
     viewCount: number;
+    totalViewCount: number;
     boostCount: number;
     reactions: ArticleReactionSummaryDto[];
   }>;
@@ -2671,6 +2691,7 @@ export type AdminUserRecentArticleDto = {
   isDraft: boolean;
   visibility: string;
   viewCount: number;
+  totalViewCount: number;
   boostCount: number;
   commentCount: number;
 };
@@ -2753,6 +2774,29 @@ export type VerificationRequestAdminDto = VerificationRequestPublicDto & {
   user: VerificationRequestAdminUserSummaryDto;
   reviewedByAdmin: { id: string; username: string | null; name: string | null } | null;
   adminNote: string | null;
+};
+
+// ─── src/common/dto/view-ack.dto.ts ────────────────────────────────────────────
+
+/** Result of one accepted or no-op view report. Additive — old clients ignore the body. */
+export type PostViewAckDto = {
+  id: string;
+  uniqueCounted: boolean;
+  totalCounted: boolean;
+  /** Unique people (person × post). */
+  viewerCount: number;
+  /** Accepted impressions, including revisits after the 30s gate. */
+  totalViewCount: number;
+};
+
+export type ArticleViewAckDto = {
+  id: string;
+  uniqueCounted: boolean;
+  totalCounted: boolean;
+  /** Unique people (person × article). */
+  viewCount: number;
+  /** Accepted impressions, including revisits after the 30s gate. */
+  totalViewCount: number;
 };
 
 // ─── src/common/dto/websters1828.dto.ts ────────────────────────────────────────

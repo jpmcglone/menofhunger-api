@@ -308,6 +308,13 @@ export class PresenceRealtimeService {
     this.emitToRoom(`post:${pid}`, WsEventNames.postsLiveUpdated, payload);
   }
 
+  /** Actor-only copy of a post live update so their chip moves even when the room is throttled. */
+  emitPostsLiveUpdatedToUser(userId: string, payload: PostsLiveUpdatedPayloadDto): void {
+    const uid = (userId ?? '').trim();
+    if (!uid) return;
+    this.emitToUser(uid, WsEventNames.postsLiveUpdated, payload);
+  }
+
   /** Full reply DTO pushed to post room subscribers when a new reply is created. */
   emitPostsCommentAdded(parentPostId: string, payload: PostsCommentAddedPayloadDto): void {
     const pid = (parentPostId ?? '').trim();
@@ -376,6 +383,13 @@ export class PresenceRealtimeService {
     const aid = (articleId ?? '').trim();
     if (!aid) return;
     this.emitToRoom(`article:${aid}`, WsEventNames.articlesLiveUpdated, payload);
+  }
+
+  /** Actor-only copy of an article live update so their chip moves even when the room is throttled. */
+  emitArticlesLiveUpdatedToUser(userId: string, payload: ArticlesLiveUpdatedPayloadDto): void {
+    const uid = (userId ?? '').trim();
+    if (!uid) return;
+    this.emitToUser(uid, WsEventNames.articlesLiveUpdated, payload);
   }
 
   emitArticlesCommentAdded(articleId: string, payload: ArticlesCommentAddedPayloadDto): void {

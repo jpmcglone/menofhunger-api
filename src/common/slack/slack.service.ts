@@ -74,6 +74,7 @@ export interface SlackDailyDigestPayload {
     boostCount: number;
     commentCount: number;
     viewerCount: number;
+    totalViewCount: number;
     username: string | null;
   } | null;
   topArticles: Array<{
@@ -82,6 +83,7 @@ export interface SlackDailyDigestPayload {
     boostCount: number;
     commentCount: number;
     viewCount: number;
+    totalViewCount: number;
     username: string | null;
   }>;
   frontendBaseUrl: string | null;
@@ -331,7 +333,9 @@ export class SlackService {
         ? (base ? `<${base}/u/${p.topPost.username}|@${p.topPost.username}>` : `@${p.topPost.username}`)
         : '_unknown_';
       const snippet = this.truncate(p.topPost.body, 220);
-      const stats = `:repeat: ${p.topPost.boostCount} · :speech_balloon: ${p.topPost.commentCount} · :eye: ${p.topPost.viewerCount}`;
+      const uniqueViews = Math.max(0, p.topPost.viewerCount);
+      const totalViews = Math.max(uniqueViews, p.topPost.totalViewCount);
+      const stats = `:repeat: ${p.topPost.boostCount} · :speech_balloon: ${p.topPost.commentCount} · :bust_in_silhouette: ${uniqueViews} · :eye: ${totalViews}`;
       const bodyText = [
         `:star: *Top Post of the Day*`,
         `by ${author}`,
@@ -348,7 +352,7 @@ export class SlackService {
         const articleUrl = base ? `${base}/a/${article.id}` : null;
         const handle = article.username ? `@${article.username}` : '@unknown';
         lines.push(
-          `${idx + 1}. ${articleUrl ? `<${articleUrl}|${this.truncate(article.title, 80)}>` : this.truncate(article.title, 80)} (${handle}) · :eye: ${article.viewCount} · :repeat: ${article.boostCount} · :speech_balloon: ${article.commentCount}`,
+          `${idx + 1}. ${articleUrl ? `<${articleUrl}|${this.truncate(article.title, 80)}>` : this.truncate(article.title, 80)} (${handle}) · :bust_in_silhouette: ${Math.max(0, article.viewCount)} · :eye: ${Math.max(article.viewCount, article.totalViewCount)} · :repeat: ${article.boostCount} · :speech_balloon: ${article.commentCount}`,
         );
       }
       blocks.push(this.section(lines.join('\n')));

@@ -682,11 +682,13 @@ export class ArticlesService {
             where: { id: articleId },
             data: {
               viewCount: { increment: 1 },
+              totalViewCount: { increment: 1 },
               weightedViewCount: { increment: LOGGED_IN_VIEW_WEIGHT },
             },
-            select: { viewCount: true, weightedViewCount: true },
+            select: { viewCount: true, totalViewCount: true, weightedViewCount: true },
           });
           (published as any).viewCount = updatedCounts.viewCount;
+          (published as any).totalViewCount = updatedCounts.totalViewCount;
           (published as any).weightedViewCount = updatedCounts.weightedViewCount;
         }
       }

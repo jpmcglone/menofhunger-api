@@ -518,6 +518,7 @@ export class AdminAnalyticsController {
         id: string;
         body: string;
         author_username: string;
+        unique_count: number;
         view_count: number;
         boost_count: number;
         comment_count: number;
@@ -528,7 +529,8 @@ export class AdminAnalyticsController {
           p.id,
           p.body,
           u.username AS author_username,
-          p."viewerCount" AS view_count,
+          p."viewerCount" AS unique_count,
+          p."totalViewCount" AS view_count,
           p."boostCount" AS boost_count,
           p."commentCount" AS comment_count,
           0 AS reaction_count,
@@ -540,7 +542,7 @@ export class AdminAnalyticsController {
           AND p."kind" = 'regular'
           AND p."visibility" = 'public'
         GROUP BY p.id, u.username
-        ORDER BY p."viewerCount" DESC, p."createdAt" DESC
+        ORDER BY p."totalViewCount" DESC, p."createdAt" DESC
         LIMIT 10
       `,
 
@@ -599,6 +601,7 @@ export class AdminAnalyticsController {
 
       // Range-scoped article engagement totals.
       this.prisma.$queryRaw<Array<{
+        unique_views: bigint;
         total_views: bigint;
         total_boosts: bigint;
         total_reactions: bigint;
@@ -606,6 +609,8 @@ export class AdminAnalyticsController {
       }>>(Prisma.sql`
         SELECT
           (SELECT COUNT(*)::bigint FROM "ArticleView"
+           WHERE 1=1 ${sinceAnd(Prisma.sql`"createdAt"`)}) AS unique_views,
+          (SELECT COALESCE(SUM("impressionCount"), 0)::bigint FROM "ArticleView"
            WHERE 1=1 ${sinceAnd(Prisma.sql`"createdAt"`)}) AS total_views,
           (SELECT COUNT(*)::bigint FROM "ArticleBoost"
            WHERE 1=1 ${sinceAnd(Prisma.sql`"createdAt"`)}) AS total_boosts,
@@ -629,6 +634,7 @@ export class AdminAnalyticsController {
         slug: string;
         visibility: string;
         author_username: string;
+        unique_count: bigint;
         view_count: bigint;
         boost_count: bigint;
         comment_count: bigint;
@@ -641,7 +647,8 @@ export class AdminAnalyticsController {
           a.slug,
           a.visibility,
           u.username AS author_username,
-          COUNT(DISTINCT av."userId")::bigint AS view_count,
+          COUNT(av."userId")::bigint AS unique_count,
+          COALESCE(SUM(av."impressionCount"), 0)::bigint AS view_count,
           (SELECT COUNT(*)::bigint FROM "ArticleBoost" ab
            WHERE ab."articleId" = a.id
            ${since ? Prisma.sql`AND ab."createdAt" >= ${since}::timestamptz` : Prisma.sql``}) AS boost_count,
@@ -1147,7 +1154,8 @@ export class AdminAnalyticsController {
       id: r.id,
       bodyPreview: r.body.length > 180 ? `${r.body.slice(0, 180).trimEnd()}...` : r.body,
       authorUsername: r.author_username,
-      viewCount: Number(r.view_count),
+      uniqueViewCount: Number(r.unique_count),
+      viewCount: Math.max(Number(r.unique_count), Number(r.view_count)),
       boostCount: Number(r.boost_count),
       commentCount: Number(r.comment_count),
       reactionCount: Number(r.reaction_count),
@@ -1162,7 +1170,8 @@ export class AdminAnalyticsController {
     const uniqueAuthors   = Number(artSummary?.unique_authors   ?? 0);
 
     const artEngagement = articleEngagementRaw[0];
-    const totalViewsInRange    = Number(artEngagement?.total_views     ?? 0);
+    const uniqueViewsInRange   = Number(artEngagement?.unique_views    ?? 0);
+    const totalViewsInRange    = Math.max(uniqueViewsInRange, Number(artEngagement?.total_views ?? 0));
     const totalBoostsInRange   = Number(artEngagement?.total_boosts    ?? 0);
     const totalReactionsInRange = Number(artEngagement?.total_reactions ?? 0);
     const totalCommentsInRange = Number(artEngagement?.total_comments  ?? 0);
@@ -1170,7 +1179,7 @@ export class AdminAnalyticsController {
     // avg views per article that was published in the range
     const articlesPublishedInRange = articlePublishedRaw.reduce((s, r) => s + Number(r.count), 0);
     const avgViewsPerArticle = articlesPublishedInRange > 0
-      ? Math.round((totalViewsInRange / articlesPublishedInRange) * 10) / 10
+      ? Math.round((uniqueViewsInRange / articlesPublishedInRange) * 10) / 10
       : 0;
 
     const articles: AdminAnalyticsArticlesDto = {
@@ -1178,6 +1187,7 @@ export class AdminAnalyticsController {
         totalPublished,
         totalDrafts,
         uniqueAuthors,
+        uniqueViewsInRange,
         totalViewsInRange,
         totalBoostsInRange,
         totalReactionsInRange,
@@ -1195,7 +1205,8 @@ export class AdminAnalyticsController {
           slug: r.slug,
           visibility: r.visibility,
           authorUsername: r.author_username,
-          viewCount: Number(r.view_count),
+          uniqueViewCount: Number(r.unique_count),
+          viewCount: Math.max(Number(r.unique_count), Number(r.view_count)),
           boostCount: Number(r.boost_count),
           commentCount: Number(r.comment_count),
           reactionCount: Number(r.reaction_count),
