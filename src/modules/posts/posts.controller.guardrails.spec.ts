@@ -31,5 +31,16 @@ describe('PostsController media feed guardrails', () => {
     expect(src).toContain('authPostsListLock');
     expect(src).toContain("? 'auth_foryou'");
     expect(src).toContain('forYouUserVer');
+    expect(src).toContain('wantsForYouRefresh');
+    expect(src).toContain('&& !wantsForYouRefresh');
+  });
+
+  it('skips For You page-1 cache and applies refresh jitter on refresh=1', () => {
+    const controller = readFromRepo('src/modules/posts/posts.controller.ts');
+    const feed = readFromRepo('src/modules/posts/posts-feed-query.service.ts');
+    expect(controller).toContain('refresh: queryBoolean().optional()');
+    expect(controller).toContain('refresh: wantsForYouRefresh');
+    expect(feed).toContain('params.refresh');
+    expect(feed).toContain('forYouRefreshJitterFloor');
   });
 });

@@ -15,6 +15,7 @@ function makeHandler(overrides: { prisma?: Record<string, any> } = {}) {
     },
     user: { findUnique: jest.fn(async () => null) },
     follow: { findMany: jest.fn(async () => []) },
+    userPageOperator: { findMany: jest.fn(async () => []) },
     crewMember: { findMany: jest.fn(async () => []) },
     communityGroup: { findUnique: jest.fn(async () => null) },
     communityGroupMember: { findMany: jest.fn(async () => []), findUnique: jest.fn(async () => null) },
@@ -488,6 +489,24 @@ describe('PostsSideEffectsHandler — followed-post bell semantics', () => {
       'bell-follower',
       'normal-follower',
     ]);
+    expect(deps.presenceRealtime.emitFeedNewPost).toHaveBeenCalledWith(
+      ['normal-follower', 'bell-follower'],
+      expect.any(Object),
+    );
+  });
+
+  it('does not notify page operators who follow the page, but still emits to their feed', async () => {
+    const { handler, deps } = setup();
+    deps.prisma.userPageOperator.findMany = jest.fn(async () => [
+      { operatorUserId: 'bell-follower' },
+    ]);
+
+    await callSideEffects(handler, {});
+
+    const followedPostCalls = deps.notifications.create.mock.calls.filter(
+      (c: any[]) => c[0]?.kind === 'followed_post',
+    );
+    expect(followedPostCalls.map((c: any[]) => c[0].recipientUserId)).toEqual(['normal-follower']);
     expect(deps.presenceRealtime.emitFeedNewPost).toHaveBeenCalledWith(
       ['normal-follower', 'bell-follower'],
       expect.any(Object),

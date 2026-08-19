@@ -2907,6 +2907,34 @@ describe('PostsService.listForYouFeed', () => {
     }
   });
 
+  it('authed: refresh=true reshuffles even below the saturation threshold', async () => {
+    const candidates = Array.from({ length: 10 }, (_, i) => cand(`p${i}`, `u${i}`, 100 - i, 1));
+    const { service } = setupForYou({ candidates });
+
+    let sawDifferentOrder = false;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const a = await service.listForYouFeed({
+        viewerUserId: 'viewer',
+        limit: 10,
+        cursor: null,
+        visibility: 'all',
+        refresh: true,
+      });
+      const b = await service.listForYouFeed({
+        viewerUserId: 'viewer',
+        limit: 10,
+        cursor: null,
+        visibility: 'all',
+        refresh: true,
+      });
+      if (a.posts.map((p: any) => p.id).join(',') !== b.posts.map((p: any) => p.id).join(',')) {
+        sawDifferentOrder = true;
+        break;
+      }
+    }
+    expect(sawDifferentOrder).toBe(true);
+  });
+
   it('authed: below the saturation threshold, ordering stays deterministic even with some seen posts', async () => {
     // 10 candidates, only 3 seen (saturation 0.3 — below the 0.6 jitter threshold), so
     // jitterStrength stays at forYouSeenJitterBase (0) and ordering must not vary.

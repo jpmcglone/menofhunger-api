@@ -186,7 +186,7 @@ export class PostVisibilityReadService {
       }) as Promise<Array<{ repostedPostId: string | null }>>,
       this.prisma.postView.findMany({
         where: { userId: viewerUserId, postId: { in: allPostIds } },
-        select: { postId: true },
+        select: { postId: true, lastSeenAt: true, createdAt: true },
       }),
       this.prisma.userBlock.findMany({
         where: { OR: [{ blockerId: viewerUserId }, { blockedId: viewerUserId }] },
@@ -207,6 +207,9 @@ export class PostVisibilityReadService {
         .filter(Boolean),
     );
     const viewedByPostId = new Set(viewedRows.map((r) => r.postId));
+    const lastSeenAtByPostId = new Map(
+      viewedRows.map((r) => [r.postId, r.lastSeenAt ?? r.createdAt] as const),
+    );
     const blockedByViewer = new Set<string>();
     const viewerBlockedBy = new Set<string>();
     for (const row of blockSets) {
@@ -260,6 +263,7 @@ export class PostVisibilityReadService {
       repostedPostMap: repostedPostMap as any,
       groupPreviewByGroupId,
       viewedByPostId,
+      lastSeenAtByPostId,
     });
 
     return new Map(posts.map((p) => [p.id, attachParentChain(p)] as const));

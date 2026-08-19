@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
+import { PersonAccountGuard } from '../pages/person-account.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { CoinsService, transferCoinsSchema } from './coins.service';
 
@@ -10,7 +11,7 @@ const listTransfersQuerySchema = z.object({
 });
 
 @Controller('coins')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, PersonAccountGuard)
 export class CoinsController {
   constructor(private readonly coins: CoinsService) {}
 

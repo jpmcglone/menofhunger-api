@@ -1,6 +1,6 @@
 import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
 
-function makeService(postViewRows: Array<{ postId: string }> = []) {
+function makeService(postViewRows: Array<{ postId: string; lastSeenAt?: Date; createdAt?: Date }> = []) {
   const prisma: any = {
     postView: {
       findMany: jest.fn(async () => postViewRows),
@@ -78,6 +78,31 @@ describe('PostsViewerEnrichmentService.viewerViewedPostIds', () => {
     const { service, prisma } = makeService([{ postId: 'p1' }]);
     await service.viewerViewedPostIds({ viewerUserId: 'u1', postIds: ['p1'] });
     await service.viewerViewedPostIds({ viewerUserId: 'u1', postIds: ['p1'] });
+    expect(prisma.postView.findMany).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PostsViewerEnrichmentService.viewerLastSeenAtByPostId', () => {
+  it('returns lastSeenAt (falling back to createdAt) for viewed posts', async () => {
+    const seen = new Date('2026-08-01T12:00:00.000Z');
+    const created = new Date('2026-07-01T12:00:00.000Z');
+    const { service } = makeService([
+      { postId: 'p1', lastSeenAt: seen, createdAt: created },
+      { postId: 'p2', lastSeenAt: null as unknown as Date, createdAt: created },
+    ]);
+    const result = await service.viewerLastSeenAtByPostId({
+      viewerUserId: 'u1',
+      postIds: ['p1', 'p2', 'p3'],
+    });
+    expect(result.get('p1')?.toISOString()).toBe(seen.toISOString());
+    expect(result.get('p2')?.toISOString()).toBe(created.toISOString());
+    expect(result.has('p3')).toBe(false);
+  });
+
+  it('shares the viewed request-cache with viewerViewedPostIds', async () => {
+    const { service, prisma } = makeService([{ postId: 'p1', lastSeenAt: new Date() }]);
+    await service.viewerViewedPostIds({ viewerUserId: 'u1', postIds: ['p1'] });
+    await service.viewerLastSeenAtByPostId({ viewerUserId: 'u1', postIds: ['p1'] });
     expect(prisma.postView.findMany).toHaveBeenCalledTimes(1);
   });
 });

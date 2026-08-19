@@ -52,6 +52,10 @@ function buildServices(prismaOverrides: Record<string, any>) {
       findMany: jest.fn(async () => []),
     },
     follow: { findMany: jest.fn(async () => []) },
+    userPageOperator: {
+      findMany: jest.fn(async () => []),
+      findUnique: jest.fn(async () => null),
+    },
     userBlock: { findMany: jest.fn(async () => []) },
     post: { findMany: jest.fn(async () => []), findUnique: jest.fn() },
     pushSubscription: { findMany: jest.fn(async () => []) },
@@ -135,6 +139,29 @@ describe('fanOutStatusUpdateNotifications', () => {
     await svc.fanOutStatusUpdateNotifications({
       actorUserId: 'actor-1',
       text: 'Self check',
+      postId: null,
+      mode: 'created',
+    });
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not notify operators of the actor page', async () => {
+    const followers = [
+      { followerId: 'operator-1' },
+      { followerId: 'follower-1' },
+    ];
+    const { svc, prisma } = buildServices({
+      follow: { findMany: jest.fn(async () => followers) },
+      userPageOperator: {
+        findMany: jest.fn(async () => [{ operatorUserId: 'operator-1' }]),
+        findUnique: jest.fn(async () => null),
+      },
+    });
+
+    await svc.fanOutStatusUpdateNotifications({
+      actorUserId: 'page-1',
+      text: 'Page status',
       postId: null,
       mode: 'created',
     });

@@ -6,6 +6,7 @@ function makeHandler() {
     article: { findFirst: jest.fn(async () => null), findUnique: jest.fn(async () => null) },
     articleComment: { findFirst: jest.fn(async () => null), findUnique: jest.fn(async () => null) },
     follow: { findMany: jest.fn(async () => []) },
+    userPageOperator: { findMany: jest.fn(async () => []) },
     user: { findMany: jest.fn(async () => []) },
   };
   const notifications: any = { create: jest.fn(async () => undefined) };
@@ -89,6 +90,18 @@ describe('ArticlesSideEffectsHandler article.published', () => {
     await run(handler);
 
     expect(notifications.create).not.toHaveBeenCalled();
+  });
+
+  it('does not notify operators of the author page', async () => {
+    const { handler, notifications, prisma } = setup([
+      { followerId: 'operator', follower: { verifiedStatus: 'identity', premium: false, premiumPlus: false } },
+      { followerId: 'f1', follower: { verifiedStatus: 'none', premium: false, premiumPlus: false } },
+    ]);
+    prisma.userPageOperator.findMany.mockResolvedValue([{ operatorUserId: 'operator' }]);
+
+    await run(handler);
+
+    expect(notifications.create.mock.calls.map((c: any[]) => c[0].recipientUserId)).toEqual(['f1']);
   });
 
   it('skips unverified followers for a verifiedOnly article', async () => {

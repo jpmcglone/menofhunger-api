@@ -51,16 +51,18 @@ export class PostsViewerEnrichmentService {
     return out;
   }
 
-  /** Returns the set of post IDs that the viewer has viewed (exists in PostView table). */
-  async viewerViewedPostIds(params: { viewerUserId: string; postIds: string[] }) {
+  /**
+   * Loads viewer PostView rows into the request cache (postId → lastSeenAt, or null).
+   */
+  private async loadViewerViewedLastSeen(params: { viewerUserId: string; postIds: string[] }) {
     const { viewerUserId, postIds } = params;
-    if (!viewerUserId) return new Set<string>();
     const ids = (postIds ?? []).filter(Boolean);
-    if (ids.length === 0) return new Set<string>();
+    const empty = new Map<string, Date | null>();
+    if (!viewerUserId || ids.length === 0) return empty;
 
     const key = `posts.viewerViewed:${viewerUserId}`;
-    const map = this.requestCache.get<Map<string, boolean>>(key) ?? new Map<string, boolean>();
-    if (this.requestCache.get<Map<string, boolean>>(key) == null) {
+    const map = this.requestCache.get<Map<string, Date | null>>(key) ?? new Map<string, Date | null>();
+    if (this.requestCache.get<Map<string, Date | null>>(key) == null) {
       this.requestCache.set(key, map);
     }
 
@@ -68,14 +70,34 @@ export class PostsViewerEnrichmentService {
     if (missing.length > 0) {
       const rows = await this.prisma.postView.findMany({
         where: { userId: viewerUserId, postId: { in: missing } },
-        select: { postId: true },
+        select: { postId: true, lastSeenAt: true, createdAt: true },
       });
-      const viewedSet = new Set(rows.map((r) => r.postId));
-      for (const id of missing) map.set(id, viewedSet.has(id));
+      const lastSeenById = new Map(
+        rows.map((r) => [r.postId, r.lastSeenAt ?? r.createdAt ?? new Date(0)] as const),
+      );
+      for (const id of missing) map.set(id, lastSeenById.get(id) ?? null);
     }
+    return map;
+  }
 
+  /** Returns the set of post IDs that the viewer has viewed (exists in PostView table). */
+  async viewerViewedPostIds(params: { viewerUserId: string; postIds: string[] }) {
+    const map = await this.loadViewerViewedLastSeen(params);
     const out = new Set<string>();
-    for (const id of ids) if (map.get(id)) out.add(id);
+    for (const id of params.postIds ?? []) {
+      if (id && map.get(id)) out.add(id);
+    }
+    return out;
+  }
+
+  /** Viewer's lastSeenAt per post (only posts they have actually viewed). */
+  async viewerLastSeenAtByPostId(params: { viewerUserId: string; postIds: string[] }) {
+    const map = await this.loadViewerViewedLastSeen(params);
+    const out = new Map<string, Date>();
+    for (const id of params.postIds ?? []) {
+      const at = id ? map.get(id) : null;
+      if (at) out.set(id, at);
+    }
     return out;
   }
 

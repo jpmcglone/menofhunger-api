@@ -54,6 +54,8 @@ type ForYouFeedParams = {
   authorUserIds?: string[] | null;
   /** Filter to posts whose author has a matching US state code (e.g. "VA"). */
   authorLocationState?: string | null;
+  /** Cursor-less pull-to-refresh: skip page-1 cache and apply refresh jitter. */
+  refresh?: boolean;
 };
 
 /**
@@ -649,7 +651,7 @@ export class PostsFeedQueryService {
     const fetchIds = ancestorAndEmbedIds.filter((id) => !pageIdSet.has(id));
     const allPostIds = [...pageIdSet, ...ancestorAndEmbedIds];
 
-    const [viewer, fetchedEmbeds, boosted, bookmarksByPostId, votedPollOptionIdByPostId, blockSets, repostedByPostId, viewedByPostId] =
+    const [viewer, fetchedEmbeds, boosted, bookmarksByPostId, votedPollOptionIdByPostId, blockSets, repostedByPostId, lastSeenAtByPostId] =
       await Promise.all([
         this.enrichment.viewerContext(viewerUserId),
         fetchIds.length ? this.getByIds({ viewerUserId, ids: fetchIds }) : Promise.resolve([] as FeedPost[]),
@@ -669,9 +671,10 @@ export class PostsFeedQueryService {
           ? this.enrichment.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
           : Promise.resolve(new Set<string>()),
         viewerUserId
-          ? this.enrichment.viewerViewedPostIds({ viewerUserId, postIds: allPostIds })
-          : Promise.resolve(new Set<string>()),
+          ? this.enrichment.viewerLastSeenAtByPostId({ viewerUserId, postIds: allPostIds })
+          : Promise.resolve(new Map<string, Date>()),
       ]);
+    const viewedByPostId = new Set(lastSeenAtByPostId.keys());
 
     const byId = new Map<string, FeedPost>();
     for (const p of filteredPosts) byId.set(p.id, p);
@@ -744,6 +747,7 @@ export class PostsFeedQueryService {
       quotedPostMap,
       groupPreviewByGroupId,
       viewedByPostId,
+      lastSeenAtByPostId,
       viewerCanAccessByPostId,
     });
 
@@ -1015,7 +1019,7 @@ export class PostsFeedQueryService {
     const viewerUserId = params.viewerUserId?.trim() || null;
     const isPage1 = this.decodeForYouCursor(params.cursor).servedIds.length === 0;
     const hasCursor = Boolean(params.cursor?.trim());
-    if (!viewerUserId || !isPage1 || hasCursor) {
+    if (!viewerUserId || !isPage1 || hasCursor || params.refresh) {
       return this.listForYouFeedUncached(params);
     }
 
@@ -1776,7 +1780,10 @@ export class PostsFeedQueryService {
       // content) and ramp up toward forYouSeenSaturationJitterMax as the candidate pool
       // saturates with already-seen posts. Seeded per-request so it's stable across
       // pagination within one refresh but different on the next refresh (new seed).
-      const jitterStrengthBase = viewerUserId == null ? POSTS_RANKING.forYouAnonJitterStrength : POSTS_RANKING.forYouSeenJitterBase;
+      const refreshJitterFloor = params.refresh && isPage1 ? POSTS_RANKING.forYouRefreshJitterFloor : 0;
+      const jitterStrengthBase = viewerUserId == null
+        ? POSTS_RANKING.forYouAnonJitterStrength
+        : Math.max(POSTS_RANKING.forYouSeenJitterBase, refreshJitterFloor);
       const jitterStrength = Math.min(
         1,
         jitterStrengthBase + (POSTS_RANKING.forYouSeenSaturationJitterMax - jitterStrengthBase) * saturationRamp,

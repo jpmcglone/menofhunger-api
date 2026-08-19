@@ -43,7 +43,7 @@ export class BillingController {
     private readonly appleIap: AppleIapService,
   ) {}
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Get('me')
   async me(@CurrentUserId() userId: string): Promise<{ data: BillingMeDto }> {
     return { data: await this.billing.getMe(userId) };
@@ -79,7 +79,7 @@ export class BillingController {
 
   // ─── Referral endpoints ───────────────────────────────────────────────────
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Get('referral')
   async getReferral(@CurrentUserId() userId: string): Promise<{ data: ReferralMeDto }> {
     return { data: await this.referral.getMyReferralInfo(userId) };
@@ -95,7 +95,7 @@ export class BillingController {
     return { data: await this.referral.setReferralCode(userId, parsed.code) };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Get('referral/recruits')
   async getRecruits(@CurrentUserId() userId: string): Promise<{ data: RecruitDto[] }> {
     return { data: await this.referral.getMyRecruits(userId) };
@@ -113,13 +113,13 @@ export class BillingController {
 
   // ─── Affiliate endpoints ──────────────────────────────────────────────────
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Get('affiliate')
   async getAffiliate(@CurrentUserId() userId: string): Promise<{ data: AffiliateSummaryDto }> {
     return { data: await this.affiliate.getAffiliateSummary(userId) };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Delete('dev-reset')
   async devReset(@CurrentUserId() userId: string): Promise<{ data: { reset: true } }> {
     await this.billing.devResetPremium(userId);

@@ -51,13 +51,20 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
     // Unpublished or deleted since the dispatch — nothing to announce.
     if (!article?.publishedAt) return;
 
-    const follows = await this.prisma.follow.findMany({
-      where: { followingId: authorUserId },
-      select: {
-        followerId: true,
-        follower: { select: { verifiedStatus: true, premium: true, premiumPlus: true } },
-      },
-    });
+    const [follows, operators] = await Promise.all([
+      this.prisma.follow.findMany({
+        where: { followingId: authorUserId },
+        select: {
+          followerId: true,
+          follower: { select: { verifiedStatus: true, premium: true, premiumPlus: true } },
+        },
+      }),
+      this.prisma.userPageOperator.findMany({
+        where: { pageUserId: authorUserId },
+        select: { operatorUserId: true },
+      }),
+    ]);
+    const operatorIds = new Set(operators.map((row) => row.operatorUserId));
 
     const title = article.title ?? '';
     const titleSnippet = title.length > 80 ? `${title.slice(0, 79)}…` : title;
@@ -66,6 +73,7 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
     for (const f of follows) {
       const recipientUserId = f.followerId;
       if (!recipientUserId || recipientUserId === authorUserId) continue;
+      if (operatorIds.has(recipientUserId)) continue;
 
       if (article.visibility === 'verifiedOnly') {
         const vs = f.follower?.verifiedStatus ?? 'none';

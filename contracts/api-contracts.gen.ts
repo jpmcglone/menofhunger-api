@@ -1626,6 +1626,7 @@ export type PostDto = {
   viewerHasReposted?: boolean;
   /** True if the viewer has viewed this post (exists in PostView table). */
   viewerHasViewed?: boolean;
+  viewerLastSeenAt?: string;
   /** Set when a block exists between viewer and author. 'viewer_blocked' = viewer blocked the author; 'viewer_blocked_by' = author blocked the viewer. */
   viewerBlockStatus?: 'viewer_blocked' | 'viewer_blocked_by' | null;
   /** For kind='repost': the original post being reshared. */

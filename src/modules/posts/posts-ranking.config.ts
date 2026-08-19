@@ -165,6 +165,15 @@ export const POSTS_RANKING = {
    * Authed viewers start with no jitter (0) while the candidate pool still has fresh/unseen
    * content — the ranking already surfaces that well and shouldn't be perturbed.
    */
+  /**
+   * Explicit pull-to-refresh (`refresh=1` on a cursor-less For You request) uses at least
+   * this jitter so a new seed actually moves rows. First paint stays at forYouSeenJitterBase.
+   */
+  forYouRefreshJitterFloor: 0.2,
+  /** For You thread rollup: hide a seen middle post when lastSeenAt is within this many hours. */
+  forYouSeenCollapseHotHours: 24,
+  /** After this many hours, a seen middle post is treated as unread for display collapse. */
+  forYouSeenCollapseWarmHours: 48,
   forYouSeenJitterBase: 0,
   /**
    * As the candidate pool saturates with already-seen posts, jitter strength ramps from

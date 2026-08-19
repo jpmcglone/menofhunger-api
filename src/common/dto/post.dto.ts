@@ -124,6 +124,8 @@ export type PostDto = {
   viewerHasReposted?: boolean;
   /** True if the viewer has viewed this post (exists in PostView table). */
   viewerHasViewed?: boolean;
+  /** Viewer's last dwell on this post (ISO). Used for For You seen-aware thread rollup. */
+  viewerLastSeenAt?: string;
   /** Set when a block exists between viewer and author. 'viewer_blocked' = viewer blocked the author; 'viewer_blocked_by' = author blocked the viewer. */
   viewerBlockStatus?: 'viewer_blocked' | 'viewer_blocked_by' | null;
   /** For kind='repost': the original post being reshared. */
@@ -280,6 +282,7 @@ export function toPostDto(
     viewerBlockStatus?: 'viewer_blocked' | 'viewer_blocked_by' | null;
     viewerHasReposted?: boolean;
     viewerHasViewed?: boolean;
+    viewerLastSeenAt?: string;
     /** Pre-built nested DTO for a flat repost's original post. */
     repostedPost?: PostDto;
     /** Pre-built nested DTO for a quote repost's quoted post. */
@@ -512,6 +515,7 @@ export function toPostDto(
     ...(Array.isArray(opts?.viewerBookmarkCollectionIds) ? { viewerBookmarkCollectionIds: opts.viewerBookmarkCollectionIds } : {}),
     ...(typeof opts?.viewerHasReposted === 'boolean' ? { viewerHasReposted: opts.viewerHasReposted } : {}),
     ...(typeof opts?.viewerHasViewed === 'boolean' ? { viewerHasViewed: opts.viewerHasViewed } : {}),
+    ...(opts?.viewerLastSeenAt ? { viewerLastSeenAt: opts.viewerLastSeenAt } : {}),
     ...(typeof opts?.viewerBlockStatus !== 'undefined' ? { viewerBlockStatus: opts.viewerBlockStatus ?? null } : {}),
     ...(opts?.repostedPost ? { repostedPost: opts.repostedPost } : {}),
     ...(opts?.quotedPost ? { quotedPost: opts.quotedPost } : {}),

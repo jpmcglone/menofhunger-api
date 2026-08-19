@@ -14,6 +14,7 @@ import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
+import { PersonAccountGuard } from '../pages/person-account.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
@@ -108,7 +109,7 @@ export class CrewController {
 
   // ---------- my crew ----------
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
     default: { limit: rateLimitLimit('publicRead', 240), ttl: rateLimitTtl('publicRead', 60) },
   })
@@ -118,7 +119,7 @@ export class CrewController {
     return { data: { crew } };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
     default: { limit: rateLimitLimit('interact', 30), ttl: rateLimitTtl('interact', 60) },
   })
@@ -140,7 +141,7 @@ export class CrewController {
     return { data: { crew } };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
     default: { limit: rateLimitLimit('interact', 10), ttl: rateLimitTtl('interact', 60) },
   })
@@ -150,7 +151,7 @@ export class CrewController {
     return { data: {} };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
     default: { limit: rateLimitLimit('interact', 5), ttl: rateLimitTtl('interact', 60) },
   })
@@ -160,7 +161,7 @@ export class CrewController {
     return { data: {} };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Delete('me/members/:userId')
   async kick(
     @CurrentUserId() viewerUserId: string,
@@ -182,7 +183,7 @@ export class CrewController {
    * `/crew/by-slug/*`, and `/crew/for-user/*` declaration so Nest's first-match
    * resolution doesn't treat literal segments as `:crewId`.
    */
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
     default: { limit: rateLimitLimit('interact', 30), ttl: rateLimitTtl('interact', 60) },
   })
@@ -212,7 +213,7 @@ export class CrewController {
     return { data: { crew } };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Patch('me/members/order')
   async reorderMembers(
     @CurrentUserId() viewerUserId: string,
@@ -243,21 +244,21 @@ export class CrewController {
 
   // ---------- invites ----------
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Get('invites/inbox')
   async inbox(@CurrentUserId() viewerUserId: string) {
     const data = await this.invites.listInbox({ viewerUserId });
     return { data };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Get('invites/outbox')
   async outbox(@CurrentUserId() viewerUserId: string) {
     const data = await this.invites.listOutbox({ viewerUserId });
     return { data };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
     default: { limit: rateLimitLimit('interact', 30), ttl: rateLimitTtl('interact', 60) },
   })
@@ -273,21 +274,21 @@ export class CrewController {
     return { data: { invite } };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Post('invites/:id/accept')
   async acceptInvite(@CurrentUserId() viewerUserId: string, @Param('id') id: string) {
     const result = await this.invites.acceptInvite({ viewerUserId, inviteId: id });
     return { data: result };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Post('invites/:id/decline')
   async declineInvite(@CurrentUserId() viewerUserId: string, @Param('id') id: string) {
     await this.invites.declineInvite({ viewerUserId, inviteId: id });
     return { data: {} };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Delete('invites/:id')
   async cancelInvite(@CurrentUserId() viewerUserId: string, @Param('id') id: string) {
     await this.invites.cancelInvite({ viewerUserId, inviteId: id });
@@ -296,7 +297,7 @@ export class CrewController {
 
   // ---------- wall ----------
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
     default: { limit: rateLimitLimit('publicRead', 240), ttl: rateLimitTtl('publicRead', 60) },
   })
@@ -318,7 +319,7 @@ export class CrewController {
     };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
     default: { limit: rateLimitLimit('interact', 120), ttl: rateLimitTtl('interact', 60) },
   })
@@ -336,7 +337,7 @@ export class CrewController {
 
   // ---------- ownership ----------
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Post('me/transfer')
   async transferOwnership(
     @CurrentUserId() viewerUserId: string,
@@ -350,7 +351,7 @@ export class CrewController {
     return { data: {} };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Post('me/transfer-votes')
   async openTransferVote(
     @CurrentUserId() viewerUserId: string,
@@ -364,7 +365,7 @@ export class CrewController {
     return { data: { voteId: vote.id, status: vote.status } };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Post('me/transfer-votes/:id/ballot')
   async castBallot(
     @CurrentUserId() viewerUserId: string,
@@ -380,7 +381,7 @@ export class CrewController {
     return { data: {} };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Delete('me/transfer-votes/:id')
   async cancelTransferVote(
     @CurrentUserId() viewerUserId: string,
@@ -392,7 +393,7 @@ export class CrewController {
 
   // ---------- open-to-crew directory ----------
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
     default: { limit: rateLimitLimit('interact', 30), ttl: rateLimitTtl('interact', 60) },
   })
@@ -403,7 +404,7 @@ export class CrewController {
     return { data: result };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
     default: { limit: rateLimitLimit('publicRead', 60), ttl: rateLimitTtl('publicRead', 60) },
   })

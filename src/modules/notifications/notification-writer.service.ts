@@ -12,6 +12,14 @@ import { NotificationQueryService } from './notification-query.service';
 import { isBellCountedNotificationKind, NotificationReadStateService } from './notification-read-state.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 
+/** Kinds that announce the actor's own post/publish. Operators of a page actor already did the action. */
+const ACTOR_SELF_ECHO_KINDS = new Set<NotificationKind>([
+  'followed_post',
+  'followed_article',
+  'checkin_post',
+  'status_update',
+]);
+
 export type CreateNotificationParams = {
   recipientUserId: string;
   kind: NotificationKind;
@@ -119,6 +127,13 @@ export class NotificationWriterService {
 
     // Never notify a user about their own actions — regardless of which call-site triggered this.
     if (actorUserId && actorUserId === recipientUserId) return;
+    if (
+      actorUserId &&
+      ACTOR_SELF_ECHO_KINDS.has(kind) &&
+      (await this.recipientOperatesActor(recipientUserId, actorUserId))
+    ) {
+      return;
+    }
 
     const fallbackTitle =
       title ??
@@ -1402,7 +1417,7 @@ export class NotificationWriterService {
   }): Promise<void> {
     const { actorUserId, text, postId, mode } = params;
 
-    const [actor, follows] = await Promise.all([
+    const [actor, follows, operators] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: actorUserId },
         select: { username: true },
@@ -1411,14 +1426,19 @@ export class NotificationWriterService {
         where: { followingId: actorUserId },
         select: { followerId: true },
       }),
+      this.prisma.userPageOperator.findMany({
+        where: { pageUserId: actorUserId },
+        select: { operatorUserId: true },
+      }),
     ]);
 
     if (!actor || follows.length === 0) return;
     const actorUsername = actor.username ?? '';
+    const operatorIds = new Set(operators.map((row) => row.operatorUserId));
 
     const recipientIds = follows
       .map((f) => f.followerId)
-      .filter((id) => id && id !== actorUserId);
+      .filter((id) => id && id !== actorUserId && !operatorIds.has(id));
 
     const result = await runInBatches(recipientIds, FANOUT_CONCURRENCY, async (recipientUserId) => {
       const args = { recipientUserId, actorUserId, actorUsername, text, postId };
@@ -1450,6 +1470,7 @@ export class NotificationWriterService {
   }): Promise<void> {
     const { recipientUserId, actorUserId, actorUsername, text, postId } = params;
     if (actorUserId === recipientUserId) return;
+    if (await this.recipientOperatesActor(recipientUserId, actorUserId)) return;
 
     const maxAttempts = 3;
     const presentAt = await this.presentAtForRecipient(recipientUserId);
@@ -2201,5 +2222,22 @@ export class NotificationWriterService {
       distinct: ['recipientUserId'],
     });
     return rows.map((r) => r.recipientUserId);
+  }
+
+  /** True when the recipient operates the actor page — they already performed the action. */
+  private async recipientOperatesActor(
+    recipientUserId: string,
+    actorUserId: string,
+  ): Promise<boolean> {
+    const recipient = String(recipientUserId ?? '').trim();
+    const actor = String(actorUserId ?? '').trim();
+    if (!recipient || !actor) return false;
+    const row = await this.prisma.userPageOperator.findUnique({
+      where: {
+        operatorUserId_pageUserId: { operatorUserId: recipient, pageUserId: actor },
+      },
+      select: { operatorUserId: true },
+    });
+    return Boolean(row);
   }
 }

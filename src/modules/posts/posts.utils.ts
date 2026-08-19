@@ -27,6 +27,8 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
   repostedByPostId?: Set<string>;
   /** Set of post IDs that the viewer has viewed (used for viewerHasViewed flag). */
   viewedByPostId?: Set<string>;
+  /** Viewer's lastSeenAt per viewed post (ISO-stamped as viewerLastSeenAt). */
+  lastSeenAtByPostId?: Map<string, Date>;
   /** Map from repostedPostId to the raw post data for flat reposts. */
   repostedPostMap?: Map<string, T>;
   /**
@@ -60,6 +62,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     viewerCanAccessByPostId,
     groupPreviewByGroupId,
     viewedByPostId,
+    lastSeenAtByPostId,
   } = opts;
 
   function attachParentChain(post: T): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } {
@@ -117,6 +120,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
       viewerBlockStatus: viewerBlockStatus ?? undefined,
       viewerHasReposted: repostedByPostId ? repostedByPostId.has(post.id) : undefined,
       viewerHasViewed: viewedByPostId ? viewedByPostId.has(post.id) : undefined,
+      viewerLastSeenAt: lastSeenAtByPostId?.get(post.id)?.toISOString(),
       repostedPost: repostedPostDto,
       quotedPost: quotedPostDto,
       includeInternal: viewerHasAdmin,

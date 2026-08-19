@@ -56,6 +56,8 @@ const listSchema = z.object({
   // Keep "popular" for backwards compatibility / internal naming.
   // "forYou" is a personalized re-rank of trending using the viewer's follow graph + view history.
   sort: z.enum(['new', 'popular', 'trending', 'featured', 'forYou']).optional(),
+  /** Cursor-less For You pull-to-refresh: skip the 15s page-1 cache and apply refresh jitter. */
+  refresh: queryBoolean().optional(),
   collapseByRoot: queryBoolean().optional(),
   collapseMode: z.enum(['root', 'parent']).optional(),
   prefer: z.enum(['reply', 'root']).optional(),
@@ -401,10 +403,12 @@ export class PostsController {
     // Authed For You page 1 is cached as a composed payload (15s) with a stampede lock.
     // lastSeenAt refreshes bump a per-user For You version so the next refresh re-ranks.
     const anonCache = viewerUserId == null && !isForYou;
+    const wantsForYouRefresh = isForYou && Boolean(parsed.refresh) && !cursor;
     const authForYouFirstPageCache =
       isForYou
       && Boolean(viewerUserId)
       && !cursor
+      && !wantsForYouRefresh
       && !authorUserIds.length
       && !effectiveKind
       && !checkinDayKey
@@ -483,6 +487,7 @@ export class PostsController {
                 topLevelOnly: parsed.topLevelOnly ?? false,
                 authorUserIds: authorUserIds.length ? authorUserIds : null,
                 authorLocationState: parsed.authorLocationState ?? null,
+                refresh: wantsForYouRefresh,
               })
             : sortKind === 'featured' && !mediaChronological
               ? await this.posts.listFeaturedFeed({
@@ -1011,9 +1016,10 @@ export class PostsController {
     const repostedByPostId = viewerUserId
       ? await this.posts.viewerRepostedPostIds({ viewerUserId, postIds })
       : new Set<string>();
-    const viewedByPostId = viewerUserId
-      ? await this.posts.viewerViewedPostIds({ viewerUserId, postIds })
-      : new Set<string>();
+    const lastSeenAtByPostId = viewerUserId
+      ? await this.posts.viewerLastSeenAtByPostId({ viewerUserId, postIds })
+      : new Map<string, Date>();
+    const viewedByPostId = new Set(lastSeenAtByPostId.keys());
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(postIds) : null;
     const scoreByPostIdGet =
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(postIds) : undefined;
@@ -1054,6 +1060,7 @@ export class PostsController {
         viewerVotedPollOptionId: votedPollOptionIdByPostId.get(p.id) ?? null,
         viewerHasReposted: repostedByPostId.has(p.id),
         viewerHasViewed: viewedByPostId.has(p.id),
+        viewerLastSeenAt: lastSeenAtByPostId.get(p.id)?.toISOString(),
         viewerCreatorSkipped: viewerCreatorSkipped || undefined,
         internalOverride:
           base || (typeof score === 'number' ? { score } : undefined)

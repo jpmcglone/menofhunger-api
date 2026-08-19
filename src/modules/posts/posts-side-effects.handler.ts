@@ -653,14 +653,21 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       const followerNotificationIds: string[] = [];
       if (!postCommunityGroupId && visibility !== 'onlyMe') {
         try {
-          const follows = await this.prisma.follow.findMany({
-            where: { followingId: userId },
-            select: {
-              followerId: true,
-              postNotificationsEnabled: true,
-              follower: { select: { verifiedStatus: true, premium: true, premiumPlus: true } },
-            },
-          });
+          const [follows, operators] = await Promise.all([
+            this.prisma.follow.findMany({
+              where: { followingId: userId },
+              select: {
+                followerId: true,
+                postNotificationsEnabled: true,
+                follower: { select: { verifiedStatus: true, premium: true, premiumPlus: true } },
+              },
+            }),
+            this.prisma.userPageOperator.findMany({
+              where: { pageUserId: userId },
+              select: { operatorUserId: true },
+            }),
+          ]);
+          const operatorIds = new Set(operators.map((row) => row.operatorUserId));
 
           for (const f of follows) {
             const recipientUserId = f.followerId;
@@ -682,7 +689,10 @@ export class PostsSideEffectsHandler implements OnModuleInit {
             // Status posts skip the followed_post notification — followers receive a
             // status_update notification instead (fired by the presence domain event).
             // Checkin posts use the checkin_post kind so followers can filter them separately.
-            if (post.kind !== 'status') followerNotificationIds.push(recipientUserId);
+            // Operators of this page already posted; they still get the home-feed emit.
+            if (post.kind !== 'status' && !operatorIds.has(recipientUserId)) {
+              followerNotificationIds.push(recipientUserId);
+            }
 
             if (!parentId) feedFollowerIds.push(recipientUserId);
           }

@@ -53,6 +53,10 @@ function makeService(overrides?: { prisma?: any }) {
     post: { findMany: jest.fn(async () => []), findUnique: jest.fn() },
     user: { findMany: jest.fn(async () => []), findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 0 })) },
     follow: { findMany: jest.fn(async () => []) },
+    userPageOperator: {
+      findMany: jest.fn(async () => []),
+      findUnique: jest.fn(async () => null),
+    },
     userBlock: { findMany: jest.fn(async () => []) },
     boost: { findMany: jest.fn(async () => []) },
     bookmark: { findMany: jest.fn(async () => []) },

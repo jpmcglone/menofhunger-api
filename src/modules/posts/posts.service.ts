@@ -68,6 +68,10 @@ export class PostsService {
     return this.enrichment.viewerViewedPostIds(...args);
   }
 
+  viewerLastSeenAtByPostId(...args: Parameters<PostsViewerEnrichmentService['viewerLastSeenAtByPostId']>) {
+    return this.enrichment.viewerLastSeenAtByPostId(...args);
+  }
+
   viewerBookmarksByPostId(...args: Parameters<PostsViewerEnrichmentService['viewerBookmarksByPostId']>) {
     return this.enrichment.viewerBookmarksByPostId(...args);
   }
