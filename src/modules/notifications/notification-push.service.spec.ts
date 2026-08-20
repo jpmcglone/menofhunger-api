@@ -348,6 +348,46 @@ describe('NotificationPushService — per-channel suppression', () => {
     expect(payload.recipientUserId).toBe('page-1');
   });
 
+  it('does not push daily content to operated page accounts', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ accountKind: 'page', username: 'menofhunger' });
+    prisma.userPageOperator.findMany.mockResolvedValue([{ operatorUserId: 'john' }]);
+    const { svc, apnsSendToUser } = makeService({ prisma });
+    await svc.sendWebPushToRecipient('page-1', {
+      title: 'Good morning!',
+      tag: 'notif-word_of_the_day-page-1',
+      kind: 'word_of_the_day',
+    });
+    expect(apnsSendToUser).not.toHaveBeenCalled();
+    expect(webpush.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it('does not push a page alert to the operator who performed the action', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ accountKind: 'page', username: 'menofhunger' });
+    prisma.userPageOperator.findMany.mockResolvedValue([
+      { operatorUserId: 'john' },
+      { operatorUserId: 'steve' },
+    ]);
+    const { svc, apnsSendToUser } = makeService({ prisma });
+    await svc.sendWebPushToRecipient('page-1', {
+      title: 'Posted',
+      tag: 'notif-followed_post-post-p1',
+      kind: 'followed_post',
+      actorUserId: 'john',
+    });
+    expect(apnsSendToUser).toHaveBeenCalledTimes(1);
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'steve',
+      expect.objectContaining({
+        title: '@menofhunger · Posted',
+        recipientUserId: 'page-1',
+      }),
+    );
+    expect(apnsSendToUser).not.toHaveBeenCalledWith('john', expect.anything());
+    expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
+  });
+
   it('sends to both channels when user is not active on either', async () => {
     const { svc, apnsSendToUser, prisma } = makeService({
       presence: makePresence({ iosActive: false, webActive: false }),

@@ -82,6 +82,11 @@ describe('fanOutDailyContentNotifications – deduplication', () => {
 
     await service.fanOutDailyContentNotifications({ item: 'word', dayKey: '2026-08-03' });
 
+    expect(prisma.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ accountKind: 'person', bannedAt: null }),
+      }),
+    );
     expect(prisma.notification.deleteMany).toHaveBeenCalledWith({
       where: { kind: 'word_of_the_day', recipientUserId: { in: ['u1', 'u2'] } },
     });

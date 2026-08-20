@@ -59,6 +59,11 @@ function withActionColon(value: string): string {
  * System / non-actor pushes. Their `fallbackTitle` IS the alert title — never reuse it
  * as subtitle (that produces "Good morning" / "Good morning" on lock screen).
  */
+const DAILY_CONTENT_PUSH_KINDS = new Set<NotificationKind>([
+  'word_of_the_day',
+  'quote_of_the_day',
+]);
+
 const SYSTEM_PUSH_KINDS = new Set<NotificationKind>([
   'word_of_the_day',
   'quote_of_the_day',
@@ -708,6 +713,8 @@ export class NotificationPushService {
       /** @deprecated Use suppressActiveWebChannel instead. Kept for call-site compat; maps to suppressActiveWebChannel. */
       suppressActiveChannels?: boolean;
       suppressActiveWebChannel?: boolean;
+      /** When the recipient is a page, skip this actor if they operate it. */
+      actorUserId?: string | null;
     },
   ): Promise<void> {
     if (!this.pushChannelConfigured()) return;
@@ -752,7 +759,18 @@ export class NotificationPushService {
       where: { id: recipientUserId },
       select: { accountKind: true, username: true },
     });
-    const tokenOwners = await this.tokenOwnersForRecipient(recipientUserId, recipient?.accountKind);
+    if (recipient?.accountKind === 'page' && DAILY_CONTENT_PUSH_KINDS.has(kind as NotificationKind)) {
+      this.logger.debug(`[push] Skipping ${kind} for page ${recipientUserId}`);
+      return;
+    }
+    const actorUserId = (params.actorUserId ?? '').trim();
+    const tokenOwners = (
+      await this.tokenOwnersForRecipient(recipientUserId, recipient?.accountKind)
+    ).filter((ownerId) => !actorUserId || ownerId !== actorUserId);
+    if (tokenOwners.length === 0) {
+      this.logger.debug(`[push] No token owners for ${kind} after excluding actor`);
+      return;
+    }
     const recipientUsername = (recipient?.username ?? '').trim() || null;
 
     const titleForOwner = (tokenOwnerId: string) => {
@@ -1126,6 +1144,7 @@ export class NotificationPushService {
         avatarUrl: icon,
         actorUsername: senderUser?.username ?? null,
         actorName: senderUser?.name ?? null,
+        actorUserId: params.senderUserId,
       });
     } catch (err) {
       this.logger.warn(`[push] Failed to send DM web push: ${err instanceof Error ? err.message : String(err)}`);
@@ -1346,6 +1365,7 @@ export class NotificationPushService {
         renotify: true,
         kind,
         suppressActiveWebChannel: true,
+        actorUserId,
         ...(params.sourceLabel ? { sourceLabel: params.sourceLabel } : {}),
       }).catch((err) => {
         this.logger.warn(`[push] Failed to send web push (${kind}): ${err instanceof Error ? err.message : String(err)}`);

@@ -1596,7 +1596,8 @@ export class NotificationWriterService {
   }
 
   /**
-   * Fan-out word_of_the_day or quote_of_the_day notifications to all non-banned users.
+   * Fan-out word_of_the_day or quote_of_the_day notifications to all non-banned
+   * person accounts. Pages are excluded — operators already get the person's copy.
    * Cursor-paginated in chunks of 500. Persists fanoutCursor after each chunk so a
    * mid-fan-out crash resumes without double-notifying (createMany skipDuplicates).
    * Sets wordNotifiedAt / quoteNotifiedAt when the fan-out completes.
@@ -1660,6 +1661,7 @@ export class NotificationWriterService {
       const users = await this.prisma.user.findMany({
         where: {
           bannedAt: null,
+          accountKind: 'person',
           ...(cursor ? { id: { gt: cursor } } : {}),
         },
         orderBy: { id: 'asc' },

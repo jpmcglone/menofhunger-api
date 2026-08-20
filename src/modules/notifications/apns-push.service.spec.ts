@@ -173,6 +173,25 @@ describe('ApnsPushService', () => {
     expect(first.options.alert).toEqual({ title: 'New reply', body: 'Someone replied' });
     expect(first.options.badge).toBe(3);
     expect(first.options.data).toEqual(expect.objectContaining({ url: '/p/abc', kind: 'comment' }));
+    expect(first.options.sound).toBe('notification.caf');
+  });
+
+  it('uses the message CAF for chat pushes', async () => {
+    const { svc, prisma } = makeService({
+      tokens: [{ id: 't1', token: 'tok-1', environment: 'production' }],
+    });
+    prisma.user.findUnique.mockResolvedValue({
+      accountKind: 'person',
+      undeliveredNotificationCount: 0,
+      undeliveredGroupPostCount: 0,
+    });
+    await svc.sendToUser('user-1', {
+      title: 'New message from Alice',
+      body: 'Hey',
+      url: '/chat?c=c1',
+      kind: 'message',
+    });
+    expect(sendMock.mock.calls[0][0].options.sound).toBe('new-message.caf');
   });
 
   it('computeAppIconBadge sums the person plus operated pages', async () => {
