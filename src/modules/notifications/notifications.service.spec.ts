@@ -538,6 +538,81 @@ describe('NotificationsService.list batching', () => {
     expect(res.items[2].notification.post?.id).toBe('p_mention');
   });
 
+  it('collapses two post-shaped notifications for the same causing post into one row', async () => {
+    const actor = {
+      id: 'a1',
+      username: 'actor',
+      name: 'Actor',
+      avatarKey: null,
+      avatarUpdatedAt: null,
+      premium: false,
+      isOrganization: false,
+      verifiedStatus: 'none',
+    };
+    const { svc } = makeService({
+      prisma: {
+        notification: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => [
+            {
+              id: 'n_comment',
+              createdAt: new Date('2026-02-03T00:00:00.000Z'),
+              kind: 'comment',
+              deliveredAt: null,
+              readAt: null,
+              ignoredAt: null,
+              nudgedBackAt: null,
+              actorUserId: 'a1',
+              actorPostId: 'p_reply',
+              subjectPostId: 'p_root',
+              subjectUserId: null,
+              title: null,
+              body: 'reply',
+              actor,
+            },
+            {
+              id: 'n_followed',
+              createdAt: new Date('2026-02-03T00:00:00.000Z'),
+              kind: 'followed_post',
+              deliveredAt: null,
+              readAt: null,
+              ignoredAt: null,
+              nudgedBackAt: null,
+              actorUserId: 'a1',
+              actorPostId: 'p_reply',
+              subjectPostId: 'p_reply',
+              subjectUserId: null,
+              title: null,
+              body: 'reply',
+              actor,
+            },
+          ]),
+          count: jest.fn(async () => 2),
+          groupBy: jest.fn(async () => []),
+        },
+        post: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => [
+            makePost('p_reply', { body: 'Actual reply row.', parentId: 'p_root' }),
+            makePost('p_root', { body: 'Original post.' }),
+          ]),
+        },
+        user: {
+          findUnique: jest.fn(async () => ({ undeliveredNotificationCount: 2 })),
+          findMany: jest.fn(async () => []),
+        },
+        follow: { findMany: jest.fn(async () => [{ followingId: 'a1' }]) },
+      } as any,
+    });
+
+    const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null });
+
+    expect(res.items).toHaveLength(1);
+    expect(res.items[0]?.type).toBe('single');
+    if (res.items[0]?.type !== 'single') throw new Error('Expected single notification item');
+    expect(res.items[0].notification.post?.id).toBe('p_reply');
+  });
+
   it('shows followed_post notifications as standalone single items regardless of bell setting', async () => {
     const { svc } = makeService({
       prisma: {
@@ -773,6 +848,7 @@ describe('NotificationWriterService bell-counter eligibility', () => {
       notification: {
         create: jest.fn(async () => ({ id: 'message-notification' })),
         count: jest.fn(async () => 7),
+        findFirst: jest.fn(async () => null),
       },
       user: { update: userUpdate },
     };

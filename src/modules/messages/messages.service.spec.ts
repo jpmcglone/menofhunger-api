@@ -1,4 +1,4 @@
-import { MessagesService } from './messages.service';
+import { MessagesService, messageMediaCreateData } from './messages.service';
 import { MessagesController } from './messages.controller';
 import { VerifiedGuard } from '../auth/verified.guard';
 
@@ -466,6 +466,36 @@ describe('MessagesService.createConversation — admin bypass', () => {
     await expect(
       (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
     ).rejects.toThrow('Cannot message a banned user.');
+  });
+});
+
+describe('messageMediaCreateData', () => {
+  it('maps upload video fields for nested create so send DTOs include media', () => {
+    expect(
+      messageMediaCreateData([
+        {
+          source: 'upload',
+          kind: 'video',
+          r2Key: 'uploads/u1/videos/a.mp4',
+          thumbnailR2Key: 'uploads/u1/thumbnails/a.jpg',
+          width: 1920,
+          height: 1080,
+          durationSeconds: 4,
+          alt: null,
+        },
+      ]),
+    ).toEqual([
+      {
+        source: 'upload',
+        kind: 'video',
+        r2Key: 'uploads/u1/videos/a.mp4',
+        thumbnailR2Key: 'uploads/u1/thumbnails/a.jpg',
+        width: 1920,
+        height: 1080,
+        durationSeconds: 4,
+        alt: null,
+      },
+    ]);
   });
 });
 

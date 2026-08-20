@@ -90,6 +90,36 @@ const MESSAGE_INCLUDE = {
   media: true,
 } satisfies Prisma.MessageInclude;
 
+/**
+ * Nested `createMany` does not populate `include: { media: true }` on the
+ * returned row, so send/socket DTOs shipped empty `media` arrays. `create`
+ * returns the nested rows so clients can render video/image immediately.
+ */
+export function messageMediaCreateData(media: MessageMediaInput[]) {
+  return media.map((m) =>
+    m.source === 'upload'
+      ? {
+          source: m.source,
+          kind: m.kind,
+          r2Key: m.r2Key,
+          thumbnailR2Key: m.thumbnailR2Key ?? null,
+          width: m.width ?? null,
+          height: m.height ?? null,
+          durationSeconds: m.durationSeconds ?? null,
+          alt: m.alt ?? null,
+        }
+      : {
+          source: m.source,
+          kind: 'gif' as PostMediaKind,
+          url: m.url,
+          mp4Url: m.mp4Url ?? null,
+          width: m.width ?? null,
+          height: m.height ?? null,
+          alt: m.alt ?? null,
+        },
+  );
+}
+
 /** Maximum time window (in ms) after sending a message during which it can be edited. */
 const MESSAGE_EDIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
@@ -1233,36 +1263,7 @@ export class MessagesService {
           conversationId: conversation.id,
           senderId: userId,
           body: trimmed,
-          ...(media.length > 0
-            ? {
-                media: {
-                  createMany: {
-                    data: media.map((m) =>
-                      m.source === 'upload'
-                        ? {
-                            source: m.source,
-                            kind: m.kind,
-                            r2Key: m.r2Key,
-                            thumbnailR2Key: m.thumbnailR2Key ?? null,
-                            width: m.width ?? null,
-                            height: m.height ?? null,
-                            durationSeconds: m.durationSeconds ?? null,
-                            alt: m.alt ?? null,
-                          }
-                        : {
-                            source: m.source,
-                            kind: 'gif' as PostMediaKind,
-                            url: m.url,
-                            mp4Url: m.mp4Url ?? null,
-                            width: m.width ?? null,
-                            height: m.height ?? null,
-                            alt: m.alt ?? null,
-                          },
-                    ),
-                  },
-                },
-              }
-            : {}),
+          ...(media.length > 0 ? { media: { create: messageMediaCreateData(media) } } : {}),
         },
         include: MESSAGE_INCLUDE,
       });
@@ -1419,36 +1420,7 @@ export class MessagesService {
           senderId: userId,
           body: trimmed,
           ...(replyToId ? { replyToId } : {}),
-          ...(media.length > 0
-            ? {
-                media: {
-                  createMany: {
-                    data: media.map((m) =>
-                      m.source === 'upload'
-                        ? {
-                            source: m.source,
-                            kind: m.kind,
-                            r2Key: m.r2Key,
-                            thumbnailR2Key: m.thumbnailR2Key ?? null,
-                            width: m.width ?? null,
-                            height: m.height ?? null,
-                            durationSeconds: m.durationSeconds ?? null,
-                            alt: m.alt ?? null,
-                          }
-                        : {
-                            source: m.source,
-                            kind: 'gif' as PostMediaKind,
-                            url: m.url,
-                            mp4Url: m.mp4Url ?? null,
-                            width: m.width ?? null,
-                            height: m.height ?? null,
-                            alt: m.alt ?? null,
-                          },
-                    ),
-                  },
-                },
-              }
-            : {}),
+          ...(media.length > 0 ? { media: { create: messageMediaCreateData(media) } } : {}),
         },
         include: MESSAGE_INCLUDE,
       });

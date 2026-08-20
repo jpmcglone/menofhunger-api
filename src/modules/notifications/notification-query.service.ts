@@ -494,13 +494,29 @@ export class NotificationQueryService {
 
     // When filtering by a specific kind, skip all grouping and return individual items.
     // The user opted in to see this kind explicitly — collapsing defeats the purpose.
+    // Still collapse post-shaped rows that point at the same causing post: a retry or a
+    // comment+followed_post pair must not render as two identical PostRows.
+    const seenPostRowIds = new Set<string>();
+    const pushSingle = (target: NotificationFeedItemDto[], n: NotificationDto): void => {
+      const postId = n.post ? this.notificationPostId(n) : null;
+      if (postId) {
+        if (seenPostRowIds.has(postId)) return;
+        seenPostRowIds.add(postId);
+      }
+      target.push({ type: 'single', notification: n });
+    };
+
     if (kind) {
-      const page = dtos.slice(0, desiredItemLimit);
+      const page: NotificationFeedItemDto[] = [];
+      for (const n of dtos) {
+        pushSingle(page, n);
+        if (page.length >= desiredItemLimit) break;
+      }
       const lastItem = page.at(-1);
-      const hasMore = dtos.length > desiredItemLimit || hasMoreRaw;
+      const hasMore = dtos.length > page.length || hasMoreRaw;
       return {
-        items: page.map((n) => ({ type: 'single' as const, notification: n })),
-        nextCursor: hasMore ? (lastItem?.id ?? null) : null,
+        items: page,
+        nextCursor: hasMore ? (lastItem?.type === 'single' ? lastItem.notification.id : null) : null,
         undeliveredCount,
         unreadByKind,
       };
@@ -514,20 +530,20 @@ export class NotificationQueryService {
       // followed_post / checkin_post notifications always appear as standalone items regardless of bell setting.
       // The bell only controls whether reply notifications from followed users are delivered.
       if (n.kind === 'followed_post' || n.kind === 'checkin_post') {
-        items.push({ type: 'single', notification: n });
+        pushSingle(items, n);
         i += 1;
         continue;
       }
 
       if (n.post && (n.kind === 'comment' || n.kind === 'mention' || n.kind === 'repost')) {
-        items.push({ type: 'single', notification: n });
+        pushSingle(items, n);
         i += 1;
         continue;
       }
 
       const key = groupKey(n);
       if (!key) {
-        items.push({ type: 'single', notification: n });
+        pushSingle(items, n);
         i += 1;
         continue;
       }
@@ -540,7 +556,7 @@ export class NotificationQueryService {
       }
 
       if (members.length === 1) {
-        items.push({ type: 'single', notification: n });
+        pushSingle(items, n);
         i += 1;
         continue;
       }

@@ -1382,7 +1382,7 @@ export class PostsMutationService {
       actorUserId: userId,
       didAwardStreak,
       requestedMarvMode,
-    });
+    }, { jobId: `post-created-${post.id}` });
 
     // Commenting on a post implies the commenter saw the parent post.
     if (parentId) {

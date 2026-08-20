@@ -301,7 +301,8 @@ export class PostsSideEffectsHandler implements OnModuleInit {
   private async loadBodyMentionIds(body: string): Promise<string[]> {
     const usernames = parseMentionsFromBody(body);
     if (usernames.length === 0) return [];
-    return await resolveMentionUsernames(this.prisma, usernames);
+    const ids = await resolveMentionUsernames(this.prisma, usernames);
+    return [...new Set(ids)];
   }
 
   private async loadQuotedInfo(

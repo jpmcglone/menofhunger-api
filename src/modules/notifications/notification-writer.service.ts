@@ -20,6 +20,14 @@ const ACTOR_SELF_ECHO_KINDS = new Set<NotificationKind>([
   'status_update',
 ]);
 
+/**
+ * Post-shaped kinds that all render as the same PostRow for a given causing post.
+ * At most one of these should exist per (recipient, causing post) — a retry or a
+ * comment+followed_post skip hole must not double-buzz the same reply.
+ */
+const POST_CAUSED_KINDS: NotificationKind[] = ['comment', 'mention', 'followed_post', 'checkin_post'];
+const POST_CAUSED_KIND_SET = new Set<NotificationKind>(POST_CAUSED_KINDS);
+
 export type CreateNotificationParams = {
   recipientUserId: string;
   kind: NotificationKind;
@@ -84,6 +92,38 @@ export class NotificationWriterService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * The post this row would render as a PostRow. Comment/mention key off actorPostId
+   * (the reply); followed/check-in key off actorPostId or subjectPostId (the new post).
+   */
+  private causingPostIdForCreate(
+    kind: NotificationKind,
+    actorPostId?: string | null,
+    subjectPostId?: string | null,
+  ): string | null {
+    if (!POST_CAUSED_KIND_SET.has(kind)) return null;
+    if (kind === 'comment' || kind === 'mention') {
+      return (actorPostId ?? '').trim() || null;
+    }
+    return (actorPostId ?? subjectPostId ?? '').trim() || null;
+  }
+
+  private postCausedExistingWhere(
+    recipientUserId: string,
+    causingPostId: string,
+  ): Prisma.NotificationWhereInput {
+    return {
+      recipientUserId,
+      OR: [
+        { kind: { in: ['comment', 'mention'] }, actorPostId: causingPostId },
+        {
+          kind: { in: ['followed_post', 'checkin_post'] },
+          OR: [{ actorPostId: causingPostId }, { subjectPostId: causingPostId }],
+        },
+      ],
+    };
   }
 
   /** True if recipient already has a follow notification from actor within the last withinMs. Use to avoid spam when someone unfollows then follows again. */
@@ -185,8 +225,19 @@ export class NotificationWriterService {
 
     // Resolve presence before the transaction so the Redis call doesn't extend it.
     const presentAt = await this.presentAtForRecipient(recipientUserId);
+    const causingPostId = this.causingPostIdForCreate(kind, actorPostId, subjectPostId);
 
-    const { notification, undeliveredCount } = await this.prisma.$transaction(async (tx) => {
+    const { notification, undeliveredCount, skipped } = await this.prisma.$transaction(async (tx) => {
+      if (causingPostId) {
+        const existing = await tx.notification.findFirst({
+          where: this.postCausedExistingWhere(recipientUserId, causingPostId),
+          select: { id: true },
+        });
+        if (existing) {
+          return { notification: existing, undeliveredCount: 0, skipped: true as const };
+        }
+      }
+
       const notification = await tx.notification.create({
         data: {
           recipientUserId,
@@ -219,8 +270,10 @@ export class NotificationWriterService {
       const undeliveredCount = await tx.notification.count({
         where: this.readState.undeliveredBellWhere(recipientUserId),
       });
-      return { notification, undeliveredCount };
+      return { notification, undeliveredCount, skipped: false as const };
     });
+
+    if (skipped) return;
 
     this.emitBellAndInvalidateList(recipientUserId, {
       undeliveredCount,
