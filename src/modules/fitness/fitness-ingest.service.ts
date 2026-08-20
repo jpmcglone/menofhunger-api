@@ -22,11 +22,22 @@ export type NormalizedActivity = {
   totalElevationM: number | null;
 };
 
-function buildDedupeKey(a: NormalizedActivity): string {
+export function buildDedupeKey(a: NormalizedActivity): string {
   const startBucket = Math.floor(a.startedAt.getTime() / (DEDUP_TIME_TOLERANCE_SEC * 1000));
   const durationBucket = Math.floor(a.durationSec / DEDUP_DURATION_TOLERANCE_SEC);
   const distanceBucket = a.distanceM ? Math.floor(a.distanceM / DEDUP_DISTANCE_TOLERANCE_M) : 'x';
   return `${a.activityType}:${startBucket}:${durationBucket}:${distanceBucket}`;
+}
+
+/**
+ * Same provider + external id is a refresh of one workout, not a cross-source duplicate.
+ * Re-syncing used to mark that row as deduped from itself, which hid it from the fitness page.
+ */
+export function isSameActivity(
+  existing: { provider: FitnessProvider; externalId: string },
+  incoming: { provider: FitnessProvider; externalId: string },
+): boolean {
+  return existing.provider === incoming.provider && existing.externalId === incoming.externalId;
 }
 
 /**
@@ -38,95 +49,154 @@ const PROVIDER_PRIORITY: Record<FitnessProvider, number> = {
   apple_health: 5,
 };
 
+function activityPatch(act: NormalizedActivity) {
+  return {
+    durationSec: act.durationSec,
+    distanceM: act.distanceM,
+    effortScore: act.effortScore,
+    stepsCount: act.stepsCount,
+    calories: act.calories,
+    avgHeartrate: act.avgHeartrate,
+    maxHeartrate: act.maxHeartrate,
+    totalElevationM: act.totalElevationM,
+  };
+}
+
 @Injectable()
 export class FitnessIngestService {
   private readonly logger = new Logger(FitnessIngestService.name);
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async upsertActivities(userId: string, activities: NormalizedActivity[]): Promise<{ inserted: number; deduped: number }> {
+  /**
+   * Rows that lost a dedup to *themselves* (same external id) are invisible on the
+   * fitness page (`dedupedFromId: null`). Restore them and return their start dates
+   * so daily summaries can be rebuilt.
+   */
+  async healSelfHiddenActivities(userId: string): Promise<Date[]> {
+    const hidden = await this.prisma.fitnessActivity.findMany({
+      where: { userId, NOT: { dedupedFromId: null } },
+      select: { id: true, startedAt: true, externalId: true, dedupedFromId: true },
+    });
+    const selfHidden = hidden.filter((row) => row.dedupedFromId === row.externalId);
+    if (selfHidden.length === 0) return [];
+    await this.prisma.fitnessActivity.updateMany({
+      where: { id: { in: selfHidden.map((row) => row.id) } },
+      data: { dedupedFromId: null, dedupedFromProvider: null },
+    });
+    this.logger.warn(
+      `Restored ${selfHidden.length} self-hidden fitness activit${selfHidden.length === 1 ? 'y' : 'ies'} for ${userId}`,
+    );
+    return selfHidden.map((row) => row.startedAt);
+  }
+
+  async upsertActivities(
+    userId: string,
+    activities: NormalizedActivity[],
+  ): Promise<{ inserted: number; deduped: number }> {
+    const healedDates = await this.healSelfHiddenActivities(userId);
     let inserted = 0;
     let deduped = 0;
 
     for (const act of activities) {
-      const dedupeKey = buildDedupeKey(act);
-
-      const existing = await this.prisma.fitnessActivity.findFirst({
-        where: { userId, dedupeKey, dedupedFromId: null },
-        select: { id: true, provider: true, externalId: true },
-      });
-
-      if (existing) {
-        const existingPriority = PROVIDER_PRIORITY[existing.provider] ?? 0;
-        const incomingPriority = PROVIDER_PRIORITY[act.provider] ?? 0;
-
-        if (incomingPriority > existingPriority) {
-          // Incoming wins: mark the existing as deduped, upsert incoming as canonical.
-          await this.prisma.fitnessActivity.update({
-            where: { id: existing.id },
-            data: {
-              dedupedFromId: act.externalId,
-              dedupedFromProvider: act.provider,
-            },
-          });
-          await this.prisma.fitnessActivity.upsert({
-            where: { userId_provider_externalId: { userId, provider: act.provider, externalId: act.externalId } },
-            create: { userId, dedupeKey, ...act, startedAt: act.startedAt },
-            update: {
-              durationSec: act.durationSec,
-              distanceM: act.distanceM,
-              effortScore: act.effortScore,
-              stepsCount: act.stepsCount,
-              calories: act.calories,
-              avgHeartrate: act.avgHeartrate,
-              maxHeartrate: act.maxHeartrate,
-              totalElevationM: act.totalElevationM,
-            },
-          });
-          inserted++;
-        } else {
-          // Existing wins: mark incoming as deduped.
-          await this.prisma.fitnessActivity.upsert({
-            where: { userId_provider_externalId: { userId, provider: act.provider, externalId: act.externalId } },
-            create: {
-              userId,
-              dedupeKey,
-              ...act,
-              startedAt: act.startedAt,
-              dedupedFromId: existing.externalId,
-              dedupedFromProvider: existing.provider,
-            },
-            update: {
-              dedupedFromId: existing.externalId,
-              dedupedFromProvider: existing.provider,
-            },
-          });
-          deduped++;
-        }
-      } else {
-        await this.prisma.fitnessActivity.upsert({
-          where: { userId_provider_externalId: { userId, provider: act.provider, externalId: act.externalId } },
-          create: { userId, dedupeKey, ...act, startedAt: act.startedAt },
-          update: {
-            durationSec: act.durationSec,
-            distanceM: act.distanceM,
-            effortScore: act.effortScore,
-            stepsCount: act.stepsCount,
-            calories: act.calories,
-            avgHeartrate: act.avgHeartrate,
-            maxHeartrate: act.maxHeartrate,
-            totalElevationM: act.totalElevationM,
-          },
-        });
-        inserted++;
-      }
+      const result = await this.upsertOne(userId, act);
+      if (result === 'deduped') deduped++;
+      else inserted++;
     }
 
-    if (activities.length > 0) {
-      await this.rebuildDailySummaries(userId, activities.map((a) => a.startedAt));
+    const dates = [...healedDates, ...activities.map((a) => a.startedAt)];
+    if (dates.length > 0) {
+      await this.rebuildDailySummaries(userId, dates);
     }
 
     return { inserted, deduped };
+  }
+
+  private async upsertOne(
+    userId: string,
+    act: NormalizedActivity,
+  ): Promise<'inserted' | 'deduped'> {
+    const dedupeKey = buildDedupeKey(act);
+    const existing = await this.prisma.fitnessActivity.findFirst({
+      where: { userId, dedupeKey, dedupedFromId: null },
+      select: { id: true, provider: true, externalId: true },
+    });
+
+    if (existing && isSameActivity(existing, act)) {
+      await this.prisma.fitnessActivity.update({
+        where: { id: existing.id },
+        data: { dedupeKey, ...activityPatch(act) },
+      });
+      return 'inserted';
+    }
+
+    if (existing) {
+      const existingPriority = PROVIDER_PRIORITY[existing.provider] ?? 0;
+      const incomingPriority = PROVIDER_PRIORITY[act.provider] ?? 0;
+      if (incomingPriority > existingPriority) {
+        await this.prisma.fitnessActivity.update({
+          where: { id: existing.id },
+          data: {
+            dedupedFromId: act.externalId,
+            dedupedFromProvider: act.provider,
+          },
+        });
+        await this.prisma.fitnessActivity.upsert({
+          where: {
+            userId_provider_externalId: {
+              userId,
+              provider: act.provider,
+              externalId: act.externalId,
+            },
+          },
+          create: { userId, dedupeKey, ...act, startedAt: act.startedAt },
+          update: { dedupeKey, ...activityPatch(act), dedupedFromId: null, dedupedFromProvider: null },
+        });
+        return 'inserted';
+      }
+
+      await this.prisma.fitnessActivity.upsert({
+        where: {
+          userId_provider_externalId: {
+            userId,
+            provider: act.provider,
+            externalId: act.externalId,
+          },
+        },
+        create: {
+          userId,
+          dedupeKey,
+          ...act,
+          startedAt: act.startedAt,
+          dedupedFromId: existing.externalId,
+          dedupedFromProvider: existing.provider,
+        },
+        update: {
+          dedupedFromId: existing.externalId,
+          dedupedFromProvider: existing.provider,
+        },
+      });
+      return 'deduped';
+    }
+
+    await this.prisma.fitnessActivity.upsert({
+      where: {
+        userId_provider_externalId: {
+          userId,
+          provider: act.provider,
+          externalId: act.externalId,
+        },
+      },
+      create: { userId, dedupeKey, ...act, startedAt: act.startedAt },
+      update: {
+        dedupeKey,
+        ...activityPatch(act),
+        // No other canonical row for this fingerprint — unhide a previously self-hidden copy.
+        dedupedFromId: null,
+        dedupedFromProvider: null,
+      },
+    });
+    return 'inserted';
   }
 
   async upsertBodyMetric(params: {

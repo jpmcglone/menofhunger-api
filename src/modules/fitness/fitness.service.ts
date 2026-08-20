@@ -19,6 +19,8 @@ import type {
 import { toPostDto } from '../posts/post.dto';
 
 const MANUAL_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
+/** Re-fetch recent Strava activities so a late upload after lastSyncAt is not skipped. */
+const STRAVA_INCREMENTAL_LOOKBACK_SEC = 48 * 60 * 60;
 const RECENT_ACTIVITIES_LIMIT = 20;
 const WEIGHT_HISTORY_LIMIT = 60;
 
@@ -108,6 +110,11 @@ export class FitnessService {
   // ─── Page ────────────────────────────────────────────────────────────────────
 
   async getPage(userId: string): Promise<FitnessPageDto> {
+    const healedDates = await this.ingest.healSelfHiddenActivities(userId);
+    if (healedDates.length > 0) {
+      await this.ingest.rebuildDailySummaries(userId, healedDates);
+    }
+
     const [user, connections, recentActivities, weekSummaries, weightRows, vo2maxRows, activeGoalRow] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: userId }, select: { premium: true, premiumPlus: true, fitnessUnits: true, featureToggles: true } }),
       this.prisma.fitnessConnection.findMany({ where: { userId }, select: { provider: true, status: true, lastSyncAt: true, lastManualSyncAt: true, providerUserId: true } }),
@@ -321,7 +328,9 @@ export class FitnessService {
       select: { lastSyncAt: true },
     });
 
-    const afterTs = conn?.lastSyncAt ? Math.floor(conn.lastSyncAt.getTime() / 1000) : undefined;
+    const afterTs = conn?.lastSyncAt
+      ? Math.max(0, Math.floor(conn.lastSyncAt.getTime() / 1000) - STRAVA_INCREMENTAL_LOOKBACK_SEC)
+      : undefined;
     const rawActivities = await this.strava.fetchActivities(accessToken, afterTs);
     const normalized = rawActivities.map((a) => this.strava.normalizeActivity(a));
     const result = await this.ingest.upsertActivities(userId, normalized);
