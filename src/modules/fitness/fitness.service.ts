@@ -17,12 +17,14 @@ import type {
   FitnessWeekSummaryDto,
 } from '../../common/dto/fitness.dto';
 import { toPostDto } from '../posts/post.dto';
+import { vo2maxShareSnapshot } from './fitness-share-snapshot';
 
 const MANUAL_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 /** Re-fetch recent Strava activities so a late upload after lastSyncAt is not skipped. */
 const STRAVA_INCREMENTAL_LOOKBACK_SEC = 48 * 60 * 60;
 const RECENT_ACTIVITIES_LIMIT = 20;
 const WEIGHT_HISTORY_LIMIT = 60;
+const VO2MAX_HISTORY_LIMIT = 60;
 
 function toConnectionDto(conn: {
   provider: string;
@@ -134,7 +136,7 @@ export class FitnessService {
       this.prisma.fitnessBodyMetric.findMany({
         where: { userId, kind: 'vo2max' },
         orderBy: { measuredAt: 'desc' },
-        take: 20,
+        take: VO2MAX_HISTORY_LIMIT,
         select: { id: true, kind: true, weightKg: true, measuredAt: true, source: true },
       }),
       this.prisma.fitnessGoal.findFirst({ where: { userId, kind: 'weight', completedAt: null }, orderBy: { createdAt: 'desc' } }),
@@ -622,14 +624,19 @@ export class FitnessService {
       const metricId = bodyMetricId ?? null;
       let metric;
       if (metricId) {
-        metric = await this.prisma.fitnessBodyMetric.findFirst({ where: { id: metricId, userId } });
+        metric = await this.prisma.fitnessBodyMetric.findFirst({
+          where: { id: metricId, userId, kind: 'weight' },
+        });
       } else {
-        metric = await this.prisma.fitnessBodyMetric.findFirst({ where: { userId }, orderBy: { measuredAt: 'desc' } });
+        metric = await this.prisma.fitnessBodyMetric.findFirst({
+          where: { userId, kind: 'weight' },
+          orderBy: { measuredAt: 'desc' },
+        });
       }
       if (!metric) throw new NotFoundException('No weight data found.');
 
       const previous = await this.prisma.fitnessBodyMetric.findFirst({
-        where: { userId, measuredAt: { lt: metric.measuredAt } },
+        where: { userId, kind: 'weight', measuredAt: { lt: metric.measuredAt } },
         orderBy: { measuredAt: 'desc' },
       });
 
@@ -652,7 +659,10 @@ export class FitnessService {
         : await this.prisma.fitnessGoal.findFirst({ where: { userId, kind: 'weight', completedAt: null }, orderBy: { createdAt: 'desc' } });
       if (!goal) throw new NotFoundException('No active weight goal found.');
 
-      const currentMetric = await this.prisma.fitnessBodyMetric.findFirst({ where: { userId }, orderBy: { measuredAt: 'desc' } });
+      const currentMetric = await this.prisma.fitnessBodyMetric.findFirst({
+        where: { userId, kind: 'weight' },
+        orderBy: { measuredAt: 'desc' },
+      });
 
       return {
         type: 'progress',
@@ -663,6 +673,26 @@ export class FitnessService {
           startedAt: goal.startedAt.toISOString(),
         },
       };
+    }
+
+    if (shareType === 'vo2max') {
+      const metricId = bodyMetricId ?? null;
+      const latest = metricId
+        ? await this.prisma.fitnessBodyMetric.findFirst({
+            where: { id: metricId, userId, kind: 'vo2max' },
+          })
+        : await this.prisma.fitnessBodyMetric.findFirst({
+            where: { userId, kind: 'vo2max' },
+            orderBy: { measuredAt: 'desc' },
+          });
+      if (!latest) throw new NotFoundException('No VO2 max data found.');
+
+      const first = await this.prisma.fitnessBodyMetric.findFirst({
+        where: { userId, kind: 'vo2max' },
+        orderBy: { measuredAt: 'asc' },
+      });
+
+      return vo2maxShareSnapshot({ latest, first });
     }
 
     throw new BadRequestException(`Unknown shareType: ${shareType}`);

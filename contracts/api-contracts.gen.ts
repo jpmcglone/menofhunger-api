@@ -26,7 +26,7 @@ export type FeedbackCategory = 'bug' | 'feature' | 'account' | 'other'
 export type FeedbackStatus = 'new' | 'triaged' | 'resolved'
 export type FitnessActivityType = 'other' | 'run' | 'ride' | 'walk' | 'swim' | 'workout' | 'hike' | 'yoga'
 export type FitnessProvider = 'strava' | 'apple_health'
-export type FitnessShareType = 'activity' | 'weight' | 'progress'
+export type FitnessShareType = 'activity' | 'weight' | 'progress' | 'vo2max'
 export type FitnessUnits = 'us' | 'metric'
 export type FollowVisibility = 'none' | 'all' | 'verified' | 'premium'
 export type HeardAboutUs = 'other' | 'friend' | 'google' | 'x' | 'youtube' | 'nxr' | 'church' | 'podcast' | 'prefer_not'
@@ -1046,10 +1046,21 @@ export type FitnessProgressSnapshotDto = {
   startedAt: string;
 };
 
+export type FitnessVo2MaxSnapshotDto = {
+  vo2maxMlKgMin: number;
+  measuredAt: string;
+  /** Oldest stored reading when there is a prior sample; otherwise null. */
+  startVo2maxMlKgMin: number | null;
+  startedAt: string | null;
+  /** Latest minus start. Null when this is the only reading. */
+  deltaMlKgMin: number | null;
+};
+
 export type FitnessShareSnapshotDto =
   | { type: 'activity'; data: FitnessActivitySnapshotDto }
   | { type: 'weight'; data: FitnessWeightSnapshotDto }
-  | { type: 'progress'; data: FitnessProgressSnapshotDto };
+  | { type: 'progress'; data: FitnessProgressSnapshotDto }
+  | { type: 'vo2max'; data: FitnessVo2MaxSnapshotDto };
 
 export type FitnessSharePreviewDto = {
   id: string;
@@ -1082,7 +1093,7 @@ export type FitnessPageDto = {
   weightHistory: FitnessBodyMetricDto[];
   /** Most recent VO2 max reading, or null if none recorded. */
   latestVo2Max: FitnessBodyMetricDto | null;
-  /** Up to 20 VO2 max entries newest-first, for trend display. */
+  /** Up to 60 VO2 max entries newest-first, for trend display. */
   vo2maxHistory: FitnessBodyMetricDto[];
   activeGoal: FitnessGoalDto | null;
 };
@@ -1626,6 +1637,7 @@ export type PostDto = {
   viewerHasReposted?: boolean;
   /** True if the viewer has viewed this post (exists in PostView table). */
   viewerHasViewed?: boolean;
+  /** Viewer's last dwell on this post (ISO). Used for For You seen-aware thread rollup. */
   viewerLastSeenAt?: string;
   /** Set when a block exists between viewer and author. 'viewer_blocked' = viewer blocked the author; 'viewer_blocked_by' = author blocked the viewer. */
   viewerBlockStatus?: 'viewer_blocked' | 'viewer_blocked_by' | null;

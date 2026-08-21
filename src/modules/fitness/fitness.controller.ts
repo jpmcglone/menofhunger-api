@@ -79,7 +79,7 @@ const updateUnitsSchema = z.object({
 });
 
 const createSharePostSchema = z.object({
-  shareType: z.enum(['activity', 'weight', 'progress']),
+  shareType: z.enum(['activity', 'weight', 'progress', 'vo2max']),
   body: z.string().trim().max(500).default(''),
   visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly', 'onlyMe']).default('verifiedOnly'),
   activityId: z.string().optional(),

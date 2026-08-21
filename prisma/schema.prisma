@@ -63,6 +63,7 @@ enum FitnessShareType {
   activity
   weight
   progress
+  vo2max
 }
 
 enum FollowVisibility {

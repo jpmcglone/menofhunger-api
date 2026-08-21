@@ -95,10 +95,21 @@ export type FitnessProgressSnapshotDto = {
   startedAt: string;
 };
 
+export type FitnessVo2MaxSnapshotDto = {
+  vo2maxMlKgMin: number;
+  measuredAt: string;
+  /** Oldest stored reading when there is a prior sample; otherwise null. */
+  startVo2maxMlKgMin: number | null;
+  startedAt: string | null;
+  /** Latest minus start. Null when this is the only reading. */
+  deltaMlKgMin: number | null;
+};
+
 export type FitnessShareSnapshotDto =
   | { type: 'activity'; data: FitnessActivitySnapshotDto }
   | { type: 'weight'; data: FitnessWeightSnapshotDto }
-  | { type: 'progress'; data: FitnessProgressSnapshotDto };
+  | { type: 'progress'; data: FitnessProgressSnapshotDto }
+  | { type: 'vo2max'; data: FitnessVo2MaxSnapshotDto };
 
 // ─── Share preview (embedded in post DTO) ────────────────────────────────────
 
@@ -135,7 +146,7 @@ export type FitnessPageDto = {
   weightHistory: FitnessBodyMetricDto[];
   /** Most recent VO2 max reading, or null if none recorded. */
   latestVo2Max: FitnessBodyMetricDto | null;
-  /** Up to 20 VO2 max entries newest-first, for trend display. */
+  /** Up to 60 VO2 max entries newest-first, for trend display. */
   vo2maxHistory: FitnessBodyMetricDto[];
   activeGoal: FitnessGoalDto | null;
 };
