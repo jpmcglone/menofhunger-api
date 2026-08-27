@@ -1,5 +1,14 @@
 import type { Response } from 'express';
 
+/** Shared-cache-friendly public Cache-Control. `s-maxage` lets a future CDN HIT independently of browsers. */
+export function publicCacheControl(maxAgeSeconds: number, staleWhileRevalidateSeconds = 0): string {
+  const parts = [`public`, `max-age=${maxAgeSeconds}`, `s-maxage=${maxAgeSeconds}`];
+  if (staleWhileRevalidateSeconds > 0) {
+    parts.push(`stale-while-revalidate=${staleWhileRevalidateSeconds}`);
+  }
+  return parts.join(', ');
+}
+
 export function setReadCache(
   res: Response,
   opts: {
@@ -30,9 +39,7 @@ export function setReadCache(
     ? privateMaxAgeSeconds > 0
       ? `private, max-age=${privateMaxAgeSeconds}`
       : `private, no-store`
-    : publicSWRSeconds > 0
-      ? `public, max-age=${publicMaxAgeSeconds}, stale-while-revalidate=${publicSWRSeconds}`
-      : `public, max-age=${publicMaxAgeSeconds}`;
+    : publicCacheControl(publicMaxAgeSeconds, publicSWRSeconds);
 
   res.setHeader('Cache-Control', cacheControl);
   if (varyCookie) {

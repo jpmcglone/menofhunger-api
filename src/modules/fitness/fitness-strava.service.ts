@@ -2,10 +2,25 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { FitnessActivityType } from '@prisma/client';
+import type { NormalizedActivity } from './fitness-ingest.service';
 
 const STRAVA_BASE = 'https://www.strava.com';
 const STRAVA_API = `${STRAVA_BASE}/api/v3`;
 const STRAVA_AUTH = `${STRAVA_BASE}/oauth`;
+
+const STRAVA_STREAM_KEYS = [
+  'time',
+  'latlng',
+  'distance',
+  'altitude',
+  'velocity_smooth',
+  'heartrate',
+  'cadence',
+  'watts',
+  'temp',
+  'moving',
+  'grade_smooth',
+].join(',');
 
 export type StravaTokens = {
   accessToken: string;
@@ -13,6 +28,8 @@ export type StravaTokens = {
   expiresAt: number;
   athleteId: number;
 };
+
+export type StravaRateLimitError = Error & { status: 429 };
 
 type StravaAthleteActivity = {
   id: number;
@@ -29,6 +46,7 @@ type StravaAthleteActivity = {
   calories?: number | null;
   average_heartrate?: number | null;
   max_heartrate?: number | null;
+  [key: string]: unknown;
 };
 
 const ACTIVITY_TYPE_MAP: Record<string, FitnessActivityType> = {
@@ -59,6 +77,15 @@ function mapActivityType(type: string): FitnessActivityType {
   return ACTIVITY_TYPE_MAP[type] ?? 'other';
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+export function stravaRawIsComplete(raw: unknown): boolean {
+  if (!isRecord(raw)) return false;
+  return isRecord(raw.activity) && raw.streams != null;
+}
+
 @Injectable()
 export class FitnessStravaService {
   private readonly logger = new Logger(FitnessStravaService.name);
@@ -77,7 +104,7 @@ export class FitnessStravaService {
       redirect_uri: redirectUri,
       response_type: 'code',
       approval_prompt: 'auto',
-      scope: 'read,activity:read_all',
+      scope: 'read,activity:read_all,profile:read_all',
       state: userId,
     });
     return `${STRAVA_AUTH}/authorize?${params.toString()}`;
@@ -168,38 +195,113 @@ export class FitnessStravaService {
   }
 
   async fetchActivities(accessToken: string, after?: number): Promise<StravaAthleteActivity[]> {
-    const params = new URLSearchParams({ per_page: '50' });
-    if (after) params.set('after', String(after));
+    const out: StravaAthleteActivity[] = [];
+    for (let page = 1; page <= 50; page += 1) {
+      const params = new URLSearchParams({ per_page: '200', page: String(page) });
+      if (after) params.set('after', String(after));
 
-    const res = await fetch(`${STRAVA_API}/athlete/activities?${params.toString()}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+      const res = await fetch(`${STRAVA_API}/athlete/activities?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
 
-    if (res.status === 401) throw new Error('Strava unauthorized');
-    if (!res.ok) throw new Error(`Strava activities fetch failed: ${res.status}`);
+      if (res.status === 401) throw new Error('Strava unauthorized');
+      if (res.status === 429) throw this.rateLimitError();
+      if (!res.ok) throw new Error(`Strava activities fetch failed: ${res.status}`);
 
-    const activities: StravaAthleteActivity[] = await res.json();
-    return activities.map((a) => ({
-      ...a,
-      _mappedType: mapActivityType(a.sport_type ?? a.type),
-    })) as any;
+      const batch: StravaAthleteActivity[] = await res.json();
+      if (!Array.isArray(batch) || batch.length === 0) break;
+      out.push(...batch);
+      if (batch.length < 200) break;
+    }
+    return out;
   }
 
-  normalizeActivity(a: StravaAthleteActivity & { _mappedType?: FitnessActivityType }) {
+  async fetchActivityDetail(accessToken: string, activityId: number): Promise<Record<string, unknown>> {
+    const res = await fetch(`${STRAVA_API}/activities/${activityId}?include_all_efforts=true`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (res.status === 429) throw this.rateLimitError();
+    if (!res.ok) throw new Error(`Strava activity ${activityId} failed: ${res.status}`);
+    return (await res.json()) as Record<string, unknown>;
+  }
+
+  async fetchActivityStreams(accessToken: string, activityId: number): Promise<unknown> {
+    const params = new URLSearchParams({
+      keys: STRAVA_STREAM_KEYS,
+      key_by_type: 'true',
+    });
+    const res = await fetch(`${STRAVA_API}/activities/${activityId}/streams?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (res.status === 429) throw this.rateLimitError();
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`Strava streams ${activityId} failed: ${res.status}`);
+    return res.json();
+  }
+
+  async fetchProfileBundle(accessToken: string, athleteId: number): Promise<Record<string, unknown>> {
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    const [athleteRes, statsRes, zonesRes] = await Promise.all([
+      fetch(`${STRAVA_API}/athlete`, { headers }),
+      fetch(`${STRAVA_API}/athletes/${athleteId}/stats`, { headers }),
+      fetch(`${STRAVA_API}/athlete/zones`, { headers }),
+    ]);
+    const athlete = athleteRes.ok ? await athleteRes.json() : null;
+    const stats = statsRes.ok ? await statsRes.json() : null;
+    const zones = zonesRes.ok ? await zonesRes.json() : null;
+    return { athlete, stats, zones, fetchedAt: new Date().toISOString() };
+  }
+
+  async enrichActivityRaw(
+    accessToken: string,
+    listActivity: StravaAthleteActivity,
+    existingRaw: unknown,
+  ): Promise<{ activity: Record<string, unknown>; streams: unknown }> {
+    if (stravaRawIsComplete(existingRaw) && isRecord(existingRaw)) {
+      return {
+        activity: existingRaw.activity as Record<string, unknown>,
+        streams: existingRaw.streams,
+      };
+    }
+    const activity = await this.fetchActivityDetail(accessToken, listActivity.id);
+    const streams = await this.fetchActivityStreams(accessToken, listActivity.id);
+    return { activity, streams };
+  }
+
+  normalizeActivity(
+    a: StravaAthleteActivity,
+    raw?: { activity?: Record<string, unknown>; streams?: unknown },
+  ): NormalizedActivity {
+    const detail = (raw?.activity ?? a) as StravaAthleteActivity;
+    const type = String(detail.sport_type ?? detail.type ?? a.sport_type ?? a.type ?? '');
+    const name = typeof detail.name === 'string' && detail.name.trim() ? detail.name.trim() : null;
     return {
-      provider: 'strava' as const,
+      provider: 'strava',
       externalId: String(a.id),
-      activityType: (a as any)._mappedType ?? mapActivityType(a.sport_type ?? a.type),
-      startedAt: new Date(a.start_date),
+      activityType: mapActivityType(type),
+      startedAt: new Date(String(detail.start_date ?? a.start_date)),
       endedAt: null,
-      durationSec: a.elapsed_time,
-      distanceM: a.distance > 0 ? a.distance : null,
-      effortScore: typeof a.suffer_score === 'number' && a.suffer_score > 0 ? a.suffer_score : null,
+      durationSec: Number(detail.elapsed_time ?? a.elapsed_time) || 0,
+      distanceM: Number(detail.distance ?? a.distance) > 0 ? Number(detail.distance ?? a.distance) : null,
+      effortScore:
+        typeof detail.suffer_score === 'number' && detail.suffer_score > 0 ? detail.suffer_score : null,
       stepsCount: null,
-      calories: typeof a.calories === 'number' && a.calories > 0 ? a.calories : null,
-      avgHeartrate: typeof a.average_heartrate === 'number' && a.average_heartrate > 0 ? a.average_heartrate : null,
-      maxHeartrate: typeof a.max_heartrate === 'number' && a.max_heartrate > 0 ? a.max_heartrate : null,
-      totalElevationM: typeof a.total_elevation_gain === 'number' && a.total_elevation_gain > 0 ? a.total_elevation_gain : null,
+      calories: typeof detail.calories === 'number' && detail.calories > 0 ? detail.calories : null,
+      avgHeartrate:
+        typeof detail.average_heartrate === 'number' && detail.average_heartrate > 0
+          ? detail.average_heartrate
+          : null,
+      maxHeartrate:
+        typeof detail.max_heartrate === 'number' && detail.max_heartrate > 0 ? detail.max_heartrate : null,
+      totalElevationM:
+        typeof detail.total_elevation_gain === 'number' && detail.total_elevation_gain > 0
+          ? detail.total_elevation_gain
+          : null,
+      name,
+      rawJson: {
+        activity: raw?.activity ?? a,
+        streams: raw?.streams ?? null,
+      },
     };
   }
 
@@ -217,5 +319,11 @@ export class FitnessStravaService {
     } catch {
       // Best-effort — token may already be invalid.
     }
+  }
+
+  private rateLimitError(): StravaRateLimitError {
+    const err = new Error('Strava rate limited') as StravaRateLimitError;
+    err.status = 429;
+    return err;
   }
 }

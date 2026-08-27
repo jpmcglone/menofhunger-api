@@ -50,6 +50,7 @@ const listSchema = z.object({
   followingOnly: queryBoolean().optional(),
   includeRestricted: queryBoolean().optional(),
   tag: z.string().trim().max(60).optional(),
+  includeBody: queryBoolean().optional(),
 });
 
 const draftsListSchema = z.object({
@@ -116,8 +117,15 @@ export class ArticlesController {
   @Throttle(readThrottle)
   @Get('trending')
   async trending(@OptionalCurrentUserId() userId: string | undefined, @Query() query: unknown) {
-    const parsed = z.object({ limit: z.coerce.number().int().min(1).max(20).optional() }).parse(query);
-    const result = await this.articles.listTrending({ viewerUserId: userId, limit: parsed.limit });
+    const parsed = z.object({
+      limit: z.coerce.number().int().min(1).max(20).optional(),
+      includeBody: queryBoolean().optional(),
+    }).parse(query);
+    const result = await this.articles.listTrending({
+      viewerUserId: userId,
+      limit: parsed.limit,
+      includeBody: parsed.includeBody ?? false,
+    });
     return { data: result };
   }
 
@@ -139,6 +147,7 @@ export class ArticlesController {
       followingOnly: parsed.followingOnly,
       includeRestricted: parsed.includeRestricted,
       tag: parsed.tag,
+      includeBody: parsed.includeBody ?? false,
     });
     return { data: result.articles, pagination: { nextCursor: result.nextCursor } };
   }

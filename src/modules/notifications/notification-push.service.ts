@@ -56,14 +56,21 @@ function withActionColon(value: string): string {
 }
 
 /**
+ * Person-accountability pushes. Pages inherit operator premium and would otherwise
+ * get "have you checked in?" / word / quote on the operator's phone. Operators
+ * already receive those on the person account.
+ */
+const PERSON_ONLY_PUSH_KINDS = new Set<NotificationKind>([
+  'word_of_the_day',
+  'quote_of_the_day',
+  'checkin_reminder',
+  'on_this_day',
+]);
+
+/**
  * System / non-actor pushes. Their `fallbackTitle` IS the alert title — never reuse it
  * as subtitle (that produces "Good morning" / "Good morning" on lock screen).
  */
-const DAILY_CONTENT_PUSH_KINDS = new Set<NotificationKind>([
-  'word_of_the_day',
-  'quote_of_the_day',
-]);
-
 const SYSTEM_PUSH_KINDS = new Set<NotificationKind>([
   'word_of_the_day',
   'quote_of_the_day',
@@ -759,7 +766,7 @@ export class NotificationPushService {
       where: { id: recipientUserId },
       select: { accountKind: true, username: true },
     });
-    if (recipient?.accountKind === 'page' && DAILY_CONTENT_PUSH_KINDS.has(kind as NotificationKind)) {
+    if (recipient?.accountKind === 'page' && PERSON_ONLY_PUSH_KINDS.has(kind as NotificationKind)) {
       this.logger.debug(`[push] Skipping ${kind} for page ${recipientUserId}`);
       return;
     }

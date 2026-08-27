@@ -835,9 +835,49 @@ describe('NotificationsService.getUndeliveredCount', () => {
     await expect(svc.getUndeliveredCount('u_recipient')).resolves.toBe(99);
     expect(prisma.user.findUnique).toHaveBeenCalledWith({
       where: { id: 'u_recipient' },
-      select: { undeliveredNotificationCount: true },
+      select: { undeliveredNotificationCount: true, accountKind: true },
     });
     expect(prisma.notification.count).not.toHaveBeenCalled();
+  });
+
+  it('live-counts the page bell excluding check-in and daily-content kinds', async () => {
+    const { svc, prisma } = makeService({
+      prisma: {
+        notification: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => []),
+          count: jest.fn(async () => 2),
+        },
+        post: { findUnique: jest.fn(), findMany: jest.fn(async () => []) },
+        user: {
+          findUnique: jest.fn(async () => ({
+            undeliveredNotificationCount: 99,
+            accountKind: 'page',
+          })),
+          findMany: jest.fn(async () => []),
+        },
+        follow: { findMany: jest.fn(async () => []) },
+        userBlock: { findMany: jest.fn(async () => []) },
+      } as any,
+    });
+
+    await expect(svc.getUndeliveredCount('page-1')).resolves.toBe(2);
+    expect(prisma.notification.count).toHaveBeenCalledWith({
+      where: {
+        recipientUserId: 'page-1',
+        deliveredAt: null,
+        kind: {
+          notIn: [
+            'message',
+            'community_group_post',
+            'word_of_the_day',
+            'quote_of_the_day',
+            'checkin_reminder',
+            'on_this_day',
+          ],
+        },
+      },
+    });
   });
 });
 

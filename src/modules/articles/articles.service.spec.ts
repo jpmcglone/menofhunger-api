@@ -447,4 +447,18 @@ describe('ArticlesService.listTrending', () => {
     expect(prisma.article.findMany).toHaveBeenCalledTimes(2);
     expect(prisma.article.findMany.mock.calls[1][0].where.id).toEqual({ notIn: ['a1', 'a2'] });
   });
+
+  it('omits TipTap body by default and keeps it when includeBody is true', async () => {
+    const { service, prisma } = makeService();
+    const row = { ...trendingRow('a1'), body: JSON.stringify({ type: 'doc', content: [] }), excerpt: 'Hello' };
+    prisma.article.findMany.mockResolvedValueOnce([row]);
+
+    const listed = await service.listTrending({ viewerUserId: null, limit: 1 });
+    expect(listed[0]?.body).toBe('{}');
+    expect(listed[0]?.excerpt).toBe('Hello');
+
+    prisma.article.findMany.mockResolvedValueOnce([row]);
+    const full = await service.listTrending({ viewerUserId: null, limit: 1, includeBody: true });
+    expect(full[0]?.body).toBe(row.body);
+  });
 });

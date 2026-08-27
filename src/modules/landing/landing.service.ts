@@ -319,6 +319,7 @@ export class LandingService {
           p."createdAt" DESC
         LIMIT ${TOP_POSTS_SCAN_LIMIT}
       `),
+      // Trending list omits TipTap `body` by default; landing cards render excerpt only.
       this.articles.listTrending({ viewerUserId: null, limit: 3, fillIfShort: true }),
     ]);
 

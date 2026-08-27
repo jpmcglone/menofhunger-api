@@ -2,12 +2,13 @@ import { Injectable, Logger, NotFoundException, BadRequestException } from '@nes
 import type { PostVisibility, FitnessShareType, FitnessActivityType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FitnessStravaService } from './fitness-strava.service';
-import { FitnessIngestService } from './fitness-ingest.service';
+import { FitnessIngestService, toNullableJson } from './fitness-ingest.service';
 import { AppConfigService } from '../app/app-config.service';
 import { RedisService } from '../redis/redis.service';
 import type {
   FitnessConnectionDto,
   FitnessActivityDto,
+  FitnessActivityDetailDto,
   FitnessDailySummaryDto,
   FitnessBodyMetricDto,
   FitnessGoalDto,
@@ -18,11 +19,15 @@ import type {
 } from '../../common/dto/fitness.dto';
 import { toPostDto } from '../posts/post.dto';
 import { vo2maxShareSnapshot } from './fitness-share-snapshot';
+import { stravaRawIsComplete } from './fitness-strava.service';
+import type { Prisma } from '@prisma/client';
 
 const MANUAL_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 /** Re-fetch recent Strava activities so a late upload after lastSyncAt is not skipped. */
 const STRAVA_INCREMENTAL_LOOKBACK_SEC = 48 * 60 * 60;
-const RECENT_ACTIVITIES_LIMIT = 20;
+const RECENT_ACTIVITIES_LIMIT = 100;
+const STRAVA_ENRICH_PER_SYNC = 20;
+const STRAVA_ENRICH_CONCURRENCY = 2;
 const WEIGHT_HISTORY_LIMIT = 60;
 const VO2MAX_HISTORY_LIMIT = 60;
 
@@ -46,6 +51,7 @@ function toActivityDto(a: {
   id: string;
   provider: string;
   activityType: FitnessActivityType;
+  name?: string | null;
   startedAt: Date;
   endedAt: Date | null;
   durationSec: number;
@@ -61,6 +67,7 @@ function toActivityDto(a: {
     id: a.id,
     provider: a.provider as any,
     activityType: a.activityType,
+    name: a.name ?? null,
     startedAt: a.startedAt.toISOString(),
     endedAt: a.endedAt?.toISOString() ?? null,
     durationSec: a.durationSec,
@@ -72,6 +79,10 @@ function toActivityDto(a: {
     maxHeartrate: a.maxHeartrate,
     totalElevationM: a.totalElevationM,
   };
+}
+
+function isStravaRateLimit(err: unknown): boolean {
+  return Boolean(err && typeof err === 'object' && 'status' in err && (err as { status?: number }).status === 429);
 }
 
 function toSummaryDto(s: {
@@ -124,7 +135,7 @@ export class FitnessService {
         where: { userId, dedupedFromId: null },
         orderBy: { startedAt: 'desc' },
         take: RECENT_ACTIVITIES_LIMIT,
-        select: { id: true, provider: true, activityType: true, startedAt: true, endedAt: true, durationSec: true, distanceM: true, effortScore: true, stepsCount: true, calories: true, avgHeartrate: true, maxHeartrate: true, totalElevationM: true },
+        select: { id: true, provider: true, activityType: true, name: true, startedAt: true, endedAt: true, durationSec: true, distanceM: true, effortScore: true, stepsCount: true, calories: true, avgHeartrate: true, maxHeartrate: true, totalElevationM: true },
       }),
       this.getWeekSummaries(userId),
       this.prisma.fitnessBodyMetric.findMany({
@@ -303,7 +314,7 @@ export class FitnessService {
 
     // 5. Rebuild daily summaries for affected days.
     if (dates.length > 0) {
-      await this.ingest.rebuildDailySummaries(userId, dates);
+      await this.ingest.rebuildDailySummaries(userId, dates, { resetSteps: true });
     }
   }
 
@@ -334,8 +345,12 @@ export class FitnessService {
       ? Math.max(0, Math.floor(conn.lastSyncAt.getTime() / 1000) - STRAVA_INCREMENTAL_LOOKBACK_SEC)
       : undefined;
     const rawActivities = await this.strava.fetchActivities(accessToken, afterTs);
+    const listByExternalId = new Map(rawActivities.map((a) => [String(a.id), a]));
     const normalized = rawActivities.map((a) => this.strava.normalizeActivity(a));
     const result = await this.ingest.upsertActivities(userId, normalized);
+
+    await this.syncStravaProfile(userId, accessToken);
+    await this.enrichIncompleteStravaActivities(userId, accessToken, listByExternalId);
 
     const now = new Date();
     await this.prisma.fitnessConnection.update({
@@ -349,6 +364,145 @@ export class FitnessService {
     });
 
     return result;
+  }
+
+  private async syncStravaProfile(userId: string, accessToken: string): Promise<void> {
+    const conn = await this.prisma.fitnessConnection.findUnique({
+      where: { userId_provider: { userId, provider: 'strava' } },
+      select: { providerUserId: true },
+    });
+    const athleteId = Number(conn?.providerUserId);
+    if (!Number.isFinite(athleteId) || athleteId <= 0) return;
+    try {
+      const profileJson = await this.strava.fetchProfileBundle(accessToken, athleteId);
+      await this.prisma.fitnessConnection.update({
+        where: { userId_provider: { userId, provider: 'strava' } },
+        data: { profileJson: profileJson as Prisma.InputJsonValue },
+      });
+    } catch (err) {
+      if (isStravaRateLimit(err)) return;
+      this.logger.warn(`Strava profile fetch failed for ${userId}: ${err}`);
+    }
+  }
+
+  private async enrichIncompleteStravaActivities(
+    userId: string,
+    accessToken: string,
+    listByExternalId: Map<string, { id: number } & Record<string, unknown>>,
+  ): Promise<void> {
+    const rows = await this.prisma.fitnessActivity.findMany({
+      where: { userId, provider: 'strava' },
+      select: { id: true, externalId: true, rawJson: true },
+      orderBy: { startedAt: 'desc' },
+      take: 200,
+    });
+    const incomplete = rows.filter((row) => !stravaRawIsComplete(row.rawJson)).slice(0, STRAVA_ENRICH_PER_SYNC);
+
+    for (let i = 0; i < incomplete.length; i += STRAVA_ENRICH_CONCURRENCY) {
+      const slice = incomplete.slice(i, i + STRAVA_ENRICH_CONCURRENCY);
+      try {
+        await Promise.all(slice.map((row) => this.persistStravaEnrichment(accessToken, row, listByExternalId)));
+      } catch (err) {
+        if (isStravaRateLimit(err)) {
+          this.logger.warn(`Strava rate limited while enriching activities for ${userId}; remaining will retry later`);
+          return;
+        }
+        this.logger.warn(`Strava enrich batch failed for ${userId}: ${err}`);
+      }
+    }
+  }
+
+  private async persistStravaEnrichment(
+    accessToken: string,
+    row: { id: string; externalId: string; rawJson: unknown },
+    listByExternalId: Map<string, { id: number } & Record<string, unknown>>,
+  ): Promise<void> {
+    const listItem = listByExternalId.get(row.externalId) ?? { id: Number(row.externalId) };
+    if (!Number.isFinite(listItem.id)) return;
+    const raw = await this.strava.enrichActivityRaw(accessToken, listItem as any, row.rawJson);
+    const normalized = this.strava.normalizeActivity(listItem as any, raw);
+    await this.prisma.fitnessActivity.update({
+      where: { id: row.id },
+      data: {
+        name: normalized.name,
+        durationSec: normalized.durationSec,
+        distanceM: normalized.distanceM,
+        effortScore: normalized.effortScore,
+        calories: normalized.calories,
+        avgHeartrate: normalized.avgHeartrate,
+        maxHeartrate: normalized.maxHeartrate,
+        totalElevationM: normalized.totalElevationM,
+        rawJson: toNullableJson(normalized.rawJson),
+      },
+    });
+  }
+
+  async getActivity(userId: string, activityId: string): Promise<FitnessActivityDetailDto> {
+    const activity = await this.prisma.fitnessActivity.findFirst({
+      where: { id: activityId, userId },
+    });
+    if (!activity) throw new NotFoundException('Activity not found.');
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { fitnessUnits: true },
+    });
+    const units = user?.fitnessUnits ?? 'us';
+
+    let raw: unknown = activity.rawJson;
+    if (activity.provider === 'strava' && !stravaRawIsComplete(raw)) {
+      const accessToken = await this.strava.refreshTokenIfNeeded(userId);
+      if (accessToken) {
+        try {
+          await this.persistStravaEnrichment(
+            accessToken,
+            { id: activity.id, externalId: activity.externalId, rawJson: activity.rawJson },
+            new Map(),
+          );
+          const refreshed = await this.prisma.fitnessActivity.findFirst({
+            where: { id: activity.id, userId },
+          });
+          if (refreshed) {
+            return this.toActivityDetailDto(refreshed, units);
+          }
+        } catch (err) {
+          if (!isStravaRateLimit(err)) {
+            this.logger.warn(`On-demand Strava enrich failed for ${activity.id}: ${err}`);
+          }
+        }
+      }
+    }
+
+    return this.toActivityDetailDto({ ...activity, rawJson: raw }, units);
+  }
+
+  private toActivityDetailDto(activity: {
+    id: string;
+    provider: string;
+    activityType: FitnessActivityType;
+    name: string | null;
+    startedAt: Date;
+    endedAt: Date | null;
+    durationSec: number;
+    distanceM: number | null;
+    effortScore: number | null;
+    stepsCount: number | null;
+    calories: number | null;
+    avgHeartrate: number | null;
+    maxHeartrate: number | null;
+    totalElevationM: number | null;
+    externalId: string;
+    rawJson: unknown;
+  }, units: 'us' | 'metric'): FitnessActivityDetailDto {
+    return {
+      ...toActivityDto(activity),
+      externalId: activity.externalId,
+      units,
+      raw: activity.rawJson ?? {
+        note: 'Provider raw payload is not stored for this activity yet. Re-sync to attach it.',
+        activity: toActivityDto(activity),
+        externalId: activity.externalId,
+      },
+    };
   }
 
   // ─── HealthKit upload ─────────────────────────────────────────────────────────
@@ -366,11 +520,14 @@ export class FitnessService {
       avgHeartrate?: number | null;
       maxHeartrate?: number | null;
       totalElevationM?: number | null;
+      name?: string | null;
+      raw?: unknown;
     }>;
     bodyMetrics?: Array<{ externalId: string; weightKg: number; measuredAt: string }>;
     vo2maxReadings?: Array<{ externalId: string; vo2maxMlKgMin: number; measuredAt: string }>;
     sleepMinutes?: Array<{ dayKey: string; sleepMinutes: number }>;
     hrv?: Array<{ dayKey: string; hrvMs: number }>;
+    dailySteps?: Array<{ dayKey: string; stepsCount: number }>;
   }): Promise<{ activitiesInserted: number; activitiesDeduped: number; metricsUpserted: number }> {
     let metricsUpserted = 0;
 
@@ -379,7 +536,8 @@ export class FitnessService {
       (payload.bodyMetrics?.length ?? 0) > 0 ||
       (payload.vo2maxReadings?.length ?? 0) > 0 ||
       (payload.sleepMinutes?.length ?? 0) > 0 ||
-      (payload.hrv?.length ?? 0) > 0;
+      (payload.hrv?.length ?? 0) > 0 ||
+      (payload.dailySteps?.length ?? 0) > 0;
 
     if (hasAnyData) {
       // Ensure HealthKit connection row exists whenever any payload is non-empty,
@@ -406,6 +564,22 @@ export class FitnessService {
       avgHeartrate: a.avgHeartrate && a.avgHeartrate > 0 ? a.avgHeartrate : null,
       maxHeartrate: a.maxHeartrate && a.maxHeartrate > 0 ? a.maxHeartrate : null,
       totalElevationM: a.totalElevationM && a.totalElevationM > 0 ? a.totalElevationM : null,
+      name: a.name?.trim() ? a.name.trim() : null,
+      rawJson: a.raw ?? {
+        source: 'apple_health',
+        externalId: a.externalId,
+        activityType: a.activityType,
+        startedAt: a.startedAt,
+        endedAt: a.endedAt ?? null,
+        durationSec: a.durationSec,
+        distanceM: a.distanceM ?? null,
+        stepsCount: a.stepsCount ?? null,
+        calories: a.calories ?? null,
+        avgHeartrate: a.avgHeartrate ?? null,
+        maxHeartrate: a.maxHeartrate ?? null,
+        totalElevationM: a.totalElevationM ?? null,
+        name: a.name ?? null,
+      },
     }));
 
     const { inserted, deduped } = activities.length > 0
@@ -450,6 +624,12 @@ export class FitnessService {
         create: { userId, dayKey: h.dayKey, hrvMs: h.hrvMs },
         update: { hrvMs: h.hrvMs },
       });
+    }
+
+    // Daily step totals from HealthKit must land after activity ingest rebuild,
+    // otherwise rebuild would overwrite them with workout-only steps.
+    if ((payload.dailySteps?.length ?? 0) > 0) {
+      await this.ingest.applyDailySteps(userId, payload.dailySteps ?? []);
     }
 
     return { activitiesInserted: inserted, activitiesDeduped: deduped, metricsUpserted };

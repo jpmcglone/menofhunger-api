@@ -15,6 +15,8 @@ function walk(override: Partial<NormalizedActivity> = {}): NormalizedActivity {
     avgHeartrate: null,
     maxHeartrate: null,
     totalElevationM: null,
+    name: null,
+    rawJson: null,
     ...override,
   };
 }
@@ -54,7 +56,7 @@ describe('FitnessIngestService', () => {
         update,
         upsert,
       },
-      fitnessDailySummary: { upsert: jest.fn(async () => ({})) },
+      fitnessDailySummary: { upsert: jest.fn(async () => ({})), findUnique: jest.fn(async () => null) },
     } as never);
 
     await ingest.upsertActivities('u1', [walk()]);

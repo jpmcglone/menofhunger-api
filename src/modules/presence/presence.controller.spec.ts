@@ -245,6 +245,35 @@ describe('PresenceController — online() output shape and per-call invariants',
     );
   });
 
+  it('omits user rows for ?summary=1 but keeps counts and tier breakdown', async () => {
+    const m = makeController({ marvEnabled: false, onlineUserIds: ['user-a', 'user-b'] });
+    m.follows.getFollowListUsersByIds.mockImplementation(async ({ userIds }: { userIds: string[] }) =>
+      userIds.map((id) => {
+        if (id === 'user-a') {
+          return { id, username: id, name: id, premium: false, premiumPlus: true, verifiedStatus: 'none' };
+        }
+        return { id, username: id, name: id, premium: true, premiumPlus: false, verifiedStatus: 'identity' };
+      }),
+    );
+
+    const res: any = await m.controller.online(undefined, undefined, '1');
+
+    expect(res.data).toEqual([]);
+    expect(res.pagination.totalOnline).toBe(2);
+    expect(res.pagination.premiumPlus).toBe(1);
+    expect(res.pagination.premium).toBe(1);
+    expect(res.pagination.verified).toBe(0);
+    expect(res.pagination.unverified).toBe(0);
+  });
+
+  it('still returns the full list when summary is omitted', async () => {
+    const m = makeController({ marvEnabled: false, onlineUserIds: ['user-a'] });
+    const res: any = await m.controller.online(undefined, undefined);
+    expect(res.data).toHaveLength(1);
+    expect(res.data[0].id).toBe('user-a');
+    expect(res.pagination.unverified).toBe(1);
+  });
+
   it('omits the id exclusion filter when nobody is currently online', async () => {
     const m = makeController({ marvEnabled: false, onlineUserIds: [] });
 

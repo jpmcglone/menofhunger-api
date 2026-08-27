@@ -13,9 +13,10 @@ import { runInBatches } from '../side-effects/batch';
  * the last 2 hours are skipped to avoid hammering Strava when a user also hits
  * "Sync now" manually shortly before the cron fires.
  *
- * Strava rate limit: 100 req/15 min, 1 000/day per app. Each sync is 1–2 API calls
- * (token refresh + activities fetch). Processing 3 users concurrently keeps us well
- * inside the limit for typical user counts.
+ * Strava rate limit: 100 req/15 min, 1 000/day per app. Each sync paginates
+ * activity lists, then enriches a bounded batch of details+streams. Remaining
+ * incomplete raw payloads are filled on GET /fitness/activities/:id or the next sync.
+ * Processing 3 users concurrently keeps us inside the limit for typical user counts.
  */
 @Injectable()
 export class FitnessCron {

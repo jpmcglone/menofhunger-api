@@ -975,6 +975,7 @@ export type FitnessActivityDto = {
   id: string;
   provider: FitnessProvider;
   activityType: FitnessActivityType;
+  name: string | null;
   startedAt: string;
   endedAt: string | null;
   durationSec: number;
@@ -986,6 +987,13 @@ export type FitnessActivityDto = {
   maxHeartrate: number | null;
   /** Total elevation gain in meters. Populated for Strava; null for Apple Health. */
   totalElevationM: number | null;
+};
+
+/** Full activity for the detail page. `raw` is the provider payload (or a normalized fallback). */
+export type FitnessActivityDetailDto = FitnessActivityDto & {
+  externalId: string;
+  raw: unknown;
+  units: FitnessUnits;
 };
 
 export type FitnessDailySummaryDto = {
@@ -1731,6 +1739,14 @@ export type OnlinePaginationDto = {
    * "(N more recently)" hint next to the online count in the right rail.
    */
   recentlyOnlineCount: number;
+  /**
+   * Tier breakdown of `data` (always computed, including for `?summary=1`
+   * where `data` is empty). Powers the right-rail hover popover.
+   */
+  premiumPlus?: number;
+  premium?: number;
+  verified?: number;
+  unverified?: number;
 };
 
 export type PresenceOnlinePageDto = {

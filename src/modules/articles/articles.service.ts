@@ -249,6 +249,7 @@ export class ArticlesService {
     limit?: number;
     /** When the 7-day scored set is short, backfill from older published articles. */
     fillIfShort?: boolean;
+    includeBody?: boolean;
   }) {
     const limit = Math.min(opts.limit ?? 5, 20);
     const viewerCtx = opts.viewerUserId ? await this.viewer.getViewer(opts.viewerUserId) : null;
@@ -291,6 +292,7 @@ export class ArticlesService {
       toArticleDto(a, this.r2BaseUrl, {
         viewerUserId: opts.viewerUserId,
         viewerHasBoosted: opts.viewerUserId ? (a.boosts?.length ?? 0) > 0 : false,
+        includeBody: opts.includeBody ?? false,
       }),
     );
   }
@@ -310,6 +312,7 @@ export class ArticlesService {
     /** When true (e.g. "More from this author"), include articles of all visibility tiers.
      *  Articles the viewer cannot access are returned with viewerCanAccess=false and stripped body/excerpt. */
     includeRestricted?: boolean | null;
+    includeBody?: boolean | null;
   }) {
     const limit = Math.min(opts.limit ?? 20, 50);
     const sort = opts.sort ?? 'new';
@@ -330,6 +333,7 @@ export class ArticlesService {
         cursor: opts.cursor ?? null,
         visibilityFilter: opts.visibilityFilter ?? null,
         tag: opts.tag ?? null,
+        includeBody: opts.includeBody ?? false,
         viewerUserId: opts.viewerUserId ?? null,
       });
       const cacheKey = `cache:articles:list:v${feedVer}:${paramsHash}`;
@@ -358,6 +362,7 @@ export class ArticlesService {
       followingOnly?: boolean | null;
       tag?: string | null;
       includeRestricted?: boolean | null;
+      includeBody?: boolean | null;
     },
     limit: number,
     sort: string,
@@ -411,6 +416,7 @@ export class ArticlesService {
         viewerUserId: opts.viewerUserId,
         viewerHasBoosted: opts.viewerUserId ? (a.boosts?.length ?? 0) > 0 : false,
         viewerCanAccess,
+        includeBody: opts.includeBody ?? false,
       });
     };
 

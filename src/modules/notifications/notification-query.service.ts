@@ -5,7 +5,11 @@ import { AppConfigService } from '../app/app-config.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { PostVisibilityReadService } from '../viewer/post-visibility-read.service';
-import { NotificationReadStateService } from './notification-read-state.service';
+import {
+  NotificationReadStateService,
+  PERSON_ONLY_NOTIFICATION_KINDS,
+  bellExcludedKindsForAccount,
+} from './notification-read-state.service';
 import { CacheService } from '../redis/cache.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { CacheTtl } from '../redis/cache-ttl';
@@ -112,7 +116,7 @@ export class NotificationQueryService {
       };
     }
 
-    const [cursorWhere, blockSets] = await Promise.all([
+    const [cursorWhere, blockSets, recipient] = await Promise.all([
       createdAtIdCursorWhere({
         cursor,
         lookup: async (id) =>
@@ -124,17 +128,38 @@ export class NotificationQueryService {
             .then((r) => (r ? { id: r.id, createdAt: r.createdAt } : null)),
       }),
       this.postVisibility.viewerBlockSets(recipientUserId),
+      this.prisma.user.findUnique({
+        where: { id: recipientUserId },
+        select: { accountKind: true },
+      }),
     ]);
     const blockedActorIds = [...blockSets.blockedByViewer, ...blockSets.viewerBlockedBy];
+    const pageExcludedKinds =
+      recipient?.accountKind === 'page' ? PERSON_ONLY_NOTIFICATION_KINDS : [];
+    if (kind && kind !== 'other' && pageExcludedKinds.includes(kind)) {
+      const [undeliveredCount, unreadByKind] = await Promise.all([
+        this.readState.getUndeliveredCount(recipientUserId),
+        this.readState.getUnreadCountsByKind(recipientUserId),
+      ]);
+      return {
+        items: [] as NotificationFeedItemDto[],
+        nextCursor: null,
+        undeliveredCount,
+        unreadByKind,
+      };
+    }
+    const alwaysExcluded: NotificationKind[] = [
+      ...bellExcludedKindsForAccount(recipient?.accountKind),
+    ];
 
     const notifications = await this.prisma.notification.findMany({
       where: {
         recipientUserId,
         ...(kind === 'other'
-          ? { kind: { notIn: [...PRIMARY_NOTIFICATION_KINDS, 'message' as const, 'community_group_post' as const] } }
+          ? { kind: { notIn: [...PRIMARY_NOTIFICATION_KINDS, ...alwaysExcluded] } }
           : kind
             ? { kind }
-            : { kind: { notIn: ['message' as const, 'community_group_post' as const] } }),
+            : { kind: { notIn: alwaysExcluded } }),
         ...(blockedActorIds.length > 0 ? { NOT: { actorUserId: { in: blockedActorIds } } } : {}),
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },

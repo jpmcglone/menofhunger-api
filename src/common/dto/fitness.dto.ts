@@ -16,6 +16,7 @@ export type FitnessActivityDto = {
   id: string;
   provider: FitnessProvider;
   activityType: FitnessActivityType;
+  name: string | null;
   startedAt: string;
   endedAt: string | null;
   durationSec: number;
@@ -27,6 +28,13 @@ export type FitnessActivityDto = {
   maxHeartrate: number | null;
   /** Total elevation gain in meters. Populated for Strava; null for Apple Health. */
   totalElevationM: number | null;
+};
+
+/** Full activity for the detail page. `raw` is the provider payload (or a normalized fallback). */
+export type FitnessActivityDetailDto = FitnessActivityDto & {
+  externalId: string;
+  raw: unknown;
+  units: FitnessUnits;
 };
 
 // ─── Daily summary ───────────────────────────────────────────────────────────

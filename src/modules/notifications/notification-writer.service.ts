@@ -1826,8 +1826,9 @@ export class NotificationWriterService {
   // ─── checkin_reminder fan-out ─────────────────────────────────────────────
 
   /**
-   * Fan-out 6pm ET check-in reminder to all verified-or-above users who have
-   * NOT already posted a check-in today.
+   * Fan-out 6pm ET check-in reminder to verified-or-above person accounts who
+   * have NOT already posted a check-in today. Pages are excluded — they cannot
+   * check in, and operators already get the person's copy.
    * Cursor-paginated in chunks of 500. Guarded by `checkinReminderNotifiedAt`.
    */
   async fanOutCheckinReminders(params: { dayKey: string }): Promise<void> {
@@ -1856,6 +1857,7 @@ export class NotificationWriterService {
       const users = await this.prisma.user.findMany({
         where: {
           bannedAt: null,
+          accountKind: 'person',
           OR: [
             { verifiedStatus: { not: 'none' } },
             { premium: true },
@@ -1953,10 +1955,10 @@ export class NotificationWriterService {
   // ─── on_this_day fan-out ──────────────────────────────────────────────────
 
   /**
-   * Fan-out 8am ET "On This Day" notifications to users who had a post
-   * exactly one or more years ago on this calendar date (ET month-day match).
-   * Picks the most-recent matching year. Cursor-paginated in chunks of 500.
-   * Guarded by `onThisDayNotifiedAt`.
+   * Fan-out 8am ET "On This Day" notifications to person accounts who had a
+   * check-in exactly one or more years ago on this calendar date (ET month-day).
+   * Pages are excluded. Picks the most-recent matching year. Cursor-paginated
+   * in chunks of 500. Guarded by `onThisDayNotifiedAt`.
    */
   async fanOutOnThisDayNotifications(params: { dayKey: string }): Promise<void> {
     const { dayKey } = params;
@@ -1994,6 +1996,7 @@ export class NotificationWriterService {
           EXTRACT(YEAR FROM now() AT TIME ZONE 'America/New_York')::int
           - EXTRACT(YEAR FROM p."createdAt" AT TIME ZONE 'America/New_York')::int AS "yearsAgo"
         FROM "Post" p
+        INNER JOIN "User" u ON u.id = p."userId" AND u."accountKind" = 'person'
         WHERE p."kind" = 'checkin'
           AND p."deletedAt" IS NULL
           AND p."visibility" IN ('public', 'verifiedOnly')

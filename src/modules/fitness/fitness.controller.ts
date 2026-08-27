@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
@@ -31,6 +31,9 @@ const healthKitActivitySchema = z.object({
   calories: z.number().nonnegative().nullable().optional(),
   avgHeartrate: z.number().nonnegative().nullable().optional(),
   maxHeartrate: z.number().nonnegative().nullable().optional(),
+  totalElevationM: z.number().nonnegative().nullable().optional(),
+  name: z.string().trim().max(500).nullable().optional(),
+  raw: z.unknown().optional(),
 });
 
 const healthKitBodyMetricSchema = z.object({
@@ -55,12 +58,18 @@ const healthKitVo2MaxSchema = z.object({
   measuredAt: z.string().datetime(),
 });
 
+const healthKitDailyStepsSchema = z.object({
+  dayKey: z.string(),
+  stepsCount: z.number().int().nonnegative(),
+});
+
 const uploadHealthKitSchema = z.object({
   activities: z.array(healthKitActivitySchema).optional(),
   bodyMetrics: z.array(healthKitBodyMetricSchema).optional(),
   vo2maxReadings: z.array(healthKitVo2MaxSchema).optional(),
   sleepMinutes: z.array(healthKitSleepSchema).optional(),
   hrv: z.array(healthKitHrvSchema).optional(),
+  dailySteps: z.array(healthKitDailyStepsSchema).optional(),
 });
 
 const logWeightSchema = z.object({
@@ -102,6 +111,15 @@ export class FitnessController {
   async getPage(@CurrentUserId() userId: string) {
     const page = await this.fitness.getPage(userId);
     return { data: page };
+  }
+
+  @Get('activities/:id')
+  async getActivity(
+    @CurrentUserId() userId: string,
+    @Param('id') id: string,
+  ) {
+    const activity = await this.fitness.getActivity(userId, id);
+    return { data: activity };
   }
 
   // ─── Strava OAuth ───────────────────────────────────────────────────────────

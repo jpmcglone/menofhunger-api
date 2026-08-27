@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { FitnessProvider, FitnessActivityType } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 const DEDUP_DISTANCE_TOLERANCE_M = 100;
@@ -20,6 +21,8 @@ export type NormalizedActivity = {
   avgHeartrate: number | null;
   maxHeartrate: number | null;
   totalElevationM: number | null;
+  name: string | null;
+  rawJson: unknown | null;
 };
 
 export function buildDedupeKey(a: NormalizedActivity): string {
@@ -49,6 +52,11 @@ const PROVIDER_PRIORITY: Record<FitnessProvider, number> = {
   apple_health: 5,
 };
 
+export function toNullableJson(value: unknown): Prisma.InputJsonValue | typeof Prisma.JsonNull {
+  if (value === null || value === undefined) return Prisma.JsonNull;
+  return value as Prisma.InputJsonValue;
+}
+
 function activityPatch(act: NormalizedActivity) {
   return {
     durationSec: act.durationSec,
@@ -59,6 +67,19 @@ function activityPatch(act: NormalizedActivity) {
     avgHeartrate: act.avgHeartrate,
     maxHeartrate: act.maxHeartrate,
     totalElevationM: act.totalElevationM,
+    name: act.name,
+    rawJson: toNullableJson(act.rawJson),
+  };
+}
+
+function activityCreateData(userId: string, dedupeKey: string, act: NormalizedActivity) {
+  const { rawJson: _rawJson, ...rest } = act;
+  return {
+    userId,
+    dedupeKey,
+    ...rest,
+    startedAt: act.startedAt,
+    rawJson: toNullableJson(act.rawJson),
   };
 }
 
@@ -149,7 +170,7 @@ export class FitnessIngestService {
               externalId: act.externalId,
             },
           },
-          create: { userId, dedupeKey, ...act, startedAt: act.startedAt },
+          create: activityCreateData(userId, dedupeKey, act),
           update: { dedupeKey, ...activityPatch(act), dedupedFromId: null, dedupedFromProvider: null },
         });
         return 'inserted';
@@ -164,10 +185,7 @@ export class FitnessIngestService {
           },
         },
         create: {
-          userId,
-          dedupeKey,
-          ...act,
-          startedAt: act.startedAt,
+          ...activityCreateData(userId, dedupeKey, act),
           dedupedFromId: existing.externalId,
           dedupedFromProvider: existing.provider,
         },
@@ -187,7 +205,7 @@ export class FitnessIngestService {
           externalId: act.externalId,
         },
       },
-      create: { userId, dedupeKey, ...act, startedAt: act.startedAt },
+      create: activityCreateData(userId, dedupeKey, act),
       update: {
         dedupeKey,
         ...activityPatch(act),
@@ -222,7 +240,11 @@ export class FitnessIngestService {
     });
   }
 
-  async rebuildDailySummaries(userId: string, dates: Date[]): Promise<void> {
+  async rebuildDailySummaries(
+    userId: string,
+    dates: Date[],
+    opts: { resetSteps?: boolean } = {},
+  ): Promise<void> {
     const dayKeys = [...new Set(
       dates.map((d) => {
         // Convert to user local time... for now use UTC date key.
@@ -249,7 +271,15 @@ export class FitnessIngestService {
         },
       });
 
-      const stepsCount = activities.reduce((sum, a) => sum + (a.stepsCount ?? 0), 0) || null;
+      const fromActivities = activities.reduce((sum, a) => sum + (a.stepsCount ?? 0), 0);
+      let stepsCount: number | null = fromActivities || null;
+      if (!opts.resetSteps) {
+        const existing = await this.prisma.fitnessDailySummary.findUnique({
+          where: { userId_dayKey: { userId, dayKey } },
+          select: { stepsCount: true },
+        });
+        stepsCount = Math.max(fromActivities, existing?.stepsCount ?? 0) || null;
+      }
       const workoutMinutes = Math.round(activities.reduce((sum, a) => sum + a.durationSec, 0) / 60) || null;
       const distanceM = activities.reduce((sum, a) => sum + (a.distanceM ?? 0), 0) || null;
       const effortScore = activities.reduce((sum, a) => sum + (a.effortScore ?? 0), 0) || null;
@@ -258,6 +288,19 @@ export class FitnessIngestService {
         where: { userId_dayKey: { userId, dayKey } },
         create: { userId, dayKey, stepsCount, workoutMinutes, distanceM, effortScore },
         update: { stepsCount, workoutMinutes, distanceM, effortScore },
+      });
+    }
+  }
+
+  async applyDailySteps(
+    userId: string,
+    days: Array<{ dayKey: string; stepsCount: number }>,
+  ): Promise<void> {
+    for (const day of days) {
+      await this.prisma.fitnessDailySummary.upsert({
+        where: { userId_dayKey: { userId, dayKey: day.dayKey } },
+        create: { userId, dayKey: day.dayKey, stepsCount: day.stepsCount },
+        update: { stepsCount: day.stepsCount },
       });
     }
   }

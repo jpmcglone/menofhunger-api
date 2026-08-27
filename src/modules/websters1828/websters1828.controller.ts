@@ -4,6 +4,7 @@ import type { Response } from 'express';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { PersonAccountGuard } from '../pages/person-account.guard';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { Websters1828Service } from './websters1828.service';
@@ -38,7 +39,7 @@ export class Websters1828Controller {
     return { data };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, PersonAccountGuard)
   @Post('wotd/like')
   async toggleLike(@CurrentUserId() userId: string) {
     const wotd = await this.websters.getWordOfDay({ includeDefinition: false, userId });

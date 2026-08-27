@@ -28,10 +28,9 @@ const leaderboardQuerySchema = z.object({
 
 @ApiTags('Check-ins & Streaks')
 @Controller('checkins')
-// The entire check-ins experience (feed, streaks, leaderboard, social proof) is
-// verified-only. Unverified/anonymous users are locked out at the API boundary;
-// the web/iOS clients render a "Verify to check in" CTA instead of calling these.
-@UseGuards(AuthGuard, VerifiedGuard)
+// Check-ins belong to the accountable person, not a page they operate. Pages
+// inherit operator premium and would otherwise pass VerifiedGuard.
+@UseGuards(AuthGuard, VerifiedGuard, PersonAccountGuard)
 export class CheckinsController {
   constructor(
     private readonly checkins: CheckinsService,
@@ -92,7 +91,6 @@ export class CheckinsController {
   }
 
   @Post()
-  @UseGuards(PersonAccountGuard)
   async create(@CurrentUserId() userId: string, @Body() body: unknown) {
     const parsed = createSchema.parse(body);
     const res = await this.checkins.createTodayCheckin({

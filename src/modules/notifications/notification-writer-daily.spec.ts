@@ -14,6 +14,7 @@ type MockPrisma = {
   dailyContentSnapshot: {
     findUnique: jest.Mock;
     update: jest.Mock;
+    upsert: jest.Mock;
   };
   user: { findMany: jest.Mock; update: jest.Mock };
   notification: {
@@ -29,6 +30,7 @@ function makeService(): { service: NotificationWriterService; prisma: MockPrisma
     dailyContentSnapshot: {
       findUnique: jest.fn(),
       update: jest.fn().mockResolvedValue({}),
+      upsert: jest.fn().mockResolvedValue({}),
     },
     user: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn().mockResolvedValue({}) },
     notification: {
@@ -193,6 +195,26 @@ describe('fanOutDailyContentNotifications – deduplication', () => {
         data: expect.arrayContaining([
           expect.objectContaining({ kind: 'quote_of_the_day', recipientUserId: 'u1' }),
         ]),
+      }),
+    );
+  });
+});
+
+describe('fanOutCheckinReminders – person accounts only', () => {
+  it('does not fan out to operated page accounts', async () => {
+    const { service, prisma } = makeService();
+
+    prisma.dailyContentSnapshot.findUnique.mockResolvedValue({
+      checkinReminderNotifiedAt: null,
+      checkinReminderFanoutCursor: null,
+    });
+    prisma.user.findMany.mockResolvedValue([]);
+
+    await service.fanOutCheckinReminders({ dayKey: '2026-08-27' });
+
+    expect(prisma.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ accountKind: 'person', bannedAt: null }),
       }),
     );
   });

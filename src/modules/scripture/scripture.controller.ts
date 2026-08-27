@@ -1,6 +1,7 @@
 import { Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import type { Response } from 'express';
+import { publicCacheControl } from '../../common/http-cache';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { ScriptureService } from './scripture.service';
 import { Throttle } from '@nestjs/throttler';
@@ -26,7 +27,7 @@ export class ScriptureController {
     const { ref } = getSchema.parse(query);
     const data = await this.scripture.getRef(ref);
     // Verse text is immutable; long cache is appropriate.
-    res.setHeader('Cache-Control', 'public, max-age=2592000');
+    res.setHeader('Cache-Control', publicCacheControl(2592000));
     return { data };
   }
 }

@@ -1,14 +1,15 @@
 import { Controller, Get, Res, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
+import { publicCacheControl } from '../../common/http-cache';
+import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
-import { OptionalCurrentUserId } from '../users/users.decorator';
-import { ExploreService } from './explore.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { CacheService } from '../redis/cache.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { CacheTtl } from '../redis/cache-ttl';
-import { Throttle } from '@nestjs/throttler';
-import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
+import { OptionalCurrentUserId } from '../users/users.decorator';
+import { ExploreService } from './explore.service';
 
 @UseGuards(OptionalAuthGuard)
 @Controller('explore')
@@ -34,7 +35,7 @@ export class ExploreController {
 
     httpRes.setHeader(
       'Cache-Control',
-      viewerUserId ? 'private, max-age=30' : 'public, max-age=30, stale-while-revalidate=60',
+      viewerUserId ? 'private, max-age=30' : publicCacheControl(30, 60),
     );
     httpRes.setHeader('Vary', 'Cookie');
 

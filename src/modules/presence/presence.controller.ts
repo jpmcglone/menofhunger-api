@@ -57,6 +57,28 @@ function statusMap(statuses: UserStatusDto[]): Map<string, UserStatusDto> {
   return new Map(statuses.map((status) => [status.userId, status]));
 }
 
+function onlineTierCounts(rows: OnlineUserDto[]): Pick<
+  OnlinePaginationDto,
+  'premiumPlus' | 'premium' | 'verified' | 'unverified'
+> {
+  let premiumPlus = 0;
+  let premium = 0;
+  let verified = 0;
+  let unverified = 0;
+  for (const u of rows) {
+    if (u.premiumPlus) premiumPlus += 1;
+    else if (u.premium) premium += 1;
+    else if (u.verifiedStatus && u.verifiedStatus !== 'none') verified += 1;
+    else unverified += 1;
+  }
+  return { premiumPlus, premium, verified, unverified };
+}
+
+function isSummaryQuery(raw?: string): boolean {
+  const v = (raw ?? '').trim().toLowerCase();
+  return v === '1' || v === 'true';
+}
+
 function encodeCursor(params: { tMs: number; id: string }): string {
   return Buffer.from(JSON.stringify(params), 'utf8').toString('base64url');
 }
@@ -240,12 +262,23 @@ export class PresenceController {
   async online(
     @OptionalCurrentUserId() userId: string | undefined,
     @Query('includeSelf') includeSelfRaw?: string,
+    @Query('summary') summaryRaw?: string,
   ) {
     const viewerUserId = userId ?? null;
+    const summary = isSummaryQuery(summaryRaw);
     // Default: include the viewer in "Online now" counts.
     // Keep the query param for backwards compatibility (includeSelf=0/false will exclude).
     const includeSelf =
       includeSelfRaw == null ? true : (includeSelfRaw === '1' || includeSelfRaw === 'true');
+
+    const toResponse = (full: { data: OnlineUserDto[]; pagination: OnlinePaginationDto }) => {
+      const pagination: OnlinePaginationDto = {
+        ...full.pagination,
+        ...onlineTierCounts(full.data),
+      };
+      if (summary) return { data: [] as OnlineUserDto[], pagination };
+      return { data: full.data, pagination };
+    };
 
     // Short-lived cache so rapid tab switches / reconnect polls don't hammer
     // getFollowListUsersByIds (User + relationship batch DB queries) on every call.
@@ -256,13 +289,13 @@ export class PresenceController {
       if (cached) {
         const rows = cached.data as OnlineUserDto[];
         const platformsById = await this.presenceRedis.platformsByUserIds(rows.map((row) => row.id));
-        return {
-          ...cached,
+        return toResponse({
           data: rows.map((row) => ({
             ...row,
             platforms: row.isBot ? [] : (platformsById.get(row.id) ?? row.platforms ?? []),
           })),
-        };
+          pagination: cached.pagination,
+        });
       }
     } catch {
       // Redis unavailable — fall through to live fetch.
@@ -342,7 +375,7 @@ export class PresenceController {
 
     const result = { data, pagination: { totalOnline, recentlyOnlineCount } };
     void this.redis.setJson(cacheKey, result, { ttlMs: ONLINE_LIST_CACHE_TTL_MS }).catch(() => undefined);
-    return result;
+    return toResponse(result);
   }
 
   @UseGuards(OptionalAuthGuard)

@@ -46,6 +46,14 @@ export type OnlinePaginationDto = {
    * "(N more recently)" hint next to the online count in the right rail.
    */
   recentlyOnlineCount: number;
+  /**
+   * Tier breakdown of `data` (always computed, including for `?summary=1`
+   * where `data` is empty). Powers the right-rail hover popover.
+   */
+  premiumPlus?: number;
+  premium?: number;
+  verified?: number;
+  unverified?: number;
 };
 
 export type PresenceOnlinePageDto = {

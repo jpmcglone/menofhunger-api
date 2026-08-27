@@ -11,6 +11,26 @@ export type NotificationUnreadByKind = Partial<Record<NotificationKind | 'all', 
 export const BELL_EXCLUDED_KINDS: NotificationKind[] = ['message', 'community_group_post'];
 
 /**
+ * Person-accountability surfaces. Pages inherit operator premium, so they would
+ * otherwise get "have you checked in?" and daily-content bells. Operators already
+ * receive those on the person account — the page inbox should stay about the page.
+ */
+export const PERSON_ONLY_NOTIFICATION_KINDS: NotificationKind[] = [
+  'word_of_the_day',
+  'quote_of_the_day',
+  'checkin_reminder',
+  'on_this_day',
+];
+
+export function bellExcludedKindsForAccount(
+  accountKind?: string | null,
+): NotificationKind[] {
+  return accountKind === 'page'
+    ? [...BELL_EXCLUDED_KINDS, ...PERSON_ONLY_NOTIFICATION_KINDS]
+    : BELL_EXCLUDED_KINDS;
+}
+
+/**
  * Notification kinds that are counted in the bell badge but must never trigger
  * nudge/instant emails. Daily content notifications are bell-counted so users
  * can clear them, but they are not "missed social activity" that warrants an email.
@@ -88,18 +108,31 @@ export class NotificationReadStateService {
   async getUndeliveredCount(recipientUserId: string): Promise<number> {
     const user = await this.prisma.user.findUnique({
       where: { id: recipientUserId },
-      select: { undeliveredNotificationCount: true },
+      select: { undeliveredNotificationCount: true, accountKind: true },
     });
+    if (user?.accountKind === 'page') {
+      return this.prisma.notification.count({
+        where: {
+          recipientUserId,
+          deliveredAt: null,
+          kind: { notIn: bellExcludedKindsForAccount('page') },
+        },
+      });
+    }
     return Math.max(0, Math.floor(Number(user?.undeliveredNotificationCount) || 0));
   }
 
   async getUnreadCountsByKind(recipientUserId: string): Promise<NotificationUnreadByKind> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: recipientUserId },
+      select: { accountKind: true },
+    });
     const rows = await this.prisma.notification.groupBy({
       by: ['kind'],
       where: {
         recipientUserId,
         readAt: null,
-        kind: { notIn: BELL_EXCLUDED_KINDS },
+        kind: { notIn: bellExcludedKindsForAccount(user?.accountKind) },
       },
       _count: { _all: true },
     });

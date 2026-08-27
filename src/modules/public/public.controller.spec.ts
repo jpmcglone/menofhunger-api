@@ -94,14 +94,17 @@ describe('PublicController.getPost', () => {
     expect(result.data.author.username).toBe('alice');
   });
 
-  it('sets Cache-Control: public, max-age=60, stale-while-revalidate=300', async () => {
+  it('sets CDN-ready Cache-Control with s-maxage on public posts', async () => {
     const posts = makePosts({ getPublicById: jest.fn(async () => makePostDto()) });
     const controller = new PublicController(posts, makeProfiles());
     const res = makeRes();
 
     await controller.getPost('post-1', res);
 
-    expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, max-age=60, s-maxage=60, stale-while-revalidate=300',
+    );
   });
 
   it.each([
@@ -176,7 +179,7 @@ describe('PublicController.getProfile', () => {
     expect(result.data).toEqual(expect.objectContaining({ birthdayDisplay: null, birthdayMonthDay: null }));
   });
 
-  it('sets Cache-Control: public, max-age=300, stale-while-revalidate=600', async () => {
+  it('sets CDN-ready Cache-Control with s-maxage on public profiles', async () => {
     const profiles = makeProfiles({
       getAnonymousProfile: jest.fn(async () => ({ payload: makeProfilePayload(), cache: 'miss' })),
     });
@@ -185,7 +188,10 @@ describe('PublicController.getProfile', () => {
 
     await controller.getProfile('alice', res);
 
-    expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, max-age=300, s-maxage=300, stale-while-revalidate=600',
+    );
   });
 
   it('propagates NotFoundException for unknown usernames', async () => {

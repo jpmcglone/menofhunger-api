@@ -3054,6 +3054,8 @@ model FitnessConnection {
   tokenExpiresAt DateTime?
   /** Provider-specific account id (e.g. Strava athlete id). */
   providerUserId String?
+  /** Athlete/profile/stats/zones snapshot from the provider (Strava). */
+  profileJson  Json?
   /** When we last successfully ingested new data from this provider. */
   lastSyncAt   DateTime?
   /** When the user last triggered a manual sync (for cooldown enforcement). */
@@ -3081,6 +3083,8 @@ model FitnessActivity {
   /** Original id from the provider (Strava activity id, HealthKit sample UUID). */
   externalId    String
   activityType  FitnessActivityType @default(other)
+  /** Provider title (Strava activity name, HealthKit workout metadata). */
+  name          String?
   startedAt     DateTime
   endedAt       DateTime?
   durationSec   Int
@@ -3095,6 +3099,8 @@ model FitnessActivity {
   maxHeartrate  Float?
   /** Total elevation gain during the activity (meters). Populated for Strava; null for Apple Health. */
   totalElevationM Float?
+  /** Full provider payload (Strava activity+streams, HealthKit workout dump). */
+  rawJson       Json?
   /** Normalized fingerprint: used to identify duplicates across providers. */
   dedupeKey     String?
   /** Provider id this row was deduplicated against (the winner's id). */

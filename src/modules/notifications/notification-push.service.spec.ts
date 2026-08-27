@@ -362,6 +362,20 @@ describe('NotificationPushService — per-channel suppression', () => {
     expect(webpush.sendNotification).not.toHaveBeenCalled();
   });
 
+  it('does not push check-in reminders to operated page accounts', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ accountKind: 'page', username: 'menofhunger' });
+    prisma.userPageOperator.findMany.mockResolvedValue([{ operatorUserId: 'john' }]);
+    const { svc, apnsSendToUser } = makeService({ prisma });
+    await svc.sendWebPushToRecipient('page-1', {
+      title: 'Have you checked in today?',
+      tag: 'notif-checkin_reminder-page-1',
+      kind: 'checkin_reminder',
+    });
+    expect(apnsSendToUser).not.toHaveBeenCalled();
+    expect(webpush.sendNotification).not.toHaveBeenCalled();
+  });
+
   it('does not push a page alert to the operator who performed the action', async () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockResolvedValue({ accountKind: 'page', username: 'menofhunger' });

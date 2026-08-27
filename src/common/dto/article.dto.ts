@@ -235,9 +235,12 @@ export function toArticleDto(
     viewerUserId?: string | null;
     viewerHasBoosted?: boolean;
     viewerCanAccess?: boolean;
+    /** When false, serialize `body` as `{}` (list/trending/landing). Default true. */
+    includeBody?: boolean;
   },
 ): ArticleDto {
   const canAccess = opts?.viewerCanAccess !== false;
+  const includeBody = opts?.includeBody !== false;
   const thumbnailUrl = article.thumbnailR2Key
     ? publicAssetUrl({ publicBaseUrl: publicAssetBaseUrl, key: article.thumbnailR2Key })
     : null;
@@ -253,7 +256,7 @@ export function toArticleDto(
     deletedAt: article.deletedAt ? article.deletedAt.toISOString() : null,
     title: article.title,
     slug: article.slug,
-    body: canAccess ? article.body : '{}',
+    body: canAccess && includeBody ? article.body : '{}',
     excerpt: canAccess ? (article.excerpt ?? null) : gatedArticleExcerpt(article.excerpt ?? null),
     thumbnailUrl: thumbnailUrl || null,
     visibility: article.visibility,
