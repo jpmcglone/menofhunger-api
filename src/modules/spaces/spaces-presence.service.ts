@@ -228,27 +228,71 @@ export class SpacesPresenceService {
       return { userId: meta.userId, spaceId: meta.spaceId, wasActive: false };
     }
 
-    this.currentByUser.delete(meta.userId);
-    const set = this.usersBySpace.get(meta.spaceId);
+    this.removeMember(meta.userId, meta.spaceId);
+    this.forgetUserSockets(meta.userId);
+    return { userId: meta.userId, spaceId: meta.spaceId, wasActive: true };
+  }
+
+  /**
+   * Drop a user from whichever space they are in, regardless of which socket
+   * originally joined. Used when they go fully offline so a missed disconnect
+   * cannot leave them "here" forever.
+   */
+  leaveByUserId(userIdRaw: string): { userId: string; spaceId: string } | null {
+    const userId = (userIdRaw ?? '').trim();
+    if (!userId) return null;
+    const current = this.currentByUser.get(userId) ?? null;
+    if (!current) {
+      this.forgetUserSockets(userId);
+      return null;
+    }
+    this.removeMember(userId, current.spaceId);
+    this.forgetUserSockets(userId);
+    return { userId, spaceId: current.spaceId };
+  }
+
+  /**
+   * Drop members who are no longer online. Idle-in-tab still counts as here.
+   * Returns the memberships that were removed.
+   */
+  pruneOfflineMembers(isOnline: (userId: string) => boolean): Array<{ userId: string; spaceId: string }> {
+    const dropped: Array<{ userId: string; spaceId: string }> = [];
+    for (const userId of Array.from(this.currentByUser.keys())) {
+      if (isOnline(userId)) continue;
+      const left = this.leaveByUserId(userId);
+      if (left) dropped.push(left);
+    }
+    return dropped;
+  }
+
+  private removeMember(userId: string, spaceId: string): void {
+    this.currentByUser.delete(userId);
+    const set = this.usersBySpace.get(spaceId);
     if (set) {
-      set.delete(meta.userId);
+      set.delete(userId);
       if (set.size === 0) {
-        this.usersBySpace.delete(meta.spaceId);
-        this.noteEmpty(meta.spaceId);
+        this.usersBySpace.delete(spaceId);
+        this.noteEmpty(spaceId);
       }
     }
-    const pausedSet = this.pausedBySpace.get(meta.spaceId);
+    const pausedSet = this.pausedBySpace.get(spaceId);
     if (pausedSet) {
-      pausedSet.delete(meta.userId);
-      if (pausedSet.size === 0) this.pausedBySpace.delete(meta.spaceId);
+      pausedSet.delete(userId);
+      if (pausedSet.size === 0) this.pausedBySpace.delete(spaceId);
     }
-    const mutedSet = this.mutedBySpace.get(meta.spaceId);
+    const mutedSet = this.mutedBySpace.get(spaceId);
     if (mutedSet) {
-      mutedSet.delete(meta.userId);
-      if (mutedSet.size === 0) this.mutedBySpace.delete(meta.spaceId);
+      mutedSet.delete(userId);
+      if (mutedSet.size === 0) this.mutedBySpace.delete(spaceId);
     }
+  }
 
-    return { userId: meta.userId, spaceId: meta.spaceId, wasActive: true };
+  private forgetUserSockets(userId: string): void {
+    for (const [socketId, meta] of this.spaceBySocket) {
+      if (meta.userId !== userId) continue;
+      this.spaceBySocket.delete(socketId);
+      this.roomSpaceBySocket.delete(socketId);
+    }
   }
 
   /** Used on disconnect. */

@@ -689,7 +689,7 @@ describe('SpacesGatewayHandler chat join/leave system messages', () => {
       makePresenceRedis(),
       {} as any,
       spaces as any,
-      { isValidSpaceId: (id: string) => Boolean(id?.trim()), onDisconnect: jest.fn().mockReturnValue(null) } as any,
+      { isValidSpaceId: (id: string) => Boolean(id?.trim()), onDisconnect: jest.fn().mockReturnValue(null), leaveByUserId: jest.fn().mockReturnValue(null), getMembersForSpace: jest.fn().mockReturnValue({ userIds: [], pausedUserIds: [], mutedUserIds: [] }), getLobbyCountsBySpaceId: jest.fn().mockReturnValue({}) } as any,
       spacesChat as any,
       {} as any,
       {} as any,
@@ -844,7 +844,7 @@ describe('SpacesGatewayHandler chat react', () => {
       makePresenceRedis(),
       {} as any,
       spaces as any,
-      { isValidSpaceId: (id: string) => Boolean(id?.trim()), onDisconnect: jest.fn().mockReturnValue(null) } as any,
+      { isValidSpaceId: (id: string) => Boolean(id?.trim()), onDisconnect: jest.fn().mockReturnValue(null), leaveByUserId: jest.fn().mockReturnValue(null), getMembersForSpace: jest.fn().mockReturnValue({ userIds: [], pausedUserIds: [], mutedUserIds: [] }), getLobbyCountsBySpaceId: jest.fn().mockReturnValue({}) } as any,
       spacesChat as any,
       {} as any,
       {} as any,
@@ -888,5 +888,96 @@ describe('SpacesGatewayHandler chat react', () => {
       reactionId: 'nope',
     });
     expect(server.emitted.some((e) => e.event === 'spaces:chatReaction')).toBe(false);
+  });
+});
+
+describe('SpacesGatewayHandler offline occupancy', () => {
+  const SPACE_ID = 'space-1';
+
+  it('drops leftover membership when the last live socket is gone', () => {
+    const server = new FakeServer();
+    const presence = makePresence();
+    const presenceRedis = makePresenceRedis();
+    const spacesPresence = {
+      isValidSpaceId: (id: string) => Boolean(id?.trim()),
+      onDisconnect: jest.fn().mockReturnValue({
+        userId: 'u1',
+        spaceId: SPACE_ID,
+        wasActive: false,
+      }),
+      leaveByUserId: jest.fn().mockReturnValue({ userId: 'u1', spaceId: SPACE_ID }),
+      getMembersForSpace: jest.fn().mockReturnValue({
+        userIds: [],
+        pausedUserIds: [],
+        mutedUserIds: [],
+      }),
+      getLobbyCountsBySpaceId: jest.fn().mockReturnValue({}),
+    };
+    const handler = new SpacesGatewayHandler(
+      presence,
+      presenceRedis,
+      { getFollowListUsersByIds: jest.fn().mockResolvedValue([]) } as any,
+      { getOwnerIdForSpace: jest.fn() } as any,
+      spacesPresence as any,
+      { appendSystemMessage: jest.fn() } as any,
+      {} as any,
+      { setJson: jest.fn().mockResolvedValue(undefined) } as any,
+      new GatewayThrottleService(),
+      makeContext(presence, server),
+      { capture: jest.fn() } as any,
+    );
+
+    const socket = new FakeSocket('s1', { userId: 'u1' });
+    server.register(socket);
+    handler.handleDisconnect(socket as any, 'u1');
+
+    expect(spacesPresence.leaveByUserId).toHaveBeenCalledWith('u1');
+    expect(presenceRedis.publishUserSpaceChanged).toHaveBeenCalledWith({
+      userId: 'u1',
+      spaceId: null,
+      previousSpaceId: SPACE_ID,
+    });
+  });
+
+  it('keeps occupancy when another tab is still connected', () => {
+    const server = new FakeServer();
+    const other = new FakeSocket('s2', { userId: 'u1' });
+    server.register(other);
+    const presence = makePresence({ getSocketIdsForUser: jest.fn().mockReturnValue(['s2']) });
+    const presenceRedis = makePresenceRedis();
+    const spacesPresence = {
+      onDisconnect: jest.fn().mockReturnValue({
+        userId: 'u1',
+        spaceId: SPACE_ID,
+        wasActive: false,
+      }),
+      leaveByUserId: jest.fn(),
+      getMembersForSpace: jest.fn().mockReturnValue({
+        userIds: ['u1'],
+        pausedUserIds: [],
+        mutedUserIds: [],
+      }),
+      getLobbyCountsBySpaceId: jest.fn().mockReturnValue({ [SPACE_ID]: 1 }),
+    };
+    const handler = new SpacesGatewayHandler(
+      presence,
+      presenceRedis,
+      { getFollowListUsersByIds: jest.fn().mockResolvedValue([]) } as any,
+      { getOwnerIdForSpace: jest.fn() } as any,
+      spacesPresence as any,
+      { appendSystemMessage: jest.fn() } as any,
+      {} as any,
+      { setJson: jest.fn().mockResolvedValue(undefined) } as any,
+      new GatewayThrottleService(),
+      makeContext(presence, server),
+      { capture: jest.fn() } as any,
+    );
+
+    const socket = new FakeSocket('s1', { userId: 'u1' });
+    server.register(socket);
+    handler.handleDisconnect(socket as any, 'u1');
+
+    expect(spacesPresence.leaveByUserId).not.toHaveBeenCalled();
+    expect(presenceRedis.publishUserSpaceChanged).not.toHaveBeenCalled();
   });
 });

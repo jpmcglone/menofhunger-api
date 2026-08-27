@@ -179,6 +179,8 @@ function makeSpacesPresenceService() {
     getLobbyCountsBySpaceId: jest.fn().mockReturnValue({}),
     pause: jest.fn().mockReturnValue(null),
     setMuted: jest.fn().mockReturnValue(null),
+    leaveByUserId: jest.fn().mockReturnValue(null),
+    pruneOfflineMembers: jest.fn().mockReturnValue([]),
   } as any;
 }
 

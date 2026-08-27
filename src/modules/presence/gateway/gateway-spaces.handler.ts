@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Interval } from '@nestjs/schedule';
 import type { Socket } from 'socket.io';
 import { FollowsService } from '../../follows/follows.service';
 import { RedisService } from '../../redis/redis.service';
@@ -54,6 +55,9 @@ export class SpacesGatewayHandler {
    */
   static readonly CHAT_LEAVE_DEBOUNCE_MS = 1_250;
   private readonly pendingChatLeaves = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /** Ghost "1 here" after a missed disconnect — bounded, overlaps are skipped. */
+  private pruningOfflineMembers = false;
 
   constructor(
     private readonly presence: PresenceService,
@@ -244,6 +248,76 @@ export class SpacesGatewayHandler {
     void this.presenceRedis.publishSpacesLobbyCounts(countsBySpaceId).catch(() => undefined);
   }
 
+  /**
+   * True when this user still has a connected socket on this process.
+   * Idle-in-tab counts; a mapped socket that Socket.IO already dropped does not.
+   */
+  private userHasLivePresence(userId: string): boolean {
+    const uid = (userId ?? '').trim();
+    if (!uid) return false;
+    const ids = this.presence.getSocketIdsForUser(uid);
+    if (ids.length === 0) return false;
+    const sockets = this.context.server?.sockets?.sockets;
+    if (!sockets) return true;
+    return ids.some((id) => {
+      const socket = sockets.get(id);
+      return socket != null && socket.connected !== false;
+    });
+  }
+
+  private emitSpaceLeft(userId: string, spaceId: string): void {
+    void this.emitSpaceMembers(spaceId);
+    this.emitSpacesLobbyCounts();
+    const uid = (userId ?? '').trim();
+    if (!uid) return;
+    const spaceChangedDto: UsersSpaceChangedPayloadDto = {
+      userId: uid,
+      spaceId: null,
+      previousSpaceId: spaceId,
+    };
+    const targets = this.context.getTargetsForUser(uid);
+    this.context.emitToSockets(targets, WsEventNames.usersSpaceChanged, spaceChangedDto);
+    void this.presenceRedis.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
+  }
+
+  /**
+   * Safety net for ghost lobby occupancy (missed disconnect, dead mapped socket).
+   * Does not boot anyone who still has a live tab — idle hangouts stay.
+   */
+  @Interval(30_000)
+  async pruneOfflineSpaceMembers(): Promise<void> {
+    if (this.pruningOfflineMembers) return;
+    this.pruningOfflineMembers = true;
+    try {
+      const dropped = this.spacesPresence.pruneOfflineMembers((userId) =>
+        this.userHasLivePresence(userId),
+      );
+      if (dropped.length === 0) return;
+      const spaceIds = [...new Set(dropped.map((row) => row.spaceId))];
+      for (const spaceId of spaceIds) {
+        await this.emitSpaceMembers(spaceId);
+      }
+      this.emitSpacesLobbyCounts();
+      for (const row of dropped) {
+        const spaceChangedDto: UsersSpaceChangedPayloadDto = {
+          userId: row.userId,
+          spaceId: null,
+          previousSpaceId: row.spaceId,
+        };
+        const targets = this.context.getTargetsForUser(row.userId);
+        this.context.emitToSockets(targets, WsEventNames.usersSpaceChanged, spaceChangedDto);
+        void this.presenceRedis.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
+      }
+      this.logger.log(`Pruned ${dropped.length} offline space member(s)`);
+    } catch (err) {
+      this.logger.warn(
+        `Offline space-member sweep failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      this.pruningOfflineMembers = false;
+    }
+  }
+
   // ─── Disconnect cleanup ─────────────────────────────────────────────
 
   /**
@@ -266,20 +340,16 @@ export class SpacesGatewayHandler {
         });
         (client.data as any).ownerSpaceId = null;
       }
-      if (spaceLeft?.wasActive) {
-        void this.emitSpaceMembers(spaceLeft.spaceId);
-        this.emitSpacesLobbyCounts();
-        const spaceUserId = String(spaceLeft.userId ?? fallbackUserId ?? '').trim();
-        if (spaceUserId) {
-          const spaceChangedDto: UsersSpaceChangedPayloadDto = {
-            userId: spaceUserId,
-            spaceId: null,
-            previousSpaceId: spaceLeft.spaceId,
-          };
-          const targets = this.context.getTargetsForUser(spaceUserId);
-          this.context.emitToSockets(targets, WsEventNames.usersSpaceChanged, spaceChangedDto);
-          void this.presenceRedis.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
-        }
+      const spaceUserId = String(spaceLeft?.userId ?? fallbackUserId ?? '').trim();
+      // Socket-keyed leave can miss when the join socket isn't the one that
+      // dropped. If they have no live tab left, drop membership immediately.
+      let leftSpaceId = spaceLeft?.wasActive ? spaceLeft.spaceId : null;
+      if (spaceUserId && !this.userHasLivePresence(spaceUserId)) {
+        const forced = this.spacesPresence.leaveByUserId(spaceUserId);
+        if (forced) leftSpaceId = forced.spaceId;
+      }
+      if (leftSpaceId) {
+        this.emitSpaceLeft(spaceUserId, leftSpaceId);
       }
     } catch (err) {
       this.logger.warn(
