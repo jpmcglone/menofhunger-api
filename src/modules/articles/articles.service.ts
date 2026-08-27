@@ -17,6 +17,7 @@ import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { SideEffectsService } from '../side-effects/side-effects.service';
+import { ArticleViewsService } from '../article-views/article-views.service';
 import { stableJsonHash } from '../redis/redis-keys';
 import {
   toArticleDto,
@@ -101,6 +102,7 @@ export class ArticlesService {
     private readonly cacheInvalidation: CacheInvalidationService,
     private readonly jobs: JobsService,
     private readonly sideEffects: SideEffectsService,
+    private readonly articleViews: ArticleViewsService,
   ) {}
 
   private get r2BaseUrl(): string | null {
@@ -288,10 +290,15 @@ export class ArticlesService {
       articles = recent.concat(extra);
     }
 
+    const viewed = await this.articleViews.viewerViewedArticleIds(
+      opts.viewerUserId,
+      articles.map((a) => a.id),
+    );
     return articles.map((a) =>
       toArticleDto(a, this.r2BaseUrl, {
         viewerUserId: opts.viewerUserId,
         viewerHasBoosted: opts.viewerUserId ? (a.boosts?.length ?? 0) > 0 : false,
+        viewerHasViewed: opts.viewerUserId ? viewed.has(a.id) : undefined,
         includeBody: opts.includeBody ?? false,
       }),
     );
@@ -409,15 +416,24 @@ export class ArticlesService {
         : {}
       : { visibility: { in: effectiveVisibilities } };
 
-    const toDto = (a: ArticleWithAuthor) => {
+    const toDto = (a: ArticleWithAuthor, viewed: Set<string>) => {
       const viewerCanAccess =
         allowedVisibilities.includes(a.visibility) || a.authorId === opts.viewerUserId;
       return toArticleDto(a, this.r2BaseUrl, {
         viewerUserId: opts.viewerUserId,
         viewerHasBoosted: opts.viewerUserId ? (a.boosts?.length ?? 0) > 0 : false,
+        viewerHasViewed: opts.viewerUserId ? viewed.has(a.id) : undefined,
         viewerCanAccess,
         includeBody: opts.includeBody ?? false,
       });
+    };
+
+    const mapItems = async (items: ArticleWithAuthor[]) => {
+      const viewed = await this.articleViews.viewerViewedArticleIds(
+        opts.viewerUserId,
+        items.map((a) => a.id),
+      );
+      return items.map((a) => toDto(a, viewed));
     };
 
     if (sort === 'trending') {
@@ -443,7 +459,7 @@ export class ArticlesService {
       const items = hasMore ? articles.slice(0, limit) : articles;
       const nextCursor = hasMore ? String(skip + limit) : null;
 
-      return { articles: items.map(toDto), nextCursor };
+      return { articles: await mapItems(items), nextCursor };
     }
 
     // Default: newest first, cursor-based
@@ -466,7 +482,7 @@ export class ArticlesService {
     const items = hasMore ? articles.slice(0, limit) : articles;
     const nextCursor = hasMore ? items[items.length - 1].id : null;
 
-    return { articles: items.map(toDto), nextCursor };
+    return { articles: await mapItems(items), nextCursor };
   }
 
   // ─── List user drafts ────────────────────────────────────────────────────────
@@ -516,6 +532,8 @@ export class ArticlesService {
     }
 
     const viewerHasBoosted = viewerUserId ? (article.boosts?.length ?? 0) > 0 : false;
+    const viewed = await this.articleViews.viewerViewedArticleIds(viewerUserId, [article.id]);
+    const viewerHasViewed = viewerUserId ? viewed.has(article.id) : undefined;
 
     // Visibility gating for published articles: return a stripped preview instead of 404
     // so the frontend can render a gated view (blurred thumbnail + upgrade CTA).
@@ -523,10 +541,20 @@ export class ArticlesService {
       const viewerCtx = viewerUserId ? await this.viewer.getViewer(viewerUserId) : null;
       const allowed = this.viewer.allowedPostVisibilities(viewerCtx);
       const viewerCanAccess = allowed.includes(article.visibility) || article.authorId === viewerUserId;
-      return toArticleDto(article, this.r2BaseUrl, { viewerUserId, viewerHasBoosted, viewerCanAccess });
+      return toArticleDto(article, this.r2BaseUrl, {
+        viewerUserId,
+        viewerHasBoosted,
+        viewerHasViewed,
+        viewerCanAccess,
+      });
     }
 
-    return toArticleDto(article, this.r2BaseUrl, { viewerUserId, viewerHasBoosted, viewerCanAccess: true });
+    return toArticleDto(article, this.r2BaseUrl, {
+      viewerUserId,
+      viewerHasBoosted,
+      viewerHasViewed,
+      viewerCanAccess: true,
+    });
   }
 
   // ─── Create draft ────────────────────────────────────────────────────────────

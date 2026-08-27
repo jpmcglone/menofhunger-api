@@ -158,6 +158,7 @@ type UserPreviewPayload = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
+  accountKind?: 'person' | 'page';
   verifiedStatus: string;
   avatarUrl: string | null;
   bannerUrl: string | null;
@@ -824,6 +825,7 @@ export class UsersController {
       premium: profile.premium,
       premiumPlus: profile.premiumPlus,
       isOrganization: Boolean((profile as any).isOrganization),
+      accountKind: (profile as any).accountKind === 'page' ? 'page' : 'person',
       verifiedStatus: profile.verifiedStatus,
       avatarUrl: profile.avatarUrl,
       bannerUrl: profile.bannerUrl,

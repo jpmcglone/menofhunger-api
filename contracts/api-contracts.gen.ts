@@ -519,6 +519,8 @@ export type ArticleDto = {
   reactions: ArticleReactionSummaryDto[];
   tags: ArticleTagDto[];
   viewerHasBoosted?: boolean;
+  /** True if the viewer has viewed this article (exists in ArticleView table). */
+  viewerHasViewed?: boolean;
   /** False when the viewer's tier does not grant access to this article (preview-only). */
   viewerCanAccess: boolean;
 };

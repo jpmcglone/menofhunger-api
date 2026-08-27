@@ -44,7 +44,9 @@ function makeUsageService(seed: FakeRow[] = []) {
     emitMarvCreditsUpdated: jest.fn(() => undefined),
   };
 
-  const svc = new MarvinUsageService(prisma, presenceRealtime);
+  const svc = new MarvinUsageService(prisma, presenceRealtime, {
+    listClusterUserIds: jest.fn(async (id: string) => [id]),
+  } as any);
   return { svc, prisma, rows };
 }
 

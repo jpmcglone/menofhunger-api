@@ -81,6 +81,8 @@ describe('ViewerContextService.getViewer — request cache reuse', () => {
       premiumPlus: false,
       siteAdmin: false,
       bannedAt: null,
+      isBot: false,
+      accountKind: 'person',
     } as any;
     const { svc, findUnique } = makeServiceWithStore({ prismaUser: dbUser });
 
@@ -92,12 +94,13 @@ describe('ViewerContextService.getViewer — request cache reuse', () => {
       where: { id: 'user-1' },
       select: {
         id: true,
-        isBot: true,
         verifiedStatus: true,
         premium: true,
         premiumPlus: true,
         siteAdmin: true,
         bannedAt: true,
+        isBot: true,
+        accountKind: true,
       },
     });
   });

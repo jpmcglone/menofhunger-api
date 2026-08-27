@@ -97,6 +97,8 @@ export type ArticleDto = {
   reactions: ArticleReactionSummaryDto[];
   tags: ArticleTagDto[];
   viewerHasBoosted?: boolean;
+  /** True if the viewer has viewed this article (exists in ArticleView table). */
+  viewerHasViewed?: boolean;
   /** False when the viewer's tier does not grant access to this article (preview-only). */
   viewerCanAccess: boolean;
 };
@@ -234,6 +236,7 @@ export function toArticleDto(
   opts?: {
     viewerUserId?: string | null;
     viewerHasBoosted?: boolean;
+    viewerHasViewed?: boolean;
     viewerCanAccess?: boolean;
     /** When false, serialize `body` as `{}` (list/trending/landing). Default true. */
     includeBody?: boolean;
@@ -272,6 +275,7 @@ export function toArticleDto(
     tags: (article.tags ?? []).map((t) => ({ tag: t.tag, label: t.label })),
     viewerCanAccess: canAccess,
     ...(typeof opts?.viewerHasBoosted === 'boolean' ? { viewerHasBoosted: opts.viewerHasBoosted } : {}),
+    ...(typeof opts?.viewerHasViewed === 'boolean' ? { viewerHasViewed: opts.viewerHasViewed } : {}),
   };
 }
 

@@ -375,6 +375,13 @@ describe('PresenceStatusHandler', () => {
       {} as any,
       new GatewayThrottleService(),
       makeContext(presence, server),
+      {
+        presenceClusterByUserId: jest.fn(async (ids: string[]) => new Map(ids.map((id) => [id, [id]]))),
+        expandPresenceOnlineIds: jest.fn(async (ids: string[]) => ({
+          displayedIds: [...ids],
+          sourceByDisplayedId: new Map(ids.map((id) => [id, id])),
+        })),
+      } as any,
     );
     return { server, presence, presenceRedis, handler };
   }
@@ -572,6 +579,13 @@ describe('PresenceStatusHandler — impersonated connections', () => {
       {} as any,
       new GatewayThrottleService(),
       makeContext(presence, server),
+      {
+        presenceClusterByUserId: jest.fn(async (ids: string[]) => new Map(ids.map((id) => [id, [id]]))),
+        expandPresenceOnlineIds: jest.fn(async (ids: string[]) => ({
+          displayedIds: [...ids],
+          sourceByDisplayedId: new Map(ids.map((id) => [id, id])),
+        })),
+      } as any,
     );
     const emitOnline = jest.spyOn(handler, 'emitOnline').mockResolvedValue(undefined);
     const emitPlatformsChanged = jest.spyOn(handler, 'emitPlatformsChanged').mockResolvedValue(undefined);

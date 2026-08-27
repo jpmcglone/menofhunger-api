@@ -9,7 +9,11 @@ import { chunk, FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
 import { FANOUT_CHUNK_SIZE } from '../side-effects/side-effects.constants';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { NotificationQueryService } from './notification-query.service';
-import { isBellCountedNotificationKind, NotificationReadStateService } from './notification-read-state.service';
+import {
+  isBellCountedNotificationKind,
+  NotificationReadStateService,
+  PERSON_ONLY_NOTIFICATION_KINDS,
+} from './notification-read-state.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 
 /** Kinds that announce the actor's own post/publish. Operators of a page actor already did the action. */
@@ -167,6 +171,13 @@ export class NotificationWriterService {
 
     // Never notify a user about their own actions — regardless of which call-site triggered this.
     if (actorUserId && actorUserId === recipientUserId) return;
+    if (PERSON_ONLY_NOTIFICATION_KINDS.includes(kind)) {
+      const recipient = await this.prisma.user.findUnique({
+        where: { id: recipientUserId },
+        select: { accountKind: true },
+      });
+      if (recipient?.accountKind === 'page') return;
+    }
     if (
       actorUserId &&
       ACTOR_SELF_ECHO_KINDS.has(kind) &&

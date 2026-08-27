@@ -36,6 +36,7 @@ function makeService(opts?: { allowedVisibilities?: Array<'public' | 'verifiedOn
     cacheInvalidation,
     { enqueue: jest.fn().mockResolvedValue({}) } as any,
     { dispatch: jest.fn() } as any,
+    { viewerViewedArticleIds: jest.fn().mockResolvedValue(new Set()) } as any,
   );
 
   return { service, prisma, viewer };
@@ -151,6 +152,7 @@ function makeAuthoringService(tier: TierOpts = {}) {
     cacheInvalidation,
     { enqueue: jest.fn().mockResolvedValue({}) } as any,
     { dispatch: jest.fn() } as any,
+    { viewerViewedArticleIds: jest.fn().mockResolvedValue(new Set()) } as any,
   );
 
   return { service, prisma, viewer };

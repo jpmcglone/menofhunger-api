@@ -76,6 +76,36 @@ describe('AccountSwitchService', () => {
     await expect(svc.listTokenOwnerIds('john')).resolves.toEqual(['john']);
   });
 
+  it('expands a connected person into their operated pages', async () => {
+    const { svc, prisma } = makeService();
+    prisma.userPageOperator.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { operatorUserId: 'john', pageUserId: 'news' },
+        { operatorUserId: 'john', pageUserId: 'radio' },
+      ]);
+
+    const expanded = await svc.expandPresenceOnlineIds(['john']);
+    expect(expanded.displayedIds.sort()).toEqual(['john', 'news', 'radio']);
+    expect(expanded.sourceByDisplayedId.get('news')).toBe('john');
+    expect(expanded.sourceByDisplayedId.get('radio')).toBe('john');
+  });
+
+  it('expands a connected page into the operator and sibling pages', async () => {
+    const { svc, prisma } = makeService();
+    prisma.userPageOperator.findMany
+      .mockResolvedValueOnce([{ operatorUserId: 'john', pageUserId: 'news' }])
+      .mockResolvedValueOnce([
+        { operatorUserId: 'john', pageUserId: 'news' },
+        { operatorUserId: 'john', pageUserId: 'radio' },
+      ]);
+
+    const expanded = await svc.expandPresenceOnlineIds(['news']);
+    expect(expanded.displayedIds.sort()).toEqual(['john', 'news', 'radio']);
+    expect(expanded.sourceByDisplayedId.get('john')).toBe('news');
+    expect(expanded.sourceByDisplayedId.get('radio')).toBe('news');
+  });
+
   it('rejects switch while impersonating', async () => {
     const { svc } = makeService();
     await expect(

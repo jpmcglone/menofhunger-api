@@ -513,7 +513,7 @@ export class FollowsService {
         bannedAt: null,
         username: { equals: normalized, mode: 'insensitive' },
       },
-      select: { id: true, username: true, followVisibility: true },
+      select: { id: true, username: true, followVisibility: true, accountKind: true },
     });
     if (!user) throw new NotFoundException('User not found.');
     return user;
@@ -677,8 +677,11 @@ export class FollowsService {
     // Unverified users may only nudge back — they cannot initiate.
     const viewer = await this.prisma.user.findUnique({
       where: { id: viewerUserId },
-      select: { verifiedStatus: true },
+      select: { verifiedStatus: true, accountKind: true },
     });
+    if (viewer?.accountKind === 'page' || target.accountKind === 'page') {
+      throw new NotFoundException('Not found.');
+    }
     const viewerIsVerified = viewer?.verifiedStatus !== 'none';
     if (!viewerIsVerified) {
       const inboundFirst = await this.prisma.notification.findFirst({
@@ -780,7 +783,12 @@ export class FollowsService {
     const relationship = await this.status({ viewerUserId, username });
     const mutual = Boolean(relationship.viewerFollowsUser && relationship.userFollowsViewer);
     const nudge =
-      viewerUserId && mutual ? await this.getNudgeState({ viewerUserId, targetUserId: target.id }) : null;
+      viewerUserId &&
+      mutual &&
+      viewer?.accountKind !== 'page' &&
+      target.accountKind !== 'page'
+        ? await this.getNudgeState({ viewerUserId, targetUserId: target.id })
+        : null;
     const canView = this.canViewFollowInfo({
       viewer,
       targetUserId: target.id,

@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ArticleViewsService } from '../article-views/article-views.service';
 import { OptionalCurrentUserId, CurrentUserId } from '../users/users.decorator';
 import { z } from 'zod';
 import type { Response } from 'express';
@@ -49,7 +50,26 @@ export class SearchController {
     private readonly posthog: PosthogService,
     private readonly taxonomy: TaxonomyService,
     private readonly prisma: PrismaService,
+    private readonly articleViews: ArticleViewsService,
   ) {}
+
+  private async toSearchArticleDtos(
+    articles: Array<{ id: string; viewerCanAccess?: boolean }>,
+    viewerUserId: string | null,
+    publicBaseUrl: string | null,
+  ) {
+    const viewed = await this.articleViews.viewerViewedArticleIds(
+      viewerUserId,
+      articles.map((a) => a.id),
+    );
+    return articles.map((a) =>
+      toArticleDto(a as unknown as ArticleWithAuthor, publicBaseUrl, {
+        viewerUserId,
+        viewerCanAccess: a.viewerCanAccess,
+        viewerHasViewed: viewerUserId ? viewed.has(a.id) : undefined,
+      }),
+    );
+  }
 
   @Throttle({
     default: {
@@ -176,12 +196,7 @@ export class SearchController {
             ...(gp ? { groupPreview: gp } : {}),
           });
         });
-        const articles = (res.articles ?? []).map((a) =>
-          toArticleDto(a as unknown as ArticleWithAuthor, publicBaseUrl, {
-            viewerUserId,
-            viewerCanAccess: a.viewerCanAccess,
-          }),
-        );
+        const articles = await this.toSearchArticleDtos(res.articles ?? [], viewerUserId, publicBaseUrl);
         const groups = res.groups ?? [];
         const taxonomyMatches = q.length >= 2
           ? await this.taxonomy.search({ q, limit: Math.min(8, limit) })
@@ -218,12 +233,7 @@ export class SearchController {
 
     if (type === 'articles') {
       const res = await this.search.searchArticles({ viewerUserId, q, limit, cursor });
-      const articles = (res.articles ?? []).map((a) =>
-        toArticleDto(a as unknown as ArticleWithAuthor, publicBaseUrl, {
-          viewerUserId,
-          viewerCanAccess: a.viewerCanAccess,
-        }),
-      );
+      const articles = await this.toSearchArticleDtos(res.articles ?? [], viewerUserId, publicBaseUrl);
       return { data: articles, pagination: { nextCursor: res.nextCursor } };
     }
 

@@ -11,6 +11,7 @@ export type ViewerContext = {
   siteAdmin: boolean;
   bannedAt: Date | null;
   isBot: boolean;
+  accountKind: 'person' | 'page';
 };
 
 @Injectable()
@@ -32,10 +33,22 @@ export class ViewerContextService {
     const cached = this.requestCache.get<ViewerContext | null>(key);
     if (cached !== undefined) return cached;
 
-    const viewer = await this.prisma.user.findUnique({
+    const row = await this.prisma.user.findUnique({
       where: { id: uid },
-      select: { id: true, verifiedStatus: true, premium: true, premiumPlus: true, siteAdmin: true, bannedAt: true, isBot: true },
+      select: {
+        id: true,
+        verifiedStatus: true,
+        premium: true,
+        premiumPlus: true,
+        siteAdmin: true,
+        bannedAt: true,
+        isBot: true,
+        accountKind: true,
+      },
     });
+    const viewer = row
+      ? { ...row, accountKind: row.accountKind === 'page' ? ('page' as const) : ('person' as const) }
+      : null;
     this.requestCache.set(key, viewer);
     return viewer;
   }

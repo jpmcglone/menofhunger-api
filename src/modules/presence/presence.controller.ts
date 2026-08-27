@@ -17,6 +17,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { PostsService } from '../posts/posts.service';
+import { AccountSwitchService } from '../auth/account-switch.service';
 
 const ONLINE_LIST_CACHE_TTL_MS = 10_000;
 const RECENTLY_ONLINE_WINDOW_MS = 60 * 60_000;
@@ -126,7 +127,37 @@ export class PresenceController {
     private readonly appConfig: AppConfigService,
     private readonly marvIdentity: MarvinBotIdentityService,
     private readonly posts: PostsService,
+    private readonly accountSwitch: AccountSwitchService,
   ) {}
+
+  /**
+   * Connected sockets plus every operated page / operator in those clusters.
+   * Synthetic identities inherit last-connect / idle / platforms from a live member.
+   */
+  private async expandDisplayedOnlineIds(connectedIds: string[]): Promise<{
+    userIds: string[];
+    sourceByDisplayedId: Map<string, string>;
+  }> {
+    const expanded = await this.accountSwitch.expandPresenceOnlineIds(connectedIds);
+    return { userIds: expanded.displayedIds, sourceByDisplayedId: expanded.sourceByDisplayedId };
+  }
+
+  private inheritPresenceMaps(
+    displayedIds: string[],
+    sourceByDisplayedId: Map<string, string>,
+    lastConnectAtById: Map<string, number | null>,
+    idleById: Map<string, boolean>,
+    platformsById: Map<string, string[]>,
+  ): void {
+    for (const id of displayedIds) {
+      const source = sourceByDisplayedId.get(id) ?? id;
+      if (!lastConnectAtById.has(id) || lastConnectAtById.get(id) == null) {
+        lastConnectAtById.set(id, lastConnectAtById.get(source) ?? null);
+      }
+      if (!idleById.has(id)) idleById.set(id, idleById.get(source) ?? false);
+      if (!platformsById.has(id)) platformsById.set(id, platformsById.get(source) ?? []);
+    }
+  }
 
   /**
    * Builds the synthetic Marv "always online" row when `MARV_ENABLED=true` and
@@ -311,18 +342,28 @@ export class PresenceController {
         userIds = [viewerUserId, ...userIds];
       }
     }
+    const connectedIds = userIds;
+    const expanded = await this.expandDisplayedOnlineIds(connectedIds);
+    userIds = expanded.userIds;
 
     // The four downstream lookups are all keyed off the same `userIds` array
     // and don't depend on each other, so we run them concurrently. This trades
     // 4 sequential round-trips (Redis + Postgres + Redis + Postgres) for 1
     // wall-clock wait on the slowest of them.
     const [lastConnectAtById, users, idleById, activeStatuses, platformsById] = await Promise.all([
-      this.presenceRedis.lastConnectAtMsByUserId(userIds),
+      this.presenceRedis.lastConnectAtMsByUserId(connectedIds),
       this.follows.getFollowListUsersByIds({ viewerUserId, userIds }),
-      this.presenceRedis.idleByUserIds(userIds),
+      this.presenceRedis.idleByUserIds(connectedIds),
       this.presence.getActiveStatuses(userIds),
-      this.presenceRedis.platformsByUserIds(userIds),
+      this.presenceRedis.platformsByUserIds(connectedIds),
     ]);
+    this.inheritPresenceMaps(
+      userIds,
+      expanded.sourceByDisplayedId,
+      lastConnectAtById,
+      idleById,
+      platformsById,
+    );
     if (viewerUserId && includeSelf && !lastConnectAtById.has(viewerUserId)) {
       lastConnectAtById.set(viewerUserId, Date.now());
     }
@@ -404,8 +445,9 @@ export class PresenceController {
     if (cursorRaw && !cursor) throw new BadRequestException('Invalid cursor.');
 
     // Exclude currently-online users so "Recently online" is truly "recently" (offline users).
-    const onlineIds = await this.presenceRedis.onlineUserIds();
-    const onlineFilter = onlineIds.length ? { id: { notIn: onlineIds } } : {};
+    const connectedIds = await this.presenceRedis.onlineUserIds();
+    const { displayedIds } = await this.accountSwitch.expandPresenceOnlineIds(connectedIds);
+    const onlineFilter = displayedIds.length ? { id: { notIn: displayedIds } } : {};
 
     let pageItems: Array<{ id: string; lastOnlineAt: string | null }> = [];
     let nextCursor: string | null = null;
@@ -556,17 +598,27 @@ export class PresenceController {
         onlineUserIds = [viewerUserId, ...onlineUserIds];
       }
     }
+    const connectedOnlineIds = onlineUserIds;
+    const expandedOnline = await this.expandDisplayedOnlineIds(connectedOnlineIds);
+    onlineUserIds = expandedOnline.userIds;
 
     // Same parallel-fan-out optimization as `/presence/online`: the four lookups
     // below all key off `onlineUserIds` and don't depend on each other, so we
     // run them concurrently to drop 3 round-trips of wall-clock wait.
     const [lastConnectAtById, onlineUsers, idleById, onlineStatuses, platformsById] = await Promise.all([
-      this.presenceRedis.lastConnectAtMsByUserId(onlineUserIds),
+      this.presenceRedis.lastConnectAtMsByUserId(connectedOnlineIds),
       this.follows.getFollowListUsersByIds({ viewerUserId, userIds: onlineUserIds }),
-      this.presenceRedis.idleByUserIds(onlineUserIds),
+      this.presenceRedis.idleByUserIds(connectedOnlineIds),
       this.presence.getActiveStatuses(onlineUserIds),
-      this.presenceRedis.platformsByUserIds(onlineUserIds),
+      this.presenceRedis.platformsByUserIds(connectedOnlineIds),
     ]);
+    this.inheritPresenceMaps(
+      onlineUserIds,
+      expandedOnline.sourceByDisplayedId,
+      lastConnectAtById,
+      idleById,
+      platformsById,
+    );
     if (viewerUserId && includeSelf && !lastConnectAtById.has(viewerUserId)) {
       lastConnectAtById.set(viewerUserId, Date.now());
     }

@@ -20,6 +20,8 @@ export const PERSON_ONLY_NOTIFICATION_KINDS: NotificationKind[] = [
   'quote_of_the_day',
   'checkin_reminder',
   'on_this_day',
+  'checkin_post',
+  'nudge',
 ];
 
 export function bellExcludedKindsForAccount(

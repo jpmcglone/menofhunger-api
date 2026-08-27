@@ -57,3 +57,35 @@ describe('NotificationWriterService — operator self-echo', () => {
     expect(prisma.notification.create).not.toHaveBeenCalled();
   });
 });
+
+describe('NotificationWriterService — person-only kinds skip pages', () => {
+  it('does not write checkin_post or nudge rows to page inboxes', async () => {
+    const prisma = {
+      user: { findUnique: jest.fn().mockResolvedValue({ accountKind: 'page' }) },
+      userPageOperator: { findUnique: jest.fn(), findMany: jest.fn(async () => []) },
+      notification: { create: jest.fn() },
+    };
+    const service = new NotificationWriterService(
+      prisma as never,
+      { emitNotificationsUpdated: jest.fn() } as never,
+      { isOnline: jest.fn().mockResolvedValue(false) } as never,
+      { dispatch: jest.fn() } as never,
+      { dispatch: jest.fn() } as never,
+      { getOne: jest.fn() } as never,
+      { undeliveredBellWhere: jest.fn() } as never,
+    );
+
+    await service.create({
+      recipientUserId: 'news',
+      kind: 'checkin_post',
+      actorUserId: 'john',
+    });
+    await service.create({
+      recipientUserId: 'news',
+      kind: 'nudge',
+      actorUserId: 'john',
+    });
+
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+  });
+});

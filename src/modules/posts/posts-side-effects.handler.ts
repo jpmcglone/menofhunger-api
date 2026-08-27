@@ -660,7 +660,14 @@ export class PostsSideEffectsHandler implements OnModuleInit {
               select: {
                 followerId: true,
                 postNotificationsEnabled: true,
-                follower: { select: { verifiedStatus: true, premium: true, premiumPlus: true } },
+                follower: {
+                  select: {
+                    verifiedStatus: true,
+                    premium: true,
+                    premiumPlus: true,
+                    accountKind: true,
+                  },
+                },
               },
             }),
             this.prisma.userPageOperator.findMany({
@@ -691,7 +698,12 @@ export class PostsSideEffectsHandler implements OnModuleInit {
             // status_update notification instead (fired by the presence domain event).
             // Checkin posts use the checkin_post kind so followers can filter them separately.
             // Operators of this page already posted; they still get the home-feed emit.
-            if (post.kind !== 'status' && !operatorIds.has(recipientUserId)) {
+            // Pages never receive checkin_post bells — person-only, both as actor and follower.
+            if (
+              post.kind !== 'status' &&
+              !operatorIds.has(recipientUserId) &&
+              !(post.kind === 'checkin' && f.follower?.accountKind === 'page')
+            ) {
               followerNotificationIds.push(recipientUserId);
             }
 

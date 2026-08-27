@@ -44,6 +44,12 @@ function makeService(initialBucket: Bucket = null) {
 
   const prisma: any = {
     marvinCreditBalance: tx.marvinCreditBalance,
+    user: {
+      findUnique: jest.fn(async () => ({ accountKind: 'person' })),
+    },
+    userPageOperator: {
+      findFirst: jest.fn(async () => null),
+    },
     $transaction: jest.fn(async (fn: any) => fn(tx)),
   };
 
@@ -181,6 +187,8 @@ describe('MarvinCreditService', () => {
 
       const prismaA: any = {
         marvinCreditBalance: txA.marvinCreditBalance,
+        user: { findUnique: jest.fn(async () => ({ accountKind: 'person' })) },
+        userPageOperator: { findFirst: jest.fn(async () => null) },
         $transaction: jest.fn(async (fn: any) => fn(txA)),
       };
       const appConfig: any = {
@@ -283,6 +291,24 @@ describe('MarvinCreditService', () => {
     it('rejects negative credits', async () => {
       const { svc } = makeService();
       await expect(svc.setCredits('u1', -1)).rejects.toThrow(/non-negative/);
+    });
+  });
+
+  describe('shared page bucket', () => {
+    it('charges the operator bucket when the requester is a page', async () => {
+      const t0 = new Date('2026-01-01T00:00:00.000Z');
+      const { svc, prisma, getBucket } = makeService({ credits: 50, lastRefilledAt: t0 });
+      prisma.user.findUnique.mockResolvedValue({ accountKind: 'page' });
+      prisma.userPageOperator.findFirst.mockResolvedValue({ operatorUserId: 'john' });
+
+      const summary = await svc.spend('news', 4, { now: t0 });
+      expect(summary.credits).toBe(46);
+      expect(getBucket()?.credits).toBe(46);
+      expect(prisma.userPageOperator.findFirst).toHaveBeenCalledWith({
+        where: { pageUserId: 'news' },
+        orderBy: { createdAt: 'asc' },
+        select: { operatorUserId: true },
+      });
     });
   });
 });

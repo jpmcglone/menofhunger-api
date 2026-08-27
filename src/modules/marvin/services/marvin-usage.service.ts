@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { MarvinMode, MarvinSource, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PresenceRealtimeService } from '../../presence/presence-realtime.service';
+import { AccountSwitchService } from '../../auth/account-switch.service';
 import type { MarvCreditSummary } from './marvin-credit.service';
 import type { MarvErrorCode } from '../marvin.constants';
 
@@ -39,6 +40,7 @@ export class MarvinUsageService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly accountSwitch: AccountSwitchService,
   ) {}
 
   async recordEvent(input: RecordEventInput): Promise<void> {
@@ -86,17 +88,39 @@ export class MarvinUsageService {
    * without polling. Carries everything the UI needs to render fresh state.
    */
   emitCreditsUpdated(userId: string, summary: MarvCreditSummary): void {
+    const payload = {
+      credits: summary.credits,
+      maxCredits: summary.maxCredits,
+      creditsPerDay: summary.creditsPerDay,
+      lastRefilledAt: summary.lastRefilledAt.toISOString(),
+    };
+    void this.emitCreditsUpdatedToCluster(userId, payload);
+  }
+
+  private async emitCreditsUpdatedToCluster(
+    userId: string,
+    payload: {
+      credits: number;
+      maxCredits: number;
+      creditsPerDay: number;
+      lastRefilledAt: string;
+    },
+  ): Promise<void> {
+    let targets = [userId];
     try {
-      this.presenceRealtime.emitMarvCreditsUpdated(userId, {
-        credits: summary.credits,
-        maxCredits: summary.maxCredits,
-        creditsPerDay: summary.creditsPerDay,
-        lastRefilledAt: summary.lastRefilledAt.toISOString(),
-      });
-    } catch (err) {
-      this.logger.debug(
-        `[marv] emitCreditsUpdated failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      const cluster = await this.accountSwitch.listClusterUserIds(userId);
+      if (cluster.length > 0) targets = cluster;
+    } catch {
+      // Fall back to the requesting identity.
+    }
+    for (const id of targets) {
+      try {
+        this.presenceRealtime.emitMarvCreditsUpdated(id, payload);
+      } catch (err) {
+        this.logger.debug(
+          `[marv] emitCreditsUpdated failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 

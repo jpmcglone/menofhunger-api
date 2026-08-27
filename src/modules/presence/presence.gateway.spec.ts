@@ -228,6 +228,13 @@ function buildGateway(deps: {
     deps.marvIdentity,
     throttle,
     context,
+    {
+      presenceClusterByUserId: jest.fn(async (ids: string[]) => new Map(ids.map((id: string) => [id, [id]]))),
+      expandPresenceOnlineIds: jest.fn(async (ids: string[]) => ({
+        displayedIds: [...ids],
+        sourceByDisplayedId: new Map(ids.map((id: string) => [id, id])),
+      })),
+    } as any,
   );
   const spacesHandler = new SpacesGatewayHandler(
     deps.presence,

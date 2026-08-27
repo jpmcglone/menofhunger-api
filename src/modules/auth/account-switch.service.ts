@@ -119,6 +119,77 @@ export class AccountSwitchService {
     return [...ids];
   }
 
+  /**
+   * Presence cluster: a person plus every page they operate. A connected page
+   * maps to its operators and those operators' other pages, so switching
+   * identity does not drop anyone from Online now.
+   */
+  async presenceClusterByUserId(userIds: string[]): Promise<Map<string, string[]>> {
+    const ids = [...new Set(userIds.map((id) => String(id ?? '').trim()).filter(Boolean))];
+    const out = new Map<string, string[]>();
+    if (ids.length === 0) return out;
+
+    const asPage = await this.prisma.userPageOperator.findMany({
+      where: { pageUserId: { in: ids } },
+      select: { operatorUserId: true, pageUserId: true },
+    });
+    const operatorIds = new Set(ids);
+    for (const row of asPage) operatorIds.add(row.operatorUserId);
+
+    const asOperator = await this.prisma.userPageOperator.findMany({
+      where: { operatorUserId: { in: [...operatorIds] } },
+      select: { operatorUserId: true, pageUserId: true },
+    });
+    const pagesByOperator = new Map<string, string[]>();
+    const operatorsByPage = new Map<string, string[]>();
+    for (const row of asOperator) {
+      const pages = pagesByOperator.get(row.operatorUserId) ?? [];
+      pages.push(row.pageUserId);
+      pagesByOperator.set(row.operatorUserId, pages);
+      const operators = operatorsByPage.get(row.pageUserId) ?? [];
+      operators.push(row.operatorUserId);
+      operatorsByPage.set(row.pageUserId, operators);
+    }
+
+    for (const id of ids) {
+      const displayed = new Set<string>([id]);
+      const operators = operatorsByPage.get(id);
+      if (operators && operators.length > 0) {
+        for (const operatorId of operators) {
+          displayed.add(operatorId);
+          for (const pageId of pagesByOperator.get(operatorId) ?? []) displayed.add(pageId);
+        }
+      } else {
+        for (const pageId of pagesByOperator.get(id) ?? []) displayed.add(pageId);
+      }
+      out.set(id, [...displayed]);
+    }
+    return out;
+  }
+
+  /**
+   * Expand actually-connected sockets into the identities that should appear
+   * online. `sourceByDisplayedId` points each displayed id at a connected
+   * member so idle/platforms/lastConnectAt can be inherited.
+   */
+  async expandPresenceOnlineIds(connectedIds: string[]): Promise<{
+    displayedIds: string[];
+    sourceByDisplayedId: Map<string, string>;
+  }> {
+    const connected = [...new Set(connectedIds.map((id) => String(id ?? '').trim()).filter(Boolean))];
+    const sourceByDisplayedId = new Map<string, string>();
+    for (const id of connected) sourceByDisplayedId.set(id, id);
+    if (connected.length === 0) return { displayedIds: [], sourceByDisplayedId };
+
+    const clusters = await this.presenceClusterByUserId(connected);
+    for (const connectedId of connected) {
+      for (const displayedId of clusters.get(connectedId) ?? [connectedId]) {
+        if (!sourceByDisplayedId.has(displayedId)) sourceByDisplayedId.set(displayedId, connectedId);
+      }
+    }
+    return { displayedIds: [...sourceByDisplayedId.keys()], sourceByDisplayedId };
+  }
+
   /** Bell + groups + chat unread for one identity (switcher row). */
   async unreadBadgeCountForUser(userId: string): Promise<number> {
     const counts = await this.unreadBadgeCounts([userId]);

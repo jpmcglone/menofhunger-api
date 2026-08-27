@@ -344,7 +344,27 @@ export class ArticleViewsService {
       .filter((ack): ack is ArticleViewAckDto => ack != null);
   }
 
-  async getBreakdown(articleId: string, viewerUserId?: string | null): Promise<ArticleViewBreakdown> {
+  /** Article IDs the viewer has a unique ArticleView row for. */
+  async viewerViewedArticleIds(
+    viewerUserId: string | null | undefined,
+    articleIds: string[],
+  ): Promise<Set<string>> {
+    const uid = (viewerUserId ?? '').trim();
+    const ids = [...new Set((articleIds ?? []).map((id) => (id ?? '').trim()).filter(Boolean))];
+    if (!uid || ids.length === 0) return new Set();
+
+    const rows = await this.prisma.articleView.findMany({
+      where: { userId: uid, articleId: { in: ids } },
+      select: { articleId: true },
+    });
+    return new Set(rows.map((row) => row.articleId));
+  }
+
+  async getBreakdown(
+    articleId: string,
+    viewerUserId?: string | null,
+    options?: { fresh?: boolean },
+  ): Promise<ArticleViewBreakdown> {
     const aid = (articleId ?? '').trim();
     const uid = (viewerUserId ?? '').trim() || null;
 
@@ -369,70 +389,76 @@ export class ArticleViewsService {
       }
     }
 
+    const computeBreakdown = async (): Promise<ArticleViewBreakdown> => {
+      const rows = await this.prisma.$queryRaw<
+        Array<{
+          premium: bigint;
+          verified: bigint;
+          unverified: bigint;
+          premium_total: bigint;
+          verified_total: bigint;
+          unverified_total: bigint;
+        }>
+      >`
+        SELECT
+          COUNT(*) FILTER (WHERE u.premium OR u."premiumPlus")                                        AS premium,
+          COUNT(*) FILTER (WHERE u."verifiedStatus" != 'none' AND NOT (u.premium OR u."premiumPlus")) AS verified,
+          COUNT(*) FILTER (WHERE u."verifiedStatus" = 'none'  AND NOT (u.premium OR u."premiumPlus")) AS unverified,
+          COALESCE(SUM(av."impressionCount") FILTER (WHERE u.premium OR u."premiumPlus"), 0) AS premium_total,
+          COALESCE(SUM(av."impressionCount") FILTER (
+            WHERE u."verifiedStatus" != 'none' AND NOT (u.premium OR u."premiumPlus")
+          ), 0) AS verified_total,
+          COALESCE(SUM(av."impressionCount") FILTER (
+            WHERE u."verifiedStatus" = 'none' AND NOT (u.premium OR u."premiumPlus")
+          ), 0) AS unverified_total
+        FROM "ArticleView" av
+        JOIN "User" u ON u.id = av."userId"
+        WHERE av."articleId" = ${aid}
+      `;
+
+      const row = rows[0] ?? {
+        premium: 0n,
+        verified: 0n,
+        unverified: 0n,
+        premium_total: 0n,
+        verified_total: 0n,
+        unverified_total: 0n,
+      };
+      const premium = Number(row.premium ?? 0);
+      const verified = Number(row.verified ?? 0);
+      const unverified = Number(row.unverified ?? 0);
+      const premiumTotal = Number(row.premium_total ?? 0);
+      const verifiedTotal = Number(row.verified_total ?? 0);
+      const unverifiedTotal = Number(row.unverified_total ?? 0);
+
+      const total = Math.max(0, Math.floor(Number(article.viewCount ?? 0)));
+      const totalViewCount = Math.max(0, Math.floor(Number(article.totalViewCount ?? total)));
+      const guest = Math.max(0, total - (premium + verified + unverified));
+      const guestTotal = Math.max(0, totalViewCount - (premiumTotal + verifiedTotal + unverifiedTotal));
+
+      return {
+        premium,
+        verified,
+        unverified,
+        guest,
+        total,
+        totalViewCount,
+        premiumTotal,
+        verifiedTotal,
+        unverifiedTotal,
+        guestTotal,
+      };
+    };
+
+    if (options?.fresh) {
+      return await computeBreakdown();
+    }
+
     return this.cache.getOrSetJson<ArticleViewBreakdown>({
       enabled: true,
       key: breakdownCacheKey(aid),
       ttlSeconds: BREAKDOWN_TTL_SECONDS,
-      compute: async () => {
-        const rows = await this.prisma.$queryRaw<
-          Array<{
-            premium: bigint;
-            verified: bigint;
-            unverified: bigint;
-            premium_total: bigint;
-            verified_total: bigint;
-            unverified_total: bigint;
-          }>
-        >`
-          SELECT
-            COUNT(*) FILTER (WHERE u.premium OR u."premiumPlus")                                        AS premium,
-            COUNT(*) FILTER (WHERE u."verifiedStatus" != 'none' AND NOT (u.premium OR u."premiumPlus")) AS verified,
-            COUNT(*) FILTER (WHERE u."verifiedStatus" = 'none'  AND NOT (u.premium OR u."premiumPlus")) AS unverified,
-            COALESCE(SUM(av."impressionCount") FILTER (WHERE u.premium OR u."premiumPlus"), 0) AS premium_total,
-            COALESCE(SUM(av."impressionCount") FILTER (
-              WHERE u."verifiedStatus" != 'none' AND NOT (u.premium OR u."premiumPlus")
-            ), 0) AS verified_total,
-            COALESCE(SUM(av."impressionCount") FILTER (
-              WHERE u."verifiedStatus" = 'none' AND NOT (u.premium OR u."premiumPlus")
-            ), 0) AS unverified_total
-          FROM "ArticleView" av
-          JOIN "User" u ON u.id = av."userId"
-          WHERE av."articleId" = ${aid}
-        `;
-
-        const row = rows[0] ?? {
-          premium: 0n,
-          verified: 0n,
-          unverified: 0n,
-          premium_total: 0n,
-          verified_total: 0n,
-          unverified_total: 0n,
-        };
-        const premium = Number(row.premium ?? 0);
-        const verified = Number(row.verified ?? 0);
-        const unverified = Number(row.unverified ?? 0);
-        const premiumTotal = Number(row.premium_total ?? 0);
-        const verifiedTotal = Number(row.verified_total ?? 0);
-        const unverifiedTotal = Number(row.unverified_total ?? 0);
-
-        const total = Math.max(0, Math.floor(Number(article.viewCount ?? 0)));
-        const totalViewCount = Math.max(0, Math.floor(Number(article.totalViewCount ?? total)));
-        const guest = Math.max(0, total - (premium + verified + unverified));
-        const guestTotal = Math.max(0, totalViewCount - (premiumTotal + verifiedTotal + unverifiedTotal));
-
-        return {
-          premium,
-          verified,
-          unverified,
-          guest,
-          total,
-          totalViewCount,
-          premiumTotal,
-          verifiedTotal,
-          unverifiedTotal,
-          guestTotal,
-        };
-      },
+      compute: computeBreakdown,
     });
   }
 }

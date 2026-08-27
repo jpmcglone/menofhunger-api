@@ -63,14 +63,36 @@ export class MarvinCreditService {
   }
 
   /**
+   * Pages share the operator's credit bucket so switching identity does not
+   * mint a second monthly allowance. A page with several operators bills the
+   * earliest-created operator.
+   */
+  async resolveCreditOwnerId(userId: string): Promise<string> {
+    const id = String(userId ?? '').trim();
+    if (!id) return userId;
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { accountKind: true },
+    });
+    if (user?.accountKind !== 'page') return id;
+    const operator = await this.prisma.userPageOperator.findFirst({
+      where: { pageUserId: id },
+      orderBy: { createdAt: 'asc' },
+      select: { operatorUserId: true },
+    });
+    return operator?.operatorUserId ?? id;
+  }
+
+  /**
    * Fetch the user's bucket, refilling it based on elapsed time. If no row exists yet,
    * lazily create it at the monthly starting balance — premium users start with a full
    * month's worth of credits the first time they use Marv.
    */
   async refill(userId: string, now: Date = new Date()): Promise<MarvCreditSummary> {
+    const ownerId = await this.resolveCreditOwnerId(userId);
     const cfg = this.appConfig.marvCredits();
     return await this.prisma.$transaction(async (tx) => {
-      return await this.refillTx(tx, userId, now, cfg);
+      return await this.refillTx(tx, ownerId, now, cfg);
     });
   }
 
@@ -118,20 +140,21 @@ export class MarvinCreditService {
       throw new Error(`Invalid Marv credit refund: ${amount}`);
     }
     const cfg = this.appConfig.marvCredits();
+    const ownerId = await this.resolveCreditOwnerId(userId);
     if (amount === 0) {
-      return await this.refill(userId, now);
+      return await this.refill(ownerId, now);
     }
     return await this.prisma.$transaction(async (tx) => {
       const existing = await tx.marvinCreditBalance.findUnique({
-        where: { userId },
+        where: { userId: ownerId },
         select: { credits: true, lastRefilledAt: true },
       });
       if (!existing) {
         // Nothing to refund into — create a capped bucket with the refund amount.
         const capped = Math.min(cfg.maxCredits, amount);
         const created = await tx.marvinCreditBalance.upsert({
-          where: { userId },
-          create: { userId, credits: capped, lastRefilledAt: now },
+          where: { userId: ownerId },
+          create: { userId: ownerId, credits: capped, lastRefilledAt: now },
           update: {},
           select: { credits: true, lastRefilledAt: true },
         });
@@ -144,7 +167,7 @@ export class MarvinCreditService {
       }
       const next = Math.min(cfg.maxCredits, existing.credits + amount);
       const updated = await tx.marvinCreditBalance.update({
-        where: { userId },
+        where: { userId: ownerId },
         data: { credits: next, lastRefilledAt: now },
         select: { credits: true, lastRefilledAt: true },
       });
@@ -199,29 +222,30 @@ export class MarvinCreditService {
     if (!Number.isFinite(amount) || amount < 0) {
       throw new Error(`Invalid Marv credit cost: ${amount}`);
     }
+    const ownerId = await this.resolveCreditOwnerId(userId);
     if (amount === 0) {
-      return await this.refill(userId, options?.now ?? new Date());
+      return await this.refill(ownerId, options?.now ?? new Date());
     }
     const now = options?.now ?? new Date();
     const cfg = this.appConfig.marvCredits();
     return await this.prisma.$transaction(async (tx) => {
-      const refilled = await this.refillOrReuseTx(tx, userId, now, cfg, options?.recentSummary);
+      const refilled = await this.refillOrReuseTx(tx, ownerId, now, cfg, options?.recentSummary);
       if (refilled.credits < amount) {
         throw new InsufficientMarvCreditsError(refilled.credits, amount);
       }
       const affected = await tx.marvinCreditBalance.updateMany({
-        where: { userId, credits: { gte: amount } },
+        where: { userId: ownerId, credits: { gte: amount } },
         data: { credits: { decrement: amount }, lastRefilledAt: now },
       });
       if (affected.count === 0) {
         const fresh = await tx.marvinCreditBalance.findUnique({
-          where: { userId },
+          where: { userId: ownerId },
           select: { credits: true },
         });
         throw new InsufficientMarvCreditsError(fresh?.credits ?? 0, amount);
       }
       const updated = await tx.marvinCreditBalance.findUnique({
-        where: { userId },
+        where: { userId: ownerId },
         select: { credits: true, lastRefilledAt: true },
       });
       return {
@@ -297,9 +321,10 @@ export class MarvinCreditService {
       throw new Error('Credits must be a non-negative finite number.');
     }
     const capped = Math.min(cfg.maxCredits, credits);
+    const ownerId = await this.resolveCreditOwnerId(userId);
     const updated = await this.prisma.marvinCreditBalance.upsert({
-      where: { userId },
-      create: { userId, credits: capped, lastRefilledAt: now },
+      where: { userId: ownerId },
+      create: { userId: ownerId, credits: capped, lastRefilledAt: now },
       update: { credits: capped, lastRefilledAt: now },
       select: { credits: true, lastRefilledAt: true },
     });

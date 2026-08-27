@@ -75,6 +75,12 @@ function makeController(opts?: {
   };
 
   const posts: any = {};
+  const accountSwitch: any = {
+    expandPresenceOnlineIds: jest.fn(async (ids: string[]) => ({
+      displayedIds: [...ids],
+      sourceByDisplayedId: new Map(ids.map((id) => [id, id])),
+    })),
+  };
   const controller = new PresenceController(
     presenceRedis,
     presence,
@@ -85,6 +91,7 @@ function makeController(opts?: {
     appConfig,
     marvIdentity,
     posts,
+    accountSwitch,
   );
 
   return { controller, follows, redis, marvIdentity, appConfig, presenceRedis, prisma };

@@ -14,6 +14,7 @@ import { PresenceService } from '../presence.service';
 import { PresenceRedisStateService } from '../presence-redis-state.service';
 import { GatewayContextService } from './gateway-context.service';
 import { GatewayThrottleService } from './gateway-throttle.service';
+import { AccountSwitchService } from '../../auth/account-switch.service';
 
 type UserTimers = {
   idleMarkTimer?: ReturnType<typeof setTimeout>;
@@ -46,6 +47,7 @@ export class PresenceStatusHandler {
     private readonly marvIdentity: MarvinBotIdentityService,
     private readonly throttle: GatewayThrottleService,
     private readonly context: GatewayContextService,
+    private readonly accountSwitch: AccountSwitchService,
   ) {}
 
   // ─── Connection lifecycle ───────────────────────────────────────────
@@ -220,12 +222,21 @@ export class PresenceStatusHandler {
   // ─── Presence fan-out ───────────────────────────────────────────────
 
   async emitOnline(userId: string): Promise<void> {
+    const cluster = await this.accountSwitch.presenceClusterByUserId([userId]);
+    const displayedIds = cluster.get(userId) ?? [userId];
+    for (const displayedId of displayedIds) {
+      await this.emitOnlineOne(displayedId, userId);
+    }
+  }
+
+  private async emitOnlineOne(userId: string, inheritFromUserId: string): Promise<void> {
     const allTargets = this.context.getTargetsForUser(userId);
     if (this.context.logPresenceVerbose) {
       this.logger.debug(`[presence] emitOnline userId=${userId} totalTargets=${allTargets.size}`);
     }
     if (allTargets.size === 0) return;
 
+    const sourceId = inheritFromUserId;
     const feedListeners = this.presence.getOnlineFeedListeners();
     let userPayload: FollowListUser | null = null;
     if (feedListeners.size > 0) {
@@ -241,13 +252,13 @@ export class PresenceStatusHandler {
     }
 
     const [lastConnectAtById, idleById, platformsById] = await Promise.all([
-      this.presenceRedis.lastConnectAtMsByUserId([userId]),
-      this.presenceRedis.idleByUserIds([userId]),
-      this.presenceRedis.platformsByUserIds([userId]),
+      this.presenceRedis.lastConnectAtMsByUserId([sourceId]),
+      this.presenceRedis.idleByUserIds([sourceId]),
+      this.presenceRedis.platformsByUserIds([sourceId]),
     ]);
-    const lastConnectAt = lastConnectAtById.get(userId) ?? Date.now();
-    const idle = idleById.get(userId) ?? this.presence.isUserIdle(userId);
-    const platforms = platformsById.get(userId) ?? [];
+    const lastConnectAt = lastConnectAtById.get(sourceId) ?? Date.now();
+    const idle = idleById.get(sourceId) ?? this.presence.isUserIdle(sourceId);
+    const platforms = platformsById.get(sourceId) ?? [];
     const status = userPayload ? await this.presence.getActiveStatusByUserId(userId) : null;
     const payload = userPayload
       ? { userId, user: { ...userPayload, status, platforms }, lastConnectAt, idle, platforms }
@@ -268,17 +279,44 @@ export class PresenceStatusHandler {
 
   emitIdle(userId: string): void {
     const targets = this.context.getTargetsForUser(userId);
-    if (targets.size === 0) return;
-    this.context.emitToSockets(targets, 'presence:idle', { userId });
+    if (targets.size > 0) {
+      this.context.emitToSockets(targets, 'presence:idle', { userId });
+    }
+    void this.emitPresenceFlagToRestOfCluster(userId, 'presence:idle');
   }
 
   emitActive(userId: string): void {
     const targets = this.context.getTargetsForUser(userId);
-    if (targets.size === 0) return;
-    this.context.emitToSockets(targets, 'presence:active', { userId });
+    if (targets.size > 0) {
+      this.context.emitToSockets(targets, 'presence:active', { userId });
+    }
+    void this.emitPresenceFlagToRestOfCluster(userId, 'presence:active');
+  }
+
+  private async emitPresenceFlagToRestOfCluster(
+    sourceUserId: string,
+    event: 'presence:idle' | 'presence:active',
+  ): Promise<void> {
+    const cluster = await this.accountSwitch.presenceClusterByUserId([sourceUserId]);
+    for (const id of cluster.get(sourceUserId) ?? [sourceUserId]) {
+      if (id === sourceUserId) continue;
+      const targets = this.context.getTargetsForUser(id);
+      if (targets.size === 0) continue;
+      this.context.emitToSockets(targets, event, { userId: id });
+    }
   }
 
   async emitOffline(userId: string): Promise<void> {
+    const cluster = await this.accountSwitch.presenceClusterByUserId([userId]);
+    const members = cluster.get(userId) ?? [userId];
+    const onlineById = await this.presenceRedis.onlineByUserIds(members);
+    if ([...onlineById.values()].some(Boolean)) return;
+    for (const displayedId of members) {
+      await this.emitOfflineOne(displayedId);
+    }
+  }
+
+  private async emitOfflineOne(userId: string): Promise<void> {
     const targets = this.context.getTargetsForUser(userId);
     if (targets.size === 0) return;
     let user: FollowListUser | undefined;
@@ -308,12 +346,16 @@ export class PresenceStatusHandler {
     if (userIds.length === 0) return;
     const { added } = this.presence.subscribe(client.id, userIds);
     if (added.length > 0) {
-      const idleById = await this.presenceRedis.idleByUserIds(added);
-      const onlineById = await this.presenceRedis.onlineByUserIds(added);
+      const clusters = await this.accountSwitch.presenceClusterByUserId(added);
+      const clusterIds = [...new Set(added.flatMap((uid) => clusters.get(uid) ?? [uid]))];
+      const idleById = await this.presenceRedis.idleByUserIds(clusterIds);
+      const onlineById = await this.presenceRedis.onlineByUserIds(clusterIds);
       const statusesById = new Map((await this.presence.getActiveStatuses(added)).map((status) => [status.userId, status]));
       const users = added.map((uid) => {
-        const online = onlineById.get(uid) ?? false;
-        const idle = online ? (idleById.get(uid) ?? false) : false;
+        const members = clusters.get(uid) ?? [uid];
+        const connected = members.filter((id) => onlineById.get(id));
+        const online = connected.length > 0;
+        const idle = online && connected.every((id) => idleById.get(id) ?? false);
         const spaceId = this.spacesPresence.getSpaceForUser(uid) ?? undefined;
         const status = statusesById.get(uid) ?? null;
         return { userId: uid, online, idle, spaceId, status };
@@ -340,7 +382,9 @@ export class PresenceStatusHandler {
       );
     }
 
-    const userIds = await this.presenceRedis.onlineUserIds();
+    const connectedIds = await this.presenceRedis.onlineUserIds();
+    const { displayedIds: userIds, sourceByDisplayedId } =
+      await this.accountSwitch.expandPresenceOnlineIds(connectedIds);
     // Resolve Marv pin (if enabled) once. We still emit a snapshot even when
     // there are no real online users, because Marv himself should appear as a
     // single-row snapshot when nobody else is connected.
@@ -356,19 +400,22 @@ export class PresenceStatusHandler {
           })
         : [];
       const [lastConnectAtById, idleById, platformsById] = await Promise.all([
-        this.presenceRedis.lastConnectAtMsByUserId(userIds),
-        this.presenceRedis.idleByUserIds(userIds),
-        this.presenceRedis.platformsByUserIds(userIds),
+        this.presenceRedis.lastConnectAtMsByUserId(connectedIds),
+        this.presenceRedis.idleByUserIds(connectedIds),
+        this.presenceRedis.platformsByUserIds(connectedIds),
       ]);
       const statusesById = new Map((await this.presence.getActiveStatuses(userIds)).map((status) => [status.userId, status]));
       const payload: Array<FollowListUser & { lastConnectAt: number | null; idle: boolean; status: unknown; isBot?: boolean }> =
-        users.map((u) => ({
-          ...u,
-          lastConnectAt: lastConnectAtById.get(u.id) ?? null,
-          idle: idleById.get(u.id) ?? false,
-          status: statusesById.get(u.id) ?? null,
-          platforms: platformsById.get(u.id) ?? [],
-        }));
+        users.map((u) => {
+          const source = sourceByDisplayedId.get(u.id) ?? u.id;
+          return {
+            ...u,
+            lastConnectAt: lastConnectAtById.get(u.id) ?? lastConnectAtById.get(source) ?? null,
+            idle: idleById.get(u.id) ?? idleById.get(source) ?? false,
+            status: statusesById.get(u.id) ?? null,
+            platforms: platformsById.get(u.id) ?? platformsById.get(source) ?? [],
+          };
+        });
 
       // Pin Marv to the front of the snapshot (consistent with REST). The
       // viewer here is anonymous (snapshot is keyed only by the socket) so we
