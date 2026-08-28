@@ -259,6 +259,7 @@ function makeProcessor(opts?: {
     threadSummary,
     threadContext,
     linkMetadata,
+    presenceRealtime,
   };
 }
 
@@ -394,6 +395,81 @@ describe('MarvinPublicReplyProcessor', () => {
     // Successful replies are recorded without an errorCode.
     const recordedCall = m.usage.recordEvent.mock.calls[0]![0];
     expect(recordedCall.errorCode).toBeUndefined();
+  });
+
+  describe('typing indicator', () => {
+    const typingUser = {
+      id: 'marv-id',
+      username: 'marv',
+      verifiedStatus: 'manual',
+      premium: true,
+      premiumPlus: false,
+      isOrganization: false,
+    };
+
+    it('emits thinking→replying on the triggering post, then typing:false', async () => {
+      const m = makeProcessor();
+      await m.processor.process({
+        postId: 'p-1',
+        rootPostId: 'r-1',
+        requestingUserId: 'u-requester',
+      });
+      const calls = m.presenceRealtime.emitPostsTyping.mock.calls;
+      expect(calls[0]).toEqual([
+        'p-1',
+        { postId: 'p-1', user: typingUser, typing: true, status: 'thinking' },
+      ]);
+      expect(calls.find((c: unknown[]) => (c[1] as { status?: string })?.status === 'replying')).toEqual([
+        'p-1',
+        { postId: 'p-1', user: typingUser, typing: true, status: 'replying' },
+      ]);
+      expect(calls[calls.length - 1]).toEqual([
+        'p-1',
+        { postId: 'p-1', user: typingUser, typing: false },
+      ]);
+    });
+
+    it('emits typing:false even if the AI call throws (no replying phase)', async () => {
+      const m = makeProcessor();
+      m.ai.respond = jest.fn(async () => {
+        throw new Error('upstream timeout');
+      });
+      await m.processor.process({
+        postId: 'p-1',
+        rootPostId: 'r-1',
+        requestingUserId: 'u-requester',
+      });
+      const calls = m.presenceRealtime.emitPostsTyping.mock.calls;
+      expect(calls[0]).toEqual([
+        'p-1',
+        { postId: 'p-1', user: typingUser, typing: true, status: 'thinking' },
+      ]);
+      expect(calls.find((c: unknown[]) => (c[1] as { status?: string })?.status === 'replying')).toBeUndefined();
+      expect(calls[calls.length - 1]).toEqual([
+        'p-1',
+        { postId: 'p-1', user: typingUser, typing: false },
+      ]);
+    });
+
+    it('does not emit typing for the canned not-configured path', async () => {
+      const m = makeProcessor({ aiConfigured: false });
+      await m.processor.process({
+        postId: 'p-1',
+        rootPostId: 'r-1',
+        requestingUserId: 'u-requester',
+      });
+      expect(m.presenceRealtime.emitPostsTyping).not.toHaveBeenCalled();
+    });
+
+    it('does not emit typing on the out-of-credits path', async () => {
+      const m = makeProcessor({ credits: 1 });
+      await m.processor.process({
+        postId: 'p-1',
+        rootPostId: 'r-1',
+        requestingUserId: 'u-requester',
+      });
+      expect(m.presenceRealtime.emitPostsTyping).not.toHaveBeenCalled();
+    });
   });
 
   it('records ai_no_text when the AI returns empty', async () => {

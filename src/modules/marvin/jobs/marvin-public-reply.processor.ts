@@ -108,6 +108,8 @@ export class MarvinPublicReplyProcessor {
     // on pre-delivery failures (allowing BullMQ retries), never after delivery (which
     // would risk a duplicate post on retry).
     let delivered = false;
+    let stopTyping = () => {};
+    let setTypingPhase = (_phase: 'thinking' | 'replying') => {};
     try {
 
     // 2. Marv globally enabled? Disabled for user?
@@ -408,6 +410,15 @@ export class MarvinPublicReplyProcessor {
       return;
     }
 
+    // Show "@marv is thinking…" on the triggering post from the moment we start
+    // collecting context through the AI call. Same `posts:typing` event humans use.
+    const marvUserIdForTyping = this.identity.cachedMarvUserId() ?? (await this.identity.getMarvUserId());
+    if (marvUserIdForTyping) {
+      const heartbeat = this.startTypingHeartbeat({ postId, marvUserId: marvUserIdForTyping });
+      stopTyping = heartbeat.stop;
+      setTypingPhase = heartbeat.setPhase;
+    }
+
     // Full thread (siblings included) + images, so reserve matches what we actually send.
     const {
       ancestors,
@@ -448,6 +459,7 @@ export class MarvinPublicReplyProcessor {
       reservedHeld = reservedCost;
     } catch (err) {
       if (err instanceof InsufficientMarvCreditsError) {
+        stopTyping();
         this.logger.log(
           `[marv] public-reply EXIT reason=no_credits_at_reserve balance=${err.currentCredits} reserved=${reservedCost}`,
         );
@@ -531,12 +543,6 @@ export class MarvinPublicReplyProcessor {
       `[marv] public-reply AI call START mode=${effectiveMode} model=${this.ai.modelForMode(effectiveMode)} userMsgLen=${built.userMessage.length}`,
     );
 
-    // Show "@marv is replying…" on the triggering post while the AI call runs.
-    const marvUserIdForTyping = this.identity.cachedMarvUserId() ?? (await this.identity.getMarvUserId());
-    const { stop: stopTyping } = marvUserIdForTyping
-      ? this.startTypingHeartbeat({ postId, marvUserId: marvUserIdForTyping })
-      : { stop: () => {} };
-
     let aiResult: Awaited<ReturnType<MarvinAIService['respond']>> | null = null;
     try {
       aiResult = await this.ai.respond({
@@ -600,6 +606,7 @@ export class MarvinPublicReplyProcessor {
     }
 
     const replyText = (aiResult.text ?? '').trim();
+    if (replyText) setTypingPhase('replying');
     if (!replyText) {
       stopTyping();
       await refundHeld();
@@ -821,6 +828,7 @@ export class MarvinPublicReplyProcessor {
     }
 
     } catch (err) {
+      stopTyping();
       // Unexpected error before delivery — release the idempotency key so BullMQ can retry.
       if (!delivered) {
         await this.prisma.marvinIdempotencyKey
@@ -832,19 +840,22 @@ export class MarvinPublicReplyProcessor {
   }
 
   /**
-   * Show "@marv is replying…" to post-room subscribers for the duration of the
-   * AI call. Returns `stop()`. Always call it in a `finally` block so the
+   * Show "@marv is thinking/replying…" on the triggering post via the same
+   * `posts:typing` event humans use. Starts as `thinking` (context + AI), then
+   * `replying` once there is text to post. Always call `stop()` so the
    * indicator never gets stuck.
    */
   private startTypingHeartbeat(args: {
     postId: string;
     marvUserId: string;
-  }): { stop: () => void } {
+  }): { stop: () => void; setPhase: (phase: 'thinking' | 'replying') => void } {
     const { postId, marvUserId } = args;
-    if (!postId || !marvUserId) return { stop: () => {} };
+    const noop = { stop: () => {}, setPhase: () => {} };
+    if (!postId || !marvUserId) return noop;
 
     const marvUsername = this.appConfig.marvBot().username;
     let stopped = false;
+    let currentStatus: 'thinking' | 'replying' = 'thinking';
 
     const emit = (typing: boolean): void => {
       try {
@@ -859,7 +870,7 @@ export class MarvinPublicReplyProcessor {
             isOrganization: false,
           },
           typing,
-          status: typing ? 'replying' : undefined,
+          status: typing ? currentStatus : undefined,
         });
       } catch {
         // best-effort: typing indicator is non-essential UX
@@ -877,6 +888,10 @@ export class MarvinPublicReplyProcessor {
         stopped = true;
         clearInterval(interval);
         emit(false);
+      },
+      setPhase: (phase: 'thinking' | 'replying') => {
+        currentStatus = phase;
+        if (!stopped) emit(true);
       },
     };
   }
