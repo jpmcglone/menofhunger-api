@@ -820,11 +820,10 @@ describe('PostsSideEffectsHandler maybeEnqueueMarvReply', () => {
     );
   });
 
-  it('does not enqueue a reply to a Marv post unless the body tags @marv', async () => {
+  it('enqueues a direct reply to a Marv post without an explicit @marv', async () => {
     const { handler, deps } = makeHandler();
     deps.appConfig.marvBot.mockReturnValue({ enabled: true, username: 'marv', userId: 'marv-id' });
     deps.marvIdentity.cachedMarvUserId.mockReturnValue('marv-id');
-    deps.prisma.post.findFirst.mockResolvedValue({ userId: 'marv-id' });
 
     await (handler as any).maybeEnqueueMarvReply({
       post: marvPost({ body: 'yeah I agree' }),
@@ -832,9 +831,30 @@ describe('PostsSideEffectsHandler maybeEnqueueMarvReply', () => {
       bodySnippet: 'yeah I agree',
       visibility: 'public',
       requestedMarvMode: null,
+      parentAuthorUserId: 'marv-id',
+    });
+
+    expect(deps.jobs.enqueue).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ postId: 'p-reply', requestingUserId: 'alice' }),
+      expect.any(Object),
+    );
+  });
+
+  it('does not enqueue a reply to someone else just because Marv is in the thread', async () => {
+    const { handler, deps } = makeHandler();
+    deps.appConfig.marvBot.mockReturnValue({ enabled: true, username: 'marv', userId: 'marv-id' });
+    deps.marvIdentity.cachedMarvUserId.mockReturnValue('marv-id');
+
+    await (handler as any).maybeEnqueueMarvReply({
+      post: marvPost({ body: 'yeah I agree', parentId: 'p-alice' }),
+      actorUserId: 'bob',
+      bodySnippet: 'yeah I agree',
+      visibility: 'public',
+      requestedMarvMode: null,
+      parentAuthorUserId: 'alice',
     });
 
     expect(deps.jobs.enqueue).not.toHaveBeenCalled();
-    expect(deps.prisma.post.findFirst).not.toHaveBeenCalled();
   });
 });
