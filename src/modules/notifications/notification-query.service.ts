@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { type NotificationKind, type VerifiedStatus } from '@prisma/client';
+import { Prisma, type NotificationKind, type VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
@@ -28,6 +28,35 @@ import { collapseFeedByRoot, type FeedCollapseMode, type FeedCollapsePrefer } fr
  * "Other" = every kind that is NOT in this set and NOT 'message'.
  */
 const PRIMARY_NOTIFICATION_KINDS = ['comment', 'mention', 'followed_post', 'status_update', 'checkin_post', 'follow', 'boost'] as const satisfies NotificationKind[];
+
+/**
+ * Posts chip = top-level followed posts only.
+ * Replies chip = comment rows plus followed_post rows whose causing post has a parent.
+ */
+function listKindWhere(
+  kind: NotificationKind | 'other' | undefined,
+  alwaysExcluded: NotificationKind[],
+): Prisma.NotificationWhereInput {
+  if (kind === 'other') {
+    return { kind: { notIn: [...PRIMARY_NOTIFICATION_KINDS, ...alwaysExcluded] } };
+  }
+  if (kind === 'followed_post') {
+    return {
+      kind: 'followed_post',
+      subjectPost: { is: { parentId: null } },
+    };
+  }
+  if (kind === 'comment') {
+    return {
+      OR: [
+        { kind: 'comment' },
+        { kind: 'followed_post', subjectPost: { is: { parentId: { not: null } } } },
+      ],
+    };
+  }
+  if (kind) return { kind };
+  return { kind: { notIn: alwaysExcluded } };
+}
 
 /** Kinds that embed a full PostDto card in the bell. Everything else uses subjectPostPreview. */
 const NOTIFICATION_POST_CARD_KINDS = new Set<NotificationKind>([
@@ -80,6 +109,8 @@ export class NotificationQueryService {
     const paramsHash = stableJsonHash({
       limit: params.limit,
       kind: params.kind ?? null,
+      // Bump when Posts/Replies chip predicates change so stale page-1 caches miss.
+      replySplit: 1,
     });
     return this.cache.getOrSetJsonWithLock({
       enabled: true,
@@ -155,11 +186,7 @@ export class NotificationQueryService {
     const notifications = await this.prisma.notification.findMany({
       where: {
         recipientUserId,
-        ...(kind === 'other'
-          ? { kind: { notIn: [...PRIMARY_NOTIFICATION_KINDS, ...alwaysExcluded] } }
-          : kind
-            ? { kind }
-            : { kind: { notIn: alwaysExcluded } }),
+        ...listKindWhere(kind, alwaysExcluded),
         ...(blockedActorIds.length > 0 ? { NOT: { actorUserId: { in: blockedActorIds } } } : {}),
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },

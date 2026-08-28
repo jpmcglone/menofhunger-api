@@ -814,6 +814,64 @@ describe('NotificationsService.list batching', () => {
     if (res.items[0]?.type !== 'single') throw new Error('Expected single');
     expect(res.items[0].notification.kind).toBe('coin_transfer');
   });
+
+  it('keeps the Posts chip to top-level followed posts only', async () => {
+    const { svc, prisma } = makeService({
+      prisma: {
+        notification: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => []),
+          count: jest.fn(async () => 0),
+          groupBy: jest.fn(async () => []),
+        },
+        post: { findUnique: jest.fn(), findMany: jest.fn(async () => []) },
+        user: { findUnique: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+        follow: { findMany: jest.fn(async () => []) },
+        userBlock: { findMany: jest.fn(async () => []) },
+      } as any,
+    });
+
+    await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null, kind: 'followed_post' });
+
+    expect(prisma.notification.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          kind: 'followed_post',
+          subjectPost: { is: { parentId: null } },
+        }),
+      }),
+    );
+  });
+
+  it('puts followed replies on the Replies chip with comment rows', async () => {
+    const { svc, prisma } = makeService({
+      prisma: {
+        notification: {
+          findUnique: jest.fn(),
+          findMany: jest.fn(async () => []),
+          count: jest.fn(async () => 0),
+          groupBy: jest.fn(async () => []),
+        },
+        post: { findUnique: jest.fn(), findMany: jest.fn(async () => []) },
+        user: { findUnique: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+        follow: { findMany: jest.fn(async () => []) },
+        userBlock: { findMany: jest.fn(async () => []) },
+      } as any,
+    });
+
+    await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null, kind: 'comment' });
+
+    expect(prisma.notification.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [
+            { kind: 'comment' },
+            { kind: 'followed_post', subjectPost: { is: { parentId: { not: null } } } },
+          ],
+        }),
+      }),
+    );
+  });
 });
 
 describe('NotificationsService.getUndeliveredCount', () => {

@@ -169,6 +169,48 @@ describe('PostViewsService.markViewed', () => {
     expect(posthog.capture).toHaveBeenCalled();
   });
 
+  it('bumps unique and total on the first anonymous view', async () => {
+    const { service, prisma, redis, presenceRealtime } = makeService();
+    prisma.postAnonView.createMany = jest.fn(async () => ({ count: 1 }));
+
+    const ack = await service.markViewed(null, 'p1', 'anon_guestviewer1', 'permalink_engaged');
+
+    expect(ack).toEqual({
+      id: 'p1',
+      uniqueCounted: true,
+      totalCounted: true,
+      viewerCount: 12,
+      totalViewCount: 13,
+    });
+    expect(prisma.postAnonView.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ postId: 'p1', anonId: 'anon_guestviewer1', impressionCount: 1 })],
+      skipDuplicates: true,
+    });
+    expect(prisma.post.update).toHaveBeenCalledWith({
+      where: { id: 'p1' },
+      data: expect.objectContaining({
+        viewerCount: { increment: 1 },
+        totalViewCount: { increment: 1 },
+      }),
+      select: { viewerCount: true, totalViewCount: true },
+    });
+    expect(presenceRealtime.emitPostsLiveUpdated).toHaveBeenCalledWith(
+      'p1',
+      expect.objectContaining({
+        patch: { viewerCount: 12, totalViewCount: 13 },
+      }),
+    );
+    expect(redis.del).toHaveBeenCalled();
+  });
+
+  it('does not count an anonymous view without an anon id', async () => {
+    const { service, prisma } = makeService();
+
+    expect(await service.markViewed(null, 'p1', null, 'permalink_engaged')).toBeNull();
+    expect(prisma.postAnonView.createMany).not.toHaveBeenCalled();
+    expect(prisma.post.update).not.toHaveBeenCalled();
+  });
+
   it('does not bump For You when a repeat view is still inside the last-seen buffer', async () => {
     const { service, cacheInvalidation } = makeService({
       createdCount: 0,
