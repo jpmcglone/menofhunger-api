@@ -2,15 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MarvinBotIdentityService } from './marvin-bot-identity.service';
 import { resolveMarvVisionUrl } from './marvin-vision-media';
+import { windowThreadAroundFocal } from './marvin-thread-window';
 
-/** Default cap on how many ancestor levels to walk up the parent chain. */
-const DEFAULT_ANCESTOR_LIMIT = 15;
-/** Default cap on how deep to descend into the reply subtree. */
-const DEFAULT_DESCENDANT_DEPTH = 6;
-/** Default cap on how many descendant posts to include in the assembled context. */
-const DEFAULT_DESCENDANT_LIMIT = 40;
-/** Body truncation applied to every collected post so the prompt stays bounded. */
-const BODY_TRUNCATE = 500;
+/** Safety cap so a mega-thread cannot blow the prompt. Typical MOH threads fit entirely. */
+const DEFAULT_THREAD_LIMIT = 80;
+/** Match the premium post body max so we do not clip what members actually wrote. */
+const BODY_TRUNCATE = 1000;
 
 export type MarvThreadContextMedia = {
   kind: string;
@@ -57,11 +54,11 @@ export type MarvGroupVenue = {
 export type MarvThreadContext = {
   /** The post the context was collected around. Null when it could not be loaded. */
   focal: MarvThreadContextPost | null;
-  /** Path above the focal post, ordered root-most → immediate parent. */
+  /** Posts before the focal post in thread reading order (siblings included). */
   ancestors: MarvThreadContextPost[];
-  /** Replies under the focal post, in depth-first reading order, capped at the limit. */
+  /** Posts after the focal post in thread reading order (siblings included). */
   descendants: MarvThreadContextPost[];
-  /** Number of descendants discovered within the traversal depth (may exceed `descendants.length`). */
+  /** Public replies in the whole thread (may exceed the windowed `descendants.length`). */
   totalDescendants: number;
   /** Thread root id (the focal post's own id when it is a root). */
   rootId: string | null;
@@ -70,21 +67,20 @@ export type MarvThreadContext = {
 };
 
 /**
- * Collects the conversation surrounding a focal post in BOTH directions:
- *  - the ancestor chain above it (verbatim path the focal post is replying within), and
- *  - the reply subtree below it (a depth- and count-capped tree walk).
+ * Collects the full public conversation for a focal post — every non-deleted,
+ * non-onlyMe post that shares its thread root — then splits it into posts
+ * before the focal (ancestors) and after it (descendants) in reading order.
  *
- * Powers both the user-facing "Catch me up" summary and the @marv mention reply
- * (so Marv reasons about what's above AND below the message that mentioned him,
- * not just the flat recent-replies list it used before).
+ * Powers both "Catch me up" and @marv replies so Marv sees sibling branches,
+ * not just the parent path + subtree under the clicked post.
  *
- * Strategy mirrors `PostsFeedQueryService.collectParentMapForFeed`: cheap recursive
- * CTEs resolve the ids (one round-trip each), then a single batched Prisma `findMany`
- * loads the full rows (author, media, poll) so we get Prisma's typed selects.
+ * Threads larger than {@link DEFAULT_THREAD_LIMIT} are windowed around the focal
+ * post (history before it, then later replies) with the root pinned in. The
+ * rolling thread summary covers anything that still falls off.
  *
- * Visibility: soft-deleted and `onlyMe` posts are filtered at the SQL layer. Callers
- * that need per-viewer access control on the focal post itself must resolve it through
- * `PostsService.getById` first — this service only excludes the universally-private rows.
+ * Visibility: soft-deleted and `onlyMe` posts are filtered here. Callers that
+ * need per-viewer access control on the focal post must resolve it through
+ * `PostsService.getById` first.
  */
 @Injectable()
 export class MarvinThreadContextService {
@@ -97,9 +93,7 @@ export class MarvinThreadContextService {
 
   async collect(params: {
     focalPostId: string;
-    ancestorLimit?: number;
-    descendantDepth?: number;
-    descendantLimit?: number;
+    threadLimit?: number;
   }): Promise<MarvThreadContext> {
     const focalPostId = (params.focalPostId ?? '').trim();
     const empty: MarvThreadContext = {
@@ -112,29 +106,27 @@ export class MarvinThreadContextService {
     };
     if (!focalPostId) return empty;
 
-    const ancestorLimit = params.ancestorLimit ?? DEFAULT_ANCESTOR_LIMIT;
-    const descendantDepth = params.descendantDepth ?? DEFAULT_DESCENDANT_DEPTH;
-    const descendantLimit = params.descendantLimit ?? DEFAULT_DESCENDANT_LIMIT;
-
-    // Resolve ancestor/descendant ids with independent, fault-isolated queries: a failure
-    // in one walk must never drop the focal post (which is always fetched below). This is
-    // what makes "Catch me up" work even on a lone post with no thread around it.
-    const ancestorRows = await this.collectAncestorIds(focalPostId, ancestorLimit);
-    const descendantRows = await this.collectDescendantIds(focalPostId, descendantDepth);
+    const threadLimit = params.threadLimit ?? DEFAULT_THREAD_LIMIT;
 
     try {
-      const includedDescendantRows = descendantRows.slice(0, descendantLimit);
+      const focalMeta = await this.prisma.post.findFirst({
+        where: { id: focalPostId, deletedAt: null },
+        select: { id: true, rootId: true },
+      });
+      if (!focalMeta) return empty;
+      const rootId = focalMeta.rootId ?? focalMeta.id;
+      const threadWhere = {
+        OR: [{ id: rootId }, { rootId }],
+        deletedAt: null,
+        visibility: { not: 'onlyMe' as const },
+      };
 
-      const ids = [
-        focalPostId,
-        ...ancestorRows.map((r) => r.id),
-        ...includedDescendantRows.map((r) => r.id),
-      ];
-
-      const [marvUserId, rows] = await Promise.all([
+      const [marvUserId, totalInThread, rows] = await Promise.all([
         this.identity.getMarvUserId(),
+        this.prisma.post.count({ where: threadWhere }),
         this.prisma.post.findMany({
-          where: { id: { in: ids } },
+          where: threadWhere,
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
           select: {
             id: true,
             parentId: true,
@@ -180,7 +172,8 @@ export class MarvinThreadContextService {
       ]);
 
       type Row = (typeof rows)[number];
-      const byId = new Map<string, Row>(rows.map((r) => [r.id, r]));
+      const included = windowThreadAroundFocal(rows, focalPostId, threadLimit, rootId);
+      const byId = new Map<string, Row>(included.map((r) => [r.id, r]));
 
       const toPost = (row: Row, depth: number): MarvThreadContextPost => ({
         id: row.id,
@@ -225,24 +218,21 @@ export class MarvinThreadContextService {
             }
           : null;
 
-      const ancestors: MarvThreadContextPost[] = [];
-      ancestorRows.forEach((r, idx) => {
-        const row = byId.get(r.id);
-        if (row) ancestors.push(toPost(row, -(ancestorRows.length - idx)));
-      });
+      const focalIndex = included.findIndex((r) => r.id === focalPostId);
+      const before = focalIndex >= 0 ? included.slice(0, focalIndex) : included;
+      const after = focalIndex >= 0 ? included.slice(focalIndex + 1) : [];
 
-      const descendants: MarvThreadContextPost[] = [];
-      for (const r of includedDescendantRows) {
-        const row = byId.get(r.id);
-        if (row) descendants.push(toPost(row, r.depth));
-      }
+      const ancestors = before.map((row, idx) => toPost(row, -(before.length - idx)));
+      const descendants = after.map((row, idx) => toPost(row, idx + 1));
 
       return {
         focal,
         ancestors,
         descendants,
-        totalDescendants: descendantRows.length,
-        rootId: focal?.rootId ?? focal?.id ?? null,
+        // Whole-thread reply count (not just the subtree under the focal post) so
+        // Catch me up freshness sees sibling replies too.
+        totalDescendants: Math.max(0, totalInThread - 1),
+        rootId,
         group,
       };
     } catch (err) {
@@ -306,73 +296,5 @@ export class MarvinThreadContextService {
       hasGifAttached: chosen.some((e) => e.kind === 'gif'),
       totalImages: candidates.length,
     };
-  }
-
-  /** Ancestors: walk up `parentId` from the focal post. Ordered root-most → parent. */
-  private async collectAncestorIds(
-    focalPostId: string,
-    ancestorLimit: number,
-  ): Promise<Array<{ id: string; depth: number }>> {
-    try {
-      return await this.prisma.$queryRawUnsafe<Array<{ id: string; depth: number }>>(
-        `
-        WITH RECURSIVE ancestors AS (
-          SELECT id, "parentId", 0 AS depth FROM "Post" WHERE id = $1
-          UNION ALL
-          SELECT p.id, p."parentId", a.depth + 1
-          FROM "Post" p
-          INNER JOIN ancestors a ON a."parentId" = p.id
-          WHERE p."deletedAt" IS NULL AND p."visibility"::text <> 'onlyMe' AND a.depth < $2
-        )
-        SELECT id, depth FROM ancestors WHERE depth > 0 ORDER BY depth DESC
-        `,
-        focalPostId,
-        ancestorLimit,
-      );
-    } catch (err) {
-      this.logger.warn(
-        `[marv] thread-context ancestors failed for focal=${focalPostId}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return [];
-    }
-  }
-
-  /**
-   * Descendants: walk down from the focal post. `ord` is a createdAt path so a parent
-   * always sorts immediately before its own subtree (depth-first preorder reading order).
-   *
-   * The `::timestamp` casts are load-bearing: the `Post."createdAt"` column is
-   * `timestamp(3)`, and a recursive CTE requires the non-recursive and recursive terms to
-   * share an EXACT column type — without the cast Postgres rejects the query with
-   * "type timestamp(3)[] in non-recursive term but type timestamp[] overall".
-   */
-  private async collectDescendantIds(
-    focalPostId: string,
-    descendantDepth: number,
-  ): Promise<Array<{ id: string; depth: number }>> {
-    try {
-      return await this.prisma.$queryRawUnsafe<Array<{ id: string; depth: number }>>(
-        `
-        WITH RECURSIVE descendants AS (
-          SELECT id, "parentId", "createdAt", 1 AS depth, ARRAY["createdAt"::timestamp] AS ord
-          FROM "Post"
-          WHERE "parentId" = $1 AND "deletedAt" IS NULL AND "visibility"::text <> 'onlyMe'
-          UNION ALL
-          SELECT p.id, p."parentId", p."createdAt", d.depth + 1, d.ord || p."createdAt"::timestamp
-          FROM "Post" p
-          INNER JOIN descendants d ON p."parentId" = d.id
-          WHERE p."deletedAt" IS NULL AND p."visibility"::text <> 'onlyMe' AND d.depth < $2
-        )
-        SELECT id, depth FROM descendants ORDER BY ord
-        `,
-        focalPostId,
-        descendantDepth,
-      );
-    } catch (err) {
-      this.logger.warn(
-        `[marv] thread-context descendants failed for focal=${focalPostId}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return [];
-    }
   }
 }

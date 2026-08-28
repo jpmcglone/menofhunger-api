@@ -21,6 +21,7 @@ import { PostViewsService } from '../post-views/post-views.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { notDeletedWhere } from './posts-query-builders';
 import {
+  excludeMarvUserId,
   resolveMentionUsernames as resolveMentionUsernamesQuery,
   resolveMentionUsernamesMap as resolveMentionUsernamesMapQuery,
 } from './posts-mentions.helpers';
@@ -1070,8 +1071,14 @@ export class PostsMutationService {
       }
     }
 
-    // All mention IDs for PostMention records (include self so @yourname renders as a link)
-    const mentionUserIds = [...new Set([...threadParticipantIds, ...resolvedFromUsernames])];
+    // All mention IDs for PostMention records (include self so @yourname renders as a link).
+    // Marv is not inherited from the thread — only an explicit @marv (in body or client list)
+    // should create a mention row for him.
+    const marvCfg = this.appConfig.marvBot();
+    const marvId = marvCfg.userId ?? mentionUsernameToId.get(marvCfg.username.trim().toLowerCase()) ?? null;
+    const mentionUserIds = [
+      ...new Set([...excludeMarvUserId(threadParticipantIds, marvId), ...resolvedFromUsernames]),
+    ];
 
     const hashtagTokensRaw = this.parseHashtagsFromBody(body);
     const hashtagTokens = hashtagTokensRaw

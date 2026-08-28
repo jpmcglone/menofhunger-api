@@ -1,19 +1,11 @@
 import { MarvinThreadContextService } from './marvin-thread-context.service';
 
 /**
- * MarvinThreadContextService collects the conversation BOTH above (ancestors) and below
- * (descendant subtree) a focal post. The CTE id-resolution is mocked; we assert that:
- *  1. ancestors come back root-most → parent, descendants in the CTE-provided order,
- *  2. the focal post is returned separately,
- *  3. descendants are capped at the limit while `totalDescendants` reflects the full set,
- *  4. Marv-authored posts are flagged.
+ * MarvinThreadContextService loads the full public thread (same root), then
+ * splits it into posts before the focal (ancestors) and after it (descendants).
  */
 
-type RawRow = { id: string; depth: number };
-
 function makeService(opts: {
-  ancestorRows: RawRow[];
-  descendantRows: RawRow[];
   postRows: Array<{
     id: string;
     parentId: string | null;
@@ -26,43 +18,44 @@ function makeService(opts: {
     username: string | null;
     name: string | null;
   }>;
+  focalMeta?: { id: string; rootId: string | null } | null;
+  totalInThread?: number;
   marvUserId?: string | null;
 }) {
-  // First $queryRawUnsafe call resolves ancestors, second resolves descendants.
-  let rawCall = 0;
-  const queryRawUnsafe = jest.fn(async () => {
-    rawCall += 1;
-    return rawCall === 1 ? opts.ancestorRows : opts.descendantRows;
-  });
+  const mapped = opts.postRows.map((p) => ({
+    id: p.id,
+    parentId: p.parentId,
+    rootId: p.rootId,
+    body: p.body,
+    createdAt: p.createdAt,
+    editedAt: p.editedAt ?? null,
+    checkinPrompt: p.checkinPrompt,
+    userId: p.userId,
+    user: { username: p.username, name: p.name },
+    media: [],
+    poll: null,
+    communityGroupId: null as string | null,
+    communityGroup: null as {
+      name: string;
+      description: string | null;
+      rules: string | null;
+      joinPolicy: 'open' | 'approval';
+      memberCount: number;
+      deletedAt: Date | null;
+    } | null,
+  }));
 
-  const findMany = jest.fn(async () =>
-    opts.postRows.map((p) => ({
-      id: p.id,
-      parentId: p.parentId,
-      rootId: p.rootId,
-      body: p.body,
-      createdAt: p.createdAt,
-      editedAt: p.editedAt ?? null,
-      checkinPrompt: p.checkinPrompt,
-      userId: p.userId,
-      user: { username: p.username, name: p.name },
-      media: [],
-      poll: null,
-      communityGroupId: null as string | null,
-      communityGroup: null as {
-        name: string;
-        description: string | null;
-        rules: string | null;
-        joinPolicy: 'open' | 'approval';
-        memberCount: number;
-        deletedAt: Date | null;
-      } | null,
-    })),
-  );
+  const findFirst = jest.fn(async () => {
+    if (opts.focalMeta === null) return null;
+    if (opts.focalMeta) return opts.focalMeta;
+    const focal = opts.postRows.find((p) => p.id === 'focal') ?? opts.postRows[0];
+    return focal ? { id: focal.id, rootId: focal.rootId } : null;
+  });
+  const count = jest.fn(async () => opts.totalInThread ?? opts.postRows.length);
+  const findMany = jest.fn(async () => mapped);
 
   const prisma: any = {
-    $queryRawUnsafe: queryRawUnsafe,
-    post: { findMany },
+    post: { findFirst, count, findMany },
   };
   const identity: any = {
     getMarvUserId: jest.fn(async () => opts.marvUserId ?? null),
@@ -70,8 +63,9 @@ function makeService(opts: {
 
   return {
     service: new MarvinThreadContextService(prisma, identity),
-    queryRawUnsafe,
+    findFirst,
     findMany,
+    count,
   };
 }
 
@@ -79,6 +73,7 @@ function post(
   id: string,
   parentId: string | null,
   rootId: string | null,
+  minute: number,
   userId = 'u-' + id,
   username = id,
 ) {
@@ -87,7 +82,7 @@ function post(
     parentId,
     rootId,
     body: `body ${id}`,
-    createdAt: new Date('2026-01-01T00:00:00Z'),
+    createdAt: new Date(`2026-01-01T00:${String(minute).padStart(2, '0')}:00Z`),
     checkinPrompt: null,
     userId,
     username,
@@ -97,11 +92,7 @@ function post(
 
 describe('MarvinThreadContextService', () => {
   it('returns empty context for a blank focal id', async () => {
-    const { service, queryRawUnsafe } = makeService({
-      ancestorRows: [],
-      descendantRows: [],
-      postRows: [],
-    });
+    const { service, findFirst } = makeService({ postRows: [] });
     const result = await service.collect({ focalPostId: '   ' });
     expect(result).toEqual({
       focal: null,
@@ -111,63 +102,54 @@ describe('MarvinThreadContextService', () => {
       rootId: null,
       group: null,
     });
-    expect(queryRawUnsafe).not.toHaveBeenCalled();
+    expect(findFirst).not.toHaveBeenCalled();
   });
 
-  it('assembles ancestors, focal, and descendants in order', async () => {
+  it('assembles the full thread around the focal post, including sibling branches', async () => {
     const { service } = makeService({
-      // CTE returns root-most → parent for ancestors.
-      ancestorRows: [
-        { id: 'root', depth: 2 },
-        { id: 'parent', depth: 1 },
-      ],
-      descendantRows: [
-        { id: 'child', depth: 1 },
-        { id: 'grandchild', depth: 2 },
-      ],
       postRows: [
-        post('root', null, null),
-        post('parent', 'root', 'root'),
-        post('focal', 'parent', 'root'),
-        post('child', 'focal', 'root'),
-        post('grandchild', 'child', 'root'),
+        post('root', null, null, 0),
+        post('parent', 'root', 'root', 1),
+        post('sibling', 'parent', 'root', 2),
+        post('focal', 'parent', 'root', 3),
+        post('child', 'focal', 'root', 4),
       ],
     });
 
     const result = await service.collect({ focalPostId: 'focal' });
 
     expect(result.focal?.id).toBe('focal');
-    expect(result.ancestors.map((a) => a.id)).toEqual(['root', 'parent']);
-    expect(result.descendants.map((d) => d.id)).toEqual(['child', 'grandchild']);
-    expect(result.descendants.map((d) => d.depth)).toEqual([1, 2]);
-    expect(result.totalDescendants).toBe(2);
+    expect(result.ancestors.map((a) => a.id)).toEqual(['root', 'parent', 'sibling']);
+    expect(result.descendants.map((d) => d.id)).toEqual(['child']);
+    expect(result.totalDescendants).toBe(4);
     expect(result.rootId).toBe('root');
   });
 
-  it('caps included descendants at the limit but keeps totalDescendants accurate', async () => {
-    const descendantRows: RawRow[] = Array.from({ length: 5 }, (_, i) => ({
-      id: `d${i}`,
-      depth: 1,
-    }));
+  it('windows a huge thread around the focal post but reports the true thread size', async () => {
     const postRows = [
-      post('focal', null, null),
-      ...descendantRows.map((r) => post(r.id, 'focal', 'focal')),
+      post('root', null, null, 0),
+      ...Array.from({ length: 5 }, (_, i) => post(`d${i}`, 'root', 'root', i + 1)),
+      post('focal', 'root', 'root', 6),
+      post('after', 'focal', 'root', 7),
     ];
-    const { service } = makeService({ ancestorRows: [], descendantRows, postRows });
+    const { service } = makeService({ postRows, totalInThread: 20 });
 
-    const result = await service.collect({ focalPostId: 'focal', descendantLimit: 3 });
+    const result = await service.collect({ focalPostId: 'focal', threadLimit: 4 });
 
-    expect(result.descendants).toHaveLength(3);
-    expect(result.totalDescendants).toBe(5);
+    expect(result.focal?.id).toBe('focal');
+    expect([
+      ...result.ancestors.map((a) => a.id),
+      result.focal?.id,
+      ...result.descendants.map((d) => d.id),
+    ]).toHaveLength(4);
+    expect(result.totalDescendants).toBe(19);
   });
 
   it('flags Marv-authored posts', async () => {
     const { service } = makeService({
-      ancestorRows: [],
-      descendantRows: [{ id: 'marv-reply', depth: 1 }],
       postRows: [
-        post('focal', null, null, 'u-focal', 'focal'),
-        post('marv-reply', 'focal', 'focal', 'marv-user', 'marv'),
+        post('focal', null, null, 0, 'u-focal', 'focal'),
+        post('marv-reply', 'focal', 'focal', 1, 'marv-user', 'marv'),
       ],
       marvUserId: 'marv-user',
     });
@@ -179,9 +161,7 @@ describe('MarvinThreadContextService', () => {
 
   it('returns the community group on the focal post', async () => {
     const { service, findMany } = makeService({
-      ancestorRows: [],
-      descendantRows: [],
-      postRows: [post('focal', null, null)],
+      postRows: [post('focal', null, null, 0)],
     });
     findMany.mockResolvedValueOnce([
       {
@@ -291,8 +271,6 @@ describe('MarvinThreadContextService.selectImageMedia', () => {
   });
 
   it('guarantees focal-post images via proximity when image-heavy ancestors would starve them', () => {
-    // 5 images total, cap 3. Top-down reading order would take the 4 ancestor images and drop
-    // the focal one — proximity selection keeps focal + nearest neighbors instead.
     const result = svc.selectImageMedia(
       {
         ancestors: [
@@ -309,7 +287,6 @@ describe('MarvinThreadContextService.selectImageMedia', () => {
     );
     expect(result.totalImages).toBe(5);
     expect(result.imageUrls).toContain('https://cdn.test/focal.jpg');
-    // Kept set is the focal image + its two nearest neighbors, presented in reading order.
     expect(result.imageUrls).toEqual([
       'https://cdn.test/a1.jpg',
       'https://cdn.test/parent.jpg',

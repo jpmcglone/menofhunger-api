@@ -95,7 +95,7 @@ export type MarvOpenAIConfig = {
   visionEnabled: boolean;
   /** Modes that may receive image inputs. Default regular,smart. */
   visionModes: string[];
-  /** Max images per turn (caps both selection logic and input_image parts). Default 4. */
+  /** Max images per turn (caps both selection logic and input_image parts). Default 16. */
   visionMaxImagesPerTurn: number;
 };
 
@@ -636,8 +636,8 @@ export class AppConfigService {
     // Per-turn image budget. Catch-me-up and mentions include EVERY image in the conversation
     // (multiple per post, throughout the thread) up to this cap. Each attached image bills the
     // per-image vision surcharge, so cost scales with count — raise via env if a deployment
-    // wants even more. 8 comfortably covers a multi-image post or a few image-bearing replies.
-    const visionMaxImagesPerTurn = this.readPositiveInt('MARV_VISION_MAX_IMAGES_PER_TURN', 8);
+    // wants even more. 16 covers a long image-bearing thread; extras still bill per image.
+    const visionMaxImagesPerTurn = this.readPositiveInt('MARV_VISION_MAX_IMAGES_PER_TURN', 16);
     return { apiKey, promptId, fastModel, regularModel, smartModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens, visionEnabled, visionModes, visionMaxImagesPerTurn };
   }
 

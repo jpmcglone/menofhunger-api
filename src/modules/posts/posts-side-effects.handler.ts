@@ -944,10 +944,8 @@ export class PostsSideEffectsHandler implements OnModuleInit {
    * configured Marv username so the queueing surface stays dumb and the processor handles all
    * gating (premium, credits, rate limits, the AI call).
    *
-   * Two triggers:
-   *   1. Explicit — the body contains @marv (the configured username).
-   *   2. Implicit — the post is a direct reply to a post authored by Marv. Replying to Marv
-   *      directly implies the mention, so the user doesn't need to type it.
+   * Only an explicit `@marv` in the body summons him. A reply under a Marv post
+   * does not — otherwise one tag keeps him talking for the rest of the thread.
    */
   private async maybeEnqueueMarvReply(args: {
     post: PostWithRelations;
@@ -971,23 +969,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       const actorIsMarv = Boolean(resolvedMarvId && actorUserId === resolvedMarvId);
       const mentionsMarv = bodyMentionUsernamesLower.has(marvUsernameLower);
 
-      // Check for implied mention: direct reply to one of Marv's posts.
-      let impliedMention = false;
-      const parentPostId = post.parentId ?? null;
-      if (!mentionsMarv && !actorIsMarv && parentPostId && resolvedMarvId) {
-        const parentAuthor = await this.prisma.post.findFirst({
-          where: { id: parentPostId, deletedAt: null },
-          select: { userId: true },
-        });
-        impliedMention = parentAuthor?.userId === resolvedMarvId;
-        if (impliedMention) {
-          this.logger.log(
-            `[marv] mention-detect post=${post.id} implied-mention via direct reply to parent=${parentPostId} (authored by marv)`,
-          );
-        }
-      }
-
-      if (!mentionsMarv && !impliedMention) {
+      if (!mentionsMarv) {
         this.logger.log(
           `[marv] mention-detect post=${post.id} skip reason=no_mention mentions=[${bodyMentions.join(',') || '-'}] expected=@${marvUsernameLower}`,
         );

@@ -55,7 +55,7 @@ type CacheReadHit = { dto: MarvinCatchUpDto; stale: boolean; newReplies: number 
 
 /**
  * "Catch me up" — a synchronous, premium, credit-spending request that summarizes the
- * conversation BOTH above and below a focal post (ancestors + descendant subtree).
+ * conversation around a focal post (the full public thread, siblings included).
  *
  * Mirrors the credit/routing/usage discipline of the reply processors, but returns the
  * summary in the HTTP envelope instead of posting it. Results are cached per (post, mode,
@@ -245,13 +245,16 @@ export class MarvinCatchUpService {
 
       // 7. Hard-reserve credits before the AI turn (mode + vision + one web search + one URL fetch).
       const cost = this.credits.costForMode(effectiveMode);
+      const threadPostCount =
+        context.ancestors.length + (context.focal ? 1 : 0) + context.descendants.length;
+      const threadCost = this.credits.threadContextSurcharge(threadPostCount);
       const estimatedVisionCost = imageUrls.length * creditCfg.visionCreditCostPerImage;
       const webSearchBuffer =
         openAICfg.webSearchEnabled && openAICfg.webSearchModes.includes(effectiveMode as string)
           ? creditCfg.webSearchCreditCost
           : 0;
       const urlFetchBuffer = creditCfg.urlFetchCreditCost;
-      const reservedCost = cost + estimatedVisionCost + webSearchBuffer + urlFetchBuffer;
+      const reservedCost = cost + threadCost + estimatedVisionCost + webSearchBuffer + urlFetchBuffer;
       let reservedHeld = 0;
       let postSpend: Awaited<ReturnType<MarvinCreditService['settle']>>;
       try {
@@ -364,7 +367,7 @@ export class MarvinCatchUpService {
       const actualVisionCost = (aiResult.imagesAttached ?? 0) * creditCfg.visionCreditCostPerImage;
       const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * creditCfg.webSearchCreditCost;
       const urlFetchSurcharge = (aiResult.urlFetchCount ?? 0) * creditCfg.urlFetchCreditCost;
-      const totalCost = cost + actualVisionCost + webSearchSurcharge + urlFetchSurcharge;
+      const totalCost = cost + threadCost + actualVisionCost + webSearchSurcharge + urlFetchSurcharge;
 
       try {
         postSpend = await this.credits.settle(userId, reservedCost, totalCost);

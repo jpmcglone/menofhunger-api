@@ -78,6 +78,18 @@ describe('MarvinCreditService', () => {
     });
   });
 
+  describe('threadContextSurcharge', () => {
+    it('is free for a short thread and scales after 15 posts', () => {
+      const { svc } = makeService();
+      expect(svc.threadContextSurcharge(1)).toBe(0);
+      expect(svc.threadContextSurcharge(15)).toBe(0);
+      expect(svc.threadContextSurcharge(16)).toBe(1);
+      expect(svc.threadContextSurcharge(30)).toBe(1);
+      expect(svc.threadContextSurcharge(31)).toBe(2);
+      expect(svc.threadContextSurcharge(80)).toBe(5);
+    });
+  });
+
   describe('refill', () => {
     it('lazily creates a bucket at the monthly starting balance for new users', async () => {
       const { svc, getBucket } = makeService(null);

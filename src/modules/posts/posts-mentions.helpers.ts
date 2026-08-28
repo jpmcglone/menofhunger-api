@@ -32,6 +32,24 @@ export async function resolveMentionUsernamesMap(
   return byLower;
 }
 
+/** Marv is not a thread participant for reply prefill / inherited mention rows. */
+export function excludeMarvFromParticipants<T extends { id: string; username: string }>(
+  people: T[],
+  marv: { userId?: string | null; username?: string | null },
+): T[] {
+  const marvId = marv.userId ?? null;
+  const marvUsername = (marv.username ?? 'marv').trim().toLowerCase();
+  return people.filter((p) => {
+    if (marvId && p.id === marvId) return false;
+    return p.username.trim().toLowerCase() !== marvUsername;
+  });
+}
+
+export function excludeMarvUserId(ids: string[], marvUserId: string | null | undefined): string[] {
+  if (!marvUserId) return ids;
+  return ids.filter((id) => id !== marvUserId);
+}
+
 /** Resolve usernames to user ids (case-insensitive, usernameIsSet). Invalid usernames ignored. */
 export async function resolveMentionUsernames(prisma: PrismaService, usernames: string[]): Promise<string[]> {
   if (usernames.length === 0) return [];

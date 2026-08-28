@@ -780,3 +780,61 @@ describe('PostsSideEffectsHandler — tier-scoped groups:newPost', () => {
     expect(deps.presenceRealtime.emitGroupNewPost).not.toHaveBeenCalled();
   });
 });
+
+// ─── Marv enqueue: explicit @marv only ───────────────────────────────────────
+
+describe('PostsSideEffectsHandler maybeEnqueueMarvReply', () => {
+  function marvPost(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'p-reply',
+      userId: 'alice',
+      body: 'thanks',
+      parentId: 'p-marv',
+      rootId: 'p-root',
+      communityGroupId: null,
+      visibility: 'public',
+      user: { name: 'Alice', username: 'alice' },
+      mentions: [],
+      media: [],
+      poll: null,
+      ...overrides,
+    };
+  }
+
+  it('enqueues when the body explicitly mentions @marv', async () => {
+    const { handler, deps } = makeHandler();
+    deps.appConfig.marvBot.mockReturnValue({ enabled: true, username: 'marv', userId: 'marv-id' });
+
+    await (handler as any).maybeEnqueueMarvReply({
+      post: marvPost({ body: 'hey @marv what do you think?' }),
+      actorUserId: 'alice',
+      bodySnippet: 'hey @marv',
+      visibility: 'public',
+      requestedMarvMode: null,
+    });
+
+    expect(deps.jobs.enqueue).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ postId: 'p-reply', requestingUserId: 'alice' }),
+      expect.any(Object),
+    );
+  });
+
+  it('does not enqueue a reply to a Marv post unless the body tags @marv', async () => {
+    const { handler, deps } = makeHandler();
+    deps.appConfig.marvBot.mockReturnValue({ enabled: true, username: 'marv', userId: 'marv-id' });
+    deps.marvIdentity.cachedMarvUserId.mockReturnValue('marv-id');
+    deps.prisma.post.findFirst.mockResolvedValue({ userId: 'marv-id' });
+
+    await (handler as any).maybeEnqueueMarvReply({
+      post: marvPost({ body: 'yeah I agree' }),
+      actorUserId: 'alice',
+      bodySnippet: 'yeah I agree',
+      visibility: 'public',
+      requestedMarvMode: null,
+    });
+
+    expect(deps.jobs.enqueue).not.toHaveBeenCalled();
+    expect(deps.prisma.post.findFirst).not.toHaveBeenCalled();
+  });
+});

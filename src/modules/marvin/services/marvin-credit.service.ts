@@ -47,6 +47,18 @@ export class MarvinCreditService {
     private readonly appConfig: AppConfigService,
   ) {}
 
+  /**
+   * Extra credits for a large thread. The mode cost covers the first 15 posts;
+   * each additional 15 posts is +1. Images are billed separately per attachment.
+   */
+  threadContextSurcharge(postCount: number): number {
+    const included = 15;
+    const chunk = 15;
+    const n = Math.max(0, Math.floor(postCount));
+    if (n <= included) return 0;
+    return Math.ceil((n - included) / chunk);
+  }
+
   /** Return the cost (in credits) for a given mode, reading runtime config. */
   costForMode(mode: ResolvedMarvinMode): number {
     const c = this.appConfig.marvCredits();

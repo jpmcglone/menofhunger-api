@@ -33,6 +33,7 @@ import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { CacheTtl } from '../redis/cache-ttl';
 import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
 import { totalPostCommentsWhere, totalUserPostsWhere } from '../../common/content-counts';
+import { excludeMarvFromParticipants } from './posts-mentions.helpers';
 
 type ForYouRankedShell = {
   ids: string[];
@@ -3430,7 +3431,8 @@ export class PostsFeedQueryService {
   }
 
   /**
-   * Thread participants = root post author + all comment authors + everyone mentioned in the thread.
+   * Thread participants = root post author + all comment authors + everyone mentioned in the thread
+   * (except Marv — he only answers an explicit @marv, so we don't prefill him on later replies).
    * Used to pre-fill mentions and show "Replying to @userA, @userB" when composing a reply.
    */
   async getThreadParticipants(params: { viewerUserId: string | null; postId: string }) {
@@ -3458,10 +3460,13 @@ export class PostsFeedQueryService {
       where: { id: { in: Array.from(participantIds) }, usernameIsSet: true, bannedAt: null },
       select: { id: true, username: true },
     });
+    const named = users
+      .filter((u) => u.username != null)
+      .map((u) => ({ id: u.id, username: u.username as string }));
+    // Marv answers only an explicit @marv — don't prefill him on every later reply.
+    const marv = this.appConfig.marvBot();
     return {
-      participants: users
-        .filter((u) => u.username != null)
-        .map((u) => ({ id: u.id, username: u.username as string })),
+      participants: excludeMarvFromParticipants(named, marv),
     };
   }
 

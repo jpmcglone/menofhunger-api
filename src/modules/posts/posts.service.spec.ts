@@ -80,6 +80,7 @@ function makeService(
   };
   const appConfig: any = {
     r2: jest.fn(() => null),
+    marvBot: jest.fn(() => ({ enabled: false, username: 'marv', userId: null })),
   };
   const postViews: any = {};
   const jobs: any = { enqueue: jest.fn(async () => undefined) };

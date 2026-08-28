@@ -131,6 +131,7 @@ function makeProcessor(opts?: {
   };
   const credits: any = {
     costForMode: jest.fn(() => 2),
+    threadContextSurcharge: jest.fn(() => 0),
     refill: jest.fn(async () => ({ ...creditSummary })),
     reserve: jest.fn(async () => ({ ...creditSummary, credits: (opts?.credits ?? 100) - 2 })),
     settle: jest.fn(async () => ({ ...creditSummary, credits: (opts?.credits ?? 100) - 2 })),

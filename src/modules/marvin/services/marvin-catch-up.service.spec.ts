@@ -209,6 +209,7 @@ function makeService(opts?: {
   };
   const credits: any = {
     costForMode: jest.fn(() => opts?.cost ?? 2),
+    threadContextSurcharge: jest.fn(() => 0),
     refill: jest.fn(async () => ({
       credits: opts?.credits ?? 100,
       maxCredits: 1500,

@@ -285,7 +285,7 @@ export class MarvinPublicReplyProcessor {
       ? creditCfg.webSearchCreditCost
       : 0;
     const urlFetchBuffer = creditCfg.urlFetchCreditCost;
-    const reservedCost = cost + visionCost + webSearchBuffer + urlFetchBuffer;
+    let reservedCost = cost + visionCost + webSearchBuffer + urlFetchBuffer;
     const summary = await this.credits.refill(requestingUserId);
     this.logger.log(
       `[marv] public-reply gate-pass step=credits balance=${summary.credits} cost=${cost} vision=${visionCost} webSearchBuffer=${webSearchBuffer} urlFetchBuffer=${urlFetchBuffer} reserved=${reservedCost} ok=${summary.credits >= reservedCost}`,
@@ -408,6 +408,36 @@ export class MarvinPublicReplyProcessor {
       return;
     }
 
+    // Full thread (siblings included) + images, so reserve matches what we actually send.
+    const {
+      ancestors,
+      triggeringPost,
+      descendants,
+      imageUrls: threadImageUrls,
+      hasGifAttached,
+      group: threadGroup,
+    } = await this.fetchBidirectionalContext(post.id, openAICfg);
+    const rollingSummary = await this.threadSummary.getSummaryText(rootPostId).catch(() => null);
+    const recentBodies = [
+      post.body ?? '',
+      ...descendants.slice(-3).map((p) => p.body),
+    ].join('\n');
+    const linkPreviews = await this.linkMetadata.previewLinks(recentBodies);
+    const imageUrls = fillVisionSlots(
+      threadImageUrls,
+      linkPreviews.map((p) => p.imageUrl),
+      visionActive ? openAICfg.visionMaxImagesPerTurn : 0,
+    );
+    const threadPostCount =
+      ancestors.length + (triggeringPost ? 1 : 0) + descendants.length;
+    const threadCost = this.credits.threadContextSurcharge(threadPostCount);
+    reservedCost =
+      cost +
+      threadCost +
+      imageUrls.length * creditCfg.visionCreditCostPerImage +
+      webSearchBuffer +
+      urlFetchBuffer;
+
     // 8b. Hard-reserve credits before the AI turn (ledger hold). Soft check above is not a hold.
     let reservedHeld = 0;
     let postSpend: Awaited<ReturnType<MarvinCreditService['settle']>> | null = null;
@@ -455,31 +485,6 @@ export class MarvinPublicReplyProcessor {
     };
 
     const requesterRow = post.user;
-
-    // Pre-fetch BIDIRECTIONAL thread context (ancestors above + replies below the
-    // triggering post) so the model reasons about the whole conversation — not just a
-    // flat recent-replies list. The rolling summary covers older posts beyond the window.
-    const {
-      ancestors,
-      triggeringPost,
-      descendants,
-      imageUrls: threadImageUrls,
-      hasGifAttached,
-      group: threadGroup,
-    } = await this.fetchBidirectionalContext(post.id, openAICfg);
-    const rollingSummary = await this.threadSummary.getSummaryText(rootPostId).catch(() => null);
-
-    // Collect link previews from triggering post + last 3 replies below it (read-only, no fetch).
-    const recentBodies = [
-      post.body ?? '',
-      ...descendants.slice(-3).map((p) => p.body),
-    ].join('\n');
-    const linkPreviews = await this.linkMetadata.previewLinks(recentBodies);
-    const imageUrls = fillVisionSlots(
-      threadImageUrls,
-      linkPreviews.map((p) => p.imageUrl),
-      visionActive ? openAICfg.visionMaxImagesPerTurn : 0,
-    );
 
     const threadPosts = [
       ...ancestors,
@@ -639,7 +644,7 @@ export class MarvinPublicReplyProcessor {
     const actualVisionCost = (aiResult.imagesAttached ?? 0) * creditCfg.visionCreditCostPerImage;
     const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * creditCfg.webSearchCreditCost;
     const urlFetchSurcharge = (aiResult.urlFetchCount ?? 0) * creditCfg.urlFetchCreditCost;
-    const totalCost = cost + actualVisionCost + webSearchSurcharge + urlFetchSurcharge;
+    const totalCost = cost + threadCost + actualVisionCost + webSearchSurcharge + urlFetchSurcharge;
     if (actualVisionCost > 0) {
       this.logger.log(
         `[marv] public-reply vision surcharge: ${aiResult.imagesAttached} image(s) × ${creditCfg.visionCreditCostPerImage} = ${actualVisionCost} extra credits`,
@@ -877,16 +882,15 @@ export class MarvinPublicReplyProcessor {
   }
 
   /**
-   * Collect the bidirectional conversation around the triggering post (ancestors above +
-   * reply subtree below) via {@link MarvinThreadContextService}, map it into the prompt
-   * builder's {@link MarvThreadPost} shape, and apply the first-then-tail image selection
-   * rule across all collected posts.
+   * Collect the full public thread around the triggering post via
+   * {@link MarvinThreadContextService}, map it into the prompt builder's
+   * {@link MarvThreadPost} shape, and select vision images across that window.
    *
    * Returns:
-   *  - `ancestors`: posts above the triggering post (root-most → parent).
+   *  - `ancestors`: posts before the triggering post in thread reading order (siblings included).
    *  - `triggeringPost`: the post that mentioned Marv (undefined if it couldn't be loaded).
-   *  - `descendants`: replies below the triggering post (reading order).
-   *  - `imageUrls`: up to `visionMaxImagesPerTurn` image/GIF URLs (first, then tail), or [].
+   *  - `descendants`: posts after the triggering post in thread reading order (siblings included).
+   *  - `imageUrls`: up to `visionMaxImagesPerTurn` image/GIF URLs, chosen by proximity to the trigger.
    *  - `hasGifAttached`: true when at least one selected URL came from a GIF.
    */
   private async fetchBidirectionalContext(

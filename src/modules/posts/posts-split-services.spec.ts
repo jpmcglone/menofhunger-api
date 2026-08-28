@@ -289,7 +289,7 @@ describe('PostsMutationService.createPost quote floor enforcement', () => {
       prisma,
       { emitFeedNewPost: jest.fn(), emitPostsLiveUpdated: jest.fn(), emitPostsInteraction: jest.fn(), emitPostsCommentDeleted: jest.fn() } as any,
       { bumpForPostWrite: jest.fn(async () => undefined) } as any,
-      { r2: jest.fn(() => null), get: jest.fn(), frontendBaseUrl: jest.fn(() => null) } as any,
+      { r2: jest.fn(() => null), get: jest.fn(), frontendBaseUrl: jest.fn(() => null), marvBot: jest.fn(() => ({ enabled: false, username: 'marv', userId: null })) } as any,
       {} as any,
       { capture: jest.fn() } as any,
       viewerContext,
