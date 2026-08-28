@@ -396,12 +396,22 @@ export class PostViewsService {
     const ids = [...new Set(postIds.map((id) => (id ?? '').trim()).filter(Boolean))].slice(0, BATCH_MAX);
     if (ids.length === 0) return [];
 
-    const expanded = await this.expandViewTargetIds(ids);
+    let expanded: string[];
+    try {
+      expanded = await this.expandViewTargetIds(ids);
+    } catch (err) {
+      this.logger.warn(`markViewedBatch expand failed: ${String(err)}`);
+      return [];
+    }
     const acks = (await Promise.all(
       expanded.map((pid) => this.markViewed(uid || null, pid, anonId, source, { skipMarkRead: true })),
     )).filter((ack): ack is PostViewAckDto => ack != null);
     if (uid) {
-      await this.notifications.markReadBySubjects(uid, expanded);
+      try {
+        await this.notifications.markReadBySubjects(uid, expanded);
+      } catch (err) {
+        this.logger.warn(`markViewedBatch mark-read failed userId=${uid}: ${String(err)}`);
+      }
     }
     return acks;
   }

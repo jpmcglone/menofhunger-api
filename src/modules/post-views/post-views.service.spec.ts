@@ -340,4 +340,22 @@ describe('PostViewsService.markViewedBatch', () => {
     expect(markViewed).toHaveBeenCalledWith('viewer', 'plain', null, 'feed_scroll', { skipMarkRead: true });
     expect(notifications.markReadBySubjects).toHaveBeenCalledWith('viewer', ['plain']);
   });
+
+  it('still returns view acks when mark-read fails', async () => {
+    const { service, findMany, notifications } = makeBatchService();
+    findMany.mockResolvedValueOnce([
+      { id: 'plain', kind: 'post', repostedPostId: null, quotedPostId: null },
+    ]);
+    notifications.markReadBySubjects.mockRejectedValueOnce(new Error('db down'));
+    const ack = {
+      id: 'plain',
+      uniqueCounted: true,
+      totalCounted: true,
+      viewerCount: 1,
+      totalViewCount: 1,
+    };
+    jest.spyOn(service, 'markViewed').mockResolvedValue(ack);
+
+    await expect(service.markViewedBatch('viewer', ['plain'], null, 'feed_scroll')).resolves.toEqual([ack]);
+  });
 });
