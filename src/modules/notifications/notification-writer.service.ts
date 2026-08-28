@@ -76,8 +76,14 @@ export class NotificationWriterService {
     recipientUserId: string,
     payload: { undeliveredCount: number },
   ): void {
-    void this.cacheInvalidation?.bumpNotificationsList(recipientUserId);
-    this.presenceRealtime.emitNotificationsUpdated(recipientUserId, payload);
+    const emit = () => this.presenceRealtime.emitNotificationsUpdated(recipientUserId, payload);
+    if (!this.cacheInvalidation) {
+      emit();
+      return;
+    }
+    // Bump the list version before the badge event. Clients refetch on that
+    // emit; a stale page-1 cache is why All sometimes missed an in-app arrival.
+    void this.cacheInvalidation.bumpNotificationsList(recipientUserId).then(emit, emit);
   }
 
   /**
