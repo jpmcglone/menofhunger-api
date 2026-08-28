@@ -555,6 +555,9 @@ describe('PresenceStatusHandler — impersonated connections', () => {
     const presenceRedis = {
       registerSocket: jest.fn().mockResolvedValue({ isNewlyOnline: true }),
       unregisterSocket: jest.fn().mockResolvedValue({ isNowOffline: true }),
+      registerAnonSocket: jest.fn().mockResolvedValue({ isNewlyOnline: true }),
+      unregisterAnonSocket: jest.fn().mockResolvedValue({ isNowOffline: true }),
+      anonymousOnlineCount: jest.fn().mockResolvedValue(0),
       lastConnectAtMsByUserId: jest.fn().mockResolvedValue(new Map()),
       idleByUserIds: jest.fn().mockResolvedValue(new Map()),
       platformsByUserIds: jest.fn().mockResolvedValue(new Map()),
@@ -649,6 +652,145 @@ describe('PresenceStatusHandler — impersonated connections', () => {
     expect(presenceRedis.unregisterSocket).not.toHaveBeenCalled();
     expect(presence.persistLastOnlineAt).not.toHaveBeenCalled();
     expect(emitOffline).not.toHaveBeenCalled();
+  });
+});
+
+describe('PresenceStatusHandler — anonymous guest sockets', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  const VALID_ANON = 'anon_abcdef123456';
+
+  function makeAnonFixture(opts?: { userId?: string | null; anon?: string }) {
+    const server = new FakeServer();
+    const presence = makePresence({
+      register: jest.fn().mockReturnValue({ isNewlyOnline: true }),
+      unregister: jest.fn().mockReturnValue({ userId: opts?.userId ?? null, isNowOffline: false }),
+      persistLastSeenAt: jest.fn(),
+      persistDailyActivity: jest.fn(),
+      persistLastOnlineAt: jest.fn(),
+      setLastActivity: jest.fn(),
+      isUserOnline: jest.fn().mockReturnValue(false),
+      isUserIdle: jest.fn().mockReturnValue(false),
+      getLastActivity: jest.fn().mockReturnValue(0),
+      presenceIdleAfterMinutes: jest.fn().mockReturnValue(5),
+      getActiveStatusByUserId: jest.fn().mockResolvedValue(null),
+      getOnlineFeedListeners: jest.fn().mockReturnValue(new Set(['listener-1'])),
+    });
+    const presenceRedis = {
+      registerSocket: jest.fn().mockResolvedValue({ isNewlyOnline: true }),
+      unregisterSocket: jest.fn().mockResolvedValue({ isNowOffline: true }),
+      registerAnonSocket: jest.fn().mockResolvedValue({ isNewlyOnline: true }),
+      unregisterAnonSocket: jest.fn().mockResolvedValue({ isNowOffline: true }),
+      anonymousOnlineCount: jest.fn().mockResolvedValue(12),
+      lastConnectAtMsByUserId: jest.fn().mockResolvedValue(new Map()),
+      idleByUserIds: jest.fn().mockResolvedValue(new Map()),
+      platformsByUserIds: jest.fn().mockResolvedValue(new Map()),
+      syncAndAggregateLobbyCounts: jest.fn(async () => ({})),
+    } as any;
+    const auth = {
+      meFromSessionToken: jest.fn().mockResolvedValue(
+        opts?.userId
+          ? {
+              user: { id: opts.userId, username: 'member', verifiedStatus: 'none' },
+              sessionId: 's1',
+              expiresAt: new Date(),
+              renewed: false,
+              impersonatedByUserId: null,
+            }
+          : null,
+      ),
+    } as any;
+    const handler = new PresenceStatusHandler(
+      { isProd: jest.fn().mockReturnValue(true), marvBot: jest.fn().mockReturnValue({ enabled: false }) } as any,
+      auth,
+      presence,
+      presenceRedis,
+      { getFollowListUsersByIds: jest.fn().mockResolvedValue([]) } as any,
+      { getJson: jest.fn().mockResolvedValue(null), setJson: jest.fn().mockResolvedValue(undefined) } as any,
+      { getLobbyCountsBySpaceId: jest.fn().mockReturnValue({}) } as any,
+      {} as any,
+      new GatewayThrottleService(),
+      makeContext(presence, server),
+      {
+        presenceClusterByUserId: jest.fn(async (ids: string[]) => new Map(ids.map((id) => [id, [id]]))),
+        expandPresenceOnlineIds: jest.fn(async (ids: string[]) => ({
+          displayedIds: [...ids],
+          sourceByDisplayedId: new Map(ids.map((id) => [id, id])),
+        })),
+      } as any,
+    );
+    const emitAnonymousCount = jest.spyOn(handler, 'emitAnonymousCount').mockResolvedValue(undefined);
+    const emitOnline = jest.spyOn(handler, 'emitOnline').mockResolvedValue(undefined);
+    const socket = new FakeSocket('s1');
+    (socket as any).handshake = {
+      headers: {},
+      query: { client: 'web', ...(opts?.anon ? { anon: opts.anon } : {}) },
+    };
+    return { handler, presence, presenceRedis, socket, emitAnonymousCount, emitOnline };
+  }
+
+  it('registers a valid logged-out anon id and announces the guest count', async () => {
+    const { handler, presenceRedis, socket, emitAnonymousCount, emitOnline } = makeAnonFixture({
+      anon: VALID_ANON,
+    });
+
+    await handler.handleConnection(socket as any);
+
+    expect(presenceRedis.registerAnonSocket).toHaveBeenCalledWith({
+      socketId: 's1',
+      anonId: VALID_ANON,
+      client: 'web',
+    });
+    expect(presenceRedis.registerSocket).not.toHaveBeenCalled();
+    expect(emitAnonymousCount).toHaveBeenCalled();
+    expect(emitOnline).not.toHaveBeenCalled();
+    expect((socket.data as { anonId?: string }).anonId).toBe(VALID_ANON);
+  });
+
+  it('ignores anon from an iOS handshake', async () => {
+    const { handler, presenceRedis, socket, emitAnonymousCount } = makeAnonFixture({
+      anon: VALID_ANON,
+    });
+    (socket as any).handshake.query = { client: 'ios', anon: VALID_ANON };
+
+    await handler.handleConnection(socket as any);
+
+    expect(presenceRedis.registerAnonSocket).not.toHaveBeenCalled();
+    expect(emitAnonymousCount).not.toHaveBeenCalled();
+    expect((socket.data as { anonId?: string }).anonId).toBeUndefined();
+  });
+
+  it('ignores anon when the socket is signed in', async () => {
+    const { handler, presenceRedis, socket, emitAnonymousCount } = makeAnonFixture({
+      userId: 'u1',
+      anon: VALID_ANON,
+    });
+
+    await handler.handleConnection(socket as any);
+
+    expect(presenceRedis.registerAnonSocket).not.toHaveBeenCalled();
+    expect(presenceRedis.registerSocket).toHaveBeenCalled();
+    expect(emitAnonymousCount).not.toHaveBeenCalled();
+    expect((socket.data as { anonId?: string }).anonId).toBeUndefined();
+  });
+
+  it('unregisters the guest on disconnect and re-emits the count when they leave', async () => {
+    const { handler, presenceRedis, socket, emitAnonymousCount } = makeAnonFixture({
+      anon: VALID_ANON,
+    });
+    await handler.handleConnection(socket as any);
+    emitAnonymousCount.mockClear();
+
+    handler.handleDisconnect(socket as any);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(presenceRedis.unregisterAnonSocket).toHaveBeenCalledWith({
+      socketId: 's1',
+      anonId: VALID_ANON,
+    });
+    expect(emitAnonymousCount).toHaveBeenCalled();
   });
 });
 

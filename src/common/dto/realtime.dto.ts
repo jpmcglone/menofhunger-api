@@ -192,6 +192,12 @@ export type PresenceOnlineFeedSnapshotPayloadDto = {
     platforms?: string[];
   }>;
   totalOnline?: number;
+  /** Unique logged-out visitors with a live socket. */
+  anonymousOnline?: number;
+};
+
+export type PresenceAnonymousCountPayloadDto = {
+  anonymousOnline: number;
 };
 
 export type PresencePlatformsChangedPayloadDto = {
@@ -208,6 +214,7 @@ export const WsEventNames = {
   presenceStatusUpdated: 'presence:status-updated',
   presenceStatusCleared: 'presence:status-cleared',
   presencePlatformsChanged: 'presence:platforms-changed',
+  presenceAnonymousCount: 'presence:anonymous-count',
   postsSubscribe: 'posts:subscribe',
   postsUnsubscribe: 'posts:unsubscribe',
   postsSubscribed: 'posts:subscribed',

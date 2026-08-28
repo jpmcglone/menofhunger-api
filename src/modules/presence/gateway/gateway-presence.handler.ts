@@ -10,6 +10,7 @@ import { RedisKeys } from '../../redis/redis-keys';
 import { SpacesPresenceService } from '../../spaces/spaces-presence.service';
 import type { RadioChatSenderDto, SpaceChatSenderDto, SpaceLobbyCountsDto } from '../../../common/dto';
 import { parseSessionCookieFromHeader } from '../../../common/session-cookie';
+import { sanitizeAnonViewerId } from '../../views/view-tracking.utils';
 import { PresenceService } from '../presence.service';
 import { PresenceRedisStateService } from '../presence-redis-state.service';
 import { GatewayContextService } from './gateway-context.service';
@@ -91,7 +92,17 @@ export class PresenceStatusHandler {
         : client.handshake.query.client) ?? 'web';
 
     const userId = String(user?.id ?? '').trim() || null;
+    const rawAnon =
+      (Array.isArray(client.handshake.query.anon)
+        ? client.handshake.query.anon[0]
+        : client.handshake.query.anon) ?? '';
+    const requestedAnonId = userId ? null : sanitizeAnonViewerId(String(rawAnon));
+    // iOS is not browsable until login and never sends `anon`. Ignore it if a
+    // stale or forged handshake includes one anyway.
+    const anonId =
+      requestedAnonId && String(clientType).toLowerCase() !== 'ios' ? requestedAnonId : null;
     let isNewlyOnline = false;
+    let isNewlyAnonymous = false;
     if (userId) {
       this.cancelUserTimers(userId);
       this.userPresenceNonce.set(userId, (this.userPresenceNonce.get(userId) ?? 0) + 1);
@@ -111,9 +122,17 @@ export class PresenceStatusHandler {
         this.presence.persistLastSeenAt(userId);
         this.presence.persistDailyActivity(userId);
       }
+    } else if (anonId) {
+      const registration = await this.presenceRedis.registerAnonSocket({
+        socketId: client.id,
+        anonId,
+        client: String(clientType),
+      });
+      isNewlyAnonymous = Boolean(registration?.isNewlyOnline);
     }
 
-    (client.data as { userId?: string; presenceClient?: string }).userId = userId ?? undefined;
+    (client.data as { userId?: string; presenceClient?: string; anonId?: string }).userId = userId ?? undefined;
+    (client.data as { userId?: string; presenceClient?: string; anonId?: string }).anonId = anonId ?? undefined;
     (client.data as { userId?: string; presenceClient?: string }).presenceClient = String(clientType);
     (client.data as { impersonated?: boolean }).impersonated = impersonated;
     (client.data as any).viewer = {
@@ -163,6 +182,9 @@ export class PresenceStatusHandler {
         await this.emitPlatformsChanged(userId);
       }
     }
+    if (isNewlyAnonymous) {
+      await this.emitAnonymousCount();
+    }
     if (userId) {
       this.scheduleIdleMarkTimer(userId);
     }
@@ -187,6 +209,16 @@ export class PresenceStatusHandler {
       this.logger.debug(
         `[presence] DISCONNECT socket=${socketId} userId=${result?.userId ?? '?'} isNowOffline=${result?.isNowOffline ?? false}`,
       );
+    }
+
+    const anonId = String((client.data as { anonId?: string }).anonId ?? '').trim();
+    if (anonId) {
+      void this.presenceRedis
+        .unregisterAnonSocket({ socketId, anonId })
+        .then(async (r) => {
+          if (r?.isNowOffline) await this.emitAnonymousCount();
+        })
+        .catch(() => undefined);
     }
 
     const userId = String(result?.userId ?? '').trim();
@@ -220,6 +252,16 @@ export class PresenceStatusHandler {
   }
 
   // ─── Presence fan-out ───────────────────────────────────────────────
+
+  async emitAnonymousCount(anonymousOnline?: number): Promise<void> {
+    const targets = this.presence.getOnlineFeedListeners();
+    if (targets.size === 0) return;
+    const count =
+      typeof anonymousOnline === 'number' && Number.isFinite(anonymousOnline)
+        ? Math.max(0, Math.floor(anonymousOnline))
+        : await this.presenceRedis.anonymousOnlineCount();
+    this.context.emitToSockets(targets, 'presence:anonymous-count', { anonymousOnline: count });
+  }
 
   async emitOnline(userId: string): Promise<void> {
     const cluster = await this.accountSwitch.presenceClusterByUserId([userId]);
@@ -391,7 +433,11 @@ export class PresenceStatusHandler {
     const marvId = this.appConfig.marvBot().enabled
       ? await this.marvIdentity.getMarvUserId().catch(() => null)
       : null;
-    if (userIds.length === 0 && !marvId) return;
+    const anonymousOnline = await this.presenceRedis.anonymousOnlineCount();
+    if (userIds.length === 0 && !marvId) {
+      client.emit('presence:onlineFeedSnapshot', { users: [], totalOnline: 0, anonymousOnline });
+      return;
+    }
     try {
       const users = userIds.length
         ? await this.follows.getFollowListUsersByIds({
@@ -438,7 +484,7 @@ export class PresenceStatusHandler {
         }
       }
 
-      client.emit('presence:onlineFeedSnapshot', { users: payload, totalOnline });
+      client.emit('presence:onlineFeedSnapshot', { users: payload, totalOnline, anonymousOnline });
       if (this.context.logPresenceVerbose) {
         this.logger.debug(
           `[presence] EMIT_OUT presence:onlineFeedSnapshot to socket=${client.id} users=${payload.length}`,

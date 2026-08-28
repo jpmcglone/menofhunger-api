@@ -197,6 +197,12 @@ export const RedisKeys = {
   presenceOnlineZset(): string {
     return 'presence:online';
   },
+  presenceAnonOnlineZset(): string {
+    return 'presence:anon:online';
+  },
+  presenceAnonSockets(anonId: string): string {
+    return `presence:anon:${clean(anonId)}:sockets`;
+  },
   presenceIdleSet(): string {
     return 'presence:idle';
   },

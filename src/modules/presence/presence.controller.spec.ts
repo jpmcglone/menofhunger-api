@@ -37,6 +37,7 @@ function makeController(opts?: {
     }),
     idleByUserIds: jest.fn(async (ids: string[]) => new Map(ids.map((id) => [id, false]))),
     platformsByUserIds: jest.fn(async (ids: string[]) => new Map(ids.map((id) => [id, []]))),
+    anonymousOnlineCount: jest.fn(async () => 0),
   };
 
   const presence: any = {
@@ -144,6 +145,14 @@ describe('PresenceController — Marv pin injection', () => {
         expect.objectContaining({ id: 'marv-id', isBot: true }),
       );
       expect(res.pagination.totalOnline).toBe(3);
+      expect(res.pagination.anonymousOnline).toBe(0);
+    });
+
+    it('includes anonymousOnline from redis on the online-page pagination', async () => {
+      const m = makeController({ marvEnabled: false });
+      m.presenceRedis.anonymousOnlineCount.mockResolvedValueOnce(12);
+      const res: any = await m.controller.onlinePage(undefined, {});
+      expect(res.pagination.anonymousOnline).toBe(12);
     });
 
     it('skips Marv on online-page when disabled', async () => {
@@ -212,6 +221,8 @@ describe('PresenceController — online() output shape and per-call invariants',
 
     expect(res.data.map((u: any) => u.id)).toEqual(['user-c', 'user-b', 'user-a']);
     expect(res.pagination.totalOnline).toBe(3);
+    expect(res.pagination.anonymousOnline).toBe(0);
+    expect(res.pagination.anonymousOnline).toBe(0);
     expect(res.data[0]).toEqual(
       expect.objectContaining({
         id: 'user-c',

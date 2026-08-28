@@ -1742,6 +1742,11 @@ export type OnlinePaginationDto = {
    */
   recentlyOnlineCount: number;
   /**
+   * Unique logged-out visitors with a live socket right now. Distinct from
+   * `totalOnline` (signed-in members). Hidden in the UI when zero.
+   */
+  anonymousOnline: number;
+  /**
    * Tier breakdown of `data` (always computed, including for `?summary=1`
    * where `data` is empty). Powers the right-rail hover popover.
    */
@@ -1758,6 +1763,8 @@ export type PresenceOnlinePageDto = {
 
 export type PresenceOnlinePagePaginationDto = {
   totalOnline: number;
+  /** Unique logged-out visitors with a live socket. Hidden in the UI when zero. */
+  anonymousOnline: number;
   recentNextCursor: string | null;
 };
 
@@ -1993,6 +2000,12 @@ export type PresenceOnlineFeedSnapshotPayloadDto = {
     platforms?: string[];
   }>;
   totalOnline?: number;
+  /** Unique logged-out visitors with a live socket. */
+  anonymousOnline?: number;
+};
+
+export type PresenceAnonymousCountPayloadDto = {
+  anonymousOnline: number;
 };
 
 export type PresencePlatformsChangedPayloadDto = {

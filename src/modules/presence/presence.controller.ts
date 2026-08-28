@@ -320,12 +320,13 @@ export class PresenceController {
       if (cached) {
         const rows = cached.data as OnlineUserDto[];
         const platformsById = await this.presenceRedis.platformsByUserIds(rows.map((row) => row.id));
+        const anonymousOnline = await this.presenceRedis.anonymousOnlineCount();
         return toResponse({
           data: rows.map((row) => ({
             ...row,
             platforms: row.isBot ? [] : (platformsById.get(row.id) ?? row.platforms ?? []),
           })),
-          pagination: cached.pagination,
+          pagination: { ...cached.pagination, anonymousOnline },
         });
       }
     } catch {
@@ -350,12 +351,13 @@ export class PresenceController {
     // and don't depend on each other, so we run them concurrently. This trades
     // 4 sequential round-trips (Redis + Postgres + Redis + Postgres) for 1
     // wall-clock wait on the slowest of them.
-    const [lastConnectAtById, users, idleById, activeStatuses, platformsById] = await Promise.all([
+    const [lastConnectAtById, users, idleById, activeStatuses, platformsById, anonymousOnline] = await Promise.all([
       this.presenceRedis.lastConnectAtMsByUserId(connectedIds),
       this.follows.getFollowListUsersByIds({ viewerUserId, userIds }),
       this.presenceRedis.idleByUserIds(connectedIds),
       this.presence.getActiveStatuses(userIds),
       this.presenceRedis.platformsByUserIds(connectedIds),
+      this.presenceRedis.anonymousOnlineCount(),
     ]);
     this.inheritPresenceMaps(
       userIds,
@@ -414,7 +416,7 @@ export class PresenceController {
       },
     });
 
-    const result = { data, pagination: { totalOnline, recentlyOnlineCount } };
+    const result = { data, pagination: { totalOnline, recentlyOnlineCount, anonymousOnline } };
     void this.redis.setJson(cacheKey, result, { ttlMs: ONLINE_LIST_CACHE_TTL_MS }).catch(() => undefined);
     return toResponse(result);
   }
@@ -578,7 +580,10 @@ export class PresenceController {
   async onlinePage(
     @OptionalCurrentUserId() userId: string | undefined,
     @Query() query: unknown,
-  ): Promise<{ data: PresenceOnlinePageDto; pagination: { totalOnline: number; recentNextCursor: string | null } }> {
+  ): Promise<{
+    data: PresenceOnlinePageDto;
+    pagination: { totalOnline: number; anonymousOnline: number; recentNextCursor: string | null };
+  }> {
     const viewerUserId = userId ?? null;
     const parsed = onlinePageSchema.parse(query);
 
@@ -605,13 +610,15 @@ export class PresenceController {
     // Same parallel-fan-out optimization as `/presence/online`: the four lookups
     // below all key off `onlineUserIds` and don't depend on each other, so we
     // run them concurrently to drop 3 round-trips of wall-clock wait.
-    const [lastConnectAtById, onlineUsers, idleById, onlineStatuses, platformsById] = await Promise.all([
-      this.presenceRedis.lastConnectAtMsByUserId(connectedOnlineIds),
-      this.follows.getFollowListUsersByIds({ viewerUserId, userIds: onlineUserIds }),
-      this.presenceRedis.idleByUserIds(connectedOnlineIds),
-      this.presence.getActiveStatuses(onlineUserIds),
-      this.presenceRedis.platformsByUserIds(connectedOnlineIds),
-    ]);
+    const [lastConnectAtById, onlineUsers, idleById, onlineStatuses, platformsById, anonymousOnline] =
+      await Promise.all([
+        this.presenceRedis.lastConnectAtMsByUserId(connectedOnlineIds),
+        this.follows.getFollowListUsersByIds({ viewerUserId, userIds: onlineUserIds }),
+        this.presenceRedis.idleByUserIds(connectedOnlineIds),
+        this.presence.getActiveStatuses(onlineUserIds),
+        this.presenceRedis.platformsByUserIds(connectedOnlineIds),
+        this.presenceRedis.anonymousOnlineCount(),
+      ]);
     this.inheritPresenceMaps(
       onlineUserIds,
       expandedOnline.sourceByDisplayedId,
@@ -791,6 +798,7 @@ export class PresenceController {
       },
       pagination: {
         totalOnline,
+        anonymousOnline,
         recentNextCursor,
       },
     };
