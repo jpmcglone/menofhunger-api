@@ -16,7 +16,8 @@ export class HealthController {
 
   @Get()
   async health(@Res({ passthrough: true }) httpRes: Response) {
-    // No caching — health checks must reflect real-time state.
+    // Render readiness probe (`healthCheckPath: /health`). 2xx = take traffic;
+    // 503 = keep the previous instance. No caching — must reflect real-time state.
     setReadCache(httpRes, { viewerUserId: null, publicMaxAgeSeconds: 0, publicStaleWhileRevalidateSeconds: 0, varyCookie: false });
     const now = new Date();
     const nowIso = now.toISOString();

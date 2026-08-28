@@ -81,6 +81,8 @@ Then call (example for an unversioned infra endpoint; most product calls append 
 
 - `${process.env.NEXT_PUBLIC_API_URL}/health`  (note: health is one of the few endpoints that stays at the raw host root)
 
+Deploy: see `DEPLOYMENT.md` (Render health check + zero-downtime).
+
 ## Production env checklist
 
 Before deploying, ensure these are set (API also validates at startup):

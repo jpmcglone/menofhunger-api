@@ -1,0 +1,15 @@
+# Intended Render settings for zero-downtime API deploys.
+#
+# If this service is already dashboard-managed (no Blueprint linked), do NOT
+# apply this file as a new Blueprint — that can create a second service.
+# Copy healthCheckPath + maxShutdownDelaySeconds into Settings instead.
+# See DEPLOYMENT.md.
+#
+# Do not attach a persistent disk. That disables zero-downtime deploys.
+services:
+  - type: web
+    name: menofhunger-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 120

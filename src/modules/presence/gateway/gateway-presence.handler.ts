@@ -22,6 +22,12 @@ type UserTimers = {
   idleDisconnectTimer?: ReturnType<typeof setTimeout>;
 };
 
+/** Broadcast presence payloads cannot carry viewer-specific follow state. */
+function withoutRelationship<T extends { relationship?: unknown }>(user: T): Omit<T, 'relationship'> {
+  const { relationship: _ignored, ...rest } = user;
+  return rest;
+}
+
 /**
  * Connection lifecycle + presence/status events: auth on connect, `client.data`
  * population, online/idle/active/offline fan-out, per-user idle timers, presence
@@ -287,7 +293,7 @@ export class PresenceStatusHandler {
           viewerUserId: null,
           userIds: [userId],
         });
-        userPayload = users[0] ?? null;
+        userPayload = users[0] ? (withoutRelationship(users[0]) as FollowListUser) : null;
       } catch (err) {
         this.logger.warn(`Failed to fetch user ${userId} for presence:online: ${err}`);
       }
@@ -366,7 +372,7 @@ export class PresenceStatusHandler {
       const users = await this.follows
         .getFollowListUsersByIds({ viewerUserId: null, userIds: [userId] })
         .catch(() => []);
-      user = users[0];
+      user = users[0] ? (withoutRelationship(users[0]) as FollowListUser) : undefined;
     }
     this.context.emitToSockets(targets, 'presence:offline', {
       userId,
@@ -417,6 +423,7 @@ export class PresenceStatusHandler {
   }
 
   async handleSubscribeOnlineFeed(client: Socket): Promise<void> {
+    await ((client.data as { __ready?: Promise<void> }).__ready)?.catch?.(() => undefined);
     this.presence.subscribeOnlineFeed(client.id);
     if (this.context.logPresenceVerbose) {
       this.logger.debug(
@@ -427,6 +434,9 @@ export class PresenceStatusHandler {
     const connectedIds = await this.presenceRedis.onlineUserIds();
     const { displayedIds: userIds, sourceByDisplayedId } =
       await this.accountSwitch.expandPresenceOnlineIds(connectedIds);
+    // Per-client snapshot — include this socket's follow relationships so
+    // /online does not paint "Follow" on people the viewer already follows.
+    const viewerUserId = String((client.data as { userId?: string }).userId ?? '').trim() || null;
     // Resolve Marv pin (if enabled) once. We still emit a snapshot even when
     // there are no real online users, because Marv himself should appear as a
     // single-row snapshot when nobody else is connected.
@@ -441,7 +451,7 @@ export class PresenceStatusHandler {
     try {
       const users = userIds.length
         ? await this.follows.getFollowListUsersByIds({
-            viewerUserId: null,
+            viewerUserId,
             userIds,
           })
         : [];
@@ -463,13 +473,11 @@ export class PresenceStatusHandler {
           };
         });
 
-      // Pin Marv to the front of the snapshot (consistent with REST). The
-      // viewer here is anonymous (snapshot is keyed only by the socket) so we
-      // pass null and let the frontend's `isBot` sort handle ordering.
+      // Pin Marv to the front of the snapshot (consistent with REST).
       let totalOnline = userIds.length;
       if (marvId) {
         const [marvUser] = await this.follows.getFollowListUsersByIds({
-          viewerUserId: null,
+          viewerUserId,
           userIds: [marvId],
         });
         if (marvUser) {

@@ -3,6 +3,45 @@ import type { AppConfigService } from '../app/app-config.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { RedisService } from '../redis/redis.service';
 
+describe('HealthController.health', () => {
+  function makeHealthController(opts?: { dbOk?: boolean; redisOk?: boolean }) {
+    const httpRes = { status: jest.fn(), setHeader: jest.fn() };
+    const prisma = {
+      $queryRaw: jest.fn(async () => {
+        if (opts?.dbOk === false) throw new Error('db down');
+        return 1;
+      }),
+    } as unknown as PrismaService;
+    const redis = {
+      raw: () => ({
+        ping: jest.fn(async () => {
+          if (opts?.redisOk === false) throw new Error('redis down');
+          return 'PONG';
+        }),
+      }),
+    } as unknown as RedisService;
+    const appConfig = {} as AppConfigService;
+    return {
+      controller: new HealthController(prisma, appConfig, redis),
+      httpRes: httpRes as unknown as { status: jest.Mock },
+    };
+  }
+
+  it('returns 2xx when Postgres and Redis are up (Render may flip traffic)', async () => {
+    const { controller, httpRes } = makeHealthController();
+    const result = await controller.health(httpRes as never);
+    expect(result.data.status).toBe('ok');
+    expect(httpRes.status).not.toHaveBeenCalled();
+  });
+
+  it('returns 503 when Redis is down so Render keeps the previous instance', async () => {
+    const { controller, httpRes } = makeHealthController({ redisOk: false });
+    const result = await controller.health(httpRes as never);
+    expect(result.data.status).toBe('degraded');
+    expect(httpRes.status).toHaveBeenCalledWith(503);
+  });
+});
+
 describe('HealthController.healthConfig', () => {
   function makeController(overrides?: Partial<Record<keyof AppConfigService, unknown>>) {
     const appConfig = {

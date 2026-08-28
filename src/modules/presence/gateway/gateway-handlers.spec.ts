@@ -356,20 +356,29 @@ describe('PresenceStatusHandler', () => {
       persistLastSeenAt: jest.fn(),
       persistDailyActivity: jest.fn(),
       presenceIdleAfterMinutes: jest.fn().mockReturnValue(5),
+      subscribeOnlineFeed: jest.fn(),
       unsubscribeOnlineFeed: jest.fn(),
+      getActiveStatuses: jest.fn().mockResolvedValue([]),
     });
     const presenceRedis = {
       setIdle: jest.fn().mockResolvedValue(undefined),
       setActive: jest.fn().mockResolvedValue(undefined),
       touchSocket: jest.fn().mockResolvedValue(undefined),
       platformsByUserIds: jest.fn().mockResolvedValue(new Map([['u1', ['ios', 'web']]])),
+      onlineUserIds: jest.fn().mockResolvedValue(['u-followed']),
+      lastConnectAtMsByUserId: jest.fn().mockResolvedValue(new Map([['u-followed', 1]])),
+      idleByUserIds: jest.fn().mockResolvedValue(new Map([['u-followed', false]])),
+      anonymousOnlineCount: jest.fn().mockResolvedValue(0),
     } as any;
+    const follows = {
+      getFollowListUsersByIds: jest.fn().mockResolvedValue([]),
+    };
     const handler = new PresenceStatusHandler(
       { isProd: jest.fn().mockReturnValue(true), marvBot: jest.fn().mockReturnValue({ enabled: false }) } as any,
       {} as any,
       presence,
       presenceRedis,
-      { getFollowListUsersByIds: jest.fn().mockResolvedValue([]) } as any,
+      follows as any,
       {} as any,
       {} as any,
       {} as any,
@@ -383,7 +392,7 @@ describe('PresenceStatusHandler', () => {
         })),
       } as any,
     );
-    return { server, presence, presenceRedis, handler };
+    return { server, presence, presenceRedis, follows, handler };
   }
 
   it('presence:idle marks the user idle and fans out presence:idle to subscribers', () => {
@@ -433,6 +442,55 @@ describe('PresenceStatusHandler', () => {
       userId: 'u1',
       platforms: ['ios', 'web'],
     });
+  });
+
+  it('online-feed snapshot loads follow relationships for the subscribing viewer', async () => {
+    const { presence, follows, handler } = makePresenceHandlerFixture();
+    follows.getFollowListUsersByIds.mockResolvedValue([
+      {
+        id: 'u-followed',
+        username: 'marv',
+        relationship: { viewerFollowsUser: true, userFollowsViewer: false, viewerPostNotificationsEnabled: true },
+      },
+    ]);
+    const socket = new FakeSocket('s-viewer', { userId: 'viewer-1' });
+
+    await handler.handleSubscribeOnlineFeed(socket as any);
+
+    expect(follows.getFollowListUsersByIds).toHaveBeenCalledWith({
+      viewerUserId: 'viewer-1',
+      userIds: ['u-followed'],
+    });
+    const snap = socket.lastEmitted('presence:onlineFeedSnapshot') as {
+      users: Array<{ relationship?: { viewerFollowsUser?: boolean } }>;
+    };
+    expect(snap.users[0]?.relationship?.viewerFollowsUser).toBe(true);
+    expect(presence.subscribeOnlineFeed).toHaveBeenCalledWith('s-viewer');
+  });
+
+  it('broadcast presence:online omits follow relationship (one payload for every viewer)', async () => {
+    const { server, presence, presenceRedis, follows, handler } = makePresenceHandlerFixture();
+    follows.getFollowListUsersByIds.mockResolvedValue([
+      {
+        id: 'u-new',
+        username: 'newguy',
+        relationship: { viewerFollowsUser: false, userFollowsViewer: false, viewerPostNotificationsEnabled: false },
+      },
+    ]);
+    presenceRedis.lastConnectAtMsByUserId.mockResolvedValue(new Map([['u-new', 9]]));
+    presenceRedis.idleByUserIds.mockResolvedValue(new Map([['u-new', false]]));
+    presenceRedis.platformsByUserIds.mockResolvedValue(new Map([['u-new', ['web']]]));
+    presence.getActiveStatusByUserId = jest.fn().mockResolvedValue(null);
+    const listener = new FakeSocket('s-feed');
+    server.register(listener);
+    presence.getOnlineFeedListeners.mockReturnValue(new Set(['s-feed']));
+    presence.getSubscribers.mockReturnValue(new Set());
+
+    await handler.emitOnline('u-new');
+
+    const payload = listener.lastEmitted('presence:online') as { user?: { relationship?: unknown } };
+    expect(payload.user).toBeDefined();
+    expect(payload.user?.relationship).toBeUndefined();
   });
 
   it('uses the originating instance platform snapshot for cross-instance events', async () => {
