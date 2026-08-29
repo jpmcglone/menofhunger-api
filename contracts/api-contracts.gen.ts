@@ -1010,6 +1010,12 @@ export type FitnessDailySummaryDto = {
   hrvMs?: number | null;
 };
 
+/** One day of recorded steps for the Steps trend card. Newest-first on the page. */
+export type FitnessStepsDayDto = {
+  dayKey: string;
+  stepsCount: number;
+};
+
 export type FitnessBodyMetricDto = {
   id: string;
   /** "weight" | "vo2max" */
@@ -1105,6 +1111,8 @@ export type FitnessPageDto = {
   latestVo2Max: FitnessBodyMetricDto | null;
   /** Up to 60 VO2 max entries newest-first, for trend display. */
   vo2maxHistory: FitnessBodyMetricDto[];
+  /** Up to 60 days with steps, newest-first, for the Steps sparkline. */
+  stepsHistory: FitnessStepsDayDto[];
   activeGoal: FitnessGoalDto | null;
 };
 

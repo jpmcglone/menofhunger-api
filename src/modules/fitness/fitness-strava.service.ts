@@ -77,6 +77,24 @@ function mapActivityType(type: string): FitnessActivityType {
   return ACTIVITY_TYPE_MAP[type] ?? 'other';
 }
 
+function readPositiveInt(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  return Math.floor(value);
+}
+
+/** Strava puts steps on walk/run details as `steps`; list payloads often omit it. */
+function readStepsCount(
+  detail: StravaAthleteActivity,
+  list: StravaAthleteActivity,
+  raw?: { activity?: Record<string, unknown> },
+): number | null {
+  return (
+    readPositiveInt(detail.steps) ??
+    readPositiveInt(list.steps) ??
+    readPositiveInt(raw?.activity?.steps)
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -285,7 +303,7 @@ export class FitnessStravaService {
       distanceM: Number(detail.distance ?? a.distance) > 0 ? Number(detail.distance ?? a.distance) : null,
       effortScore:
         typeof detail.suffer_score === 'number' && detail.suffer_score > 0 ? detail.suffer_score : null,
-      stepsCount: null,
+      stepsCount: readStepsCount(detail, a, raw),
       calories: typeof detail.calories === 'number' && detail.calories > 0 ? detail.calories : null,
       avgHeartrate:
         typeof detail.average_heartrate === 'number' && detail.average_heartrate > 0

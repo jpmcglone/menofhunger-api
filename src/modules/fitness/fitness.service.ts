@@ -16,6 +16,7 @@ import type {
   FitnessShareSnapshotDto,
   FitnessPageDto,
   FitnessWeekSummaryDto,
+  FitnessStepsDayDto,
 } from '../../common/dto/fitness.dto';
 import { toPostDto } from '../posts/post.dto';
 import { vo2maxShareSnapshot } from './fitness-share-snapshot';
@@ -30,6 +31,7 @@ const STRAVA_ENRICH_PER_SYNC = 20;
 const STRAVA_ENRICH_CONCURRENCY = 2;
 const WEIGHT_HISTORY_LIMIT = 60;
 const VO2MAX_HISTORY_LIMIT = 60;
+const STEPS_HISTORY_LIMIT = 60;
 
 function toConnectionDto(conn: {
   provider: string;
@@ -128,7 +130,7 @@ export class FitnessService {
       await this.ingest.rebuildDailySummaries(userId, healedDates);
     }
 
-    const [user, connections, recentActivities, weekSummaries, weightRows, vo2maxRows, activeGoalRow] = await Promise.all([
+    const [user, connections, recentActivities, weekSummaries, weightRows, vo2maxRows, stepsRows, activeGoalRow] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: userId }, select: { premium: true, premiumPlus: true, fitnessUnits: true, featureToggles: true } }),
       this.prisma.fitnessConnection.findMany({ where: { userId }, select: { provider: true, status: true, lastSyncAt: true, lastManualSyncAt: true, providerUserId: true } }),
       this.prisma.fitnessActivity.findMany({
@@ -149,6 +151,12 @@ export class FitnessService {
         orderBy: { measuredAt: 'desc' },
         take: VO2MAX_HISTORY_LIMIT,
         select: { id: true, kind: true, weightKg: true, measuredAt: true, source: true },
+      }),
+      this.prisma.fitnessDailySummary.findMany({
+        where: { userId, stepsCount: { gt: 0 } },
+        orderBy: { dayKey: 'desc' },
+        take: STEPS_HISTORY_LIMIT,
+        select: { dayKey: true, stepsCount: true },
       }),
       this.prisma.fitnessGoal.findFirst({ where: { userId, kind: 'weight', completedAt: null }, orderBy: { createdAt: 'desc' } }),
     ]);
@@ -185,6 +193,11 @@ export class FitnessService {
       weightHistory: weightRows.map(toMetricDto),
       latestVo2Max: vo2maxRows[0] ? toMetricDto(vo2maxRows[0]) : null,
       vo2maxHistory: vo2maxRows.map(toMetricDto),
+      stepsHistory: stepsRows.flatMap((row): FitnessStepsDayDto[] =>
+        row.stepsCount != null && row.stepsCount > 0
+          ? [{ dayKey: row.dayKey, stepsCount: row.stepsCount }]
+          : [],
+      ),
       activeGoal: activeGoalRow
         ? { id: activeGoalRow.id, kind: activeGoalRow.kind, startKg: activeGoalRow.startKg, targetKg: activeGoalRow.targetKg, startedAt: activeGoalRow.startedAt.toISOString(), completedAt: activeGoalRow.completedAt?.toISOString() ?? null }
         : null,
