@@ -139,6 +139,10 @@ export const RedisKeys = {
   discoverMoreIds(postId: string, feedVer: number): string {
     return `cache:posts:discoverMore:${clean(postId)}:v${Math.max(1, Math.floor(feedVer || 1))}`;
   },
+  /** Thread authors + mentions for composer prefill (access-checked before read). */
+  threadParticipants(rootId: string): string {
+    return `cache:posts:threadParticipants:${clean(rootId)}`;
+  },
 
   /** Public marketing landing snapshot (stats + strips). */
   landingSnapshot(): string {

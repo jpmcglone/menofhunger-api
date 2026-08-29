@@ -403,17 +403,223 @@ export class PostViewsService {
       this.logger.warn(`markViewedBatch expand failed: ${String(err)}`);
       return [];
     }
-    const acks = (await Promise.all(
-      expanded.map((pid) => this.markViewed(uid || null, pid, anonId, source, { skipMarkRead: true })),
-    )).filter((ack): ack is PostViewAckDto => ack != null);
     if (uid) {
+      const acks = await this.markAuthenticatedViewsBatch(uid, expanded, anonId, source);
       try {
         await this.notifications.markReadBySubjects(uid, expanded);
       } catch (err) {
         this.logger.warn(`markViewedBatch mark-read failed userId=${uid}: ${String(err)}`);
       }
+      return acks;
     }
+
+    const acks = (await Promise.all(
+      expanded.map((pid) => this.markViewed(null, pid, anonId, source, { skipMarkRead: true })),
+    )).filter((ack): ack is PostViewAckDto => ack != null);
     return acks;
+  }
+
+  /**
+   * One transaction for a scroll batch instead of N markViewed transactions.
+   * createManyAndReturn keeps first-view increments race-safe.
+   */
+  private async markAuthenticatedViewsBatch(
+    uid: string,
+    postIds: string[],
+    anonId: string | null,
+    source?: string | null,
+  ): Promise<PostViewAckDto[]> {
+    try {
+      const [posts, viewer] = await Promise.all([
+        this.prisma.post.findMany({
+          where: { id: { in: postIds }, deletedAt: null },
+          select: { id: true, visibility: true, userId: true, viewerCount: true, totalViewCount: true },
+        }),
+        this.prisma.user.findFirst({
+          where: { id: uid },
+          select: { isBot: true, verifiedStatus: true, premium: true, premiumPlus: true },
+        }),
+      ]);
+      if (viewer?.isBot) return [];
+
+      const accessible = posts.filter(
+        (post) => post.userId === uid || viewerCanAccessVisibility(post.visibility, viewer),
+      );
+      if (accessible.length === 0) return [];
+      const accessibleIds = accessible.map((post) => post.id);
+
+      if (anonId) {
+        await this.prisma.viewerIdentity.upsert({
+          where: { anonId },
+          create: { anonId, userId: uid },
+          update: { userId: uid },
+        });
+      }
+
+      const now = new Date();
+      const lastSource = normalizeViewSource(source);
+      const lastSeenCutoff = cutoffForLastSeenRefresh(now);
+      const impressionCutoff = cutoffForTotalViewRecount(now);
+
+      const [existingViews, anonRows] = await Promise.all([
+        this.prisma.postView.findMany({
+          where: { userId: uid, postId: { in: accessibleIds } },
+          select: { postId: true, lastSeenAt: true, lastImpressionAt: true },
+        }),
+        anonId
+          ? this.prisma.postAnonView.findMany({
+              where: { anonId, postId: { in: accessibleIds } },
+              select: { postId: true },
+            })
+          : Promise.resolve([] as Array<{ postId: string }>),
+      ]);
+
+      const existingByPostId = new Map(existingViews.map((row) => [row.postId, row]));
+      const anonPostIds = new Set(anonRows.map((row) => row.postId));
+      const toCreate = accessibleIds.filter((id) => !existingByPostId.has(id));
+      const toRefreshLastSeen = existingViews
+        .filter((row) => row.lastSeenAt < lastSeenCutoff)
+        .map((row) => row.postId);
+      const toRefreshImpression = existingViews
+        .filter((row) => row.lastImpressionAt < impressionCutoff)
+        .map((row) => row.postId);
+
+      const createdRows = await this.prisma.$transaction(async (tx) => {
+        const created =
+          toCreate.length > 0
+            ? await tx.postView.createManyAndReturn({
+                data: toCreate.map((postId) => ({
+                  postId,
+                  userId: uid,
+                  lastSeenAt: now,
+                  seenCount: 1,
+                  impressionCount: 1,
+                  lastImpressionAt: now,
+                  lastSource,
+                })),
+                skipDuplicates: true,
+                select: { postId: true },
+              })
+            : [];
+
+        if (toRefreshLastSeen.length > 0) {
+          await tx.postView.updateMany({
+            where: {
+              userId: uid,
+              postId: { in: toRefreshLastSeen },
+              lastSeenAt: { lt: lastSeenCutoff },
+            },
+            data: { lastSeenAt: now, seenCount: { increment: 1 }, lastSource },
+          });
+        }
+        if (toRefreshImpression.length > 0) {
+          await tx.postView.updateMany({
+            where: {
+              userId: uid,
+              postId: { in: toRefreshImpression },
+              lastImpressionAt: { lt: impressionCutoff },
+            },
+            data: { lastImpressionAt: now, impressionCount: { increment: 1 } },
+          });
+        }
+        if (anonId && anonPostIds.size > 0) {
+          await tx.postAnonView.deleteMany({
+            where: { anonId, postId: { in: [...anonPostIds] } },
+          });
+        }
+
+        const createdIds = new Set(created.map((row) => row.postId));
+        const firstNoAnon = [...createdIds].filter((id) => !anonPostIds.has(id));
+        const firstConsumedAnon = [...createdIds].filter((id) => anonPostIds.has(id));
+        const impressionOnly = toRefreshImpression.filter((id) => !createdIds.has(id));
+
+        if (firstNoAnon.length > 0) {
+          await tx.post.updateMany({
+            where: { id: { in: firstNoAnon } },
+            data: {
+              viewerCount: { increment: 1 },
+              weightedViewCount: { increment: LOGGED_IN_VIEW_WEIGHT },
+              totalViewCount: { increment: 1 },
+            },
+          });
+        }
+        if (firstConsumedAnon.length > 0) {
+          await tx.post.updateMany({
+            where: { id: { in: firstConsumedAnon } },
+            data: {
+              weightedViewCount: { increment: 0.5 },
+              totalViewCount: { increment: 1 },
+            },
+          });
+        }
+        if (impressionOnly.length > 0) {
+          await tx.post.updateMany({
+            where: { id: { in: impressionOnly } },
+            data: { totalViewCount: { increment: 1 } },
+          });
+        }
+
+        return created;
+      });
+
+      const createdIds = new Set(createdRows.map((row) => row.postId));
+      if (createdIds.size > 0 || toRefreshLastSeen.length > 0) {
+        void this.cacheInvalidation.bumpForYouUser(uid).catch(() => undefined);
+      }
+
+      const incrementByPostId = new Map<string, { viewer: number; total: number }>();
+      for (const id of createdIds) {
+        incrementByPostId.set(id, { viewer: anonPostIds.has(id) ? 0 : 1, total: 1 });
+      }
+      for (const id of toRefreshImpression) {
+        if (!createdIds.has(id)) incrementByPostId.set(id, { viewer: 0, total: 1 });
+      }
+
+      const acks: PostViewAckDto[] = [];
+      const emitJobs: Array<Promise<void>> = [];
+      const breakdownKeys: string[] = [];
+      for (const post of accessible) {
+        const inc = incrementByPostId.get(post.id) ?? { viewer: 0, total: 0 };
+        const uniqueCounted = inc.viewer !== 0;
+        const totalCounted = inc.total !== 0;
+        const viewerCount = post.viewerCount + inc.viewer;
+        const totalViewCount = post.totalViewCount + inc.total;
+        if (createdIds.has(post.id)) {
+          this.posthog.capture(uid, 'post_viewed', {
+            post_id: post.id,
+            source: lastSource ?? 'unknown',
+            viewer_type: 'user',
+          });
+        }
+        if (uniqueCounted || totalCounted) {
+          breakdownKeys.push(breakdownCacheKey(post.id));
+          emitJobs.push(
+            this.emitViewCounts(post.id, {
+              viewerCount,
+              totalViewCount,
+              uniqueCounted,
+              totalCounted,
+              actorUserId: uid,
+            }),
+          );
+        }
+        acks.push({
+          id: post.id,
+          uniqueCounted,
+          totalCounted,
+          viewerCount,
+          totalViewCount,
+        });
+      }
+      if (breakdownKeys.length > 0) {
+        void this.redis.del(...breakdownKeys).catch(() => undefined);
+      }
+      if (emitJobs.length > 0) await Promise.all(emitJobs);
+      return acks;
+    } catch (err) {
+      this.logger.warn(`markAuthenticatedViewsBatch failed userId=${uid}: ${String(err)}`);
+      return [];
+    }
   }
 
   async expandViewTargetIds(ids: string[]): Promise<string[]> {

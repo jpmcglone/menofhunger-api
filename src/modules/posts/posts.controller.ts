@@ -315,6 +315,103 @@ export class PostsController {
     return this.posts.communityGroupPreviewMapForFeed(viewerUserId, groupIds);
   }
 
+  /**
+   * Permalink hydration used to walk parentId with sequential getById calls
+   * (one heavy include per ancestor). Feed compose already batches this via
+   * collectAncestorPostIds + getByIds — keep that here so /p/:id stays O(1)
+   * round trips instead of O(depth).
+   */
+  private async loadPermalinkRelatedPosts(params: {
+    viewerUserId: string | null;
+    viewerHasAdmin: boolean;
+    leaf: Awaited<ReturnType<PostsService['getById']>>;
+    leafGated: boolean;
+  }): Promise<{
+    chain: Array<Awaited<ReturnType<PostsService['getById']>>>;
+    gatedChainIndices: Set<number>;
+    byId: Map<string, Awaited<ReturnType<PostsService['getById']>>>;
+    repostedPostRaw: Awaited<ReturnType<PostsService['getById']>> | null;
+  }> {
+    const { viewerUserId, viewerHasAdmin, leaf, leafGated } = params;
+    const leafParentId = (leaf as { parentId?: string | null }).parentId ?? null;
+    const leafRepostedId = (leaf as { repostedPostId?: string | null }).repostedPostId ?? null;
+
+    const ancestorIds = await this.posts.collectAncestorPostIds([leafParentId, leafRepostedId]);
+    const fetched = ancestorIds.length
+      ? await this.posts.getByIds({ viewerUserId, ids: ancestorIds })
+      : [];
+
+    const byId = new Map<string, Awaited<ReturnType<PostsService['getById']>>>();
+    for (const row of fetched) {
+      const deletedAt = (row as { deletedAt?: Date | null }).deletedAt ?? null;
+      if (deletedAt && !viewerHasAdmin) continue;
+      byId.set(row.id, row);
+    }
+
+    const missingIds = ancestorIds.filter((id) => !byId.has(id));
+    const gatedIds = new Set<string>();
+    if (missingIds.length > 0) {
+      const gatedRows = await Promise.all(
+        missingIds.map((id) => this.posts.getByIdNoAccess(id).catch(() => null)),
+      );
+      for (const row of gatedRows) {
+        if (!row) continue;
+        byId.set(row.id, row);
+        gatedIds.add(row.id);
+      }
+    }
+
+    const chain: Array<Awaited<ReturnType<PostsService['getById']>>> = [leaf];
+    const gatedChainIndices = new Set<number>();
+    if (leafGated) gatedChainIndices.add(0);
+
+    let current = leaf;
+    while (current) {
+      const parentId = (current as { parentId?: string | null }).parentId ?? null;
+      if (!parentId) break;
+      const next = byId.get(parentId);
+      if (!next) break;
+      chain.push(next);
+      if (gatedIds.has(next.id)) {
+        gatedChainIndices.add(chain.length - 1);
+        break;
+      }
+      current = next;
+    }
+
+    const quotedSeeds = [
+      ...chain,
+      ...(leafRepostedId && byId.has(leafRepostedId) ? [byId.get(leafRepostedId)!] : []),
+    ];
+    const quotedPostIds = [
+      ...new Set(
+        quotedSeeds
+          .map((p) => (p as { quotedPostId?: string | null }).quotedPostId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ].filter((id) => !byId.has(id));
+    if (quotedPostIds.length > 0) {
+      const quoted = await this.posts.getByIds({ viewerUserId, ids: quotedPostIds });
+      for (const row of quoted) byId.set(row.id, row);
+      const stillMissing = quotedPostIds.filter((id) => !byId.has(id));
+      if (stillMissing.length > 0) {
+        const gatedQuoted = await Promise.all(
+          stillMissing.map((id) => this.posts.getByIdNoAccess(id).catch(() => null)),
+        );
+        for (const row of gatedQuoted) {
+          if (row) byId.set(row.id, row);
+        }
+      }
+    }
+
+    return {
+      chain,
+      gatedChainIndices,
+      byId,
+      repostedPostRaw: leafRepostedId ? byId.get(leafRepostedId) ?? null : null,
+    };
+  }
+
   @UseGuards(OptionalAuthGuard)
   @Throttle({
     default: {
@@ -808,25 +905,23 @@ export class PostsController {
       visibility: (parsed.visibility as 'all' | 'public' | 'verifiedOnly' | 'premiumOnly') ?? 'all',
       sort: sortKind as 'new' | 'popular',
     });
+    const commentIds = result.comments.map((p) => p.id);
     const viewer = await this.posts.viewerContext(viewerUserId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-    const boosted = viewerUserId
-      ? await this.posts.viewerBoostedPostIds({
-          viewerUserId,
-          postIds: result.comments.map((p) => p.id),
-        })
-      : new Set<string>();
-    const bookmarksByPostId = viewerUserId
-      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: result.comments.map((p) => p.id) })
-      : new Map<string, { collectionIds: string[] }>();
-    const votedPollOptionIdByPostId = viewerUserId
-      ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: result.comments.map((p) => p.id) })
-      : new Map<string, string>();
-    const internalByPostId = viewerHasAdmin
-      ? await this.posts.ensureBoostScoresFresh(result.comments.map((p) => p.id))
-      : null;
-    const scoreByPostIdComments =
-      viewerHasAdmin ? await this.posts.computeScoresForPostIds(result.comments.map((p) => p.id)) : undefined;
+    const [boosted, bookmarksByPostId, votedPollOptionIdByPostId, internalByPostId, scoreByPostIdComments] =
+      await Promise.all([
+        viewerUserId
+          ? this.posts.viewerBoostedPostIds({ viewerUserId, postIds: commentIds })
+          : Promise.resolve(new Set<string>()),
+        viewerUserId
+          ? this.posts.viewerBookmarksByPostId({ viewerUserId, postIds: commentIds })
+          : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
+        viewerUserId
+          ? this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: commentIds })
+          : Promise.resolve(new Map<string, string>()),
+        viewerHasAdmin ? this.posts.ensureBoostScoresFresh(commentIds) : Promise.resolve(null),
+        viewerHasAdmin ? this.posts.computeScoresForPostIds(commentIds) : Promise.resolve(undefined),
+      ]);
 
     const r2comments = this.appConfig.r2()?.publicBaseUrl ?? null;
 
@@ -927,44 +1022,20 @@ export class PostsController {
       !viewerCanAccess && (post as { communityGroupId?: string | null }).communityGroupId
         ? String((post as { communityGroupId?: string | null }).communityGroupId)
         : null;
-    const groupPreview = gatedGroupId
-      ? await this.posts.communityGroupPreviewForGroup(gatedGroupId, viewerUserId)
-      : null;
-
-    const viewer = await this.posts.viewerContext(viewerUserId);
+    const [viewer, groupPreview] = await Promise.all([
+      this.posts.viewerContext(viewerUserId),
+      gatedGroupId
+        ? this.posts.communityGroupPreviewForGroup(gatedGroupId, viewerUserId)
+        : Promise.resolve(null),
+    ]);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
 
-    // Collect ancestor chain (post + all parents) for boost/bookmark and DTO building.
-    // If the viewer can't access an ancestor (e.g. public reply inside a verified-only thread),
-    // fall back to the gated preview instead of propagating a 403 for the whole permalink.
-    const chain: Awaited<ReturnType<typeof this.posts.getById>>[] = [];
-    const gatedChainIndices = new Set<number>();
-    let current: Awaited<ReturnType<typeof this.posts.getById>> | null = post;
-    while (current) {
-      chain.push(current);
-      const parentId: string | null | undefined = (current as { parentId?: string | null }).parentId;
-      if (!parentId) { current = null; break; }
-      try {
-        current = await this.posts.getById({ viewerUserId, id: parentId });
-      } catch (e) {
-        if (e instanceof ForbiddenException) {
-          const gatedParent = await this.posts.getByIdNoAccess(parentId).catch(() => null);
-          if (gatedParent) {
-            chain.push(gatedParent);
-            gatedChainIndices.add(chain.length - 1);
-          }
-          current = null;
-        } else {
-          throw e;
-        }
-      }
-    }
-
-    // Also fetch the reposted post if this is a flat repost.
-    const repostedPostId = (post as any).repostedPostId as string | null | undefined;
-    const repostedPostRaw = repostedPostId
-      ? await this.posts.getById({ viewerUserId, id: repostedPostId }).catch(() => null)
-      : null;
+    const { chain, gatedChainIndices, byId, repostedPostRaw } = await this.loadPermalinkRelatedPosts({
+      viewerUserId,
+      viewerHasAdmin,
+      leaf: post,
+      leafGated: !viewerCanAccess,
+    });
 
     // Build groupPreview map for any group post in the chain (including reposted) so the
     // permalink page can show the group context (back-strip, inline pill, nav highlight)
@@ -980,16 +1051,10 @@ export class PostsController {
           .filter((gid): gid is string => Boolean(gid)),
       ),
     );
-    const groupPreviewById = groupIdsForPreview.length
-      ? await this.communityGroupPreviewMapForIds(viewerUserId, groupIdsForPreview)
-      : new Map<string, CommunityGroupPreviewDto>();
-
     const allPosts = [...chain, ...(repostedPostRaw ? [repostedPostRaw] : [])];
     const postIds = allPosts.map((p) => p.id);
 
-    // Collect quotedPostIds across all posts in the chain and build a viewer-gated map.
-    // Using getById ensures all tier/membership/visibility gates are applied before we
-    // include the quoted post in the DTO — same as the feed path via quotedPostMap.
+    // Quoted posts were batched with the ancestor chain (getByIds + gated fallback).
     const quotedPostIds = Array.from(
       new Set(
         allPosts
@@ -998,31 +1063,42 @@ export class PostsController {
       ),
     );
     const quotedPostByIdPermalink = new Map<string, Awaited<ReturnType<typeof this.posts.getById>>>();
-    await Promise.all(
-      quotedPostIds.map(async (qid) => {
-        const qp = await this.posts.getById({ viewerUserId, id: qid }).catch(() => null);
-        if (qp) quotedPostByIdPermalink.set(qid, qp);
-      }),
-    );
-    const boosted = viewerUserId
-      ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds })
-      : new Set<string>();
-    const bookmarksByPostId = viewerUserId
-      ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
-      : new Map<string, { collectionIds: string[] }>();
-    const votedPollOptionIdByPostId = viewerUserId
-      ? await this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds })
-      : new Map<string, string>();
-    const repostedByPostId = viewerUserId
-      ? await this.posts.viewerRepostedPostIds({ viewerUserId, postIds })
-      : new Set<string>();
-    const lastSeenAtByPostId = viewerUserId
-      ? await this.posts.viewerLastSeenAtByPostId({ viewerUserId, postIds })
-      : new Map<string, Date>();
+    for (const qid of quotedPostIds) {
+      const qp = byId.get(qid);
+      if (qp) quotedPostByIdPermalink.set(qid, qp);
+    }
+    const [
+      groupPreviewById,
+      boosted,
+      bookmarksByPostId,
+      votedPollOptionIdByPostId,
+      repostedByPostId,
+      lastSeenAtByPostId,
+      internalByPostId,
+      scoreByPostIdGet,
+    ] = await Promise.all([
+      groupIdsForPreview.length
+        ? this.communityGroupPreviewMapForIds(viewerUserId, groupIdsForPreview)
+        : Promise.resolve(new Map<string, CommunityGroupPreviewDto>()),
+      viewerUserId
+        ? this.posts.viewerBoostedPostIds({ viewerUserId, postIds })
+        : Promise.resolve(new Set<string>()),
+      viewerUserId
+        ? this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
+        : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
+      viewerUserId
+        ? this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds })
+        : Promise.resolve(new Map<string, string>()),
+      viewerUserId
+        ? this.posts.viewerRepostedPostIds({ viewerUserId, postIds })
+        : Promise.resolve(new Set<string>()),
+      viewerUserId
+        ? this.posts.viewerLastSeenAtByPostId({ viewerUserId, postIds })
+        : Promise.resolve(new Map<string, Date>()),
+      viewerHasAdmin ? this.posts.ensureBoostScoresFresh(postIds) : Promise.resolve(null),
+      viewerHasAdmin ? this.posts.computeScoresForPostIds(postIds) : Promise.resolve(undefined),
+    ]);
     const viewedByPostId = new Set(lastSeenAtByPostId.keys());
-    const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(postIds) : null;
-    const scoreByPostIdGet =
-      viewerHasAdmin ? await this.posts.computeScoresForPostIds(postIds) : undefined;
 
     const r2 = this.appConfig.r2()?.publicBaseUrl ?? null;
     const toDto = (

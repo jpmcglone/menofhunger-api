@@ -228,9 +228,63 @@ export class NotificationQueryService {
           .filter(Boolean),
       ),
     ] as string[];
-    const subjectPosts =
+    const subjectUserIds = [...new Set(raw.map((n) => n.subjectUserId).filter(Boolean))] as string[];
+    const subjectArticleIds = [
+      ...new Set(
+        raw
+          .filter((n) => n.kind === 'followed_article' && n.subjectArticleId)
+          .map((n) => n.subjectArticleId as string),
+      ),
+    ];
+    const notificationPostIds = [
+      ...new Set(
+        raw
+          .flatMap((n) => {
+            if (!NOTIFICATION_POST_CARD_KINDS.has(n.kind)) return [];
+            const primary = this.notificationPostId(n);
+            const fallback = n.kind === 'repost' ? n.subjectPostId : null;
+            return [primary, fallback].filter(Boolean);
+          })
+          .filter(Boolean),
+      ),
+    ] as string[];
+    const subjectGroupIds = [
+      ...new Set(
+        raw
+          .filter((n) => Boolean(n.subjectGroupId))
+          .map((n) => n.subjectGroupId as string),
+      ),
+    ];
+    const subjectCrewInviteIds = [
+      ...new Set(raw.map((n) => n.subjectCrewInviteId).filter(Boolean) as string[]),
+    ];
+    const subjectCrewIds = [
+      ...new Set(
+        raw
+          .filter((n) => n.subjectCrewId && !n.subjectCrewInviteId)
+          .map((n) => n.subjectCrewId as string),
+      ),
+    ];
+    const subjectCommunityGroupInviteIds = [
+      ...new Set(raw.map((n) => n.subjectCommunityGroupInviteId).filter(Boolean) as string[]),
+    ];
+    const subjectSpaceIds = [
+      ...new Set(raw.map((n) => n.subjectSpaceId).filter(Boolean) as string[]),
+    ];
+
+    const [
+      subjectPosts,
+      subjectUsers,
+      subjectArticles,
+      notificationPostDtoById,
+      subjectGroups,
+      subjectCrewInvites,
+      subjectCrews,
+      subjectCommunityGroupInvites,
+      subjectSpaces,
+    ] = await Promise.all([
       previewPostIds.length > 0
-        ? await this.prisma.post.findMany({
+        ? this.prisma.post.findMany({
             where: { id: { in: previewPostIds } },
             select: {
               id: true,
@@ -239,7 +293,64 @@ export class NotificationQueryService {
               media: { where: { deletedAt: null }, orderBy: { position: 'asc' }, select: { kind: true, r2Key: true, thumbnailR2Key: true, url: true } },
             },
           })
-        : [];
+        : Promise.resolve([]),
+      subjectUserIds.length > 0
+        ? this.prisma.user.findMany({
+            where: { id: { in: subjectUserIds } },
+            select: { id: true, premium: true, verifiedStatus: true },
+          })
+        : Promise.resolve([]),
+      subjectArticleIds.length > 0
+        ? this.prisma.article.findMany({
+            where: { id: { in: subjectArticleIds } },
+            select: { id: true, title: true, excerpt: true, thumbnailR2Key: true, visibility: true },
+          })
+        : Promise.resolve([]),
+      notificationPostIds.length > 0
+        ? this.postVisibility.getVisiblePostsByIds({
+            viewerUserId: recipientUserId,
+            ids: notificationPostIds,
+            includeDeleted: false,
+            excludeBannedAuthors: true,
+          }).then((posts) => this.postVisibility.composePostDtoMapForViewer(recipientUserId, posts))
+        : Promise.resolve(new Map<string, PostDto>()),
+      subjectGroupIds.length > 0
+        ? this.prisma.communityGroup.findMany({
+            where: { id: { in: subjectGroupIds } },
+            select: { id: true, slug: true, name: true },
+          })
+        : Promise.resolve([]),
+      subjectCrewInviteIds.length > 0
+        ? this.prisma.crewInvite.findMany({
+            where: { id: { in: subjectCrewInviteIds } },
+            select: {
+              id: true,
+              status: true,
+              crewNameOnAccept: true,
+              crew: { select: { name: true } },
+            },
+          })
+        : Promise.resolve([]),
+      subjectCrewIds.length > 0
+        ? this.prisma.crew.findMany({
+            where: { id: { in: subjectCrewIds } },
+            select: { id: true, name: true },
+          })
+        : Promise.resolve([]),
+      subjectCommunityGroupInviteIds.length > 0
+        ? this.prisma.communityGroupInvite.findMany({
+            where: { id: { in: subjectCommunityGroupInviteIds } },
+            select: { id: true, status: true },
+          })
+        : Promise.resolve([]),
+      subjectSpaceIds.length > 0
+        ? this.prisma.space.findMany({
+            where: { id: { in: subjectSpaceIds } },
+            select: { id: true, owner: { select: { username: true } } },
+          })
+        : Promise.resolve([]),
+    ]);
+
     const subjectPreviewByPostId = new Map<string, SubjectPostPreviewDto>();
     const subjectTierByPostId = new Map<string, SubjectTier>();
     const subjectVisibilityByPostId = new Map<string, SubjectPostVisibility>();
@@ -266,34 +377,12 @@ export class NotificationQueryService {
       }
     }
 
-    const subjectUserIds = [...new Set(raw.map((n) => n.subjectUserId).filter(Boolean))] as string[];
-    const subjectUsers =
-      subjectUserIds.length > 0
-        ? await this.prisma.user.findMany({
-            where: { id: { in: subjectUserIds } },
-            select: { id: true, premium: true, verifiedStatus: true },
-          })
-        : [];
     const subjectTierByUserId = new Map<string, SubjectTier>();
     for (const u of subjectUsers) {
       const tier: SubjectTier = u.premium ? 'premium' : u.verifiedStatus !== 'none' ? 'verified' : null;
       subjectTierByUserId.set(u.id, tier);
     }
 
-    const subjectArticleIds = [
-      ...new Set(
-        raw
-          .filter((n) => n.kind === 'followed_article' && n.subjectArticleId)
-          .map((n) => n.subjectArticleId as string),
-      ),
-    ];
-    const subjectArticles =
-      subjectArticleIds.length > 0
-        ? await this.prisma.article.findMany({
-            where: { id: { in: subjectArticleIds } },
-            select: { id: true, title: true, excerpt: true, thumbnailR2Key: true, visibility: true },
-          })
-        : [];
     const subjectArticlePreviewById = new Map<string, SubjectArticlePreviewDto>();
     for (const a of subjectArticles) {
       const thumbnailUrl = a.thumbnailR2Key
@@ -307,65 +396,7 @@ export class NotificationQueryService {
       });
     }
 
-    const notificationPostIds = [
-      ...new Set(
-        raw
-          .flatMap((n) => {
-            if (!NOTIFICATION_POST_CARD_KINDS.has(n.kind)) return [];
-            const primary = this.notificationPostId(n);
-            const fallback = n.kind === 'repost' ? n.subjectPostId : null;
-            return [primary, fallback].filter(Boolean);
-          })
-          .filter(Boolean),
-      ),
-    ] as string[];
-    const notificationPostDtoById =
-      notificationPostIds.length > 0
-        ? await this.postVisibility.getVisiblePostsByIds({
-            viewerUserId: recipientUserId,
-            ids: notificationPostIds,
-            includeDeleted: false,
-            excludeBannedAuthors: true,
-          }).then((posts) => this.postVisibility.composePostDtoMapForViewer(recipientUserId, posts))
-        : new Map<string, PostDto>();
-
-    // Batch-lookup groups for any notification that carries a subjectGroupId
-    // (group_join_request and community_group_invite_* both use it for routing).
-    const subjectGroupIds = [
-      ...new Set(
-        raw
-          .filter((n) => Boolean(n.subjectGroupId))
-          .map((n) => n.subjectGroupId as string),
-      ),
-    ];
-    const subjectGroups =
-      subjectGroupIds.length > 0
-        ? await this.prisma.communityGroup.findMany({
-            where: { id: { in: subjectGroupIds } },
-            select: { id: true, slug: true, name: true },
-          })
-        : [];
     const subjectGroupById = new Map(subjectGroups.map((g) => [g.id, g] as const));
-
-    // Batch-lookup invite statuses for crew_invite_* notifications so the row can
-    // render the correct terminal state on first load (no extra FE round-trip).
-    // We grab the linked crew name (or the founding `crewNameOnAccept`) at the
-    // same time so the row can say "invited you to The Iron Men".
-    const subjectCrewInviteIds = [
-      ...new Set(raw.map((n) => n.subjectCrewInviteId).filter(Boolean) as string[]),
-    ];
-    const subjectCrewInvites =
-      subjectCrewInviteIds.length > 0
-        ? await this.prisma.crewInvite.findMany({
-            where: { id: { in: subjectCrewInviteIds } },
-            select: {
-              id: true,
-              status: true,
-              crewNameOnAccept: true,
-              crew: { select: { name: true } },
-            },
-          })
-        : [];
     const subjectCrewInviteStatusById = new Map(
       subjectCrewInvites.map((inv) => [inv.id, inv.status] as const),
     );
@@ -375,53 +406,12 @@ export class NotificationQueryService {
           [inv.id, ((inv.crew?.name ?? inv.crewNameOnAccept ?? '') as string).trim() || null] as const,
       ),
     );
-
-    // For non-invite crew notifications (member joined/left, owner transferred,
-    // wall mention, etc.) the crew name lives on the Crew row directly.
-    const subjectCrewIds = [
-      ...new Set(
-        raw
-          .filter((n) => n.subjectCrewId && !n.subjectCrewInviteId)
-          .map((n) => n.subjectCrewId as string),
-      ),
-    ];
-    const subjectCrews =
-      subjectCrewIds.length > 0
-        ? await this.prisma.crew.findMany({
-            where: { id: { in: subjectCrewIds } },
-            select: { id: true, name: true },
-          })
-        : [];
     const subjectCrewNameByCrewId = new Map(
       subjectCrews.map((c) => [c.id, (c.name ?? '').trim() || null] as const),
     );
-
-    // Same idea for community group invites: hydrate status so the row can
-    // render Joined / Declined / No longer available without a refetch.
-    const subjectCommunityGroupInviteIds = [
-      ...new Set(raw.map((n) => n.subjectCommunityGroupInviteId).filter(Boolean) as string[]),
-    ];
-    const subjectCommunityGroupInvites =
-      subjectCommunityGroupInviteIds.length > 0
-        ? await this.prisma.communityGroupInvite.findMany({
-            where: { id: { in: subjectCommunityGroupInviteIds } },
-            select: { id: true, status: true },
-          })
-        : [];
     const subjectCommunityGroupInviteStatusById = new Map(
       subjectCommunityGroupInvites.map((inv) => [inv.id, inv.status] as const),
     );
-
-    const subjectSpaceIds = [
-      ...new Set(raw.map((n) => n.subjectSpaceId).filter(Boolean) as string[]),
-    ];
-    const subjectSpaces =
-      subjectSpaceIds.length > 0
-        ? await this.prisma.space.findMany({
-            where: { id: { in: subjectSpaceIds } },
-            select: { id: true, owner: { select: { username: true } } },
-          })
-        : [];
     const subjectSpaceOwnerUsernameById = new Map(
       subjectSpaces.map((s) => [s.id, (s.owner.username ?? '').trim() || null] as const),
     );

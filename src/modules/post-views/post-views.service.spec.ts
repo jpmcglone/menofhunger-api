@@ -225,10 +225,40 @@ describe('PostViewsService.markViewed', () => {
 });
 
 describe('PostViewsService.markViewedBatch', () => {
-  function makeBatchService() {
-    const findMany = jest.fn(async (): Promise<
-      Array<{ id: string; kind: string; repostedPostId: string | null; quotedPostId: string | null }>
-    > => []);
+  function makeBatchService(opts?: {
+    existingViews?: Array<{ postId: string; lastSeenAt: Date; lastImpressionAt: Date }>;
+    createdPostIds?: string[];
+  }) {
+    const existingViews = opts?.existingViews ?? [];
+    const createdPostIds = opts?.createdPostIds;
+    const expandRows: Array<{
+      id: string;
+      kind: string;
+      repostedPostId: string | null;
+      quotedPostId: string | null;
+    }> = [];
+    const detailRows: Array<{
+      id: string;
+      visibility: string;
+      userId: string;
+      viewerCount: number;
+      totalViewCount: number;
+    }> = [];
+    const findMany = jest.fn(async (args: { select?: Record<string, unknown> }) => {
+      if (args?.select && 'kind' in args.select) return expandRows;
+      return detailRows;
+    });
+    const tx = {
+      postView: {
+        createManyAndReturn: jest.fn(async (args: { data: Array<{ postId: string }> }) => {
+          const ids = createdPostIds ?? args.data.map((row) => row.postId);
+          return ids.map((postId) => ({ postId }));
+        }),
+        updateMany: jest.fn(async () => ({ count: 0 })),
+      },
+      postAnonView: { deleteMany: jest.fn(async () => ({ count: 0 })) },
+      post: { updateMany: jest.fn(async () => ({ count: 1 })) },
+    };
     const prisma = {
       post: {
         findMany,
@@ -248,22 +278,15 @@ describe('PostViewsService.markViewedBatch', () => {
         findUnique: jest.fn(async () => null),
       },
       postView: {
+        findMany: jest.fn(async () => existingViews),
         findUnique: jest.fn(async () => null),
       },
       postAnonView: {
+        findMany: jest.fn(async () => []),
         createMany: jest.fn(async () => ({ count: 0 })),
         updateMany: jest.fn(async () => ({ count: 0 })),
       },
-      $transaction: jest.fn(async (fn: any) =>
-        fn({
-          postView: {
-            createMany: jest.fn(async () => ({ count: 1 })),
-            update: jest.fn(async () => ({})),
-          },
-          postAnonView: { deleteMany: jest.fn(async () => ({ count: 0 })) },
-          post: { update: jest.fn(async () => ({ viewerCount: 1, totalViewCount: 1 })) },
-        }),
-      ),
+      $transaction: jest.fn(async (fn: any) => fn(tx)),
     };
     const cache = {};
     const redis = { del: jest.fn(async () => undefined), setString: jest.fn(async () => true) };
@@ -283,35 +306,48 @@ describe('PostViewsService.markViewedBatch', () => {
       posthog as any,
       notifications as any,
     );
-    return { service, prisma, findMany, notifications };
+    return {
+      service,
+      prisma,
+      tx,
+      findMany,
+      expandRows,
+      detailRows,
+      notifications,
+      cacheInvalidation,
+      posthog,
+      presenceRealtime,
+    };
   }
 
-  it('expands flat repost and quoted post IDs into the batch', async () => {
-    const { service, prisma, findMany, notifications } = makeBatchService();
-    findMany.mockResolvedValueOnce([
+  it('expands flat repost and quoted post IDs into one authenticated write', async () => {
+    const { service, prisma, expandRows, detailRows, notifications, tx } = makeBatchService();
+    expandRows.push(
       { id: 'repost-shell', kind: 'repost', repostedPostId: 'original', quotedPostId: null },
       { id: 'quote-post', kind: 'post', repostedPostId: null, quotedPostId: 'quoted' },
-    ]);
+    );
+    for (const id of ['repost-shell', 'quote-post', 'original', 'quoted']) {
+      detailRows.push({ id, visibility: 'public', userId: 'author', viewerCount: 1, totalViewCount: 1 });
+    }
+    const markViewed = jest.spyOn(service, 'markViewed');
 
-    const markViewed = jest.spyOn(service, 'markViewed').mockResolvedValue({
-      id: 'p',
-      uniqueCounted: false,
-      totalCounted: false,
-      viewerCount: 1,
-      totalViewCount: 1,
-    });
-
-    await service.markViewedBatch('viewer', ['repost-shell', 'quote-post'], null, 'feed_scroll');
+    const acks = await service.markViewedBatch(
+      'viewer',
+      ['repost-shell', 'quote-post'],
+      null,
+      'feed_scroll',
+    );
 
     expect(prisma.post.findMany).toHaveBeenCalledWith({
       where: { id: { in: ['repost-shell', 'quote-post'] }, deletedAt: null },
       select: { id: true, kind: true, repostedPostId: true, quotedPostId: true },
     });
-    const marked = markViewed.mock.calls.map((c) => c[1]).sort();
-    expect(marked).toEqual(['original', 'quote-post', 'quoted', 'repost-shell']);
-    for (const call of markViewed.mock.calls) {
-      expect(call[4]).toEqual({ skipMarkRead: true });
-    }
+    expect(markViewed).not.toHaveBeenCalled();
+    expect(tx.postView.createManyAndReturn).toHaveBeenCalledTimes(1);
+    expect(tx.postView.createManyAndReturn.mock.calls[0][0].data.map((row: { postId: string }) => row.postId).sort()).toEqual(
+      ['original', 'quote-post', 'quoted', 'repost-shell'],
+    );
+    expect(acks.map((ack) => ack.id).sort()).toEqual(['original', 'quote-post', 'quoted', 'repost-shell']);
     expect(notifications.markReadBySubjects).toHaveBeenCalledTimes(1);
     expect(notifications.markReadBySubjects).toHaveBeenCalledWith(
       'viewer',
@@ -321,41 +357,74 @@ describe('PostViewsService.markViewedBatch', () => {
   });
 
   it('does not expand non-repost posts without quotedPostId', async () => {
-    const { service, findMany, notifications } = makeBatchService();
-    findMany.mockResolvedValueOnce([
-      { id: 'plain', kind: 'post', repostedPostId: null, quotedPostId: null },
+    const { service, expandRows, detailRows, notifications, tx, posthog } = makeBatchService();
+    expandRows.push({ id: 'plain', kind: 'post', repostedPostId: null, quotedPostId: null });
+    detailRows.push({ id: 'plain', visibility: 'public', userId: 'author', viewerCount: 4, totalViewCount: 7 });
+
+    const acks = await service.markViewedBatch('viewer', ['plain'], null, 'feed_scroll');
+
+    expect(acks).toEqual([
+      { id: 'plain', uniqueCounted: true, totalCounted: true, viewerCount: 5, totalViewCount: 8 },
     ]);
-
-    const markViewed = jest.spyOn(service, 'markViewed').mockResolvedValue({
-      id: 'plain',
-      uniqueCounted: true,
-      totalCounted: true,
-      viewerCount: 1,
-      totalViewCount: 1,
+    expect(tx.post.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['plain'] } },
+      data: expect.objectContaining({
+        viewerCount: { increment: 1 },
+        totalViewCount: { increment: 1 },
+      }),
     });
-
-    await service.markViewedBatch('viewer', ['plain'], null, 'feed_scroll');
-
-    expect(markViewed).toHaveBeenCalledTimes(1);
-    expect(markViewed).toHaveBeenCalledWith('viewer', 'plain', null, 'feed_scroll', { skipMarkRead: true });
+    expect(posthog.capture).toHaveBeenCalled();
     expect(notifications.markReadBySubjects).toHaveBeenCalledWith('viewer', ['plain']);
   });
 
-  it('still returns view acks when mark-read fails', async () => {
-    const { service, findMany, notifications } = makeBatchService();
-    findMany.mockResolvedValueOnce([
-      { id: 'plain', kind: 'post', repostedPostId: null, quotedPostId: null },
-    ]);
-    notifications.markReadBySubjects.mockRejectedValueOnce(new Error('db down'));
-    const ack = {
-      id: 'plain',
-      uniqueCounted: true,
-      totalCounted: true,
-      viewerCount: 1,
-      totalViewCount: 1,
-    };
-    jest.spyOn(service, 'markViewed').mockResolvedValue(ack);
+  it('refreshes last-seen without incrementing unique or total inside the impression window', async () => {
+    const lastSeenAt = new Date(Date.now() - 20_000);
+    const lastImpressionAt = new Date();
+    const { service, expandRows, detailRows, tx, cacheInvalidation, posthog } = makeBatchService({
+      existingViews: [{ postId: 'plain', lastSeenAt, lastImpressionAt }],
+    });
+    expandRows.push({ id: 'plain', kind: 'post', repostedPostId: null, quotedPostId: null });
+    detailRows.push({ id: 'plain', visibility: 'public', userId: 'author', viewerCount: 4, totalViewCount: 7 });
 
-    await expect(service.markViewedBatch('viewer', ['plain'], null, 'feed_scroll')).resolves.toEqual([ack]);
+    const acks = await service.markViewedBatch('viewer', ['plain'], null, 'feed_scroll');
+
+    expect(acks).toEqual([
+      { id: 'plain', uniqueCounted: false, totalCounted: false, viewerCount: 4, totalViewCount: 7 },
+    ]);
+    expect(tx.postView.createManyAndReturn).not.toHaveBeenCalled();
+    expect(tx.postView.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        postId: { in: ['plain'] },
+        lastSeenAt: { lt: expect.any(Date) },
+      }),
+      data: expect.objectContaining({ seenCount: { increment: 1 } }),
+    });
+    expect(tx.post.updateMany).not.toHaveBeenCalled();
+    expect(cacheInvalidation.bumpForYouUser).toHaveBeenCalledWith('viewer');
+    expect(posthog.capture).not.toHaveBeenCalled();
+  });
+
+  it('does not bump For You when a repeat view is still inside the last-seen buffer', async () => {
+    const recent = new Date();
+    const { service, expandRows, detailRows, cacheInvalidation } = makeBatchService({
+      existingViews: [{ postId: 'plain', lastSeenAt: recent, lastImpressionAt: recent }],
+    });
+    expandRows.push({ id: 'plain', kind: 'post', repostedPostId: null, quotedPostId: null });
+    detailRows.push({ id: 'plain', visibility: 'public', userId: 'author', viewerCount: 4, totalViewCount: 7 });
+
+    await service.markViewedBatch('viewer', ['plain'], null, 'feed_scroll');
+
+    expect(cacheInvalidation.bumpForYouUser).not.toHaveBeenCalled();
+  });
+
+  it('still returns view acks when mark-read fails', async () => {
+    const { service, expandRows, detailRows, notifications } = makeBatchService();
+    expandRows.push({ id: 'plain', kind: 'post', repostedPostId: null, quotedPostId: null });
+    detailRows.push({ id: 'plain', visibility: 'public', userId: 'author', viewerCount: 1, totalViewCount: 1 });
+    notifications.markReadBySubjects.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(service.markViewedBatch('viewer', ['plain'], null, 'feed_scroll')).resolves.toEqual([
+      { id: 'plain', uniqueCounted: true, totalCounted: true, viewerCount: 2, totalViewCount: 2 },
+    ]);
   });
 });

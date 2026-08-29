@@ -13,7 +13,9 @@ export const CacheTtl = {
   authFeedSeconds: 15,
   authCursorFeedSeconds: 8,
   forYouRankedPage1Seconds: 15,
-  authNotificationsPage1Seconds: 20,
+  authNotificationsPage1Seconds: 30,
+  /** Thread mention-prefill list. Short TTL; new replies appear within a minute. */
+  threadParticipantsSeconds: 45,
   anonTopicsListSeconds: 60,
   anonTopicPostsSeconds: 30,
   anonSearchPostsSeconds: 30,

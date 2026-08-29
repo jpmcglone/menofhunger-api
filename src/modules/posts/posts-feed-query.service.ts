@@ -35,6 +35,14 @@ import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
 import { totalPostCommentsWhere, totalUserPostsWhere } from '../../common/content-counts';
 import { excludeMarvFromParticipants } from './posts-mentions.helpers';
 
+type ReadablePostShell = {
+  id: string;
+  userId: string;
+  visibility: PostVisibility;
+  rootId: string | null;
+  communityGroupId: string | null;
+};
+
 type ForYouRankedShell = {
   ids: string[];
   nextCursor: string | null;
@@ -125,6 +133,87 @@ export class PostsFeedQueryService {
     if (!m || m.status !== 'active') {
       throw new NotFoundException('Post not found.');
     }
+  }
+
+  /**
+   * Same visibility + group gates as getById, without the feed include.
+   * Comments and thread-participants only need access, not the full row.
+   */
+  private async assertViewerCanReadListedPost(params: {
+    post: ReadablePostShell;
+    viewerUserId: string | null;
+    viewer: ViewerContext | null;
+  }): Promise<void> {
+    const { post, viewerUserId, viewer } = params;
+    const gid = post.communityGroupId;
+    const isSelf = Boolean(viewer && viewer.id === post.userId);
+    let knownActiveGroupMember = false;
+    if (!isSelf && gid && viewerUserId && !viewer?.siteAdmin) {
+      const m = await this.prisma.communityGroupMember.findUnique({
+        where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
+        select: { status: true },
+      });
+      knownActiveGroupMember = m?.status === 'active';
+    }
+
+    if (!isSelf) {
+      if (post.visibility === 'onlyMe' && !viewer?.siteAdmin) {
+        throw new ForbiddenException('This post is private.');
+      }
+      const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
+      if (!allowed.includes(post.visibility)) {
+        if (post.visibility === 'verifiedOnly') throw new ForbiddenException('Verify to view verified-only posts.');
+        if (post.visibility === 'premiumOnly') {
+          throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+        }
+        throw new ForbiddenException('Not allowed to view this post.');
+      }
+    }
+
+    await this.assertReadableCommunityGroupPost(
+      { userId: post.userId, communityGroupId: gid },
+      viewerUserId,
+      viewer,
+      knownActiveGroupMember ? { knownActiveMember: true } : undefined,
+    );
+  }
+
+  async requireReadablePostShell(params: {
+    viewerUserId: string | null;
+    id: string;
+  }): Promise<ReadablePostShell> {
+    const { viewerUserId, id } = params;
+    const postId = (id ?? '').trim();
+    if (!postId) throw new NotFoundException('Post not found.');
+
+    const shellKey = `posts.readShell:${viewerUserId ?? 'anon'}:${postId}`;
+    const cachedShell = this.requestCache.get<ReadablePostShell>(shellKey);
+    if (cachedShell) return cachedShell;
+
+    const fullKey = `posts.getById:${viewerUserId ?? 'anon'}:${postId}`;
+    const cachedFull = this.requestCache.get<FeedPost>(fullKey);
+    if (cachedFull) {
+      const fromFull: ReadablePostShell = {
+        id: cachedFull.id,
+        userId: cachedFull.userId,
+        visibility: cachedFull.visibility,
+        rootId: (cachedFull as { rootId?: string | null }).rootId ?? null,
+        communityGroupId: (cachedFull as { communityGroupId?: string | null }).communityGroupId ?? null,
+      };
+      this.requestCache.set(shellKey, fromFull);
+      return fromFull;
+    }
+
+    const viewer = await this.viewerContextService.getViewer(viewerUserId);
+    const post = await this.prisma.post.findFirst({
+      where: { id: postId, ...(viewer?.siteAdmin ? {} : notDeletedWhere()) },
+      select: { id: true, userId: true, visibility: true, rootId: true, communityGroupId: true },
+    });
+    if (!post) throw new NotFoundException('Post not found.');
+
+    await this.assertViewerCanReadListedPost({ post, viewerUserId, viewer });
+    this.requestCache.set(shellKey, post);
+    return post;
   }
 
   private async filterPostsByCommunityGroupAccess(params: {
@@ -3303,7 +3392,7 @@ export class PostsFeedQueryService {
     sort?: 'new' | 'popular';
   }) {
     const { viewerUserId, postId, limit, cursor, visibility = 'all', sort = 'new' } = params;
-    const parent = await this.getById({ viewerUserId, id: postId });
+    const parent = await this.requireReadablePostShell({ viewerUserId, id: postId });
     if (parent.visibility === 'onlyMe') {
       throw new ForbiddenException('This post is private.');
     }
@@ -3347,6 +3436,12 @@ export class PostsFeedQueryService {
       ...notDeletedWhere(),
     };
 
+    const commentInclude = {
+      user: { select: USER_LIST_SELECT },
+      media: { orderBy: { position: 'asc' as const } },
+      mentions: { include: { user: { select: MENTION_USER_SELECT } } },
+    };
+
     if (sort === 'popular') {
       const candidateIds = (
         await this.prisma.post.findMany({
@@ -3356,21 +3451,20 @@ export class PostsFeedQueryService {
         })
       ).map((p) => p.id);
       if (candidateIds.length > 0) await this.ranking.ensureBoostScoresFresh(candidateIds);
-      const comments = await this.prisma.post.findMany({
-        where: cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere,
-        include: {
-          user: { select: USER_LIST_SELECT },
-          media: { orderBy: { position: 'asc' } },
-          mentions: { include: { user: { select: MENTION_USER_SELECT } } },
-        },
-        orderBy: [
-          { boostScore: 'desc' },
-          { boostCount: 'desc' },
-          { createdAt: 'desc' },
-          { id: 'desc' },
-        ],
-        take: limit + 1,
-      });
+      const [comments, countMap] = await Promise.all([
+        this.prisma.post.findMany({
+          where: cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere,
+          include: commentInclude,
+          orderBy: [
+            { boostScore: 'desc' },
+            { boostCount: 'desc' },
+            { createdAt: 'desc' },
+            { id: 'desc' },
+          ],
+          take: limit + 1,
+        }),
+        this.commentVisibilityCounts(postId),
+      ]);
       const slice = comments.slice(0, limit);
       const nextCursor =
         comments.length > limit && slice[slice.length - 1]
@@ -3379,31 +3473,18 @@ export class PostsFeedQueryService {
               id: slice[slice.length - 1].id,
             })
           : null;
-      const counts = await this.prisma.post.groupBy({
-        by: ['visibility'],
-        where: totalPostCommentsWhere(postId),
-        _count: { _all: true },
-      });
-      const countMap = { all: 0, public: 0, verifiedOnly: 0, premiumOnly: 0 };
-      for (const g of counts) {
-        countMap.all += g._count._all;
-        if (g.visibility === 'public') countMap.public = g._count._all;
-        if (g.visibility === 'verifiedOnly') countMap.verifiedOnly = g._count._all;
-        if (g.visibility === 'premiumOnly') countMap.premiumOnly = g._count._all;
-      }
       return { comments: slice, nextCursor, counts: countMap };
     }
 
-    const comments = await this.prisma.post.findMany({
-      where: cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere,
-      include: {
-        user: { select: USER_LIST_SELECT },
-        media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
-      },
-      orderBy: isDesc ? [{ createdAt: 'desc' }, { id: 'desc' }] : [{ createdAt: 'asc' }, { id: 'asc' }],
-      take: limit + 1,
-    });
+    const [comments, countMap] = await Promise.all([
+      this.prisma.post.findMany({
+        where: cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere,
+        include: commentInclude,
+        orderBy: isDesc ? [{ createdAt: 'desc' }, { id: 'desc' }] : [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: limit + 1,
+      }),
+      this.commentVisibilityCounts(postId),
+    ]);
 
     const slice = comments.slice(0, limit);
     const nextCursor =
@@ -3414,6 +3495,10 @@ export class PostsFeedQueryService {
           })
         : null;
 
+    return { comments: slice, nextCursor, counts: countMap };
+  }
+
+  private async commentVisibilityCounts(postId: string) {
     const counts = await this.prisma.post.groupBy({
       by: ['visibility'],
       where: totalPostCommentsWhere(postId),
@@ -3426,8 +3511,7 @@ export class PostsFeedQueryService {
       if (g.visibility === 'verifiedOnly') countMap.verifiedOnly = g._count._all;
       if (g.visibility === 'premiumOnly') countMap.premiumOnly = g._count._all;
     }
-
-    return { comments: slice, nextCursor, counts: countMap };
+    return countMap;
   }
 
   /**
@@ -3437,37 +3521,48 @@ export class PostsFeedQueryService {
    */
   async getThreadParticipants(params: { viewerUserId: string | null; postId: string }) {
     const { viewerUserId, postId } = params;
-    const post = await this.getById({ viewerUserId, id: postId });
+    const post = await this.requireReadablePostShell({ viewerUserId, id: postId });
     if (post.visibility === 'onlyMe') {
       throw new ForbiddenException('This post is private.');
     }
 
-    // Use rootId if set (post is a reply), otherwise post.id is the root
-    const rootId = (post as { rootId?: string | null }).rootId ?? post.id;
-
-    // Collect all posts in the thread: root post + all replies (using rootId index)
-    const threadPosts = await this.prisma.post.findMany({
-      where: { OR: [{ id: rootId }, { rootId }], ...notDeletedWhere() },
-      select: { userId: true, mentions: { select: { userId: true } } },
+    const rootId = post.rootId ?? post.id;
+    const cached = await this.cache.getOrSetJson<{ id: string; username: string }[]>({
+      enabled: true,
+      key: RedisKeys.threadParticipants(rootId),
+      ttlSeconds: CacheTtl.threadParticipantsSeconds,
+      compute: () => this.loadThreadParticipantUsers(rootId),
     });
-    const participantIds = new Set<string>();
-    for (const p of threadPosts) {
-      participantIds.add(p.userId);
-      for (const m of p.mentions) participantIds.add(m.userId);
-    }
-
-    const users = await this.prisma.user.findMany({
-      where: { id: { in: Array.from(participantIds) }, usernameIsSet: true, bannedAt: null },
-      select: { id: true, username: true },
-    });
-    const named = users
-      .filter((u) => u.username != null)
-      .map((u) => ({ id: u.id, username: u.username as string }));
-    // Marv answers only an explicit @marv — don't prefill him on every later reply.
     const marv = this.appConfig.marvBot();
     return {
-      participants: excludeMarvFromParticipants(named, marv),
+      participants: excludeMarvFromParticipants(cached, marv),
     };
+  }
+
+  private async loadThreadParticipantUsers(rootId: string): Promise<Array<{ id: string; username: string }>> {
+    const threadWhere = { OR: [{ id: rootId }, { rootId }], ...notDeletedWhere() };
+    const [authorRows, mentionRows] = await Promise.all([
+      this.prisma.post.findMany({
+        where: threadWhere,
+        select: { userId: true },
+        distinct: ['userId'],
+      }),
+      this.prisma.postMention.findMany({
+        where: { post: threadWhere },
+        select: { userId: true },
+        distinct: ['userId'],
+      }),
+    ]);
+    const participantIds = [...new Set([...authorRows, ...mentionRows].map((r) => r.userId))];
+    if (participantIds.length === 0) return [];
+
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: participantIds }, usernameIsSet: true, bannedAt: null },
+      select: { id: true, username: true },
+    });
+    return users
+      .filter((u) => u.username != null)
+      .map((u) => ({ id: u.id, username: u.username as string }));
   }
 
   async getById(params: { viewerUserId: string | null; id: string }) {
@@ -3480,8 +3575,6 @@ export class PostsFeedQueryService {
     if (cached) return cached;
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
-    const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
-
     const post = await this.prisma.post.findFirst({
       where: { id: postId, ...(viewer?.siteAdmin ? {} : notDeletedWhere()) },
       include: {
@@ -3496,41 +3589,17 @@ export class PostsFeedQueryService {
     });
     if (!post) throw new NotFoundException('Post not found.');
 
-    const gid = (post as { communityGroupId?: string | null }).communityGroupId ?? null;
-
-    // Author can always view their own posts.
-    const isSelf = Boolean(viewer && viewer.id === post.userId);
-    let knownActiveGroupMember = false;
-    if (!isSelf && gid && viewerUserId && !viewer?.siteAdmin) {
-      const m = await this.prisma.communityGroupMember.findUnique({
-        where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
-        select: { status: true },
-      });
-      knownActiveGroupMember = m?.status === 'active';
-    }
-
-    if (!isSelf) {
-      // Only-me posts are private. Allow site admins to view for support/moderation.
-      if (post.visibility === 'onlyMe' && !viewer?.siteAdmin) throw new ForbiddenException('This post is private.');
-      const visibilityOk = allowed.includes(post.visibility);
-      if (!visibilityOk) {
-        if (post.visibility === 'verifiedOnly') throw new ForbiddenException('Verify to view verified-only posts.');
-        if (post.visibility === 'premiumOnly') throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
-        throw new ForbiddenException('Not allowed to view this post.');
-      }
-    }
-
-    await this.assertReadableCommunityGroupPost(
-      {
-        userId: post.userId,
-        communityGroupId: gid,
-      },
-      viewerUserId,
-      viewer,
-      knownActiveGroupMember ? { knownActiveMember: true } : undefined,
-    );
+    const shell: ReadablePostShell = {
+      id: post.id,
+      userId: post.userId,
+      visibility: post.visibility,
+      rootId: (post as { rootId?: string | null }).rootId ?? null,
+      communityGroupId: (post as { communityGroupId?: string | null }).communityGroupId ?? null,
+    };
+    await this.assertViewerCanReadListedPost({ post: shell, viewerUserId, viewer });
 
     this.requestCache.set(cacheKey, post as FeedPost);
+    this.requestCache.set(`posts.readShell:${viewerUserId ?? 'anon'}:${postId}`, shell);
     return post;
   }
 
@@ -3583,6 +3652,10 @@ export class PostsFeedQueryService {
     });
     if (!dto) throw new NotFoundException('Post not found.');
     return dto;
+  }
+
+  collectAncestorPostIds(seedIds: Array<string | null | undefined>): Promise<string[]> {
+    return collectAncestorPostIds(this.prisma, seedIds);
   }
 
   /**

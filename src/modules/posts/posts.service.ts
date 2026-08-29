@@ -190,6 +190,10 @@ export class PostsService {
     return this.feedQuery.getByIds(...args);
   }
 
+  collectAncestorPostIds(...args: Parameters<PostsFeedQueryService['collectAncestorPostIds']>) {
+    return this.feedQuery.collectAncestorPostIds(...args);
+  }
+
   getByIdNoAccess(...args: Parameters<PostsFeedQueryService['getByIdNoAccess']>) {
     return this.feedQuery.getByIdNoAccess(...args);
   }

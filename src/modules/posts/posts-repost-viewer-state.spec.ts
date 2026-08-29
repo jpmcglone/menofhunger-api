@@ -244,4 +244,57 @@ describe('allPostIds includes embedded post IDs (source guardrail)', () => {
     expect(controllerSource).toContain('this.posts.composeFeedPostDtos');
     expect(controllerSource).not.toContain('repostedPostMapUser.keys()');
   });
+
+  it('permalink getById batches ancestors instead of walking getById per parent', () => {
+    expect(controllerSource).toContain('collectAncestorPostIds');
+    expect(controllerSource).toContain('loadPermalinkRelatedPosts');
+    expect(controllerSource).not.toContain('current = await this.posts.getById({ viewerUserId, id: parentId })');
+  });
+
+  it('permalink overlays load in one Promise.all', () => {
+    const overlayStart = controllerSource.indexOf('quotedPostByIdPermalink');
+    const snippet = controllerSource.slice(overlayStart, overlayStart + 1400);
+    expect(snippet).toContain('await Promise.all([');
+    expect(snippet).toContain('communityGroupPreviewMapForIds');
+    expect(snippet).toContain('viewerBoostedPostIds');
+    expect(snippet).toContain('viewerBookmarksByPostId');
+    expect(snippet).toContain('viewerVotedPollOptionIdByPostId');
+    expect(snippet).toContain('viewerRepostedPostIds');
+    expect(snippet).toContain('viewerLastSeenAtByPostId');
+  });
+
+  it('comments and thread-participants use a shell access check, not full getById', () => {
+    const commentsStart = feedQuerySource.indexOf('async listComments(');
+    const commentsEnd = feedQuerySource.indexOf('async getThreadParticipants(');
+    const comments = feedQuerySource.slice(commentsStart, commentsEnd);
+    expect(comments).toContain('requireReadablePostShell');
+    expect(comments).not.toContain('this.getById(');
+
+    const participants = feedQuerySource.slice(
+      commentsEnd,
+      feedQuerySource.indexOf('async getById('),
+    );
+    expect(participants).toContain('requireReadablePostShell');
+    expect(participants).toContain('RedisKeys.threadParticipants');
+    expect(participants).not.toContain('this.getById(');
+  });
+});
+
+describe('authenticated post-view batch writes (source guardrail)', () => {
+  const viewsSource = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '../post-views/post-views.service.ts'),
+    'utf8',
+  );
+
+  it('markViewedBatch writes authenticated views in one transaction', () => {
+    expect(viewsSource).toContain('markAuthenticatedViewsBatch');
+    expect(viewsSource).toContain('createManyAndReturn');
+    const batchFn = viewsSource.slice(
+      viewsSource.indexOf('async markViewedBatch('),
+      viewsSource.indexOf('async expandViewTargetIds('),
+    );
+    expect(batchFn).toContain('if (uid)');
+    expect(batchFn).toContain('this.markAuthenticatedViewsBatch');
+    expect(batchFn).not.toContain('expanded.map((pid) => this.markViewed(uid');
+  });
 });
