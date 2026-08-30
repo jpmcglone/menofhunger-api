@@ -40,6 +40,18 @@ export function dayIndexEastern(d: Date): number {
   return Math.floor(Date.UTC(p.yyyy, p.mm - 1, p.dd) / 86400000);
 }
 
+/**
+ * Sunday–Saturday day keys for the Eastern calendar week containing `now`.
+ * Fitness “this week” must use this, not UTC — otherwise the week flips at
+ * 8pm ET and yesterday’s steps vanish from the recap.
+ */
+export function easternWeekDayKeys(now: Date = new Date()): string[] {
+  const todayIndex = dayIndexEastern(now);
+  const utcNoon = new Date(todayIndex * 86400000 + 12 * 60 * 60 * 1000);
+  const sundayIndex = todayIndex - utcNoon.getUTCDay();
+  return Array.from({ length: 7 }, (_, i) => easternDayKeyFromDayIndex(sundayIndex + i));
+}
+
 export function easternDayKeyFromDayIndex(dayIndex: number): string {
   // Use UTC noon so the corresponding Eastern Time date is stable.
   // (UTC midnight can fall on the previous ET calendar day.)

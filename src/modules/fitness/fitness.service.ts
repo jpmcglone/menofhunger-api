@@ -18,6 +18,7 @@ import type {
   FitnessWeekSummaryDto,
   FitnessStepsDayDto,
 } from '../../common/dto/fitness.dto';
+import { easternWeekDayKeys } from '../../common/time/eastern-day-key';
 import { toPostDto } from '../posts/post.dto';
 import { vo2maxShareSnapshot } from './fitness-share-snapshot';
 import { stravaRawIsComplete } from './fitness-strava.service';
@@ -205,21 +206,7 @@ export class FitnessService {
   }
 
   private async getWeekSummaries(userId: string) {
-    // Use UTC date arithmetic throughout so that the "Sunday" boundary never
-    // shifts to Monday for users in negative UTC offsets (e.g. UTC-4 at 10 PM
-    // local = UTC next day, which would produce a Monday ISO string if we mix
-    // local setDate() with UTC toISOString()).
-    const now = new Date();
-    const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    const dowUtc = new Date(todayUtc).getUTCDay(); // 0 = Sunday
-    const weekStartMs = todayUtc - dowUtc * 86_400_000;
-
-    const days: string[] = [];
-    for (let i = 0; i < 7; i++) {
-      days.push(new Date(weekStartMs + i * 86_400_000).toISOString().slice(0, 10));
-    }
-    const weekStart = { toISOString: () => new Date(weekStartMs).toISOString() };
-    const weekEnd = { toISOString: () => new Date(weekStartMs + 6 * 86_400_000).toISOString() };
+    const days = easternWeekDayKeys();
 
     const summaries = await this.prisma.fitnessDailySummary.findMany({
       where: { userId, dayKey: { in: days } },
@@ -231,8 +218,8 @@ export class FitnessService {
     });
 
     return {
-      weekStart: weekStart.toISOString().slice(0, 10),
-      weekEnd: weekEnd.toISOString().slice(0, 10),
+      weekStart: days[0] ?? '',
+      weekEnd: days[6] ?? '',
       totalSteps: filledDays.reduce((s, d) => s + (d.stepsCount ?? 0), 0),
       totalWorkoutMinutes: filledDays.reduce((s, d) => s + (d.workoutMinutes ?? 0), 0),
       totalDistanceM: filledDays.reduce((s, d) => s + (d.distanceM ?? 0), 0),

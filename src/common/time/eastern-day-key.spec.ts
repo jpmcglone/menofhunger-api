@@ -1,5 +1,6 @@
 import {
   easternDayKey,
+  easternWeekDayKeys,
   yesterdayEasternDayKey,
   wordContentDayKey,
   quoteContentDayKey,
@@ -70,6 +71,34 @@ describe('wordContentDayKey / quoteContentDayKey publish boundaries', () => {
       // At 14:00 UTC on 2026-03-08 (after spring-forward) it's 10:00 EDT — today
       expect(wordContentDayKey(dstAt09)).toBe('2026-03-08');
     });
+  });
+});
+
+describe('easternWeekDayKeys', () => {
+  it('stays on the ET Saturday week after UTC has rolled to Sunday', () => {
+    // Saturday 2026-08-29 21:20 ET = Sunday 01:20 UTC.
+    const afterUtcMidnight = new Date('2026-08-30T01:20:00.000Z');
+    expect(easternWeekDayKeys(afterUtcMidnight)).toEqual([
+      '2026-08-23',
+      '2026-08-24',
+      '2026-08-25',
+      '2026-08-26',
+      '2026-08-27',
+      '2026-08-28',
+      '2026-08-29',
+    ]);
+  });
+
+  it('uses the same ET week earlier the same Saturday', () => {
+    const afternoonEt = new Date('2026-08-29T19:00:00.000Z'); // 15:00 EDT
+    expect(easternWeekDayKeys(afternoonEt)[0]).toBe('2026-08-23');
+    expect(easternWeekDayKeys(afternoonEt)[6]).toBe('2026-08-29');
+  });
+
+  it('opens a new week at Sunday midnight ET', () => {
+    const sundayMorningEt = new Date('2026-08-30T08:00:00.000Z'); // 04:00 EDT Sunday
+    expect(easternWeekDayKeys(sundayMorningEt)[0]).toBe('2026-08-30');
+    expect(easternWeekDayKeys(sundayMorningEt)[6]).toBe('2026-09-05');
   });
 });
 
