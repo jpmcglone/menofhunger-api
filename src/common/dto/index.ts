@@ -30,3 +30,4 @@ export * from './site-config.dto';
 export * from './announcement.dto';
 export * from './view-ack.dto';
 export * from './newsletter.dto';
+export * from './call.dto';

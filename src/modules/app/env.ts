@@ -125,6 +125,25 @@ export const envSchema = z.object({
     z.string().optional(),
   ),
 
+  // WebRTC ICE servers for DM calling. STUN defaults to Google's public servers.
+  // TURN is optional fallback infrastructure; all three TURN vars must be set to enable it.
+  RTC_STUN_URLS: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  RTC_TURN_URLS: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  RTC_TURN_USERNAME: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  RTC_TURN_CREDENTIAL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+
   // Cloudflare R2 (S3-compatible) for public assets (avatars/banners).
   R2_ACCOUNT_ID: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),

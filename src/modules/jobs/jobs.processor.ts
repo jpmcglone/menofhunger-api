@@ -27,6 +27,7 @@ import { ScheduledPostsPublishCron } from '../posts/scheduled-posts-publish.cron
 import { NewslettersCron } from '../newsletters/newsletters.cron';
 import { NotificationWriterService } from '../notifications/notification-writer.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
+import { CallsService } from '../calls/calls.service';
 
 @Processor(MOH_BACKGROUND_QUEUE)
 export class JobsProcessor extends WorkerHost {
@@ -58,6 +59,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly newsletters: NewslettersCron,
     private readonly notificationWriter: NotificationWriterService,
     private readonly sideEffects: SideEffectsService,
+    private readonly calls: CallsService,
   ) {
     super();
   }
@@ -194,6 +196,22 @@ export class JobsProcessor extends WorkerHost {
               scheduledAtMs,
             });
           }
+          return { ok: true };
+        }
+        case JOBS.callRingTimeout: {
+          const callId = String(job.data?.callId ?? '').trim();
+          if (callId) await this.calls.onRingTimeout(callId);
+          return { ok: true };
+        }
+        case JOBS.callEmptyGrace: {
+          const callId = String(job.data?.callId ?? '').trim();
+          if (callId) await this.calls.onEmptyGraceExpired(callId);
+          return { ok: true };
+        }
+        case JOBS.callParticipantGrace: {
+          const callId = String(job.data?.callId ?? '').trim();
+          const userId = String(job.data?.userId ?? '').trim();
+          if (callId && userId) await this.calls.onParticipantGraceExpired(callId, userId);
           return { ok: true };
         }
         default:

@@ -1,5 +1,6 @@
 import type { Message, MessageConversation, MessageMedia, MessageParticipantStatus, MessageParticipantRole } from '@prisma/client';
 import { toUserListDto, type UserListDto, type UserListRow } from '../../common/dto';
+import type { CallSessionDto, MessageCallDto } from '../../common/dto/call.dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 
 export type MessageParticipantDto = {
@@ -46,6 +47,10 @@ export type MessageDto = {
   body: string;
   conversationId: string;
   sender: UserListDto;
+  /** `text` for ordinary chat; `call` for the one-per-call timeline row. */
+  kind: Message['kind'];
+  /** Present only when `kind === 'call'`. */
+  call: MessageCallDto | null;
   reactions: MessageReactionSummaryDto[];
   deletedForMe: boolean;
   /** True when the sender deleted this message for all participants. */
@@ -91,6 +96,11 @@ export type MessageConversationDto = {
    * crew avatar/name and link to the crew's public page.
    */
   crew?: MessageConversationCrewSummaryDto | null;
+  /**
+   * Live call session in this conversation, or null. This is the on-load sync for the
+   * call UI; `calls:updated` keeps it fresh while the page is open.
+   */
+  activeCall?: CallSessionDto | null;
 };
 
 type MessageReactionRow = {
@@ -172,6 +182,30 @@ function buildReactionSummaries(
   return [...byReactionId.values()];
 }
 
+/**
+ * Narrow the persisted `callMeta` JSON into the DTO. Defensive: a malformed blob yields
+ * null rather than a 500 on the whole conversation.
+ */
+export function toMessageCallDto(raw: unknown): MessageCallDto | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const callId = typeof r.callId === 'string' ? r.callId : '';
+  const type = r.type === 'audio' || r.type === 'video' ? r.type : null;
+  const outcome =
+    r.outcome === 'started' ||
+    r.outcome === 'active' ||
+    r.outcome === 'ended' ||
+    r.outcome === 'missed' ||
+    r.outcome === 'declined' ||
+    r.outcome === 'cancelled'
+      ? r.outcome
+      : null;
+  if (!callId || !type || !outcome) return null;
+  const duration = typeof r.durationSeconds === 'number' && Number.isFinite(r.durationSeconds) ? r.durationSeconds : null;
+  const peak = typeof r.peakParticipantCount === 'number' && Number.isFinite(r.peakParticipantCount) ? r.peakParticipantCount : 0;
+  return { callId, type, outcome, durationSeconds: duration, peakParticipantCount: peak };
+}
+
 function toMessageMediaDto(m: MessageMedia, publicBaseUrl: string | null): MessageMediaDto {
   const url =
     m.source === 'upload'
@@ -207,6 +241,8 @@ export function toMessageDto(params: {
     body: message.body,
     conversationId: message.conversationId,
     sender: toUserListDto(message.sender, publicBaseUrl),
+    kind: message.kind ?? 'text',
+    call: message.kind === 'call' ? toMessageCallDto(message.callMeta) : null,
     reactions: buildReactionSummaries(message.reactions ?? [], viewerUserId, publicBaseUrl),
     deletedForMe: (message.deletions ?? []).some((d) => d.userId === viewerUserId),
     deletedForAll: Boolean(message.deletedForAll),

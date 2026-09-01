@@ -34,6 +34,9 @@ import type {
   UsersSelfUpdatedPayloadDto,
   ScheduledPostPublishedPayloadDto,
   ScheduledPostFailedPayloadDto,
+  CallsIncomingPayloadDto,
+  CallsUpdatedPayloadDto,
+  RtcSignalPayloadDto,
 } from '../../common/dto';
 
 @Injectable()
@@ -539,6 +542,23 @@ export class PresenceRealtimeService {
   /** Notify the post owner that a scheduled post failed to publish. */
   emitScheduledPostFailed(userId: string, payload: ScheduledPostFailedPayloadDto): void {
     this.emitToUser(userId, 'scheduled:failed', payload);
+  }
+
+  // ─── DM calling ──────────────────────────────────────────────────────────────
+
+  /** Direct-call ring. Every tab of the callee rings; the tab that accepts becomes the participant. */
+  emitCallsIncoming(userId: string, payload: CallsIncomingPayloadDto): void {
+    this.emitToUser(userId, WsEventNames.callsIncoming, payload);
+  }
+
+  /** Single patch-shaped lifecycle event, fanned out to every member of the conversation. */
+  emitCallsUpdated(userIds: Iterable<string>, payload: CallsUpdatedPayloadDto): void {
+    this.emitToUsers(userIds, WsEventNames.callsUpdated, payload);
+  }
+
+  /** SDP / ICE relay to one participant. Tabs not in the call ignore it by `callId`. */
+  emitRtcSignal(userId: string, payload: RtcSignalPayloadDto): void {
+    this.emitToUser(userId, WsEventNames.rtcSignal, payload);
   }
 }
 

@@ -305,4 +305,17 @@ export const RedisKeys = {
   watchPartyState(spaceId: string): string {
     return `wp:state:${clean(spaceId)}`;
   },
+
+  // DM calls — ephemeral signaling session, one per conversation (Redis is authoritative)
+  callSessionByConversation(conversationId: string): string {
+    return `call:conv:${clean(conversationId)}`;
+  },
+  /** callId → conversationId so socket handlers can resolve the session key. */
+  callConversationByCallId(callId: string): string {
+    return `call:id:${clean(callId)}`;
+  },
+  /** Short mutation lock so concurrent joins can't exceed capacity. */
+  callSessionLock(conversationId: string): string {
+    return `lock:call:conv:${clean(conversationId)}`;
+  },
 } as const;

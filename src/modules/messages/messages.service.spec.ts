@@ -34,7 +34,11 @@ function makeService(overrides?: {
   } as any;
 
   const sideEffects = { dispatch: jest.fn() } as any;
-  const svc = new MessagesService(prisma, appConfig, presenceRealtime, events, redis, posthog, jobs, marvIdentity, sideEffects);
+  const callSessions = {
+    getByConversationId: jest.fn(async () => null),
+    getManyByConversationIds: jest.fn(async () => new Map()),
+  } as any;
+  const svc = new MessagesService(prisma, appConfig, presenceRealtime, events, redis, posthog, jobs, marvIdentity, sideEffects, callSessions);
   return { svc, prisma };
 }
 

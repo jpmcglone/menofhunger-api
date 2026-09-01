@@ -25,6 +25,8 @@ import { SpacesGatewayHandler } from './gateway/gateway-spaces.handler';
 import { RadioGatewayHandler } from './gateway/gateway-radio.handler';
 import { ContentSubscriptionsHandler } from './gateway/gateway-subscriptions.handler';
 import { MessagingGatewayHandler } from './gateway/gateway-messaging.handler';
+import { CallsGatewayHandler } from './gateway/gateway-calls.handler';
+import type { CallsAckDto } from '../../common/dto';
 
 /**
  * Single Socket.IO gateway for the app. All domain logic lives in the injected
@@ -52,6 +54,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     private readonly radioHandler: RadioGatewayHandler,
     private readonly subscriptionsHandler: ContentSubscriptionsHandler,
     private readonly messagingHandler: MessagingGatewayHandler,
+    private readonly callsHandler: CallsGatewayHandler,
   ) {}
 
   afterInit(server: Server): void {
@@ -125,6 +128,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     this.presenceHandler.handleDisconnect(client);
     this.radioHandler.handleDisconnect(client);
     this.spacesHandler.handleDisconnect(client, fallbackUserId);
+    this.callsHandler.handleDisconnect(client);
   }
 
   // ─── Spaces ─────────────────────────────────────────────────────────
@@ -352,5 +356,40 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   @SubscribeMessage('posts:typing')
   handlePostsTyping(client: Socket, payload: { postId?: string; typing?: boolean }): void {
     this.messagingHandler.handlePostsTyping(client, payload);
+  }
+
+  // ─── DM calling (returned values are sent as Socket.IO acks) ────────────
+
+  @SubscribeMessage(WsEventNames.callsStart)
+  handleCallsStart(client: Socket, payload: { conversationId?: string; type?: string }): Promise<CallsAckDto> {
+    return this.callsHandler.handleCallsStart(client, payload);
+  }
+
+  @SubscribeMessage(WsEventNames.callsJoin)
+  handleCallsJoin(client: Socket, payload: { callId?: string }): Promise<CallsAckDto> {
+    return this.callsHandler.handleCallsJoin(client, payload);
+  }
+
+  @SubscribeMessage(WsEventNames.callsLeave)
+  handleCallsLeave(client: Socket, payload: { callId?: string }): Promise<CallsAckDto> {
+    return this.callsHandler.handleCallsLeave(client, payload);
+  }
+
+  @SubscribeMessage(WsEventNames.callsDecline)
+  handleCallsDecline(client: Socket, payload: { callId?: string }): Promise<CallsAckDto> {
+    return this.callsHandler.handleCallsDecline(client, payload);
+  }
+
+  @SubscribeMessage(WsEventNames.callsState)
+  handleCallsState(client: Socket, payload: { callId?: string; micEnabled?: boolean; cameraEnabled?: boolean }): Promise<void> {
+    return this.callsHandler.handleCallsState(client, payload);
+  }
+
+  @SubscribeMessage(WsEventNames.rtcSignal)
+  handleRtcSignal(
+    client: Socket,
+    payload: { callId?: string; toUserId?: string; description?: unknown; candidate?: unknown },
+  ): Promise<void> {
+    return this.callsHandler.handleRtcSignal(client, payload);
   }
 }

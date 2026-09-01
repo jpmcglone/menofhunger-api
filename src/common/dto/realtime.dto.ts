@@ -240,6 +240,17 @@ export const WsEventNames = {
   articlesCommentDeleted: 'articles:commentDeleted',
   articlesCommentUpdated: 'articles:commentUpdated',
   articlesCommentReactionChanged: 'articles:commentReactionChanged',
+  /** DM calling: client → server (acked). */
+  callsStart: 'calls:start',
+  callsJoin: 'calls:join',
+  callsLeave: 'calls:leave',
+  callsDecline: 'calls:decline',
+  callsState: 'calls:state',
+  /** DM calling: server → client. */
+  callsIncoming: 'calls:incoming',
+  callsUpdated: 'calls:updated',
+  /** SDP / ICE relay, both directions. */
+  rtcSignal: 'rtc:signal',
 } as const;
 
 export type PostsSubscribePayloadDto = {

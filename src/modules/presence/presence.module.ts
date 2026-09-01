@@ -18,10 +18,13 @@ import { SpacesGatewayHandler } from './gateway/gateway-spaces.handler';
 import { RadioGatewayHandler } from './gateway/gateway-radio.handler';
 import { ContentSubscriptionsHandler } from './gateway/gateway-subscriptions.handler';
 import { MessagingGatewayHandler } from './gateway/gateway-messaging.handler';
+import { CallsGatewayHandler } from './gateway/gateway-calls.handler';
+import { CallsModule } from '../calls/calls.module';
 
 @Module({
   imports: [
     AuthModule,
+    CallsModule,
     FollowsModule,
     MessagesModule,
     PostsModule,
@@ -45,6 +48,7 @@ import { MessagingGatewayHandler } from './gateway/gateway-messaging.handler';
     RadioGatewayHandler,
     ContentSubscriptionsHandler,
     MessagingGatewayHandler,
+    CallsGatewayHandler,
   ],
   exports: [RealtimeModule],
 })

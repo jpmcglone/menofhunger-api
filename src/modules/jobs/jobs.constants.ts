@@ -71,6 +71,11 @@ export const JOBS = {
   spaceReminderDay: 'space.reminder.day',
   spaceReminderSoon: 'space.reminder.soon',
 
+  // DM calls — delayed one-shot timers (ring timeout, empty-room grace, participant reconnect grace)
+  callRingTimeout: 'calls.ringTimeout',
+  callEmptyGrace: 'calls.emptyGrace',
+  callParticipantGrace: 'calls.participantGrace',
+
   // Marvin (the AI helper)
   marvinReplyPublic: 'marvin.reply.public',
   marvinReplyPrivate: 'marvin.reply.private',

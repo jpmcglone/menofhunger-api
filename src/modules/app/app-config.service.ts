@@ -289,6 +289,30 @@ export class AppConfigService {
     return { accountSid, authToken, verifyServiceSid };
   }
 
+  /**
+   * ICE servers handed to browsers on call start/join. STUN is always present (Google's
+   * public servers unless `RTC_STUN_URLS` overrides). TURN is appended only when all
+   * three `RTC_TURN_*` vars are set, so enabling relay later is a config change.
+   */
+  rtcIceServers(): Array<{ urls: string[]; username?: string; credential?: string }> {
+    const split = (raw: string | undefined): string[] =>
+      (raw ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    const stun = split(this.config.get<string>('RTC_STUN_URLS'));
+    const servers: Array<{ urls: string[]; username?: string; credential?: string }> = [
+      { urls: stun.length > 0 ? stun : ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+    ];
+    const turnUrls = split(this.config.get<string>('RTC_TURN_URLS'));
+    const username = this.config.get<string>('RTC_TURN_USERNAME')?.trim() ?? '';
+    const credential = this.config.get<string>('RTC_TURN_CREDENTIAL')?.trim() ?? '';
+    if (turnUrls.length > 0 && username && credential) {
+      servers.push({ urls: turnUrls, username, credential });
+    }
+    return servers;
+  }
+
   r2(): R2Config | null {
     const accountId = this.config.get<string>('R2_ACCOUNT_ID')?.trim() ?? '';
     const accessKeyId = this.config.get<string>('R2_ACCESS_KEY_ID')?.trim() ?? '';

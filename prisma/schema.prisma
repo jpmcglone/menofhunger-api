@@ -219,6 +219,16 @@ enum MessageParticipantRole {
   member
 }
 
+/**
+ * text: an ordinary chat message.
+ * call: lightweight call-history row (one per call session; edited in place as the
+ *       call progresses). `body` stays human-readable so older clients render it as text.
+ */
+enum MessageKind {
+  text
+  call
+}
+
 enum EmailActionTokenPurpose {
   verifyEmail
   unsubscribeDailyDigest
@@ -2394,6 +2404,13 @@ model Message {
 
   conversationId String
   senderId       String
+
+  kind MessageKind @default(text)
+  /**
+   * Call summary for `kind: call` rows: `{ callId, type, outcome, durationSeconds, peakParticipantCount }`.
+   * Never stores SDP/ICE or anything negotiated — only the summary a timeline row needs.
+   */
+  callMeta Json?
 
   /**
    * When set, this message is a reply to another message in the same conversation.

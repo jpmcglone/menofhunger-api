@@ -43,6 +43,23 @@ import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
+import { CallSessionStore } from '../calls/call-session.store';
+import type { MessageCallDto } from '../../common/dto/call.dto';
+
+/** What the calls service needs to authorize a start/join without re-querying per field. */
+export type CallConversationContext = {
+  id: string;
+  type: MessageConversation['type'];
+  participants: Array<{
+    userId: string;
+    status: 'pending' | 'accepted';
+    verified: boolean;
+    premium: boolean;
+    siteAdmin: boolean;
+    isBot: boolean;
+    banned: boolean;
+  }>;
+};
 
 const MESSAGE_UNREAD_CACHE_TTL_MS = 30_000;
 
@@ -150,6 +167,7 @@ export class MessagesService {
     private readonly jobs: JobsService,
     private readonly marvIdentity: MarvinBotIdentityService,
     private readonly sideEffects: SideEffectsService,
+    private readonly callSessions: CallSessionStore,
   ) {}
 
   /**
@@ -401,6 +419,152 @@ export class MessagesService {
     return conversation.participants.map((p) => p.userId);
   }
 
+  /**
+   * All participant user ids, no viewer check. Internal use only (call lifecycle fan-out
+   * fired by timers where there is no acting viewer).
+   */
+  async listConversationMemberUserIds(conversationId: string): Promise<string[]> {
+    const rows = await this.prisma.messageParticipant.findMany({
+      where: { conversationId },
+      select: { userId: true },
+    });
+    return rows.map((r) => r.userId);
+  }
+
+  /**
+   * Membership + gating snapshot for DM calls. Same visibility rules as
+   * `getConversationOrThrow` (viewer must be a participant; blocked peers hide the
+   * conversation), plus the tier/admin flags the calls service gates on.
+   */
+  async getCallConversationContext(params: { userId: string; conversationId: string }): Promise<CallConversationContext> {
+    const { userId, conversationId } = params;
+    const blockedUserIds = await this._getBlockedUserIds(userId);
+    const conversation = await this.prisma.messageConversation.findFirst({
+      where: {
+        id: conversationId,
+        participants: {
+          some: { userId },
+          ...(blockedUserIds.size > 0 ? { none: { userId: { in: [...blockedUserIds] } } } : {}),
+        },
+      },
+      select: {
+        id: true,
+        type: true,
+        participants: {
+          select: {
+            userId: true,
+            status: true,
+            user: {
+              select: { verifiedStatus: true, premium: true, premiumPlus: true, siteAdmin: true, isBot: true, bannedAt: true },
+            },
+          },
+        },
+      },
+    });
+    if (!conversation) throw new NotFoundException('Conversation not found.');
+    return {
+      id: conversation.id,
+      type: conversation.type,
+      participants: conversation.participants.map((p) => ({
+        userId: p.userId,
+        status: p.status,
+        verified: (p.user.verifiedStatus ?? 'none') !== 'none',
+        premium: Boolean(p.user.premium || p.user.premiumPlus),
+        siteAdmin: Boolean(p.user.siteAdmin),
+        isBot: Boolean(p.user.isBot),
+        banned: Boolean(p.user.bannedAt),
+      })),
+    };
+  }
+
+  /**
+   * Insert the one-per-call timeline row. Flows through the normal message plumbing
+   * (last-message pointer, `messages:new`, unread badge, push) so a group call start is
+   * announced exactly like a message — no separate notification kind.
+   */
+  async createCallMessage(params: {
+    conversationId: string;
+    senderId: string;
+    body: string;
+    call: MessageCallDto;
+  }): Promise<MessageDto> {
+    const { conversationId, senderId, body, call } = params;
+    const conversation = await this.prisma.messageConversation.findUnique({
+      where: { id: conversationId },
+      select: { id: true, type: true, participants: { select: { userId: true, status: true } } },
+    });
+    if (!conversation) throw new NotFoundException('Conversation not found.');
+    const now = new Date();
+    const message = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.message.create({
+        data: {
+          conversationId,
+          senderId,
+          body,
+          kind: 'call',
+          callMeta: call as unknown as Prisma.InputJsonValue,
+        },
+        include: MESSAGE_INCLUDE,
+      });
+      await tx.messageConversation.update({
+        where: { id: conversationId },
+        data: { lastMessageId: created.id, lastMessageAt: now },
+      });
+      await tx.messageParticipant.update({
+        where: { conversationId_userId: { conversationId, userId: senderId } },
+        data: { lastReadAt: now },
+      });
+      return created;
+    });
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const dto = toMessageDto({ message, publicBaseUrl, viewerUserId: senderId });
+    const participantIds = conversation.participants.map((p) => p.userId);
+    for (const id of participantIds) {
+      this.presenceRealtime.emitMessageCreated(id, { conversationId, message: dto });
+      this.emitUnreadCounts(id);
+    }
+    const senderName = message.sender?.name?.trim() || message.sender?.username?.trim() || 'Someone';
+    for (const p of conversation.participants) {
+      if (p.userId === senderId || p.status === 'pending') continue;
+      this.events.emitMessagePushRequested({
+        recipientUserId: p.userId,
+        senderUserId: senderId,
+        senderName,
+        body,
+        conversationId,
+      });
+    }
+    return dto;
+  }
+
+  /**
+   * Patch the call row in place as the call progresses. Emits `messages:edited` so open
+   * chats re-render the row; deliberately leaves `editedAt` null (this isn't a user edit).
+   */
+  async updateCallMessage(params: { messageId: string; body: string; call: MessageCallDto }): Promise<void> {
+    const { messageId, body, call } = params;
+    const existing = await this.prisma.message.findUnique({
+      where: { id: messageId },
+      select: { id: true, conversationId: true, kind: true },
+    });
+    if (!existing || existing.kind !== 'call') return;
+    const updated = await this.prisma.message.update({
+      where: { id: messageId },
+      data: { body, callMeta: call as unknown as Prisma.InputJsonValue },
+      include: MESSAGE_INCLUDE,
+    });
+    const participants = await this.prisma.messageParticipant.findMany({
+      where: { conversationId: existing.conversationId },
+      select: { userId: true },
+    });
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    for (const p of participants) {
+      const dto = toMessageDto({ message: updated, publicBaseUrl, viewerUserId: p.userId });
+      this.presenceRealtime.emitMessageEdited(p.userId, { conversationId: existing.conversationId, message: dto });
+    }
+  }
+
   async listConversations(params: {
     userId: string;
     tab: 'primary' | 'requests';
@@ -487,6 +651,7 @@ export class MessagesService {
       })
       .filter((v): v is { conversationId: string; lastReadAt: Date | null } => Boolean(v));
     const unreadCountByConversationId = await this.getUnreadCountByConversationId({ userId, perConversation });
+    const activeCalls = await this.callSessions.getManyByConversationIds(slice.map((c) => c.id));
 
     const items = slice
       .map((conversation): MessageConversationDto | null => {
@@ -532,6 +697,10 @@ export class MessagesService {
           crewWall: conversation.crewWall ?? null,
           publicBaseUrl,
         }),
+        activeCall: (() => {
+          const rec = activeCalls.get(conversation.id);
+          return rec ? CallSessionStore.toDto(rec) : null;
+        })(),
       };
     })
     .filter((v): v is MessageConversationDto => Boolean(v));
@@ -790,6 +959,7 @@ export class MessagesService {
     const isBlockedWith = otherParticipant
       ? await this.isBlockedBetween(userId, otherParticipant.userId)
       : false;
+    const activeCallRecord = await this.callSessions.getByConversationId(conversationId).catch(() => null);
 
     const dto: MessageConversationDto = {
       id: conversation.id,
@@ -824,6 +994,7 @@ export class MessagesService {
         crewWall: conversation.crewWall ?? null,
         publicBaseUrl,
       }),
+      activeCall: activeCallRecord ? CallSessionStore.toDto(activeCallRecord) : null,
     };
 
     const messages = await this.listMessages({ userId, conversationId, limit: MESSAGE_LIST_LIMIT });

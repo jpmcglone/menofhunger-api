@@ -88,6 +88,21 @@ export class RedisService implements OnModuleDestroy {
     return await this.setString(key, JSON.stringify(value), opts);
   }
 
+  /** Batched JSON read (single MGET). Missing or corrupt entries come back as null. */
+  async getJsonMany<T>(keys: string[]): Promise<Array<T | null>> {
+    const ks = keys.map((k) => (k ?? '').trim());
+    if (ks.length === 0) return [];
+    const raws = await this.client.mget(...ks.map((k) => k || '__missing__'));
+    return raws.map((raw) => {
+      if (!raw) return null;
+      try {
+        return JSON.parse(raw) as T;
+      } catch {
+        return null;
+      }
+    });
+  }
+
   async del(...keys: Array<string | null | undefined>): Promise<number> {
     const ks = keys.map((k) => (k ?? '').trim()).filter(Boolean);
     if (ks.length === 0) return 0;

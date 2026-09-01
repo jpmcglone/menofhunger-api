@@ -15,6 +15,7 @@ import { SpacesGatewayHandler } from './gateway/gateway-spaces.handler';
 import { RadioGatewayHandler } from './gateway/gateway-radio.handler';
 import { ContentSubscriptionsHandler } from './gateway/gateway-subscriptions.handler';
 import { MessagingGatewayHandler } from './gateway/gateway-messaging.handler';
+import { CallsGatewayHandler } from './gateway/gateway-calls.handler';
 import { CommunityGroupReadAccessService } from '../viewer/community-group-read-access.service';
 
 // ─── Lightweight fake socket.io infrastructure ──────────────────────────────
@@ -269,6 +270,7 @@ function buildGateway(deps: {
     throttle,
     context,
   );
+  const callsHandler = new CallsGatewayHandler(deps.presence, {} as any);
   return new PresenceGateway(
     deps.presence,
     deps.presenceRedis,
@@ -279,6 +281,7 @@ function buildGateway(deps: {
     radioHandler,
     subscriptionsHandler,
     messagingHandler,
+    callsHandler,
   );
 }
 

@@ -229,3 +229,52 @@ describe('PresenceRealtimeService.emitGroupMarvChanged', () => {
     expect(server.to).not.toHaveBeenCalled();
   });
 });
+
+describe('PresenceRealtimeService DM calling emits', () => {
+  function makeUserService() {
+    const presence = { emitToUser: jest.fn() };
+    const presenceRedis = { publishEmitToUser: jest.fn().mockResolvedValue(undefined) };
+    const service = new PresenceRealtimeService(presence as any, presenceRedis as any);
+    const server = {} as any;
+    service.setServer(server);
+    return { service, server, presence, presenceRedis };
+  }
+
+  const call = {
+    id: 'call-1',
+    conversationId: 'conv-1',
+    type: 'video' as const,
+    status: 'ringing' as const,
+    startedByUserId: 'u1',
+    startedByAdmin: false,
+    startedAt: '2026-09-01T00:00:00.000Z',
+    endedAt: null,
+    capacity: 2,
+    messageId: 'm1',
+    participants: [],
+  };
+
+  it('rings only the callee with calls:incoming', () => {
+    const { service, server, presence, presenceRedis } = makeUserService();
+    const payload = { call, caller: { id: 'u1' } as any };
+    service.emitCallsIncoming('u2', payload);
+    expect(presence.emitToUser).toHaveBeenCalledWith(server, 'u2', 'calls:incoming', payload);
+    expect(presenceRedis.publishEmitToUser).toHaveBeenCalledWith({ userId: 'u2', event: 'calls:incoming', payload });
+  });
+
+  it('fans calls:updated out to every conversation member', () => {
+    const { service, server, presence } = makeUserService();
+    const payload = { conversationId: 'conv-1', call };
+    service.emitCallsUpdated(['u1', 'u2', ''], payload);
+    expect(presence.emitToUser).toHaveBeenCalledTimes(2);
+    expect(presence.emitToUser).toHaveBeenCalledWith(server, 'u1', 'calls:updated', payload);
+    expect(presence.emitToUser).toHaveBeenCalledWith(server, 'u2', 'calls:updated', payload);
+  });
+
+  it('relays rtc:signal to a single user', () => {
+    const { service, server, presence } = makeUserService();
+    const payload = { callId: 'call-1', fromUserId: 'u1', description: { type: 'offer', sdp: 'v=0' } };
+    service.emitRtcSignal('u2', payload);
+    expect(presence.emitToUser).toHaveBeenCalledWith(server, 'u2', 'rtc:signal', payload);
+  });
+});

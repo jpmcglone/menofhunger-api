@@ -14,6 +14,7 @@ import { ArticlesModule } from '../articles/articles.module';
 import { CrewModule } from '../crew/crew.module';
 import { MarvinModule } from '../marvin/marvin.module';
 import { NewslettersModule } from '../newsletters/newsletters.module';
+import { CallsModule } from '../calls/calls.module';
 
 /**
  * Worker-only module: all BullMQ processors live here so we can disable job consumption
@@ -38,6 +39,7 @@ import { NewslettersModule } from '../newsletters/newsletters.module';
     CrewModule,
     MarvinModule,
     NewslettersModule,
+    CallsModule,
   ],
   providers: [JobsProcessor],
 })
