@@ -18,6 +18,22 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
   return { service, prisma };
 }
 
+describe('GroupInvitesService.countInboxPending', () => {
+  it('counts unexpired pending invites for the viewer', async () => {
+    const count = jest.fn(async () => 4);
+    const { service, prisma } = makeService({
+      communityGroupInvite: { count },
+    });
+    await expect(service.countInboxPending('viewer')).resolves.toBe(4);
+    expect(prisma.communityGroupInvite.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        inviteeUserId: 'viewer',
+        status: 'pending',
+      }),
+    });
+  });
+});
+
 describe('GroupInvitesService.acceptInvite — verification gate', () => {
   it('rejects an unverified user before reading the invite', async () => {
     const inviteFindUnique = jest.fn();

@@ -51,6 +51,8 @@ export class GroupsSideEffectsHandler implements OnModuleInit {
   }
 
   private async onInviteResponded(payload: SideEffectPayloads['group.invite.responded']): Promise<void> {
+    // Decline is a quiet no — the inviter's pending list updates over the socket.
+    if (payload.response === 'declined') return;
     await this.notifications.upsertCommunityGroupInviteResponseNotification({
       inviterUserId: payload.inviterUserId,
       inviteeUserId: payload.inviteeUserId,

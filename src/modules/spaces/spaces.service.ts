@@ -225,10 +225,12 @@ export class SpacesService {
     if (previousScheduledAt) {
       await this.cancelReminderJobs(id, previousScheduledAt.getTime());
     }
-    // Snapshot Notify-me recipients before clearing them. The handler also unions
-    // anyone who already has a space_live row (go-live-again with no new schedule).
+    // Snapshot before clearing Notify-me rows. Scheduled go-live (including early)
+    // uses followers ∪ subscribers — same audience as the 30-min reminder — so
+    // people who heard about the time also hear that it started. Unscheduled
+    // go-live is followers only. The handler also unions existing space_live rows.
     const recipientUserIds = previousScheduledAt
-      ? (await this.listSubscriberUserIds(id)).filter((uid) => uid !== userId)
+      ? await this.listAudienceUserIds(id, userId)
       : (await this.listFollowerUserIds(userId)).filter((uid) => uid !== userId);
     this.sideEffects.dispatch('space.schedule.live', { spaceId: id, recipientUserIds });
     await this.clearNonOwnerSubscribers(id, userId);

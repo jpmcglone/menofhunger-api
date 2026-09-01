@@ -55,6 +55,7 @@ export type AuthMeDto = UserDto & {
     byGroupId: Record<string, number>;
   };
   crewInviteInboxCount: number;
+  groupInviteInboxCount: number;
   messageUnreadCounts: {
     primary: number;
     requests: number;

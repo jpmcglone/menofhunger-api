@@ -76,6 +76,20 @@ describe('group invite effects', () => {
       expect.objectContaining({ inviterUserId: 'inviter', response: 'accepted' }),
     );
   });
+
+  it('does not notify the inviter when the invitee declines', async () => {
+    const { handler, notifications } = build();
+
+    await handler['onInviteResponded']({
+      groupId: 'g1',
+      inviteId: 'i1',
+      inviterUserId: 'inviter',
+      inviteeUserId: 'invitee',
+      response: 'declined',
+    });
+
+    expect(notifications.upsertCommunityGroupInviteResponseNotification).not.toHaveBeenCalled();
+  });
 });
 
 describe('group.join.requested', () => {

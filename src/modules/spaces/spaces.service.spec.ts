@@ -231,10 +231,12 @@ describe('SpacesService.activateSpace', () => {
     });
   });
 
-  it('snapshots recipients then clears non-owner subscribers when going live from schedule', async () => {
+  it('snapshots followers and Notify-me subscribers when going live from schedule', async () => {
     const scheduledAt = new Date(Date.now() + 3_600_000);
     const { service, sideEffects, prisma } = build({
       prisma: {
+        follow: { findMany: jest.fn(async () => [{ followerId: 'fan-1' }]) },
+        userPageOperator: { findMany: jest.fn(async () => []) },
         space: {
           findUnique: jest.fn(async () => ({
             ownerId: 'owner-1',
@@ -275,7 +277,7 @@ describe('SpacesService.activateSpace', () => {
 
     expect(sideEffects.dispatch).toHaveBeenCalledWith('space.schedule.live', {
       spaceId: 'space-1',
-      recipientUserIds: ['sub-1'],
+      recipientUserIds: ['fan-1', 'sub-1'],
     });
     expect(prisma.spaceScheduleSubscriber.deleteMany).toHaveBeenCalled();
   });

@@ -111,19 +111,29 @@ export class GroupInvitesService {
     return rows.map((r) => this.toDto(r));
   }
 
+  private inboxPendingWhere(viewerUserId: string): Prisma.CommunityGroupInviteWhereInput {
+    return {
+      inviteeUserId: viewerUserId,
+      status: 'pending',
+      expiresAt: { gt: new Date() },
+      group: { deletedAt: null },
+    };
+  }
+
   /** Pending group invites for the viewer's own inbox. */
   async listMyInbox(params: { viewerUserId: string }): Promise<CommunityGroupInviteDto[]> {
     const rows = await this.prisma.communityGroupInvite.findMany({
-      where: {
-        inviteeUserId: params.viewerUserId,
-        status: 'pending',
-        expiresAt: { gt: new Date() },
-        group: { deletedAt: null },
-      },
+      where: this.inboxPendingWhere(params.viewerUserId),
       orderBy: { createdAt: 'desc' },
       include: INVITE_INCLUDE,
     });
     return rows.map((r) => this.toDto(r));
+  }
+
+  async countInboxPending(viewerUserId: string): Promise<number> {
+    return this.prisma.communityGroupInvite.count({
+      where: this.inboxPendingWhere(viewerUserId),
+    });
   }
 
   /**

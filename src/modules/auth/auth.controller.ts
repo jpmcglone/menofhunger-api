@@ -26,6 +26,7 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MessagesService } from '../messages/messages.service';
 import { CrewInvitesService } from '../crew/crew-invites.service';
+import { GroupInvitesService } from '../groups/group-invites.service';
 import type { AuthMeDto } from '../../common/dto/auth.dto';
 import type { BrowserHandoffDto } from '../../common/dto';
 import { AuthGuard, type AuthedRequest } from './auth.guard';
@@ -226,11 +227,17 @@ export class AuthController {
     const notifications = this.moduleRef.get(NotificationsService, { strict: false });
     const messages = this.moduleRef.get(MessagesService, { strict: false });
     let crewInvites: CrewInvitesService | null = null;
+    let groupInvites: GroupInvitesService | null = null;
     let prisma: PrismaService | null = null;
     try {
       crewInvites = this.moduleRef.get(CrewInvitesService, { strict: false });
     } catch {
       // CrewModule can be absent in focused test/application contexts.
+    }
+    try {
+      groupInvites = this.moduleRef.get(GroupInvitesService, { strict: false });
+    } catch {
+      // GroupsModule can be absent in focused test/application contexts.
     }
     try {
       prisma = this.moduleRef.get(PrismaService, { strict: false });
@@ -243,6 +250,7 @@ export class AuthController {
       notificationUnreadCommentCountRes,
       groupsUnreadRes,
       crewInviteInboxCountRes,
+      groupInviteInboxCountRes,
       messageCountsRes,
       postCountRes,
       articleCountRes,
@@ -253,6 +261,7 @@ export class AuthController {
       notifications?.getUnreadCommentCount(user.id) ?? Promise.resolve(0),
       notifications?.getGroupsUnread(user.id) ?? Promise.resolve({ total: 0, byGroupId: {} }),
       crewInvites?.countInboxPending(user.id) ?? Promise.resolve(0),
+      groupInvites?.countInboxPending(user.id) ?? Promise.resolve(0),
       messages?.getUnreadSummary(user.id) ?? Promise.resolve({ primary: 0, requests: 0 }),
       prisma?.post.count({ where: totalUserPostsWhere(user.id) }) ?? Promise.resolve(null),
       prisma?.article.count({ where: totalUserArticlesWhere(user.id) }) ?? Promise.resolve(null),
@@ -284,6 +293,10 @@ export class AuthController {
       crewInviteInboxCountRes.status === 'fulfilled'
         ? Math.max(0, Math.floor(Number(crewInviteInboxCountRes.value) || 0))
         : 0;
+    const groupInviteInboxCount =
+      groupInviteInboxCountRes.status === 'fulfilled'
+        ? Math.max(0, Math.floor(Number(groupInviteInboxCountRes.value) || 0))
+        : 0;
     const messageUnreadCounts =
       messageCountsRes.status === 'fulfilled'
         ? {
@@ -312,6 +325,7 @@ export class AuthController {
         notificationUnreadCommentCount,
         groupsUnread,
         crewInviteInboxCount,
+        groupInviteInboxCount,
         messageUnreadCounts,
         postCount,
         articleCount,

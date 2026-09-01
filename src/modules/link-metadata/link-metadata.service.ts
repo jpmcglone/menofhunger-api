@@ -21,7 +21,12 @@ import {
   type SocialPostMetadataDto,
   xSyndicationToken,
 } from './x-link-metadata';
-import { isRumbleVideoUrl, enrichRumbleVideo, type VideoEmbedDto } from './rumble-link-metadata';
+import {
+  isRumbleVideoUrl,
+  enrichRumbleVideo,
+  needsRumbleDimensionRefresh,
+  type VideoEmbedDto,
+} from './rumble-link-metadata';
 import { isSubstackPostUrl, enrichSubstackPost } from './substack-link-metadata';
 
 export type LinkMetadataDto = {
@@ -39,6 +44,8 @@ const FETCH_TIMEOUT_MS = 2000;
 const PICKAX_ENRICH_TIMEOUT_MS = 8_000;
 const X_ENRICH_TIMEOUT_MS = 6_000;
 const SUBSTACK_ENRICH_TIMEOUT_MS = 6_000;
+/** Rumble does oEmbed then embedJS for encoded width/height. */
+const RUMBLE_ENRICH_TIMEOUT_MS = 6_000;
 const X_CONNECTOR_LAUNCHED_AT = new Date('2026-07-16T00:00:00.000Z');
 const STALE_DAYS = 7;
 /** Keyset pagination page size when scanning recent posts during backfill. */
@@ -191,7 +198,9 @@ export class LinkMetadataService {
         isXPostUrl(normalized) &&
         cachedMeta != null &&
         !Object.prototype.hasOwnProperty.call(cachedMeta, 'socialPost');
-      if (!cachedNeedsPickaxEnrichment && !cachedNeedsXEnrichment) {
+      const cachedNeedsRumbleRefresh =
+        isRumbleVideoUrl(normalized) && needsRumbleDimensionRefresh(cachedMeta);
+      if (!cachedNeedsPickaxEnrichment && !cachedNeedsXEnrichment && !cachedNeedsRumbleRefresh) {
         return cachedMeta;
       }
     }
@@ -214,11 +223,16 @@ export class LinkMetadataService {
         typeof existing.socialPost !== 'object' ||
         Array.isArray(existing.socialPost) ||
         existing.socialPost.platform !== 'x');
+    const existingNeedsRumbleRefresh =
+      existing != null &&
+      isRumbleVideoUrl(normalized) &&
+      needsRumbleDimensionRefresh(this.toDto(existing));
 
     if (
       existingIsFresh &&
       !existingNeedsPickaxEnrichment &&
       !existingNeedsXEnrichment &&
+      !existingNeedsRumbleRefresh &&
       existing
     ) {
       const dto = this.toDto(existing);
@@ -231,13 +245,14 @@ export class LinkMetadataService {
     const lockKey = RedisKeys.linkMetaLock(normalized);
     const pickax = isPickaxPostUrl(normalized);
     const xPost = isXPostUrl(normalized);
+    const rumble = isRumbleVideoUrl(normalized);
     const wrapped = await this.cache.getOrSetJsonWithLock<{ meta: LinkMetadataDto | null }>({
       enabled: true,
       key: cacheKey,
       ttlSeconds: CacheTtl.linkMetaFrontSeconds,
       lockKey,
-      lockTtlMs: pickax ? 12_000 : xPost ? 10_000 : 4_000,
-      lockWaitMs: pickax || xPost ? 500 : 250,
+      lockTtlMs: pickax ? 12_000 : xPost ? 10_000 : rumble ? 8_000 : 4_000,
+      lockWaitMs: pickax || xPost || rumble ? 500 : 250,
       computeAndSet: async () => {
         const fresh = await this.fetchAndUpsert(normalized);
         const dto = fresh ? this.toDto(fresh) : null;
@@ -366,7 +381,9 @@ export class LinkMetadataService {
         ? X_ENRICH_TIMEOUT_MS
         : isSubstackPostUrl(url)
           ? SUBSTACK_ENRICH_TIMEOUT_MS
-          : FETCH_TIMEOUT_MS;
+          : isRumbleVideoUrl(url)
+            ? RUMBLE_ENRICH_TIMEOUT_MS
+            : FETCH_TIMEOUT_MS;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {

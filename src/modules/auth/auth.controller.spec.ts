@@ -1,6 +1,7 @@
 import { AUTH_COOKIE_NAME } from './auth.constants';
 import { AuthController } from './auth.controller';
 import { CrewInvitesService } from '../crew/crew-invites.service';
+import { GroupInvitesService } from '../groups/group-invites.service';
 import { MessagesService } from '../messages/messages.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { UnauthorizedException } from '@nestjs/common';
@@ -26,6 +27,7 @@ describe('AuthController.me', () => {
     };
     const messages = { getUnreadSummary: jest.fn(async () => ({ primary: 6, requests: 1 })) };
     const crewInvites = { countInboxPending: jest.fn(async () => 3) };
+    const groupInvites = { countInboxPending: jest.fn(async () => 2) };
     const prisma = {
       post: { count: jest.fn(async () => 978) },
       article: { count: jest.fn(async () => 12) },
@@ -35,6 +37,7 @@ describe('AuthController.me', () => {
         if (token === NotificationsService) return notifications;
         if (token === MessagesService) return messages;
         if (token === CrewInvitesService) return crewInvites;
+        if (token === GroupInvitesService) return groupInvites;
         if (token === PrismaService) return prisma;
         return null;
       }),
@@ -56,6 +59,7 @@ describe('AuthController.me', () => {
       notificationUnreadCommentCount: 2,
       groupsUnread: { total: 4, byGroupId: { 'group-1': 3, 'group-2': 1 } },
       crewInviteInboxCount: 3,
+      groupInviteInboxCount: 2,
       messageUnreadCounts: { primary: 6, requests: 1 },
       postCount: 978,
       articleCount: 12,
@@ -63,6 +67,7 @@ describe('AuthController.me', () => {
       accountSwitch: null,
     });
     expect(crewInvites.countInboxPending).toHaveBeenCalledWith('user-1');
+    expect(groupInvites.countInboxPending).toHaveBeenCalledWith('user-1');
     // Defer to the canonical filters so /auth/me can't drift away from the
     // totals the profile endpoints report. content-counts.spec.ts pins what
     // those filters actually contain.
@@ -120,6 +125,7 @@ describe('AuthController.me', () => {
       notificationUnreadCommentCount: 0,
       groupsUnread: { total: 0, byGroupId: {} },
       crewInviteInboxCount: 0,
+      groupInviteInboxCount: 0,
       messageUnreadCounts: { primary: 0, requests: 0 },
       postCount: null,
       articleCount: null,
