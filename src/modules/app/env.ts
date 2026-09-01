@@ -350,6 +350,10 @@ export const envSchema = z.object({
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
   ),
+  RESEND_FROM_NEWSLETTER_EMAIL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
 
   // Slack Incoming Webhook URL (optional; notifications silently no-op when unset).
   // Create one at: https://api.slack.com/apps → your app → Incoming Webhooks
@@ -569,6 +573,14 @@ export const envSchema = z.object({
     .string()
     .optional()
     .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) >= 0 : true), 'EMAIL_DAILY_VERIFICATION_RESERVE must be a non-negative number'),
+  // EMAIL_BROADCAST_DAILY_QUOTA: admin newsletter sends per UTC day (default 5000).
+  // Separate from engagement/transactional so a blast cannot starve verification or digests.
+  EMAIL_BROADCAST_DAILY_QUOTA: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true), 'EMAIL_BROADCAST_DAILY_QUOTA must be a positive number'),
+  // NEWSLETTER_POSTAL_ADDRESS: physical mailing address for CAN-SPAM footer. Required to send.
+  NEWSLETTER_POSTAL_ADDRESS: z.string().optional(),
 
   // Per-publish article fan-out email. Disable (false) on the Resend free tier —
   // new articles already appear in the weekly digest. Enable (true) after upgrading.

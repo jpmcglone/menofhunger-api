@@ -11,8 +11,9 @@ import { RedisKeys } from '../redis/redis-keys';
  * 'engagement' — optional reminder email (digest, nudges, instant, streak).
  *   Blocked once sends reach (quotaLimit - verificationReserve).
  *   Also enforces a per-user 24h cap so one active user can't drain the team quota.
+ * 'broadcast' — admin newsletter blast. Own daily quota; no per-user 24h cap.
  */
-export type EmailCategory = 'transactional' | 'engagement';
+export type EmailCategory = 'transactional' | 'engagement' | 'broadcast';
 
 type SendEmailParams = {
   to: string;
@@ -20,6 +21,8 @@ type SendEmailParams = {
   text: string;
   html?: string;
   from?: string;
+  replyTo?: string;
+  headers?: Record<string, string>;
   /** Defaults to 'engagement'. Pass 'transactional' for verification emails. */
   category?: EmailCategory;
   /** Required when category is 'engagement' to enforce the per-user 24h cap. */
@@ -52,6 +55,8 @@ export class EmailService {
       text: params.text,
       html: params.html,
       from: params.from,
+      replyTo: params.replyTo,
+      headers: params.headers,
       category: params.category,
       userId: params.userId,
     });
@@ -111,6 +116,20 @@ export class EmailService {
         return { allowed: true };
       }
 
+      if (category === 'broadcast') {
+        const broadcastLimit = this.appConfig.emailBroadcastDailyQuota();
+        const broadcastKey = RedisKeys.emailBroadcastDailyCount(utcDateKey());
+        const broadcastRaw = await this.redis.getString(broadcastKey);
+        const broadcastCount = Number(broadcastRaw ?? '0');
+        if (broadcastCount >= broadcastLimit) {
+          this.logger.warn(
+            `[email-quota] Broadcast budget exhausted (${broadcastCount}/${broadcastLimit}). Pausing newsletter send.`,
+          );
+          return { allowed: false, reason: 'email_quota_broadcast_limit' };
+        }
+        return { allowed: true };
+      }
+
       // Engagement: block at (limit - reserve).
       if (count >= engagementCap) {
         this.logger.warn(
@@ -140,7 +159,25 @@ export class EmailService {
    * Records a successful send in the team daily counter and, for engagement emails,
    * marks the per-user 24h cap.
    */
+  async broadcastRemaining(): Promise<number> {
+    try {
+      const limit = this.appConfig.emailBroadcastDailyQuota();
+      const raw = await this.redis.getString(RedisKeys.emailBroadcastDailyCount(utcDateKey()));
+      const count = Number(raw ?? '0');
+      return Math.max(0, limit - (Number.isFinite(count) ? count : 0));
+    } catch {
+      return this.appConfig.emailBroadcastDailyQuota();
+    }
+  }
+
   private async recordSend(category: EmailCategory, userId: string | null): Promise<void> {
+    if (category === 'broadcast') {
+      const broadcastKey = RedisKeys.emailBroadcastDailyCount(utcDateKey());
+      await this.redis.raw().incr(broadcastKey);
+      await this.redis.raw().pexpire(broadcastKey, DAILY_COUNT_TTL_MS);
+      return;
+    }
+
     const countKey = RedisKeys.emailDailyCount(utcDateKey());
     await this.redis.raw().incr(countKey);
     // Keep counter for 48h so it survives past midnight for debugging.

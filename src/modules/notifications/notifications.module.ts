@@ -46,6 +46,7 @@ import { OnThisDayCron } from './on-this-day.cron';
   ],
   exports: [
     NotificationsService,
+    NotificationPreferencesService,
     NotificationWriterService,
     NotificationsCleanupCron,
     NotificationsOrphanCleanupCron,

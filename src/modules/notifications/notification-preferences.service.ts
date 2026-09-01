@@ -35,6 +35,17 @@ export class NotificationPreferencesService {
     });
   }
 
+  /** Flip lodge-newsletter opt-in without the verified-email gate (one-click unsubscribe). */
+  async setEmailNewsletter(userId: string, enabled: boolean): Promise<void> {
+    void this.cache.del(RedisKeys.pushPrefs(userId)).catch(() => undefined);
+    const updated = await this.prisma.notificationPreferences.upsert({
+      where: { userId },
+      create: { userId, emailNewsletter: enabled },
+      update: { emailNewsletter: enabled },
+    });
+    void this.cache.setJson(RedisKeys.pushPrefs(userId), updated, { ttlSeconds: CacheTtl.pushPrefsSeconds }).catch(() => undefined);
+  }
+
   async getPreferences(userId: string): Promise<NotificationPreferencesDto> {
     const prefs = await this.getPreferencesInternal(userId);
     return this.toDto(prefs);
@@ -49,7 +60,8 @@ export class NotificationPreferencesService {
       patch.emailNewNotifications !== undefined ||
       patch.emailInstantHighSignal !== undefined ||
       patch.emailStreakReminder !== undefined ||
-      patch.emailFollowedArticle !== undefined;
+      patch.emailFollowedArticle !== undefined ||
+      patch.emailNewsletter !== undefined;
 
     let effectivePatch = patch;
     if (wantsEmailPatch) {
@@ -65,6 +77,7 @@ export class NotificationPreferencesService {
         delete effectivePatch.emailInstantHighSignal;
         delete effectivePatch.emailStreakReminder;
         delete effectivePatch.emailFollowedArticle;
+        delete effectivePatch.emailNewsletter;
       }
     }
 
@@ -96,6 +109,7 @@ export class NotificationPreferencesService {
     emailInstantHighSignal: boolean;
     emailStreakReminder: boolean;
     emailFollowedArticle: boolean;
+    emailNewsletter: boolean;
   }): NotificationPreferencesDto {
     return {
       pushComment: Boolean(prefs.pushComment),
@@ -116,6 +130,7 @@ export class NotificationPreferencesService {
       emailInstantHighSignal: Boolean(prefs.emailInstantHighSignal),
       emailStreakReminder: Boolean(prefs.emailStreakReminder),
       emailFollowedArticle: Boolean(prefs.emailFollowedArticle),
+      emailNewsletter: prefs.emailNewsletter !== false,
     };
   }
 }

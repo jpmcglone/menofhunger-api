@@ -16,6 +16,7 @@ import { ApiExceptionFilter } from './common/filters/api-exception.filter';
 import { AppConfigService } from './modules/app/app-config.service';
 import { PresenceIoAdapter } from './common/adapters/presence-io.adapter';
 import { RequestCacheService } from './common/cache/request-cache.service';
+import { isOneClickUnsubscribePath } from './modules/newsletters/email-unsubscribe.helpers';
 
 function isUnsafeMethod(method: string | undefined) {
   const m = (method ?? '').toUpperCase();
@@ -270,6 +271,8 @@ async function bootstrap() {
     // Allow third-party webhooks (no Origin/Referer).
     if (isStripeWebhookPath(req)) return next();
     if (isAppleIapNotificationPath(req)) return next();
+    // Gmail one-click unsubscribe POSTs with no Origin/Referer.
+    if (isOneClickUnsubscribePath(String(req.originalUrl || req.url || ''))) return next();
     // Defense-in-depth: any request carrying a Stripe signature header is a
     // server-to-server webhook call (browsers can't set this header), so bypass
     // CSRF even if the path-based check above misses it (e.g. misconfigured URL

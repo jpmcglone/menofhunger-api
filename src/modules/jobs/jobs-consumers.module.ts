@@ -13,6 +13,7 @@ import { CheckinsModule } from '../checkins/checkins.module';
 import { ArticlesModule } from '../articles/articles.module';
 import { CrewModule } from '../crew/crew.module';
 import { MarvinModule } from '../marvin/marvin.module';
+import { NewslettersModule } from '../newsletters/newsletters.module';
 
 /**
  * Worker-only module: all BullMQ processors live here so we can disable job consumption
@@ -36,6 +37,7 @@ import { MarvinModule } from '../marvin/marvin.module';
     ArticlesModule,
     CrewModule,
     MarvinModule,
+    NewslettersModule,
   ],
   providers: [JobsProcessor],
 })

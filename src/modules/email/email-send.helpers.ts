@@ -23,6 +23,20 @@ export function preferredDisplayName(params: {
   return username || null;
 }
 
+/** First word of `name`, else `username`, else `"there"` (so "Hey {{firstName}}," never reads "Hey ,"). */
+export function firstNameFrom(params: {
+  name: string | null | undefined;
+  username: string | null | undefined;
+}): string {
+  const name = String(params.name ?? '').trim();
+  if (name) {
+    const first = name.split(/\s+/)[0];
+    if (first) return first;
+  }
+  const username = String(params.username ?? '').trim();
+  return username || 'there';
+}
+
 export function buildGreeting(params: {
   name: string | null | undefined;
   username: string | null | undefined;

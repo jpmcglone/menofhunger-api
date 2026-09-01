@@ -5,7 +5,7 @@ import { AdminGuard, type AdminRequest } from './admin.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { EmailService } from '../email/email.service';
-import { escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
+import { EMAIL, EMAIL_DARK, escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
 import { buildFollowedArticleEmail } from '../email/email-content-article';
 
 function safeBaseUrl(raw: string | null): string {
@@ -127,9 +127,9 @@ export class AdminEmailSamplesController {
     const featuredBlock = renderCard(
       [
         `<div style="margin-bottom:10px;">${renderPill('Best post of the week', 'success')}</div>`,
-        `<div style="font-size:13px;line-height:1.7;color:#6b7280;">by <strong style="color:#111827;">@${escapeHtml(samplePost.username)}</strong></div>`,
-        `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:#111827;">${escapeHtml(samplePost.body)}</div>`,
-        `<div style="margin-top:10px;font-size:12px;color:#6b7280;">🔁 ${samplePost.boostCount} boosts · 💬 ${samplePost.commentCount} replies</div>`,
+        `<div style="font-size:13px;line-height:1.7;color:${EMAIL.muted};">by <strong style="color:${EMAIL.text};">@${escapeHtml(samplePost.username)}</strong></div>`,
+        `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:${EMAIL.text};">${escapeHtml(samplePost.body)}</div>`,
+        `<div style="margin-top:10px;font-size:12px;color:${EMAIL.muted};">🔁 ${samplePost.boostCount} boosts · 💬 ${samplePost.commentCount} replies</div>`,
         `<div style="margin-top:12px;">${renderButton({ href: samplePostUrl, label: 'Open post' })}</div>`,
       ].join(''),
     );
@@ -141,12 +141,12 @@ export class AdminEmailSamplesController {
         ...sampleNewMembers.map(
           (m) =>
             `<div style="display:inline-flex;flex-direction:column;align-items:center;gap:5px;text-align:center;width:72px;">` +
-            `<div style="width:44px;height:44px;border-radius:50%;background:#111827;color:#fff;font-size:18px;font-weight:700;text-align:center;line-height:44px;">${escapeHtml(m.name[0].toUpperCase())}</div>` +
-            `<span style="font-size:11px;font-weight:700;color:#111827;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">@${escapeHtml(m.username)}</span>` +
+            `<div style="width:44px;height:44px;border-radius:50%;background:${EMAIL_DARK.elevated};color:${EMAIL_DARK.text};font-size:18px;font-weight:700;text-align:center;line-height:44px;">${escapeHtml(m.name[0].toUpperCase())}</div>` +
+            `<span style="font-size:11px;font-weight:700;color:${EMAIL.text};max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">@${escapeHtml(m.username)}</span>` +
             `</div>`,
         ),
         `</div>`,
-        `<div style="margin-top:10px;font-size:12px;color:#9ca3af;">…and ${newMembersTotal - sampleNewMembers.length} more</div>`,
+        `<div style="margin-top:10px;font-size:12px;color:${EMAIL.soft};">…and ${newMembersTotal - sampleNewMembers.length} more</div>`,
       ].join(''),
     );
 
@@ -154,8 +154,8 @@ export class AdminEmailSamplesController {
       title: 'Sample — Weekly digest',
       preheader: `This week's best post + ${newMembersTotal} new members.`,
       contentHtml: [
-        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">Weekly digest (sample)</div>`,
-        `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(ctx.greeting)}</div>`,
+        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:${EMAIL.text};">Weekly digest (sample)</div>`,
+        `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(ctx.greeting)}</div>`,
         `<div style="margin:0 0 14px 0;">${renderPill('Sample email', 'warning')}</div>`,
         `<div style="height:4px;"></div>`,
         featuredBlock,
@@ -164,17 +164,17 @@ export class AdminEmailSamplesController {
             `<div style="margin-bottom:10px;">${renderPill('Best articles this week', 'success')}</div>`,
             ...sampleArticles.map((a, idx) => {
               const url = `${ctx.baseUrl}/a/${a.id}`;
-              return `<div style="${idx > 0 ? 'margin-top:8px;' : ''}"><a href="${escapeHtml(url)}" style="color:#111827;text-decoration:none;font-size:13px;font-weight:700;">${escapeHtml(
+              return `<div style="${idx > 0 ? 'margin-top:8px;' : ''}"><a href="${escapeHtml(url)}" style="color:${EMAIL.text};text-decoration:none;font-size:13px;font-weight:700;">${escapeHtml(
                 a.title,
-              )}</a><div style="font-size:12px;color:#6b7280;">by @${escapeHtml(a.username)}</div></div>`;
+              )}</a><div style="font-size:12px;color:${EMAIL.muted};">by @${escapeHtml(a.username)}</div></div>`;
             }),
-            `<div style="margin-top:10px;font-size:12px;color:#6b7280;">${weeklyArticleCount} new articles this week</div>`,
+            `<div style="margin-top:10px;font-size:12px;color:${EMAIL.muted};">${weeklyArticleCount} new articles this week</div>`,
           ].join(''),
         ),
         newMembersBlock,
-        `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(
+        `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:${EMAIL.muted};">Manage notification settings: <a href="${escapeHtml(
           settingsUrl,
-        )}" style="color:#111827;text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
+        )}" style="color:${EMAIL.text};text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
       ].join(''),
       footerHtml: `Men of Hunger · Sample email`,
     });
@@ -212,25 +212,25 @@ export class AdminEmailSamplesController {
       title: `Unread notifications (sample)`,
       preheader: `Sample: you have ${undelivered} new notifications.`,
       contentHtml: [
-        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">You have ${undelivered} new notifications</div>`,
-        `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(ctx.greeting)}</div>`,
+        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:${EMAIL.text};">You have ${undelivered} new notifications</div>`,
+        `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(ctx.greeting)}</div>`,
         `<div style="margin-top:10px;display:block;">${renderButton({ href: notificationsUrl, label: 'Open notifications' })}</div>`,
         renderCard(
           [
-            `<div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7280;">Recent</div>`,
-            `<ul style="margin:10px 0 0 18px;padding:0;color:#111827;font-size:14px;line-height:1.6;">`,
+            `<div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:${EMAIL.muted};">Recent</div>`,
+            `<ul style="margin:10px 0 0 18px;padding:0;color:${EMAIL.text};font-size:14px;line-height:1.6;">`,
             ...items.map(
               (it) =>
-                `<li style="margin:0 0 8px 0;"><a href="${escapeHtml(it.href)}" style="color:#111827;text-decoration:none;">${escapeHtml(
+                `<li style="margin:0 0 8px 0;"><a href="${escapeHtml(it.href)}" style="color:${EMAIL.text};text-decoration:none;">${escapeHtml(
                   it.text,
                 )}</a></li>`,
             ),
             `</ul>`,
           ].join(''),
         ),
-        `<div style="margin-top:14px;font-size:13px;line-height:1.7;color:#6b7280;">Manage email notification settings: <a href="${escapeHtml(
+        `<div style="margin-top:14px;font-size:13px;line-height:1.7;color:${EMAIL.muted};">Manage email notification settings: <a href="${escapeHtml(
           settingsUrl,
-        )}" style="color:#111827;text-decoration:underline;">Settings → Notifications</a></div>`,
+        )}" style="color:${EMAIL.text};text-decoration:underline;">Settings → Notifications</a></div>`,
       ].join(''),
       footerHtml: `Men of Hunger · Sample email`,
     });
@@ -259,14 +259,14 @@ export class AdminEmailSamplesController {
       title: 'New activity (sample)',
       preheader: 'Sample: new messages and mentions waiting for you.',
       contentHtml: [
-        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">New activity</div>`,
-        `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(ctx.greeting)}</div>`,
+        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:${EMAIL.text};">New activity</div>`,
+        `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(ctx.greeting)}</div>`,
         `<div style="margin:0 0 14px 0;">${renderPill('Sample email', 'warning')}</div>`,
         renderCard(
           [
             `<div style="margin-bottom:10px;">${renderPill('Messages', 'warning')}</div>`,
-            `<div style="font-size:14px;line-height:1.8;color:#111827;">You have <strong>2</strong> unread messages.</div>`,
-            `<ul style="margin:10px 0 0 18px;padding:0;color:#111827;font-size:14px;line-height:1.6;">`,
+            `<div style="font-size:14px;line-height:1.8;color:${EMAIL.text};">You have <strong>2</strong> unread messages.</div>`,
+            `<ul style="margin:10px 0 0 18px;padding:0;color:${EMAIL.text};font-size:14px;line-height:1.6;">`,
             `<li style="margin:0 0 8px 0;"><strong>John</strong> — “You free this week?”</li>`,
             `<li style="margin:0 0 8px 0;"><strong>Mike</strong> — “Good to see your check-in.”</li>`,
             `</ul>`,
@@ -276,16 +276,16 @@ export class AdminEmailSamplesController {
         renderCard(
           [
             `<div style="margin-bottom:10px;">${renderPill('Mentions & replies', 'info')}</div>`,
-            `<ul style="margin:0 0 0 18px;padding:0;color:#111827;font-size:14px;line-height:1.6;">`,
+            `<ul style="margin:0 0 0 18px;padding:0;color:${EMAIL.text};font-size:14px;line-height:1.6;">`,
             `<li style="margin:0 0 10px 0;"><strong>Mention</strong> from <strong>@someone</strong> — “@you what do you think?”</li>`,
             `<li style="margin:0 0 10px 0;"><strong>Reply</strong> from <strong>@another</strong> — “Strong point.”</li>`,
             `</ul>`,
             `<div style="margin-top:12px;">${renderButton({ href: notificationsUrl, label: 'Open notifications', variant: 'secondary' })}</div>`,
           ].join(''),
         ),
-        `<div style="margin-top:14px;font-size:13px;line-height:1.8;color:#6b7280;">You can turn off instant emails in <a href="${escapeHtml(
+        `<div style="margin-top:14px;font-size:13px;line-height:1.8;color:${EMAIL.muted};">You can turn off instant emails in <a href="${escapeHtml(
           settingsUrl,
-        )}" style="color:#111827;text-decoration:underline;">Settings → Notifications</a>.</div>`,
+        )}" style="color:${EMAIL.text};text-decoration:underline;">Settings → Notifications</a>.</div>`,
       ].join(''),
       footerHtml: `Men of Hunger · Sample email`,
     });
@@ -370,19 +370,19 @@ export class AdminEmailSamplesController {
       title: `Keep your streak (sample)`,
       preheader: `Sample: post or reply today to keep your ${currentStreak}-day streak.`,
       contentHtml: [
-        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">Keep your streak</div>`,
-        `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(ctx.greeting)}</div>`,
+        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:${EMAIL.text};">Keep your streak</div>`,
+        `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(ctx.greeting)}</div>`,
         renderCard(
           [
             `<div style="margin-bottom:10px;">${renderPill('Streak reminder', 'warning')}</div>`,
-            `<div style="font-size:14px;line-height:1.8;color:#111827;">You’re on a <strong>${currentStreak}</strong>-day streak.</div>`,
-            `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:#111827;">Post or reply <strong>today</strong> to keep it.</div>`,
+            `<div style="font-size:14px;line-height:1.8;color:${EMAIL.text};">You’re on a <strong>${currentStreak}</strong>-day streak.</div>`,
+            `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:${EMAIL.text};">Post or reply <strong>today</strong> to keep it.</div>`,
             `<div style="margin-top:12px;">${renderButton({ href: homeUrl, label: 'Post now' })}</div>`,
           ].join(''),
         ),
-        `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(
+        `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:${EMAIL.muted};">Manage notification settings: <a href="${escapeHtml(
           settingsUrl,
-        )}" style="color:#111827;text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
+        )}" style="color:${EMAIL.text};text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
       ].join(''),
       footerHtml: `Men of Hunger · Sample email`,
     });

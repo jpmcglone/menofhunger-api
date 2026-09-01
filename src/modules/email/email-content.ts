@@ -1,4 +1,4 @@
-import { escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from './templates/moh-email';
+import { EMAIL, escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from './templates/moh-email';
 
 export type MissingProfileField = 'avatar' | 'bio' | 'banner';
 
@@ -111,27 +111,27 @@ export function buildProfileReminderEmail(p: ProfileReminderEmailParams): { subj
     title: headline,
     preheader: lines[0] ?? headline,
     contentHtml: [
-      `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">${escapeHtml(headline)}</div>`,
-      `<div style="margin:0 0 14px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(greeting)}</div>`,
+      `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:${EMAIL.text};">${escapeHtml(headline)}</div>`,
+      `<div style="margin:0 0 14px 0;font-size:14px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(greeting)}</div>`,
       renderCard(
         [
           `<div style="margin-bottom:10px;">${renderPill(checkpoint === '7d' ? 'Reminder' : 'Profile setup', 'info')}</div>`,
           ...lines.map((line, index) => {
-            const color = index === 0 ? '#111827' : index === lines.length - 1 && missingBanner ? '#6b7280' : '#374151';
+            const color = index === 0 ? EMAIL.text : index === lines.length - 1 && missingBanner ? EMAIL.muted : EMAIL.soft;
             const size = index === lines.length - 1 && missingBanner ? '13px' : '14px';
             return `<div style="margin-top:${index === 0 ? '0' : '8px'};font-size:${size};line-height:1.8;color:${color};">${escapeHtml(
               line,
             )}</div>`;
           }),
           missingSummary
-            ? `<div style="margin-top:10px;font-size:12px;line-height:1.7;color:#6b7280;">${escapeHtml(missingSummary)}</div>`
+            ? `<div style="margin-top:10px;font-size:12px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(missingSummary)}</div>`
             : ``,
           `<div style="margin-top:14px;">${renderButton({ href: settingsUrl, label: 'Update profile' })}</div>`,
         ].join(''),
       ),
-      `<div style="margin-top:14px;font-size:13px;line-height:1.7;color:#6b7280;">You can update your profile any time in Settings → Account.</div>`,
+      `<div style="margin-top:14px;font-size:13px;line-height:1.7;color:${EMAIL.muted};">You can update your profile any time in Settings → Account.</div>`,
     ].join(''),
-    footerHtml: `Manage notifications in <a href="${escapeHtml(settingsUrl)}" style="color:#9ca3af;text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
+    footerHtml: `Manage notifications in <a href="${escapeHtml(settingsUrl)}" style="color:${EMAIL.soft};text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
   });
 
   return { subject, text, html };

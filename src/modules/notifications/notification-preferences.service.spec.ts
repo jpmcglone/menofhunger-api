@@ -22,6 +22,7 @@ function makePrismaPrefs(row?: Record<string, unknown>) {
     emailInstantHighSignal: false,
     emailStreakReminder: false,
     emailFollowedArticle: false,
+    emailNewsletter: true,
   };
   const resolved = { ...defaultRow, ...(row ?? {}) };
   return {

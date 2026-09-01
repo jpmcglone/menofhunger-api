@@ -1443,6 +1443,56 @@ export type ActiveUsersMetricsDto = {
   asOf: string;
 };
 
+// ─── src/common/dto/newsletter.dto.ts ──────────────────────────────────────────
+
+export type NewsletterStatusDto = 'draft' | 'scheduled' | 'sending' | 'sent';
+
+export type NewsletterDurationUnit = 'days' | 'weeks' | 'months' | 'years';
+
+export type NewsletterAudienceFilter =
+  | { type: 'inactive'; amount: number; unit: NewsletterDurationUnit }
+  | { type: 'joined'; cmp: 'atLeast' | 'inTheLast'; amount: number; unit: NewsletterDurationUnit }
+  | { type: 'tier'; min: 'verified' | 'premium' }
+  | { type: 'noCheckin'; amount: number; unit: NewsletterDurationUnit };
+
+export type NewsletterAdminDto = {
+  id: string;
+  status: NewsletterStatusDto;
+  subject: string;
+  preheader: string;
+  bodyJson: string;
+  ctaLabel: string | null;
+  ctaHref: string | null;
+  imageKey: string | null;
+  imageUrl: string | null;
+  scheduledAt: string | null;
+  sentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  audienceFilters: NewsletterAudienceFilter[];
+  /** Members with a confirmed email who are opted into newsletters (no extra filters). */
+  confirmedEmailCount: number;
+  eligibleCount: number;
+  sentCount: number;
+  failedCount: number;
+};
+
+export type NewsletterAudienceCountDto = {
+  confirmedEmailCount: number;
+  eligibleCount: number;
+};
+
+export type NewsletterPreviewDto = {
+  subject: string;
+  preheader: string;
+  html: string;
+  text: string;
+};
+
+export type NewsletterUnsubscribeDto = {
+  ok: boolean;
+};
+
 // ─── src/common/dto/notification-feed.dto.ts ───────────────────────────────────
 
 export type NotificationGroupKind = 'comment' | 'boost' | 'repost' | 'follow' | 'followed_post' | 'nudge';
@@ -1541,6 +1591,8 @@ export type NotificationPreferencesDto = {
   emailStreakReminder: boolean;
   /** Send an email when someone you follow publishes a new article. */
   emailFollowedArticle: boolean;
+  /** Admin-authored lodge newsletter. On by default. */
+  emailNewsletter: boolean;
 };
 
 // ─── src/common/dto/post.dto.ts ────────────────────────────────────────────────

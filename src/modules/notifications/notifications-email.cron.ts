@@ -12,7 +12,7 @@ import { buildGreeting, getRecipientEmail, getVerifiedRecipientEmail } from '../
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { MessagesService } from '../messages/messages.service';
-import { escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
+import { EMAIL, EMAIL_DARK, escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
 import { SlackService } from '../../common/slack/slack.service';
@@ -32,7 +32,7 @@ function renderEmailAvatar(params: {
   const initial = escapeHtml((displayName || '?')[0].toUpperCase());
   const inner = avatarUrl
     ? `<img src="${escapeHtml(avatarUrl)}" width="${size}" height="${size}" alt="${escapeHtml(displayName)}" style="width:${size}px;height:${size}px;border-radius:50%;display:block;object-fit:cover;" />`
-    : `<div style="width:${size}px;height:${size}px;border-radius:50%;background:#111827;color:#ffffff;font-size:${Math.round(size * 0.4)}px;font-weight:700;text-align:center;line-height:${size}px;">${initial}</div>`;
+    : `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${EMAIL_DARK.elevated};color:${EMAIL_DARK.text};font-size:${Math.round(size * 0.4)}px;font-weight:700;text-align:center;line-height:${size}px;">${initial}</div>`;
   return `<a href="${escapeHtml(profileUrl)}" style="display:inline-block;text-decoration:none;">${inner}</a>`;
 }
 
@@ -415,11 +415,11 @@ export class NotificationsEmailCron {
         const recentHtml = recentItems.length
           ? renderCard(
               [
-                `<div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7280;">Recent</div>`,
-                `<ul style="margin:10px 0 0 18px;padding:0;color:#111827;font-size:14px;line-height:1.6;">`,
+                `<div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:${EMAIL.muted};">Recent</div>`,
+                `<ul style="margin:10px 0 0 18px;padding:0;color:${EMAIL.text};font-size:14px;line-height:1.6;">`,
                 ...recentItems.map(
                   (it) =>
-                    `<li style="margin:0 0 8px 0;"><a href="${escapeHtml(it.href)}" style="color:#111827;text-decoration:none;">${escapeHtml(
+                    `<li style="margin:0 0 8px 0;"><a href="${escapeHtml(it.href)}" style="color:${EMAIL.text};text-decoration:none;">${escapeHtml(
                       it.text,
                     )}</a></li>`,
                 ),
@@ -432,17 +432,17 @@ export class NotificationsEmailCron {
           title: `Unread notifications`,
           preheader: `You have ${undelivered} new notification${undelivered === 1 ? '' : 's'}.`,
           contentHtml: [
-            `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">You have ${undelivered} new notification${
+            `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:${EMAIL.text};">You have ${undelivered} new notification${
               undelivered === 1 ? '' : 's'
             }</div>`,
-            `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(greeting)}</div>`,
+            `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(greeting)}</div>`,
             `<div style="margin-top:10px;display:block;">${renderButton({ href: notificationsUrl, label: 'Open notifications' })}</div>`,
             recentHtml,
-            `<div style="margin-top:14px;font-size:13px;line-height:1.7;color:#6b7280;">Manage email notification settings: <a href="${escapeHtml(
+            `<div style="margin-top:14px;font-size:13px;line-height:1.7;color:${EMAIL.muted};">Manage email notification settings: <a href="${escapeHtml(
               `${baseUrl}/settings/notifications`,
-            )}" style="color:#111827;text-decoration:underline;">Settings → Notifications</a></div>`,
+            )}" style="color:${EMAIL.text};text-decoration:underline;">Settings → Notifications</a></div>`,
           ].join(''),
-          footerHtml: `Manage notifications in <a href="${escapeHtml(`${baseUrl}/settings/notifications`)}" style="color:#9ca3af;text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
+          footerHtml: `Manage notifications in <a href="${escapeHtml(`${baseUrl}/settings/notifications`)}" style="color:${EMAIL.soft};text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
         });
 
         await this.sendEmailAndHandle({
@@ -623,25 +623,25 @@ export class NotificationsEmailCron {
           title: `Keep your streak`,
           preheader: `Post or reply today to keep your ${currentStreak}-day streak.`,
           contentHtml: [
-            `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">Keep your streak</div>`,
-            `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(greeting)}</div>`,
+            `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:${EMAIL.text};">Keep your streak</div>`,
+            `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(greeting)}</div>`,
             renderCard(
               [
                 `<div style="margin-bottom:10px;">${renderPill('Streak reminder', 'warning')}</div>`,
-                `<div style="font-size:14px;line-height:1.8;color:#111827;">You’re on a <strong>${currentStreak}</strong>-day streak.</div>`,
-                `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:#111827;">Post or reply <strong>today</strong> to keep it.</div>`,
-                `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">Today’s multiplier: <strong style="color:#111827;">${reward.multiplier}x</strong> (${reward.coinsAdd} coin${reward.coinsAdd === 1 ? '' : 's'}).</div>`,
-                `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">If you skip today, your streak resets to 0.</div>`,
+                `<div style="font-size:14px;line-height:1.8;color:${EMAIL.text};">You’re on a <strong>${currentStreak}</strong>-day streak.</div>`,
+                `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:${EMAIL.text};">Post or reply <strong>today</strong> to keep it.</div>`,
+                `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:${EMAIL.muted};">Today’s multiplier: <strong style="color:${EMAIL.text};">${reward.multiplier}x</strong> (${reward.coinsAdd} coin${reward.coinsAdd === 1 ? '' : 's'}).</div>`,
+                `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:${EMAIL.muted};">If you skip today, your streak resets to 0.</div>`,
                 `<div style="margin-top:12px;">${renderButton({ href: homeUrl, label: 'Post now' })}</div>`,
               ].join(''),
             ),
-            `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(
+            `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:${EMAIL.muted};">Manage notification settings: <a href="${escapeHtml(
               settingsUrl,
-            )}" style="color:#111827;text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
+            )}" style="color:${EMAIL.text};text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
           ].join(''),
           footerHtml: `Manage notifications in <a href="${escapeHtml(
             settingsUrl,
-          )}" style="color:#9ca3af;text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
+          )}" style="color:${EMAIL.soft};text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
         });
 
         await this.sendEmailAndHandle({
@@ -1029,13 +1029,13 @@ export class NotificationsEmailCron {
                       return [
                         `<div style="display:inline-flex;flex-direction:column;align-items:center;gap:5px;text-align:center;width:72px;">`,
                         renderEmailAvatar({ profileUrl, avatarUrl: mAvatarUrl, displayName: m.username ?? m.name ?? '?', size: 44 }),
-                        `<a href="${escapeHtml(profileUrl)}" style="font-size:11px;font-weight:700;color:#111827;text-decoration:none;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">@${escapeHtml((m.username ?? '').trim() || m.id)}</a>`,
+                        `<a href="${escapeHtml(profileUrl)}" style="font-size:11px;font-weight:700;color:${EMAIL.text};text-decoration:none;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">@${escapeHtml((m.username ?? '').trim() || m.id)}</a>`,
                         `</div>`,
                       ].join('');
                     }),
                     `</div>`,
                     weeklyNewMembersTotal > weeklyNewMembers.length
-                      ? `<div style="margin-top:10px;font-size:12px;color:#9ca3af;">…and ${weeklyNewMembersTotal - weeklyNewMembers.length} more</div>`
+                      ? `<div style="margin-top:10px;font-size:12px;color:${EMAIL.soft};">…and ${weeklyNewMembersTotal - weeklyNewMembers.length} more</div>`
                       : ``,
                   ].join(''),
                 )
@@ -1045,10 +1045,10 @@ export class NotificationsEmailCron {
             ? renderCard(
                 [
                   `<div style="margin-bottom:10px;">${renderPill('Best post of the week', 'success')}</div>`,
-                  `<div style="font-size:13px;line-height:1.7;color:#6b7280;">by <strong style="color:#111827;">@${escapeHtml(
+                  `<div style="font-size:13px;line-height:1.7;color:${EMAIL.muted};">by <strong style="color:${EMAIL.text};">@${escapeHtml(
                     (featuredPost.user.username ?? 'unknown').trim(),
                   )}</strong></div>`,
-                  `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:#111827;">${escapeHtml(
+                  `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:${EMAIL.text};">${escapeHtml(
                     truncate(featuredPost.body ?? '', 260),
                   )}</div>`,
                   featuredUrl ? `<div style="margin-top:12px;">${renderButton({ href: featuredUrl, label: 'Open post' })}</div>` : ``,
@@ -1065,14 +1065,14 @@ export class NotificationsEmailCron {
                     const authorUser = (a.author?.username ?? '').trim();
                     const authorDisplay = authorRealName || (authorUser ? `@${authorUser}` : 'Unknown');
                     return [
-                      `<div style="${idx > 0 ? 'margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6;' : ''}">`,
-                      `<a href="${escapeHtml(articleUrl)}" style="font-size:14px;line-height:1.6;color:#111827;text-decoration:none;font-weight:700;">${escapeHtml(truncate(a.title ?? 'Untitled article', 140))}</a>`,
-                      `<div style="margin-top:4px;font-size:12px;color:#6b7280;">by ${escapeHtml(authorDisplay)}</div>`,
-                      a.excerpt ? `<div style="margin-top:4px;font-size:12px;line-height:1.6;color:#6b7280;">${escapeHtml(truncate(a.excerpt, 150))}</div>` : '',
+                      `<div style="${idx > 0 ? `margin-top:10px;padding-top:10px;border-top:1px solid ${EMAIL.border};` : ''}">`,
+                      `<a href="${escapeHtml(articleUrl)}" style="font-size:14px;line-height:1.6;color:${EMAIL.text};text-decoration:none;font-weight:700;">${escapeHtml(truncate(a.title ?? 'Untitled article', 140))}</a>`,
+                      `<div style="margin-top:4px;font-size:12px;color:${EMAIL.muted};">by ${escapeHtml(authorDisplay)}</div>`,
+                      a.excerpt ? `<div style="margin-top:4px;font-size:12px;line-height:1.6;color:${EMAIL.muted};">${escapeHtml(truncate(a.excerpt, 150))}</div>` : '',
                       `</div>`,
                     ].join('');
                   }),
-                  `<div style="margin-top:12px;font-size:12px;color:#6b7280;">${weeklyNewArticleCount} new article${weeklyNewArticleCount === 1 ? '' : 's'} this week</div>`,
+                  `<div style="margin-top:12px;font-size:12px;color:${EMAIL.muted};">${weeklyNewArticleCount} new article${weeklyNewArticleCount === 1 ? '' : 's'} this week</div>`,
                 ].join(''),
               )
             : '';
@@ -1083,17 +1083,17 @@ export class NotificationsEmailCron {
                   ...taggedArticleGroups.map((group, groupIdx) => {
                     const groupLabel = group.label;
                     return [
-                      `<div style="${groupIdx > 0 ? 'margin-top:12px;padding-top:12px;border-top:1px solid #f3f4f6;' : ''}">`,
-                      `<div style="font-size:12px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;color:#6b7280;">${escapeHtml(groupLabel)}</div>`,
+                      `<div style="${groupIdx > 0 ? `margin-top:12px;padding-top:12px;border-top:1px solid ${EMAIL.border};` : ''}">`,
+                      `<div style="font-size:12px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;color:${EMAIL.muted};">${escapeHtml(groupLabel)}</div>`,
                       ...group.articles.map((a, idx) => {
                         const articleUrl = `${baseUrl}/a/${encodeURIComponent(a.id)}`;
                         const authorRealName = (a.author?.name ?? '').trim();
                         const authorUser = (a.author?.username ?? '').trim();
                         const authorDisplay = authorRealName || (authorUser ? `@${authorUser}` : 'Unknown');
                         return [
-                          `<div style="${idx > 0 ? 'margin-top:8px;padding-top:8px;border-top:1px dashed #f3f4f6;' : 'margin-top:6px'}">`,
-                          `<a href="${escapeHtml(articleUrl)}" style="font-size:14px;line-height:1.6;color:#111827;text-decoration:none;font-weight:700;">${escapeHtml(truncate(a.title ?? 'Untitled article', 120))}</a>`,
-                          `<div style="margin-top:4px;font-size:12px;color:#6b7280;">by ${escapeHtml(authorDisplay)}</div>`,
+                          `<div style="${idx > 0 ? `margin-top:8px;padding-top:8px;border-top:1px dashed ${EMAIL.border};` : 'margin-top:6px'}">`,
+                          `<a href="${escapeHtml(articleUrl)}" style="font-size:14px;line-height:1.6;color:${EMAIL.text};text-decoration:none;font-weight:700;">${escapeHtml(truncate(a.title ?? 'Untitled article', 120))}</a>`,
+                          `<div style="margin-top:4px;font-size:12px;color:${EMAIL.muted};">by ${escapeHtml(authorDisplay)}</div>`,
                           `</div>`,
                         ].join('');
                       }),
@@ -1101,10 +1101,10 @@ export class NotificationsEmailCron {
                         const postUrl = `${baseUrl}/p/${encodeURIComponent(p.id)}`;
                         const authorDisplay = (p.user.name ?? '').trim() || ((p.user.username ?? '').trim() ? `@${(p.user.username ?? '').trim()}` : 'Unknown');
                         return [
-                          `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #f3f4f6;">`,
-                          `<a href="${escapeHtml(postUrl)}" style="font-size:13px;line-height:1.6;color:#111827;text-decoration:none;font-weight:700;">Top post this week</a>`,
-                          `<div style="margin-top:4px;font-size:12px;color:#6b7280;">by ${escapeHtml(authorDisplay)}</div>`,
-                          `<div style="margin-top:4px;font-size:12px;line-height:1.6;color:#6b7280;">${escapeHtml(truncate(p.body ?? '', 140))}</div>`,
+                          `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed ${EMAIL.border};">`,
+                          `<a href="${escapeHtml(postUrl)}" style="font-size:13px;line-height:1.6;color:${EMAIL.text};text-decoration:none;font-weight:700;">Top post this week</a>`,
+                          `<div style="margin-top:4px;font-size:12px;color:${EMAIL.muted};">by ${escapeHtml(authorDisplay)}</div>`,
+                          `<div style="margin-top:4px;font-size:12px;line-height:1.6;color:${EMAIL.muted};">${escapeHtml(truncate(p.body ?? '', 140))}</div>`,
                           `</div>`,
                         ].join('');
                       }),
@@ -1186,19 +1186,19 @@ export class NotificationsEmailCron {
               ? `This week's best post + ${weeklyNewArticleCount} new article${weeklyNewArticleCount === 1 ? '' : 's'}.`
               : `Your weekly Men of Hunger recap (${weeklyNewArticleCount} new articles).`,
             contentHtml: [
-              `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">Weekly digest</div>`,
-              `<div style="margin:0 0 16px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(greeting)}</div>`,
+              `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:${EMAIL.text};">Weekly digest</div>`,
+              `<div style="margin:0 0 16px 0;font-size:14px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(greeting)}</div>`,
               ...(featuredPost ? [featuredHtml] : []),
               ...(taggedArticleGroups.length > 0 ? [pickedForYouHtml] : []),
               ...(topArticles.length > 0 ? [topArticlesHtml] : []),
               ...(newMembersBlock ? [newMembersBlock] : []),
-              `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:#6b7280;">Manage notification settings: <a href="${escapeHtml(
+              `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:${EMAIL.muted};">Manage notification settings: <a href="${escapeHtml(
                 settingsUrl,
-              )}" style="color:#111827;text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
+              )}" style="color:${EMAIL.text};text-decoration:underline;">${escapeHtml(settingsUrl)}</a></div>`,
             ].join(''),
             footerHtml: `Manage notifications in <a href="${escapeHtml(
               settingsUrl,
-            )}" style="color:#9ca3af;text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
+            )}" style="color:${EMAIL.soft};text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
           });
 
           await this.sendEmailAndHandle({
@@ -1419,16 +1419,16 @@ export class NotificationsEmailCron {
       return renderCard(
         [
           `<div style="margin-bottom:10px;">${renderPill('Messages', 'warning')}</div>`,
-          `<div style="font-size:14px;line-height:1.8;color:#111827;">You have <strong>${unreadChats}</strong> unread message${
+          `<div style="font-size:14px;line-height:1.8;color:${EMAIL.text};">You have <strong>${unreadChats}</strong> unread message${
             unreadChats === 1 ? '' : 's'
           }.</div>`,
           chatPreviewRows.length
-            ? `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#6b7280;">Latest:</div>
-<ul style="margin:8px 0 0 18px;padding:0;color:#111827;font-size:14px;line-height:1.6;">
+            ? `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:${EMAIL.muted};">Latest:</div>
+<ul style="margin:8px 0 0 18px;padding:0;color:${EMAIL.text};font-size:14px;line-height:1.6;">
 ${chatPreviewRows
   .map(
     (r) =>
-      `<li style="margin:0 0 8px 0;"><a href="${escapeHtml(r.href)}" style="color:#111827;text-decoration:none;"><strong>${escapeHtml(
+      `<li style="margin:0 0 8px 0;"><a href="${escapeHtml(r.href)}" style="color:${EMAIL.text};text-decoration:none;"><strong>${escapeHtml(
         r.sender,
       )}</strong> — ${escapeHtml(r.body)}</a></li>`,
   )
@@ -1444,7 +1444,7 @@ ${chatPreviewRows
       ? renderCard(
           [
             `<div style="margin-bottom:10px;">${renderPill('Mentions & replies', 'info')}</div>`,
-            `<ul style="margin:0 0 0 18px;padding:0;color:#111827;font-size:14px;line-height:1.6;">`,
+            `<ul style="margin:0 0 0 18px;padding:0;color:${EMAIL.text};font-size:14px;line-height:1.6;">`,
             ...notifs.slice(0, 5).map((n) => {
               const actorRealName = (n.actor?.name ?? '').trim();
               const actorUser = (n.actor?.username ?? '').trim();
@@ -1461,7 +1461,7 @@ ${chatPreviewRows
                   : '';
               return `<li style="margin:0 0 10px 0;"><a href="${escapeHtml(
                 href,
-              )}" style="color:#111827;text-decoration:none;"><strong>${escapeHtml(label)}</strong> from <strong>${escapeHtml(
+              )}" style="color:${EMAIL.text};text-decoration:none;"><strong>${escapeHtml(label)}</strong> from <strong>${escapeHtml(
                 actor,
               )}</strong>${tierPill}${visPill} — ${escapeHtml(msg)}</a></li>`;
             }),
@@ -1482,18 +1482,18 @@ ${chatPreviewRows
       title: 'New activity',
       preheader: previewText,
       contentHtml: [
-        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:#111827;">New activity</div>`,
-        `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(greeting)}</div>`,
+        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:${EMAIL.text};">New activity</div>`,
+        `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(greeting)}</div>`,
         `<div style="margin:0 0 14px 0;">${renderPill(previewText, 'neutral')}</div>`,
         convoCards,
         notifCard,
-        `<div style="margin-top:14px;font-size:13px;line-height:1.8;color:#6b7280;">You can turn off instant emails in <a href="${escapeHtml(
+        `<div style="margin-top:14px;font-size:13px;line-height:1.8;color:${EMAIL.muted};">You can turn off instant emails in <a href="${escapeHtml(
           settingsUrl,
-        )}" style="color:#111827;text-decoration:underline;">Settings → Notifications</a>.</div>`,
+        )}" style="color:${EMAIL.text};text-decoration:underline;">Settings → Notifications</a>.</div>`,
       ]
         .filter(Boolean)
         .join(''),
-      footerHtml: `Manage notifications in <a href="${escapeHtml(settingsUrl)}" style="color:#9ca3af;text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
+      footerHtml: `Manage notifications in <a href="${escapeHtml(settingsUrl)}" style="color:${EMAIL.soft};text-decoration:underline;">Settings → Notifications</a> · Men of Hunger`,
     });
 
     await this.sendEmailAndHandle({
@@ -1776,7 +1776,7 @@ ${chatPreviewRows
 
       // Pre-render the body preview once (avoids re-parsing the same JSON per follower).
       const bodyPreviewHtml = article.body
-        ? renderTiptapPreviewHtml(article.body, 3)
+        ? renderTiptapPreviewHtml(article.body, 3, { siteUrl: baseUrl })
         : null;
 
       // Query all followers who have a verified email address.

@@ -24,6 +24,7 @@ import { PostsService } from '../posts/posts.service';
 import { ArticlesTrendingScoreCron } from '../articles/articles-trending-score.cron';
 import { CrewJobsCron } from '../crew/crew-jobs.cron';
 import { ScheduledPostsPublishCron } from '../posts/scheduled-posts-publish.cron';
+import { NewslettersCron } from '../newsletters/newsletters.cron';
 import { NotificationWriterService } from '../notifications/notification-writer.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 
@@ -54,6 +55,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly articlesTrendingScore: ArticlesTrendingScoreCron,
     private readonly crewJobs: CrewJobsCron,
     private readonly scheduledPostsPublish: ScheduledPostsPublishCron,
+    private readonly newsletters: NewslettersCron,
     private readonly notificationWriter: NotificationWriterService,
     private readonly sideEffects: SideEffectsService,
   ) {
@@ -163,6 +165,12 @@ export class JobsProcessor extends WorkerHost {
           return { ok: true };
         case JOBS.postsScheduledPublishSweep:
           await this.scheduledPostsPublish.runPublishDue();
+          return { ok: true };
+        case JOBS.newslettersScheduledSweep:
+          await this.newsletters.runSweep();
+          return { ok: true };
+        case JOBS.newslettersSend:
+          await this.newsletters.runSend(String(job.data?.newsletterId ?? '').trim());
           return { ok: true };
         case JOBS.spaceReminderDay: {
           const spaceId = String(job.data?.spaceId ?? '').trim();

@@ -43,6 +43,8 @@ export class ResendEmailProvider implements EmailProvider {
           subject,
           text,
           ...(html ? { html } : {}),
+          ...(req.replyTo?.trim() ? { reply_to: req.replyTo.trim() } : {}),
+          ...(req.headers && Object.keys(req.headers).length > 0 ? { headers: req.headers } : {}),
         }),
       });
 

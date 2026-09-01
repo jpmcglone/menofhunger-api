@@ -65,6 +65,7 @@ export type EmailConfig = {
     default: string;
     notifications: string;
     support: string;
+    newsletter: string;
   };
 };
 
@@ -533,11 +534,13 @@ export class AppConfigService {
     const resendFromDefault = this.config.get<string>('RESEND_FROM_EMAIL')?.trim() ?? '';
     const resendFromNotifications = this.config.get<string>('RESEND_FROM_NOTIFICATIONS_EMAIL')?.trim() ?? '';
     const resendFromSupport = this.config.get<string>('RESEND_FROM_SUPPORT_EMAIL')?.trim() ?? '';
+    const resendFromNewsletter = this.config.get<string>('RESEND_FROM_NEWSLETTER_EMAIL')?.trim() ?? '';
 
     const fallback = resendFromDefault;
     const notifications = resendFromNotifications || fallback;
     const support = resendFromSupport || fallback;
-    const effectiveDefault = fallback || notifications || support;
+    const newsletter = resendFromNewsletter || notifications || fallback;
+    const effectiveDefault = fallback || notifications || support || newsletter;
 
     if (resendApiKey && effectiveDefault) {
       return {
@@ -547,6 +550,7 @@ export class AppConfigService {
           default: withDisplayName(effectiveDefault, 'Men of Hunger'),
           notifications: withDisplayName(notifications || effectiveDefault, 'Men of Hunger'),
           support: withDisplayName(support || effectiveDefault, 'Men of Hunger'),
+          newsletter: withDisplayName(newsletter || effectiveDefault, 'Men of Hunger'),
         },
       };
     }
@@ -580,6 +584,19 @@ export class AppConfigService {
    */
   emailFollowedArticleEnabled(): boolean {
     return this.readBool('EMAIL_FOLLOWED_ARTICLE_ENABLED', false);
+  }
+
+  /** Daily cap for admin newsletter blasts. Independent of engagement/transactional quota. */
+  emailBroadcastDailyQuota(): number {
+    const raw = this.config.get<string>('EMAIL_BROADCAST_DAILY_QUOTA') ?? '';
+    const n = Number(raw.trim());
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5000;
+  }
+
+  /** Physical mailing address required in newsletter footers (CAN-SPAM). */
+  newsletterPostalAddress(): string | null {
+    const v = this.config.get<string>('NEWSLETTER_POSTAL_ADDRESS')?.trim() ?? '';
+    return v ? v : null;
   }
 
   slackWebhookUrl(): string | null {
@@ -767,6 +784,9 @@ export class AppConfigService {
         'RESEND_FROM_NOTIFICATIONS_EMAIL',
       ) as Env['RESEND_FROM_NOTIFICATIONS_EMAIL'],
       RESEND_FROM_SUPPORT_EMAIL: this.config.get<string>('RESEND_FROM_SUPPORT_EMAIL') as Env['RESEND_FROM_SUPPORT_EMAIL'],
+      RESEND_FROM_NEWSLETTER_EMAIL: this.config.get<string>(
+        'RESEND_FROM_NEWSLETTER_EMAIL',
+      ) as Env['RESEND_FROM_NEWSLETTER_EMAIL'],
     };
   }
 }

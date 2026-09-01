@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from './email.service';
 import { AppConfigService } from '../app/app-config.service';
 import { EmailActionTokensService } from './email-action-tokens.service';
-import { escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from './templates/moh-email';
+import { EMAIL, escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from './templates/moh-email';
 import { toUserDto } from '../../common/dto';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PresenceService } from '../presence/presence.service';
@@ -88,19 +88,19 @@ export class EmailVerificationService {
       title: 'Verify your email',
       preheader: previewText,
       contentHtml: [
-        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 8px 0;color:#111827;">Verify your email</div>`,
-        `<div style="margin:0 0 12px 0;font-size:14px;line-height:1.7;color:#374151;">${escapeHtml(greeting)}</div>`,
+        `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 8px 0;color:${EMAIL.text};">Verify your email</div>`,
+        `<div style="margin:0 0 12px 0;font-size:14px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(greeting)}</div>`,
         renderCard(
           [
-            `<div style="font-size:14px;line-height:1.7;color:#111827;">Confirm this email address to unlock your daily digest and important notifications.</div>`,
+            `<div style="font-size:14px;line-height:1.7;color:${EMAIL.text};">Confirm this email address to unlock your daily digest and important notifications.</div>`,
             `<div style="margin-top:12px;">${renderButton({ href: confirmUrl, label: 'Verify email', variant: 'primary' })}</div>`,
             `<div style="margin-top:12px;">${renderPill(`Expires in ${VERIFY_EXPIRES_HOURS} hours`, 'warning')}</div>`,
           ].join(''),
         ),
-        `<div style="margin-top:14px;font-size:12px;line-height:1.7;color:#6b7280;">If the button doesn’t work, copy and paste this link:</div>`,
-        `<div style="margin-top:6px;font-size:12px;line-height:1.7;word-break:break-all;"><a href="${safeConfirmUrl}" style="color:#111827;text-decoration:underline;">${safeConfirmUrl}</a></div>`,
-        `<hr style="border:0;border-top:1px solid #e5e7eb;margin:18px 0;" />`,
-        `<div style="font-size:12px;line-height:1.7;color:#6b7280;">Didn’t request this? You can safely ignore this email.</div>`,
+        `<div style="margin-top:14px;font-size:12px;line-height:1.7;color:${EMAIL.muted};">If the button doesn’t work, copy and paste this link:</div>`,
+        `<div style="margin-top:6px;font-size:12px;line-height:1.7;word-break:break-all;"><a href="${safeConfirmUrl}" style="color:${EMAIL.text};text-decoration:underline;">${safeConfirmUrl}</a></div>`,
+        `<hr style="border:0;border-top:1px solid ${EMAIL.border};margin:18px 0;" />`,
+        `<div style="font-size:12px;line-height:1.7;color:${EMAIL.muted};">Didn’t request this? You can safely ignore this email.</div>`,
       ].join(''),
       footerHtml: `Men of Hunger · Security notice: verification requires login.`,
     });

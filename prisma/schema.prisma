@@ -529,6 +529,7 @@ model User {
   userSearchTargets            UserSearch[]               @relation("UserSearchTarget")
   feedbacks                    Feedback[]
   announcementsCreated         Announcement[]             @relation("Announcement_createdBy")
+  newslettersCreated           Newsletter[]               @relation("Newsletter_createdBy")
   announcementViewers          AnnouncementViewer[]
   announcementAudiences        AnnouncementAudience[]
   reportsMade                  Report[]                   @relation("Report_reporter")
@@ -2194,6 +2195,10 @@ model NotificationPreferences {
    * Send an email when someone you follow publishes a new article.
    */
   emailFollowedArticle   Boolean @default(true)
+  /**
+   * Admin-authored lodge newsletter. On by default; one-click unsubscribe from the email.
+   */
+  emailNewsletter        Boolean @default(true)
 
   // Email send timestamps (rate limiting / dedupe).
   lastEmailDigestWeeklySentAt      DateTime?
@@ -3284,6 +3289,13 @@ enum AnnouncementOutcome {
   abandoned
 }
 
+enum NewsletterStatus {
+  draft
+  scheduled
+  sending
+  sent
+}
+
 /**
  * Admin-authored lodge notice or ad. Mid-session sockets are intentionally skipped —
  * clients fetch on session start only.
@@ -3370,6 +3382,36 @@ model AnnouncementEvent {
 
   @@index([announcementId, type])
   @@index([viewerKey, platform, createdAt])
+}
+
+/**
+ * Admin-authored lodge newsletter. Draft → schedule/send → locked sent history.
+ */
+model Newsletter {
+  id               String           @id @default(cuid())
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  status           NewsletterStatus @default(draft)
+  subject          String           @default("")
+  preheader        String           @default("")
+  bodyJson         String           @default("")
+  ctaLabel         String?
+  ctaHref          String?
+  imageKey         String?
+  imageUpdatedAt   DateTime?
+  scheduledAt      DateTime?
+  sentAt           DateTime?
+  createdByAdminId     String
+  createdByAdmin       User             @relation("Newsletter_createdBy", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+  /** Stacked audience filters. Empty = every opted-in member with a confirmed email. */
+  audienceFilters      Json             @default("[]")
+  eligibleCount        Int              @default(0)
+  sentCount        Int              @default(0)
+  failedCount      Int              @default(0)
+  lastUserId       String?
+
+  @@index([status, scheduledAt])
+  @@index([createdAt])
 }
 
 model MarvinCostRollup {

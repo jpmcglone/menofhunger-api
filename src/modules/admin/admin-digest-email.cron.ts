@@ -6,7 +6,7 @@ import { EmailService } from '../email/email.service';
 import { AppConfigService } from '../app/app-config.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
-import { escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
+import { EMAIL, escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
 import { SlackService } from '../../common/slack/slack.service';
 
 // ─── ET helpers ───────────────────────────────────────────────────────────────
@@ -115,18 +115,18 @@ function renderNewUserRow(user: UserRow, now: Date, baseUrl: string): string {
   const badge = renderTierBadge(user);
 
   const nameHtml = profileUrl
-    ? `<a href="${escapeHtml(profileUrl)}" style="color:#111827;text-decoration:none;font-weight:600;font-size:13px;">${escapeHtml(displayName)}</a>`
+    ? `<a href="${escapeHtml(profileUrl)}" style="color:${EMAIL.text};text-decoration:none;font-weight:600;font-size:13px;">${escapeHtml(displayName)}</a>`
     : `<span style="font-weight:600;font-size:13px;">${escapeHtml(displayName)}</span>`;
 
   const handleHtml = user.username
-    ? `<span style="font-size:12px;color:#6b7280;margin-left:4px;">@${escapeHtml(user.username)}</span>`
+    ? `<span style="font-size:12px;color:${EMAIL.muted};margin-left:4px;">@${escapeHtml(user.username)}</span>`
     : '';
 
   return `
-<div style="padding:7px 0;border-bottom:1px solid #f3f4f6;">
+<div style="padding:7px 0;border-bottom:1px solid ${EMAIL.border};">
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
     <td style="vertical-align:middle;">${nameHtml}${handleHtml}${badge ? `<span style="margin-left:6px;">${badge}</span>` : ''}</td>
-    <td style="vertical-align:middle;text-align:right;white-space:nowrap;font-size:11px;color:#9ca3af;">${escapeHtml(timeAgo)}</td>
+    <td style="vertical-align:middle;text-align:right;white-space:nowrap;font-size:11px;color:${EMAIL.soft};">${escapeHtml(timeAgo)}</td>
   </tr></table>
 </div>`.trim();
 }
@@ -137,7 +137,7 @@ function renderStatRow(
   opts?: { href?: string; color?: string; dimZero?: boolean },
 ): string {
   const isZero = Number(value) === 0;
-  const effectiveColor = opts?.color ?? (opts?.dimZero && isZero ? '#9ca3af' : '#111827');
+  const effectiveColor = opts?.color ?? (opts?.dimZero && isZero ? EMAIL.soft : EMAIL.text);
 
   const valueHtml = opts?.href
     ? `<a href="${escapeHtml(opts.href)}" style="font-size:14px;font-weight:700;color:${effectiveColor};text-decoration:none;">${escapeHtml(String(value))} →</a>`
@@ -145,14 +145,14 @@ function renderStatRow(
 
   return `
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-bottom:1px solid #f9fafb;"><tr>
-  <td style="padding:5px 0;font-size:13px;color:#374151;">${escapeHtml(label)}</td>
+  <td style="padding:5px 0;font-size:13px;color:${EMAIL.muted};">${escapeHtml(label)}</td>
   <td style="padding:5px 0;text-align:right;">${valueHtml}</td>
 </tr></table>`.trim();
 }
 
 function sectionTitle(title: string, badge?: string): string {
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:10px;"><tr>
-  <td style="font-size:13px;font-weight:700;color:#111827;">${escapeHtml(title)}</td>
+  <td style="font-size:13px;font-weight:700;color:${EMAIL.text};">${escapeHtml(title)}</td>
   ${badge ? `<td style="text-align:right;">${badge}</td>` : ''}
 </tr></table>`;
 }
@@ -632,8 +632,8 @@ export class AdminDailyDigestCron {
 
     // ── Page header ──
     sections.push(
-      `<h2 style="margin:0 0 4px 0;font-size:20px;font-weight:800;color:#111827;">Admin Daily Digest</h2>` +
-      `<p style="margin:0 0 18px 0;font-size:13px;color:#6b7280;">${escapeHtml(dateLabel)}</p>`,
+      `<h2 style="margin:0 0 4px 0;font-size:20px;font-weight:800;color:${EMAIL.text};">Admin Daily Digest</h2>` +
+      `<p style="margin:0 0 18px 0;font-size:13px;color:${EMAIL.muted};">${escapeHtml(dateLabel)}</p>`,
     );
 
     // ── New Members ──
@@ -644,15 +644,15 @@ export class AdminDailyDigestCron {
 
       let body = '';
       if (totalNewUserCount === 0) {
-        body = `<p style="margin:0;font-size:13px;color:#9ca3af;">No new members yesterday.</p>`;
+        body = `<p style="margin:0;font-size:13px;color:${EMAIL.soft};">No new members yesterday.</p>`;
       } else {
         body = newUsers.map((u) => renderNewUserRow(u, now, baseUrl)).join('');
         if (totalNewUserCount > newUsers.length) {
-          body += `<p style="margin:8px 0 0 0;font-size:12px;color:#9ca3af;">…and ${totalNewUserCount - newUsers.length} more</p>`;
+          body += `<p style="margin:8px 0 0 0;font-size:12px;color:${EMAIL.soft};">…and ${totalNewUserCount - newUsers.length} more</p>`;
         }
         body += `<div style="margin-top:12px;">${renderButton({ href: `${baseUrl}/admin/users`, label: 'View All Users →', variant: 'secondary' })}</div>`;
       }
-      body += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6;">${renderStatRow('Total members (all-time)', totalUserCount, { color: '#6b7280' })}</div>`;
+      body += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid ${EMAIL.border};">${renderStatRow('Total members (all-time)', totalUserCount, { color: EMAIL.muted })}</div>`;
 
       sections.push(renderCard(sectionTitle('New Members', pill) + body));
     }
@@ -665,7 +665,7 @@ export class AdminDailyDigestCron {
       body += renderStatRow('New replies / comments', newReplyCount, { dimZero: true });
       body += renderStatRow('New articles published', newArticleCount);
       body += renderStatRow('Active users (DAU)', activeUserCount);
-      body += renderStatRow('Active users (7-day WAU)', wauCount, { color: '#6b7280' });
+      body += renderStatRow('Active users (7-day WAU)', wauCount, { color: EMAIL.muted });
       if (bannedUserCount > 0) {
         body += renderStatRow('Users banned', bannedUserCount, { color: '#dc2626' });
       }
@@ -685,16 +685,16 @@ export class AdminDailyDigestCron {
         : '';
 
       const body =
-        `<p style="margin:0 0 6px 0;font-size:12px;color:#6b7280;">` +
-        `${escapeHtml(authorName)}${authorHandle ? ` <span style="color:#9ca3af;">${escapeHtml(authorHandle)}</span>` : ''}` +
+        `<p style="margin:0 0 6px 0;font-size:12px;color:${EMAIL.muted};">` +
+        `${escapeHtml(authorName)}${authorHandle ? ` <span style="color:${EMAIL.soft};">${escapeHtml(authorHandle)}</span>` : ''}` +
         `${visibilityPill ? ` ${visibilityPill}` : ''}` +
         `</p>` +
-        `<p style="margin:0 0 10px 0;font-size:13px;color:#374151;line-height:1.5;font-style:italic;">"${escapeHtml(snippet)}"</p>` +
+        `<p style="margin:0 0 10px 0;font-size:13px;color:${EMAIL.muted};line-height:1.5;font-style:italic;">"${escapeHtml(snippet)}"</p>` +
         `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:12px;"><tr>` +
-        `<td style="padding-right:14px;font-size:12px;color:#6b7280;">🔁 ${topPost.boostCount} boosts</td>` +
-        `<td style="padding-right:14px;font-size:12px;color:#6b7280;">💬 ${topPost.commentCount} replies</td>` +
-        `<td style="padding-right:14px;font-size:12px;color:#6b7280;">👤 ${topPost.viewerCount} people</td>` +
-        `<td style="font-size:12px;color:#6b7280;">👁 ${Math.max(topPost.viewerCount, topPost.totalViewCount)} views</td>` +
+        `<td style="padding-right:14px;font-size:12px;color:${EMAIL.muted};">🔁 ${topPost.boostCount} boosts</td>` +
+        `<td style="padding-right:14px;font-size:12px;color:${EMAIL.muted};">💬 ${topPost.commentCount} replies</td>` +
+        `<td style="padding-right:14px;font-size:12px;color:${EMAIL.muted};">👤 ${topPost.viewerCount} people</td>` +
+        `<td style="font-size:12px;color:${EMAIL.muted};">👁 ${Math.max(topPost.viewerCount, topPost.totalViewCount)} views</td>` +
         `</tr></table>` +
         renderButton({ href: postUrl, label: 'View Post →', variant: 'secondary' });
 
@@ -708,11 +708,11 @@ export class AdminDailyDigestCron {
           const articleUrl = `${baseUrl}/a/${article.id}`;
           const authorHandle = article.username ? `@${article.username}` : '@unknown';
           return [
-            `<div style="${idx > 0 ? 'margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6;' : ''}">`,
-            `<a href="${escapeHtml(articleUrl)}" style="font-size:14px;line-height:1.6;color:#111827;text-decoration:none;font-weight:700;">${escapeHtml(truncate(article.title || 'Untitled article', 140))}</a>`,
-            `<div style="margin-top:4px;font-size:12px;color:#6b7280;">${escapeHtml(authorHandle)} · 👤 ${article.viewCount} · 👁 ${Math.max(article.viewCount, article.totalViewCount)} · 🔁 ${article.boostCount} · 💬 ${article.commentCount}</div>`,
+            `<div style="${idx > 0 ? `margin-top:10px;padding-top:10px;border-top:1px solid ${EMAIL.border};` : ''}">`,
+            `<a href="${escapeHtml(articleUrl)}" style="font-size:14px;line-height:1.6;color:${EMAIL.text};text-decoration:none;font-weight:700;">${escapeHtml(truncate(article.title || 'Untitled article', 140))}</a>`,
+            `<div style="margin-top:4px;font-size:12px;color:${EMAIL.muted};">${escapeHtml(authorHandle)} · 👤 ${article.viewCount} · 👁 ${Math.max(article.viewCount, article.totalViewCount)} · 🔁 ${article.boostCount} · 💬 ${article.commentCount}</div>`,
             article.excerpt
-              ? `<div style="margin-top:4px;font-size:12px;line-height:1.6;color:#6b7280;">${escapeHtml(truncate(article.excerpt, 150))}</div>`
+              ? `<div style="margin-top:4px;font-size:12px;line-height:1.6;color:${EMAIL.muted};">${escapeHtml(truncate(article.excerpt, 150))}</div>`
               : '',
             `</div>`,
           ].join('');
@@ -741,13 +741,13 @@ export class AdminDailyDigestCron {
 
       // Mini list of new subscribers
       if (newSubscriberRows.length > 0) {
-        body += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6;">`;
-        body += `<div style="font-size:11px;font-weight:600;color:#6b7280;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.06em;">New yesterday</div>`;
+        body += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid ${EMAIL.border};">`;
+        body += `<div style="font-size:11px;font-weight:600;color:${EMAIL.muted};margin-bottom:6px;text-transform:uppercase;letter-spacing:0.06em;">New yesterday</div>`;
         for (const sub of newSubscriberRows) {
           const displayName = sub.name || sub.username || '(no name)';
           const handle = sub.username ? ` @${sub.username}` : '';
           const badge = renderTierBadge(sub);
-          body += `<div style="font-size:12px;color:#374151;padding:3px 0;">${escapeHtml(displayName)}${escapeHtml(handle)}${badge ? ` ${badge}` : ''}</div>`;
+          body += `<div style="font-size:12px;color:${EMAIL.muted};padding:3px 0;">${escapeHtml(displayName)}${escapeHtml(handle)}${badge ? ` ${badge}` : ''}</div>`;
         }
         body += `</div>`;
       }
@@ -763,10 +763,10 @@ export class AdminDailyDigestCron {
 
       let body = '';
       if (newFeedbackCount === 0) {
-        body = `<p style="margin:0;font-size:13px;color:#9ca3af;">No new feedback submissions yesterday.</p>`;
+        body = `<p style="margin:0;font-size:13px;color:${EMAIL.soft};">No new feedback submissions yesterday.</p>`;
       } else {
         body =
-          `<p style="margin:0 0 12px 0;font-size:13px;color:#374151;">${plural(newFeedbackCount, 'new submission')} received.</p>` +
+          `<p style="margin:0 0 12px 0;font-size:13px;color:${EMAIL.muted};">${plural(newFeedbackCount, 'new submission')} received.</p>` +
           renderButton({ href: `${baseUrl}/admin/feedback`, label: 'Review Feedbacks →', variant: 'secondary' });
       }
 
@@ -781,10 +781,10 @@ export class AdminDailyDigestCron {
 
       let body = '';
       if (newReportCount === 0) {
-        body = `<p style="margin:0;font-size:13px;color:#9ca3af;">No new reports submitted yesterday.</p>`;
+        body = `<p style="margin:0;font-size:13px;color:${EMAIL.soft};">No new reports submitted yesterday.</p>`;
       } else {
         body =
-          `<p style="margin:0 0 12px 0;font-size:13px;color:#374151;">${plural(newReportCount, 'new report')} submitted.</p>` +
+          `<p style="margin:0 0 12px 0;font-size:13px;color:${EMAIL.muted};">${plural(newReportCount, 'new report')} submitted.</p>` +
           renderButton({ href: `${baseUrl}/admin/reports`, label: 'Review Reports →', variant: 'secondary' });
       }
 

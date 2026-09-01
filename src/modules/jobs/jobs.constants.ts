@@ -59,6 +59,8 @@ export const JOBS = {
 
   // Admin
   adminDailyDigest: 'admin.dailyDigest',
+  newslettersScheduledSweep: 'newsletters.scheduledSweep',
+  newslettersSend: 'newsletters.send',
 
   // Crew
   crewInvitesExpire: 'crew.invitesExpire',

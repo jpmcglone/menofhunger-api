@@ -3,7 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { AppConfigService } from '../app/app-config.service';
-import { escapeHtml, renderMohEmail } from '../email/templates/moh-email';
+import { EMAIL, escapeHtml, renderMohEmail } from '../email/templates/moh-email';
 import { getRecipientEmail, buildGreeting } from '../email/email-send.helpers';
 
 function safeBaseUrl(raw: string | null): string {
@@ -77,11 +77,11 @@ export class ReferralDigestEmailCron {
             ? `${baseUrl}/u/${encodeURIComponent(r.username)}`
             : `${baseUrl}/u/`;
           return `<tr>
-  <td style="padding:8px 0;border-bottom:1px solid #f3f4f6;">
-    <a href="${escapeHtml(profileUrl)}" style="font-weight:600;color:#111827;text-decoration:none;">${display}</a>
-    ${r.username ? `<span style="font-size:12px;color:#6b7280;"> @${escapeHtml(r.username)}</span>` : ''}
+  <td style="padding:8px 0;border-bottom:1px solid ${EMAIL.border};">
+    <a href="${escapeHtml(profileUrl)}" style="font-weight:600;color:${EMAIL.text};text-decoration:none;">${display}</a>
+    ${r.username ? `<span style="font-size:12px;color:${EMAIL.muted};"> @${escapeHtml(r.username)}</span>` : ''}
   </td>
-  <td style="padding:8px 0;border-bottom:1px solid #f3f4f6;text-align:right;">
+  <td style="padding:8px 0;border-bottom:1px solid ${EMAIL.border};text-align:right;">
     <a href="${escapeHtml(profileUrl)}" style="font-size:12px;color:#2563eb;text-decoration:none;">View profile →</a>
   </td>
 </tr>`;
@@ -89,24 +89,24 @@ export class ReferralDigestEmailCron {
         .join('');
 
       const contentHtml = `
-<p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:#111827;">${escapeHtml(greeting)}</p>
-<p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:#111827;">
+<p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:${EMAIL.text};">${escapeHtml(greeting)}</p>
+<p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:${EMAIL.text};">
   <strong>${count} ${plural}</strong> signed up with your referral code today. After a recruit’s first Premium payment, his second month is free and you receive one free month too.
 </p>
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
-       style="border-collapse:collapse;width:100%;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+       style="border-collapse:collapse;width:100%;border:1px solid ${EMAIL.border};border-radius:10px;overflow:hidden;">
   <thead>
     <tr style="background:#f9fafb;">
-      <th style="padding:8px 12px;text-align:left;font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;">New recruit</th>
-      <th style="padding:8px 12px;text-align:right;font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;"></th>
+      <th style="padding:8px 12px;text-align:left;font-size:12px;font-weight:600;color:${EMAIL.muted};text-transform:uppercase;letter-spacing:0.05em;">New recruit</th>
+      <th style="padding:8px 12px;text-align:right;font-size:12px;font-weight:600;color:${EMAIL.muted};text-transform:uppercase;letter-spacing:0.05em;"></th>
     </tr>
   </thead>
-  <tbody style="background:#ffffff;padding:0 12px;">
+  <tbody style="background:#1B2127;padding:0 12px;">
     ${recruitListHtml}
   </tbody>
 </table>
-<p style="margin:20px 0 0 0;font-size:13px;color:#6b7280;line-height:1.6;">
-  Your referral code: <strong style="font-family:monospace;color:#111827;">${escapeHtml(recruiter.username ?? '—')}</strong>
+<p style="margin:20px 0 0 0;font-size:13px;color:${EMAIL.muted};line-height:1.6;">
+  Your referral code: <strong style="font-family:monospace;color:${EMAIL.text};">${escapeHtml(recruiter.username ?? '—')}</strong>
   &nbsp;·&nbsp;
   <a href="${escapeHtml(`${baseUrl}/settings/billing`)}" style="color:#2563eb;">Manage in settings</a>
 </p>`;

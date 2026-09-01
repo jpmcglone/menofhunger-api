@@ -252,6 +252,10 @@ export const RedisKeys = {
   emailLastEngagement(userId: string): string {
     return `email:eng:last:${clean(userId)}`;
   },
+  /** Admin newsletter / broadcast send count for a UTC date. TTL 48h. */
+  emailBroadcastDailyCount(dateKey: string): string {
+    return `email:broadcast:count:${clean(dateKey)}`;
+  },
 
   /** scripture:{translation}:{bookId}:{chapter} — immutable verse text, 30-day TTL. */
   scriptureChapter(translation: string, bookId: string, chapter: number): string {
