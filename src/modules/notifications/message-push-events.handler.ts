@@ -36,6 +36,7 @@ export class MessagePushEventsHandler implements OnModuleInit, OnModuleDestroy {
           senderName: event.senderName,
           body: event.body ?? undefined,
           conversationId: event.conversationId,
+          skipIfVoipRegistered: event.skipIfVoipRegistered,
         })
         .catch((err) => {
           this.logger.debug(`[push] Message push handler failed: ${err}`);

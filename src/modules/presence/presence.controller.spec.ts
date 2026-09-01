@@ -25,6 +25,7 @@ function makeController(opts?: {
   marvEnabled?: boolean;
   marvUserId?: string | null;
   onlineUserIds?: string[];
+  inCallIds?: string[];
 }) {
   const onlineIds = opts?.onlineUserIds ?? ['user-a', 'user-b'];
 
@@ -76,6 +77,9 @@ function makeController(opts?: {
   };
 
   const posts: any = {};
+  const callSessions: any = {
+    inCallByUserIds: jest.fn(async (ids: string[]) => new Set(ids.filter((id) => opts?.inCallIds?.includes(id)))),
+  };
   const accountSwitch: any = {
     expandPresenceOnlineIds: jest.fn(async (ids: string[]) => ({
       displayedIds: [...ids],
@@ -93,9 +97,10 @@ function makeController(opts?: {
     marvIdentity,
     posts,
     accountSwitch,
+    callSessions,
   );
 
-  return { controller, follows, redis, marvIdentity, appConfig, presenceRedis, prisma };
+  return { controller, follows, redis, marvIdentity, appConfig, presenceRedis, prisma, callSessions };
 }
 
 describe('PresenceController — Marv pin injection', () => {
@@ -134,6 +139,15 @@ describe('PresenceController — Marv pin injection', () => {
       const res: any = await m.controller.online('marv-id', undefined);
       const data: any[] = res.data;
       expect(data.find((u) => u.id === 'marv-id' && u.isBot)).toBeUndefined();
+    });
+
+    it('flags members who currently hold a call seat', async () => {
+      const m = makeController({ inCallIds: ['user-b'] });
+      const res: any = await m.controller.online(undefined, undefined);
+      const byId = new Map((res.data as any[]).map((u) => [u.id, u]));
+      expect(byId.get('user-a').inCall).toBe(false);
+      expect(byId.get('user-b').inCall).toBe(true);
+      expect(byId.get('marv-id').inCall).toBeUndefined();
     });
   });
 

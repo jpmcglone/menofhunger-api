@@ -103,6 +103,14 @@ export class RedisService implements OnModuleDestroy {
     });
   }
 
+  /** Batched string read (single MGET). Missing entries come back as null. */
+  async getStringMany(keys: string[]): Promise<Array<string | null>> {
+    const ks = keys.map((k) => (k ?? '').trim());
+    if (ks.length === 0) return [];
+    const raws = await this.client.mget(...ks.map((k) => k || '__missing__'));
+    return raws.map((raw) => raw ?? null);
+  }
+
   async del(...keys: Array<string | null | undefined>): Promise<number> {
     const ks = keys.map((k) => (k ?? '').trim()).filter(Boolean);
     if (ks.length === 0) return 0;

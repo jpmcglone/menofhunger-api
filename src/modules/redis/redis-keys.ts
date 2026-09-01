@@ -318,4 +318,20 @@ export const RedisKeys = {
   callSessionLock(conversationId: string): string {
     return `lock:call:conv:${clean(conversationId)}`;
   },
+  /** userId → callId they currently hold a seat in. One seat per member, across tabs and devices. */
+  callByUserId(userId: string): string {
+    return `call:user:${clean(userId)}`;
+  },
+  /** Set of conversationIds with a live call session, so the liveness sweep can enumerate them. */
+  callsLive(): string {
+    return 'call:live';
+  },
+  /** Single-runner lock for the call liveness sweep. */
+  callsSweepLock(): string {
+    return 'lock:call:sweep';
+  },
+  /** Heartbeat key proving an API instance is still alive; lets others tell "crashed" from "elsewhere". */
+  presenceInstance(instanceId: string): string {
+    return `presence:instance:${clean(instanceId)}`;
+  },
 } as const;

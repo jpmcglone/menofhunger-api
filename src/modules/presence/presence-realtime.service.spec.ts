@@ -54,6 +54,22 @@ describe('PresenceRealtimeService user statuses', () => {
     });
   });
 
+  it('emits in-call changes through the same fanout path', () => {
+    const { service, emittedBySocket, presenceRedis } = makeService();
+    const payload = { userId: 'user-1', inCall: true };
+
+    service.emitPresenceCallChanged('user-1', payload);
+
+    expect(emittedBySocket.get('subscriber-socket')).toEqual([{ event: 'presence:call-changed', payload }]);
+    expect(emittedBySocket.get('feed-socket')).toEqual([{ event: 'presence:call-changed', payload }]);
+    expect(emittedBySocket.get('own-socket')).toEqual([{ event: 'presence:call-changed', payload }]);
+    expect(presenceRedis.publishUserStatusChanged).toHaveBeenCalledWith({
+      userId: 'user-1',
+      event: 'presence:call-changed',
+      payload,
+    });
+  });
+
   it('emits status clears through the same fanout path', () => {
     const { service, emittedBySocket, presenceRedis } = makeService();
     const payload = { userId: 'user-1' };
@@ -276,5 +292,12 @@ describe('PresenceRealtimeService DM calling emits', () => {
     const payload = { callId: 'call-1', fromUserId: 'u1', description: { type: 'offer', sdp: 'v=0' } };
     service.emitRtcSignal('u2', payload);
     expect(presence.emitToUser).toHaveBeenCalledWith(server, 'u2', 'rtc:signal', payload);
+  });
+
+  it('tells every socket of the user which one lost its seat', () => {
+    const { service, server, presence } = makeUserService();
+    const payload = { callId: 'call-1', socketId: 'old-socket' };
+    service.emitCallsSeatTaken('u1', payload);
+    expect(presence.emitToUser).toHaveBeenCalledWith(server, 'u1', 'calls:seat-taken', payload);
   });
 });

@@ -7,6 +7,8 @@ export type MessagePushRequestedEvent = {
   senderName: string;
   body?: string | null;
   conversationId: string;
+  /** Set for direct-call rows: the ring already reaches iPhones through PushKit. */
+  skipIfVoipRegistered?: boolean;
 };
 
 export type ConversationReadEvent = {

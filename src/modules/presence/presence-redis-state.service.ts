@@ -27,6 +27,9 @@ type PresenceEvent =
     }
   | { type: 'anonymousCount'; instanceId: string; anonymousOnline: number };
 
+const INSTANCE_HEARTBEAT_MS = 20_000;
+const INSTANCE_HEARTBEAT_TTL_SECONDS = 60;
+
 @Injectable()
 export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PresenceRedisStateService.name);
@@ -90,7 +93,60 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
     return () => this.listeners.delete(handler);
   }
 
+  /**
+   * Instance liveness beacon. Socket heartbeat keys outlive idle-disconnect (~16 min), so on
+   * their own they can't tell "socket on a crashed/restarted instance" from "socket on a
+   * healthy peer" for a long time. This key expires within a minute of a process dying.
+   */
+  @Interval(INSTANCE_HEARTBEAT_MS)
+  async heartbeatInstance(): Promise<void> {
+    try {
+      await this.redis.setString(RedisKeys.presenceInstance(this.instanceId), '1', {
+        ttlSeconds: INSTANCE_HEARTBEAT_TTL_SECONDS,
+      });
+    } catch {
+      // Next tick retries; a missed beat only shortens the grace for our sockets.
+    }
+  }
+
+  /**
+   * Socket ids of `userId` that are provably still connected somewhere: registered in the
+   * user's socket set, on an instance that is still beating, with a live heartbeat key.
+   */
+  async liveSocketIdsForUser(userId: string): Promise<Set<string>> {
+    const uid = String(userId ?? '').trim();
+    const out = new Set<string>();
+    if (!uid) return out;
+    let members: string[] = [];
+    try {
+      members = (await this.redis.raw().smembers(RedisKeys.presenceUserSockets(uid))) ?? [];
+    } catch {
+      return out;
+    }
+    const refs = members.map((m) => this.parseMember(m)).filter((r): r is { instanceId: string; socketId: string } => r !== null);
+    if (refs.length === 0) return out;
+    const pipe = this.redis.raw().pipeline();
+    for (const ref of refs) {
+      pipe.exists(RedisKeys.presenceInstance(ref.instanceId));
+      pipe.exists(RedisKeys.presenceSocket(ref.instanceId, ref.socketId));
+    }
+    let results: Array<[Error | null, unknown]> | null = null;
+    try {
+      results = await pipe.exec();
+    } catch {
+      results = null;
+    }
+    if (!results) return out;
+    refs.forEach((ref, i) => {
+      const instanceAlive = Number(results[i * 2]?.[1] ?? 0) === 1;
+      const socketAlive = Number(results[i * 2 + 1]?.[1] ?? 0) === 1;
+      if (instanceAlive && socketAlive) out.add(ref.socketId);
+    });
+    return out;
+  }
+
   async onModuleInit(): Promise<void> {
+    await this.heartbeatInstance();
     try {
       await this.sub.subscribe(RedisKeys.presencePubSubChannel());
       this.sub.on('message', (_channel, message) => {

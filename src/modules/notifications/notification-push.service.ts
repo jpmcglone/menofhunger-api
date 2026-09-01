@@ -1120,12 +1120,17 @@ export class NotificationPushService {
     senderName: string;
     body?: string | null;
     conversationId: string;
+    /** Direct-call rows: the ring reaches iPhones via PushKit/CallKit, so the DM alert would double up. */
+    skipIfVoipRegistered?: boolean;
   }): Promise<void> {
     try {
       const prefs = await this.preferences.getPreferencesInternal(params.recipientUserId);
       if (!prefs.pushMessage) return;
     } catch {
       // Best-effort: if prefs read fails, still attempt push (default behavior).
+    }
+    if (params.skipIfVoipRegistered && (await this.apnsPush.hasVoipToken(params.recipientUserId).catch(() => false))) {
+      return;
     }
     if (this.presence.isUserViewingConversation(params.recipientUserId, params.conversationId)) {
       this.logger.debug(

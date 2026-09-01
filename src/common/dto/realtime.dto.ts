@@ -190,6 +190,7 @@ export type PresenceOnlineFeedSnapshotPayloadDto = {
     idle?: boolean;
     status?: UserStatusDto | null;
     platforms?: string[];
+    inCall?: boolean;
   }>;
   totalOnline?: number;
   /** Unique logged-out visitors with a live socket. */
@@ -249,6 +250,8 @@ export const WsEventNames = {
   /** DM calling: server → client. */
   callsIncoming: 'calls:incoming',
   callsUpdated: 'calls:updated',
+  callsSeatTaken: 'calls:seat-taken',
+  presenceCallChanged: 'presence:call-changed',
   /** SDP / ICE relay, both directions. */
   rtcSignal: 'rtc:signal',
 } as const;

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ApnsClient, ApnsError, Host, Notification as ApnsNotification } from 'apns2';
+import { ApnsClient, ApnsError, Host, Notification as ApnsNotification, Priority, PushType } from 'apns2';
+import type { CallVoipPushPayloadDto } from '../../common/dto/call.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { CacheService } from '../redis/cache.service';
@@ -7,6 +8,13 @@ import { RedisKeys } from '../redis/redis-keys';
 import { CacheTtl } from '../redis/cache-ttl';
 
 export type ApnsEnvironment = 'production' | 'sandbox';
+/**
+ * `alert` tokens come from `UIApplication.registerForRemoteNotifications`; `voip` tokens from
+ * PushKit. They are different byte strings on the same device, and APNs rejects a VoIP token
+ * on the alert topic (and vice versa) with `DeviceTokenNotForTopic`, so every send path must
+ * filter by kind or it would prune healthy tokens.
+ */
+export type ApnsTokenKind = 'alert' | 'voip';
 
 /** APNs error reasons that mean the device token is permanently dead and must be pruned. */
 const PRUNE_REASONS = new Set(['BadDeviceToken', 'Unregistered', 'DeviceTokenNotForTopic']);
@@ -49,11 +57,12 @@ export class ApnsPushService {
   /** Upsert an APNs device token for a user (idempotent; steals from a prior account on the same device). */
   async registerToken(
     userId: string,
-    params: { token: string; environment?: string | null },
+    params: { token: string; environment?: string | null; kind?: string | null },
   ): Promise<void> {
     const token = (params.token ?? '').trim();
     if (!token) return;
     const environment: ApnsEnvironment = params.environment === 'sandbox' ? 'sandbox' : 'production';
+    const kind: ApnsTokenKind = params.kind === 'voip' ? 'voip' : 'alert';
 
     // Rebind first so we know the old userId before overwriting.
     const existing = await this.prisma.apnsDeviceToken.findUnique({
@@ -64,10 +73,10 @@ export class ApnsPushService {
 
     await this.prisma.apnsDeviceToken.upsert({
       where: { token },
-      create: { userId, token, environment, lastSeenAt: new Date() },
+      create: { userId, token, environment, kind, lastSeenAt: new Date() },
       // Token is unique per device — if another user registered it before
       // (account switch on the same phone), rebind it to the current user.
-      update: { userId, environment, lastSeenAt: new Date() },
+      update: { userId, environment, kind, lastSeenAt: new Date() },
     });
 
     // Invalidate token cache for the new owner (and prior owner if it changed).
@@ -85,10 +94,39 @@ export class ApnsPushService {
     void this.cache.del(RedisKeys.pushApnsTokens(userId)).catch(() => undefined);
   }
 
-  /** True if the user has at least one registered device token. */
+  /** True if the user has at least one registered alert device token. */
   async hasTokens(userId: string): Promise<boolean> {
-    const count = await this.prisma.apnsDeviceToken.count({ where: { userId } });
+    const count = await this.prisma.apnsDeviceToken.count({ where: { userId, kind: 'alert' } });
     return count > 0;
+  }
+
+  /** True if any of the user's iPhones can ring through PushKit/CallKit. */
+  async hasVoipToken(userId: string): Promise<boolean> {
+    const tokens = await this.loadTokens(userId, 'voip');
+    return tokens.length > 0;
+  }
+
+  /**
+   * Incoming-call ring for iOS. Goes to the `<bundle>.voip` topic with `apns-push-type: voip`
+   * so PushKit wakes the app even when it was terminated. Expires with the ring so a phone that
+   * was offline for a minute doesn't get a stale ring for a call that is already over.
+   */
+  async sendVoip(recipientUserId: string, payload: CallVoipPushPayloadDto): Promise<void> {
+    const cfg = this.appConfig.apns();
+    if (!cfg) return;
+    const expiration = Math.floor(new Date(payload.expiresAt).getTime() / 1000);
+    await this.deliverToTokens(
+      recipientUserId,
+      (token) =>
+        new ApnsNotification(token, {
+          type: PushType.voip,
+          topic: `${cfg.bundleId}.voip`,
+          priority: Priority.immediate,
+          expiration: Number.isFinite(expiration) ? expiration : undefined,
+          data: { call: payload },
+        }),
+      'voip',
+    );
   }
 
   /**
@@ -271,7 +309,7 @@ export class ApnsPushService {
     if (!cfg) return [];
 
     const tokens = await this.prisma.apnsDeviceToken.findMany({
-      where: { userId: recipientUserId },
+      where: { userId: recipientUserId, kind: 'alert' },
       select: { id: true, token: true, environment: true },
     });
     const results: Array<{ token: string; environment: string; success: boolean; error?: string }> = [];
@@ -317,24 +355,30 @@ export class ApnsPushService {
     return results;
   }
 
-  private async deliverToTokens(
-    recipientUserId: string,
-    build: (token: string) => InstanceType<typeof ApnsNotification>,
-  ): Promise<void> {
-    const cfg = this.appConfig.apns();
-    if (!cfg) return;
-
-    type TokenRow = { id: string; token: string; environment: string };
-    const tokens = await this.cache.getOrSetJson<TokenRow[]>({
+  private async loadTokens(recipientUserId: string, kind: ApnsTokenKind): Promise<TokenRow[]> {
+    const all = await this.cache.getOrSetJson<TokenRow[]>({
       enabled: Boolean(recipientUserId),
       key: RedisKeys.pushApnsTokens(recipientUserId),
       ttlSeconds: CacheTtl.pushApnsTokensSeconds,
       compute: () =>
         this.prisma.apnsDeviceToken.findMany({
           where: { userId: recipientUserId },
-          select: { id: true, token: true, environment: true },
+          select: { id: true, token: true, environment: true, kind: true },
         }),
     });
+    // Rows cached before `kind` existed have no field; they are alert tokens.
+    return all.filter((row) => (row.kind ?? 'alert') === kind);
+  }
+
+  private async deliverToTokens(
+    recipientUserId: string,
+    build: (token: string) => InstanceType<typeof ApnsNotification>,
+    kind: ApnsTokenKind = 'alert',
+  ): Promise<void> {
+    const cfg = this.appConfig.apns();
+    if (!cfg) return;
+
+    const tokens = await this.loadTokens(recipientUserId, kind);
     if (tokens.length === 0) return;
 
     const deadTokenIds: string[] = [];
@@ -392,6 +436,8 @@ export class ApnsPushService {
     return kind === 'message' ? MESSAGE_PUSH_SOUND : NOTIFICATION_PUSH_SOUND;
   }
 }
+
+type TokenRow = { id: string; token: string; environment: string; kind?: string | null };
 
 function iconBadgeFromCounts(
   user: { undeliveredNotificationCount?: number | null; undeliveredGroupPostCount?: number | null } | null | undefined,

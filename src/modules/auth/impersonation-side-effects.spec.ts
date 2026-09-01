@@ -25,6 +25,7 @@ describe('impersonation side-effect suppression', () => {
       expect(notifications.apnsRegister).toHaveBeenCalledWith('user-1', {
         token: 'device-token-abc',
         environment: 'sandbox',
+        kind: 'alert',
       });
       expect(result).toEqual({ data: {} });
     });

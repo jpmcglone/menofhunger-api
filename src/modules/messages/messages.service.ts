@@ -54,11 +54,16 @@ export type CallConversationContext = {
     userId: string;
     status: 'pending' | 'accepted';
     verified: boolean;
-    premium: boolean;
     siteAdmin: boolean;
     isBot: boolean;
     banned: boolean;
   }>;
+  /**
+   * Direct conversations only, and only when the other side hasn't accepted the thread yet:
+   * the alternate ways a verified member may still call them (mutual follow, or they already
+   * share a group chat). `null` when the check wasn't needed.
+   */
+  relationship: { mutualFollow: boolean; sharedGroupConversation: boolean } | null;
 };
 
 const MESSAGE_UNREAD_CACHE_TTL_MS = 30_000;
@@ -455,13 +460,39 @@ export class MessagesService {
             userId: true,
             status: true,
             user: {
-              select: { verifiedStatus: true, premium: true, premiumPlus: true, siteAdmin: true, isBot: true, bannedAt: true },
+              select: { verifiedStatus: true, siteAdmin: true, isBot: true, bannedAt: true },
             },
           },
         },
       },
     });
     if (!conversation) throw new NotFoundException('Conversation not found.');
+
+    // Callee hasn't accepted this DM: a mutual follow or a shared group chat still counts as a
+    // relationship that allows calling. Skip the lookups when the thread is already accepted.
+    let relationship: CallConversationContext['relationship'] = null;
+    const other = conversation.type === 'direct' ? conversation.participants.find((p) => p.userId !== userId) : null;
+    if (other && other.status !== 'accepted') {
+      const [viewerFollows, otherFollows, sharedGroup] = await Promise.all([
+        this.prisma.follow.findFirst({ where: { followerId: userId, followingId: other.userId }, select: { id: true } }),
+        this.prisma.follow.findFirst({ where: { followerId: other.userId, followingId: userId }, select: { id: true } }),
+        this.prisma.messageConversation.findFirst({
+          where: {
+            type: { not: 'direct' },
+            AND: [
+              { participants: { some: { userId, status: 'accepted' } } },
+              { participants: { some: { userId: other.userId, status: 'accepted' } } },
+            ],
+          },
+          select: { id: true },
+        }),
+      ]);
+      relationship = {
+        mutualFollow: Boolean(viewerFollows && otherFollows),
+        sharedGroupConversation: Boolean(sharedGroup),
+      };
+    }
+
     return {
       id: conversation.id,
       type: conversation.type,
@@ -469,11 +500,11 @@ export class MessagesService {
         userId: p.userId,
         status: p.status,
         verified: (p.user.verifiedStatus ?? 'none') !== 'none',
-        premium: Boolean(p.user.premium || p.user.premiumPlus),
         siteAdmin: Boolean(p.user.siteAdmin),
         isBot: Boolean(p.user.isBot),
         banned: Boolean(p.user.bannedAt),
       })),
+      relationship,
     };
   }
 
@@ -487,6 +518,8 @@ export class MessagesService {
     senderId: string;
     body: string;
     call: MessageCallDto;
+    /** Direct rings reach iPhones via PushKit; skip the DM alert for recipients that have one. */
+    skipPushIfVoipRegistered?: boolean;
   }): Promise<MessageDto> {
     const { conversationId, senderId, body, call } = params;
     const conversation = await this.prisma.messageConversation.findUnique({
@@ -533,6 +566,7 @@ export class MessagesService {
         senderName,
         body,
         conversationId,
+        skipIfVoipRegistered: Boolean(params.skipPushIfVoipRegistered),
       });
     }
     return dto;

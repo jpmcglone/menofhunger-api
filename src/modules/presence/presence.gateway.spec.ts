@@ -238,6 +238,7 @@ function buildGateway(deps: {
         sourceByDisplayedId: new Map(ids.map((id: string) => [id, id])),
       })),
     } as any,
+    { inCallByUserIds: jest.fn(async () => new Set<string>()) } as any,
   );
   const spacesHandler = new SpacesGatewayHandler(
     deps.presence,

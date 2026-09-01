@@ -81,6 +81,8 @@ const pushUnsubscribeBodySchema = z.object({
 const apnsRegisterBodySchema = z.object({
   token: z.string().trim().min(1),
   environment: z.enum(['production', 'sandbox']).optional(),
+  /** `voip` = PushKit token for incoming-call rings; defaults to a regular alert token. */
+  kind: z.enum(['alert', 'voip']).optional(),
 });
 
 const apnsUnregisterBodySchema = z.object({
@@ -268,6 +270,7 @@ export class NotificationsController {
     await this.notifications.apnsRegister(operatorUserId, {
       token: parsed.token,
       environment: parsed.environment ?? 'production',
+      kind: parsed.kind ?? 'alert',
     });
     return { data: {} };
   }

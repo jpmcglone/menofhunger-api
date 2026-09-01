@@ -15,6 +15,8 @@ export type CallParticipantRecord = {
   cameraEnabled: boolean;
   connectionState: CallParticipantConnectionState;
   socketId: string | null;
+  /** When the seat entered `reconnecting`; lets the sweep expire it even if the grace job was lost. */
+  disconnectedAt?: string | null;
 };
 
 export type CallSessionRecord = {
@@ -81,6 +83,11 @@ export class CallSessionStore {
     return out;
   }
 
+  /**
+   * Persist the session and point every current participant's seat index at it. Seats of
+   * participants who were removed are released by the service (`releaseSeat`), which knows
+   * who left; here we only know who is still in.
+   */
   async save(record: CallSessionRecord): Promise<void> {
     await Promise.all([
       this.redis.setJson(RedisKeys.callSessionByConversation(record.conversationId), record, {
@@ -89,14 +96,76 @@ export class CallSessionStore {
       this.redis.setString(RedisKeys.callConversationByCallId(record.id), record.conversationId, {
         ttlSeconds: CALL_SESSION_TTL_SECONDS,
       }),
+      ...record.participants.map((p) =>
+        this.redis.setString(RedisKeys.callByUserId(p.userId), record.id, { ttlSeconds: CALL_SESSION_TTL_SECONDS }),
+      ),
+      this.redis.raw().sadd(RedisKeys.callsLive(), record.conversationId),
     ]);
   }
 
   async delete(record: Pick<CallSessionRecord, 'id' | 'conversationId'>): Promise<void> {
-    await this.redis.del(
-      RedisKeys.callSessionByConversation(record.conversationId),
-      RedisKeys.callConversationByCallId(record.id),
-    );
+    await Promise.all([
+      this.redis.del(RedisKeys.callSessionByConversation(record.conversationId), RedisKeys.callConversationByCallId(record.id)),
+      this.redis.raw().srem(RedisKeys.callsLive(), record.conversationId),
+    ]);
+  }
+
+  /** Conversations the sweep should inspect. Entries whose session is gone are pruned by the caller. */
+  async listLiveConversationIds(): Promise<string[]> {
+    try {
+      return (await this.redis.raw().smembers(RedisKeys.callsLive())) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  async forgetLiveConversation(conversationId: string): Promise<void> {
+    try {
+      await this.redis.raw().srem(RedisKeys.callsLive(), conversationId);
+    } catch {
+      // Next sweep retries.
+    }
+  }
+
+  // ─── One seat per member ──────────────────────────────────────────────────────
+
+  /** The call this user currently holds a seat in, if any. Verified against the live record. */
+  async getCallIdForUser(userId: string): Promise<string | null> {
+    const uid = (userId ?? '').trim();
+    if (!uid) return null;
+    const callId = await this.redis.getString(RedisKeys.callByUserId(uid));
+    if (!callId) return null;
+    const record = await this.getByCallId(callId);
+    if (!record || record.status === 'ended' || !record.participants.some((p) => p.userId === uid)) {
+      // Stale pointer (the call ended or they were removed without a release); self-heal.
+      await this.releaseSeat(uid, callId);
+      return null;
+    }
+    return callId;
+  }
+
+  /** Drop the seat pointer, but only if it still points at `callId` — never clobber a newer seat. */
+  async releaseSeat(userId: string, callId: string): Promise<void> {
+    const uid = (userId ?? '').trim();
+    if (!uid) return;
+    const current = await this.redis.getString(RedisKeys.callByUserId(uid));
+    if (current === callId) await this.redis.del(RedisKeys.callByUserId(uid));
+  }
+
+  /** Batched "is in a call" for presence surfaces. Pointer presence is enough; stale ones expire. */
+  async inCallByUserIds(userIds: string[]): Promise<Set<string>> {
+    const ids = [...new Set(userIds.map((id) => (id ?? '').trim()).filter(Boolean))];
+    const out = new Set<string>();
+    if (ids.length === 0) return out;
+    try {
+      const rows = await this.redis.getStringMany(ids.map((id) => RedisKeys.callByUserId(id)));
+      rows.forEach((row, i) => {
+        if (row) out.add(ids[i]!);
+      });
+    } catch {
+      return out;
+    }
+    return out;
   }
 
   /**

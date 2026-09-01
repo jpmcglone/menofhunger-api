@@ -67,6 +67,47 @@ describe('PresenceRedisStateService.platformsByUserIds', () => {
   });
 });
 
+describe('PresenceRedisStateService.liveSocketIdsForUser', () => {
+  it('counts a socket live only when both its instance beacon and its heartbeat key exist', async () => {
+    const pipeline = {
+      exists: jest.fn(),
+      // Pairs of [instance, socket] per member, in smembers order.
+      exec: jest.fn(async () => [
+        [null, 1], [null, 1], // healthy: live instance, live socket
+        [null, 0], [null, 1], // crashed/restarted instance: socket key lingers but beacon is gone
+        [null, 1], [null, 0], // live instance, socket heartbeat expired
+      ]),
+    };
+    const rawRedis = {
+      smembers: jest.fn(async () => ['inst-a:sock-1', 'inst-dead:sock-2', 'inst-a:sock-3', 'garbage']),
+      pipeline: jest.fn(() => pipeline),
+    };
+    const redis = {
+      duplicate: jest.fn(() => ({ subscribe: jest.fn(), on: jest.fn(), quit: jest.fn(), disconnect: jest.fn() })),
+      raw: jest.fn(() => rawRedis),
+    } as any;
+    const service = new PresenceRedisStateService(redis, { presenceIdleDisconnectMinutes: jest.fn(() => 10) } as any, {} as any);
+
+    const live = await service.liveSocketIdsForUser('user-1');
+
+    expect([...live]).toEqual(['sock-1']);
+    expect(pipeline.exists).toHaveBeenCalledWith('presence:instance:inst-dead');
+    expect(pipeline.exists).toHaveBeenCalledWith('presence:socket:inst-a:sock-3');
+  });
+
+  it('returns nothing when the user has no registered sockets', async () => {
+    const rawRedis = { smembers: jest.fn(async () => []), pipeline: jest.fn() };
+    const redis = {
+      duplicate: jest.fn(() => ({ subscribe: jest.fn(), on: jest.fn(), quit: jest.fn(), disconnect: jest.fn() })),
+      raw: jest.fn(() => rawRedis),
+    } as any;
+    const service = new PresenceRedisStateService(redis, { presenceIdleDisconnectMinutes: jest.fn(() => 10) } as any, {} as any);
+
+    expect((await service.liveSocketIdsForUser('user-1')).size).toBe(0);
+    expect(rawRedis.pipeline).not.toHaveBeenCalled();
+  });
+});
+
 describe('PresenceRedisStateService.touchSocket', () => {
   it('preserves connectedAtMs while refreshing socket metadata', async () => {
     const rawRedis = { expire: jest.fn(async () => 1) };

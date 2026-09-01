@@ -72,7 +72,7 @@ export class CallsGatewayHandler {
     const bound = this.boundCallBySocket.get(client.id);
     if (bound?.callId === callId) this.boundCallBySocket.delete(client.id);
     try {
-      return await this.calls.leave({ userId, callId });
+      return await this.calls.leave({ userId, callId, socketId: client.id });
     } catch (err) {
       this.logger.warn(`[calls] leave failed user=${userId}: ${err instanceof Error ? err.message : String(err)}`);
       return { call: null };
@@ -103,6 +103,7 @@ export class CallsGatewayHandler {
       await this.calls.updateParticipantState({
         userId,
         callId,
+        socketId: client.id,
         ...(typeof payload?.micEnabled === 'boolean' ? { micEnabled: payload.micEnabled } : {}),
         ...(typeof payload?.cameraEnabled === 'boolean' ? { cameraEnabled: payload.cameraEnabled } : {}),
       });

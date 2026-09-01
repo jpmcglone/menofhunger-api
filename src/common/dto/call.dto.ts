@@ -89,7 +89,6 @@ export type CallsAckErrorCode =
   | 'call_not_found'
   | 'call_ended'
   | 'call_full'
-  | 'already_in_call'
   | 'invalid_payload';
 
 export type CallsAckErrorDto = {
@@ -102,7 +101,25 @@ export type CallsAckDto = {
   call: CallSessionDto | null;
   /** Present on successful start/join so the client can build its RTCPeerConnections. */
   iceServers?: RtcIceServerDto[];
+  /**
+   * Present on successful start/join. How long the server keeps a participant's seat after
+   * their socket drops. Clients keep retrying signaling/ICE for exactly this long, then give up.
+   */
+  reconnectGraceMs?: number;
   error?: CallsAckErrorDto | null;
+};
+
+/**
+ * PushKit (VoIP) payload for a direct-call ring on iOS. Must be enough to report the call
+ * to CallKit synchronously with zero network; the socket supplies truth after wake.
+ */
+export type CallVoipPushPayloadDto = {
+  callId: string;
+  conversationId: string;
+  type: CallType;
+  caller: UserListDto;
+  /** ISO time after which the client stops ringing locally (mirrors the server ring timeout). */
+  expiresAt: string;
 };
 
 // ─── Realtime payloads ────────────────────────────────────────────────────────
@@ -117,6 +134,27 @@ export type CallsIncomingPayloadDto = {
 export type CallsUpdatedPayloadDto = {
   conversationId: string;
   call: CallSessionDto;
+};
+
+/**
+ * A member may hold exactly one call seat. When another tab or device of theirs joins (the
+ * same call or a different one), this goes to every socket of that user; the socket whose id
+ * matches `socketId` was displaced and must tear down locally WITHOUT sending `calls:leave`,
+ * since the seat now belongs to the newcomer.
+ */
+export type CallsSeatTakenPayloadDto = {
+  callId: string;
+  /** The displaced socket. */
+  socketId: string;
+};
+
+/**
+ * Presence: `userId` entered or left a call (any type). Sent to online-feed listeners and
+ * presence subscribers, same audience as `presence:status-updated`.
+ */
+export type PresenceCallChangedPayloadDto = {
+  userId: string;
+  inCall: boolean;
 };
 
 /** Relayed SDP / ICE between two current participants. Exactly one of description/candidate is set. */

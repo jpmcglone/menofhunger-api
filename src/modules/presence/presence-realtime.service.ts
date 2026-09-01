@@ -36,6 +36,8 @@ import type {
   ScheduledPostFailedPayloadDto,
   CallsIncomingPayloadDto,
   CallsUpdatedPayloadDto,
+  CallsSeatTakenPayloadDto,
+  PresenceCallChangedPayloadDto,
   RtcSignalPayloadDto,
 } from '../../common/dto';
 
@@ -559,6 +561,29 @@ export class PresenceRealtimeService {
   /** SDP / ICE relay to one participant. Tabs not in the call ignore it by `callId`. */
   emitRtcSignal(userId: string, payload: RtcSignalPayloadDto): void {
     this.emitToUser(userId, WsEventNames.rtcSignal, payload);
+  }
+
+  /**
+   * Another tab/device of this user took their seat. Goes to all of the user's sockets (the
+   * displaced one may be on another instance); each compares `socketId` with its own.
+   */
+  emitCallsSeatTaken(userId: string, payload: CallsSeatTakenPayloadDto): void {
+    this.emitToUser(userId, WsEventNames.callsSeatTaken, payload);
+  }
+
+  /** In-call flag for presence surfaces (online list headset). Same audience as status updates. */
+  emitPresenceCallChanged(userId: string, payload: PresenceCallChangedPayloadDto): void {
+    const uid = (userId ?? '').trim();
+    if (!uid) return;
+    const targets = new Set([
+      ...this.presence.getSubscribers(uid),
+      ...this.presence.getOnlineFeedListeners(),
+      ...this.presence.getSocketIdsForUser(uid),
+    ]);
+    this.emitToSockets(targets, WsEventNames.presenceCallChanged, payload);
+    void this.presenceRedis
+      .publishUserStatusChanged({ userId: uid, event: WsEventNames.presenceCallChanged, payload })
+      .catch(() => undefined);
   }
 }
 

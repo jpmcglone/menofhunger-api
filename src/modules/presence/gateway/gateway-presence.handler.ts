@@ -16,6 +16,7 @@ import { PresenceRedisStateService } from '../presence-redis-state.service';
 import { GatewayContextService } from './gateway-context.service';
 import { GatewayThrottleService } from './gateway-throttle.service';
 import { AccountSwitchService } from '../../auth/account-switch.service';
+import { CallSessionStore } from '../../calls/call-session.store';
 
 type UserTimers = {
   idleMarkTimer?: ReturnType<typeof setTimeout>;
@@ -55,6 +56,7 @@ export class PresenceStatusHandler {
     private readonly throttle: GatewayThrottleService,
     private readonly context: GatewayContextService,
     private readonly accountSwitch: AccountSwitchService,
+    private readonly callSessions: CallSessionStore,
   ) {}
 
   // ─── Connection lifecycle ───────────────────────────────────────────
@@ -455,10 +457,11 @@ export class PresenceStatusHandler {
             userIds,
           })
         : [];
-      const [lastConnectAtById, idleById, platformsById] = await Promise.all([
+      const [lastConnectAtById, idleById, platformsById, inCallIds] = await Promise.all([
         this.presenceRedis.lastConnectAtMsByUserId(connectedIds),
         this.presenceRedis.idleByUserIds(connectedIds),
         this.presenceRedis.platformsByUserIds(connectedIds),
+        this.callSessions.inCallByUserIds(userIds),
       ]);
       const statusesById = new Map((await this.presence.getActiveStatuses(userIds)).map((status) => [status.userId, status]));
       const payload: Array<FollowListUser & { lastConnectAt: number | null; idle: boolean; status: unknown; isBot?: boolean }> =
@@ -470,6 +473,7 @@ export class PresenceStatusHandler {
             idle: idleById.get(u.id) ?? idleById.get(source) ?? false,
             status: statusesById.get(u.id) ?? null,
             platforms: platformsById.get(u.id) ?? platformsById.get(source) ?? [],
+            inCall: inCallIds.has(u.id),
           };
         });
 

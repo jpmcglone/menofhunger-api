@@ -82,11 +82,12 @@ function makePreferences(opts?: { pushComment?: boolean }) {
   return svc;
 }
 
-function makeApns(opts?: { configured?: boolean }) {
+function makeApns(opts?: { configured?: boolean; hasVoipToken?: boolean }) {
   const apnsSendToUser = jest.fn(async () => {});
   const svc = {
     configured: jest.fn(() => opts?.configured ?? true),
     hasTokens: jest.fn(async () => true),
+    hasVoipToken: jest.fn(async () => opts?.hasVoipToken ?? false),
     sendToUser: apnsSendToUser,
   } as unknown as ApnsPushService;
   return { svc, apnsSendToUser };
@@ -730,6 +731,33 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
         avatarUrl: 'https://cdn.example.com/avatars/brett.jpg',
       }),
     );
+  });
+
+  it('sendMessagePush skips the DM alert for a direct-call row when the recipient rings via PushKit', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ id: 'sender-1', username: 'brett', name: 'Brett', avatarKey: null, avatarUpdatedAt: null });
+    const withVoip = makeService({ prisma, apns: makeApns({ hasVoipToken: true }) });
+    await withVoip.svc.sendMessagePush({
+      recipientUserId: 'user-1',
+      senderUserId: 'sender-1',
+      senderName: 'Brett',
+      body: 'Started a video call',
+      conversationId: 'conv-1',
+      skipIfVoipRegistered: true,
+    });
+    expect(withVoip.apnsSendToUser).not.toHaveBeenCalled();
+
+    // No PushKit token (web-only or Android-less user): the DM alert is their only ring.
+    const withoutVoip = makeService({ prisma, apns: makeApns({ hasVoipToken: false }) });
+    await withoutVoip.svc.sendMessagePush({
+      recipientUserId: 'user-1',
+      senderUserId: 'sender-1',
+      senderName: 'Brett',
+      body: 'Started a video call',
+      conversationId: 'conv-1',
+      skipIfVoipRegistered: true,
+    });
+    expect(withoutVoip.apnsSendToUser).toHaveBeenCalledTimes(1);
   });
 
   it('sendMessagePush still sends when sender has no avatar', async () => {

@@ -920,6 +920,11 @@ model ApnsDeviceToken {
   userId      String
   token       String @unique @db.Text
   environment String @default("production")
+  /**
+   * "alert" = regular APNs token; "voip" = PushKit token (only ever receives incoming-call
+   * pushes on the `<bundle>.voip` topic). The two are distinct tokens on the same device.
+   */
+  kind        String @default("alert")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

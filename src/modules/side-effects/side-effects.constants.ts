@@ -316,6 +316,19 @@ export interface SideEffectPayloads {
     source: 'auto_referral' | 'auto_signup';
   };
 
+  // ─── Calls ────────────────────────────────────────────────────────────
+  /**
+   * A direct call started ringing. The handler re-reads the Redis session and only sends the
+   * PushKit (VoIP) ring if the call is still `ringing`, so a retry after the callee already
+   * answered or declined is a no-op. Web/foreground iOS ring over the socket regardless.
+   */
+  'call.direct.ringing': {
+    callId: string;
+    conversationId: string;
+    callerUserId: string;
+    calleeUserId: string;
+  };
+
   // ─── Spaces schedule ──────────────────────────────────────────────────
   /** Host went live — fan out `space_live` to schedule subscribers. */
   'space.schedule.live': {

@@ -39,6 +39,8 @@ jest.mock('apns2', () => {
     ApnsError,
     Notification,
     Host: { production: 'api.push.apple.com', development: 'api.sandbox.push.apple.com' },
+    PushType: { alert: 'alert', background: 'background', voip: 'voip' },
+    Priority: { immediate: 10, throttled: 5, low: 1 },
   };
 });
 
@@ -72,7 +74,10 @@ function makeCache() {
   };
 }
 
-function makeService(opts?: { configured?: boolean; tokens?: Array<{ id: string; token: string; environment: string }> }) {
+function makeService(opts?: {
+  configured?: boolean;
+  tokens?: Array<{ id: string; token: string; environment: string; kind?: string }>;
+}) {
   const configured = opts?.configured ?? true;
   const prisma = {
     apnsDeviceToken: {
@@ -127,6 +132,58 @@ describe('ApnsPushService', () => {
         update: expect.objectContaining({ userId: 'user-1', environment: 'sandbox' }),
       }),
     );
+  });
+
+  it('registerToken stores the token kind and defaults it to alert', async () => {
+    const { svc, prisma } = makeService();
+    await svc.registerToken('user-1', { token: 'voip-1', kind: 'voip' });
+    expect(prisma.apnsDeviceToken.upsert).toHaveBeenLastCalledWith(
+      expect.objectContaining({ create: expect.objectContaining({ kind: 'voip' }), update: expect.objectContaining({ kind: 'voip' }) }),
+    );
+    await svc.registerToken('user-1', { token: 'alert-1' });
+    expect(prisma.apnsDeviceToken.upsert).toHaveBeenLastCalledWith(
+      expect.objectContaining({ create: expect.objectContaining({ kind: 'alert' }) }),
+    );
+  });
+
+  it('alert pushes never go to voip tokens and voip pushes never go to alert tokens', async () => {
+    const { svc } = makeService({
+      tokens: [
+        { id: 'a', token: 'alert-tok', environment: 'production', kind: 'alert' },
+        { id: 'v', token: 'voip-tok', environment: 'production', kind: 'voip' },
+        { id: 'legacy', token: 'legacy-tok', environment: 'production' },
+      ],
+    });
+    await svc.sendToUser('user-1', { title: 'Hello' });
+    expect(sendMock.mock.calls.map((c) => c[0].deviceToken).sort()).toEqual(['alert-tok', 'legacy-tok']);
+
+    sendMock.mockClear();
+    await svc.sendVoip('user-1', {
+      callId: 'call-1',
+      conversationId: 'conv-1',
+      type: 'video',
+      caller: { id: 'u2', username: 'john', name: 'John' } as any,
+      expiresAt: new Date(1_800_000_000_000).toISOString(),
+    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const voip = sendMock.mock.calls[0][0];
+    expect(voip.deviceToken).toBe('voip-tok');
+    expect(voip.options).toEqual(
+      expect.objectContaining({
+        type: 'voip',
+        topic: 'com.menofhunger.app.voip',
+        priority: 10,
+        expiration: 1_800_000_000,
+        data: { call: expect.objectContaining({ callId: 'call-1', conversationId: 'conv-1', type: 'video' }) },
+      }),
+    );
+  });
+
+  it('hasVoipToken reflects only voip-kind rows', async () => {
+    const withVoip = makeService({ tokens: [{ id: 'v', token: 'voip-tok', environment: 'production', kind: 'voip' }] });
+    expect(await withVoip.svc.hasVoipToken('user-1')).toBe(true);
+    const alertOnly = makeService({ tokens: [{ id: 'a', token: 'alert-tok', environment: 'production' }] });
+    expect(await alertOnly.svc.hasVoipToken('user-1')).toBe(false);
   });
 
   it('registerToken defaults unknown environments to production', async () => {

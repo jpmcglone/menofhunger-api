@@ -16,11 +16,14 @@ import { JobsService } from '../jobs/jobs.service';
 import { JOBS, type JobName } from '../jobs/jobs.constants';
 import { MessagesService, type CallConversationContext } from '../messages/messages.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { CallSessionStore, type CallParticipantRecord, type CallSessionRecord } from './call-session.store';
 import {
   CALL_EMPTY_GRACE_MS,
   CALL_PARTICIPANT_GRACE_MS,
   CALL_RING_TIMEOUT_MS,
+  CALL_SWEEP_SLACK_MS,
   callCapacityFor,
   callEmptyGraceJobId,
   callParticipantGraceJobId,
@@ -85,10 +88,17 @@ export class CallsService {
     private readonly realtime: PresenceRealtimeService,
     private readonly jobs: JobsService,
     private readonly appConfig: AppConfigService,
+    private readonly sideEffects: SideEffectsService,
+    private readonly presenceRedis: PresenceRedisStateService,
   ) {}
 
   iceServers(): RtcIceServerDto[] {
     return this.appConfig.rtcIceServers();
+  }
+
+  /** Fields every successful start/join ack carries so a client can connect and knows when to stop retrying. */
+  private connectAck(record: CallSessionRecord): CallsAckDto {
+    return { call: CallSessionStore.toDto(record), iceServers: this.iceServers(), reconnectGraceMs: CALL_PARTICIPANT_GRACE_MS };
   }
 
   // ─── Lifecycle (client-initiated) ────────────────────────────────────────────
@@ -114,18 +124,28 @@ export class CallsService {
       return await this.join({ userId, socketId, callId: existing.id });
     }
 
-    const canStart = viewer.siteAdmin || (viewer.premium && viewer.verified);
-    if (!canStart) return ackError('not_allowed_to_start', 'Calls are for verified premium members.');
+    // One seat per member: starting here hangs up whatever they were in elsewhere.
+    await this.leaveOtherCall(userId, null);
+
+    // Verified members call; admins call anybody. Group chats are a relationship by definition.
+    // For a DM the other side must have accepted the thread, follow us back, or share a group
+    // chat with us — one is enough.
+    if (!viewer.siteAdmin && !viewer.verified) return ackError('not_allowed_to_start', 'Calls are for verified members.');
 
     let ringTargetUserId: string | null = null;
     if (ctx.type === 'direct') {
       const callee = ctx.participants.find((p) => p.userId !== userId) ?? null;
       if (!callee || callee.isBot || callee.banned) return ackError('callee_unavailable', "You can't call this account.");
-      if (callee.status !== 'accepted') {
-        return ackError('conversation_not_accepted', 'They need to accept your message request first.');
-      }
-      if (!callee.verified && !viewer.siteAdmin) {
-        return ackError('callee_not_verified', 'You can only call verified members.');
+      if (!viewer.siteAdmin) {
+        if (!callee.verified) return ackError('callee_not_verified', 'You can only call verified members.');
+        const related =
+          callee.status === 'accepted' || Boolean(ctx.relationship?.mutualFollow) || Boolean(ctx.relationship?.sharedGroupConversation);
+        if (!related) {
+          return ackError(
+            'conversation_not_accepted',
+            'They need to accept your message, follow you back, or share a group chat with you first.',
+          );
+        }
       }
       ringTargetUserId = callee.userId;
     }
@@ -170,6 +190,8 @@ export class CallsService {
         senderId: userId,
         body: callMessageBody(type, 'started', null),
         call: this.toMessageCall(record, outcome, null),
+        // A direct ring reaches iPhones through PushKit/CallKit; the DM alert would be a duplicate there.
+        skipPushIfVoipRegistered: isDirect,
       });
       record.messageId = message.id;
       callerDto = message.sender;
@@ -180,12 +202,19 @@ export class CallsService {
 
     const memberIds = ctx.participants.map((p) => p.userId);
     this.emitUpdated(memberIds, record);
+    this.realtime.emitPresenceCallChanged(userId, { userId, inCall: true });
     if (isDirect && ringTargetUserId && callerDto) {
       this.realtime.emitCallsIncoming(ringTargetUserId, { call: CallSessionStore.toDto(record), caller: callerDto });
       await this.enqueueTimer(JOBS.callRingTimeout, callRingTimeoutJobId(record.id), { callId: record.id }, CALL_RING_TIMEOUT_MS);
+      this.sideEffects.dispatch('call.direct.ringing', {
+        callId: record.id,
+        conversationId,
+        callerUserId: userId,
+        calleeUserId: ringTargetUserId,
+      });
     }
 
-    return { call: CallSessionStore.toDto(record), iceServers: this.iceServers() };
+    return this.connectAck(record);
   }
 
   async join(params: { userId: string; socketId: string; callId: string }): Promise<CallsAckDto> {
@@ -209,32 +238,51 @@ export class CallsService {
       return ackError('not_verified', 'Verify your account to join calls.');
     }
 
-    type JoinResult = { ack: CallsAckDto; record: CallSessionRecord | null; becameActiveFromRinging: boolean; cancel: string[] };
+    // One seat per member: joining here hangs up whatever they were in elsewhere.
+    await this.leaveOtherCall(userId, callId);
+
+    type JoinResult = {
+      ack: CallsAckDto;
+      record: CallSessionRecord | null;
+      becameActiveFromRinging: boolean;
+      cancel: string[];
+      /** Same call, different tab/device: the socket that held the seat until now. */
+      displacedSocketId: string | null;
+      newlySeated: boolean;
+    };
+    const fail = (ack: CallsAckDto): JoinResult => ({
+      ack,
+      record: null,
+      becameActiveFromRinging: false,
+      cancel: [],
+      displacedSocketId: null,
+      newlySeated: false,
+    });
     const result = await this.store.withConversationLock(initial.conversationId, async (): Promise<JoinResult> => {
       const record = await this.store.getByConversationId(initial.conversationId);
       if (!record || record.id !== callId || record.status === 'ended') {
-        return { ack: ackError('call_ended', 'This call has ended.'), record: null, becameActiveFromRinging: false, cancel: [] };
+        return fail(ackError('call_ended', 'This call has ended.'));
       }
       const nowIso = new Date().toISOString();
       const cancel: string[] = [];
+      let displacedSocketId: string | null = null;
+      let newlySeated = false;
       const existing = record.participants.find((p) => p.userId === userId);
       if (existing) {
+        // The newest tab/device wins the seat; the previous one is told to stand down.
         if (existing.connectionState === 'connected' && existing.socketId && existing.socketId !== socketId) {
-          return {
-            ack: ackError('already_in_call', "You're already in this call in another tab."),
-            record: null,
-            becameActiveFromRinging: false,
-            cancel: [],
-          };
+          displacedSocketId = existing.socketId;
         }
         existing.socketId = socketId;
         existing.connectionState = 'connected';
+        existing.disconnectedAt = null;
         cancel.push(callParticipantGraceJobId(record.id, userId));
       } else {
         if (record.participants.length >= record.capacity) {
-          return { ack: ackError('call_full', 'This call is full.'), record: null, becameActiveFromRinging: false, cancel: [] };
+          return fail(ackError('call_full', 'This call is full.'));
         }
         record.participants.push(this.newParticipant(userId, socketId, record.type, nowIso));
+        newlySeated = true;
       }
 
       let becameActiveFromRinging = false;
@@ -250,7 +298,7 @@ export class CallsService {
       }
       record.peakParticipantCount = Math.max(record.peakParticipantCount, record.participants.length);
       await this.store.save(record);
-      return { ack: { call: CallSessionStore.toDto(record), iceServers: this.iceServers() }, record, becameActiveFromRinging, cancel };
+      return { ack: this.connectAck(record), record, becameActiveFromRinging, cancel, displacedSocketId, newlySeated };
     });
 
     if (!result.record) return result.ack;
@@ -258,16 +306,42 @@ export class CallsService {
     if (result.becameActiveFromRinging && result.record.messageId) {
       await this.safeUpdateMessage(result.record, 'active', null);
     }
+    if (result.displacedSocketId) {
+      this.realtime.emitCallsSeatTaken(userId, { callId, socketId: result.displacedSocketId });
+    }
+    if (result.newlySeated) this.realtime.emitPresenceCallChanged(userId, { userId, inCall: true });
     this.emitUpdated(ctx.participants.map((p) => p.userId), result.record);
     return result.ack;
   }
 
-  async leave(params: { userId: string; callId: string }): Promise<CallsAckDto> {
-    const { userId, callId } = params;
+  /**
+   * Only the socket that holds the seat may give it up. A tab that was displaced by a newer
+   * one must not be able to hang up the call the newcomer is now in.
+   */
+  async leave(params: { userId: string; callId: string; socketId?: string }): Promise<CallsAckDto> {
+    const { userId, callId, socketId } = params;
     const record = await this.store.getByCallId(callId);
     if (!record) return { call: null };
+    const seat = record.participants.find((p) => p.userId === userId);
+    if (seat && socketId && seat.socketId && seat.socketId !== socketId) {
+      return { call: CallSessionStore.toDto(record) };
+    }
     const updated = await this.removeParticipant(record.conversationId, callId, userId);
     return { call: updated ? CallSessionStore.toDto(updated) : null };
+  }
+
+  /**
+   * One seat per member across tabs and devices. If `userId` currently sits in a call other
+   * than `keepCallId`, remove them from it (which, for a 1:1, ends that call) before they
+   * take a seat in the new one. The old tab learns via `calls:updated` that it's no longer
+   * a participant and tears down.
+   */
+  private async leaveOtherCall(userId: string, keepCallId: string | null): Promise<void> {
+    const heldCallId = await this.store.getCallIdForUser(userId);
+    if (!heldCallId || heldCallId === keepCallId) return;
+    const held = await this.store.getByCallId(heldCallId);
+    if (!held) return;
+    await this.removeParticipant(held.conversationId, heldCallId, userId);
   }
 
   /** Direct calls only: the rung callee refuses. */
@@ -285,10 +359,11 @@ export class CallsService {
   async updateParticipantState(params: {
     userId: string;
     callId: string;
+    socketId?: string;
     micEnabled?: boolean;
     cameraEnabled?: boolean;
   }): Promise<void> {
-    const { userId, callId } = params;
+    const { userId, callId, socketId } = params;
     const initial = await this.store.getByCallId(callId);
     if (!initial) return;
     const record = await this.store.withConversationLock(initial.conversationId, async () => {
@@ -296,6 +371,8 @@ export class CallsService {
       if (!rec || rec.id !== callId) return null;
       const p = rec.participants.find((x) => x.userId === userId);
       if (!p) return null;
+      // A displaced tab's late mic/camera flags must not overwrite the seat holder's.
+      if (socketId && p.socketId && p.socketId !== socketId) return null;
       if (typeof params.micEnabled === 'boolean') p.micEnabled = params.micEnabled;
       if (typeof params.cameraEnabled === 'boolean') p.cameraEnabled = params.cameraEnabled;
       await this.store.save(rec);
@@ -335,7 +412,7 @@ export class CallsService {
   }
 
   /** The socket bound to a participant dropped. Hold the seat for a grace period. */
-  async markParticipantReconnecting(params: { userId: string; callId: string; socketId: string }): Promise<void> {
+  async markParticipantReconnecting(params: { userId: string; callId: string; socketId: string | null }): Promise<void> {
     const { userId, callId, socketId } = params;
     const initial = await this.store.getByCallId(callId);
     if (!initial) return;
@@ -347,6 +424,7 @@ export class CallsService {
       if (!p || p.socketId !== socketId || p.connectionState !== 'connected') return null;
       p.connectionState = 'reconnecting';
       p.socketId = null;
+      p.disconnectedAt = new Date().toISOString();
       await this.store.save(rec);
       return rec;
     });
@@ -382,6 +460,71 @@ export class CallsService {
     await this.removeParticipant(record.conversationId, callId, userId);
   }
 
+  // ─── Liveness sweep (periodic backstop for everything above) ──────────────────
+
+  /**
+   * Re-derive every live session's truth from what Redis can prove, so a call never outlives
+   * its participants. The event-driven paths above are primary; this catches what they miss:
+   * a disconnect on an API process that died before `handleDisconnect` ran (deploys,
+   * `--watch` restarts), a lost/never-consumed delayed job, or a seat left `connected` by
+   * any other gap. Idempotent and safe to run on every instance.
+   *
+   * Returns the number of corrective actions taken (for tests and logs).
+   */
+  async sweepStaleSessions(now: Date = new Date()): Promise<number> {
+    const conversationIds = await this.store.listLiveConversationIds();
+    let actions = 0;
+    for (const conversationId of conversationIds) {
+      try {
+        actions += await this.sweepConversation(conversationId, now);
+      } catch (err) {
+        this.logger.warn(`[calls] sweep failed conv=${conversationId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return actions;
+  }
+
+  private async sweepConversation(conversationId: string, now: Date): Promise<number> {
+    const record = await this.store.getByConversationId(conversationId);
+    if (!record) {
+      await this.store.forgetLiveConversation(conversationId);
+      return 0;
+    }
+    const nowMs = now.getTime();
+    const ageOf = (iso: string | null | undefined): number => (iso ? nowMs - new Date(iso).getTime() : Number.POSITIVE_INFINITY);
+
+    if (record.status === 'ringing' && ageOf(record.startedAt) > CALL_RING_TIMEOUT_MS + CALL_SWEEP_SLACK_MS) {
+      await this.endCall(conversationId, record.id, 'missed');
+      return 1;
+    }
+    if (record.status === 'empty') {
+      if (ageOf(record.emptyAt) <= CALL_EMPTY_GRACE_MS + CALL_SWEEP_SLACK_MS) return 0;
+      await this.endCall(conversationId, record.id, 'ended');
+      return 1;
+    }
+    if (record.status === 'active' && record.participants.length === 0) {
+      // Should be unreachable (removeParticipant flips to `empty`), but never leave a seatless active call.
+      await this.endCall(conversationId, record.id, 'ended');
+      return 1;
+    }
+
+    let actions = 0;
+    for (const p of record.participants) {
+      if (p.connectionState === 'connected') {
+        const live = p.socketId ? await this.presenceRedis.liveSocketIdsForUser(p.userId) : new Set<string>();
+        if (p.socketId && live.has(p.socketId)) continue;
+        await this.markParticipantReconnecting({ userId: p.userId, callId: record.id, socketId: p.socketId });
+        actions += 1;
+        continue;
+      }
+      if (p.connectionState === 'reconnecting' && ageOf(p.disconnectedAt ?? p.joinedAt) > CALL_PARTICIPANT_GRACE_MS + CALL_SWEEP_SLACK_MS) {
+        await this.removeParticipant(conversationId, record.id, p.userId);
+        actions += 1;
+      }
+    }
+    return actions;
+  }
+
   // ─── Internals ────────────────────────────────────────────────────────────────
 
   private newParticipant(userId: string, socketId: string, type: CallType, joinedAt: string): CallParticipantRecord {
@@ -393,31 +536,35 @@ export class CallsService {
    * with a grace timer; otherwise everyone else stays connected (no host).
    */
   private async removeParticipant(conversationId: string, callId: string, userId: string): Promise<CallSessionRecord | null> {
-    type Outcome = { record: CallSessionRecord | null; endAs: MessageCallOutcome | null; scheduleEmpty: boolean };
+    type Outcome = { record: CallSessionRecord | null; removed: boolean; endAs: MessageCallOutcome | null; scheduleEmpty: boolean };
     const outcome = await this.store.withConversationLock(conversationId, async (): Promise<Outcome> => {
       const rec = await this.store.getByConversationId(conversationId);
-      if (!rec || rec.id !== callId) return { record: null, endAs: null, scheduleEmpty: false };
+      if (!rec || rec.id !== callId) return { record: null, removed: false, endAs: null, scheduleEmpty: false };
       const before = rec.participants.length;
       rec.participants = rec.participants.filter((p) => p.userId !== userId);
-      if (rec.participants.length === before) return { record: rec, endAs: null, scheduleEmpty: false };
+      if (rec.participants.length === before) return { record: rec, removed: false, endAs: null, scheduleEmpty: false };
       // A 1:1 call has nobody else who could join, so either side leaving hangs up for both.
       // Group calls stay open for the remaining members.
       if (rec.conversationType === 'direct' && rec.status === 'active') {
-        return { record: rec, endAs: 'ended', scheduleEmpty: false };
+        return { record: rec, removed: true, endAs: 'ended', scheduleEmpty: false };
       }
       if (rec.participants.length > 0) {
         await this.store.save(rec);
-        return { record: rec, endAs: null, scheduleEmpty: false };
+        return { record: rec, removed: true, endAs: null, scheduleEmpty: false };
       }
-      if (rec.status === 'ringing') return { record: rec, endAs: 'cancelled', scheduleEmpty: false };
+      if (rec.status === 'ringing') return { record: rec, removed: true, endAs: 'cancelled', scheduleEmpty: false };
       rec.status = 'empty';
       rec.emptyAt = new Date().toISOString();
       await this.store.save(rec);
-      return { record: rec, endAs: null, scheduleEmpty: true };
+      return { record: rec, removed: true, endAs: null, scheduleEmpty: true };
     });
 
     await this.cancelTimer(callParticipantGraceJobId(callId, userId));
     if (!outcome.record) return null;
+    if (outcome.removed) {
+      await this.store.releaseSeat(userId, callId);
+      this.realtime.emitPresenceCallChanged(userId, { userId, inCall: false });
+    }
     if (outcome.endAs) return await this.endCall(conversationId, callId, outcome.endAs);
     if (outcome.scheduleEmpty) {
       await this.enqueueTimer(JOBS.callEmptyGrace, callEmptyGraceJobId(callId), { callId }, CALL_EMPTY_GRACE_MS);
@@ -427,10 +574,12 @@ export class CallsService {
   }
 
   private async endCall(conversationId: string, callId: string, outcome: MessageCallOutcome): Promise<CallSessionRecord | null> {
+    let seated: string[] = [];
     const ended = await this.store.withConversationLock(conversationId, async () => {
       const rec = await this.store.getByConversationId(conversationId);
       if (!rec || rec.id !== callId) return null;
       const now = new Date();
+      seated = rec.participants.map((p) => p.userId);
       rec.status = 'ended';
       rec.endedAt = now.toISOString();
       rec.participants = [];
@@ -439,7 +588,12 @@ export class CallsService {
     });
     if (!ended) return null;
 
-    await Promise.all([this.cancelTimer(callRingTimeoutJobId(callId)), this.cancelTimer(callEmptyGraceJobId(callId))]);
+    await Promise.all([
+      this.cancelTimer(callRingTimeoutJobId(callId)),
+      this.cancelTimer(callEmptyGraceJobId(callId)),
+      ...seated.map((uid) => this.store.releaseSeat(uid, callId)),
+    ]);
+    for (const uid of seated) this.realtime.emitPresenceCallChanged(uid, { userId: uid, inCall: false });
 
     const durationSeconds =
       outcome === 'ended' && ended.activeAt

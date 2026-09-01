@@ -25,6 +25,8 @@ export type OnlineUserDto = UserListDto & {
    * is tracked only via Redis and the in-memory service has no sockets on this instance.
    */
   platforms?: string[];
+  /** Currently holds a seat in a voice/video call (any type). Kept live by `presence:call-changed`. */
+  inCall?: boolean;
 };
 
 export type RecentlyOnlineUserDto = UserListDto & {

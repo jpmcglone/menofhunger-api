@@ -18,6 +18,7 @@ import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { PostsService } from '../posts/posts.service';
 import { AccountSwitchService } from '../auth/account-switch.service';
+import { CallSessionStore } from '../calls/call-session.store';
 
 const ONLINE_LIST_CACHE_TTL_MS = 10_000;
 const RECENTLY_ONLINE_WINDOW_MS = 60 * 60_000;
@@ -128,6 +129,7 @@ export class PresenceController {
     private readonly marvIdentity: MarvinBotIdentityService,
     private readonly posts: PostsService,
     private readonly accountSwitch: AccountSwitchService,
+    private readonly callSessions: CallSessionStore,
   ) {}
 
   /**
@@ -351,13 +353,14 @@ export class PresenceController {
     // and don't depend on each other, so we run them concurrently. This trades
     // 4 sequential round-trips (Redis + Postgres + Redis + Postgres) for 1
     // wall-clock wait on the slowest of them.
-    const [lastConnectAtById, users, idleById, activeStatuses, platformsById, anonymousOnline] = await Promise.all([
+    const [lastConnectAtById, users, idleById, activeStatuses, platformsById, anonymousOnline, inCallIds] = await Promise.all([
       this.presenceRedis.lastConnectAtMsByUserId(connectedIds),
       this.follows.getFollowListUsersByIds({ viewerUserId, userIds }),
       this.presenceRedis.idleByUserIds(connectedIds),
       this.presence.getActiveStatuses(userIds),
       this.presenceRedis.platformsByUserIds(connectedIds),
       this.presenceRedis.anonymousOnlineCount(),
+      this.callSessions.inCallByUserIds(userIds),
     ]);
     this.inheritPresenceMaps(
       userIds,
@@ -389,6 +392,7 @@ export class PresenceController {
       idle: idleById.get(u.id) ?? false,
       status: statusesById.get(u.id) ?? null,
       platforms: platformsById.get(u.id) ?? [],
+      inCall: inCallIds.has(u.id),
     }));
 
     // Pin Marv to the front when enabled, and bump totalOnline so the right-rail
@@ -610,7 +614,7 @@ export class PresenceController {
     // Same parallel-fan-out optimization as `/presence/online`: the four lookups
     // below all key off `onlineUserIds` and don't depend on each other, so we
     // run them concurrently to drop 3 round-trips of wall-clock wait.
-    const [lastConnectAtById, onlineUsers, idleById, onlineStatuses, platformsById, anonymousOnline] =
+    const [lastConnectAtById, onlineUsers, idleById, onlineStatuses, platformsById, anonymousOnline, inCallIds] =
       await Promise.all([
         this.presenceRedis.lastConnectAtMsByUserId(connectedOnlineIds),
         this.follows.getFollowListUsersByIds({ viewerUserId, userIds: onlineUserIds }),
@@ -618,6 +622,7 @@ export class PresenceController {
         this.presence.getActiveStatuses(onlineUserIds),
         this.presenceRedis.platformsByUserIds(connectedOnlineIds),
         this.presenceRedis.anonymousOnlineCount(),
+        this.callSessions.inCallByUserIds(onlineUserIds),
       ]);
     this.inheritPresenceMaps(
       onlineUserIds,
@@ -650,6 +655,7 @@ export class PresenceController {
       idle: idleById.get(u.id) ?? false,
       status: onlineStatusesById.get(u.id) ?? null,
       platforms: platformsById.get(u.id) ?? [],
+      inCall: inCallIds.has(u.id),
     }));
 
     // Pin Marv to the top when enabled. Same rationale as in `online()`: the

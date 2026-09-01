@@ -80,14 +80,14 @@ describe('CallsGatewayHandler', () => {
       description: { type: 'offer' },
       candidate: undefined,
     });
-    expect(calls.updateParticipantState).toHaveBeenCalledWith({ userId: 'u1', callId: 'call-1', micEnabled: false });
+    expect(calls.updateParticipantState).toHaveBeenCalledWith({ userId: 'u1', callId: 'call-1', socketId: 's1', micEnabled: false });
   });
 
   it('leave unbinds the socket so a later disconnect does not schedule grace', async () => {
     const { handler, calls } = makeHandler({ s1: 'u1' });
     await handler.handleCallsJoin(socket('s1'), { callId: 'call-1' });
     await handler.handleCallsLeave(socket('s1'), { callId: 'call-1' });
-    expect(calls.leave).toHaveBeenCalledWith({ userId: 'u1', callId: 'call-1' });
+    expect(calls.leave).toHaveBeenCalledWith({ userId: 'u1', callId: 'call-1', socketId: 's1' });
     handler.handleDisconnect(socket('s1'));
     expect(calls.markParticipantReconnecting).not.toHaveBeenCalled();
   });

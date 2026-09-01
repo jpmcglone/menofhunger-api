@@ -391,6 +391,7 @@ describe('PresenceStatusHandler', () => {
           sourceByDisplayedId: new Map(ids.map((id) => [id, id])),
         })),
       } as any,
+      { inCallByUserIds: jest.fn(async () => new Set<string>()) } as any,
     );
     return { server, presence, presenceRedis, follows, handler };
   }
@@ -647,6 +648,7 @@ describe('PresenceStatusHandler — impersonated connections', () => {
           sourceByDisplayedId: new Map(ids.map((id) => [id, id])),
         })),
       } as any,
+      { inCallByUserIds: jest.fn(async () => new Set<string>()) } as any,
     );
     const emitOnline = jest.spyOn(handler, 'emitOnline').mockResolvedValue(undefined);
     const emitPlatformsChanged = jest.spyOn(handler, 'emitPlatformsChanged').mockResolvedValue(undefined);
@@ -777,6 +779,7 @@ describe('PresenceStatusHandler — anonymous guest sockets', () => {
           sourceByDisplayedId: new Map(ids.map((id) => [id, id])),
         })),
       } as any,
+      { inCallByUserIds: jest.fn(async () => new Set<string>()) } as any,
     );
     const emitAnonymousCount = jest.spyOn(handler, 'emitAnonymousCount').mockResolvedValue(undefined);
     const emitOnline = jest.spyOn(handler, 'emitOnline').mockResolvedValue(undefined);
