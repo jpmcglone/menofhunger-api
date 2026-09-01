@@ -194,6 +194,10 @@ export class PostsService {
     return this.feedQuery.collectAncestorPostIds(...args);
   }
 
+  videoEmbedsForPosts(...args: Parameters<PostsFeedQueryService['videoEmbedsForPosts']>) {
+    return this.feedQuery.videoEmbedsForPosts(...args);
+  }
+
   getByIdNoAccess(...args: Parameters<PostsFeedQueryService['getByIdNoAccess']>) {
     return this.feedQuery.getByIdNoAccess(...args);
   }

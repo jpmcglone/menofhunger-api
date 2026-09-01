@@ -77,6 +77,22 @@ export type PostPollDto = {
   options: PostPollOptionDto[];
 };
 
+/**
+ * Cached video-embed metadata for the post's preview link, so clients can lay
+ * out the player at its final aspect ratio on first paint instead of after a
+ * `/link-metadata` round trip. Same shape as `LinkMetadataDto.videoEmbed`
+ * plus the body link it belongs to.
+ */
+export type PostVideoEmbedDto = {
+  /** Normalized body URL this embed was resolved from. */
+  url: string;
+  platform: 'rumble';
+  embedUrl: string;
+  thumbnailUrl: string | null;
+  width: number;
+  height: number;
+};
+
 export type PostDto = {
   id: string;
   createdAt: string;
@@ -144,6 +160,8 @@ export type PostDto = {
   article?: import('./article.dto').ArticleSharePreviewDto;
   /** For kind='fitnessShare': the fitness share preview (frozen snapshot). */
   fitnessShare?: import('./fitness.dto').FitnessSharePreviewDto;
+  /** Present when the preview link's video embed is already cached server-side. */
+  videoEmbed?: PostVideoEmbedDto;
   internal?: {
     boostScore: number | null;
     boostScoreUpdatedAt: string | null;
@@ -297,6 +315,8 @@ export function toPostDto(
     viewerCanAccess?: boolean;
     /** Join CTA for gated group posts (permalink). */
     groupPreview?: CommunityGroupPreviewDto | null;
+    /** Cached embed for the body's preview link (see `loadPostVideoEmbeds`). */
+    videoEmbed?: PostVideoEmbedDto | null;
   },
 ): PostDto {
   const internalBoostScore =
@@ -519,6 +539,7 @@ export function toPostDto(
     ...(typeof opts?.viewerBlockStatus !== 'undefined' ? { viewerBlockStatus: opts.viewerBlockStatus ?? null } : {}),
     ...(opts?.repostedPost ? { repostedPost: opts.repostedPost } : {}),
     ...(opts?.quotedPost ? { quotedPost: opts.quotedPost } : {}),
+    ...(opts?.videoEmbed && !isPostDeleted ? { videoEmbed: opts.videoEmbed } : {}),
     ...(() => {
       const a = (post as { article?: {
         id: string; title: string; excerpt: string | null; thumbnailR2Key: string | null;

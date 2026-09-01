@@ -1661,6 +1661,22 @@ export type PostPollDto = {
   options: PostPollOptionDto[];
 };
 
+/**
+ * Cached video-embed metadata for the post's preview link, so clients can lay
+ * out the player at its final aspect ratio on first paint instead of after a
+ * `/link-metadata` round trip. Same shape as `LinkMetadataDto.videoEmbed`
+ * plus the body link it belongs to.
+ */
+export type PostVideoEmbedDto = {
+  /** Normalized body URL this embed was resolved from. */
+  url: string;
+  platform: 'rumble';
+  embedUrl: string;
+  thumbnailUrl: string | null;
+  width: number;
+  height: number;
+};
+
 export type PostDto = {
   id: string;
   createdAt: string;
@@ -1728,6 +1744,8 @@ export type PostDto = {
   article?: ArticleSharePreviewDto;
   /** For kind='fitnessShare': the fitness share preview (frozen snapshot). */
   fitnessShare?: FitnessSharePreviewDto;
+  /** Present when the preview link's video embed is already cached server-side. */
+  videoEmbed?: PostVideoEmbedDto;
   internal?: {
     boostScore: number | null;
     boostScoreUpdatedAt: string | null;

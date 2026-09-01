@@ -7,6 +7,7 @@ import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
 import { collectAncestorPostIds } from '../../common/posts/collect-ancestor-post-ids';
+import { loadPostVideoEmbeds } from '../../common/posts/post-video-embeds';
 import { buildAttachParentChain } from '../posts/posts.utils';
 import { toPostDto, type PostDto } from '../../common/dto/post.dto';
 import { toCommunityGroupPreviewDto, type CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
@@ -246,6 +247,12 @@ export class PostVisibilityReadService {
       }
     }
 
+    const videoEmbedByPostId = await loadPostVideoEmbeds(this.prisma, [
+      ...posts,
+      ...parentMap.values(),
+      ...repostedPostMap.values(),
+    ]);
+
     const attachParentChain = buildAttachParentChain({
       parentMap,
       baseUrl,
@@ -264,6 +271,7 @@ export class PostVisibilityReadService {
       groupPreviewByGroupId,
       viewedByPostId,
       lastSeenAtByPostId,
+      videoEmbedByPostId,
     });
 
     return new Map(posts.map((p) => [p.id, attachParentChain(p)] as const));

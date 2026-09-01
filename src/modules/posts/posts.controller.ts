@@ -952,6 +952,7 @@ export class PostsController {
         : Promise.resolve(new Map<string, CommunityGroupPreviewDto>()),
     ]);
     const parentMap = new Map(parentPosts.map((p) => [p.id, p] as const));
+    const videoEmbedByPostId = await this.posts.videoEmbedsForPosts([...result.comments, ...parentPosts]);
 
     const attachParentChain = buildAttachParentChain({
       parentMap: parentMap as any,
@@ -965,6 +966,7 @@ export class PostsController {
       scoreByPostId: scoreByPostIdComments,
       toPostDto,
       groupPreviewByGroupId,
+      videoEmbedByPostId,
     });
 
     setReadCache(httpRes, { viewerUserId });
@@ -1099,6 +1101,10 @@ export class PostsController {
       viewerHasAdmin ? this.posts.computeScoresForPostIds(postIds) : Promise.resolve(undefined),
     ]);
     const viewedByPostId = new Set(lastSeenAtByPostId.keys());
+    const videoEmbedByPostId = await this.posts.videoEmbedsForPosts([
+      ...allPosts,
+      ...quotedPostByIdPermalink.values(),
+    ]);
 
     const r2 = this.appConfig.r2()?.publicBaseUrl ?? null;
     const toDto = (
@@ -1127,7 +1133,9 @@ export class PostsController {
       const quotedPostIdVal = (p as any).quotedPostId as string | null | undefined;
       const quotedPostFromMap = quotedPostIdVal ? quotedPostByIdPermalink.get(quotedPostIdVal) : undefined;
       const quotedPostDto = quotedPostFromMap
-        ? toPostDto(quotedPostFromMap as any, r2)
+        ? toPostDto(quotedPostFromMap as any, r2, {
+            videoEmbed: videoEmbedByPostId.get(quotedPostFromMap.id) ?? null,
+          })
         : undefined;
       const dto = toPostDto(p, r2, {
         viewerHasBoosted: boosted.has(p.id),
@@ -1147,6 +1155,7 @@ export class PostsController {
         // Only the root (requested) post is gated; ancestors are accessible.
         viewerCanAccess: opts.isGatedRoot ? false : undefined,
         groupPreview: resolvedGroupPreview,
+        videoEmbed: videoEmbedByPostId.get(p.id) ?? null,
       });
       return opts.parent ? { ...dto, parent: opts.parent } : dto;
     };

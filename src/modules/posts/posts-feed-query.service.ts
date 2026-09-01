@@ -9,6 +9,7 @@ import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cu
 import { toCommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import { collectAncestorPostIds } from '../../common/posts/collect-ancestor-post-ids';
+import { loadPostVideoEmbeds } from '../../common/posts/post-video-embeds';
 import { ARTICLE_SHARE_INCLUDE, FITNESS_SHARE_INCLUDE, QUOTED_POST_INCLUDE } from '../../common/prisma-includes/post.include';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { collapseFeedByRoot, type FeedCollapsedItem } from '../../common/feed-collapse/collapse-by-root';
@@ -814,8 +815,9 @@ export class PostsFeedQueryService {
     for (const p of parentMap.values()) accCommunityGroupId(p as { communityGroupId?: string | null });
     for (const p of repostedPostMap.values()) accCommunityGroupId(p as { communityGroupId?: string | null });
     for (const p of quotedPostMap.values()) accCommunityGroupId(p as { communityGroupId?: string | null });
-    const groupPreviewByGroupId = await this.communityGroupPreviewMapForFeed(viewerUserId, [
-      ...communityGroupIdsForPage,
+    const [groupPreviewByGroupId, videoEmbedByPostId] = await Promise.all([
+      this.communityGroupPreviewMapForFeed(viewerUserId, [...communityGroupIdsForPage]),
+      loadPostVideoEmbeds(this.prisma, byId.values()),
     ]);
 
     const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
@@ -839,6 +841,7 @@ export class PostsFeedQueryService {
       viewedByPostId,
       lastSeenAtByPostId,
       viewerCanAccessByPostId,
+      videoEmbedByPostId,
     });
 
     return filteredPosts.map((p) => {
@@ -3656,6 +3659,11 @@ export class PostsFeedQueryService {
 
   collectAncestorPostIds(seedIds: Array<string | null | undefined>): Promise<string[]> {
     return collectAncestorPostIds(this.prisma, seedIds);
+  }
+
+  /** Cached preview-link video embeds by post id; never fetches externally. */
+  videoEmbedsForPosts(posts: Iterable<{ id: string; body?: string | null }>) {
+    return loadPostVideoEmbeds(this.prisma, posts);
   }
 
   /**

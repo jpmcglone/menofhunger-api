@@ -1,5 +1,6 @@
 import type { Post } from '@prisma/client';
 import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
+import type { PostVideoEmbedDto } from '../../common/dto/post.dto';
 import type { PostWithAuthorAndMedia } from './post.dto';
 
 type PostWithParentId = { id: string; parentId?: string | null } & Record<string, unknown>;
@@ -42,6 +43,8 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
   viewerCanAccessByPostId?: Map<string, boolean>;
   /** Join previews for posts scoped to a community group (inline chip + hover card). */
   groupPreviewByGroupId?: Map<string, CommunityGroupPreviewDto>;
+  /** Cached preview-link video embeds by post id (see `loadPostVideoEmbeds`). */
+  videoEmbedByPostId?: Map<string, PostVideoEmbedDto>;
 }) {
   const {
     parentMap,
@@ -63,6 +66,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     groupPreviewByGroupId,
     viewedByPostId,
     lastSeenAtByPostId,
+    videoEmbedByPostId,
   } = opts;
 
   function attachParentChain(post: T): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } {
@@ -101,8 +105,10 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     } else {
       // Single-post / legacy path: fall back to the raw Prisma include.
       const quotedPostRaw = (post as any).quotedPost ?? null;
-      quotedPostDto = quotedPostRaw
-        ? toPostDto(quotedPostRaw as PostWithAuthorAndMedia, baseUrl)
+      quotedPostDto =       quotedPostRaw
+        ? toPostDto(quotedPostRaw as PostWithAuthorAndMedia, baseUrl, {
+            videoEmbed: videoEmbedByPostId?.get((quotedPostRaw as { id: string }).id) ?? null,
+          })
         : undefined;
     }
 
@@ -130,6 +136,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
           : undefined,
       viewerCanAccess: postViewerCanAccess,
       ...(groupPreview ? { groupPreview } : {}),
+      videoEmbed: videoEmbedByPostId?.get(post.id) ?? null,
     }) as ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> };
     const parent = post.parentId ? parentMap.get(post.parentId) : null;
     if (parent) {
