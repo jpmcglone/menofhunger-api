@@ -237,6 +237,7 @@ export class NotificationWriterService {
         space_live: 'Space is live',
         space_schedule_cancelled: 'Space cancelled',
         space_schedule_rescheduled: 'Space rescheduled',
+        followed_space: 'scheduled a space',
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
 
@@ -342,7 +343,8 @@ export class NotificationWriterService {
         kind === 'space_reminder_soon' ||
         kind === 'space_live' ||
         kind === 'space_schedule_cancelled' ||
-        kind === 'space_schedule_rescheduled')
+        kind === 'space_schedule_rescheduled' ||
+        kind === 'followed_space')
     ) {
       const space = await this.prisma.space.findUnique({
         where: { id: subjectSpaceId },
@@ -2149,7 +2151,7 @@ export class NotificationWriterService {
    */
   async upsertSpaceScheduleNotification(params: {
     recipientUserId: string;
-    kind: 'space_reminder_day' | 'space_reminder_soon' | 'space_live' | 'space_schedule_cancelled' | 'space_schedule_rescheduled';
+    kind: 'space_reminder_day' | 'space_reminder_soon' | 'space_live' | 'space_schedule_cancelled' | 'space_schedule_rescheduled' | 'followed_space';
     spaceId: string;
     actorUserId?: string | null;
     title: string;

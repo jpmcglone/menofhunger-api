@@ -16,10 +16,11 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { LinkMetadataService } from '../link-metadata/link-metadata.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { compareLobbySpaces } from './spaces-lobby-sort';
+import { resolveSpaceEventTitle } from './spaces-event-title';
 import { resolveSpacePlaybackTitle } from './spaces-playback-title';
 import { fetchYouTubeOEmbedTitle } from './youtube-oembed-title';
 
-const SOON_MS = 15 * 60 * 1000;
+export const SPACE_SOON_REMINDER_MS = 30 * 60 * 1000;
 
 function dayReminderJobId(spaceId: string, scheduledAtMs: number): string {
   return `space-reminder-day-${spaceId}-${scheduledAtMs}`;
@@ -156,9 +157,7 @@ export class SpacesService {
     // Cancel-on-delete must write while the space row still exists (subjectSpaceId FK
     // + push deep-link lookup). clearSchedule keeps the async side-effect path.
     if (space.scheduledAt) {
-      const recipientUserIds = (await this.listSubscriberUserIds(id)).filter(
-        (uid) => uid !== space.ownerId,
-      );
+      const recipientUserIds = await this.listAudienceUserIds(id, space.ownerId);
       await this.cancelReminderJobs(id, space.scheduledAt.getTime());
       const title = `${space.title} cancelled`;
       const body = 'The scheduled space was cancelled.';
@@ -171,6 +170,13 @@ export class SpacesService {
           title,
           body,
         });
+      });
+      this.sideEffects.dispatch('space.schedule.cancelled', {
+        spaceId: id,
+        ownerUserId: space.ownerId,
+        spaceTitle: space.title,
+        ownerUsername: space.owner.username,
+        recipientUserIds,
       });
     }
 
@@ -223,7 +229,7 @@ export class SpacesService {
     // anyone who already has a space_live row (go-live-again with no new schedule).
     const recipientUserIds = previousScheduledAt
       ? (await this.listSubscriberUserIds(id)).filter((uid) => uid !== userId)
-      : [];
+      : (await this.listFollowerUserIds(userId)).filter((uid) => uid !== userId);
     this.sideEffects.dispatch('space.schedule.live', { spaceId: id, recipientUserIds });
     await this.clearNonOwnerSubscribers(id, userId);
 
@@ -360,7 +366,7 @@ export class SpacesService {
       include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
     });
 
-    // Host gets the ~15 min heads-up (not day-of / live — see side-effects handler).
+    // Host gets the ~30 min heads-up (not day-of / live — see side-effects handler).
     await this.ensureOwnerScheduleSubscription(id, userId);
 
     if (previousMs != null) {
@@ -373,6 +379,8 @@ export class SpacesService {
         spaceId: id,
         scheduledAt: scheduledAt.toISOString(),
       });
+    } else if (previousMs == null) {
+      this.sideEffects.dispatch('space.schedule.announced', { spaceId: id });
     }
 
     const dto = await this.toDto(updated, {
@@ -592,7 +600,7 @@ export class SpacesService {
   async enqueueReminderJobs(spaceId: string, scheduledAt: Date): Promise<void> {
     const scheduledAtMs = scheduledAt.getTime();
     const now = Date.now();
-    const soonAt = scheduledAtMs - SOON_MS;
+    const soonAt = scheduledAtMs - SPACE_SOON_REMINDER_MS;
     const dayAt = etLocalToUtcMs(scheduledAt, 9, 0);
 
     // Day-of at 09:00 ET — skip if that instant is after the 15-min window or already past.
@@ -641,6 +649,7 @@ export class SpacesService {
   async getScheduleSnapshot(spaceId: string): Promise<{
     scheduledAt: Date | null;
     title: string;
+    eventTitle: string;
     ownerUserId: string;
     ownerUsername: string | null;
   } | null> {
@@ -649,14 +658,29 @@ export class SpacesService {
       select: {
         scheduledAt: true,
         title: true,
+        mode: true,
+        watchPartyUrl: true,
+        radioStreamUrl: true,
         ownerId: true,
         owner: { select: { username: true } },
       },
     });
     if (!space) return null;
+    const playbackTitle = await resolveSpacePlaybackTitle({
+      mode: space.mode,
+      watchPartyUrl: space.watchPartyUrl,
+      radioStreamUrl: space.radioStreamUrl,
+      getLinkTitle: async (url) => {
+        const youtubeTitle = await fetchYouTubeOEmbedTitle(url);
+        if (youtubeTitle) return youtubeTitle;
+        const meta = await this.linkMetadata.getMetadata(url);
+        return meta?.title?.trim() || null;
+      },
+    });
     return {
       scheduledAt: space.scheduledAt,
       title: space.title,
+      eventTitle: resolveSpaceEventTitle({ title: space.title, playbackTitle }),
       ownerUserId: space.ownerId,
       ownerUsername: space.owner.username,
     };
@@ -668,6 +692,39 @@ export class SpacesService {
       select: { userId: true },
     });
     return rows.map((r) => r.userId);
+  }
+
+  async listFollowerUserIds(ownerUserId: string): Promise<string[]> {
+    const [follows, operators] = await Promise.all([
+      this.prisma.follow.findMany({
+        where: { followingId: ownerUserId },
+        select: { followerId: true },
+      }),
+      this.prisma.userPageOperator.findMany({
+        where: { pageUserId: ownerUserId },
+        select: { operatorUserId: true },
+      }),
+    ]);
+    const skip = new Set(operators.map((row) => row.operatorUserId));
+    skip.add(ownerUserId);
+    return follows.map((row) => row.followerId).filter((id) => id && !skip.has(id));
+  }
+
+  /** Followers ∪ Notify-me subscribers, minus the host. */
+  async listAudienceUserIds(spaceId: string, ownerUserId: string): Promise<string[]> {
+    const [followers, subscribers] = await Promise.all([
+      this.listFollowerUserIds(ownerUserId),
+      this.listSubscriberUserIds(spaceId),
+    ]);
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const id of [...followers, ...subscribers]) {
+      const uid = String(id ?? '').trim();
+      if (!uid || uid === ownerUserId || seen.has(uid)) continue;
+      seen.add(uid);
+      out.push(uid);
+    }
+    return out;
   }
 
   /** Host is always on the reminder list for an upcoming schedule. */
@@ -693,7 +750,7 @@ export class SpacesService {
     if (scheduledAt.getTime() !== scheduledAtMs) return false;
     if (scheduledAtMs <= now) return false;
     const dayAt = etLocalToUtcMs(scheduledAt, 9, 0);
-    const soonAt = scheduledAtMs - SOON_MS;
+    const soonAt = scheduledAtMs - SPACE_SOON_REMINDER_MS;
     // Fire only if we're at/after the day slot conceptually; job already delayed to dayAt.
     // Skip if day slot would have been after the soon window (should not have been enqueued).
     if (dayAt > soonAt) return false;

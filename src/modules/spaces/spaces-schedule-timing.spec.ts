@@ -9,9 +9,9 @@ describe('space schedule reminder timing', () => {
     expect(new Date(dayAt).toISOString()).toBe('2026-08-14T13:00:00.000Z');
   });
 
-  it('places the 15-minute reminder before start', () => {
+  it('places the 30-minute reminder before start', () => {
     const scheduledAtMs = Date.parse('2026-08-15T00:00:00.000Z');
-    const soonAt = scheduledAtMs - 15 * 60 * 1000;
-    expect(new Date(soonAt).toISOString()).toBe('2026-08-14T23:45:00.000Z');
+    const soonAt = scheduledAtMs - 30 * 60 * 1000;
+    expect(new Date(soonAt).toISOString()).toBe('2026-08-14T23:30:00.000Z');
   });
 });

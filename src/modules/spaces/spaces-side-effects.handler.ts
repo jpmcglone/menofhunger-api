@@ -1,8 +1,18 @@
-import { Injectable, type OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { AppConfigService } from '../app/app-config.service';
+import { buildFollowedSpaceEmail, type SpaceScheduleEmailKind } from '../email/email-content-space';
+import { buildGreeting, getVerifiedRecipientEmail } from '../email/email-send.helpers';
+import { EmailService } from '../email/email.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
-import type { SideEffectPayloads } from '../side-effects/side-effects.constants';
+import { PrismaService } from '../prisma/prisma.service';
+import { chunk, FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
+import {
+  FANOUT_CHUNK_SIZE,
+  FANOUT_CHUNK_THRESHOLD,
+  type SideEffectPayloads,
+} from '../side-effects/side-effects.constants';
 import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { SpacesService } from './spaces.service';
 
 function formatScheduleWhen(isoOrDate: string | Date): string {
@@ -24,10 +34,16 @@ function formatScheduleWhen(isoOrDate: string | Date): string {
  */
 @Injectable()
 export class SpacesSideEffectsHandler implements OnModuleInit {
+  private readonly logger = new Logger(SpacesSideEffectsHandler.name);
+
   constructor(
     private readonly spaces: SpacesService,
     private readonly notifications: NotificationsService,
     private readonly registry: SideEffectsRegistry,
+    private readonly sideEffects: SideEffectsService,
+    private readonly prisma: PrismaService,
+    private readonly email: EmailService,
+    private readonly appConfig: AppConfigService,
   ) {}
 
   onModuleInit(): void {
@@ -36,6 +52,8 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     this.registry.register('space.schedule.cancelled', (p) => this.onCancelled(p));
     this.registry.register('space.schedule.rescheduled', (p) => this.onRescheduled(p));
     this.registry.register('space.schedule.reminder', (p) => this.onReminder(p));
+    this.registry.register('space.schedule.announced', (p) => this.onAnnounced(p));
+    this.registry.register('space.schedule.announce.chunk', (p) => this.onAnnounceChunk(p));
   }
 
   private uniqueRecipientIds(ids: string[], skipUserId?: string | null): string[] {
@@ -63,7 +81,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     const recipients = this.uniqueRecipientIds([...fromPayload, ...fromExisting], snap?.ownerUserId);
     if (recipients.length === 0) return;
 
-    const title = snap ? `${snap.title} is live` : 'Space is live';
+    const title = snap ? `${snap.eventTitle || snap.title} is live` : 'Space is live';
     const body = 'Tap to join now.';
     const actorUserId = snap?.ownerUserId ?? null;
 
@@ -87,7 +105,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     });
     if (recipients.length === 0) return;
 
-    const spaceTitle = (snap?.title ?? payload.spaceTitle ?? '').trim();
+    const spaceTitle = (snap?.eventTitle ?? snap?.title ?? payload.spaceTitle ?? '').trim();
     const title = spaceTitle ? `${spaceTitle} was live` : 'Space was live';
     const body = "It's no longer live.";
     const actorUserId = snap?.ownerUserId ?? null;
@@ -106,22 +124,44 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
   }
 
   private async onCancelled(payload: SideEffectPayloads['space.schedule.cancelled']): Promise<void> {
-    const recipients = (
-      payload.recipientUserIds ?? (await this.spaces.listSubscriberUserIds(payload.spaceId))
-    ).filter((id) => id !== payload.ownerUserId);
+    const snap = await this.spaces.getScheduleSnapshot(payload.spaceId);
+    const eventTitle = (snap?.eventTitle || payload.spaceTitle || '').trim() || 'Space';
+    const recipients = this.uniqueRecipientIds(
+      payload.recipientUserIds ??
+        (snap
+          ? await this.spaces.listAudienceUserIds(payload.spaceId, payload.ownerUserId)
+          : await this.spaces.listSubscriberUserIds(payload.spaceId)),
+      payload.ownerUserId,
+    );
     if (recipients.length === 0) return;
 
-    const title = `${payload.spaceTitle} cancelled`;
+    const title = `${eventTitle} cancelled`;
     const body = 'The scheduled space was cancelled.';
+    const emailCfg = this.appConfig.email();
+    const ctx = this.spaceEmailContext({
+      ownerUsername: snap?.ownerUsername ?? payload.ownerUsername,
+      eventTitle,
+    });
 
     await runInBatches(recipients, FANOUT_CONCURRENCY, async (recipientUserId) => {
-      await this.notifications.upsertSpaceScheduleNotification({
+      if (snap) {
+        await this.notifications.upsertSpaceScheduleNotification({
+          recipientUserId,
+          kind: 'space_schedule_cancelled',
+          spaceId: payload.spaceId,
+          actorUserId: payload.ownerUserId,
+          title,
+          body,
+        });
+      }
+      if (!emailCfg) return;
+      await this.sendSpaceEmail({
         recipientUserId,
-        kind: 'space_schedule_cancelled',
-        spaceId: payload.spaceId,
-        actorUserId: payload.ownerUserId,
-        title,
-        body,
+        hostName: ctx.hostName,
+        spaceTitle: eventTitle,
+        whenLabel: '',
+        spaceUrl: ctx.spaceUrl,
+        kind: 'cancelled',
       });
     });
   }
@@ -135,7 +175,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     if (recipients.length === 0) return;
 
     const when = formatScheduleWhen(payload.scheduledAt);
-    const title = `${snap.title} rescheduled`;
+    const title = `${snap.eventTitle || snap.title} rescheduled`;
     const body = when ? `Now ${when}.` : 'The start time changed.';
 
     await runInBatches(recipients, FANOUT_CONCURRENCY, async (recipientUserId) => {
@@ -148,6 +188,125 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
         body,
       });
     });
+  }
+
+  private async onAnnounced(payload: SideEffectPayloads['space.schedule.announced']): Promise<void> {
+    const snap = await this.spaces.getScheduleSnapshot(payload.spaceId);
+    if (!snap?.scheduledAt) return;
+    const recipients = await this.spaces.listFollowerUserIds(snap.ownerUserId);
+    if (recipients.length === 0) return;
+    if (recipients.length > FANOUT_CHUNK_THRESHOLD) {
+      for (const slice of chunk(recipients, FANOUT_CHUNK_SIZE)) {
+        this.sideEffects.dispatch('space.schedule.announce.chunk', {
+          spaceId: payload.spaceId,
+          recipientUserIds: slice,
+        });
+      }
+      return;
+    }
+    await this.onAnnounceChunk({ spaceId: payload.spaceId, recipientUserIds: recipients });
+  }
+
+  private async onAnnounceChunk(
+    payload: SideEffectPayloads['space.schedule.announce.chunk'],
+  ): Promise<void> {
+    const snap = await this.spaces.getScheduleSnapshot(payload.spaceId);
+    if (!snap?.scheduledAt) return;
+    const recipients = this.uniqueRecipientIds(payload.recipientUserIds ?? [], snap.ownerUserId);
+    if (recipients.length === 0) return;
+
+    const when = formatScheduleWhen(snap.scheduledAt);
+    const eventTitle = snap.eventTitle || snap.title;
+    const title = `${eventTitle} scheduled`;
+    const body = when ? `Tune in ${when}.` : 'Someone you follow scheduled a space.';
+    const emailCfg = this.appConfig.email();
+    const ctx = this.spaceEmailContext({
+      ownerUsername: snap.ownerUsername,
+      eventTitle,
+    });
+
+    await runInBatches(recipients, FANOUT_CONCURRENCY, async (recipientUserId) => {
+      await this.notifications.upsertSpaceScheduleNotification({
+        recipientUserId,
+        kind: 'followed_space',
+        spaceId: payload.spaceId,
+        actorUserId: snap.ownerUserId,
+        title,
+        body,
+      });
+      if (!emailCfg) return;
+      await this.sendSpaceEmail({
+        recipientUserId,
+        hostName: ctx.hostName,
+        spaceTitle: eventTitle,
+        whenLabel: when,
+        spaceUrl: ctx.spaceUrl,
+        kind: 'announced',
+      });
+    });
+  }
+
+  private spaceEmailContext(input: {
+    ownerUsername?: string | null;
+    eventTitle: string;
+  }): { hostName: string; spaceUrl: string } {
+    const baseUrl = frontendBase(this.appConfig.frontendBaseUrl());
+    const username = (input.ownerUsername ?? '').trim();
+    return {
+      hostName: username || input.eventTitle,
+      spaceUrl: username ? `${baseUrl}/s/${encodeURIComponent(username)}` : `${baseUrl}/spaces`,
+    };
+  }
+
+  private async sendSpaceEmail(params: {
+    recipientUserId: string;
+    hostName: string;
+    spaceTitle: string;
+    whenLabel: string;
+    spaceUrl: string;
+    kind: SpaceScheduleEmailKind;
+  }): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: params.recipientUserId },
+      select: {
+        id: true,
+        email: true,
+        emailVerifiedAt: true,
+        name: true,
+        username: true,
+        notificationPreferences: { select: { emailFollowedArticle: true } },
+      },
+    });
+    if (!user) return;
+    if (user.notificationPreferences?.emailFollowedArticle === false) return;
+    const to = getVerifiedRecipientEmail(user);
+    if (!to) return;
+    const emailCfg = this.appConfig.email();
+    if (!emailCfg) return;
+    const baseUrl = frontendBase(this.appConfig.frontendBaseUrl());
+    const rendered = buildFollowedSpaceEmail({
+      greeting: buildGreeting({ name: user.name, username: user.username }),
+      hostName: params.hostName,
+      spaceTitle: params.spaceTitle,
+      whenLabel: params.whenLabel,
+      spaceUrl: params.spaceUrl,
+      settingsUrl: `${baseUrl}/settings/notifications`,
+      kind: params.kind,
+    });
+    const from =
+      emailCfg.fromEmail.notifications || emailCfg.fromEmail.default || emailCfg.fromEmail.newsletter;
+    const sent = await this.email.sendText({
+      to,
+      from,
+      subject: rendered.subject,
+      text: rendered.text,
+      html: rendered.html,
+      category: 'engagement',
+      userId: user.id,
+    });
+    if (!sent.sent) {
+      this.logger.debug(`Followed-space email skipped ${user.id}: ${sent.reason ?? 'unknown'}`);
+    }
   }
 
   private async onReminder(payload: SideEffectPayloads['space.schedule.reminder']): Promise<void> {
@@ -163,22 +322,29 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     }
 
     const isDay = payload.kind === 'space_reminder_day';
-    // Host only wants the ~15 min heads-up — not the morning "today" ping.
-    let recipients = await this.spaces.listSubscriberUserIds(payload.spaceId);
-    if (isDay) {
-      recipients = recipients.filter((id) => id !== snap.ownerUserId);
-    }
-    if (recipients.length === 0) return;
+    // Host gets the 30-min heads-up — not the morning "today" ping.
+    const audience = isDay
+      ? (await this.spaces.listSubscriberUserIds(payload.spaceId)).filter((id) => id !== snap.ownerUserId)
+      : this.uniqueRecipientIds(
+          [...(await this.spaces.listAudienceUserIds(payload.spaceId, snap.ownerUserId)), snap.ownerUserId],
+        );
+    if (audience.length === 0) return;
 
     const when = formatScheduleWhen(snap.scheduledAt);
-    const title = isDay ? `${snap.title} today` : `${snap.title} starting soon`;
+    const eventTitle = snap.eventTitle || snap.title;
+    const title = isDay ? `${eventTitle} today` : `${eventTitle} starting soon`;
     const body = isDay
       ? when
         ? `Scheduled for ${when}.`
         : 'A space you asked about is today.'
-      : 'Starts in about 15 minutes.';
+      : 'Starts in about 30 minutes.';
+    const emailCfg = this.appConfig.email();
+    const ctx = this.spaceEmailContext({
+      ownerUsername: snap.ownerUsername,
+      eventTitle,
+    });
 
-    await runInBatches(recipients, FANOUT_CONCURRENCY, async (recipientUserId) => {
+    await runInBatches(audience, FANOUT_CONCURRENCY, async (recipientUserId) => {
       await this.notifications.upsertSpaceScheduleNotification({
         recipientUserId,
         kind: payload.kind,
@@ -187,6 +353,19 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
         title,
         body,
       });
+      if (isDay || !emailCfg || recipientUserId === snap.ownerUserId) return;
+      await this.sendSpaceEmail({
+        recipientUserId,
+        hostName: ctx.hostName,
+        spaceTitle: eventTitle,
+        whenLabel: when,
+        spaceUrl: ctx.spaceUrl,
+        kind: 'soon',
+      });
     });
   }
+}
+
+function frontendBase(raw: string | null): string {
+  return ((raw ?? '').trim() || 'https://menofhunger.com').replace(/\/$/, '');
 }

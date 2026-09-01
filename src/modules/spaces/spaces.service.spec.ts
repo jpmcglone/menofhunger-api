@@ -25,7 +25,11 @@ function build(overrides: {
       findUnique: jest.fn(async () => null),
       upsert: jest.fn(),
     },
-    follow: { findUnique: jest.fn(async () => null) },
+    follow: {
+      findUnique: jest.fn(async () => null),
+      findMany: jest.fn(async () => []),
+    },
+    userPageOperator: { findMany: jest.fn(async () => []) },
     ...overrides.prisma,
   };
   const notifications = {
@@ -44,6 +48,7 @@ function build(overrides: {
   const jobs = {
     removeById: jest.fn(async () => undefined),
     add: jest.fn(async () => undefined),
+    enqueue: jest.fn(async () => undefined),
     ...overrides.jobs,
   };
   const spacesPresence = {
@@ -114,9 +119,12 @@ describe('SpacesService.deleteSpace', () => {
         spaceId: 'space-1',
       }),
     );
-    expect(sideEffects.dispatch).not.toHaveBeenCalledWith(
+    expect(sideEffects.dispatch).toHaveBeenCalledWith(
       'space.schedule.cancelled',
-      expect.anything(),
+      expect.objectContaining({
+        spaceId: 'space-1',
+        recipientUserIds: ['sub-1'],
+      }),
     );
     expect(sideEffects.dispatch).not.toHaveBeenCalledWith(
       'space.schedule.ended',
@@ -171,9 +179,11 @@ describe('SpacesService.deleteSpace', () => {
 });
 
 describe('SpacesService.activateSpace', () => {
-  it('dispatches live fan-out with no new recipients when there was no schedule', async () => {
+  it('dispatches live fan-out to followers when there was no schedule', async () => {
     const { service, prisma, sideEffects } = build({
       prisma: {
+        follow: { findMany: jest.fn(async () => [{ followerId: 'fan-1' }, { followerId: 'owner-1' }]) },
+        userPageOperator: { findMany: jest.fn(async () => []) },
         space: {
           findUnique: jest.fn(async () => ({
             ownerId: 'owner-1',
@@ -214,7 +224,7 @@ describe('SpacesService.activateSpace', () => {
 
     expect(sideEffects.dispatch).toHaveBeenCalledWith('space.schedule.live', {
       spaceId: 'space-1',
-      recipientUserIds: [],
+      recipientUserIds: ['fan-1'],
     });
     expect(prisma.spaceScheduleSubscriber.deleteMany).toHaveBeenCalledWith({
       where: { spaceId: 'space-1', userId: { not: 'owner-1' } },
@@ -332,6 +342,49 @@ describe('SpacesService.deactivateIfActive', () => {
     });
     await expect(skipped.service.deactivateIfActive('space-1')).resolves.toBe(false);
     expect(skipped.sideEffects.dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe('SpacesService.setSchedule', () => {
+  it('announces to followers on the first schedule', async () => {
+    const when = new Date(Date.now() + 3_600_000);
+    const { service, sideEffects } = build({
+      prisma: {
+        space: {
+          findUnique: jest.fn(async () => ({ ownerId: 'owner-1', scheduledAt: null })),
+          update: jest.fn(async () => ({ ...SPACE_ROW, scheduledAt: when })),
+        },
+      },
+    });
+
+    await service.setSchedule('space-1', 'owner-1', when.toISOString());
+
+    expect(sideEffects.dispatch).toHaveBeenCalledWith('space.schedule.announced', { spaceId: 'space-1' });
+    expect(sideEffects.dispatch).not.toHaveBeenCalledWith(
+      'space.schedule.rescheduled',
+      expect.anything(),
+    );
+  });
+
+  it('does not re-announce when rescheduling', async () => {
+    const previous = new Date(Date.now() + 3_600_000);
+    const next = new Date(Date.now() + 7_200_000);
+    const { service, sideEffects } = build({
+      prisma: {
+        space: {
+          findUnique: jest.fn(async () => ({ ownerId: 'owner-1', scheduledAt: previous })),
+          update: jest.fn(async () => ({ ...SPACE_ROW, scheduledAt: next })),
+        },
+      },
+    });
+
+    await service.setSchedule('space-1', 'owner-1', next.toISOString());
+
+    expect(sideEffects.dispatch).toHaveBeenCalledWith(
+      'space.schedule.rescheduled',
+      expect.objectContaining({ spaceId: 'space-1' }),
+    );
+    expect(sideEffects.dispatch).not.toHaveBeenCalledWith('space.schedule.announced', expect.anything());
   });
 });
 

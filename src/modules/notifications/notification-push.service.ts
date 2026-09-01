@@ -170,6 +170,7 @@ export class NotificationPushService {
     if (kind === 'nudge') return Boolean(prefs.pushNudge);
     if (kind === 'followed_post' || kind === 'checkin_post') return Boolean(prefs.pushFollowedPost);
     if (kind === 'followed_article') return Boolean(prefs.pushFollowedPost);
+    if (kind === 'followed_space') return Boolean(prefs.pushFollowedPost);
     if (kind === 'status_update') return Boolean(prefs.pushFollowedPost);
     if (kind === 'message') return Boolean(prefs.pushMessage);
     if (
@@ -534,7 +535,7 @@ export class NotificationPushService {
     if (kind === 'space_reminder_soon') {
       return {
         title: titleFromFallback || 'Space starting soon',
-        body: snippet ?? 'Starts in about 15 minutes.',
+        body: snippet ?? 'Starts in about 30 minutes.',
       };
     }
     if (kind === 'space_live') {
@@ -553,6 +554,12 @@ export class NotificationPushService {
       return {
         title: titleFromFallback || 'Space rescheduled',
         body: snippet ?? 'The start time changed.',
+      };
+    }
+    if (kind === 'followed_space') {
+      return {
+        title: titleFromFallback || 'Space scheduled',
+        body: snippet ?? 'Someone you follow scheduled a space.',
       };
     }
     // Generic kind is used for one-off actor-driven events that don't have their own kind

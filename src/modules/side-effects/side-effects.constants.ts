@@ -353,6 +353,15 @@ export interface SideEffectPayloads {
     kind: 'space_reminder_day' | 'space_reminder_soon';
     scheduledAtMs: number;
   };
+  /** First schedule set — fan out `followed_space` + email to the host's followers. */
+  'space.schedule.announced': {
+    spaceId: string;
+  };
+  /** Child job for a slice of followers on first announce. */
+  'space.schedule.announce.chunk': {
+    spaceId: string;
+    recipientUserIds: string[];
+  };
 }
 
 export type SideEffectName = keyof SideEffectPayloads;
