@@ -521,7 +521,6 @@ export class FitnessService {
       maxHeartrate?: number | null;
       totalElevationM?: number | null;
       name?: string | null;
-      raw?: unknown;
     }>;
     bodyMetrics?: Array<{ externalId: string; weightKg: number; measuredAt: string }>;
     vo2maxReadings?: Array<{ externalId: string; vo2maxMlKgMin: number; measuredAt: string }>;
@@ -565,7 +564,8 @@ export class FitnessService {
       maxHeartrate: a.maxHeartrate && a.maxHeartrate > 0 ? a.maxHeartrate : null,
       totalElevationM: a.totalElevationM && a.totalElevationM > 0 ? a.totalElevationM : null,
       name: a.name?.trim() ? a.name.trim() : null,
-      rawJson: a.raw ?? {
+      // Never persist client `raw` (GPS/HR series). That payload 500'd the upload.
+      rawJson: {
         source: 'apple_health',
         externalId: a.externalId,
         activityType: a.activityType,

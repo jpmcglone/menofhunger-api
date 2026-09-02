@@ -33,7 +33,6 @@ const healthKitActivitySchema = z.object({
   maxHeartrate: z.number().nonnegative().nullable().optional(),
   totalElevationM: z.number().nonnegative().nullable().optional(),
   name: z.string().trim().max(500).nullable().optional(),
-  raw: z.unknown().optional(),
 });
 
 const healthKitBodyMetricSchema = z.object({
@@ -63,13 +62,21 @@ const healthKitDailyStepsSchema = z.object({
   stepsCount: z.number().int().nonnegative(),
 });
 
-const uploadHealthKitSchema = z.object({
-  activities: z.array(healthKitActivitySchema).optional(),
-  bodyMetrics: z.array(healthKitBodyMetricSchema).optional(),
-  vo2maxReadings: z.array(healthKitVo2MaxSchema).optional(),
-  sleepMinutes: z.array(healthKitSleepSchema).optional(),
-  hrv: z.array(healthKitHrvSchema).optional(),
-  dailySteps: z.array(healthKitDailyStepsSchema).optional(),
+/** Caps match the iOS HealthKit sync window so a 2-year dump cannot 500 the request. */
+export const HEALTHKIT_UPLOAD_LIMITS = {
+  activities: 40,
+  bodyMetrics: 60,
+  vo2maxReadings: 60,
+  daySeries: 31,
+} as const;
+
+export const uploadHealthKitSchema = z.object({
+  activities: z.array(healthKitActivitySchema).max(HEALTHKIT_UPLOAD_LIMITS.activities).optional(),
+  bodyMetrics: z.array(healthKitBodyMetricSchema).max(HEALTHKIT_UPLOAD_LIMITS.bodyMetrics).optional(),
+  vo2maxReadings: z.array(healthKitVo2MaxSchema).max(HEALTHKIT_UPLOAD_LIMITS.vo2maxReadings).optional(),
+  sleepMinutes: z.array(healthKitSleepSchema).max(HEALTHKIT_UPLOAD_LIMITS.daySeries).optional(),
+  hrv: z.array(healthKitHrvSchema).max(HEALTHKIT_UPLOAD_LIMITS.daySeries).optional(),
+  dailySteps: z.array(healthKitDailyStepsSchema).max(HEALTHKIT_UPLOAD_LIMITS.daySeries).optional(),
 });
 
 const logWeightSchema = z.object({
