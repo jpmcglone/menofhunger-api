@@ -235,6 +235,7 @@ describe('CallsService direct call lifecycle', () => {
     expect(ack.reconnectGraceMs).toBe(30_000);
     expect(ack.call).toMatchObject({ status: 'ringing', capacity: 2, messageId: 'msg-1', startedByUserId: 'alice' });
     expect(ack.call?.participants).toHaveLength(1);
+    expect(ack.call?.participants[0]?.cameraEnabled).toBe(true);
 
     expect(messages.createCallMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -268,6 +269,8 @@ describe('CallsService direct call lifecycle', () => {
     expect(joined.call?.status).toBe('active');
     expect(joined.reconnectGraceMs).toBe(30_000);
     expect(joined.call?.participants.map((p) => p.userId).sort()).toEqual(['alice', 'bob']);
+    expect(joined.call?.participants.find((p) => p.userId === 'alice')?.cameraEnabled).toBe(true);
+    expect(joined.call?.participants.find((p) => p.userId === 'bob')?.cameraEnabled).toBe(false);
     expect(jobs.removeById).toHaveBeenCalledWith('calls.ringTimeout', `call-ring-${callId}`);
     expect(messages.createCallMessage).toHaveBeenCalledTimes(1);
     expect(messages.updateCallMessage).toHaveBeenCalledWith(

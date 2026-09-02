@@ -166,7 +166,7 @@ export class CallsService {
       messageId: null,
       ringTargetUserId,
       peakParticipantCount: 1,
-      participants: [this.newParticipant(userId, socketId, type, nowIso)],
+      participants: [this.newParticipant(userId, socketId, nowIso, type === 'video')],
     };
 
     const created = await this.store.withConversationLock(conversationId, async () => {
@@ -279,7 +279,10 @@ export class CallsService {
         if (record.participants.length >= record.capacity) {
           return fail(ackError('call_full', 'This call is full.'));
         }
-        record.participants.push(this.newParticipant(userId, socketId, record.type, nowIso));
+        // Joiners keep camera off until they toggle it — the starter is the only
+        // side that publishes video on entry. Advertising camera-on here made the
+        // far side show an empty recv tile (and hid the real late-on camera).
+        record.participants.push(this.newParticipant(userId, socketId, nowIso, false));
         newlySeated = true;
       }
 
@@ -537,8 +540,13 @@ export class CallsService {
 
   // ─── Internals ────────────────────────────────────────────────────────────────
 
-  private newParticipant(userId: string, socketId: string, type: CallType, joinedAt: string): CallParticipantRecord {
-    return { userId, joinedAt, micEnabled: true, cameraEnabled: type === 'video', connectionState: 'connected', socketId };
+  private newParticipant(
+    userId: string,
+    socketId: string,
+    joinedAt: string,
+    cameraEnabled: boolean,
+  ): CallParticipantRecord {
+    return { userId, joinedAt, micEnabled: true, cameraEnabled, connectionState: 'connected', socketId };
   }
 
   /**
