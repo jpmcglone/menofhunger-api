@@ -28,6 +28,8 @@ export type CallParticipantDto = {
   connectionState: CallParticipantConnectionState;
   /** Web only: the participant's outgoing video track is a screen capture (render contain-fit, unmirrored). */
   screenSharing?: boolean;
+  /** Raised hand. Clients only show this in calls with more than two people. */
+  handRaised?: boolean;
 };
 
 export type CallSessionDto = {

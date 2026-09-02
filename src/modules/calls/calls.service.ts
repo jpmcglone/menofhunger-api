@@ -363,6 +363,7 @@ export class CallsService {
     micEnabled?: boolean;
     cameraEnabled?: boolean;
     screenSharing?: boolean;
+    handRaised?: boolean;
   }): Promise<void> {
     const { userId, callId, socketId } = params;
     const initial = await this.store.getByCallId(callId);
@@ -377,6 +378,7 @@ export class CallsService {
       if (typeof params.micEnabled === 'boolean') p.micEnabled = params.micEnabled;
       if (typeof params.cameraEnabled === 'boolean') p.cameraEnabled = params.cameraEnabled;
       if (typeof params.screenSharing === 'boolean') p.screenSharing = params.screenSharing;
+      if (typeof params.handRaised === 'boolean') p.handRaised = params.handRaised;
       await this.store.save(rec);
       return rec;
     });
@@ -551,6 +553,9 @@ export class CallsService {
         return { record: rec, removed: true, endAs: 'ended', scheduleEmpty: false };
       }
       if (rec.participants.length > 0) {
+        if (rec.participants.length <= 2) {
+          for (const p of rec.participants) p.handRaised = undefined;
+        }
         await this.store.save(rec);
         return { record: rec, removed: true, endAs: null, scheduleEmpty: false };
       }

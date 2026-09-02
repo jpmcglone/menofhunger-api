@@ -545,6 +545,31 @@ describe('CallsService one seat per member', () => {
     expect(realLeave.call?.participants).toHaveLength(0);
   });
 
+  it('records handRaised on the bound participant and surfaces it on the DTO', async () => {
+    const { svc, store } = makeService({ [GROUP.id]: GROUP });
+    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    const callId = started.call!.id;
+    await svc.updateParticipantState({ userId: 'alice', callId, socketId: 's1', handRaised: true });
+    expect(store.byConversation.get(GROUP.id)!.participants[0]!.handRaised).toBe(true);
+    expect(CallSessionStore.toDto(store.byConversation.get(GROUP.id)!).participants[0]!.handRaised).toBe(true);
+  });
+
+  it('clears raised hands when a group call drops to two people', async () => {
+    const { svc, store } = makeService({ [GROUP.id]: GROUP });
+    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'audio' });
+    const callId = started.call!.id;
+    await svc.join({ userId: 'bob', socketId: 's2', callId });
+    await svc.join({ userId: 'carol', socketId: 's3', callId });
+    await svc.updateParticipantState({ userId: 'alice', callId, socketId: 's1', handRaised: true });
+    await svc.updateParticipantState({ userId: 'bob', callId, socketId: 's2', handRaised: true });
+    expect(store.byConversation.get(GROUP.id)!.participants).toHaveLength(3);
+    await svc.leave({ userId: 'carol', callId, socketId: 's3' });
+    const left = store.byConversation.get(GROUP.id)!.participants;
+    expect(left).toHaveLength(2);
+    expect(left.every((p) => !p.handRaised)).toBe(true);
+    expect(CallSessionStore.toDto(store.byConversation.get(GROUP.id)!).participants.every((p) => !p.handRaised)).toBe(true);
+  });
+
   it('records screenSharing on the bound participant and surfaces it on the DTO', async () => {
     const { svc, store } = makeService({ [GROUP.id]: GROUP });
     const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });

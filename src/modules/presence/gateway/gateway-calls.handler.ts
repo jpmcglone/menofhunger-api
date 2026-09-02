@@ -12,6 +12,7 @@ export type CallsStatePayload = {
   micEnabled?: boolean;
   cameraEnabled?: boolean;
   screenSharing?: boolean;
+  handRaised?: boolean;
 };
 
 /**
@@ -115,6 +116,7 @@ export class CallsGatewayHandler {
         ...(typeof payload?.micEnabled === 'boolean' ? { micEnabled: payload.micEnabled } : {}),
         ...(typeof payload?.cameraEnabled === 'boolean' ? { cameraEnabled: payload.cameraEnabled } : {}),
         ...(typeof payload?.screenSharing === 'boolean' ? { screenSharing: payload.screenSharing } : {}),
+        ...(typeof payload?.handRaised === 'boolean' ? { handRaised: payload.handRaised } : {}),
       });
     } catch {
       // Best-effort; the next state change resyncs.
