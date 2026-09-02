@@ -33,6 +33,7 @@ import { toUserListDto } from '../../common/dto';
 import { findReactionById } from '../../common/constants/reactions';
 import {
   toMessageDto,
+  toMessageCallDto,
   toMessageParticipantDto,
   toMessageConversationCrewSummaryDto,
   type MessageConversationDto,
@@ -1592,9 +1593,10 @@ export class MessagesService {
       const viewerIsVerified = Boolean(sender?.verifiedStatus && sender.verifiedStatus !== 'none');
       const viewerIsPremium = Boolean(sender?.premium || sender?.premiumPlus);
       const hasVideo = media.some((m) => m.kind === 'video');
-      const hasImageOrGif = media.some((m) => m.kind !== 'video');
-      if (hasImageOrGif && !viewerIsVerified) {
-        throw new ForbiddenException('Verify your account to send images and GIFs in chat.');
+      const hasAudio = media.some((m) => m.kind === 'audio');
+      const hasImageOrGif = media.some((m) => m.kind !== 'video' && m.kind !== 'audio');
+      if ((hasImageOrGif || hasAudio) && !viewerIsVerified) {
+        throw new ForbiddenException('Verify your account to send photos and voice notes in chat.');
       }
       if (hasVideo && !viewerIsPremium) {
         throw new ForbiddenException('Video messages are for premium members only.');
@@ -1660,7 +1662,13 @@ export class MessagesService {
       this.presenceRealtime.emitMessageCreated(id, { conversationId, message: dto });
       this.emitUnreadCounts(id);
     }
-    const pushBody = trimmed || (media.length > 0 ? '📷 Sent a photo' : '');
+    const pushBody =
+      trimmed ||
+      (media.some((m) => m.kind === 'audio')
+        ? '🎙️ Sent a voice note'
+        : media.length > 0
+          ? '📷 Sent a photo'
+          : '');
     const pushRecipients = conversation.participants.filter(
       (p) => p.userId !== userId && p.status !== 'pending',
     );
@@ -2019,6 +2027,76 @@ export class MessagesService {
       where: { conversationId_userId: { conversationId, userId } },
       data: { mutedAt: null },
     });
+  }
+
+  /**
+   * Caller attaches one video to a missed-call row. Emits `messages:edited` so both
+   * sides patch the existing chip instead of growing a second message.
+   */
+  async attachCallVoicemail(params: {
+    userId: string;
+    conversationId: string;
+    messageId: string;
+    media: MessageMediaInput;
+  }) {
+    const { userId, conversationId, messageId, media } = params;
+    if (media.source !== 'upload' || media.kind !== 'video') {
+      throw new BadRequestException('Voicemail must be a video upload.');
+    }
+
+    const conversation = await this.getConversationOrThrow({ userId, conversationId });
+    if (conversation.type !== 'direct') {
+      throw new BadRequestException('Voicemail is only for direct calls.');
+    }
+
+    const existing = await this.prisma.message.findFirst({
+      where: { id: messageId, conversationId },
+      include: { media: true },
+    });
+    if (!existing || existing.kind !== 'call') throw new NotFoundException('Call message not found.');
+    if (existing.senderId !== userId) {
+      throw new ForbiddenException('Only the caller can leave a video message.');
+    }
+    const call = toMessageCallDto(existing.callMeta);
+    if (!call || call.outcome !== 'missed') {
+      throw new BadRequestException('A video message can only be left on a missed call.');
+    }
+    if ((existing.media?.length ?? 0) > 0) {
+      throw new BadRequestException('This call already has a video message.');
+    }
+
+    const [create] = messageMediaCreateData([media]);
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.messageMedia.create({
+        data: { messageId, ...create },
+      });
+      return tx.message.update({
+        where: { id: messageId },
+        data: { body: 'Missed video call · Left a message' },
+        include: MESSAGE_INCLUDE,
+      });
+    });
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const dto = toMessageDto({ message: updated, publicBaseUrl, viewerUserId: userId });
+    for (const p of conversation.participants) {
+      const viewerDto = toMessageDto({ message: updated, publicBaseUrl, viewerUserId: p.userId });
+      this.presenceRealtime.emitMessageEdited(p.userId, { conversationId, message: viewerDto });
+    }
+    const senderName =
+      updated.sender?.name?.trim() || updated.sender?.username?.trim() || 'Someone';
+    for (const recipient of conversation.participants.filter(
+      (p) => p.userId !== userId && p.status !== 'pending',
+    )) {
+      this.events.emitMessagePushRequested({
+        recipientUserId: recipient.userId,
+        senderUserId: userId,
+        senderName,
+        body: '📹 Left you a video message',
+        conversationId,
+      });
+    }
+    return dto;
   }
 
   async editMessage(params: { userId: string; conversationId: string; messageId: string; body: string }): Promise<void> {

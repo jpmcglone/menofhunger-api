@@ -95,6 +95,7 @@ enum PostMediaKind {
   image
   gif
   video
+  audio
 }
 
 enum PostMediaSource {

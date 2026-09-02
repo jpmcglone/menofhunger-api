@@ -362,6 +362,7 @@ export class CallsService {
     socketId?: string;
     micEnabled?: boolean;
     cameraEnabled?: boolean;
+    screenSharing?: boolean;
   }): Promise<void> {
     const { userId, callId, socketId } = params;
     const initial = await this.store.getByCallId(callId);
@@ -375,6 +376,7 @@ export class CallsService {
       if (socketId && p.socketId && p.socketId !== socketId) return null;
       if (typeof params.micEnabled === 'boolean') p.micEnabled = params.micEnabled;
       if (typeof params.cameraEnabled === 'boolean') p.cameraEnabled = params.cameraEnabled;
+      if (typeof params.screenSharing === 'boolean') p.screenSharing = params.screenSharing;
       await this.store.save(rec);
       return rec;
     });

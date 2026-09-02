@@ -503,6 +503,130 @@ describe('messageMediaCreateData', () => {
   });
 });
 
+describe('MessagesService.attachCallVoicemail', () => {
+  const video = {
+    source: 'upload' as const,
+    kind: 'video' as const,
+    r2Key: 'uploads/alice/voicemail/a.mp4',
+    thumbnailR2Key: 'uploads/alice/thumbnails/a.jpg',
+    width: 720,
+    height: 1280,
+    durationSeconds: 8,
+    alt: null,
+  };
+
+  function makeVoicemailService(message: any, extras?: { events?: any; presenceRealtime?: any }) {
+    const presenceRealtime = extras?.presenceRealtime ?? { emitMessageEdited: jest.fn() };
+    const events = extras?.events ?? { emitMessagePushRequested: jest.fn() };
+    const conversation = {
+      id: 'c1',
+      type: 'direct',
+      participants: [
+        { userId: 'alice', status: 'accepted' },
+        { userId: 'bob', status: 'accepted' },
+      ],
+    };
+    const updated = {
+      id: message.id,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      body: 'Missed video call · Left a message',
+      conversationId: 'c1',
+      senderId: 'alice',
+      kind: 'call',
+      callMeta: message.callMeta,
+      deletedForAll: false,
+      editedAt: null,
+      replyTo: null,
+      deletions: [],
+      reactions: [],
+      media: [{
+        id: 'mm1',
+        kind: 'video',
+        source: 'upload',
+        r2Key: video.r2Key,
+        thumbnailR2Key: video.thumbnailR2Key,
+        url: null,
+        mp4Url: null,
+        width: 720,
+        height: 1280,
+        durationSeconds: 8,
+        alt: null,
+      }],
+      sender: {
+        id: 'alice',
+        username: 'alice',
+        name: 'Alice',
+        premium: false,
+        premiumPlus: false,
+        isOrganization: false,
+        verifiedStatus: 'manual',
+        avatarKey: null,
+        avatarUpdatedAt: null,
+        isBot: false,
+      },
+    };
+    const prisma = {
+      userBlock: { findMany: jest.fn(async () => []) },
+      messageConversation: { findFirst: jest.fn(async () => conversation) },
+      message: {
+        findFirst: jest.fn(async () => message),
+        update: jest.fn(async () => updated),
+      },
+      messageMedia: { create: jest.fn(async () => ({ id: 'mm1' })) },
+      $transaction: jest.fn(async (fn: any) => fn({
+        messageMedia: { create: jest.fn(async () => ({ id: 'mm1' })) },
+        message: { update: jest.fn(async () => updated) },
+      })),
+    };
+    return makeService({ prisma, presenceRealtime, events });
+  }
+
+  const missedCall = {
+    id: 'm1',
+    conversationId: 'c1',
+    senderId: 'alice',
+    kind: 'call',
+    callMeta: { callId: 'call1', type: 'video', outcome: 'missed', durationSeconds: null, peakParticipantCount: 1 },
+    media: [],
+  };
+
+  it('attaches video to a missed call the viewer started', async () => {
+    const { svc, prisma } = makeVoicemailService(missedCall);
+    const dto = await svc.attachCallVoicemail({
+      userId: 'alice',
+      conversationId: 'c1',
+      messageId: 'm1',
+      media: video,
+    });
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(dto.body).toBe('Missed video call · Left a message');
+  });
+
+  it('rejects a call that was not missed', async () => {
+    const { svc } = makeVoicemailService({
+      ...missedCall,
+      callMeta: { ...missedCall.callMeta, outcome: 'ended' },
+    });
+    await expect(
+      svc.attachCallVoicemail({ userId: 'alice', conversationId: 'c1', messageId: 'm1', media: video }),
+    ).rejects.toThrow('missed call');
+  });
+
+  it('rejects a non-caller', async () => {
+    const { svc } = makeVoicemailService(missedCall);
+    await expect(
+      svc.attachCallVoicemail({ userId: 'bob', conversationId: 'c1', messageId: 'm1', media: video }),
+    ).rejects.toThrow('Only the caller');
+  });
+
+  it('rejects a second attach', async () => {
+    const { svc } = makeVoicemailService({ ...missedCall, media: [{ id: 'already' }] });
+    await expect(
+      svc.attachCallVoicemail({ userId: 'alice', conversationId: 'c1', messageId: 'm1', media: video }),
+    ).rejects.toThrow('already has a video message');
+  });
+});
+
 describe('MessagesController — VerifiedGuard invariant', () => {
   it('MessagesController does NOT carry VerifiedGuard (unverified users must be able to read/reply in admin-initiated threads)', () => {
     const classGuards = (Reflect.getMetadata('__guards__', MessagesController) as unknown[] | undefined) ?? [];

@@ -33,7 +33,7 @@ export type HeardAboutUs = 'other' | 'friend' | 'google' | 'x' | 'youtube' | 'nx
 export type MessageParticipantRole = 'owner' | 'member'
 export type MessageParticipantStatus = 'pending' | 'accepted'
 export type NotificationKind = 'message' | 'comment' | 'boost' | 'repost' | 'follow' | 'followed_post' | 'followed_article' | 'mention' | 'nudge' | 'poll_results_ready' | 'generic' | 'coin_transfer' | 'group_join_request' | 'community_group_member_joined' | 'community_group_join_approved' | 'community_group_join_rejected' | 'community_group_member_removed' | 'community_group_disbanded' | 'crew_invite_received' | 'crew_invite_accepted' | 'crew_invite_declined' | 'crew_invite_cancelled' | 'crew_member_joined' | 'crew_member_left' | 'crew_member_kicked' | 'crew_owner_transferred' | 'crew_owner_transfer_vote' | 'crew_wall_mention' | 'crew_disbanded' | 'community_group_invite_received' | 'community_group_invite_accepted' | 'community_group_invite_declined' | 'community_group_invite_cancelled' | 'community_group_post' | 'marv_not_in_group' | 'status_update' | 'checkin_post' | 'word_of_the_day' | 'quote_of_the_day' | 'account_verified' | 'checkin_reminder' | 'on_this_day' | 'premium_started' | 'premium_ended' | 'space_reminder_day' | 'space_reminder_soon' | 'space_live' | 'space_schedule_cancelled' | 'space_schedule_rescheduled' | 'followed_space'
-export type PostMediaKind = 'image' | 'gif' | 'video'
+export type PostMediaKind = 'image' | 'gif' | 'video' | 'audio'
 export type PostMediaSource = 'upload' | 'giphy'
 export type PostVisibility = 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe'
 export type ReportReason = 'other' | 'spam' | 'harassment' | 'hate' | 'sexual' | 'violence' | 'illegal'
@@ -701,6 +701,8 @@ export type CallParticipantDto = {
   micEnabled: boolean;
   cameraEnabled: boolean;
   connectionState: CallParticipantConnectionState;
+  /** Web only: the participant's outgoing video track is a screen capture (render contain-fit, unmirrored). */
+  screenSharing?: boolean;
 };
 
 export type CallSessionDto = {
@@ -3166,7 +3168,7 @@ export type MessageReplySnippetDto = {
 
 export type MessageMediaDto = {
   id: string;
-  kind: 'image' | 'gif' | 'video';
+  kind: 'image' | 'gif' | 'video' | 'audio';
   source: 'upload' | 'giphy';
   url: string;
   mp4Url: string | null;

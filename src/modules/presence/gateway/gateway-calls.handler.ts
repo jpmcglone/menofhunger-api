@@ -6,6 +6,14 @@ import { PresenceService } from '../presence.service';
 
 type BoundCall = { callId: string; userId: string };
 
+/** `calls:state` body: any subset of the participant's own flags. */
+export type CallsStatePayload = {
+  callId?: string;
+  micEnabled?: boolean;
+  cameraEnabled?: boolean;
+  screenSharing?: boolean;
+};
+
 /**
  * DM calling over the socket. Every lifecycle action is acked with `CallsAckDto` so
  * the client gets `{ call, iceServers }` or `{ error }` without an HTTP round-trip.
@@ -92,7 +100,7 @@ export class CallsGatewayHandler {
     }
   }
 
-  async handleCallsState(client: Socket, payload: { callId?: string; micEnabled?: boolean; cameraEnabled?: boolean }): Promise<void> {
+  async handleCallsState(client: Socket, payload: CallsStatePayload): Promise<void> {
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
     const callId = String(payload?.callId ?? '').trim();
@@ -106,6 +114,7 @@ export class CallsGatewayHandler {
         socketId: client.id,
         ...(typeof payload?.micEnabled === 'boolean' ? { micEnabled: payload.micEnabled } : {}),
         ...(typeof payload?.cameraEnabled === 'boolean' ? { cameraEnabled: payload.cameraEnabled } : {}),
+        ...(typeof payload?.screenSharing === 'boolean' ? { screenSharing: payload.screenSharing } : {}),
       });
     } catch {
       // Best-effort; the next state change resyncs.

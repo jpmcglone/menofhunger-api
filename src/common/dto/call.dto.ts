@@ -26,6 +26,8 @@ export type CallParticipantDto = {
   micEnabled: boolean;
   cameraEnabled: boolean;
   connectionState: CallParticipantConnectionState;
+  /** Web only: the participant's outgoing video track is a screen capture (render contain-fit, unmirrored). */
+  screenSharing?: boolean;
 };
 
 export type CallSessionDto = {

@@ -25,7 +25,7 @@ import { SpacesGatewayHandler } from './gateway/gateway-spaces.handler';
 import { RadioGatewayHandler } from './gateway/gateway-radio.handler';
 import { ContentSubscriptionsHandler } from './gateway/gateway-subscriptions.handler';
 import { MessagingGatewayHandler } from './gateway/gateway-messaging.handler';
-import { CallsGatewayHandler } from './gateway/gateway-calls.handler';
+import { CallsGatewayHandler, type CallsStatePayload } from './gateway/gateway-calls.handler';
 import type { CallsAckDto } from '../../common/dto';
 
 /**
@@ -381,7 +381,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   @SubscribeMessage(WsEventNames.callsState)
-  handleCallsState(client: Socket, payload: { callId?: string; micEnabled?: boolean; cameraEnabled?: boolean }): Promise<void> {
+  handleCallsState(client: Socket, payload: CallsStatePayload): Promise<void> {
     return this.callsHandler.handleCallsState(client, payload);
   }
 

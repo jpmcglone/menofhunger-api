@@ -25,7 +25,7 @@ const commitBannerSchema = z.object({
 const initPostMediaSchema = z.object({
   contentType: z.string().min(1),
   contentHash: z.string().min(1).optional(),
-  purpose: z.enum(['post', 'thumbnail', 'group', 'crew']).optional(),
+  purpose: z.enum(['post', 'thumbnail', 'group', 'crew', 'voicemail']).optional(),
 });
 
 const commitPostMediaSchema = z.object({
@@ -37,7 +37,22 @@ const commitPostMediaSchema = z.object({
   durationSeconds: z.coerce.number().int().min(0).max(3600).optional(),
 }).superRefine((val, ctx) => {
   const key = (val.key ?? '').trim();
-  const isVideo = key.includes('/videos/');
+  const isVideo = key.includes('/videos/') || key.includes('/voicemail/');
+  const isAudio = key.includes('/audio/');
+  const isVoicemail = key.includes('/voicemail/');
+  if (isAudio) {
+    const durationSeconds = typeof val.durationSeconds === 'number' ? val.durationSeconds : null;
+    if (durationSeconds == null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Audio uploads must include durationSeconds.',
+        path: ['durationSeconds'],
+      });
+    } else if (durationSeconds > 120) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Voice notes must be 2 minutes or shorter.', path: ['durationSeconds'] });
+    }
+    return;
+  }
   if (!isVideo) return;
 
   const width = typeof val.width === 'number' ? val.width : null;
@@ -53,7 +68,9 @@ const commitPostMediaSchema = z.object({
     return;
   }
 
-  if (durationSeconds > 5 * 60) {
+  if (isVoicemail && durationSeconds > 60) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Video messages must be 60 seconds or shorter.', path: ['durationSeconds'] });
+  } else if (!isVoicemail && durationSeconds > 5 * 60) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Video must be 5 minutes or shorter.', path: ['durationSeconds'] });
   }
 

@@ -14,6 +14,7 @@ export type CallParticipantRecord = {
   micEnabled: boolean;
   cameraEnabled: boolean;
   connectionState: CallParticipantConnectionState;
+  screenSharing?: boolean;
   socketId: string | null;
   /** When the seat entered `reconnecting`; lets the sweep expire it even if the grace job was lost. */
   disconnectedAt?: string | null;
@@ -201,6 +202,7 @@ export class CallSessionStore {
         micEnabled: p.micEnabled,
         cameraEnabled: p.cameraEnabled,
         connectionState: p.connectionState,
+        ...(p.screenSharing ? { screenSharing: true } : {}),
       })),
     };
   }

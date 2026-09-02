@@ -27,7 +27,7 @@ const listMessagesSchema = z.object({
 const messageMediaSchema = z.discriminatedUnion('source', [
   z.object({
     source: z.literal('upload'),
-    kind: z.enum(['image', 'gif', 'video']),
+    kind: z.enum(['image', 'gif', 'video', 'audio']),
     r2Key: z.string().min(1),
     thumbnailR2Key: z.string().optional().nullable(),
     width: z.coerce.number().int().positive().optional().nullable(),
@@ -66,6 +66,17 @@ const sendMessageSchema = z
   .refine((val) => (val.body?.trim()?.length ?? 0) > 0 || (val.media?.length ?? 0) > 0, {
     message: 'Message must have a body or media.',
   });
+
+const voicemailSchema = z.object({
+  source: z.literal('upload'),
+  kind: z.literal('video'),
+  r2Key: z.string().min(1),
+  thumbnailR2Key: z.string().optional().nullable(),
+  width: z.coerce.number().int().positive().optional().nullable(),
+  height: z.coerce.number().int().positive().optional().nullable(),
+  durationSeconds: z.coerce.number().min(0).max(60).optional().nullable(),
+  alt: z.string().max(500).optional().nullable(),
+});
 
 const blockUserSchema = z.object({
   user_id: z.string().trim().min(1),
@@ -252,6 +263,29 @@ export class MessagesController {
       body: parsed.body ?? '',
       replyToId: parsed.replyToId ?? null,
       media: (parsed.media ?? []) as MessageMediaInput[],
+    });
+    return { data: result };
+  }
+
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('interact', 30),
+      ttl: rateLimitTtl('interact', 60),
+    },
+  })
+  @Post('conversations/:id/messages/:messageId/voicemail')
+  async attachCallVoicemail(
+    @CurrentUserId() userId: string,
+    @Param('id') id: string,
+    @Param('messageId') messageId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = voicemailSchema.parse(body);
+    const result = await this.messages.attachCallVoicemail({
+      userId,
+      conversationId: id,
+      messageId,
+      media: parsed as MessageMediaInput,
     });
     return { data: result };
   }

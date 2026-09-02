@@ -537,11 +537,22 @@ describe('CallsService one seat per member', () => {
     const staleLeave = await svc.leave({ userId: 'alice', callId, socketId: 's1' });
     expect(staleLeave.call?.participants).toHaveLength(1);
     // Nor overwrite its mic/camera flags.
-    await svc.updateParticipantState({ userId: 'alice', callId, socketId: 's1', micEnabled: false });
+    await svc.updateParticipantState({ userId: 'alice', callId, socketId: 's1', micEnabled: false, screenSharing: true });
     expect(store.byConversation.get(GROUP.id)!.participants[0]!.micEnabled).toBe(true);
+    expect(store.byConversation.get(GROUP.id)!.participants[0]!.screenSharing).toBeFalsy();
 
     const realLeave = await svc.leave({ userId: 'alice', callId, socketId: 's2' });
     expect(realLeave.call?.participants).toHaveLength(0);
+  });
+
+  it('records screenSharing on the bound participant and surfaces it on the DTO', async () => {
+    const { svc, store } = makeService({ [GROUP.id]: GROUP });
+    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    const callId = started.call!.id;
+    await svc.updateParticipantState({ userId: 'alice', callId, socketId: 's1', screenSharing: true });
+    expect(store.byConversation.get(GROUP.id)!.participants[0]!.screenSharing).toBe(true);
+    const dto = store.byConversation.get(GROUP.id)!;
+    expect(CallSessionStore.toDto(dto).participants[0]!.screenSharing).toBe(true);
   });
 
   it('rejoining from the same socket is not a takeover', async () => {
