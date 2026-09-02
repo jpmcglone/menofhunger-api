@@ -68,6 +68,9 @@ describe('CallsSideEffectsHandler', () => {
       conversationId: 'conv-1',
       type: 'video',
       caller: expect.objectContaining({ id: 'alice', username: 'alice', name: 'Alice', avatarUrl: null }),
+      callerName: 'Alice',
+      callerUsername: 'alice',
+      callerAvatarUrl: null,
       expiresAt: '2026-09-01T12:00:40.000Z',
     });
   });
@@ -87,6 +90,26 @@ describe('CallsSideEffectsHandler', () => {
     await handler.onDirectRinging(PAYLOAD);
     expect(apns.sendVoip).not.toHaveBeenCalled();
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('uses username when the caller has no display name', async () => {
+    const { handler, apns, prisma } = makeHandler({ record: ringing() });
+    prisma.user.findUnique.mockResolvedValueOnce({
+      id: 'alice',
+      username: 'alice',
+      name: null,
+      premium: false,
+      premiumPlus: false,
+      isOrganization: false,
+      verifiedStatus: 'none',
+      avatarKey: null,
+      avatarUpdatedAt: null,
+    } as never);
+    await handler.onDirectRinging(PAYLOAD);
+    expect(apns.sendVoip).toHaveBeenCalledWith(
+      'bob',
+      expect.objectContaining({ callerName: 'alice', callerUsername: 'alice' }),
+    );
   });
 
   it('refuses to ring anyone other than the recorded callee', async () => {

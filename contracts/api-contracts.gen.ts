@@ -797,7 +797,14 @@ export type CallVoipPushPayloadDto = {
   conversationId: string;
   type: CallType;
   caller: UserListDto;
-  /** ISO time after which the client stops ringing locally (mirrors the server ring timeout). */
+  /**
+   * Flat CallKit title. Name, else username. iOS must report this synchronously from the
+   * VoIP push — nested `caller` decode must not be the only way to get a person name.
+   */
+  callerName: string;
+  callerUsername?: string | null;
+  callerAvatarUrl?: string | null;
+  /** ISO time after which the phone stops ringing locally (mirrors the server ring timeout). */
   expiresAt: string;
 };
 

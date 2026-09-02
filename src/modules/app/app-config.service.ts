@@ -290,9 +290,20 @@ export class AppConfigService {
   }
 
   /**
-   * ICE servers handed to browsers on call start/join. STUN is always present (Google's
-   * public servers unless `RTC_STUN_URLS` overrides). TURN is appended only when all
-   * three `RTC_TURN_*` vars are set, so enabling relay later is a config change.
+   * Cloudflare Realtime TURN key. Used to mint short-lived ICE credentials on start/join.
+   * The key itself is never sent to clients.
+   */
+  cloudflareTurn(): { keyId: string; apiToken: string } | null {
+    const keyId = this.config.get<string>('CF_TURN_KEY_ID')?.trim() ?? '';
+    const apiToken = this.config.get<string>('CF_TURN_API_TOKEN')?.trim() ?? '';
+    if (!keyId || !apiToken) return null;
+    return { keyId, apiToken };
+  }
+
+  /**
+   * Static ICE servers when Cloudflare TURN is unset or minting fails. STUN is always
+   * present (Google's public servers unless `RTC_STUN_URLS` overrides). Static TURN is
+   * appended only when all three `RTC_TURN_*` vars are set.
    */
   rtcIceServers(): Array<{ urls: string[]; username?: string; credential?: string }> {
     const split = (raw: string | undefined): string[] =>

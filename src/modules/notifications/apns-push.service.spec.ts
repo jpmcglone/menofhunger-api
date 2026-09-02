@@ -163,6 +163,8 @@ describe('ApnsPushService', () => {
       conversationId: 'conv-1',
       type: 'video',
       caller: { id: 'u2', username: 'john', name: 'John' } as any,
+      callerName: 'John',
+      callerUsername: 'john',
       expiresAt: new Date(1_800_000_000_000).toISOString(),
     });
     expect(sendMock).toHaveBeenCalledTimes(1);

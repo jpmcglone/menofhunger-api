@@ -102,7 +102,7 @@ function makeService(conversations: Record<string, CallConversationContext>) {
     enqueue: jest.fn(async () => ({})),
     removeById: jest.fn(async () => undefined),
   };
-  const appConfig = { rtcIceServers: jest.fn(() => [{ urls: ['stun:stun.example.com'] }]) };
+  const iceServers = { resolve: jest.fn(async () => [{ urls: ['stun:stun.example.com'] }]) };
   const sideEffects = { dispatch: jest.fn() };
   /** Socket ids presence can prove are still connected, per user. Tests mutate this to simulate drops. */
   const liveSockets = new Map<string, Set<string>>();
@@ -114,7 +114,7 @@ function makeService(conversations: Record<string, CallConversationContext>) {
     messages as any,
     realtime as any,
     jobs as any,
-    appConfig as any,
+    iceServers as any,
     sideEffects as any,
     presenceRedis as any,
   );

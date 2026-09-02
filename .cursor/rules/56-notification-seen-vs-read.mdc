@@ -1,0 +1,19 @@
+---
+description: Bell badge is unseen; list highlight is unread. Do not mix deliveredAt and readAt.
+alwaysApply: true
+---
+
+# Notification seen vs read
+
+Two clocks. Do not collapse them.
+
+| State | Field | User meaning | UI |
+| --- | --- | --- | --- |
+| **Unseen** | `deliveredAt == null` | Has not opened/seen the inbox since it arrived | **Badge** (app icon, bell count, `undeliveredCount`) |
+| **Unread** | `readAt == null` | Has not opened the item / marked it read | **Highlight** on the row |
+
+Opening the notifications surface marks **seen** (`deliveredAt`). That clears the badge. Rows stay highlighted until **read** (`readAt`).
+
+Clicking through (or mark-read) sets `readAt` and should also set `deliveredAt` if it was still null.
+
+Never drive the badge off `readAt`. Never drive row highlight off `deliveredAt`.

@@ -143,6 +143,15 @@ export const envSchema = z.object({
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
   ),
+  // Cloudflare Realtime TURN. When both are set, start/join mints short-lived ICE credentials.
+  CF_TURN_KEY_ID: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  CF_TURN_API_TOKEN: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
 
   // Cloudflare R2 (S3-compatible) for public assets (avatars/banners).
   R2_ACCOUNT_ID: z.preprocess(

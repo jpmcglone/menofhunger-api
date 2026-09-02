@@ -1,5 +1,5 @@
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
-import type { CallVoipPushPayloadDto } from '../../common/dto/call.dto';
+import { callKitCallerName, type CallVoipPushPayloadDto } from '../../common/dto/call.dto';
 import { toUserListDto } from '../../common/dto/user.dto';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { AppConfigService } from '../app/app-config.service';
@@ -46,11 +46,15 @@ export class CallsSideEffectsHandler implements OnModuleInit {
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
     const startedAt = new Date(record.startedAt).getTime();
+    const caller = toUserListDto(callerRow, publicBaseUrl);
     const voip: CallVoipPushPayloadDto = {
       callId: record.id,
       conversationId: record.conversationId,
       type: record.type,
-      caller: toUserListDto(callerRow, publicBaseUrl),
+      caller,
+      callerName: callKitCallerName(caller),
+      callerUsername: caller.username,
+      callerAvatarUrl: caller.avatarUrl,
       expiresAt: new Date((Number.isFinite(startedAt) ? startedAt : Date.now()) + CALL_RING_TIMEOUT_MS).toISOString(),
     };
     try {
