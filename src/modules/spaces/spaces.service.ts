@@ -652,6 +652,8 @@ export class SpacesService {
     scheduledAt: Date | null;
     title: string;
     eventTitle: string;
+    playbackTitle: string | null;
+    watchPartyUrl: string | null;
     ownerUserId: string;
     ownerUsername: string | null;
   } | null> {
@@ -683,6 +685,8 @@ export class SpacesService {
       scheduledAt: space.scheduledAt,
       title: space.title,
       eventTitle: resolveSpaceEventTitle({ title: space.title, playbackTitle }),
+      playbackTitle,
+      watchPartyUrl: space.watchPartyUrl,
       ownerUserId: space.ownerId,
       ownerUsername: space.owner.username,
     };

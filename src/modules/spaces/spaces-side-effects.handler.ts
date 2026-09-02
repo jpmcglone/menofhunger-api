@@ -14,6 +14,7 @@ import {
 import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { SpacesService } from './spaces.service';
+import { youtubeEmailPosterUrl } from './youtube-oembed-title';
 
 function formatScheduleWhen(isoOrDate: string | Date): string {
   const d = typeof isoOrDate === 'string' ? new Date(isoOrDate) : isoOrDate;
@@ -162,6 +163,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
         whenLabel: '',
         spaceUrl: ctx.spaceUrl,
         kind: 'cancelled',
+        ...this.spaceEmailMedia(snap),
       });
     });
   }
@@ -242,6 +244,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
         whenLabel: when,
         spaceUrl: ctx.spaceUrl,
         kind: 'announced',
+        ...this.spaceEmailMedia(snap),
       });
     });
   }
@@ -258,6 +261,21 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     };
   }
 
+  private spaceEmailMedia(snap: {
+    watchPartyUrl?: string | null;
+    playbackTitle?: string | null;
+    eventTitle?: string | null;
+    title?: string | null;
+  } | null): { thumbnailUrl: string | null; videoTitle: string | null } {
+    if (!snap) return { thumbnailUrl: null, videoTitle: null };
+    const eventTitle = (snap.eventTitle || snap.title || '').trim();
+    const playing = (snap.playbackTitle ?? '').trim();
+    return {
+      thumbnailUrl: youtubeEmailPosterUrl(snap.watchPartyUrl),
+      videoTitle: playing && playing.toLowerCase() !== eventTitle.toLowerCase() ? playing : null,
+    };
+  }
+
   private async sendSpaceEmail(params: {
     recipientUserId: string;
     hostName: string;
@@ -265,6 +283,8 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     whenLabel: string;
     spaceUrl: string;
     kind: SpaceScheduleEmailKind;
+    thumbnailUrl?: string | null;
+    videoTitle?: string | null;
   }): Promise<void> {
     const user = await this.prisma.user.findUnique({
       where: { id: params.recipientUserId },
@@ -292,6 +312,8 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
       spaceUrl: params.spaceUrl,
       settingsUrl: `${baseUrl}/settings/notifications`,
       kind: params.kind,
+      thumbnailUrl: params.thumbnailUrl,
+      videoTitle: params.videoTitle,
     });
     const from =
       emailCfg.fromEmail.notifications || emailCfg.fromEmail.default || emailCfg.fromEmail.newsletter;
@@ -361,6 +383,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
         whenLabel: when,
         spaceUrl: ctx.spaceUrl,
         kind: 'soon',
+        ...this.spaceEmailMedia(snap),
       });
     });
   }

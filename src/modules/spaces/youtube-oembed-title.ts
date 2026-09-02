@@ -1,6 +1,6 @@
 const YOUTUBE_ID_RE = /^[a-zA-Z0-9_-]{6,20}$/;
 
-function youtubeVideoId(url: string): string | null {
+export function youtubeVideoId(url: string): string | null {
   try {
     const u = new URL(url);
     const host = u.hostname.replace(/^www\./, '').toLowerCase();
@@ -25,6 +25,18 @@ export function youtubeOEmbedRequestUrl(pageUrl: string): string | null {
   const id = youtubeVideoId(pageUrl);
   if (!id) return null;
   return `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${encodeURIComponent(id)}&format=json`;
+}
+
+/**
+ * Stable YouTube poster for email. `hqdefault` is always present; `maxresdefault`
+ * 404s for some videos and clients have no onerror fallback.
+ */
+export function youtubeEmailPosterUrl(pageUrl: string | null | undefined): string | null {
+  const trimmed = (pageUrl ?? '').trim();
+  if (!trimmed) return null;
+  const id = youtubeVideoId(trimmed);
+  if (!id) return null;
+  return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
 }
 
 /** Keyless public oEmbed — more reliable than scraping YouTube HTML. */

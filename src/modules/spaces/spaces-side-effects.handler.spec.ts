@@ -7,12 +7,16 @@ function makeHandler() {
       scheduledAt: Date | null;
       title: string;
       eventTitle: string;
+      playbackTitle: string | null;
+      watchPartyUrl: string | null;
       ownerUserId: string;
       ownerUsername: string | null;
     } | null> => ({
       scheduledAt: null,
       title: "ocaptain's space",
       eventTitle: "ocaptain's space",
+      playbackTitle: null,
+      watchPartyUrl: null,
       ownerUserId: 'owner-1',
       ownerUsername: 'ocaptain',
     })),
@@ -101,6 +105,8 @@ describe('SpacesSideEffectsHandler space.schedule.announced', () => {
     scheduledAt: new Date('2026-09-15T20:00:00.000Z'),
     title: "ocaptain's space",
     eventTitle: "ocaptain's space",
+    playbackTitle: null as string | null,
+    watchPartyUrl: null as string | null,
     ownerUserId: 'owner-1',
     ownerUsername: 'ocaptain',
   };
@@ -205,6 +211,8 @@ describe('SpacesSideEffectsHandler space.schedule.reminder soon', () => {
       scheduledAt,
       title: 'The Great Debate',
       eventTitle: 'The Great Debate',
+      playbackTitle: 'THE GREAT DEBATE | Live',
+      watchPartyUrl: 'https://youtu.be/dQw4w9WgXcQ',
       ownerUserId: 'owner-1',
       ownerUsername: 'ocaptain',
     });
@@ -240,6 +248,8 @@ describe('SpacesSideEffectsHandler space.schedule.reminder soon', () => {
     expect(email.sendText).toHaveBeenCalledWith(
       expect.objectContaining({
         subject: expect.stringContaining('starts in 30 minutes'),
+        html: expect.stringContaining('https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg'),
+        text: expect.stringContaining('Watching: THE GREAT DEBATE | Live'),
       }),
     );
   });

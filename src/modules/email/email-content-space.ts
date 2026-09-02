@@ -10,11 +10,15 @@ export function buildFollowedSpaceEmail(params: {
   spaceUrl: string;
   settingsUrl: string;
   kind?: SpaceScheduleEmailKind;
+  thumbnailUrl?: string | null;
+  videoTitle?: string | null;
 }): { subject: string; text: string; html: string } {
   const host = params.hostName.trim() || 'Someone you follow';
   const title = params.spaceTitle.trim() || 'a space';
   const when = params.whenLabel.trim();
   const kind = params.kind ?? 'announced';
+  const thumbnailUrl = (params.thumbnailUrl ?? '').trim();
+  const videoTitle = distinctVideoTitle(title, params.videoTitle);
 
   const subject =
     kind === 'cancelled'
@@ -33,6 +37,7 @@ export function buildFollowedSpaceEmail(params: {
         : `${host} scheduled ${title}.`;
 
   const whenLine = kind === 'cancelled' || !when ? '' : `Tune in ${when}.`;
+  const watchingLine = videoTitle ? `Watching: ${videoTitle}` : '';
 
   const leadHtml =
     kind === 'cancelled'
@@ -41,11 +46,26 @@ export function buildFollowedSpaceEmail(params: {
         ? `<strong>${escapeHtml(title)}</strong> starts in about 30 minutes.`
         : `${escapeHtml(host)} scheduled <strong>${escapeHtml(title)}</strong>.`;
 
+  const thumbnailHtml = thumbnailUrl
+    ? [
+        `<div style="margin-bottom:16px;border-radius:10px;overflow:hidden;">`,
+        `<a href="${escapeHtml(params.spaceUrl)}" style="display:block;">`,
+        `<img src="${escapeHtml(thumbnailUrl)}" alt="${escapeHtml(videoTitle || title)}" width="556" style="width:100%;display:block;border-radius:10px;" />`,
+        `</a>`,
+        `</div>`,
+      ].join('')
+    : '';
+
+  const watchingHtml = watchingLine
+    ? `<div class="${EMAIL_CLASS.muted}" style="margin-top:6px;font-size:14px;line-height:1.5;color:${EMAIL.muted};">${escapeHtml(watchingLine)}</div>`
+    : '';
+
   const text = [
     params.greeting,
     '',
     lead,
     ...(whenLine ? [whenLine] : []),
+    ...(watchingLine ? [watchingLine] : []),
     '',
     params.spaceUrl,
     '',
@@ -57,8 +77,10 @@ export function buildFollowedSpaceEmail(params: {
     title: subject,
     preheader: whenLine || lead,
     contentHtml: [
+      thumbnailHtml,
       `<div class="${EMAIL_CLASS.text}" style="font-size:16px;line-height:1.6;color:${EMAIL.text};">${escapeHtml(params.greeting)}</div>`,
       `<div class="${EMAIL_CLASS.text}" style="margin-top:14px;font-size:16px;line-height:1.6;color:${EMAIL.text};">${leadHtml}</div>`,
+      watchingHtml,
       whenLine
         ? `<div class="${EMAIL_CLASS.text}" style="margin-top:8px;font-size:16px;font-weight:700;color:${EMAIL.text};">${escapeHtml(whenLine)}</div>`
         : '',
@@ -71,4 +93,10 @@ export function buildFollowedSpaceEmail(params: {
   });
 
   return { subject, text, html };
+}
+
+function distinctVideoTitle(spaceTitle: string, videoTitle: string | null | undefined): string {
+  const playing = (videoTitle ?? '').trim();
+  if (!playing) return '';
+  return playing.toLowerCase() === spaceTitle.trim().toLowerCase() ? '' : playing;
 }

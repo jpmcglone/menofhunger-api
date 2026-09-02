@@ -1,4 +1,8 @@
-import { fetchYouTubeOEmbedTitle, youtubeOEmbedRequestUrl } from './youtube-oembed-title';
+import {
+  fetchYouTubeOEmbedTitle,
+  youtubeEmailPosterUrl,
+  youtubeOEmbedRequestUrl,
+} from './youtube-oembed-title';
 
 describe('youtubeOEmbedRequestUrl', () => {
   it('builds the watch oEmbed URL from common YouTube shapes', () => {
@@ -9,6 +13,18 @@ describe('youtubeOEmbedRequestUrl', () => {
       'v=dQw4w9WgXcQ',
     );
     expect(youtubeOEmbedRequestUrl('https://example.com/watch')).toBeNull();
+  });
+});
+
+describe('youtubeEmailPosterUrl', () => {
+  it('returns hqdefault for common YouTube shapes', () => {
+    expect(youtubeEmailPosterUrl('https://youtu.be/dQw4w9WgXcQ')).toBe(
+      'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+    );
+    expect(youtubeEmailPosterUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe(
+      'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+    );
+    expect(youtubeEmailPosterUrl('https://example.com/watch')).toBeNull();
   });
 });
 

@@ -24,6 +24,28 @@ describe('buildFollowedSpaceEmail', () => {
     expect(rendered.text).toContain('starts in about 30 minutes.');
   });
 
+  it('embeds the YouTube poster and a distinct video title', () => {
+    const rendered = buildFollowedSpaceEmail({
+      ...base,
+      kind: 'soon',
+      thumbnailUrl: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+      videoTitle: 'THE GREAT DEBATE | Live',
+    });
+    expect(rendered.html).toContain('https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    expect(rendered.html).toContain('Watching: THE GREAT DEBATE | Live');
+    expect(rendered.text).toContain('Watching: THE GREAT DEBATE | Live');
+  });
+
+  it('does not repeat the video title when it matches the space title', () => {
+    const rendered = buildFollowedSpaceEmail({
+      ...base,
+      kind: 'soon',
+      videoTitle: 'The Great Debate',
+    });
+    expect(rendered.text).not.toContain('Watching:');
+    expect(rendered.html).not.toContain('Watching:');
+  });
+
   it('writes a cancel notice', () => {
     const rendered = buildFollowedSpaceEmail({ ...base, kind: 'cancelled' });
     expect(rendered.subject).toBe('The Great Debate was cancelled');
