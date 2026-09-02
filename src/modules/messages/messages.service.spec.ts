@@ -627,6 +627,116 @@ describe('MessagesService.attachCallVoicemail', () => {
   });
 });
 
+describe('MessagesService — delete conversation then talk again', () => {
+  const restoredConversation = {
+    id: 'c1',
+    type: 'direct',
+    directKey: 'u1:u2',
+    createdByUserId: 'u1',
+    title: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    lastMessageAt: null,
+    lastMessageId: null,
+    lastMessage: null,
+    crewWall: null,
+    participants: [
+      { userId: 'u1', status: 'accepted', role: 'owner', acceptedAt: new Date(), lastReadAt: new Date(), mutedAt: null, user: { id: 'u1' } },
+      { userId: 'u2', status: 'accepted', role: 'member', acceptedAt: new Date(), lastReadAt: new Date(), mutedAt: null, user: { id: 'u2' } },
+    ],
+  };
+
+  it('getConversation restores a viewer who left a direct thread', async () => {
+    const findFirst = jest
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(restoredConversation);
+    const createMany = jest.fn(async () => ({ count: 1 }));
+    const { svc, prisma } = makeService({
+      prisma: {
+        userBlock: { findMany: jest.fn(async () => []) },
+        messageConversation: {
+          findFirst,
+          findUnique: jest.fn(async () => ({
+            type: 'direct',
+            directKey: 'u1:u2',
+            createdByUserId: 'u1',
+          })),
+        },
+        messageParticipant: {
+          findMany: jest.fn(async () => [{ userId: 'u2' }]),
+          createMany,
+        },
+        message: { count: jest.fn(async () => 0), findMany: jest.fn(async () => []) },
+      } as any,
+    });
+
+    const result = await (svc as any).getConversationOrThrow({ userId: 'u1', conversationId: 'c1' });
+    expect(createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [
+          expect.objectContaining({
+            conversationId: 'c1',
+            userId: 'u1',
+            role: 'owner',
+            status: 'accepted',
+          }),
+        ],
+      }),
+    );
+    expect(result.id).toBe('c1');
+    expect(prisma.messageConversation.findFirst).toHaveBeenCalledTimes(2);
+  });
+
+  it('getConversation does not restore a blocked pair', async () => {
+    const createMany = jest.fn(async () => ({ count: 1 }));
+    const { svc } = makeService({
+      prisma: {
+        userBlock: {
+          findMany: jest.fn(async () => [{ blockerId: 'u1', blockedId: 'u2' }]),
+        },
+        messageConversation: {
+          findFirst: jest.fn(async () => null),
+          findUnique: jest.fn(async () => ({
+            type: 'direct',
+            directKey: 'u1:u2',
+            createdByUserId: 'u1',
+          })),
+        },
+        messageParticipant: { findMany: jest.fn(async () => []), createMany },
+      } as any,
+    });
+
+    await expect((svc as any).getConversationOrThrow({ userId: 'u1', conversationId: 'c1' })).rejects.toThrow(
+      'Conversation not found.',
+    );
+    expect(createMany).not.toHaveBeenCalled();
+  });
+
+  it('getConversation does not restore a group the viewer left', async () => {
+    const createMany = jest.fn(async () => ({ count: 1 }));
+    const { svc } = makeService({
+      prisma: {
+        userBlock: { findMany: jest.fn(async () => []) },
+        messageConversation: {
+          findFirst: jest.fn(async () => null),
+          findUnique: jest.fn(async () => ({
+            type: 'group',
+            directKey: null,
+            createdByUserId: 'u1',
+          })),
+        },
+        messageParticipant: { findMany: jest.fn(async () => []), createMany },
+      } as any,
+    });
+
+    await expect((svc as any).getConversationOrThrow({ userId: 'u1', conversationId: 'g1' })).rejects.toThrow(
+      'Conversation not found.',
+    );
+    expect(createMany).not.toHaveBeenCalled();
+  });
+});
+
 describe('MessagesController — VerifiedGuard invariant', () => {
   it('MessagesController does NOT carry VerifiedGuard (unverified users must be able to read/reply in admin-initiated threads)', () => {
     const classGuards = (Reflect.getMetadata('__guards__', MessagesController) as unknown[] | undefined) ?? [];

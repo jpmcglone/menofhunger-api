@@ -580,6 +580,18 @@ describe('CallsService one seat per member', () => {
     expect(CallSessionStore.toDto(dto).participants[0]!.screenSharing).toBe(true);
   });
 
+  it('keeps only one presenter when a second participant starts sharing', async () => {
+    const { svc, store } = makeService({ [GROUP.id]: GROUP });
+    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    const callId = started.call!.id;
+    await svc.join({ userId: 'bob', socketId: 's2', callId });
+    await svc.updateParticipantState({ userId: 'alice', callId, socketId: 's1', screenSharing: true });
+    await svc.updateParticipantState({ userId: 'bob', callId, socketId: 's2', screenSharing: true });
+    const parts = store.byConversation.get(GROUP.id)!.participants;
+    expect(parts.find((p) => p.userId === 'alice')!.screenSharing).toBe(true);
+    expect(parts.find((p) => p.userId === 'bob')!.screenSharing).toBeFalsy();
+  });
+
   it('rejoining from the same socket is not a takeover', async () => {
     const { svc, realtime } = makeService({ [GROUP.id]: GROUP });
     const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });

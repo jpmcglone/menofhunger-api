@@ -375,7 +375,15 @@ export class CallsService {
       if (socketId && p.socketId && p.socketId !== socketId) return null;
       if (typeof params.micEnabled === 'boolean') p.micEnabled = params.micEnabled;
       if (typeof params.cameraEnabled === 'boolean') p.cameraEnabled = params.cameraEnabled;
-      if (typeof params.screenSharing === 'boolean') p.screenSharing = params.screenSharing;
+      if (typeof params.screenSharing === 'boolean') {
+        if (params.screenSharing) {
+          // One presenter: a second start must not land on the roster.
+          const otherPresenting = rec.participants.some((x) => x.userId !== userId && x.screenSharing);
+          if (!otherPresenting) p.screenSharing = true;
+        } else {
+          p.screenSharing = false;
+        }
+      }
       if (typeof params.handRaised === 'boolean') p.handRaised = params.handRaised;
       await this.store.save(rec);
       return rec;

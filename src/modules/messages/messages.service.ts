@@ -240,46 +240,108 @@ export class MessagesService {
     }
   }
 
+  private parseDirectPair(directKey: string | null | undefined): [string, string] | null {
+    if (!directKey) return null;
+    const parts = directKey.split(':');
+    if (parts.length !== 2 || !parts[0] || !parts[1] || parts[0] === parts[1]) return null;
+    return [parts[0], parts[1]];
+  }
+
+  /**
+   * Delete conversation removes the viewer's participant row, but the direct
+   * thread stays (unique `directKey`). Re-add missing members so they can
+   * open or message that person again instead of 404ing on the zombie thread.
+   */
+  private async restoreMissingDirectParticipants(params: {
+    conversationId: string;
+    createdByUserId: string;
+    userIds: string[];
+  }): Promise<number> {
+    const uniqueIds = [...new Set(params.userIds.filter(Boolean))];
+    if (uniqueIds.length === 0) return 0;
+    const existing = await this.prisma.messageParticipant.findMany({
+      where: { conversationId: params.conversationId },
+      select: { userId: true },
+    });
+    const have = new Set(existing.map((p) => p.userId));
+    const missing = uniqueIds.filter((id) => !have.has(id));
+    if (missing.length === 0) return 0;
+    const now = new Date();
+    await this.prisma.messageParticipant.createMany({
+      data: missing.map((userId) => ({
+        conversationId: params.conversationId,
+        userId,
+        role: params.createdByUserId === userId ? 'owner' : 'member',
+        status: 'accepted' as const,
+        acceptedAt: now,
+        lastReadAt: now,
+      })),
+      skipDuplicates: true,
+    });
+    return missing.length;
+  }
+
   private async getConversationOrThrow(params: { userId: string; conversationId: string }) {
     const { userId, conversationId } = params;
     const blockedUserIds = await this._getBlockedUserIds(userId);
-    const conversation = await this.prisma.messageConversation.findFirst({
-      where: {
-        id: conversationId,
-        participants: {
-          some: { userId },
-          ...(blockedUserIds.size > 0 ? { none: { userId: { in: [...blockedUserIds] } } } : {}),
+    const load = () =>
+      this.prisma.messageConversation.findFirst({
+        where: {
+          id: conversationId,
+          participants: {
+            some: { userId },
+            ...(blockedUserIds.size > 0 ? { none: { userId: { in: [...blockedUserIds] } } } : {}),
+          },
         },
-      },
-      include: {
-        participants: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                username: true,
-                name: true,
-                premium: true,
-                premiumPlus: true,
-                isOrganization: true,
-                verifiedStatus: true,
-                avatarKey: true,
-                avatarUpdatedAt: true,
-                bannedAt: true,
-                isBot: true,
+        include: {
+          participants: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  username: true,
+                  name: true,
+                  premium: true,
+                  premiumPlus: true,
+                  isOrganization: true,
+                  verifiedStatus: true,
+                  avatarKey: true,
+                  avatarUpdatedAt: true,
+                  bannedAt: true,
+                  isBot: true,
+                },
               },
             },
           },
+          lastMessage: {
+            select: { id: true, body: true, createdAt: true, senderId: true },
+          },
+          crewWall: {
+            select: { id: true, slug: true, name: true, avatarImageUrl: true },
+          },
         },
-        lastMessage: {
-          select: { id: true, body: true, createdAt: true, senderId: true },
-        },
-        crewWall: {
-          select: { id: true, slug: true, name: true, avatarImageUrl: true },
-        },
-      },
-    });
-    if (!conversation) throw new NotFoundException('Conversation not found.');
+      });
+
+    let conversation = await load();
+    if (!conversation) {
+      const raw = await this.prisma.messageConversation.findUnique({
+        where: { id: conversationId },
+        select: { type: true, directKey: true, createdByUserId: true },
+      });
+      const pair = raw?.type === 'direct' ? this.parseDirectPair(raw.directKey) : null;
+      const otherId = pair ? (pair[0] === userId ? pair[1] : pair[0]) : null;
+      if (!raw || !pair || !pair.includes(userId) || (otherId != null && blockedUserIds.has(otherId))) {
+        throw new NotFoundException('Conversation not found.');
+      }
+      await this.restoreMissingDirectParticipants({
+        conversationId,
+        createdByUserId: raw.createdByUserId,
+        userIds: [userId],
+      });
+      conversation = await load();
+      if (!conversation) throw new NotFoundException('Conversation not found.');
+    }
+
     return conversation;
   }
 
@@ -1572,7 +1634,20 @@ export class MessagesService {
     if (!trimmed && media.length === 0) throw new BadRequestException('Message must have a body or media.');
     if (trimmed.length > MESSAGE_BODY_MAX) throw new BadRequestException('Message body is too long.');
 
-    const conversation = await this.getConversationOrThrow({ userId, conversationId });
+    let conversation = await this.getConversationOrThrow({ userId, conversationId });
+    const directPair = conversation.type === 'direct' ? this.parseDirectPair(conversation.directKey) : null;
+    if (directPair) {
+      const present = new Set(conversation.participants.map((p) => p.userId));
+      const missingPeer = directPair.filter((id) => !present.has(id));
+      if (missingPeer.length > 0) {
+        await this.restoreMissingDirectParticipants({
+          conversationId,
+          createdByUserId: conversation.createdByUserId,
+          userIds: missingPeer,
+        });
+        conversation = await this.getConversationOrThrow({ userId, conversationId });
+      }
+    }
     const participant = conversation.participants.find((p) => p.userId === userId);
     if (!participant) throw new NotFoundException('Conversation not found.');
 
@@ -1781,7 +1856,8 @@ export class MessagesService {
 
   async deleteConversation(params: { userId: string; conversationId: string }) {
     const { userId, conversationId } = params;
-    // Silently succeed if the user is not a participant (idempotent).
+    // Hide for this viewer only. The conversation row (and unique directKey) stay so
+    // either person can talk again — getConversationOrThrow / sendMessage re-add them.
     const participant = await this.prisma.messageParticipant.findUnique({
       where: { conversationId_userId: { conversationId, userId } },
       select: { conversationId: true },
