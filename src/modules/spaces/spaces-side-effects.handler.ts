@@ -82,7 +82,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     const recipients = this.uniqueRecipientIds([...fromPayload, ...fromExisting], snap?.ownerUserId);
     if (recipients.length === 0) return;
 
-    const title = snap ? `${snap.eventTitle || snap.title} is live` : 'Space is live';
+    const title = snap ? `${snap.eventTitle} is live` : 'Space is live';
     const body = 'Tap to join now.';
     const actorUserId = snap?.ownerUserId ?? null;
 
@@ -177,7 +177,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     if (recipients.length === 0) return;
 
     const when = formatScheduleWhen(payload.scheduledAt);
-    const title = `${snap.eventTitle || snap.title} rescheduled`;
+    const title = `${snap.eventTitle} rescheduled`;
     const body = when ? `Now ${when}.` : 'The start time changed.';
 
     await runInBatches(recipients, FANOUT_CONCURRENCY, async (recipientUserId) => {
@@ -218,7 +218,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     if (recipients.length === 0) return;
 
     const when = formatScheduleWhen(snap.scheduledAt);
-    const eventTitle = snap.eventTitle || snap.title;
+    const eventTitle = snap.eventTitle;
     const title = `${eventTitle} scheduled`;
     const body = when ? `Tune in ${when}.` : 'Someone you follow scheduled a space.';
     const emailCfg = this.appConfig.email();
@@ -268,7 +268,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     title?: string | null;
   } | null): { thumbnailUrl: string | null; videoTitle: string | null } {
     if (!snap) return { thumbnailUrl: null, videoTitle: null };
-    const eventTitle = (snap.eventTitle || snap.title || '').trim();
+    const eventTitle = (snap.eventTitle || '').trim();
     const playing = (snap.playbackTitle ?? '').trim();
     return {
       thumbnailUrl: youtubeEmailPosterUrl(snap.watchPartyUrl),
@@ -353,7 +353,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     if (audience.length === 0) return;
 
     const when = formatScheduleWhen(snap.scheduledAt);
-    const eventTitle = snap.eventTitle || snap.title;
+    const eventTitle = snap.eventTitle;
     const title = isDay ? `${eventTitle} today` : `${eventTitle} starting soon`;
     const body = isDay
       ? when

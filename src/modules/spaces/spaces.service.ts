@@ -119,7 +119,7 @@ export class SpacesService {
     return space?.ownerId ?? null;
   }
 
-  async updateSpace(id: string, userId: string, data: { title?: string; description?: string | null }): Promise<SpaceDto> {
+  async updateSpace(id: string, userId: string, data: { title?: string | null; description?: string | null }): Promise<SpaceDto> {
     const space = await this.prisma.space.findUnique({ where: { id }, select: { ownerId: true } });
     if (!space) throw new NotFoundException();
     if (space.ownerId !== userId) throw new ForbiddenException();
@@ -159,7 +159,7 @@ export class SpacesService {
     if (space.scheduledAt) {
       const recipientUserIds = await this.listAudienceUserIds(id, space.ownerId);
       await this.cancelReminderJobs(id, space.scheduledAt.getTime());
-      const title = `${space.title} cancelled`;
+      const title = `${resolveSpaceEventTitle({ title: space.title })} cancelled`;
       const body = 'The scheduled space was cancelled.';
       await runInBatches(recipientUserIds, FANOUT_CONCURRENCY, async (recipientUserId) => {
         await this.notifications.upsertSpaceScheduleNotification({
@@ -174,7 +174,7 @@ export class SpacesService {
       this.sideEffects.dispatch('space.schedule.cancelled', {
         spaceId: id,
         ownerUserId: space.ownerId,
-        spaceTitle: space.title,
+        spaceTitle: resolveSpaceEventTitle({ title: space.title }),
         ownerUsername: space.owner.username,
         recipientUserIds,
       });
@@ -187,7 +187,7 @@ export class SpacesService {
       kind: 'space_live',
     });
     if (liveRecipientIds.length > 0) {
-      const title = `${space.title} was live`;
+      const title = `${resolveSpaceEventTitle({ title: space.title })} was live`;
       const body = "It's no longer live.";
       await runInBatches(liveRecipientIds, FANOUT_CONCURRENCY, async (recipientUserId) => {
         await this.notifications.upsertSpaceScheduleNotification({
@@ -431,7 +431,7 @@ export class SpacesService {
     this.sideEffects.dispatch('space.schedule.cancelled', {
       spaceId: id,
       ownerUserId: space.ownerId,
-      spaceTitle: space.title,
+      spaceTitle: resolveSpaceEventTitle({ title: space.title }),
       ownerUsername: space.owner.username,
     });
     await this.clearNonOwnerSubscribers(id, userId);
@@ -650,7 +650,7 @@ export class SpacesService {
   /** Used by reminder jobs / side-effects — re-check schedule still matches. */
   async getScheduleSnapshot(spaceId: string): Promise<{
     scheduledAt: Date | null;
-    title: string;
+    title: string | null;
     eventTitle: string;
     playbackTitle: string | null;
     watchPartyUrl: string | null;
@@ -767,7 +767,7 @@ export class SpacesService {
   private async toDto(
     space: {
       id: string;
-      title: string;
+      title: string | null;
       description: string | null;
       isActive: boolean;
       scheduledAt: Date | null;

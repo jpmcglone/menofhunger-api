@@ -1356,7 +1356,7 @@ model Space {
   ownerId String @unique
   owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
-  title       String  @db.VarChar(100)
+  title       String? @db.VarChar(100)
   description String? @db.VarChar(500)
 
   isActive Boolean @default(false)

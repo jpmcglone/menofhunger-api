@@ -5,7 +5,7 @@ function makeHandler() {
   const spaces = {
     getScheduleSnapshot: jest.fn(async (): Promise<{
       scheduledAt: Date | null;
-      title: string;
+      title: string | null;
       eventTitle: string;
       playbackTitle: string | null;
       watchPartyUrl: string | null;

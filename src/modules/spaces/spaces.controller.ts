@@ -17,7 +17,8 @@ const createSpaceSchema = z.object({
 });
 
 const updateSpaceSchema = z.object({
-  title: z.string().trim().min(1).max(100).optional(),
+  title: z.union([z.string().trim().max(100), z.null()]).optional()
+    .transform((value) => (value === '' ? null : value)),
   description: z.string().trim().max(500).nullish(),
 });
 

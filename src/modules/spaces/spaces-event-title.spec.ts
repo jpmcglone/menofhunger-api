@@ -24,4 +24,12 @@ describe('resolveSpaceEventTitle', () => {
       "ocaptain's Space",
     );
   });
+
+  it('treats a cleared title as no override', () => {
+    expect(isDefaultSpaceTitle(null)).toBe(false);
+    expect(resolveSpaceEventTitle({ title: null, playbackTitle: 'Conference talk' })).toBe(
+      'Conference talk',
+    );
+    expect(resolveSpaceEventTitle({ title: null, playbackTitle: null })).toBe('Space');
+  });
 });

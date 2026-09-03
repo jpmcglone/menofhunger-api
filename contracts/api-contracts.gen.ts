@@ -2692,7 +2692,7 @@ export type SpaceOwnerDto = {
 
 export type SpaceDto = {
   id: string;
-  title: string;
+  title: string | null;
   description: string | null;
   isActive: boolean;
   /** ISO upcoming go-live time, or null when unscheduled. */
@@ -2733,7 +2733,7 @@ export type SpaceLobbyCountsDto = {
  * Do NOT include viewerSubscribed / viewerFollowsOwner — those are per-viewer.
  */
 export type SpacesUpdatedPatchDto = Partial<{
-  title: string;
+  title: string | null;
   description: string | null;
   isActive: boolean;
   scheduledAt: string | null;
