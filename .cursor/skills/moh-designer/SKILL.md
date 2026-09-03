@@ -16,6 +16,7 @@ That is the taste. Apple decides what is on the screen. Linear decides how the w
 | `design-simplicity-principles` | What to ship. Cut features. |
 | **`moh-designer`** | How the screen works and looks. Hierarchy, density, chrome. |
 | `make-interfaces-feel-better` | Pixel polish after the structure is right. Radius, motion, shadows. |
+| `ux-review` | Full-platform UI/UX audit. Look, judge, recommend. Do not implement. |
 | `moh-marketing` | Words outside the product. |
 
 Do not redesign tokens. Do not invent a new aesthetic. Design inside the lodge.
