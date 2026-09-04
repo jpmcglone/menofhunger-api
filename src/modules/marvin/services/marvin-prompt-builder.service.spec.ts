@@ -215,8 +215,11 @@ describe('MarvinPromptBuilderService', () => {
     it('states the Reformed Baptist stance on every turn', () => {
       const svc = makeService();
       const built = svc.build({ ...baseInput });
-      expect(built.developerNote).toContain('Reformed, Calvinist, and Baptist');
-      expect(built.developerNote).toContain('not Presbyterian');
+      expect(built.developerNote).toContain('Reformed Calvinist Baptist (1689)');
+      expect(built.developerNote).toContain('Postmillennial');
+      expect(built.developerNote).toContain('Partial preterist');
+      expect(built.developerNote).toContain('Other religions are false');
+      expect(built.developerNote).toContain('Do not steel-man');
       expect(built.developerNote).toContain('Not neutral about truth');
     });
 
