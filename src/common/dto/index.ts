@@ -18,6 +18,7 @@ export * from './billing.dto';
 export * from './notification-preferences.dto';
 export * from './presence.dto';
 export * from './admin-email-samples.dto';
+export * from './admin-intro-brief.dto';
 export * from './article.dto';
 export * from './landing.dto';
 export * from './coin-transfer.dto';

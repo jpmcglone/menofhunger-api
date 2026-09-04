@@ -42,6 +42,9 @@ import { UploadsModule } from '../uploads/uploads.module';
 import { LandingModule } from '../landing/landing.module';
 import { MarvinModule } from '../marvin/marvin.module';
 import { AdminAnalyticsBriefService } from './admin-analytics-brief.service';
+import { AdminIntroBriefService } from './admin-intro-brief.service';
+import { AdminIntroBriefCron } from './admin-intro-brief.cron';
+import { AdminIntroBriefController } from './admin-intro-brief.controller';
 import { AnnouncementsModule } from '../announcements/announcements.module';
 import { AdminAnnouncementsController } from './admin-announcements.controller';
 import { PagesModule } from '../pages/pages.module';
@@ -97,9 +100,18 @@ import { AdminNewslettersController } from './admin-newsletters.controller';
     AdminAnnouncementsController,
     AdminPagesController,
     AdminNewslettersController,
+    AdminIntroBriefController,
   ],
-  providers: [AdminGuard, AdminImageReviewService, AdminHashtagsService, AdminDailyDigestCron, AdminAnalyticsBriefService],
-  exports: [AdminDailyDigestCron],
+  providers: [
+    AdminGuard,
+    AdminImageReviewService,
+    AdminHashtagsService,
+    AdminDailyDigestCron,
+    AdminAnalyticsBriefService,
+    AdminIntroBriefService,
+    AdminIntroBriefCron,
+  ],
+  exports: [AdminDailyDigestCron, AdminIntroBriefCron],
 })
 export class AdminModule {}
 

@@ -197,6 +197,20 @@ export class AdminJobsController {
     return { data: { ok: true, jobId: String(job.id) } };
   }
 
+  @Post('posts-topics-ai-classify')
+  async runPostsTopicsAiClassify(@Body() body: unknown) {
+    const parsed = postsTopicsBackfillSchema.pick({ runUntilEmpty: true, batchSize: true }).parse(body ?? {});
+    const job = await this.jobs.enqueue(
+      JOBS.postsTopicsAiClassify,
+      {
+        runUntilEmpty: Boolean(parsed.runUntilEmpty),
+        batchSize: parsed.batchSize ?? 20,
+      },
+      { removeOnComplete: true, removeOnFail: false },
+    );
+    return { data: { ok: true, jobId: String(job.id) } };
+  }
+
   @Post('topics-normalize')
   async normalizeTopicsEverywhere(@Body() body: unknown) {
     const parsed = normalizeTopicsSchema.parse(body ?? {});

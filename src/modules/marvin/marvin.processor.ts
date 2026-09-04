@@ -7,6 +7,7 @@ import { MarvinPrivateReplyProcessor } from './jobs/marvin-private-reply.process
 import { MarvinContextCardsProcessor } from './jobs/marvin-context-cards.processor';
 import { MarvinSummarizeThreadProcessor } from './jobs/marvin-summarize-thread.processor';
 import { MarvinCostRollupProcessor } from './jobs/marvin-cost-rollup.processor';
+import { PostsTopicsClassifyService } from '../posts/posts-topics-classify.service';
 import { AppConfigService } from '../app/app-config.service';
 
 /**
@@ -33,6 +34,7 @@ export class MarvinProcessor extends WorkerHost implements OnModuleInit {
     private readonly contextCards: MarvinContextCardsProcessor,
     private readonly summarizeThread: MarvinSummarizeThreadProcessor,
     private readonly costRollup: MarvinCostRollupProcessor,
+    private readonly topicsClassify: PostsTopicsClassifyService,
   ) {
     super();
   }
@@ -80,6 +82,9 @@ export class MarvinProcessor extends WorkerHost implements OnModuleInit {
           return { ok: true };
         case JOBS.marvinCostRollup:
           await this.costRollup.process();
+          return { ok: true };
+        case JOBS.postsTopicsAiClassify:
+          await this.topicsClassify.process(job.data ?? {});
           return { ok: true };
         default:
           this.logger.warn(`Unknown Marv job name: ${name}`);

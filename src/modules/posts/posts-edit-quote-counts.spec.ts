@@ -73,6 +73,7 @@ function makeQuoteHandler(overrides: {
   const registry = new SideEffectsRegistry();
   const handler = new PostsSideEffectsHandler(
     prisma, notifications, presenceRealtime, appConfig, jobs, marvIdentity, linkMetadata, registry, sideEffects,
+    { enqueueIfNeeded: jest.fn(async () => undefined) } as any,
   );
   handler.onModuleInit();
 

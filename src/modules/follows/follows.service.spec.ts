@@ -14,6 +14,7 @@ function makeRow(overrides: Partial<any> = {}) {
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     mutualCount: 0,
     overlapCount: 0,
+    topicOverlapCount: 0,
     followsViewer: false,
     sameState: false,
     ...overrides,
@@ -108,6 +109,31 @@ describe('FollowsService recommendations ranking', () => {
     });
 
     expect(result.users.map((u) => u.id)).toEqual(['shared-interests', 'trusted']);
+  });
+
+  it('ranks shared public-post topics above polished fallbacks', async () => {
+    const { service } = makeService([
+      makeRow({
+        id: 'trusted',
+        username: 'trusted',
+        verifiedStatus: 'identity',
+        premiumPlus: true,
+        avatarKey: 'avatar.png',
+      }),
+      makeRow({
+        id: 'same-topics',
+        username: 'lifter',
+        topicOverlapCount: 2,
+      }),
+    ]);
+
+    const result = await service.recommendUsersToFollow({
+      viewerUserId: 'viewer',
+      limit: 2,
+      seed: 'refresh-a',
+    });
+
+    expect(result.users.map((u) => u.id)).toEqual(['same-topics', 'trusted']);
   });
 
   it('ranks same-state candidates above otherwise similar candidates', async () => {

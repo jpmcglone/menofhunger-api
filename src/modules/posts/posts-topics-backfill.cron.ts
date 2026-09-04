@@ -143,12 +143,24 @@ export class PostsTopicsBackfillCron {
         if (rows.length < batchSize) break;
       }
 
-      if (total === 0) return;
+      if (total > 0) {
+        const ms = Date.now() - startedAt;
+        this.logger.log(
+          `${wipeExisting ? 'Rebuilt' : 'Backfilled'} topics for ${total} posts (${ms}ms)`,
+        );
+      }
 
-      const ms = Date.now() - startedAt;
-      this.logger.log(
-        `${wipeExisting ? 'Rebuilt' : 'Backfilled'} topics for ${total} posts (${ms}ms)`,
-      );
+      // After keywords, drain remaining public empties with Luna (one batch per cron tick).
+      try {
+        await this.jobs.enqueueCron(
+          JOBS.postsTopicsAiClassify,
+          { batchSize: 20 },
+          'cron-postsTopicsAiClassify',
+          { attempts: 2, backoff: { type: 'exponential', delay: 60_000 } },
+        );
+      } catch {
+        // Duplicate while a classify batch is already queued.
+      }
     } catch (err) {
       this.logger.warn(`Topics backfill failed: ${(err as Error).message}`);
     } finally {

@@ -254,3 +254,44 @@ export function queryToTopicValues(query: string): string[] {
   return Array.from(direct);
 }
 
+const MAX_AI_TOPICS = 5;
+
+/**
+ * Parse a model reply into allowlisted topic values.
+ * Accepts a JSON array of strings, or prose that contains one.
+ */
+export function parseModelTopicList(raw: string): string[] {
+  const text = String(raw ?? '').trim();
+  if (!text) return [];
+  const parsed = coerceJsonArray(text);
+  if (!parsed) return [];
+  const out = new Set<string>();
+  for (const item of parsed) {
+    const value =
+      typeof item === 'string'
+        ? canonicalizeTopicValue(item)
+        : item && typeof item === 'object' && typeof (item as { value?: unknown }).value === 'string'
+          ? canonicalizeTopicValue(String((item as { value: string }).value))
+          : null;
+    if (value) out.add(value);
+    if (out.size >= MAX_AI_TOPICS) break;
+  }
+  return TOPIC_OPTIONS.map((o) => o.value).filter((v) => out.has(v));
+}
+
+function coerceJsonArray(text: string): unknown[] | null {
+  const candidates = [text];
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
+  if (start >= 0 && end > start) candidates.push(text.slice(start, end + 1));
+  for (const candidate of candidates) {
+    try {
+      const value = JSON.parse(candidate);
+      if (Array.isArray(value)) return value;
+    } catch {
+      // try next
+    }
+  }
+  return null;
+}
+

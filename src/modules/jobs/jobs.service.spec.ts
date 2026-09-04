@@ -75,6 +75,8 @@ describe('Cron job ID registry — no invalid colons', () => {
     'cron-postsPopularScoreRefresh',
     'cron-hashtagsTrendingScoreRefresh',
     'cron-postsTopicsBackfill',
+    'cron-postsTopicsAiClassify',
+    'cron-adminIntroBrief',
     'cron-postsPollResultsReadySweep',
     // daily content publish jobs use dynamic IDs: cron:dailyContentPublish:{item}:{dayKey}
     // (not static; tested via cron integration tests)

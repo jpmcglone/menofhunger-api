@@ -29,6 +29,7 @@ import { PostsRankingService } from './posts-ranking.service';
 import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
 import { SiteConfigService } from '../site-config/site-config.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
+import { PostsTopicsClassifyService } from './posts-topics-classify.service';
 
 /**
  * Post write paths: create (with the full side-effect pipeline), update,
@@ -52,6 +53,7 @@ export class PostsMutationService {
     private readonly ticker: TickerService,
     private readonly siteConfig: SiteConfigService,
     private readonly sideEffects: SideEffectsService,
+    private readonly topicsClassify: PostsTopicsClassifyService,
   ) {}
 
   private async recomputeStreakFromPostsTx(tx: Prisma.TransactionClient, userId: string, now: Date): Promise<void> {
@@ -450,6 +452,7 @@ export class PostsMutationService {
     });
     const nextTopics = updated.topics ?? [];
     await this.cacheInvalidation.bumpForPostWrite({ topics: [...prevTopics, ...nextTopics] });
+    void this.topicsClassify.enqueueIfNeeded(id);
 
     // Realtime: update body/edited markers for live subscribers (best-effort).
     try {

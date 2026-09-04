@@ -35,6 +35,7 @@ type RecommendationRow = {
   createdAt: Date;
   mutualCount: number;
   overlapCount: number;
+  topicOverlapCount: number;
   followsViewer: boolean;
   sameState: boolean;
 };
@@ -117,6 +118,7 @@ export class FollowsService {
     const relevance =
       Math.min(Math.max(row.mutualCount, 0), 5) * 24 +
       Math.min(Math.max(row.overlapCount, 0), 4) * 16 +
+      Math.min(Math.max(row.topicOverlapCount ?? 0, 0), 4) * 20 +
       (row.followsViewer ? 12 : 0) +
       (row.sameState ? RECOMMENDATION_SAME_STATE_WEIGHT : 0);
     const jitter = this.recommendationJitter(`${params.viewerUserId}:${row.id}:${params.seed}`) * RECOMMENDATION_JITTER_MAX;
@@ -209,6 +211,37 @@ export class FollowsService {
         FROM "User" u
         WHERE u."id" = ${viewerUserId}
       ),
+      viewer_topics AS (
+        SELECT ARRAY(
+          SELECT DISTINCT s.t
+          FROM (
+            SELECT unnest(u."interests") AS t
+            FROM "User" u
+            WHERE u."id" = ${viewerUserId}
+            UNION
+            SELECT unnest(p."topics") AS t
+            FROM "Post" p
+            WHERE p."userId" = ${viewerUserId}
+              AND p."deletedAt" IS NULL
+              AND p."visibility" = 'public'
+              AND p."communityGroupId" IS NULL
+              AND p."createdAt" > NOW() - INTERVAL '180 days'
+              AND cardinality(p."topics") > 0
+          ) s
+          WHERE s.t IS NOT NULL AND btrim(s.t) <> ''
+        ) AS topics
+      ),
+      candidate_topics AS (
+        SELECT p."userId", ARRAY_AGG(DISTINCT t) AS topics
+        FROM "Post" p
+        CROSS JOIN LATERAL UNNEST(p."topics") AS t
+        WHERE p."deletedAt" IS NULL
+          AND p."visibility" = 'public'
+          AND p."communityGroupId" IS NULL
+          AND p."createdAt" > NOW() - INTERVAL '180 days'
+          AND cardinality(p."topics") > 0
+        GROUP BY p."userId"
+      ),
       viewer_following AS (
         SELECT f1."followingId" AS "userId"
         FROM "Follow" f1
@@ -251,6 +284,17 @@ export class FollowsService {
           ),
           0
         )::int AS "overlapCount",
+        COALESCE(
+          array_length(
+            ARRAY(
+              SELECT unnest(COALESCE(ct."topics", ARRAY[]::text[]))
+              INTERSECT
+              SELECT unnest(vt."topics")
+            ),
+            1
+          ),
+          0
+        )::int AS "topicOverlapCount",
         EXISTS (
           SELECT 1
           FROM "Follow" inbound
@@ -264,7 +308,9 @@ export class FollowsService {
         ) AS "sameState"
       FROM "User" u
       CROSS JOIN viewer v
+      CROSS JOIN viewer_topics vt
       LEFT JOIN mutuals m ON m."userId" = u."id"
+      LEFT JOIN candidate_topics ct ON ct."userId" = u."id"
       WHERE u."usernameIsSet" = true
         AND u."bannedAt" IS NULL
         AND u."id" <> ${viewerUserId}
@@ -276,6 +322,7 @@ export class FollowsService {
         )
       ORDER BY
         COALESCE(m."mutualCount", 0) DESC,
+        "topicOverlapCount" DESC,
         "overlapCount" DESC,
         "sameState" DESC,
         "followsViewer" DESC,
@@ -348,6 +395,7 @@ export class FollowsService {
           ),
           0
         )::int AS "overlapCount",
+        0::int AS "topicOverlapCount",
         0::int AS "mutualCount",
         EXISTS (
           SELECT 1

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  MARV_DEFAULT_ASTRA_MODEL,
   MARV_DEFAULT_FAST_MODEL,
   MARV_DEFAULT_REGULAR_MODEL,
   MARV_DEFAULT_SMART_MODEL,
@@ -105,6 +106,8 @@ export type MarvOpenAIConfig = {
   visionModes: string[];
   /** Max images per turn (caps both selection logic and input_image parts). Default 16. */
   visionMaxImagesPerTurn: number;
+  /** Admin-only long jobs (intro brief). Not a Marv chat tier. */
+  astraModel: string;
 };
 
 export type MarvCreditConfig = {
@@ -676,6 +679,7 @@ export class AppConfigService {
     const fastModel = this.config.get<string>('OPENAI_MARV_FAST_MODEL')?.trim() || MARV_DEFAULT_FAST_MODEL;
     const regularModel = this.config.get<string>('OPENAI_MARV_REGULAR_MODEL')?.trim() || MARV_DEFAULT_REGULAR_MODEL;
     const smartModel = this.config.get<string>('OPENAI_MARV_SMART_MODEL')?.trim() || MARV_DEFAULT_SMART_MODEL;
+    const astraModel = this.config.get<string>('OPENAI_ADMIN_ASTRA_MODEL')?.trim() || MARV_DEFAULT_ASTRA_MODEL;
     // Web search is ON by default. Set MARV_WEB_SEARCH_ENABLED=false to disable.
     const webSearchEnabled = this.readBool('MARV_WEB_SEARCH_ENABLED', true);
     // Comma-separated list of modes that may use web search. Defaults to regular,smart only —
@@ -699,7 +703,7 @@ export class AppConfigService {
     // per-image vision surcharge, so cost scales with count — raise via env if a deployment
     // wants even more. 16 covers a long image-bearing thread; extras still bill per image.
     const visionMaxImagesPerTurn = this.readPositiveInt('MARV_VISION_MAX_IMAGES_PER_TURN', 16);
-    return { apiKey, promptId, promptVersion, fastModel, regularModel, smartModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens, visionEnabled, visionModes, visionMaxImagesPerTurn };
+    return { apiKey, promptId, promptVersion, fastModel, regularModel, smartModel, astraModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens, visionEnabled, visionModes, visionMaxImagesPerTurn };
   }
 
   marvCredits(): MarvCreditConfig {

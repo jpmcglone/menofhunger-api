@@ -13,6 +13,7 @@ export const JOBS = {
   // Posts
   postsPollResultsReadySweep: 'posts.pollResultsReadySweep',
   postsTopicsBackfill: 'posts.topicsBackfill',
+  postsTopicsAiClassify: 'posts.topicsAiClassify',
   postsPopularScoreRefresh: 'posts.popularScoreRefresh',
   postsRefreshSinglePostScore: 'posts.refreshSinglePostScore',
   postsScheduledPublishSweep: 'posts.scheduledPublishSweep',
@@ -59,6 +60,7 @@ export const JOBS = {
 
   // Admin
   adminDailyDigest: 'admin.dailyDigest',
+  adminIntroBrief: 'admin.introBrief',
   newslettersScheduledSweep: 'newsletters.scheduledSweep',
   newslettersSend: 'newsletters.send',
 
@@ -99,6 +101,7 @@ export const MARVIN_JOB_NAMES: ReadonlySet<JobName> = new Set<JobName>([
   JOBS.marvinContextCardRefresh,
   JOBS.marvinSummarizeThread,
   JOBS.marvinCostRollup,
+  JOBS.postsTopicsAiClassify,
 ]);
 
 /** Returns the BullMQ queue name a given job should be enqueued onto. */

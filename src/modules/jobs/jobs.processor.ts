@@ -17,6 +17,7 @@ import { SearchCleanupCron } from '../search/search-cleanup.cron';
 import { LinkMetadataCron } from '../link-metadata/link-metadata.cron';
 import { DailyContentCron } from '../daily-content/daily-content.cron';
 import { AdminDailyDigestCron } from '../admin/admin-digest-email.cron';
+import { AdminIntroBriefCron } from '../admin/admin-intro-brief.cron';
 import { CheckinsStreakResetCron } from '../checkins/checkins-streak-reset.cron';
 import { CheckinReminderCron } from '../checkins/checkin-reminder.cron';
 import { OnThisDayCron } from '../notifications/on-this-day.cron';
@@ -49,6 +50,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly searchCleanup: SearchCleanupCron,
     private readonly linkMetadata: LinkMetadataCron,
     private readonly adminDailyDigest: AdminDailyDigestCron,
+    private readonly adminIntroBrief: AdminIntroBriefCron,
     private readonly checkinsStreakReset: CheckinsStreakResetCron,
     private readonly checkinReminder: CheckinReminderCron,
     private readonly onThisDay: OnThisDayCron,
@@ -134,6 +136,9 @@ export class JobsProcessor extends WorkerHost {
           return { ok: true };
         case JOBS.adminDailyDigest:
           await this.adminDailyDigest.runSendAdminDailyDigest();
+          return { ok: true };
+        case JOBS.adminIntroBrief:
+          await this.adminIntroBrief.runGenerate();
           return { ok: true };
         case JOBS.checkinsStreakReset:
           await this.checkinsStreakReset.runStreakReset();

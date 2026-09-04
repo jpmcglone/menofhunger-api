@@ -62,6 +62,7 @@ function makeHandler(overrides: { prisma?: Record<string, any> } = {}) {
     linkMetadata,
     registry,
     sideEffects,
+    { enqueueIfNeeded: jest.fn(async () => undefined) } as any,
   );
 
   const deps = {

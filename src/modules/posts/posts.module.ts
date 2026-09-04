@@ -11,6 +11,7 @@ import { PostsController } from './posts.controller';
 import { PostsPollResultsReadyCron } from './posts-poll-results-ready.cron';
 import { PostsPopularScoreCron } from './posts-popular-score.cron';
 import { PostsTopicsBackfillCron } from './posts-topics-backfill.cron';
+import { PostsTopicsClassifyService } from './posts-topics-classify.service';
 import { PostsService } from './posts.service';
 import { PostsDraftsService } from './posts-drafts.service';
 import { PostsEngagementService } from './posts-engagement.service';
@@ -46,11 +47,12 @@ import { ScheduledPostsPublishCron } from './scheduled-posts-publish.cron';
     PollsService,
     PostsPopularScoreCron,
     PostsTopicsBackfillCron,
+    PostsTopicsClassifyService,
     PostsPollResultsReadyCron,
     ScheduledPostsService,
     ScheduledPostsPublishCron,
   ],
-  exports: [PostsService, PollsService, PostsPopularScoreCron, PostsTopicsBackfillCron, PostsPollResultsReadyCron, ScheduledPostsPublishCron],
+  exports: [PostsService, PollsService, PostsPopularScoreCron, PostsTopicsBackfillCron, PostsTopicsClassifyService, PostsPollResultsReadyCron, ScheduledPostsPublishCron],
 })
 export class PostsModule {}
 

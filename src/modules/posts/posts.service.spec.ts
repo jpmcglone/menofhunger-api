@@ -166,6 +166,7 @@ function makeService(
       })),
     } as any,
     deps.sideEffects,
+    { enqueueIfNeeded: jest.fn(async () => undefined) } as any,
   );
 
   const service = new PostsService(

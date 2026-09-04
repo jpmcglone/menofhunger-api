@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  MARV_DEFAULT_ASTRA_MODEL,
   MARV_DEFAULT_FAST_MODEL,
   MARV_DEFAULT_REGULAR_MODEL,
   MARV_DEFAULT_SMART_MODEL,
@@ -470,6 +471,10 @@ export const envSchema = z.object({
   OPENAI_MARV_SMART_MODEL: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional().default(MARV_DEFAULT_SMART_MODEL),
+  ),
+  OPENAI_ADMIN_ASTRA_MODEL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional().default(MARV_DEFAULT_ASTRA_MODEL),
   ),
 
   // Credit bucket — see MarvinCreditService.

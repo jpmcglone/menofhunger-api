@@ -9,6 +9,7 @@ import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selec
 import { AppConfigService } from '../app/app-config.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { JobsService } from '../jobs/jobs.service';
+import { PostsTopicsClassifyService } from './posts-topics-classify.service';
 import { LinkMetadataService } from '../link-metadata/link-metadata.service';
 import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -75,6 +76,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     private readonly linkMetadata: LinkMetadataService,
     private readonly registry: SideEffectsRegistry,
     private readonly sideEffects: SideEffectsService,
+    private readonly topicsClassify: PostsTopicsClassifyService,
   ) {}
 
   onModuleInit(): void {
@@ -241,6 +243,8 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       this.logger.debug(`[side-effects] post.created skipped: post ${postId} is gone.`);
       return;
     }
+
+    void this.topicsClassify.enqueueIfNeeded(postId);
 
     const parentId = post.parentId ?? null;
     const visibility = post.visibility as PostVisibility;

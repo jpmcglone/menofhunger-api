@@ -200,7 +200,7 @@ describe('PostsMutationService visibilityRank ordering', () => {
     const svc = new PostsMutationService(
       {} as any, {} as any, {} as any, {} as any, {} as any,
       {} as any, {} as any, {} as any, {} as any, {} as any,
-      {} as any, {} as any,
+      {} as any, {} as any, {} as any,
     );
     const rank = (vis: string) => (svc as any).visibilityRank(vis);
     expect(rank('public')).toBeLessThan(rank('verifiedOnly'));
@@ -310,6 +310,7 @@ describe('PostsMutationService.createPost quote floor enforcement', () => {
         })),
       } as any,
       { dispatch: jest.fn() } as any,
+      { enqueueIfNeeded: jest.fn(async () => undefined) } as any,
     );
     return { svc, QUOTED_POST_URL };
   }

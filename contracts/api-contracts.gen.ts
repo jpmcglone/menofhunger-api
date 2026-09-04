@@ -342,6 +342,30 @@ export type AdminEmailSampleSendResultDto = {
   type: AdminEmailSampleTypeDto;
 };
 
+// ─── src/common/dto/admin-intro-brief.dto.ts ───────────────────────────────────
+
+export type AdminIntroPersonDto = {
+  id: string;
+  username: string;
+  name: string | null;
+};
+
+export type AdminIntroPairDto = {
+  left: AdminIntroPersonDto;
+  right: AdminIntroPersonDto;
+  topics: string[];
+  reason: string;
+};
+
+/** Latest weekly admin intro briefing. */
+export type AdminIntroBriefDto = {
+  weekKey: string;
+  brief: string;
+  pairs: AdminIntroPairDto[];
+  modelUsed: string;
+  createdAt: string;
+};
+
 // ─── src/common/dto/affiliate.dto.ts ───────────────────────────────────────────
 
 export type AffiliateEarningType = 'signup' | 'verified' | 'premium' | 'premium60d';
@@ -2413,9 +2437,9 @@ export type PostsCommentDeletedPayloadDto = {
  * Emitted to `post:{postId}` room subscribers (excluding the sender) while a user is composing a reply.
  * Mirrors the shape of `messages:typing` / `spaces:typing` — no state persisted server-side.
  *
- * `status` is only set by server-side emitters (e.g. Marvin):
- *   - `'thinking'` — AI is processing (show purple "thinking" label)
- *   - `'replying'` — about to post the reply (show standard wave animation)
+ * `status` is only set by server-side emitters (e.g. Marvin). Marv always
+ * emits `'replying'` while queued, thinking, or composing — clients show the
+ * same "is replying" copy. `'thinking'` is legacy and should render the same.
  */
 export type PostsTypingPayloadDto = {
   postId: string;
