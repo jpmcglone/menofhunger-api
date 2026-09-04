@@ -63,7 +63,7 @@ function makeFakeCache() {
 function makeService() {
   const prisma: any = {
     $queryRaw: jest.fn(async () => []),
-    user: { findFirst: jest.fn() },
+    user: { findFirst: jest.fn(), findMany: jest.fn(async () => []) },
     userContextCard: { findFirst: jest.fn() },
     post: { findFirst: jest.fn(), findMany: jest.fn(async () => []) },
     marvinThreadSummary: { findUnique: jest.fn() },
@@ -102,8 +102,17 @@ function makeService() {
     ),
   };
   const jobs: any = { enqueue: jest.fn(async () => undefined) };
-  const svc = new MarvinToolHandlersService(prisma, identity, fake.cache, contextCard, scripture, jobs);
-  return { svc, prisma, identity, cache: fake, contextCard, scripture, jobs };
+  const appConfig: any = { r2: jest.fn(() => ({ publicBaseUrl: 'https://cdn.test' })) };
+  const svc = new MarvinToolHandlersService(
+    prisma,
+    identity,
+    fake.cache,
+    contextCard,
+    scripture,
+    jobs,
+    appConfig,
+  );
+  return { svc, prisma, identity, cache: fake, contextCard, scripture, jobs, appConfig };
 }
 
 const baseCtx: MarvAIToolCallContext = {
@@ -368,6 +377,53 @@ describe('MarvinToolHandlersService.dispatch', () => {
     });
   });
 
+  describe('find_members_by_name', () => {
+    it('maps a first or last name to @username', async () => {
+      const { svc, prisma } = makeService();
+      prisma.user.findMany.mockResolvedValueOnce([
+        { username: 'jpmcglone', name: 'John McGlone' },
+      ]);
+      const raw = await svc.dispatch('find_members_by_name', { name: 'McGlone' }, baseCtx);
+      const parsed = JSON.parse(raw);
+      expect(parsed.members).toEqual([{ username: 'jpmcglone', displayName: 'John McGlone' }]);
+      expect(parsed.note).toMatch(/@username/);
+    });
+
+    it('ranks an in-thread match first when several people share the name', async () => {
+      const { svc, prisma } = makeService();
+      prisma.user.findMany.mockResolvedValueOnce([
+        { username: 'timw', name: 'Tim Wells' },
+        { username: 'timk', name: 'Tim Kane' },
+      ]);
+      prisma.post.findMany.mockResolvedValueOnce([
+        { user: { username: 'timk' } },
+        { user: { username: 'alice' } },
+      ]);
+      const raw = await svc.dispatch('find_members_by_name', { name: 'Tim' }, baseCtx);
+      const parsed = JSON.parse(raw);
+      expect(parsed.members[0]).toEqual({ username: 'timk', displayName: 'Tim Kane' });
+      expect(parsed.note).toMatch(/@timk is in this conversation/);
+    });
+
+    it('says when no conversation participant matched', async () => {
+      const { svc, prisma } = makeService();
+      prisma.user.findMany.mockResolvedValueOnce([
+        { username: 'timw', name: 'Tim Wells' },
+        { username: 'timk', name: 'Tim Kane' },
+      ]);
+      const raw = await svc.dispatch('find_members_by_name', { name: 'Tim' }, baseCtx);
+      const parsed = JSON.parse(raw);
+      expect(parsed.members).toHaveLength(2);
+      expect(parsed.note).toMatch(/Nobody in this conversation matched/);
+    });
+
+    it('rejects a one-character name', async () => {
+      const { svc } = makeService();
+      const raw = await svc.dispatch('find_members_by_name', { name: 'J' }, baseCtx);
+      expect(JSON.parse(raw)).toEqual({ error: 'invalid_args' });
+    });
+  });
+
   describe('find_similar_members', () => {
     it('ranks members by interest overlap', async () => {
       const { svc, prisma } = makeService();
@@ -394,6 +450,75 @@ describe('MarvinToolHandlersService.dispatch', () => {
       const parsed = JSON.parse(raw);
       expect(parsed.members[0].username).toBe('bob');
       expect(parsed.members[0].reasons[0]).toMatch(/woodworking/);
+    });
+  });
+
+  describe('list_public_posts', () => {
+    const publicRow = {
+      id: 'p-pub',
+      body: 'Morning lift.',
+      createdAt: new Date('2026-09-04T12:00:00Z'),
+      visibility: 'public',
+      rootId: 'p-pub',
+      parentId: null,
+      checkinPrompt: 'What are you grateful for?',
+      user: { username: 'alice', name: 'Alice', isBot: false },
+      media: [
+        { kind: 'image', source: 'upload', r2Key: 'images/lift.jpg', url: null, thumbnailR2Key: null },
+      ],
+      poll: {
+        totalVoteCount: 3,
+        options: [{ text: 'Yes', voteCount: 3 }],
+      },
+    };
+
+    it('returns recent public lodge posts with text, media, poll, and check-in', async () => {
+      const { svc, prisma } = makeService();
+      prisma.post.findMany.mockResolvedValueOnce([publicRow]);
+      const raw = await svc.dispatch('list_public_posts', {}, baseCtx);
+      const parsed = JSON.parse(raw);
+      expect(parsed.posts).toHaveLength(1);
+      expect(parsed.posts[0]).toMatchObject({
+        id: 'p-pub',
+        body: 'Morning lift.',
+        checkinPrompt: 'What are you grateful for?',
+        media: ['image'],
+        imageUrls: ['https://cdn.test/images/lift.jpg'],
+        author: { username: 'alice', displayName: 'Alice' },
+      });
+      expect(parsed.posts[0].poll.options[0].text).toBe('Yes');
+      const where = prisma.post.findMany.mock.calls[0][0].where;
+      expect(where.visibility).toBe('public');
+      expect(where.parentId).toBeNull();
+      expect(where.communityGroupId).toBeNull();
+    });
+
+    it('treats empty username and "all" as the general lodge feed', async () => {
+      const { svc, prisma } = makeService();
+      prisma.post.findMany.mockResolvedValue([publicRow]);
+      for (const args of [{ username: '' }, { username: 'all' }, { username: '@feed' }, { username: 'omit' }]) {
+        const parsed = JSON.parse(await svc.dispatch('list_public_posts', args, baseCtx));
+        expect(parsed.error).toBeUndefined();
+        expect(parsed.posts).toHaveLength(1);
+        expect(prisma.post.findMany.mock.calls.at(-1)?.[0].where.user.username).toBeUndefined();
+      }
+    });
+
+    it('filters to one member and 404s an unknown handle', async () => {
+      const { svc, prisma } = makeService();
+      prisma.user.findFirst.mockResolvedValueOnce({ id: 'u-alice' });
+      prisma.post.findMany.mockResolvedValueOnce([publicRow]);
+      const ok = JSON.parse(await svc.dispatch('list_public_posts', { username: 'alice' }, baseCtx));
+      expect(ok.posts[0].author.username).toBe('alice');
+      expect(prisma.post.findMany.mock.calls[0][0].where.user.username).toEqual({
+        equals: 'alice',
+        mode: 'insensitive',
+      });
+
+      prisma.user.findFirst.mockResolvedValueOnce(null);
+      const missing = JSON.parse(await svc.dispatch('list_public_posts', { username: 'nobody' }, baseCtx));
+      expect(missing.error).toBe('user_not_found');
+      expect(missing.posts).toEqual([]);
     });
   });
 });

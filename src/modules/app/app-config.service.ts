@@ -1,5 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import {
+  MARV_DEFAULT_FAST_MODEL,
+  MARV_DEFAULT_REGULAR_MODEL,
+  MARV_DEFAULT_SMART_MODEL,
+} from '../marvin/marvin-models';
 import type { Env } from './env';
 
 export type NodeEnv = 'development' | 'test' | 'production';
@@ -83,10 +88,12 @@ export type MarvOpenAIConfig = {
   apiKey: string;
   /** OpenAI Stored Prompt id (e.g. "pmpt_..."). When unset, OpenAI calls are short-circuited. */
   promptId: string | null;
+  /** Pin a Stored Prompt version for cache-stable requests. Null = latest. */
+  promptVersion: string | null;
   fastModel: string;
   regularModel: string;
   smartModel: string;
-  /** When true, `web_search_preview` is added to Marv requests for qualifying modes. */
+  /** When true, hosted `web_search` is added to Marv requests for qualifying modes. */
   webSearchEnabled: boolean;
   /** Modes (subset of 'fast' | 'regular' | 'smart') that may use web search. */
   webSearchModes: string[];
@@ -665,13 +672,15 @@ export class AppConfigService {
   marvOpenAI(): MarvOpenAIConfig {
     const apiKey = this.config.get<string>('OPENAI_API_KEY')?.trim() ?? '';
     const promptId = this.config.get<string>('OPENAI_MARV_PROMPT_ID')?.trim() || null;
-    const fastModel = this.config.get<string>('OPENAI_MARV_FAST_MODEL')?.trim() || 'gpt-5.4-nano';
-    const regularModel = this.config.get<string>('OPENAI_MARV_REGULAR_MODEL')?.trim() || 'gpt-5.4-mini';
-    const smartModel = this.config.get<string>('OPENAI_MARV_SMART_MODEL')?.trim() || 'gpt-5.5';
+    const promptVersion = this.config.get<string>('OPENAI_MARV_PROMPT_VERSION')?.trim() || null;
+    const fastModel = this.config.get<string>('OPENAI_MARV_FAST_MODEL')?.trim() || MARV_DEFAULT_FAST_MODEL;
+    const regularModel = this.config.get<string>('OPENAI_MARV_REGULAR_MODEL')?.trim() || MARV_DEFAULT_REGULAR_MODEL;
+    const smartModel = this.config.get<string>('OPENAI_MARV_SMART_MODEL')?.trim() || MARV_DEFAULT_SMART_MODEL;
     // Web search is ON by default. Set MARV_WEB_SEARCH_ENABLED=false to disable.
     const webSearchEnabled = this.readBool('MARV_WEB_SEARCH_ENABLED', true);
     // Comma-separated list of modes that may use web search. Defaults to regular,smart only —
-    // fast (gpt-5.4-nano) exhausts its token budget on search processing before producing any text.
+    // fast (gpt-5.6-luna) plus our 4k output cap often burns the budget on search processing,
+    // and the $0.03 search fee dwarfs a Luna turn.
     const webSearchModesRaw = this.config.get<string>('MARV_WEB_SEARCH_MODES')?.trim() || 'regular,smart';
     const webSearchModes = webSearchModesRaw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
     // When web search is active, use a larger output-token budget so the model has room to
@@ -681,7 +690,7 @@ export class AppConfigService {
     const visionEnabled = this.readBool('MARV_VISION_ENABLED', true);
     // All three model tiers support image inputs. Previously only regular,smart was default,
     // which meant auto-routed queries landing on fast would silently drop images and Marv
-    // would claim he can't see them. fast (gpt-5.4-nano) handles vision fine; the token-budget
+    // would claim he can't see them. fast (gpt-5.6-luna) handles vision fine; the token-budget
     // concern only applies to web search (see webSearchModes).
     const visionModesRaw = this.config.get<string>('MARV_VISION_MODES')?.trim() || 'fast,regular,smart';
     const visionModes = visionModesRaw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
@@ -690,7 +699,7 @@ export class AppConfigService {
     // per-image vision surcharge, so cost scales with count — raise via env if a deployment
     // wants even more. 16 covers a long image-bearing thread; extras still bill per image.
     const visionMaxImagesPerTurn = this.readPositiveInt('MARV_VISION_MAX_IMAGES_PER_TURN', 16);
-    return { apiKey, promptId, fastModel, regularModel, smartModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens, visionEnabled, visionModes, visionMaxImagesPerTurn };
+    return { apiKey, promptId, promptVersion, fastModel, regularModel, smartModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens, visionEnabled, visionModes, visionMaxImagesPerTurn };
   }
 
   marvCredits(): MarvCreditConfig {
@@ -703,7 +712,9 @@ export class AppConfigService {
       creditsPerDay: this.readPositiveInt('MARV_CREDITS_PER_DAY', 20),
       fastCost: this.readPositiveInt('MARV_FAST_COST', 1),
       regularCost: this.readPositiveInt('MARV_REGULAR_COST', 2),
-      // Smart uses gpt-5.5 (~$0.02/req) vs regular gpt-5.4-mini (~$0.004/req).
+      // Smart (gpt-5.6-sol, ~$0.016/req) vs regular (gpt-5.6-terra, ~$0.009/req)
+      // at ~2k in / 400 out. Credit ladder stays 1/2/5 — a gentler throttle than
+      // the ~1:10:20 API-price ratio, so Smart stays usable.
       smartCost: this.readPositiveInt('MARV_SMART_COST', 5),
       // Web search is the expensive API (~$0.03/call). Same weight as a Smart turn.
       webSearchCreditCost: this.readPositiveInt('MARV_WEB_SEARCH_CREDIT_COST', 5),
@@ -720,11 +731,12 @@ export class AppConfigService {
       publicMaxInputTokens: this.readPositiveInt('MARV_PUBLIC_MAX_INPUT_TOKENS', 8000),
       privateMaxInputTokens: this.readPositiveInt('MARV_PRIVATE_MAX_INPUT_TOKENS', 4000),
       // Cap, not a target — billed tokens follow what the model actually emits.
-      // Reasoning models (gpt-5.4-mini/nano, gpt-5.5) spend this on thinking + tool-call
-      // JSON before any visible text. 1024 was exhausting mid-think on tool-heavy DMs
-      // ("tell me about @user"), which surfaced as the canned "something went sideways"
-      // reply. 4096 leaves room for a few tool rounds; the 80-word prompt still keeps
-      // the visible reply short. Override with MARV_MAX_OUTPUT_TOKENS in .env.
+      // GPT-5.6 Luna/Terra/Sol all allow 128K output; this is a cost/latency cap,
+      // not the model limit. Reasoning + tool-call JSON burn this before visible
+      // text. 1024 exhausted mid-think on tool-heavy DMs ("tell me about @user"),
+      // which surfaced as the canned "something went sideways" reply. 4096 leaves
+      // room for a few tool rounds; the 80-word prompt still keeps the visible
+      // reply short. Override with MARV_MAX_OUTPUT_TOKENS in .env.
       maxOutputTokens: this.readPositiveInt('MARV_MAX_OUTPUT_TOKENS', 4096),
       publicMaxPerUserPerHour: this.readPositiveInt('MARV_PUBLIC_MAX_PER_USER_PER_HOUR', 10),
       publicMaxPerUserPerDay: this.readPositiveInt('MARV_PUBLIC_MAX_PER_USER_PER_DAY', 30),

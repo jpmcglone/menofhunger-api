@@ -18,6 +18,7 @@ export type RecordEventInput = {
   inputTokens?: number | null;
   outputTokens?: number | null;
   cachedInputTokens?: number | null;
+  reasoningTokens?: number | null;
   modelUsed?: string | null;
   estimatedCostUsd?: number | null;
   responseId?: string | null;
@@ -57,6 +58,7 @@ export class MarvinUsageService {
           inputTokens: input.inputTokens ?? null,
           outputTokens: input.outputTokens ?? null,
           cachedInputTokens: input.cachedInputTokens ?? null,
+          reasoningTokens: input.reasoningTokens ?? null,
           modelUsed: input.modelUsed ?? null,
           estimatedCostUsd: input.estimatedCostUsd != null ? toDecimal(input.estimatedCostUsd) : null,
           responseId: input.responseId ?? null,

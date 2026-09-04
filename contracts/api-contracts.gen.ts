@@ -1598,6 +1598,8 @@ export type MarvinUsageEventDto = {
   inputTokens: number | null;
   outputTokens: number | null;
   cachedInputTokens: number | null;
+  /** Hidden reasoning tokens (subset of outputTokens). Null on older rows. */
+  reasoningTokens: number | null;
   modelUsed: string | null;
   estimatedCostUsd: number | null;
   responseId: string | null;

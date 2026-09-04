@@ -43,6 +43,7 @@ describe('MarvinRoutingService', () => {
     const cases: Array<{ text: string; reason: string }> = [
       { text: 'is divorce ever permitted?', reason: 'sensitive_topic' },
       { text: 'what does Calvinism say about predestination?', reason: 'sensitive_topic' },
+      { text: 'Is infant baptism biblical?', reason: 'sensitive_topic' },
       { text: 'i keep struggling with porn addiction and shame', reason: 'sensitive_topic' },
       { text: 'how do i fact-check this claim about scripture', reason: 'sensitive_topic' },
     ];
@@ -239,6 +240,38 @@ describe('MarvinRoutingService', () => {
       });
       expect(r.mode).toBe('smart');
       expect(r.crisisDetected).toBe(true);
+    });
+  });
+
+  describe('shouldElevateReasoning', () => {
+    it('elevates on crisis, long context, and multi-user threads', () => {
+      expect(MarvinRoutingService.shouldElevateReasoning({
+        reason: 'crisis_keywords',
+        crisisDetected: true,
+      })).toBe(true);
+      expect(MarvinRoutingService.shouldElevateReasoning({
+        reason: 'long_context',
+        crisisDetected: false,
+      })).toBe(true);
+      expect(MarvinRoutingService.shouldElevateReasoning({
+        reason: 'multi_user_thread',
+        crisisDetected: false,
+      })).toBe(true);
+    });
+
+    it('does not elevate ordinary Smart or sensitive-topic routing', () => {
+      expect(MarvinRoutingService.shouldElevateReasoning({
+        reason: 'sensitive_topic',
+        crisisDetected: false,
+      })).toBe(false);
+      expect(MarvinRoutingService.shouldElevateReasoning({
+        reason: 'user_selected_smart',
+        crisisDetected: false,
+      })).toBe(false);
+      expect(MarvinRoutingService.shouldElevateReasoning({
+        reason: 'user_selected',
+        crisisDetected: false,
+      })).toBe(false);
     });
   });
 

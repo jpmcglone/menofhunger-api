@@ -24,7 +24,7 @@ export class MarvinRoutingService {
   /**
    * Explicit web-search demand. These fire when the user is directly asking Marv to
    * look something up online. Upgrades Fast → Regular AND sets `webSearchDemanded=true`
-   * so the prompt builder injects a "you MUST use web_search_preview" instruction.
+   * so the prompt builder injects a "you MUST use web_search" instruction.
    */
   private static readonly EXPLICIT_SEARCH_PATTERNS: ReadonlyArray<RegExp> = [
     /\b(search\s+(the\s+web|online|google|internet)\s+(for)?)\b/i,
@@ -65,7 +65,7 @@ export class MarvinRoutingService {
    */
   private static readonly SMART_TOPIC_PATTERNS: ReadonlyArray<RegExp> = [
     // Theology / scripture interpretation debates
-    /\b(theolog\w*|reformed|calvinis\w+|arminian|sola\s+scriptura|trinity|atonement|eschatolog\w+)\b/i,
+    /\b(theolog\w*|reformed|calvinis\w+|arminian|sola\s+scriptura|trinity|atonement|eschatolog\w+|paedo|credo|(?:infant\s+)?baptis\w*)\b/i,
     // Marriage / family conflict
     /\b(divorce|separation|abus\w+|adulter\w+|cheat\w+|infidelity)\b/i,
     /\b(my\s+(wife|husband|spouse)\s+(left|cheated|hit|hates))\b/i,
@@ -160,6 +160,17 @@ export class MarvinRoutingService {
     }
 
     return { mode: baseMode, reason: args.requested === 'auto' ? 'auto_routed' : 'user_selected', crisisDetected, webSearchDemanded: false };
+  }
+
+  /**
+   * Crisis, long threads, and multi-author threads get `reasoning.effort=high`.
+   * Sensitive-topic Smart stays at the Smart default (`medium`).
+   */
+  static shouldElevateReasoning(routed: { reason: string; crisisDetected: boolean }): boolean {
+    if (routed.crisisDetected) return true;
+    return routed.reason === 'crisis_keywords'
+      || routed.reason === 'long_context'
+      || routed.reason === 'multi_user_thread';
   }
 
   /** Cheap char→token approximation. ~4 chars/token works well enough for routing decisions. */

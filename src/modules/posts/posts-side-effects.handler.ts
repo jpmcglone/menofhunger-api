@@ -1065,6 +1065,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
         )
         .then(() => {
           this.logger.log(`[marv] mention-detect post=${post.id} enqueued ok`);
+          this.emitMarvQueuedTyping(post.id);
         })
         .catch((err) => {
           this.logger.warn(
@@ -1076,5 +1077,37 @@ export class PostsSideEffectsHandler implements OnModuleInit {
         `[marv] mention-detection during side-effects failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /** First "Marv is replying" pulse as soon as the job is queued. */
+  private emitMarvQueuedTyping(postId: string): void {
+    const username = this.appConfig.marvBot().username;
+    const emit = (marvUserId: string): void => {
+      try {
+        this.presenceRealtime.emitPostsTyping(postId, {
+          postId,
+          user: {
+            id: marvUserId,
+            username,
+            verifiedStatus: 'manual',
+            premium: true,
+            premiumPlus: false,
+            isOrganization: false,
+          },
+          typing: true,
+          status: 'replying',
+        });
+      } catch {
+        // best-effort: typing is non-essential UX
+      }
+    };
+    const cached = this.marvIdentity.cachedMarvUserId();
+    if (cached) {
+      emit(cached);
+      return;
+    }
+    void this.marvIdentity.getMarvUserId().then((id) => {
+      if (id) emit(id);
+    });
   }
 }

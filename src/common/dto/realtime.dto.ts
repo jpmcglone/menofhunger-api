@@ -396,9 +396,9 @@ export type PostsCommentDeletedPayloadDto = {
  * Emitted to `post:{postId}` room subscribers (excluding the sender) while a user is composing a reply.
  * Mirrors the shape of `messages:typing` / `spaces:typing` — no state persisted server-side.
  *
- * `status` is only set by server-side emitters (e.g. Marvin):
- *   - `'thinking'` — AI is processing (show purple "thinking" label)
- *   - `'replying'` — about to post the reply (show standard wave animation)
+ * `status` is only set by server-side emitters (e.g. Marvin). Marv always
+ * emits `'replying'` while queued, thinking, or composing — clients show the
+ * same "is replying" copy. `'thinking'` is legacy and should render the same.
  */
 export type PostsTypingPayloadDto = {
   postId: string;

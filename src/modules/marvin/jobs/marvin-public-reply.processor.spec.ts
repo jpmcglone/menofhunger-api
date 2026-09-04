@@ -395,6 +395,27 @@ describe('MarvinPublicReplyProcessor', () => {
     // Successful replies are recorded without an errorCode.
     const recordedCall = m.usage.recordEvent.mock.calls[0]![0];
     expect(recordedCall.errorCode).toBeUndefined();
+    expect(m.ai.respond).toHaveBeenCalledWith(
+      expect.objectContaining({ elevateReasoning: false }),
+    );
+  });
+
+  it('elevates reasoning on crisis routing', async () => {
+    const m = makeProcessor();
+    m.routing.resolve.mockReturnValue({
+      mode: 'smart',
+      reason: 'crisis_keywords',
+      crisisDetected: true,
+      webSearchDemanded: false,
+    });
+    await m.processor.process({
+      postId: 'p-1',
+      rootPostId: 'r-1',
+      requestingUserId: 'u-requester',
+    });
+    expect(m.ai.respond).toHaveBeenCalledWith(
+      expect.objectContaining({ elevateReasoning: true, mode: 'smart' }),
+    );
   });
 
   describe('typing indicator', () => {
@@ -407,7 +428,7 @@ describe('MarvinPublicReplyProcessor', () => {
       isOrganization: false,
     };
 
-    it('emits thinking→replying on the triggering post, then typing:false', async () => {
+    it('emits replying on the triggering post, then typing:false', async () => {
       const m = makeProcessor();
       await m.processor.process({
         postId: 'p-1',
@@ -417,19 +438,16 @@ describe('MarvinPublicReplyProcessor', () => {
       const calls = m.presenceRealtime.emitPostsTyping.mock.calls;
       expect(calls[0]).toEqual([
         'p-1',
-        { postId: 'p-1', user: typingUser, typing: true, status: 'thinking' },
-      ]);
-      expect(calls.find((c: unknown[]) => (c[1] as { status?: string })?.status === 'replying')).toEqual([
-        'p-1',
         { postId: 'p-1', user: typingUser, typing: true, status: 'replying' },
       ]);
+      expect(calls.some((c: unknown[]) => (c[1] as { status?: string })?.status === 'thinking')).toBe(false);
       expect(calls[calls.length - 1]).toEqual([
         'p-1',
         { postId: 'p-1', user: typingUser, typing: false },
       ]);
     });
 
-    it('emits typing:false even if the AI call throws (no replying phase)', async () => {
+    it('emits typing:false even if the AI call throws', async () => {
       const m = makeProcessor();
       m.ai.respond = jest.fn(async () => {
         throw new Error('upstream timeout');
@@ -442,33 +460,48 @@ describe('MarvinPublicReplyProcessor', () => {
       const calls = m.presenceRealtime.emitPostsTyping.mock.calls;
       expect(calls[0]).toEqual([
         'p-1',
-        { postId: 'p-1', user: typingUser, typing: true, status: 'thinking' },
+        { postId: 'p-1', user: typingUser, typing: true, status: 'replying' },
       ]);
-      expect(calls.find((c: unknown[]) => (c[1] as { status?: string })?.status === 'replying')).toBeUndefined();
       expect(calls[calls.length - 1]).toEqual([
         'p-1',
         { postId: 'p-1', user: typingUser, typing: false },
       ]);
     });
 
-    it('does not emit typing for the canned not-configured path', async () => {
+    it('emits then clears typing on the canned not-configured path', async () => {
       const m = makeProcessor({ aiConfigured: false });
       await m.processor.process({
         postId: 'p-1',
         rootPostId: 'r-1',
         requestingUserId: 'u-requester',
       });
-      expect(m.presenceRealtime.emitPostsTyping).not.toHaveBeenCalled();
+      const calls = m.presenceRealtime.emitPostsTyping.mock.calls;
+      expect(calls[0]).toEqual([
+        'p-1',
+        { postId: 'p-1', user: typingUser, typing: true, status: 'replying' },
+      ]);
+      expect(calls[calls.length - 1]).toEqual([
+        'p-1',
+        { postId: 'p-1', user: typingUser, typing: false },
+      ]);
     });
 
-    it('does not emit typing on the out-of-credits path', async () => {
+    it('emits then clears typing on the out-of-credits path', async () => {
       const m = makeProcessor({ credits: 1 });
       await m.processor.process({
         postId: 'p-1',
         rootPostId: 'r-1',
         requestingUserId: 'u-requester',
       });
-      expect(m.presenceRealtime.emitPostsTyping).not.toHaveBeenCalled();
+      const calls = m.presenceRealtime.emitPostsTyping.mock.calls;
+      expect(calls[0]).toEqual([
+        'p-1',
+        { postId: 'p-1', user: typingUser, typing: true, status: 'replying' },
+      ]);
+      expect(calls[calls.length - 1]).toEqual([
+        'p-1',
+        { postId: 'p-1', user: typingUser, typing: false },
+      ]);
     });
   });
 

@@ -314,6 +314,7 @@ export class MarvinCatchUpService {
           dispatchTool: (name, args, ctx) => this.tools.dispatch(name, args, ctx),
           toolContext: { requesterUserId: userId, rootPostId, triggeringPostId: postId },
           cacheKey: `marv:catchup:${rootPostId}`,
+          elevateReasoning: MarvinRoutingService.shouldElevateReasoning(routed),
         });
       } catch (err) {
         await refundHeld();
@@ -390,6 +391,7 @@ export class MarvinCatchUpService {
           inputTokens: aiResult.inputTokens,
           outputTokens: aiResult.outputTokens,
           cachedInputTokens: aiResult.cachedInputTokens,
+          reasoningTokens: aiResult.reasoningTokens,
           estimatedCostUsd: aiResult.estimatedCostUsd,
           latencyMs: Date.now() - startedAt,
           errorCode: isInsufficient ? MARV_ERROR_CODES.noCredits : MARV_ERROR_CODES.aiError,
@@ -421,6 +423,7 @@ export class MarvinCatchUpService {
         inputTokens: aiResult.inputTokens,
         outputTokens: aiResult.outputTokens,
         cachedInputTokens: aiResult.cachedInputTokens,
+        reasoningTokens: aiResult.reasoningTokens,
         estimatedCostUsd: aiResult.estimatedCostUsd,
         latencyMs: Date.now() - startedAt,
         postSpendSummary: postSpend,

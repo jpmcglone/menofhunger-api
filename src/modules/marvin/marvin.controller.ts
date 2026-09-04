@@ -423,6 +423,7 @@ function usageRowToDto(r: UsageRow): MarvinUsageEventDto {
     inputTokens: r.inputTokens,
     outputTokens: r.outputTokens,
     cachedInputTokens: r.cachedInputTokens,
+    reasoningTokens: r.reasoningTokens,
     modelUsed: r.modelUsed,
     estimatedCostUsd: r.estimatedCostUsd === null ? null : Number(r.estimatedCostUsd),
     responseId: r.responseId,

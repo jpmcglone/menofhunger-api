@@ -109,14 +109,24 @@ export class MarvinPublicReplyProcessor {
     // would risk a duplicate post on retry).
     let delivered = false;
     let stopTyping = () => {};
-    let setTypingPhase = (_phase: 'thinking' | 'replying') => {};
     try {
-
     // 2. Marv globally enabled? Disabled for user?
     const cfg = this.appConfig.marvBot();
     if (!cfg.enabled) {
       this.logger.log('[marv] public-reply EXIT reason=marv_disabled');
+      this.emitMarvTypingStop(postId);
       return;
+    }
+
+    // Show "@marv is replying…" for the rest of this job. Queued / thinking /
+    // composing all look the same. Same `posts:typing` event humans use.
+    const marvUserIdForTyping = this.identity.cachedMarvUserId() ?? (await this.identity.getMarvUserId());
+    if (marvUserIdForTyping) {
+      stopTyping = this.startTypingHeartbeat({
+        postId,
+        marvUserId: marvUserIdForTyping,
+        username: cfg.username,
+      }).stop;
     }
     const settings = await this.prisma.marvinUserSettings.findUnique({
       where: { userId: requestingUserId },
@@ -410,15 +420,6 @@ export class MarvinPublicReplyProcessor {
       return;
     }
 
-    // Show "@marv is thinking…" on the triggering post from the moment we start
-    // collecting context through the AI call. Same `posts:typing` event humans use.
-    const marvUserIdForTyping = this.identity.cachedMarvUserId() ?? (await this.identity.getMarvUserId());
-    if (marvUserIdForTyping) {
-      const heartbeat = this.startTypingHeartbeat({ postId, marvUserId: marvUserIdForTyping });
-      stopTyping = heartbeat.stop;
-      setTypingPhase = heartbeat.setPhase;
-    }
-
     // Full thread (siblings included) + images, so reserve matches what we actually send.
     const {
       ancestors,
@@ -559,6 +560,7 @@ export class MarvinPublicReplyProcessor {
           requesterUsername: requesterRow.username,
         },
         cacheKey: `marv:public:${rootPostId}`,
+        elevateReasoning: MarvinRoutingService.shouldElevateReasoning(routed),
       });
       this.logger.log(
         `[marv] public-reply AI call DONE in ${Date.now() - aiStartedAt}ms textLen=${(aiResult.text ?? '').length} model=${aiResult.modelUsed} resp=${aiResult.responseId} tools=${aiResult.toolCallCount} tokens=in${aiResult.inputTokens ?? 0}/out${aiResult.outputTokens ?? 0}/cached${aiResult.cachedInputTokens ?? 0} errorCode=${aiResult.errorCode ?? '-'}`,
@@ -606,7 +608,6 @@ export class MarvinPublicReplyProcessor {
     }
 
     const replyText = (aiResult.text ?? '').trim();
-    if (replyText) setTypingPhase('replying');
     if (!replyText) {
       stopTyping();
       await refundHeld();
@@ -640,6 +641,7 @@ export class MarvinPublicReplyProcessor {
         inputTokens: aiResult.inputTokens,
         outputTokens: aiResult.outputTokens,
         cachedInputTokens: aiResult.cachedInputTokens,
+        reasoningTokens: aiResult.reasoningTokens,
         estimatedCostUsd: aiResult.estimatedCostUsd,
         errorCode: MARV_ERROR_CODES.aiNoText,
         latencyMs: Date.now() - startedAt,
@@ -802,6 +804,7 @@ export class MarvinPublicReplyProcessor {
         inputTokens: aiResult.inputTokens,
         outputTokens: aiResult.outputTokens,
         cachedInputTokens: aiResult.cachedInputTokens,
+        reasoningTokens: aiResult.reasoningTokens,
         estimatedCostUsd: aiResult.estimatedCostUsd,
         latencyMs: Date.now() - startedAt,
         postSpendSummary: postSpend,
@@ -828,7 +831,6 @@ export class MarvinPublicReplyProcessor {
     }
 
     } catch (err) {
-      stopTyping();
       // Unexpected error before delivery — release the idempotency key so BullMQ can retry.
       if (!delivered) {
         await this.prisma.marvinIdempotencyKey
@@ -836,26 +838,49 @@ export class MarvinPublicReplyProcessor {
           .catch((e: unknown) => this.logger.warn(`[marv] public-reply failed to release idempotency key: ${String(e)}`));
       }
       throw err;
+    } finally {
+      stopTyping();
     }
   }
 
   /**
-   * Show "@marv is thinking/replying…" on the triggering post via the same
-   * `posts:typing` event humans use. Starts as `thinking` (context + AI), then
-   * `replying` once there is text to post. Always call `stop()` so the
-   * indicator never gets stuck.
+   * Show "@marv is replying…" on the triggering post via the same `posts:typing`
+   * event humans use. Queued / thinking / composing all emit `replying`. Always
+   * call `stop()` so the indicator never gets stuck.
    */
+  /** Clears a queued "Marv is replying" pulse when this job will not reply. */
+  private emitMarvTypingStop(postId: string): void {
+    const marvUserId = this.identity.cachedMarvUserId();
+    if (!postId || !marvUserId) return;
+    try {
+      this.presenceRealtime.emitPostsTyping(postId, {
+        postId,
+        user: {
+          id: marvUserId,
+          username: this.appConfig.marvBot().username,
+          verifiedStatus: 'manual',
+          premium: true,
+          premiumPlus: false,
+          isOrganization: false,
+        },
+        typing: false,
+      });
+    } catch {
+      // best-effort
+    }
+  }
+
   private startTypingHeartbeat(args: {
     postId: string;
     marvUserId: string;
-  }): { stop: () => void; setPhase: (phase: 'thinking' | 'replying') => void } {
-    const { postId, marvUserId } = args;
-    const noop = { stop: () => {}, setPhase: () => {} };
+    username: string;
+  }): { stop: () => void } {
+    const { postId, marvUserId, username } = args;
+    const noop = { stop: () => {} };
     if (!postId || !marvUserId) return noop;
 
-    const marvUsername = this.appConfig.marvBot().username;
+    const marvUsername = username;
     let stopped = false;
-    let currentStatus: 'thinking' | 'replying' = 'thinking';
 
     const emit = (typing: boolean): void => {
       try {
@@ -870,7 +895,7 @@ export class MarvinPublicReplyProcessor {
             isOrganization: false,
           },
           typing,
-          status: typing ? currentStatus : undefined,
+          status: typing ? 'replying' : undefined,
         });
       } catch {
         // best-effort: typing indicator is non-essential UX
@@ -888,10 +913,6 @@ export class MarvinPublicReplyProcessor {
         stopped = true;
         clearInterval(interval);
         emit(false);
-      },
-      setPhase: (phase: 'thinking' | 'replying') => {
-        currentStatus = phase;
-        if (!stopped) emit(true);
       },
     };
   }

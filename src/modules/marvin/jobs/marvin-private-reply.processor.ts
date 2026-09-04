@@ -76,22 +76,21 @@ export class MarvinPrivateReplyProcessor {
     conversationId: string;
     fromUserId: string;
     toUserId: string;
-  }): { stop: () => void; setPhase: (phase: 'thinking' | 'typing') => void } {
+  }): { stop: () => void } {
     const { conversationId, fromUserId, toUserId } = args;
-    const noop = { stop: () => {}, setPhase: () => {} };
+    const noop = { stop: () => {} };
     if (!conversationId || !fromUserId || !toUserId || fromUserId === toUserId) {
       return noop;
     }
 
     let stopped = false;
-    let currentStatus: 'thinking' | 'typing' = 'thinking';
 
     const emit = (typing: boolean): void => {
       try {
         this.presenceRealtime.emitMessagesTypingFromUser(toUserId, fromUserId, {
           conversationId,
           typing,
-          status: typing ? currentStatus : undefined,
+          status: typing ? 'typing' : undefined,
         });
       } catch {
         // best-effort: typing is non-essential UX
@@ -110,10 +109,6 @@ export class MarvinPrivateReplyProcessor {
         stopped = true;
         clearInterval(interval);
         emit(false);
-      },
-      setPhase: (phase: 'thinking' | 'typing') => {
-        currentStatus = phase;
-        if (!stopped) emit(true);
       },
     };
   }
@@ -522,13 +517,13 @@ export class MarvinPrivateReplyProcessor {
     // call can take 5–15s with tool loops, so we heartbeat below the client's
     // 3.5s typing TTL. Always stop in `finally` so the dots never stick.
     const marvUserIdForTyping = this.identity.cachedMarvUserId() ?? (await this.identity.getMarvUserId());
-    const { stop: stopTyping, setPhase: setTypingPhase } = marvUserIdForTyping
+    const { stop: stopTyping } = marvUserIdForTyping
       ? this.startTypingHeartbeat({
           conversationId,
           fromUserId: marvUserIdForTyping,
           toUserId: requestingUserId,
         })
-      : { stop: () => {}, setPhase: () => {} };
+      : { stop: () => {} };
 
     const aiStartedAt = Date.now();
     this.logger.log(
@@ -551,6 +546,7 @@ export class MarvinPrivateReplyProcessor {
         },
         previousResponseId: sessionState?.lastResponseId ?? null,
         cacheKey: `marv:private:${conversationId}`,
+        elevateReasoning: MarvinRoutingService.shouldElevateReasoning(routed),
       });
       this.logger.log(
         `[marv] private-reply AI call DONE in ${Date.now() - aiStartedAt}ms textLen=${(aiResult.text ?? '').length} model=${aiResult.modelUsed} resp=${aiResult.responseId} tools=${aiResult.toolCallCount} tokens=in${aiResult.inputTokens ?? 0}/out${aiResult.outputTokens ?? 0}/cached${aiResult.cachedInputTokens ?? 0} errorCode=${aiResult.errorCode ?? '-'}`,
@@ -603,9 +599,7 @@ export class MarvinPrivateReplyProcessor {
       return;
     }
 
-    // AI finished thinking — briefly switch to "typing" so the client shows
-    // the phase change, then stop just before the message lands.
-    setTypingPhase('typing');
+    // Brief pause so the indicator is still visible right before the DM lands.
     await new Promise<void>((resolve) => setTimeout(resolve, 350));
     stopTyping();
 
@@ -638,6 +632,7 @@ export class MarvinPrivateReplyProcessor {
         inputTokens: aiResult.inputTokens,
         outputTokens: aiResult.outputTokens,
         cachedInputTokens: aiResult.cachedInputTokens,
+        reasoningTokens: aiResult.reasoningTokens,
         estimatedCostUsd: aiResult.estimatedCostUsd,
         errorCode: MARV_ERROR_CODES.aiNoText,
         latencyMs: Date.now() - startedAt,
@@ -800,6 +795,7 @@ export class MarvinPrivateReplyProcessor {
         inputTokens: aiResult.inputTokens,
         outputTokens: aiResult.outputTokens,
         cachedInputTokens: aiResult.cachedInputTokens,
+        reasoningTokens: aiResult.reasoningTokens,
         estimatedCostUsd: aiResult.estimatedCostUsd,
         latencyMs: Date.now() - startedAt,
         postSpendSummary: postSpend,

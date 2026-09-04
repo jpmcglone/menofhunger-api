@@ -316,6 +316,27 @@ describe('MarvinPrivateReplyProcessor', () => {
     );
     const recordedCall = m.usage.recordEvent.mock.calls[0]![0];
     expect(recordedCall.errorCode).toBeUndefined();
+    expect(m.ai.respond).toHaveBeenCalledWith(
+      expect.objectContaining({ elevateReasoning: false }),
+    );
+  });
+
+  it('elevates reasoning on crisis routing', async () => {
+    const m = makeProcessor();
+    m.routing.resolve.mockReturnValue({
+      mode: 'smart',
+      reason: 'crisis_keywords',
+      crisisDetected: true,
+      webSearchDemanded: false,
+    });
+    await m.processor.process({
+      conversationId: 'c-1',
+      messageId: 'm-1',
+      requestingUserId: 'u-requester',
+    });
+    expect(m.ai.respond).toHaveBeenCalledWith(
+      expect.objectContaining({ elevateReasoning: true, mode: 'smart' }),
+    );
   });
 
   it('records ai_no_text when the AI returns empty', async () => {
@@ -386,7 +407,7 @@ describe('MarvinPrivateReplyProcessor', () => {
   });
 
   describe('typing indicator', () => {
-    it('emits thinking→typing phases then typing:false on success', async () => {
+    it('emits typing then typing:false on success', async () => {
       const m = makeProcessor();
       await m.processor.process({
         conversationId: 'c-1',
@@ -394,17 +415,13 @@ describe('MarvinPrivateReplyProcessor', () => {
         requestingUserId: 'u-requester',
       });
       const calls = m.presenceRealtime.emitMessagesTypingFromUser.mock.calls;
-      // First emit: typing=true with status='thinking'.
       expect(calls.length).toBeGreaterThanOrEqual(2);
       expect(calls[0]).toEqual([
         'u-requester',
         'marv-id',
-        { conversationId: 'c-1', typing: true, status: 'thinking' },
+        { conversationId: 'c-1', typing: true, status: 'typing' },
       ]);
-      // After AI succeeds there should be a typing=true with status='typing'.
-      const typingPhase = calls.find((c: unknown[]) => (c[2] as Record<string, unknown>)?.status === 'typing');
-      expect(typingPhase).toBeDefined();
-      // Last emit: typing=false (stop).
+      expect(calls.some((c: unknown[]) => (c[2] as { status?: string })?.status === 'thinking')).toBe(false);
       expect(calls[calls.length - 1]).toEqual([
         'u-requester',
         'marv-id',
@@ -412,7 +429,7 @@ describe('MarvinPrivateReplyProcessor', () => {
       ]);
     });
 
-    it('emits typing:false even if the AI call throws (no typing phase)', async () => {
+    it('emits typing:false even if the AI call throws', async () => {
       const m = makeProcessor();
       m.ai.respond = jest.fn(async () => {
         throw new Error('upstream timeout');
@@ -424,15 +441,11 @@ describe('MarvinPrivateReplyProcessor', () => {
       });
       const calls = m.presenceRealtime.emitMessagesTypingFromUser.mock.calls;
       expect(calls.length).toBeGreaterThanOrEqual(2);
-      // Starts as thinking.
       expect(calls[0]).toEqual([
         'u-requester',
         'marv-id',
-        { conversationId: 'c-1', typing: true, status: 'thinking' },
+        { conversationId: 'c-1', typing: true, status: 'typing' },
       ]);
-      // No typing phase on error path.
-      expect(calls.find((c: unknown[]) => (c[2] as Record<string, unknown>)?.status === 'typing')).toBeUndefined();
-      // Last emit: typing=false.
       expect(calls[calls.length - 1]).toEqual([
         'u-requester',
         'marv-id',

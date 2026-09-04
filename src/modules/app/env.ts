@@ -541,7 +541,7 @@ export const envSchema = z.object({
     .optional()
     .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PRIVATE_MAX_PER_10_MIN must be a number'),
 
-  // Marv web search (optional — gates web_search_preview tool attachment).
+  // Marv web search (optional — gates hosted web_search tool attachment).
   MARV_WEB_SEARCH_ENABLED: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
@@ -564,8 +564,8 @@ export const envSchema = z.object({
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
   ),
-  // Comma-separated modes that may receive image inputs. Defaults to regular,smart — gpt-5.4-nano
-  // cannot reliably process images within its token budget.
+  // Comma-separated modes that may receive image inputs. Default is all three;
+  // gpt-5.6-luna handles vision. Web search stays off for fast (see MARV_WEB_SEARCH_MODES).
   MARV_VISION_MODES: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),

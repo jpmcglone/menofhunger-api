@@ -3,11 +3,25 @@ import OpenAI from 'openai';
 import type { MarvinSource } from '@prisma/client';
 import { AppConfigService } from '../../app/app-config.service';
 import type { ResolvedMarvinMode } from './marvin-routing.service';
-import {
-  MARV_DEFAULT_FAST_MODEL,
-  MARV_DEFAULT_REGULAR_MODEL,
-  MARV_DEFAULT_SMART_MODEL,
-} from '../marvin-models';
+import { MARV_LOCAL_FUNCTION_TOOLS } from '../marvin-ai-tools';
+import { MARV_MODEL_RATES_USD_PER_M_TOKENS } from '../marvin-models';
+
+/** GPT-5.6 reasoning effort. Stay on `standard` mode (omit `reasoning.mode`). */
+export type MarvReasoningEffort = 'none' | 'low' | 'medium' | 'high';
+
+/**
+ * Per-mode think budget. GPT-5.6 defaults to medium if we omit this — Fast then
+ * spends output tokens on hidden reasoning that the 80-word cap throws away.
+ * Fast uses `low` (not `none`) because Marv still does tool loops.
+ */
+export function marvReasoningEffort(
+  mode: ResolvedMarvinMode,
+  elevate: boolean,
+): MarvReasoningEffort {
+  if (elevate) return 'high';
+  if (mode === 'smart') return 'medium';
+  return 'low';
+}
 
 export type MarvAIToolCallContext = {
   /** Source-scoped ids the tool handlers may use. */
@@ -47,6 +61,11 @@ export type MarvAIRequest = {
   previousResponseId?: string | null;
   /** Stable id used as OpenAI's prompt_cache_key (lower latency for repeat shapes). */
   cacheKey?: string;
+  /**
+   * Crisis, long-context, or multi-user threads: bump reasoning to `high`.
+   * Processors set this from {@link MarvinRoutingService.shouldElevateReasoning}.
+   */
+  elevateReasoning?: boolean;
 };
 
 export type MarvAIResult = {
@@ -56,6 +75,8 @@ export type MarvAIResult = {
   inputTokens: number | null;
   outputTokens: number | null;
   cachedInputTokens: number | null;
+  /** Subset of output tokens spent on hidden reasoning. Billing still uses outputTokens. */
+  reasoningTokens: number | null;
   estimatedCostUsd: number | null;
   toolCallCount: number;
   /** Number of `web_search_call` items OpenAI executed during this response. */
@@ -68,14 +89,7 @@ export type MarvAIResult = {
   errorCode?: 'no_text' | 'refusal' | 'incomplete';
 };
 
-/** Per-1M-token rate (USD) for cost estimation. Approximate; admins can tweak per-deploy. */
-const MODEL_RATES_USD_PER_M_TOKENS: Record<string, { input: number; output: number; cached?: number }> = {
-  [MARV_DEFAULT_FAST_MODEL]: { input: 0.05, output: 0.4, cached: 0.005 },
-  [MARV_DEFAULT_REGULAR_MODEL]: { input: 1.25, output: 10, cached: 0.125 },
-  [MARV_DEFAULT_SMART_MODEL]: { input: 5, output: 30, cached: 0.5 },
-};
-
-/** Flat cost per web_search_preview call (OpenAI pricing, USD). */
+/** Flat cost per hosted `web_search` call (OpenAI pricing, USD). */
 const WEB_SEARCH_COST_USD = 0.03;
 
 /** Tool-loop budget. Two @username lookups easily burn 4 rounds (card + basic × 2). */
@@ -185,20 +199,22 @@ export class MarvinAIService {
     }
 
     const model = this.modelForMode(req.mode);
+    const reasoningEffort = marvReasoningEffort(req.mode, Boolean(req.elevateReasoning));
     this.logger.log(
-      `[marv-ai] respond start source=${req.source} mode=${req.mode} model=${model} promptId=${promptId} maxOut=${limits.maxOutputTokens} prevResp=${req.previousResponseId ?? 'null'} cacheKey=${req.cacheKey ?? '-'}`,
+      `[marv-ai] respond start source=${req.source} mode=${req.mode} model=${model} reasoning=${reasoningEffort} elevate=${Boolean(req.elevateReasoning)} promptId=${promptId} promptVer=${cfg.promptVersion ?? 'latest'} maxOut=${limits.maxOutputTokens} prevResp=${req.previousResponseId ?? 'null'} cacheKey=${req.cacheKey ?? '-'}`,
     );
 
     // Vision: only activate when feature flag is on and mode is in allowed list.
     const visionActive =
       cfg.visionEnabled && cfg.visionModes.includes(req.mode as string);
-    const imageUrls = visionActive && req.imageUrls && req.imageUrls.length > 0
-      ? req.imageUrls.slice(0, cfg.visionMaxImagesPerTurn)
-      : [];
+    const attachedImageUrls =
+      visionActive && req.imageUrls && req.imageUrls.length > 0
+        ? req.imageUrls.slice(0, cfg.visionMaxImagesPerTurn)
+        : [];
 
-    if (visionActive && imageUrls.length > 0) {
+    if (visionActive && attachedImageUrls.length > 0) {
       this.logger.log(
-        `[marv-ai] vision enabled for mode=${req.mode} images=${imageUrls.length}`,
+        `[marv-ai] vision enabled for mode=${req.mode} images=${attachedImageUrls.length}`,
       );
     }
 
@@ -207,10 +223,10 @@ export class MarvinAIService {
     // When images are attached, the user role uses a content-parts array; otherwise a plain string.
     // ResponseInputImage requires `detail` (non-optional in the SDK type). Omitting it causes
     // the API to silently ignore the image content — the model responds as if no image was sent.
-    const userContent: unknown = imageUrls.length > 0
+    const userContent: unknown = attachedImageUrls.length > 0
       ? [
           { type: 'input_text', text: req.userMessage },
-          ...imageUrls.map((u) => ({ type: 'input_image', image_url: u, detail: 'auto' })),
+          ...attachedImageUrls.map((u) => ({ type: 'input_image', image_url: u, detail: 'auto' })),
         ]
       : req.userMessage;
 
@@ -229,6 +245,7 @@ export class MarvinAIService {
     let aggregatedInputTokens = 0;
     let aggregatedOutputTokens = 0;
     let aggregatedCachedTokens = 0;
+    let aggregatedReasoningTokens = 0;
     let toolCallCount = 0;
     let webSearchCount = 0;
     let urlFetchCount = 0;
@@ -242,8 +259,9 @@ export class MarvinAIService {
     // conversation memory across messages.
 
     // Web search is only enabled when: the feature flag is on AND the current mode is in the
-    // allowed list. fast (gpt-5.4-nano) is excluded by default — it exhausts its token budget
-    // on search result processing and never gets to produce visible text.
+    // allowed list. fast (gpt-5.6-luna) is excluded by default — search processing plus our
+    // 4k output cap often exhausts the budget before a visible reply, and the $0.03 search
+    // fee dwarfs a Luna turn.
     const webSearchActive =
       cfg.webSearchEnabled && cfg.webSearchModes.includes(req.mode as string);
 
@@ -253,10 +271,15 @@ export class MarvinAIService {
       ? Math.max(limits.maxOutputTokens, cfg.webSearchMaxOutputTokens)
       : limits.maxOutputTokens;
 
+    const prompt: { id: string; version?: string } = { id: promptId };
+    if (cfg.promptVersion) prompt.version = cfg.promptVersion;
+
     const baseRequest: Record<string, unknown> = {
       model,
-      prompt: { id: promptId },
+      prompt,
       max_output_tokens: effectiveMaxOutputTokens,
+      reasoning: { effort: reasoningEffort },
+      text: { verbosity: 'low' },
       store: true,
       prompt_cache_key: req.cacheKey,
       // Tag every request with the MOH user id so OpenAI's Usage dashboard
@@ -278,66 +301,14 @@ export class MarvinAIService {
 
     // Local tools always registered in-code so they work even if the Stored Prompt
     // tool list drifts. Keep the OpenAI Stored Prompt in sync for documentation.
-    const tools: unknown[] = [
-      {
-        type: 'function',
-        name: 'fetch_url_content',
-        description:
-          'Fetch and read the full text content of a web page. Use this when the user or conversation contains a URL and you need to understand what the page says before responding. Only fetch URLs that are directly relevant to your reply.',
-        parameters: {
-          type: 'object',
-          properties: {
-            url: {
-              type: 'string',
-              description: 'The full URL to fetch, starting with http:// or https://.',
-            },
-          },
-          required: ['url'],
-        },
-      },
-      {
-        type: 'function',
-        name: 'get_bible_passage',
-        description:
-          'Look up the exact text of a Bible passage by reference (non-AI lookup). Use ONLY when the user asks for Scripture or a specific verse/passage. Do not volunteer Scripture unprompted.',
-        parameters: {
-          type: 'object',
-          properties: {
-            reference: {
-              type: 'string',
-              description:
-                'A scripture reference such as "John 3:16", "Romans 8:28-30", "Rom 9", or "Eph 2:1,8".',
-            },
-          },
-          required: ['reference'],
-        },
-      },
-      {
-        type: 'function',
-        name: 'find_similar_members',
-        description:
-          'Find platform members similar to the requester or matching a short interest/query (interests + public profile cards). Use when the user asks who they should meet or if anyone else is into a topic.',
-        parameters: {
-          type: 'object',
-          properties: {
-            query: {
-              type: 'string',
-              description:
-                'Optional short topic or interest (e.g. "woodworking", "Texas", "fasting"). Omit to match the requester\'s own interests/profile.',
-            },
-            limit: {
-              type: 'integer',
-              description: 'Max members to return (1–8). Default 5.',
-            },
-          },
-          required: [],
-        },
-      },
-    ];
+    const tools: unknown[] = [...MARV_LOCAL_FUNCTION_TOOLS];
     if (webSearchActive) {
-      tools.push({ type: 'web_search_preview' });
+      // Hosted web_search (not the legacy web_search_preview). `low` context keeps
+      // search dumps inside the 80-word reply budget; omit return_token_budget
+      // so OpenAI uses the default cap, not unlimited.
+      tools.push({ type: 'web_search', search_context_size: 'low' });
       this.logger.log(
-        `[marv-ai] web_search_preview enabled for mode=${req.mode} maxOutputTokens=${effectiveMaxOutputTokens}`,
+        `[marv-ai] web_search enabled for mode=${req.mode} maxOutputTokens=${effectiveMaxOutputTokens}`,
       );
     }
     baseRequest.tools = tools;
@@ -358,6 +329,7 @@ export class MarvinAIService {
       aggregatedOutputTokens += Number(usage.output_tokens ?? 0);
       aggregatedCachedTokens +=
         Number(usage.input_tokens_details?.cached_tokens ?? 0) + Number(usage.cached_tokens ?? 0);
+      aggregatedReasoningTokens += Number(usage.output_tokens_details?.reasoning_tokens ?? 0);
     };
 
     const dispatchPending = async (
@@ -425,7 +397,7 @@ export class MarvinAIService {
       const roundWebSearches = MarvinAIService.extractWebSearchCount(result);
       webSearchCount += roundWebSearches;
       this.logger.log(
-        `[marv-ai] round=${round} ← OK in ${Date.now() - roundStartedAt}ms status=${result?.status ?? '?'} resp=${responseId} textLen=${textFromThisTurn.length} toolCalls=${pendingToolCalls.length} webSearches=${roundWebSearches} usage=in${result?.usage?.input_tokens ?? 0}/out${result?.usage?.output_tokens ?? 0}`,
+        `[marv-ai] round=${round} ← OK in ${Date.now() - roundStartedAt}ms status=${result?.status ?? '?'} resp=${responseId} textLen=${textFromThisTurn.length} toolCalls=${pendingToolCalls.length} webSearches=${roundWebSearches} usage=in${result?.usage?.input_tokens ?? 0}/out${result?.usage?.output_tokens ?? 0}/reason${result?.usage?.output_tokens_details?.reasoning_tokens ?? 0}`,
       );
 
       if (pendingToolCalls.length === 0) {
@@ -443,6 +415,12 @@ export class MarvinAIService {
 
       const toolOutputs = await dispatchPending(round, pendingToolCalls);
       isToolFollowUp = true;
+      const followUpInput = this.appendToolVision(
+        toolOutputs,
+        attachedImageUrls,
+        visionActive,
+        cfg.visionMaxImagesPerTurn,
+      );
 
       if (round === MAX_TOOL_ROUNDS) {
         this.logger.warn(
@@ -455,7 +433,7 @@ export class MarvinAIService {
             {
               ...baseRequest,
               previous_response_id: responseId,
-              input: toolOutputs,
+              input: followUpInput,
               tool_choice: 'none',
             },
             { allowDropPreviousResponse: false },
@@ -485,7 +463,7 @@ export class MarvinAIService {
       nextRequest = {
         ...baseRequest,
         previous_response_id: responseId,
-        input: toolOutputs,
+        input: followUpInput,
       };
     }
 
@@ -574,7 +552,7 @@ export class MarvinAIService {
       }
     }
 
-    const modelRate = MODEL_RATES_USD_PER_M_TOKENS[model] ?? null;
+    const modelRate = MARV_MODEL_RATES_USD_PER_M_TOKENS[model] ?? null;
     let estimatedCostUsd: number | null = null;
     if (modelRate) {
       const cachedRate = modelRate.cached ?? modelRate.input;
@@ -594,11 +572,12 @@ export class MarvinAIService {
       inputTokens: aggregatedInputTokens || null,
       outputTokens: aggregatedOutputTokens || null,
       cachedInputTokens: aggregatedCachedTokens || null,
+      reasoningTokens: aggregatedReasoningTokens || null,
       estimatedCostUsd,
       toolCallCount,
       webSearchCount,
       urlFetchCount,
-      imagesAttached: imageUrls.length,
+      imagesAttached: attachedImageUrls.length,
       ...(errorCode ? { errorCode } : {}),
     };
   }
@@ -696,6 +675,65 @@ export class MarvinAIService {
       }
     }
     return calls;
+  }
+
+  /**
+   * When list_public_posts / get_post return image URLs, attach leftover vision
+   * slots so Marv can see those posts — not just read "[attached: image]".
+   */
+  private appendToolVision(
+    toolOutputs: Array<{ type: 'function_call_output'; call_id: string; output: string }>,
+    attachedImageUrls: string[],
+    visionActive: boolean,
+    maxImages: number,
+  ): unknown[] {
+    if (!visionActive) return toolOutputs;
+    const leftover = Math.max(0, maxImages - attachedImageUrls.length);
+    if (leftover === 0) return toolOutputs;
+    const seen = new Set(attachedImageUrls);
+    const extra: string[] = [];
+    for (const item of toolOutputs) {
+      for (const url of MarvinAIService.extractToolImageUrls(item.output)) {
+        if (seen.has(url)) continue;
+        seen.add(url);
+        extra.push(url);
+        if (extra.length >= leftover) break;
+      }
+      if (extra.length >= leftover) break;
+    }
+    if (extra.length === 0) return toolOutputs;
+    attachedImageUrls.push(...extra);
+    this.logger.log(`[marv-ai] attached ${extra.length} image(s) from tool results`);
+    return [
+      ...toolOutputs,
+      {
+        role: 'developer' as const,
+        content:
+          'Images from the posts you just loaded. Look at them when you describe those posts.',
+      },
+      {
+        role: 'user' as const,
+        content: extra.map((url) => ({ type: 'input_image', image_url: url, detail: 'auto' })),
+      },
+    ];
+  }
+
+  /** Public image URLs from get_post / list_public_posts tool JSON. */
+  static extractToolImageUrls(output: string): string[] {
+    try {
+      const parsed = JSON.parse(output) as {
+        imageUrls?: unknown;
+        posts?: Array<{ imageUrls?: unknown }>;
+      };
+      const raw: unknown[] = [];
+      if (Array.isArray(parsed.imageUrls)) raw.push(...parsed.imageUrls);
+      for (const post of parsed.posts ?? []) {
+        if (Array.isArray(post?.imageUrls)) raw.push(...post.imageUrls);
+      }
+      return raw.filter((u): u is string => typeof u === 'string' && /^https?:\/\//.test(u));
+    } catch {
+      return [];
+    }
   }
 
   /** Strip stray "Marv:" prefix the model occasionally produces. */

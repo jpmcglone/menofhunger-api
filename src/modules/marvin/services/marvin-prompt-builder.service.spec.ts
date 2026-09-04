@@ -209,6 +209,79 @@ describe('MarvinPromptBuilderService', () => {
       const built = svc.build({ ...baseInput });
       expect(built.developerNote).toContain('first person');
       expect(built.developerNote).toContain('M.A.R.V.');
+      expect(built.developerNote).toContain('You ARE Marv');
+    });
+
+    it('states the Reformed Baptist stance on every turn', () => {
+      const svc = makeService();
+      const built = svc.build({ ...baseInput });
+      expect(built.developerNote).toContain('Reformed, Calvinist, and Baptist');
+      expect(built.developerNote).toContain('not Presbyterian');
+      expect(built.developerNote).toContain('Not neutral about truth');
+    });
+
+    it('maps first and last names onto @usernames and labels thread speakers', () => {
+      const svc = makeService();
+      const built = svc.build({
+        ...baseInput,
+        requester: { userId: 'u-1', username: 'jpmcglone', displayName: 'John McGlone' },
+        threadContext: [
+          {
+            id: 'p-1',
+            authorUsername: 'timk',
+            authorDisplayName: 'Tim Kane',
+            body: 'Ask Marv about John.',
+            createdAt: new Date().toISOString(),
+            poll: null,
+          },
+        ],
+      });
+      expect(built.developerNote).toContain('People in this conversation, nearest first');
+      expect(built.developerNote).toContain('@jpmcglone (John McGlone)');
+      expect(built.developerNote).toContain('@timk (Tim Kane)');
+      expect(built.developerNote).toContain('find_members_by_name');
+    });
+
+    it('lists the nearest John before a distant John in the same thread', () => {
+      const svc = makeService();
+      const built = svc.build({
+        ...baseInput,
+        requester: { userId: 'u-alice', username: 'alice', displayName: 'Alice' },
+        ancestors: [
+          {
+            id: 'p-root',
+            authorUsername: 'johnroot',
+            authorDisplayName: 'John Root',
+            body: 'Starting the thread.',
+            createdAt: new Date().toISOString(),
+            poll: null,
+          },
+        ],
+        triggeringPost: {
+          id: 'p-ask',
+          authorUsername: 'alice',
+          authorDisplayName: 'Alice',
+          body: 'What did John mean?',
+          createdAt: new Date().toISOString(),
+          poll: null,
+        },
+        descendants: [
+          {
+            id: 'p-reply',
+            authorUsername: 'johnrecent',
+            authorDisplayName: 'John Recent',
+            body: 'I meant the fast.',
+            createdAt: new Date().toISOString(),
+            poll: null,
+          },
+        ],
+      });
+      const roster = built.developerNote.slice(
+        built.developerNote.indexOf('People in this conversation, nearest first'),
+      );
+      expect(roster.indexOf('@johnrecent (John Recent)')).toBeGreaterThan(-1);
+      expect(roster.indexOf('@johnrecent (John Recent)')).toBeLessThan(roster.indexOf('@johnroot (John Root)'));
+      expect(roster).toContain('first match here');
     });
 
     it('tells Marv to speak in the first person on DM replies', () => {

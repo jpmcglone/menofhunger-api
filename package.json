@@ -23,6 +23,7 @@
     "seed:tickers": "node scripts/seed-tickers.mjs",
     "backfill:cashtags": "node scripts/backfill-cashtags.mjs",
     "seed:dev": "node scripts/seed-dev.js",
+    "marv:try": "RUN_JOB_CONSUMERS=false RUN_HTTP=false RUN_SCHEDULERS=false ts-node --transpile-only -r reflect-metadata scripts/marv-try.ts",
     "emit:contracts": "node scripts/emit-contracts.mjs",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write .",

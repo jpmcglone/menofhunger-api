@@ -2919,6 +2919,10 @@ model MarvinUsageEvent {
   inputTokens       Int?
   outputTokens      Int?
   cachedInputTokens Int?
+  /**
+   * Hidden reasoning tokens (subset of outputTokens). Diagnostic — billing uses outputTokens.
+   */
+  reasoningTokens   Int?
   modelUsed         String?
   estimatedCostUsd  Decimal?     @db.Decimal(10, 6)
   /**

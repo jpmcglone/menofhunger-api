@@ -5,13 +5,16 @@ import {
   MARV_CRISIS_SAFETY,
   MARV_DM_CONTEXT_HINT,
   MARV_FIRST_PERSON,
+  MARV_NAME_AND_HANDLE,
   MARV_NO_PROACTIVE_OFFERS,
+  MARV_THEOLOGY,
   MARV_THREAD_TOOL_FALLBACK,
   MARV_THREAD_TOOL_OPTIONAL,
   MARV_USER_LOOKUP_HINT,
   MARV_WEB_SEARCH_REQUIRED,
   renderGroupContextLines,
   renderMemberBackgroundLines,
+  renderPeopleHereLines,
 } from '../marvin-prompt-instructions';
 import { marvMediaMarker } from './marvin-vision-media';
 
@@ -139,7 +142,7 @@ export type MarvPromptInput = {
   crisisDetected?: boolean;
   /**
    * Set when the user explicitly demanded a web search (e.g. "search the web for…").
-   * Injects a strong instruction so the model always calls web_search_preview.
+   * Injects a strong instruction so the model always calls web_search.
    */
   webSearchDemanded?: boolean;
   /**
@@ -193,6 +196,8 @@ export class MarvinPromptBuilderService {
 
     const lines: string[] = [];
     lines.push(MARV_FIRST_PERSON);
+    lines.push(MARV_THEOLOGY);
+    lines.push(MARV_NAME_AND_HANDLE);
     if (input.source === 'public_thread') {
       lines.push('Source: public post thread.');
       if (input.triggeringPostId) lines.push(`Triggering post id: ${input.triggeringPostId}.`);
@@ -250,6 +255,7 @@ export class MarvinPromptBuilderService {
     }
 
     lines.push(`Requester: ${requesterDisplay} ${requesterHandle} (id: ${input.requester.userId}).`);
+    lines.push(...renderPeopleHereLines(this.collectPeopleHere(input)));
 
     const prefetched = renderMemberBackgroundLines(input.referencedMemberCards ?? []);
     if (prefetched.length > 0) {
@@ -302,9 +308,7 @@ export class MarvinPromptBuilderService {
   private renderThreadPostLines(p: MarvThreadPost): string[] {
     const handle = p.isMarv
       ? '[YOU previously said]'
-      : p.authorUsername
-        ? `@${p.authorUsername}`
-        : (p.authorDisplayName ?? 'unknown');
+      : MarvinPromptBuilderService.formatSpeaker(p.authorUsername, p.authorDisplayName);
     const tag = p.isTriggeringPost ? ' [← this message mentions you]' : '';
     const out: string[] = [];
     if (p.checkinPrompt) {
@@ -328,5 +332,44 @@ export class MarvinPromptBuilderService {
       return `    - "${o.text}" — ${o.voteCount} (${pct}%)`;
     });
     return `  [Poll on this post] (${total} vote${total !== 1 ? 's' : ''}, ${closeStr})\n${optionLines.join('\n')}`;
+  }
+
+  /** `@alice (Alice Smith)` so first/last names in the thread resolve to a handle. */
+  private static formatSpeaker(username: string | null, displayName: string | null): string {
+    const handle = (username ?? '').trim().replace(/^@/, '');
+    const name = (displayName ?? '').trim();
+    if (handle && name && name.toLowerCase() !== handle.toLowerCase()) return `@${handle} (${name})`;
+    if (handle) return `@${handle}`;
+    return name || 'unknown';
+  }
+
+  /**
+   * Nearest speakers first so a first name like "John" maps to the closest John.
+   * Dedup in {@link renderPeopleHereLines} keeps the first (nearest) occurrence.
+   */
+  private collectPeopleHere(input: MarvPromptInput): Array<{ username: string | null; displayName: string | null }> {
+    const people: Array<{ username: string | null; displayName: string | null }> = [
+      { username: input.requester.username, displayName: input.requester.displayName },
+    ];
+    if (input.triggeringPost && !input.triggeringPost.isMarv) {
+      people.push({
+        username: input.triggeringPost.authorUsername,
+        displayName: input.triggeringPost.authorDisplayName,
+      });
+    }
+    // Newest replies first (just spoke), then parents before the distant root.
+    const nearPosts = [
+      ...[...(input.descendants ?? [])].reverse(),
+      ...[...(input.ancestors ?? [])].reverse(),
+      ...[...(input.threadContext ?? [])].reverse(),
+    ];
+    for (const post of nearPosts) {
+      if (post.isMarv) continue;
+      people.push({ username: post.authorUsername, displayName: post.authorDisplayName });
+    }
+    for (const card of input.referencedMemberCards ?? []) {
+      people.push({ username: card.username, displayName: null });
+    }
+    return people;
   }
 }

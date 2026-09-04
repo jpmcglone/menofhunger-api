@@ -34,6 +34,7 @@ function makeHandler(overrides: { prisma?: Record<string, any> } = {}) {
     emitGroupNewPost: jest.fn(),
     emitCheckinAnsweredToday: jest.fn(),
     emitUsersMeUpdated: jest.fn(),
+    emitPostsTyping: jest.fn(),
   };
   const appConfig: any = {
     r2: jest.fn(() => null),
@@ -804,6 +805,7 @@ describe('PostsSideEffectsHandler maybeEnqueueMarvReply', () => {
   it('enqueues when the body explicitly mentions @marv', async () => {
     const { handler, deps } = makeHandler();
     deps.appConfig.marvBot.mockReturnValue({ enabled: true, username: 'marv', userId: 'marv-id' });
+    deps.marvIdentity.cachedMarvUserId.mockReturnValue('marv-id');
 
     await (handler as any).maybeEnqueueMarvReply({
       post: marvPost({ body: 'hey @marv what do you think?' }),
@@ -817,6 +819,15 @@ describe('PostsSideEffectsHandler maybeEnqueueMarvReply', () => {
       expect.any(String),
       expect.objectContaining({ postId: 'p-reply', requestingUserId: 'alice' }),
       expect.any(Object),
+    );
+    expect(deps.presenceRealtime.emitPostsTyping).toHaveBeenCalledWith(
+      'p-reply',
+      expect.objectContaining({
+        postId: 'p-reply',
+        typing: true,
+        status: 'replying',
+        user: expect.objectContaining({ id: 'marv-id', username: 'marv' }),
+      }),
     );
   });
 
