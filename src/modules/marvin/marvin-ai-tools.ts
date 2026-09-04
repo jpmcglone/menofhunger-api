@@ -108,14 +108,14 @@ export const MARV_LOCAL_FUNCTION_TOOLS: ReadonlyArray<Record<string, unknown>> =
     type: 'function',
     name: 'list_public_posts',
     description:
-      'List recent public lodge posts (not group-only). For the general lodge feed, call with only limit (or no arguments). Do not put a placeholder in username. Pass username only when the question is about one member. Returns text, media, polls, and check-ins.',
+      'List recent public posts on Men of Hunger (not group-only). For the general public feed, call with only limit (or no arguments). Do not put a placeholder in username. Pass username only when the question is about one member. Returns text, media, polls, and check-ins.',
     parameters: {
       type: 'object',
       properties: {
         username: {
           type: 'string',
           description:
-            'Member @username when the question is about that person. Leave this field off for the general lodge feed.',
+            'Member @username when the question is about that person. Leave this field off for the general public feed.',
         },
         limit: {
           type: 'integer',

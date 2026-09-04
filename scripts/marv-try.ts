@@ -2,7 +2,7 @@
  * One-shot local Marv runner. Boots the real Nest stack (prompt builder, tools,
  * OpenAI) without HTTP or job consumers, then prints the reply.
  *
- *   npm run marv:try -- "What's new on the lodge?"
+ *   npm run marv:try -- "What's new on Men of Hunger?"
  *   npm run marv:try -- --suite
  *   npm run marv:try -- --as cslewis --mode regular --dump-prompt "What did John mean?"
  *
@@ -394,7 +394,7 @@ async function runSuite(deps: SuiteDeps, onlyId: string | null): Promise<CaseRes
     {
       id: 'public-posts',
       title: 'Lodge feed via list_public_posts',
-      question: "What's new on the lodge?",
+      question: "What's new on Men of Hunger?",
       expect: (reply, toolsUsed) => {
         const fails: string[] = [];
         if (!toolsUsed.includes('list_public_posts')) {

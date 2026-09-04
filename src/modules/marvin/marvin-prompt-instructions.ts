@@ -115,8 +115,9 @@ export const MARV_USER_LOOKUP_HINT =
   'Never say you lack access "in this session" or "in this chat context" — if you need a profile, call the tool. ' +
   'A fallback card is still real public profile information; share it. ' +
   'If the tool says user_not_found, say you could not find that username. ' +
-  'If someone asks what is new on the lodge, what is on the feed, or what a member posted recently, ' +
+  'If someone asks what is new on Men of Hunger, what is on the feed, or what a member posted recently, ' +
   'call list_public_posts with no username argument for the general feed. ' +
+  'When you name the site, say Men of Hunger — not "the lodge." ' +
   'Pass username only when the question is about one person. ' +
   'Those results include text, polls, check-ins, and attached media — look at any images that follow. ' +
   'If someone asks who they should meet or whether anyone else is into a topic, call find_similar_members. ' +

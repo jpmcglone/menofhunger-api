@@ -396,9 +396,9 @@ export class MarvinToolHandlersService {
           note:
             posts.length === 0
               ? username
-                ? 'That member has no recent public lodge posts.'
-                : 'No recent public lodge posts.'
-              : 'Public lodge posts only (not group-only). Use get_post for a full thread.',
+                ? 'That member has no recent public posts on Men of Hunger.'
+                : 'No recent public posts on Men of Hunger.'
+              : 'Public Men of Hunger posts only (not group-only). Use get_post for a full thread.',
         };
       },
     });
