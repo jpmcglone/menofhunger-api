@@ -19,6 +19,14 @@ function makeService(overrides?: {
 }
 
 describe('CacheInvalidationService.bumpForPostWrite', () => {
+  it('retains feed snapshots for additive writes while invalidating search and topics', async () => {
+    const { svc, rawObj } = makeService();
+    await svc.bumpForPostWrite({ topics: ['faith'], invalidateFeed: false });
+    expect(rawObj.incr).not.toHaveBeenCalledWith(RedisKeys.verFeedGlobal());
+    expect(rawObj.incr).toHaveBeenCalledWith(RedisKeys.verSearchGlobal());
+    expect(rawObj.incr).toHaveBeenCalledWith(RedisKeys.verTopic('faith'));
+  });
+
   it('bumps feed/search and unique normalized topics', async () => {
     const { svc, rawObj } = makeService();
 

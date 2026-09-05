@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { CoinsService } from './coins.service';
 
 function makeService(overrides?: { prisma?: any }) {
@@ -165,7 +166,7 @@ describe('CoinsService access rules', () => {
         },
         $transaction: jest.fn(async (fn: any) =>
           fn({
-            user: { update: jest.fn() },
+            user: { update: jest.fn().mockRejectedValue(new Prisma.PrismaClientKnownRequestError('No matching balance', { code: 'P2025', clientVersion: '6' })) },
             coinTransfer: { create: jest.fn() },
           }),
         ),
@@ -253,3 +254,33 @@ describe('CoinsService.transfer – overdraw guard', () => {
   });
 });
 
+
+
+describe('Coin history pagination privacy', () => {
+  it('keeps unrelated transfers out of later pages', async () => {
+    const person = (id: string) => ({ id, username: id, name: id });
+    const rows = [
+      { id: 'c', createdAt: new Date('2026-01-03'), senderId: 'viewer', recipientId: 'friend' },
+      { id: 'b', createdAt: new Date('2026-01-02'), senderId: 'stranger', recipientId: 'other' },
+      { id: 'a', createdAt: new Date('2026-01-01'), senderId: 'friend', recipientId: 'viewer' },
+    ].map((r) => ({ ...r, kind: 'transfer', amount: 1, note: 'private', sender: person(r.senderId), recipient: person(r.recipientId) }));
+    const matches = (row: any, where: any): boolean => Object.entries(where).every(([key, value]: [string, any]) => {
+      if (key === 'AND') return value.every((part: any) => matches(row, part));
+      if (key === 'OR') return value.some((part: any) => matches(row, part));
+      if (value && typeof value === 'object' && 'lt' in value) return row[key] < value.lt;
+      return row[key] instanceof Date ? row[key].getTime() === value.getTime() : row[key] === value;
+    });
+    const { svc } = makeService({ prisma: {
+      user: { findUnique: async () => ({ id: 'viewer', verifiedStatus: 'identity' }) },
+      coinTransfer: {
+        findUnique: async ({ where }: any) => rows.find((r) => r.id === where.id),
+        findMany: async ({ where, take }: any) => rows.filter((r) => matches(r, where)).slice(0, take),
+      },
+    } });
+    const first = await svc.listTransfers({ userId: 'viewer', limit: 1 });
+    expect(first.items.map((r) => r.id)).toEqual(['c']);
+    const second = await svc.listTransfers({ userId: 'viewer', limit: 1, cursor: first.nextCursor });
+    expect(second.items.map((r) => r.id)).toEqual(['a']);
+    expect(second.nextCursor).toBeNull();
+  });
+});

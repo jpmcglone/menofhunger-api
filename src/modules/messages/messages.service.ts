@@ -889,6 +889,10 @@ export class MessagesService {
         AND mp."userId"        = ${userId}
         AND mp."status"        = 'accepted'
       WHERE m."deletedForAll" = false
+        AND NOT EXISTS (
+          SELECT 1 FROM "MessageDeletion" md
+          WHERE md."messageId" = m.id AND md."userId" = ${userId}
+        )
         AND m.body ILIKE ${ilike}
         AND (
           cardinality(${blockedArray}::text[]) = 0

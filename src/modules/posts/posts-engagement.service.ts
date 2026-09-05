@@ -395,7 +395,7 @@ export class PostsEngagementService {
     }
 
     void this.postViews.markViewed(userId, canonicalId);
-    await this.cacheInvalidation.bumpFeedGlobal();
+    await this.cacheInvalidation.bumpForYouUser(userId);
     this.ranking.enqueueScoreRefresh(canonicalId);
     this.ranking.enqueueScoreRefresh(repostId);
 

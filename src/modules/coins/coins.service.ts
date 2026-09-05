@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
@@ -136,7 +137,7 @@ export class CoinsService {
       }),
       this.prisma.user.findUnique({
         where: { id: targetUserId },
-        select: { id: true, username: true, name: true, coins: true },
+        select: { id: true },
       }),
     ]);
     if (!adminExists) throw new NotFoundException('Admin user not found.');
@@ -145,16 +146,19 @@ export class CoinsService {
     const note = (reason ?? '').trim() || null;
 
     const { transfer, targetAfter } = await this.prisma.$transaction(async (tx) => {
-      if (deltaInt < 0 && target.coins < amount) {
-        throw new BadRequestException('Cannot remove more coins than the user has.');
-      }
-
+      // Check the balance in the UPDATE itself: concurrent debits cannot spend
+      // the same coins. Returning the balance also avoids a follow-up SELECT.
       const targetAfter = await tx.user.update({
-        where: { id: targetUserId },
+        where: { id: targetUserId, ...(deltaInt < 0 ? { coins: { gte: amount } } : {}) },
         data: deltaInt > 0
           ? { coins: { increment: amount } }
           : { coins: { decrement: amount } },
         select: { coins: true },
+      }).catch((error: unknown) => {
+        if (deltaInt < 0 && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+          throw new BadRequestException('Cannot remove more coins than the user has.');
+        }
+        throw error;
       });
 
       const transfer = await tx.coinTransfer.create({
@@ -183,16 +187,25 @@ export class CoinsService {
 
   /** Gift a fixed number of coins to a newly verified user. Idempotent — skips if the user already has a verification_gift transfer. */
   async giftVerificationCoins(userId: string, amount = 5): Promise<void> {
-    const existing = await this.prisma.coinTransfer.findFirst({
-      where: { recipientId: userId, kind: 'verification_gift' },
-      select: { id: true },
-    });
-    if (existing) return;
+    const gifted = await this.prisma.$transaction(async (tx) => {
+      // Serialize only this recipient's gift checks. The primary-key row lock
+      // also coordinates with ordinary coin updates; unrelated users do not wait.
+      // Read the ledger AFTER acquiring the lock so a concurrent gift is visible.
+      const users = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE
+      `;
+      if (users.length === 0) throw new NotFoundException('User not found.');
 
-    await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.coinTransfer.findFirst({
+        where: { recipientId: userId, kind: 'verification_gift' },
+        select: { id: true },
+      });
+      if (existing) return false;
+
       await tx.user.update({
         where: { id: userId },
         data: { coins: { increment: amount } },
+        select: { id: true },
       });
       await tx.coinTransfer.create({
         data: {
@@ -202,8 +215,11 @@ export class CoinsService {
           amount,
           note: 'Welcome gift for getting verified',
         },
+        select: { id: true },
       });
+      return true;
     });
+    if (!gifted) return;
 
     await this.usersMeRealtime.emitMeUpdated(userId, 'coin_admin_adjusted').catch(() => undefined);
   }
@@ -228,7 +244,7 @@ export class CoinsService {
     const transfers = await this.prisma.coinTransfer.findMany({
       where: {
         OR: [{ senderId: userId }, { recipientId: userId }],
-        ...(cursorWhere ?? {}),
+        ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: take + 1,

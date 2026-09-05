@@ -1325,11 +1325,11 @@ export class PostsMutationService {
         throw e;
       });
 
-    // Versioned read caches: bump so public reads shift namespaces. Not awaited — it is a
-    // best-effort Redis write (`bumpForPostWrite` already swallows its own failures) and the
-    // client's next read is a separate round trip that will land after this fires either way.
+    // New content is delivered over realtime; feed snapshots expire within 30s.
+    // Keep search/topic invalidation, without flushing every viewer's feed.
+    // Edits and deletions still invalidate immediately above.
     if (post.visibility && post.visibility !== 'onlyMe') {
-      void this.cacheInvalidation.bumpForPostWrite({ topics: post.topics ?? [] });
+      void this.cacheInvalidation.bumpForPostWrite({ topics: post.topics ?? [], invalidateFeed: false });
     }
 
     // Realtime: bump parent commentCount for live subscribers (best-effort, sync emit).

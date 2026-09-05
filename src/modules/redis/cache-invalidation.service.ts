@@ -120,10 +120,10 @@ export class CacheInvalidationService {
    *
    * We use version bumps for instant invalidation without pattern deletes.
    */
-  async bumpForPostWrite(params: { topics: string[] }): Promise<void> {
+  async bumpForPostWrite(params: { topics: string[]; invalidateFeed?: boolean }): Promise<void> {
     const topics = this.normalizeTopics(params.topics ?? []);
     await Promise.allSettled([
-      this.bumpFeedGlobal(),
+      ...(params.invalidateFeed === false ? [] : [this.bumpFeedGlobal()]),
       this.bumpSearchGlobal(),
       ...topics.map((t) => this.bumpTopic(t)),
     ]).catch(() => undefined);

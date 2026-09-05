@@ -52,7 +52,7 @@ describe('PostsTopicsClassifyService', () => {
       where: { id: 'p1' },
       data: { topics: ['faith', 'strength_training'], topicsClassifiedAt: expect.any(Date) },
     });
-    expect(cacheInvalidation.bumpForPostWrite).toHaveBeenCalledWith({ topics: ['faith', 'strength_training'] });
+    expect(cacheInvalidation.bumpForPostWrite).toHaveBeenCalledWith({ topics: ['faith', 'strength_training'], invalidateFeed: false });
   });
 
   it('stamps classifiedAt when the model returns nothing usable so we do not re-pay', async () => {

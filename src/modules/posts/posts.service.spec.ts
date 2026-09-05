@@ -72,10 +72,12 @@ function makeService(
   const viewerContext: any = {};
   const cacheInvalidation: any = {
     bumpForPostWrite: jest.fn(async () => undefined),
+    bumpForYouUser: jest.fn(async () => undefined),
     feedGlobalVersion: jest.fn(async () => 1),
     forYouUserVersion: jest.fn(async () => 1),
   };
   const cache: any = {
+    getOrSetJson: jest.fn(async (params: any) => params.compute()),
     getOrSetJsonWithLock: jest.fn(async (params: any) => params.computeAndSet()),
   };
   const appConfig: any = {
@@ -1616,7 +1618,7 @@ describe('PostsService.listForYouFeed', () => {
     blockedAuthorIds?: string[];
     memberGroupIds?: string[];
     viewerVerified?: boolean;
-    cache?: { getOrSetJsonWithLock: jest.Mock };
+    cache?: { getOrSetJsonWithLock: jest.Mock; getOrSetJson?: jest.Mock };
     /** Author IDs the viewer has recently boosted (A+ tier engagement history). */
     viewerBoostedAuthorIds?: string[];
     /** Author IDs of posts the viewer has recently replied to (A+ tier engagement history). */
@@ -1869,7 +1871,7 @@ describe('PostsService.listForYouFeed', () => {
           setJson: jest.fn(async () => undefined),
           del: jest.fn(async () => undefined),
         },
-        ...(opts.cache ? { cache: opts.cache } : {}),
+        ...(opts.cache ? { cache: { getOrSetJson: jest.fn(async (params: any) => params.compute()), ...opts.cache } } : {}),
       },
     );
 
@@ -1883,6 +1885,31 @@ describe('PostsService.listForYouFeed', () => {
   function deeperForYouCursor(servedIds: string[] = ['already-served']): string {
     return Buffer.from(JSON.stringify({ v: 3, s: servedIds, seed: 'test-seed' }), 'utf8').toString('base64url');
   }
+
+  it('reuses ranking inputs across cursor pages but still queries fresh candidates', async () => {
+    const values = new Map<string, unknown>();
+    const cache = {
+      getOrSetJsonWithLock: jest.fn(async (p: any) => p.computeAndSet()),
+      getOrSetJson: jest.fn(async (p: any) => {
+        if (!values.has(p.key)) values.set(p.key, await p.compute());
+        return values.get(p.key);
+      }),
+    };
+    const { service, follow, post } = setupForYou({
+      candidates: [cand('p1', 'a', 10), cand('p2', 'b', 9)],
+      youFollowAuthorIds: ['a'],
+      cache,
+    });
+    const params = { viewerUserId: 'viewer', limit: 1, cursor: deeperForYouCursor(), visibility: 'all' as const };
+    await service.listForYouFeed(params);
+    const initialCandidateReads = post.findMany.mock.calls.length;
+    await service.listForYouFeed({ ...params, cursor: deeperForYouCursor(['p1']) });
+    expect(post.findMany.mock.calls.length).toBeGreaterThan(initialCandidateReads);
+    const followingReads = () => follow.findMany.mock.calls.filter((call: any) => call[0]?.where?.followerId === 'viewer').length;
+    expect(followingReads()).toBe(1);
+    await service.listForYouFeed({ ...params, cursor: null, refresh: true });
+    expect(followingReads()).toBe(2);
+  });
 
   it('excludes the viewer from candidate authors via the prisma where filter', async () => {
     const { service, post } = setupForYou({

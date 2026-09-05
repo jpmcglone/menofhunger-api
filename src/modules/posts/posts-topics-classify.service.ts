@@ -191,7 +191,7 @@ export class PostsTopicsClassifyService {
       where: { id: post.id },
       data: { topics, topicsClassifiedAt: new Date() },
     });
-    await this.cacheInvalidation.bumpForPostWrite({ topics });
+    await this.cacheInvalidation.bumpForPostWrite({ topics, invalidateFeed: false });
     return true;
   }
 

@@ -1144,21 +1144,17 @@ export class PostsFeedQueryService {
       };
     };
 
-    let shell: ForYouRankedShell;
-    try {
-      shell = await this.cache.getOrSetJsonWithLock<ForYouRankedShell>({
-        enabled: true,
-        key,
-        ttlSeconds: CacheTtl.forYouRankedPage1Seconds,
-        lockKey,
-        lockTtlMs: 10_000,
-        lockWaitMs: 750,
-        computeAndSet: computeShell,
-        fallback: computeShell,
-      });
-    } catch {
-      return this.listForYouFeedUncached(params);
-    }
+    const shell = await this.cache.getOrSetJsonWithLock<ForYouRankedShell>({
+      enabled: true,
+      key,
+      ttlSeconds: CacheTtl.forYouRankedPage1Seconds,
+      lockKey,
+      lockTtlMs: 10_000,
+      lockWaitMs: 750,
+      computeAndSet: computeShell,
+      fallback: computeShell,
+      waitForResult: true,
+    });
     if (computed) return computed;
 
     const rows = shell.ids.length
@@ -1174,6 +1170,17 @@ export class PostsFeedQueryService {
       nextCursor: shell.nextCursor,
       scoreByPostId: new Map(shell.scores),
     };
+  }
+
+  /** Ranking signals only: permissions and block filters are always read fresh. */
+  private rankingInput<T>(viewerUserId: string | null, name: string, refresh: boolean | undefined, compute: () => Promise<T>): Promise<T> {
+    if (!viewerUserId || refresh) return compute();
+    return this.cache.getOrSetJson({
+      enabled: true,
+      key: `cache:forYou:input:v1:${viewerUserId}:${name}`,
+      ttlSeconds: 15,
+      compute,
+    });
   }
 
   private async listForYouFeedUncached(params: ForYouFeedParams): Promise<PopularFeedResult> {
@@ -1313,10 +1320,10 @@ export class PostsFeedQueryService {
     let discoveryOverflow = false;
 
     const viewerFollowingRows = viewerUserId
-      ? await this.prisma.follow.findMany({
+      ? await this.rankingInput(viewerUserId, 'following', params.refresh, () => this.prisma.follow.findMany({
           where: { followerId: viewerUserId },
           select: { followingId: true },
-        })
+        }))
       : [];
     const viewerFollowingIds = [...new Set(viewerFollowingRows.map((r) => r.followingId).filter(Boolean))];
     const followingCandidateIds = requestedAuthorUserIds
@@ -1335,7 +1342,7 @@ export class PostsFeedQueryService {
     const viewerCanReadOpenGroups = false;
     const secondDegreePathCountByAuthor = new Map<string, number>();
     if (!isPage1 && viewerFollowingIds.length > 0) {
-      const secondDegreeRows = await this.prisma.follow.findMany({
+      const secondDegreeRows = await this.rankingInput(viewerUserId, `secondDegree:${stableJsonHash({ viewerFollowingIds, directNetworkExcludedIds, requestedAuthorUserIds })}`, params.refresh, () => this.prisma.follow.findMany({
         where: {
           followerId: { in: viewerFollowingIds },
           followingId: requestedAuthorUserIds?.length
@@ -1344,7 +1351,7 @@ export class PostsFeedQueryService {
         },
         select: { followingId: true },
         take: 1000,
-      });
+      }));
       for (const row of secondDegreeRows) {
         const authorId = row.followingId;
         secondDegreePathCountByAuthor.set(authorId, (secondDegreePathCountByAuthor.get(authorId) ?? 0) + 1);
@@ -1695,19 +1702,19 @@ export class PostsFeedQueryService {
       // Viewer's own recent boosts — used to identify A+ tier authors (people you actively engage with).
       // Boost has @@unique([postId, userId]) so _count is effectively distinct users.
       viewerUserId
-        ? this.prisma.boost.findMany({
+        ? this.rankingInput(viewerUserId, 'engagedBoostAuthors', params.refresh, () => this.prisma.boost.findMany({
             where: { userId: viewerUserId, createdAt: { gte: engagedWithSince } },
             select: { post: { select: { userId: true } } },
             take: 200,
-          })
+          }))
         : Promise.resolve([] as Array<{ post: { userId: string } }>),
       // Viewer's own recent replies — surfaces authors the viewer actively talks to.
       viewerUserId
-        ? this.prisma.post.findMany({
+        ? this.rankingInput(viewerUserId, 'engagedReplyAuthors', params.refresh, () => this.prisma.post.findMany({
             where: { userId: viewerUserId, parentId: { not: null }, createdAt: { gte: engagedWithSince } },
             select: { parent: { select: { userId: true } } },
             take: 200,
-          })
+          }))
         : Promise.resolve([] as Array<{ parent: { userId: string } | null }>),
     ]);
 

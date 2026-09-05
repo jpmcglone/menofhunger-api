@@ -238,17 +238,20 @@ export function toMessageDto(params: {
   return {
     id: message.id,
     createdAt: message.createdAt.toISOString(),
-    body: message.body,
+    body: message.deletedForAll ? '' : message.body,
     conversationId: message.conversationId,
     sender: toUserListDto(message.sender, publicBaseUrl),
     kind: message.kind ?? 'text',
-    call: message.kind === 'call' ? toMessageCallDto(message.callMeta) : null,
-    reactions: buildReactionSummaries(message.reactions ?? [], viewerUserId, publicBaseUrl),
+    call: !message.deletedForAll && message.kind === 'call' ? toMessageCallDto(message.callMeta) : null,
+    reactions: message.deletedForAll ? [] : buildReactionSummaries(message.reactions ?? [], viewerUserId, publicBaseUrl),
     deletedForMe: (message.deletions ?? []).some((d) => d.userId === viewerUserId),
     deletedForAll: Boolean(message.deletedForAll),
     editedAt: message.editedAt ? message.editedAt.toISOString() : null,
-    replyTo: message.replyTo
+    replyTo: !message.deletedForAll && message.replyTo
       ? (() => {
+          if (message.replyTo.deletedForAll) {
+            return { id: message.replyTo.id, senderUsername: message.replyTo.sender.username, bodyPreview: 'Message deleted', mediaThumbnailUrl: null };
+          }
           const rm = (message.replyTo.media ?? [])[0] ?? null;
           let mediaThumbnailUrl: string | null = null;
           if (rm) {
@@ -269,7 +272,7 @@ export function toMessageDto(params: {
           };
         })()
       : null,
-    media: (message.media ?? []).map((m) => toMessageMediaDto(m, publicBaseUrl)),
+    media: message.deletedForAll ? [] : (message.media ?? []).map((m) => toMessageMediaDto(m, publicBaseUrl)),
   };
 }
 

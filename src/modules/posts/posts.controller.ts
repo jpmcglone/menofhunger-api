@@ -691,6 +691,7 @@ export class PostsController {
           lockWaitMs: 750,
           computeAndSet: computeFeed,
           fallback: computeFeed,
+          waitForResult: true,
         })
       : await computeFeed();
 

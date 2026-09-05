@@ -1,9 +1,20 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { RedisService } from './redis.service';
 
 @Injectable()
 export class CacheService {
   constructor(private readonly redis: RedisService) {}
+
+  private readonly pending = new Map<string, Promise<unknown>>();
+
+  private async share<T>(key: string, compute: () => Promise<T>): Promise<T> {
+    const existing = this.pending.get(key);
+    if (existing) return existing as Promise<T>;
+    const promise = compute();
+    this.pending.set(key, promise);
+    try { return await promise; }
+    finally { if (this.pending.get(key) === promise) this.pending.delete(key); }
+  }
 
   async getJson<T>(key: string): Promise<T | null> {
     return await this.redis.getJson<T>(key);
@@ -43,12 +54,13 @@ export class CacheService {
     const key = (params.key ?? '').trim();
     if (!params.enabled || !key) return await params.compute();
 
-    const cached = await this.redis.getJson<T>(key);
-    if (cached !== null) return cached;
-
-    const value = await params.compute();
-    void this.redis.setJson(key, value, { ttlSeconds: Math.max(1, Math.floor(params.ttlSeconds || 1)) }).catch(() => undefined);
-    return value;
+    return this.share(`json:${key}`, async () => {
+      const cached = await this.redis.getJson<T>(key).catch(() => null);
+      if (cached !== null) return cached;
+      const value = await params.compute();
+      await this.redis.setJson(key, value, { ttlSeconds: Math.max(1, params.ttlSeconds) }).catch(() => undefined);
+      return value;
+    });
   }
 
   /**
@@ -64,27 +76,53 @@ export class CacheService {
     lockWaitMs: number;
     computeAndSet: () => Promise<T>;
     fallback: () => Promise<T>;
+    /** On contention, await the lock owner's result instead of running fallback. */
+    waitForResult?: boolean;
   }): Promise<T> {
     const key = (params.key ?? '').trim();
     const lockKey = (params.lockKey ?? '').trim();
     if (!params.enabled || !key || !lockKey) return await params.computeAndSet();
 
-    const cached = await this.redis.getJson<T>(key);
-    if (cached !== null) return cached;
+    return this.share(`locked:${key}`, async () => {
+      try {
+        const cached = await this.redis.getJson<T>(key);
+        if (cached !== null) return cached;
+      } catch {
+        // Redis unavailable: still collapse requests on this API instance.
+        return params.computeAndSet();
+      }
 
-    const locked = await this.redis.withLock(
-      lockKey,
-      { ttlMs: Math.max(1, Math.floor(params.lockTtlMs)), waitMs: Math.max(0, Math.floor(params.lockWaitMs)), retryDelayMs: 25 },
-      async () => {
-        const cachedInside = await this.redis.getJson<T>(key);
-        if (cachedInside !== null) return cachedInside;
-        const v = await params.computeAndSet();
-        await this.redis.setJson(key, v, { ttlSeconds: Math.max(1, Math.floor(params.ttlSeconds || 1)) });
-        return v;
-      },
-    );
-    if (locked !== null) return locked;
-    return await params.fallback();
+      let started = false;
+      let locked: T | null;
+      try {
+        locked = await this.redis.withLock(
+          lockKey,
+          { ttlMs: Math.max(1, params.lockTtlMs), waitMs: Math.max(0, params.lockWaitMs), retryDelayMs: 25 },
+          async () => {
+            const cachedInside = await this.redis.getJson<T>(key);
+            if (cachedInside !== null) return cachedInside;
+            started = true;
+            const value = await params.computeAndSet();
+            await this.redis.setJson(key, value, { ttlSeconds: Math.max(1, params.ttlSeconds) }).catch(() => undefined);
+            return value;
+          },
+        );
+      } catch (error) {
+        if (started) throw error;
+        return params.computeAndSet();
+      }
+      if (locked !== null) return locked;
+      if (!params.waitForResult) return params.fallback();
+
+      // Do not multiply expensive database work while another instance owns it.
+      const deadline = Date.now() + Math.max(0, params.lockTtlMs - params.lockWaitMs);
+      do {
+        const result = await this.redis.getJson<T>(key);
+        if (result !== null) return result;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      } while (Date.now() < deadline);
+      throw new ServiceUnavailableException('Feed is still being prepared. Please retry.');
+    });
   }
 
   /**
