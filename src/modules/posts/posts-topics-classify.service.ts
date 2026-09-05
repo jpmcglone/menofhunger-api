@@ -10,6 +10,8 @@ import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
 import { parseModelTopicList } from '../../common/topics/topic-utils';
 
 const ALLOWLIST_VALUES = TOPIC_OPTIONS.map((o) => o.value);
+/** Shorter than this with no hashtags is not worth an OpenAI call. */
+const MIN_AI_BODY_CHARS = 24;
 const CLASSIFY_INSTRUCTIONS = [
   'Assign topics to one public post on Men of Hunger.',
   'Return ONLY a JSON array of 0 to 5 topic values from this allowlist:',
@@ -29,6 +31,7 @@ type ClassifyRow = {
   body: string | null;
   hashtags: string[];
   topics: string[];
+  topicsClassifiedAt: Date | null;
   visibility: PostVisibility;
   communityGroupId: string | null;
   deletedAt: Date | null;
@@ -57,12 +60,17 @@ export class PostsTopicsClassifyService {
         body: true,
         hashtags: true,
         topics: true,
+        topicsClassifiedAt: true,
         visibility: true,
         communityGroupId: true,
         deletedAt: true,
       },
     });
     if (!post || !this.isEligible(post)) return;
+    if (this.isThinForAi(post)) {
+      await this.stampClassified(id);
+      return;
+    }
     try {
       await this.jobs.enqueue(
         JOBS.postsTopicsAiClassify,
@@ -110,6 +118,7 @@ export class PostsTopicsClassifyService {
           body: true,
           hashtags: true,
           topics: true,
+          topicsClassifiedAt: true,
           visibility: true,
           communityGroupId: true,
           deletedAt: true,
@@ -140,6 +149,7 @@ export class PostsTopicsClassifyService {
         body: true,
         hashtags: true,
         topics: true,
+        topicsClassifiedAt: true,
         visibility: true,
         communityGroupId: true,
         deletedAt: true,
@@ -151,6 +161,10 @@ export class PostsTopicsClassifyService {
 
   private async classifyRow(post: ClassifyRow): Promise<boolean> {
     if (!this.isEligible(post)) return false;
+    if (this.isThinForAi(post)) {
+      await this.stampClassified(post.id);
+      return false;
+    }
     const model = this.appConfig.marvOpenAI().fastModel;
     const userMessage = [
       `Body:\n${(post.body ?? '').trim() || '—'}`,
@@ -168,14 +182,24 @@ export class PostsTopicsClassifyService {
       cacheKey: 'topics:classify',
     });
     const topics = parseModelTopicList(result?.text ?? '');
-    if (topics.length === 0) return false;
+    if (topics.length === 0) {
+      await this.stampClassified(post.id);
+      return false;
+    }
 
     await this.prisma.post.update({
       where: { id: post.id },
-      data: { topics },
+      data: { topics, topicsClassifiedAt: new Date() },
     });
     await this.cacheInvalidation.bumpForPostWrite({ topics });
     return true;
+  }
+
+  private async stampClassified(postId: string): Promise<void> {
+    await this.prisma.post.update({
+      where: { id: postId },
+      data: { topicsClassifiedAt: new Date() },
+    });
   }
 
   isEligible(post: {
@@ -183,16 +207,24 @@ export class PostsTopicsClassifyService {
     visibility: PostVisibility | string;
     communityGroupId: string | null;
     topics: string[] | null;
+    topicsClassifiedAt?: Date | null;
     body: string | null;
     hashtags: string[] | null;
   }): boolean {
     if (post.deletedAt) return false;
     if (post.visibility === 'onlyMe') return false;
     if (post.communityGroupId) return false;
+    if (post.topicsClassifiedAt) return false;
     if (Array.isArray(post.topics) && post.topics.length > 0) return false;
     const body = (post.body ?? '').trim();
     const tags = Array.isArray(post.hashtags) ? post.hashtags : [];
     return Boolean(body || tags.length);
+  }
+
+  isThinForAi(post: { body: string | null; hashtags: string[] | null }): boolean {
+    const tags = Array.isArray(post.hashtags) ? post.hashtags : [];
+    if (tags.length > 0) return false;
+    return (post.body ?? '').trim().length < MIN_AI_BODY_CHARS;
   }
 
   private eligibleWhere() {
@@ -201,6 +233,7 @@ export class PostsTopicsClassifyService {
       visibility: { not: 'onlyMe' as const },
       communityGroupId: null,
       topics: { equals: [] },
+      topicsClassifiedAt: null,
     };
   }
 }

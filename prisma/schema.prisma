@@ -644,6 +644,8 @@ model User {
   @@index([deletionScheduledAt])
   // Leaderboard queries: sort by active streak then longest streak, filter by bannedAt IS NULL.
   @@index([bannedAt, checkinStreakDays(sort: Desc), longestStreakDays(sort: Desc), createdAt(sort: Asc)])
+  // Who-to-follow / intro: `interests && viewer_topics`.
+  @@index([interests], type: Gin)
 }
 
 model UserOrgMembership {
@@ -1446,6 +1448,11 @@ model Post {
    */
   topics                    String[]        @default([])
   /**
+   * Set after Luna topic classify (hit or miss) or when the post is too thin to send.
+   * Keeps the cron from re-paying OpenAI for the same empty post.
+   */
+  topicsClassifiedAt        DateTime?
+  /**
    * User-created hashtags (parsed from body) used for search/autocomplete. Stored lowercase.
    */
   hashtags                  String[]        @default([])
@@ -1561,6 +1568,7 @@ model Post {
   @@index([articleId])
   @@index([fitnessShareId])
   @@index([topics], type: Gin)
+  @@index([topicsClassifiedAt])
   @@index([hashtags], type: Gin)
   @@index([cashtags], type: Gin)
   // Feed/trending hot paths (parentId IS NULL + deletedAt IS NULL) benefit from composite indexes matching sort+filters.

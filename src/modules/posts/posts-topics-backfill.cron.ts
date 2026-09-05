@@ -90,7 +90,7 @@ export class PostsTopicsBackfillCron {
           where: {
             deletedAt: null,
             createdAt: { gte: minCreatedAt },
-            ...(wipeExisting ? {} : { topics: { equals: [] } }),
+            ...(wipeExisting ? {} : { topics: { equals: [] }, topicsClassifiedAt: null }),
             ...cursorWhere,
           },
           select: { id: true, body: true, hashtags: true, parentId: true, rootId: true, createdAt: true },
@@ -117,22 +117,30 @@ export class PostsTopicsBackfillCron {
         );
 
         await this.prisma.$transaction(
-          rows.map((p: BackfillPostRow) =>
-            this.prisma.post.update({
+          rows.map((p: BackfillPostRow) => {
+            const hashtags = p.hashtags ?? [];
+            const topics = inferTopicsFromText(p.body ?? '', {
+              hashtags,
+              relatedTopics: Array.from(
+                new Set([
+                  ...(topicsById.get(p.parentId ?? '') ?? []),
+                  ...(topicsById.get(p.rootId ?? '') ?? []),
+                ]),
+              ).filter(Boolean),
+            });
+            const thin = hashtags.length === 0 && (p.body ?? '').trim().length < 24;
+            return this.prisma.post.update({
               where: { id: p.id },
               data: {
-                topics: inferTopicsFromText(p.body ?? '', {
-                  hashtags: p.hashtags ?? [],
-                  relatedTopics: Array.from(
-                    new Set([
-                      ...(topicsById.get(p.parentId ?? '') ?? []),
-                      ...(topicsById.get(p.rootId ?? '') ?? []),
-                    ]),
-                  ).filter(Boolean),
-                }),
+                topics,
+                ...(thin && topics.length === 0
+                  ? { topicsClassifiedAt: new Date() }
+                  : wipeExisting
+                    ? { topicsClassifiedAt: null }
+                    : {}),
               },
-            }),
-          ),
+            });
+          }),
         );
 
         total += rows.length;

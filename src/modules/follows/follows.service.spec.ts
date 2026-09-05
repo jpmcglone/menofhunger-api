@@ -15,6 +15,8 @@ function makeRow(overrides: Partial<any> = {}) {
     mutualCount: 0,
     overlapCount: 0,
     topicOverlapCount: 0,
+    groupOverlapCount: 0,
+    searchedForCandidate: false,
     followsViewer: false,
     sameState: false,
     ...overrides,
@@ -109,6 +111,56 @@ describe('FollowsService recommendations ranking', () => {
     });
 
     expect(result.users.map((u) => u.id)).toEqual(['shared-interests', 'trusted']);
+  });
+
+  it('ranks shared groups above polished fallbacks', async () => {
+    const { service } = makeService([
+      makeRow({
+        id: 'trusted',
+        username: 'trusted',
+        verifiedStatus: 'identity',
+        premiumPlus: true,
+        avatarKey: 'avatar.png',
+      }),
+      makeRow({
+        id: 'same-group',
+        username: 'brother',
+        groupOverlapCount: 1,
+      }),
+    ]);
+
+    const result = await service.recommendUsersToFollow({
+      viewerUserId: 'viewer',
+      limit: 2,
+      seed: 'refresh-a',
+    });
+
+    expect(result.users.map((u) => u.id)).toEqual(['same-group', 'trusted']);
+  });
+
+  it('ranks a searched-for profile above polished fallbacks', async () => {
+    const { service } = makeService([
+      makeRow({
+        id: 'trusted',
+        username: 'trusted',
+        verifiedStatus: 'identity',
+        premiumPlus: true,
+        avatarKey: 'avatar.png',
+      }),
+      makeRow({
+        id: 'looked-up',
+        username: 'lookedup',
+        searchedForCandidate: true,
+      }),
+    ]);
+
+    const result = await service.recommendUsersToFollow({
+      viewerUserId: 'viewer',
+      limit: 2,
+      seed: 'refresh-a',
+    });
+
+    expect(result.users.map((u) => u.id)).toEqual(['looked-up', 'trusted']);
   });
 
   it('ranks shared public-post topics above polished fallbacks', async () => {

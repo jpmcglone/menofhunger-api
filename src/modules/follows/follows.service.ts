@@ -14,8 +14,18 @@ import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cu
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
+import {
+  AFFINITY_POST_DAYS,
+  AFFINITY_SEARCH_DAYS,
+  mergedPoolUserTopicsSql,
+  paddedMatchesPhraseSql,
+  topicPhrasesCteSql,
+  viewerGroupNameTopicsSql,
+  viewerPostTopicsSql,
+  viewerSearchTopicsSql,
+} from '../../common/discovery/user-affinity.sql';
 
-const RECOMMENDATIONS_CACHE_TTL_SECONDS = 5 * 60;
+const RECOMMENDATIONS_CACHE_TTL_SECONDS = 15 * 60;
 const RECOMMENDATION_POOL_MULTIPLIER = 8;
 const RECOMMENDATION_MAX_POOL_SIZE = 200;
 const RECOMMENDATION_JITTER_MAX = 7;
@@ -36,6 +46,8 @@ type RecommendationRow = {
   mutualCount: number;
   overlapCount: number;
   topicOverlapCount: number;
+  groupOverlapCount: number;
+  searchedForCandidate: boolean;
   followsViewer: boolean;
   sameState: boolean;
 };
@@ -89,7 +101,7 @@ export class FollowsService {
       ? crypto.createHash('sha1').update([...interestKeys].sort().join(',').toLowerCase()).digest('hex').slice(0, 12)
       : 'none';
     const seedPart = crypto.createHash('sha1').update(seed).digest('hex').slice(0, 12);
-    return `follows:recs:${viewerUserId}:${limit}:${interestsPart}:${seedPart}`;
+    return `follows:recs:v2:${viewerUserId}:${limit}:${interestsPart}:${seedPart}`;
   }
 
   private recommendationSeed(seed: string | undefined): string {
@@ -119,6 +131,8 @@ export class FollowsService {
       Math.min(Math.max(row.mutualCount, 0), 5) * 24 +
       Math.min(Math.max(row.overlapCount, 0), 4) * 16 +
       Math.min(Math.max(row.topicOverlapCount ?? 0, 0), 4) * 20 +
+      Math.min(Math.max(row.groupOverlapCount ?? 0, 0), 3) * 22 +
+      (row.searchedForCandidate ? 28 : 0) +
       (row.followsViewer ? 12 : 0) +
       (row.sameState ? RECOMMENDATION_SAME_STATE_WEIGHT : 0);
     const jitter = this.recommendationJitter(`${params.viewerUserId}:${row.id}:${params.seed}`) * RECOMMENDATION_JITTER_MAX;
@@ -185,8 +199,8 @@ export class FollowsService {
    * Recommend users for the viewer to follow.
    *
    * Ranking:
-   * - build a larger eligible pool than requested
-   * - score mutual follows, shared interests, same-state proximity, inbound follows, trust, profile quality, and capped freshness
+   * - union mutuals with people who share topics, groups, or a search tap
+   * - score those signals, inbound follows, same-state, trust, profile quality, and capped freshness
    * - apply small seeded jitter so refresh can vary without letting weak candidates jump strong ones
    */
   async recommendUsersToFollow(params: {
@@ -198,6 +212,7 @@ export class FollowsService {
     const limit = Math.max(1, Math.min(50, Math.floor(params.limit)));
     const seed = this.recommendationSeed(params.seed);
     const poolLimit = this.recommendationPoolLimit(limit);
+    const affinityLimit = Math.min(RECOMMENDATION_MAX_POOL_SIZE, poolLimit * 2);
 
     const cacheKey = this.recommendationsCacheKey(viewerUserId, limit, null, seed);
     try {
@@ -206,7 +221,9 @@ export class FollowsService {
     } catch { /* Redis unavailable */ }
 
     const rows = await this.prisma.$queryRaw<RecommendationRow[]>(Prisma.sql`
-      WITH viewer AS (
+      WITH
+      ${topicPhrasesCteSql()},
+      viewer AS (
         SELECT u."interests", u."locationState"
         FROM "User" u
         WHERE u."id" = ${viewerUserId}
@@ -215,32 +232,37 @@ export class FollowsService {
         SELECT ARRAY(
           SELECT DISTINCT s.t
           FROM (
-            SELECT unnest(u."interests") AS t
-            FROM "User" u
-            WHERE u."id" = ${viewerUserId}
+            SELECT unnest(v."interests") AS t
+            FROM viewer v
             UNION
-            SELECT unnest(p."topics") AS t
-            FROM "Post" p
-            WHERE p."userId" = ${viewerUserId}
-              AND p."deletedAt" IS NULL
-              AND p."visibility" = 'public'
-              AND p."communityGroupId" IS NULL
-              AND p."createdAt" > NOW() - INTERVAL '180 days'
-              AND cardinality(p."topics") > 0
+            SELECT unnest(${viewerPostTopicsSql(viewerUserId, AFFINITY_POST_DAYS)})
+            UNION
+            SELECT unnest(${viewerSearchTopicsSql(viewerUserId, AFFINITY_SEARCH_DAYS)})
+            UNION
+            SELECT unnest(${viewerGroupNameTopicsSql(viewerUserId)})
           ) s
           WHERE s.t IS NOT NULL AND btrim(s.t) <> ''
         ) AS topics
       ),
-      candidate_topics AS (
-        SELECT p."userId", ARRAY_AGG(DISTINCT t) AS topics
-        FROM "Post" p
-        CROSS JOIN LATERAL UNNEST(p."topics") AS t
-        WHERE p."deletedAt" IS NULL
-          AND p."visibility" = 'public'
-          AND p."communityGroupId" IS NULL
-          AND p."createdAt" > NOW() - INTERVAL '180 days'
-          AND cardinality(p."topics") > 0
-        GROUP BY p."userId"
+      viewer_groups AS (
+        SELECT cgm."groupId"
+        FROM "CommunityGroupMember" cgm
+        JOIN "CommunityGroup" g ON g."id" = cgm."groupId" AND g."deletedAt" IS NULL
+        WHERE cgm."userId" = ${viewerUserId}
+          AND cgm."status" = 'active'
+        UNION
+        SELECT us."targetGroupId"
+        FROM "UserSearch" us
+        WHERE us."userId" = ${viewerUserId}
+          AND us."targetGroupId" IS NOT NULL
+          AND us."createdAt" > NOW() - (${AFFINITY_SEARCH_DAYS}::int * INTERVAL '1 day')
+      ),
+      viewer_search_users AS (
+        SELECT DISTINCT us."targetUserId" AS "userId"
+        FROM "UserSearch" us
+        WHERE us."userId" = ${viewerUserId}
+          AND us."targetUserId" IS NOT NULL
+          AND us."createdAt" > NOW() - (${AFFINITY_SEARCH_DAYS}::int * INTERVAL '1 day')
       ),
       viewer_following AS (
         SELECT f1."followingId" AS "userId"
@@ -264,6 +286,72 @@ export class FollowsService {
         GROUP BY f2."followingId"
         ORDER BY "mutualCount" DESC
         LIMIT ${Math.min(1000, poolLimit * 10)}
+      ),
+      affinity_posts AS (
+        SELECT DISTINCT p."userId"
+        FROM "Post" p
+        CROSS JOIN viewer_topics vt
+        WHERE p."deletedAt" IS NULL
+          AND p."visibility" = 'public'
+          AND p."createdAt" > NOW() - (${AFFINITY_POST_DAYS}::int * INTERVAL '1 day')
+          AND cardinality(p."topics") > 0
+          AND p."topics" && vt."topics"
+          AND p."userId" <> ${viewerUserId}
+        LIMIT ${affinityLimit}
+      ),
+      affinity_interests AS (
+        SELECT u."id" AS "userId"
+        FROM "User" u
+        CROSS JOIN viewer_topics vt
+        WHERE u."usernameIsSet" = true
+          AND u."bannedAt" IS NULL
+          AND u."id" <> ${viewerUserId}
+          AND u."interests" && vt."topics"
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "Follow" f
+            WHERE f."followerId" = ${viewerUserId}
+              AND f."followingId" = u."id"
+          )
+        LIMIT ${affinityLimit}
+      ),
+      affinity_groups AS (
+        SELECT DISTINCT cgm."userId"
+        FROM "CommunityGroupMember" cgm
+        JOIN "CommunityGroup" g ON g."id" = cgm."groupId" AND g."deletedAt" IS NULL
+        WHERE cgm."status" = 'active'
+          AND cgm."userId" <> ${viewerUserId}
+          AND cgm."groupId" IN (SELECT vg."groupId" FROM viewer_groups vg)
+      ),
+      pool AS (
+        SELECT "userId" FROM mutuals
+        UNION
+        SELECT "userId" FROM affinity_posts
+        UNION
+        SELECT "userId" FROM affinity_interests
+        UNION
+        SELECT "userId" FROM affinity_groups
+        UNION
+        SELECT "userId" FROM viewer_search_users
+      ),
+      pool_post_topics AS (
+        SELECT p."userId", ARRAY_AGG(DISTINCT t) AS topics
+        FROM "Post" p
+        JOIN pool po ON po."userId" = p."userId"
+        CROSS JOIN LATERAL UNNEST(p."topics") AS t
+        WHERE p."deletedAt" IS NULL
+          AND p."visibility" = 'public'
+          AND p."createdAt" > NOW() - (${AFFINITY_POST_DAYS}::int * INTERVAL '1 day')
+          AND cardinality(p."topics") > 0
+        GROUP BY p."userId"
+      ),
+      pool_group_topics AS (
+        SELECT cgm."userId", ARRAY_AGG(DISTINCT tp.value) AS topics
+        FROM pool po
+        JOIN "CommunityGroupMember" cgm ON cgm."userId" = po."userId" AND cgm."status" = 'active'
+        JOIN "CommunityGroup" g ON g."id" = cgm."groupId" AND g."deletedAt" IS NULL
+        JOIN topic_phrases tp ON ${paddedMatchesPhraseSql(Prisma.sql`g."name"`, Prisma.sql`tp.phrase`)}
+        GROUP BY cgm."userId"
       )
       SELECT
         u."id",
@@ -287,7 +375,7 @@ export class FollowsService {
         COALESCE(
           array_length(
             ARRAY(
-              SELECT unnest(COALESCE(ct."topics", ARRAY[]::text[]))
+              SELECT unnest(${mergedPoolUserTopicsSql()})
               INTERSECT
               SELECT unnest(vt."topics")
             ),
@@ -295,6 +383,17 @@ export class FollowsService {
           ),
           0
         )::int AS "topicOverlapCount",
+        (
+          SELECT COUNT(*)::int
+          FROM "CommunityGroupMember" cgm
+          JOIN "CommunityGroup" g ON g."id" = cgm."groupId" AND g."deletedAt" IS NULL
+          WHERE cgm."userId" = u."id"
+            AND cgm."status" = 'active'
+            AND cgm."groupId" IN (SELECT vg."groupId" FROM viewer_groups vg)
+        ) AS "groupOverlapCount",
+        EXISTS (
+          SELECT 1 FROM viewer_search_users vsu WHERE vsu."userId" = u."id"
+        ) AS "searchedForCandidate",
         EXISTS (
           SELECT 1
           FROM "Follow" inbound
@@ -306,11 +405,13 @@ export class FollowsService {
           AND NULLIF(TRIM(v."locationState"), '') IS NOT NULL
           AND UPPER(TRIM(u."locationState")) = UPPER(TRIM(v."locationState"))
         ) AS "sameState"
-      FROM "User" u
+      FROM pool p
+      JOIN "User" u ON u."id" = p."userId"
       CROSS JOIN viewer v
       CROSS JOIN viewer_topics vt
       LEFT JOIN mutuals m ON m."userId" = u."id"
-      LEFT JOIN candidate_topics ct ON ct."userId" = u."id"
+      LEFT JOIN pool_post_topics ppt ON ppt."userId" = u."id"
+      LEFT JOIN pool_group_topics pgt ON pgt."userId" = u."id"
       WHERE u."usernameIsSet" = true
         AND u."bannedAt" IS NULL
         AND u."id" <> ${viewerUserId}
@@ -320,17 +421,6 @@ export class FollowsService {
           WHERE f."followerId" = ${viewerUserId}
             AND f."followingId" = u."id"
         )
-      ORDER BY
-        COALESCE(m."mutualCount", 0) DESC,
-        "topicOverlapCount" DESC,
-        "overlapCount" DESC,
-        "sameState" DESC,
-        "followsViewer" DESC,
-        (u."verifiedStatus" <> 'none') DESC,
-        u."premiumPlus" DESC,
-        u."premium" DESC,
-        u."createdAt" DESC
-      LIMIT ${poolLimit}
     `);
 
     const rankedRows = this.rankRecommendationRows(rows, { viewerUserId, seed, limit });
@@ -396,6 +486,8 @@ export class FollowsService {
           0
         )::int AS "overlapCount",
         0::int AS "topicOverlapCount",
+        0::int AS "groupOverlapCount",
+        false AS "searchedForCandidate",
         0::int AS "mutualCount",
         EXISTS (
           SELECT 1

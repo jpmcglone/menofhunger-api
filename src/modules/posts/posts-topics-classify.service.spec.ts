@@ -6,6 +6,7 @@ function makeService(opts?: { configured?: boolean; completeText?: string | null
     body: 'Hit a new squat PR after church.',
     hashtags: [],
     topics: [],
+    topicsClassifiedAt: null,
     visibility: 'public',
     communityGroupId: null,
     deletedAt: null,
@@ -36,8 +37,11 @@ describe('PostsTopicsClassifyService', () => {
     expect(service.isEligible({ visibility: 'public', communityGroupId: 'g1', topics: [], body: 'hi', hashtags: [] })).toBe(false);
     expect(service.isEligible({ visibility: 'onlyMe', communityGroupId: null, topics: [], body: 'hi', hashtags: [] })).toBe(false);
     expect(service.isEligible({ visibility: 'public', communityGroupId: null, topics: ['faith'], body: 'hi', hashtags: [] })).toBe(false);
+    expect(service.isEligible({ visibility: 'public', communityGroupId: null, topics: [], topicsClassifiedAt: new Date(), body: 'long enough for luna classify', hashtags: [] })).toBe(false);
     expect(service.isEligible({ visibility: 'public', communityGroupId: null, topics: [], body: '', hashtags: [] })).toBe(false);
     expect(service.isEligible({ visibility: 'public', communityGroupId: null, topics: [], body: 'hi', hashtags: [] })).toBe(true);
+    expect(service.isThinForAi({ body: 'ok', hashtags: [] })).toBe(true);
+    expect(service.isThinForAi({ body: 'Hit a new squat PR after church today.', hashtags: [] })).toBe(false);
   });
 
   it('writes allowlisted topics and bumps search caches', async () => {
@@ -46,16 +50,19 @@ describe('PostsTopicsClassifyService', () => {
     expect(result).toEqual({ classified: 1, examined: 1 });
     expect(prisma.post.update).toHaveBeenCalledWith({
       where: { id: 'p1' },
-      data: { topics: ['faith', 'strength_training'] },
+      data: { topics: ['faith', 'strength_training'], topicsClassifiedAt: expect.any(Date) },
     });
     expect(cacheInvalidation.bumpForPostWrite).toHaveBeenCalledWith({ topics: ['faith', 'strength_training'] });
   });
 
-  it('does not write when the model returns nothing usable', async () => {
+  it('stamps classifiedAt when the model returns nothing usable so we do not re-pay', async () => {
     const { service, prisma } = makeService({ completeText: '[]' });
     const result = await service.process({ postId: 'p1' });
     expect(result.classified).toBe(0);
-    expect(prisma.post.update).not.toHaveBeenCalled();
+    expect(prisma.post.update).toHaveBeenCalledWith({
+      where: { id: 'p1' },
+      data: { topicsClassifiedAt: expect.any(Date) },
+    });
   });
 
   it('enqueues a one-shot job for an eligible post', async () => {

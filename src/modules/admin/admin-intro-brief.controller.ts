@@ -17,6 +17,6 @@ export class AdminIntroBriefController {
   @Post('brief')
   async generate(@Res({ passthrough: true }) res: Response) {
     res.setHeader('Cache-Control', 'no-store');
-    return { data: await this.briefs.generate() };
+    return { data: await this.briefs.enqueueGenerate() };
   }
 }

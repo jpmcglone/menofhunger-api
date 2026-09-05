@@ -350,6 +350,7 @@ export class PostsMutationService {
         data: {
           body: nextBody,
           topics,
+          topicsClassifiedAt: topics.length > 0 ? undefined : null,
           hashtags,
           hashtagCasings,
           cashtags,
