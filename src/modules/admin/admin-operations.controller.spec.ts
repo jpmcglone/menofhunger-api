@@ -1,3 +1,4 @@
+import { AdminEngagementService } from './admin-engagement.service';
 import { Test } from "@nestjs/testing";
 import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
@@ -28,6 +29,7 @@ describe("Admin operations HTTP boundary", () => {
       controllers: [AdminOperationsController],
       providers: [
         AdminGuard,
+        { provide: AdminEngagementService, useFactory: () => new AdminEngagementService(prisma as any) },
         { provide: AuthService, useValue: auth },
         { provide: PrismaService, useValue: prisma },
         { provide: BillingService, useValue: billing },
@@ -60,7 +62,7 @@ describe("Admin operations HTTP boundary", () => {
     prisma.post.findMany.mockResolvedValue([]);
   });
 
-  it.each(["health", "content", "members/member1"])(
+  it.each(["health", "content", "members/member1", "attention", "activation"])(
     "hides %s from logged-out, non-admin and impersonated users",
     async (path) => {
       await request(app.getHttpServer())

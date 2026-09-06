@@ -1,3 +1,4 @@
+import { AdminEngagementService } from './admin-engagement.service';
 import {
   BadRequestException,
   Controller,
@@ -36,7 +37,22 @@ export class AdminOperationsController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly billing: BillingService,
+    private readonly engagement: AdminEngagementService,
   ) {}
+
+  @Get('attention')
+  async attention() { return { data: await this.engagement.attention() }; }
+
+  @Get('activation')
+  async activation(@Query() query: unknown) {
+    const input = z.object({
+      days: z.coerce.number().pipe(z.union([z.literal(30), z.literal(90)])).default(30),
+      stage: z.enum(['joined', 'verified', 'contributed', 'returned']).optional(),
+      offset: z.coerce.number().int().min(0).max(10000).default(0),
+      limit: z.coerce.number().int().min(1).max(50).default(25),
+    }).strict().parse(query);
+    return { data: await this.engagement.activation(input) };
+  }
 
   @Get("members/:id")
   async member(
@@ -141,57 +157,7 @@ export class AdminOperationsController {
 
   @Get("health")
   async health(): Promise<{ data: AdminOperationsHealthDto }> {
-    const now = new Date();
-    const [
-      newFeedback,
-      triaged,
-      pendingReports,
-      unprocessed,
-      olderThan15Minutes,
-      oldest,
-      scheduledPostsWithFailures,
-    ] = await Promise.all([
-      this.prisma.feedback.count({ where: { status: "new" } }),
-      this.prisma.feedback.count({ where: { status: "triaged" } }),
-      this.prisma.report.count({ where: { status: "pending" } }),
-      this.prisma.stripeWebhookEvent.count({ where: { processedAt: null } }),
-      this.prisma.stripeWebhookEvent.count({
-        where: {
-          processedAt: null,
-          createdAt: { lt: new Date(now.getTime() - 15 * 60000) },
-        },
-      }),
-      this.prisma.stripeWebhookEvent.findFirst({
-        where: { processedAt: null },
-        orderBy: { createdAt: "asc" },
-        select: { createdAt: true },
-      }),
-      this.prisma.post.count({
-        where: {
-          isDraft: true,
-          deletedAt: null,
-          scheduledAt: { not: null },
-          scheduledFailedAt: { not: null },
-        },
-      }),
-    ]);
-    return {
-      data: {
-        asOf: now.toISOString(),
-        feedback: { new: newFeedback, triaged },
-        pendingReports,
-        stripeWebhooks: {
-          unprocessed,
-          olderThan15Minutes,
-          oldestReceivedAt: oldest?.createdAt.toISOString() ?? null,
-        },
-        scheduledPostsWithFailures,
-        limitations: [
-          "Unprocessed webhooks can be in flight; age is a signal for investigation, not a failure diagnosis.",
-          "This snapshot does not include HTTP error rates, mobile crashes, deployment history, or payment receipts.",
-        ],
-      },
-    };
+    return { data: await this.engagement.health() };
   }
 
   @Get("content")

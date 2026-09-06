@@ -513,6 +513,7 @@ model User {
   posts                    Post[]
   boosts                   Boost[]
   pollVotes                PostPollVote[]
+  marvinPersonalActions    MarvinPersonalAction[]
   bookmarks                Bookmark[]
   bookmarkCollections      BookmarkCollection[]
   // Pinned post on profile (one per user; must be own post).
@@ -3531,4 +3532,22 @@ model AdminAssistantAction {
   createdAt DateTime @default(now())
   completedAt DateTime?
   @@index([turnId, createdAt])
+}
+
+model MarvinPersonalAction {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requestKey String @unique
+  messageId String
+  kind String
+  title String
+  preview String @db.Text
+  input Json
+  before Json
+  status String @default("pending")
+  receipt String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  @@index([userId, createdAt])
 }

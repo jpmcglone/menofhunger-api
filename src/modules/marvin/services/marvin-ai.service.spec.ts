@@ -302,7 +302,17 @@ describe('MarvinAIService request knobs', () => {
       .filter((t: { type?: string; name?: string }) => t.type === 'function')
       .map((t: { name: string }) => t.name)
       .sort();
-    expect(names).toEqual([...MARV_LOCAL_TOOL_NAMES].sort());
+    expect(names).toEqual([...MARV_LOCAL_TOOL_NAMES, 'prepare_personal_action', 'get_my_notification_preferences', 'get_participation_suggestions'].sort());
+  });
+
+  it('never exposes personal actions in public replies or catch-up', async () => {
+    const svc = makeService();
+    for (const source of ['public_thread', 'catch_up'] as const) {
+      await svc.respond({ ...baseReq, source });
+      const tools = mockResponsesCreate.mock.calls.at(-1)[0].tools;
+      expect(tools.map((tool: any) => tool.name)).not.toContain('prepare_personal_action');
+      expect(tools.map((tool: any) => tool.name)).not.toContain('get_my_notification_preferences');
+    }
   });
 
   it('attaches hosted web_search with a low context size', async () => {

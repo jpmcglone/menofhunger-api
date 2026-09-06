@@ -1,3 +1,4 @@
+import { marvPersonalFunctionTools } from './marvin-personal-tools';
 import { Injectable, Logger } from '@nestjs/common';
 import OpenAI from 'openai';
 import type { MarvinSource } from '@prisma/client';
@@ -30,6 +31,7 @@ export type MarvAIToolCallContext = {
   conversationId?: string;
   /** The requesting user — used by tools that need to scope queries to "the requester". */
   requesterUserId: string;
+  requesterMessageId?: string;
   /** @handle of the requesting user — attached to OpenAI response metadata for per-user spend visibility. */
   requesterUsername?: string | null;
 };
@@ -304,7 +306,7 @@ export class MarvinAIService {
 
     // Local tools always registered in-code so they work even if the Stored Prompt
     // tool list drifts. Keep the OpenAI Stored Prompt in sync for documentation.
-    const tools: unknown[] = req.source === 'admin_console' ? [...(req.adminTools ?? [])] : [...MARV_LOCAL_FUNCTION_TOOLS];
+    const tools: unknown[] = req.source === 'admin_console' ? [...(req.adminTools ?? [])] : [...MARV_LOCAL_FUNCTION_TOOLS, ...(req.source === 'private_session' ? marvPersonalFunctionTools() : [])];
     if (webSearchActive) {
       // Hosted web_search (not the legacy web_search_preview). `low` context keeps
       // search dumps inside the 80-word reply budget; omit return_token_budget

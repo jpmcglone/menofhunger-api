@@ -506,6 +506,10 @@ export class PresenceRealtimeService {
    * client uses this to refresh the credits chip in the chat page / settings without polling.
    * Carries the same shape as `MarvCreditSummaryDto` so the client can patch state in place.
    */
+  emitMarvActionsUpdated(userId: string): void {
+    this.emitToUser(userId, 'marv:actions-updated', {});
+  }
+
   emitMarvCreditsUpdated(
     userId: string,
     payload: {

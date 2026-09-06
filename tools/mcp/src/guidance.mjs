@@ -1,5 +1,5 @@
 export const instructions = `You have access to Men of Hunger's administrator data through its existing API.
-Start broad business questions with founder_briefing. Use analytics for deeper investigation.
+Start broad business questions with founder_briefing. Use analytics for deeper investigation. For actionable work use admin_workspace with workspace attention. Use member_activation to explore signup cohorts, recorded verification, public contributions, and later-day returns; this is a different definition from the legacy analytics activation metric.
 Check connection_status when authentication or deployment is uncertain.
 Report facts with their source URLs, asOf/fetchedAt timestamps, range, and denominators.
 Separate observations, hypotheses, and recommendations. Never present correlation as causation.

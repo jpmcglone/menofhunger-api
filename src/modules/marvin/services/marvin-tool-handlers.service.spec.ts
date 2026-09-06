@@ -111,6 +111,8 @@ function makeService() {
     scripture,
     jobs,
     appConfig,
+    {} as any,
+    {} as any,
   );
   return { svc, prisma, identity, cache: fake, contextCard, scripture, jobs, appConfig };
 }

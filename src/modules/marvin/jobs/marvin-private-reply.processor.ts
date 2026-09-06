@@ -542,6 +542,7 @@ export class MarvinPrivateReplyProcessor {
         toolContext: {
           conversationId,
           requesterUserId: msg.sender.id,
+          requesterMessageId: msg.id,
           requesterUsername: msg.sender.username,
         },
         previousResponseId: sessionState?.lastResponseId ?? null,

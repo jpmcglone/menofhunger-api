@@ -36,7 +36,8 @@ for (const file of files(join(root, 'src/modules')).filter(path => path.endsWith
       const route = methodDecorators.find(d => ts.isCallExpression(d) && ['Get', 'Post', 'Patch', 'Put', 'Delete'].includes(d.expression.getText()));
       if (!route) continue;
       const key = file.split('/').at(-1).replace('.controller.ts', '');
-      const home = homes[key];
+      const methodHome = key === 'admin-operations' && ['attention', 'activation'].includes(literal(route.arguments[0])) ? literal(route.arguments[0]) : null;
+      const home = methodHome ?? homes[key];
       if (!home || !adminCapabilities.some(cap => cap.id === home)) throw new Error(`Account for ${key} in the shared catalog before shipping it.`);
       const path = [literal(controller.arguments[0]), literal(route.arguments[0])].filter(Boolean).join('/');
       rows.push({ method: route.expression.getText().toUpperCase(), path: `/v1/${path}`, home, file: file.slice(root.length + 1), line: source.getLineAndCharacterOfPosition(member.getStart()).line + 1 });

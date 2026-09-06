@@ -144,3 +144,60 @@ The compiled API bridge also loaded the actual ESM registry and converted all
 18 read schemas and 12 proposal schemas. Existing web lint/build/test-environment
 warnings remain; changed-file lint is clean. Database migration deployment and a
 signed-in live MARV acceptance test were not performed.
+
+## Attention, activation, and member MARV actions (September 6)
+
+- **Attention inbox** (`/admin/attention`) combines pending reports, verification, feedback,
+  aging payment webhook events, scheduled-post failures, and public conversations with no
+  human reply in the last 14 days. Counts cover the full query; the oldest eight conversations
+  are previews. It reuses the operations health implementation and links to the existing editors.
+- **Member activation** (`/admin/activation`) follows 30/90-day signup cohorts through recorded
+  verification, a public post/reply after verification, and activity on a later UTC day. Totals
+  cover the complete cohort; member rows filter by highest milestone and paginate independently.
+  This intentionally differs from the older analytics activation metric. Small/recent cohorts,
+  deleted content, and verification-date changes are explained in the interface.
+- Both appear automatically in the shared catalog and the iOS authenticated admin handoff.
+  MCP and CLI expose `admin_workspace` → `attention` and `member_activation`.
+  CLI examples: `moh workspace attention` and `moh activation --days 90 --stage verified`.
+- **Personal actions** live under **Actions** in the member's private MARV chat, on web and
+  natively on iOS. MARV can prepare a public-post bookmark, a notification-preference change,
+  or a plain-text post/check-in draft. The user reviews and applies individual proposals;
+  drafts can be copied into the normal composer and never publish or record a check-in.
+  These tools are absent from public replies, Catch Up generation, admin MARV, and hosted MCP.
+- Personal proposals persist privately, expire after 24 hours, and show the latest 30 actions.
+  A database claim prevents duplicate confirmation. Writes reuse BookmarksService and
+  NotificationPreferencesService. Notification changes compare the reviewed values before
+  applying; this preflight is not an atomic compare-and-set against concurrent Settings writes.
+  Failed or interrupted writes are never retried automatically. An interrupted `executing`
+  receipt requires checking the actual Bookmarks/Settings state.
+- **Participation suggestions** are separate from the shared summary cache and scoped to the
+  viewer. They use recent public human posts, follows, and shared profile interests, exclude
+  both directions of blocking and posts already replied to, and diversify authors. Selection
+  examines at most 60 recent posts and 1,000 follows; no private conversations are used.
+  This secondary browsing surface refreshes on open/activation rather than continuously
+  reranking underneath a reader. It does not spend AI credits or send invitations.
+- Catch Up uses a stable desktop/mobile viewport-bounded panel and one large iOS detent.
+  Regeneration keeps the previous summary visible, with progress and failure feedback.
+  Web requests discard stale results after changing the focal post, options, or identity.
+- Ask MARV and web Catch Up render Markdown through one Vue-node renderer: formatting,
+  lists, links, tables, and code. Raw HTML is text, unsafe link schemes are rejected, and
+  Markdown images do not load tracking resources. The parser uses the already-installed
+  `marked` version; it is now an explicit dependency.
+- The web account menu anchors its bottom edge eight pixels above the clicked profile
+  card. Account rows can load without moving that edge; available height is capped with
+  internal scrolling, and resize/scroll tracking ends when the menu closes.
+
+Deployment order: apply `20260906050000_marvin_personal_actions` with the API deployment,
+then deploy web and release iOS. No environment variables, PostHog integration, or new paid
+service is required. Never apply this migration to production as a validation step.
+
+Local verification for this addition: API lint/typecheck/build/module graph and 187 suites /
+2,072 tests passed; all 27 MCP/CLI tests passed. iOS format, strict lint, build, 715 tests,
+and static checks passed. Web lint, typecheck, contract validation, build, and 134 suites /
+1,082 tests passed, as did all 24 anonymous hydration routes. Existing lint/build warnings
+remain, including unavailable local Sentry source-map upload. Production data, paid AI
+calls, and migration deployment were not exercised.
+Authenticated browser fixtures also verified Markdown, both admin panels, delayed account
+loading, menu anchoring through an open-window resize, and Catch Up participation rendering.
+The final class-only mobile mode/balance spacing adjustment was linted and previewed against
+the source classes at 390px and 320px widths after the build, without repeating unaffected gates.

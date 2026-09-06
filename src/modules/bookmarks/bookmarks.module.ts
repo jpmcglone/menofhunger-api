@@ -10,6 +10,7 @@ import { BookmarksService } from './bookmarks.service';
 @Module({
   imports: [AuthModule, RealtimeModule, PostViewsModule, RedisModule],
   controllers: [BookmarksController],
+  exports: [BookmarksService],
   providers: [BookmarksService, VerifiedGuard],
 })
 export class BookmarksModule {}

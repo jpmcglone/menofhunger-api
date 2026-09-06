@@ -1,3 +1,5 @@
+import { MarvinPersonalService } from './marvin-personal.service';
+import { MarvinParticipationService } from './marvin-participation.service';
 import crypto from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { z } from 'zod';
@@ -125,6 +127,8 @@ export class MarvinToolHandlersService {
     private readonly scripture: ScriptureService,
     private readonly jobs: JobsService,
     private readonly appConfig: AppConfigService,
+    private readonly personal: MarvinPersonalService,
+    private readonly participation: MarvinParticipationService,
   ) {}
 
   async dispatch(name: string, args: unknown, ctx: MarvAIToolCallContext): Promise<string> {
@@ -151,6 +155,11 @@ export class MarvinToolHandlersService {
 
   private async dispatchTyped(name: string, args: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
     switch (name) {
+      case 'prepare_personal_action': return this.personal.prepare(args, ctx);
+      case 'get_my_notification_preferences': return this.personal.readPreferences(ctx);
+      case 'get_participation_suggestions':
+        await this.personal.assertPrivate(ctx);
+        return this.participation.suggestions(ctx.requesterUserId);
       case 'get_user_basic_info':
         return await this.getUserBasicInfo(args, ctx);
       case 'get_user_context_card':

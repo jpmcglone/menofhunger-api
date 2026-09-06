@@ -5,6 +5,7 @@ import { configuredBaseUrl } from './config.mjs';
 export const aliases = {
   status: ['connection_status'],
   capabilities: ['admin_capabilities'],
+  activation: ['member_activation'],
   workspace: ['admin_workspace', 'workspace'],
   briefing: ['founder_briefing'],
   analytics: ['analytics'],
@@ -99,7 +100,7 @@ export async function parseCommand(argv) {
       filtered[0] && !filtered[0].startsWith('--') ? filtered.shift() : 'true';
     // Only the actual numeric/boolean options are coerced; a numeric search stays text.
     args[key] =
-      key === 'limit'
+      ['limit', 'days', 'offset'].includes(key)
         ? Number(raw)
         : key === 'unanswered'
           ? raw === 'true'
@@ -132,6 +133,8 @@ Optional global command: npm install --global ./tools/mcp, then moh <command>
   reports --status pending            Moderation queue for human review
   health                             Support totals and operational issues
   queues                             Background job queue health
+  activation --days 90 --stage verified  Explore member activation
+  workspace attention                Pending admin work
   content --unanswered --limit 20     Public posts needing a response
   content --q "leadership"            Public content research, up to a 31-day window
   referrals                          Referral metrics

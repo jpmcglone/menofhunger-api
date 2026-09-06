@@ -1,6 +1,8 @@
 // Shared discovery for the panel, MARV, MCP, and CLI. Paths are product links,
 // never API targets supplied by the model. Long-tail actions remain in their editor.
 export const adminCapabilities = [
+  { id: 'attention', section: 'Overview', title: 'Attention inbox', path: '/admin/attention', icon: 'tabler:inbox', summary: 'Review pending work and conversations needing a human reply', tools: ['admin_workspace'], ios: 'web' },
+  { id: 'activation', section: 'Overview', title: 'Member activation', path: '/admin/activation', icon: 'tabler:chart-funnel', summary: 'Explore signup, verification, first contribution, and return milestones', tools: ['member_activation'], ios: 'web' },
   { id: 'assistant', section: 'Overview', title: 'Ask MARV', path: '/admin/assistant', icon: 'tabler:sparkles', summary: 'Check the business and prepare admin actions', tools: ['founder_briefing', 'metric_definitions'], ios: 'web' },
   { id: 'users', section: 'People', title: 'Users', path: '/admin/users', icon: 'tabler:users', summary: 'Profiles, bans, grants, coins, pages, organizations, and operators', tools: ['search_members', 'member_profile', 'member_diagnostics', 'member_grants', 'member_referrals'], ios: 'web' },
   { id: 'impersonate', section: 'People', title: 'Log in as user', path: '/admin/impersonate', icon: 'tabler:eye', summary: 'Inspect a member experience; direct admin control only', tools: [], ios: 'native' },
@@ -25,6 +27,7 @@ export const adminCapabilities = [
 ];
 
 export const workspaceReads = {
+  attention: { path: 'admin/operations/attention' },
   verification: { path: 'admin/verification', paginated: true },
   announcements: { path: 'admin/announcements' },
   searches: { path: 'admin/searches', paginated: true },

@@ -386,6 +386,45 @@ export type AdminEmailSampleSendResultDto = {
   type: AdminEmailSampleTypeDto;
 };
 
+// ─── src/common/dto/admin-engagement.dto.ts ────────────────────────────────────
+
+export type AdminAttentionItemDto = {
+  id: string;
+  title: string;
+  detail: string;
+  count: number;
+  path: string;
+  priority: 'review' | 'investigate' | 'participate';
+};
+
+export type AdminAttentionDto = {
+  asOf: string;
+  items: AdminAttentionItemDto[];
+  unansweredPosts: { id: string; body: string; username: string | null; createdAt: string }[];
+};
+
+export type AdminActivationMemberDto = {
+  id: string;
+  username: string | null;
+  createdAt: string;
+  verifiedAt: string | null;
+  contributedAt: string | null;
+  returnedAt: string | null;
+  stage: 'joined' | 'verified' | 'contributed' | 'returned';
+};
+
+export type AdminActivationDto = {
+  asOf: string;
+  since: string;
+  days: number;
+  counts: { joined: number; verified: number; contributed: number; returned: number };
+  members: AdminActivationMemberDto[];
+  matching: number;
+  offset: number;
+  limit: number;
+  definitions: string[];
+};
+
 // ─── src/common/dto/admin-intro-brief.dto.ts ───────────────────────────────────
 
 export type AdminIntroPersonDto = {
@@ -1777,6 +1816,25 @@ export type MarvinModeDto = 'auto' | 'fast' | 'regular' | 'smart';
 
 /** Source channel the request originated from. */
 export type MarvinSourceDto = 'public_thread' | 'private_session' | 'catch_up' | 'admin_console';
+
+// ─── src/common/dto/marvin/marvin-personal.dto.ts ──────────────────────────────
+
+export type MarvinPersonalActionDto = {
+  id: string;
+  kind: 'bookmark' | 'preferences' | 'draft';
+  title: string;
+  preview: string;
+  draft: string | null;
+  status: string;
+  createdAt: string;
+  expiresAt: string;
+  receipt: string | null;
+};
+
+export type MarvinParticipationDto = {
+  asOf: string;
+  suggestions: { postId: string; username: string | null; name: string | null; body: string; reason: string }[];
+};
 
 // ─── src/common/dto/marvin/marvin-usage-event.dto.ts ───────────────────────────
 

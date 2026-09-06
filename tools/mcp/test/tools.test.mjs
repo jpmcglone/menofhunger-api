@@ -254,3 +254,18 @@ test('shared admin workspace reads enforce named routes, pagination and redactio
   assert.ok(catalog.data.some(item => item.id === 'newsletters'));
   assert.ok(catalog.data.some(item => item.id === 'intros'));
 });
+
+test('activation and attention use shared admin routes and bounded validated inputs', async () => {
+  const calls = [];
+  const api = { get: async (...args) => { calls.push(args); return { data: {} }; } };
+  const tools = createTools({ api, localArtifacts: false });
+  const activation = tools.find(tool => tool.name === 'member_activation');
+  const command = await parseCommand(['activation', '--days', '90', '--stage', 'verified']);
+  assert.equal(command.toolName, 'member_activation');
+  await activation.execute(command.args);
+  assert.deepEqual(calls[0], ['admin/operations/activation', { days: 90, stage: 'verified', offset: 0, limit: 25 }]);
+  await assert.rejects(activation.execute({ days: 365 }));
+  await assert.rejects(activation.execute({ offset: -1 }));
+  await tools.find(tool => tool.name === 'admin_workspace').execute({ workspace: 'attention' });
+  assert.equal(calls.at(-1)[0], 'admin/operations/attention');
+});

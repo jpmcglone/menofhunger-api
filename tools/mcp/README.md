@@ -290,3 +290,16 @@ admin_workspace '{"workspace":"verification"}' --json` or discover its schema wi
 12 additional proposal operations that require an in-product confirmation button.
 MCP and the CLI do not execute those mutations. Local draft/decision files remain local.
 See [admin experience and coverage](../../docs/admin-experience.md).
+
+### Attention and member activation
+
+`moh workspace attention` returns pending admin work and bounded previews of unanswered
+public conversations. `moh activation --days 90 --stage verified` explores the full signup
+cohort and lists members who have verified but have not yet contributed publicly. Use
+`--offset 25 --limit 25` for another page. Supported windows are 30 and 90 days; stage is the
+highest observed milestone (`joined`, `verified`, `contributed`, `returned`). Counts remain
+for the entire cohort while member rows are filtered. See the returned definitions before
+comparing with older analytics activation percentages.
+
+These reads share the product admin API. Personal member actions are reviewed in the
+member's private MARV chat; they do not grant the external MCP or CLI mutation permissions.

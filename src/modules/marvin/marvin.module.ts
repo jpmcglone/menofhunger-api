@@ -1,3 +1,8 @@
+import { BookmarksModule } from '../bookmarks/bookmarks.module';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { MarvinPersonalController } from './marvin-personal.controller';
+import { MarvinPersonalService } from './services/marvin-personal.service';
+import { MarvinParticipationService } from './services/marvin-participation.service';
 import { Module } from '@nestjs/common';
 import { AppConfigModule } from '../app/app-config.module';
 import { AuthModule } from '../auth/auth.module';
@@ -50,6 +55,7 @@ import { ScriptureModule } from '../scripture/scripture.module';
  */
 @Module({
   imports: [
+    BookmarksModule, NotificationsModule,
     AppConfigModule,
     AuthModule,
     RealtimeModule,
@@ -60,8 +66,9 @@ import { ScriptureModule } from '../scripture/scripture.module';
     LinkMetadataModule,
     ScriptureModule,
   ],
-  controllers: [MarvinController],
+  controllers: [MarvinController, MarvinPersonalController],
   providers: [
+    MarvinPersonalService, MarvinParticipationService,
     AdminGuard,
     MarvinThreadContextService,
     MarvinCatchUpService,

@@ -1,3 +1,4 @@
+import { AdminEngagementService } from './admin-engagement.service';
 import { AdminAssistantController } from './admin-assistant.controller';
 import { AdminAssistantService } from './admin-assistant.service';
 import { Module } from '@nestjs/common';
@@ -108,6 +109,7 @@ import { AdminOperationsController } from './admin-operations.controller';
     AdminIntroBriefController,
   ],
   providers: [
+    AdminEngagementService,
     AdminAssistantService,
     AdminGuard,
     AdminImageReviewService,
