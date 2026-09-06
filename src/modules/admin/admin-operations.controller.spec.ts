@@ -79,6 +79,14 @@ describe("Admin operations HTTP boundary", () => {
         .get(`/v1/admin/operations/${path}`)
         .set("Cookie", "moh_session=impersonation")
         .expect(404);
+      auth.meFromSessionToken.mockResolvedValue({
+        user: { siteAdmin: true },
+        operatedByUserId: "page-operator",
+      });
+      await request(app.getHttpServer())
+        .get(`/v1/admin/operations/${path}`)
+        .set("Cookie", "moh_session=page-session")
+        .expect(404);
       expect(prisma.post.findMany).not.toHaveBeenCalled();
       expect(prisma.user.findUnique).not.toHaveBeenCalled();
       expect(prisma.feedback.count).not.toHaveBeenCalled();

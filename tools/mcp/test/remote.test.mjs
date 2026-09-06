@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createRemoteMcp } from '../src/remote.mjs';
-import { OAuthStore } from '../src/oauth.mjs';
+import { OAuthStore, MohOAuthProvider } from '../src/oauth.mjs';
 
 class TestRedis {
   values = new Map();
@@ -215,6 +215,20 @@ test('removing administrator access blocks issued access and refresh tokens', as
   assert.equal((await f.post('/mcp', {}, { headers: { Authorization: `Bearer ${tokens.access_token}` } })).status, 401);
   assert.equal((await f.post('/token', { grant_type: 'refresh_token', client_id: client.client_id,
     client_secret: client.client_secret, refresh_token: tokens.refresh_token })).status, 400);
+});
+
+test('tokens remain bound to their resource even when environments share Redis and encryption keys', async (t) => {
+  const f = await fixture(t);
+  const { client, tokens } = await f.connect();
+  const other = new MohOAuthProvider({ store: new OAuthStore(f.redis, 'test-encryption-key'),
+    resourceUrl: 'https://another-environment.example/mcp',
+    resolveAdmin: async () => ({ id: 'founder' }),
+    revokeSession: async () => { throw new Error('Wrong environment must not revoke this session.'); },
+  });
+  await assert.rejects(other.verifyAccessToken(tokens.access_token));
+  await assert.rejects(other.exchangeRefreshToken(client, tokens.refresh_token));
+  await other.revokeToken(client, { token: tokens.access_token });
+  assert.equal(f.sessions.has('dedicated-1'), true);
 });
 
 test('encrypted OAuth state rejects tampering and cannot be substituted between keys', async () => {

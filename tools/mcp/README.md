@@ -30,8 +30,9 @@ moh briefing --range 7d
 ```
 
 Without a global install, use `npm run --silent moh -- ...` from the API project.
-Dependencies are pinned in the nested package lock and remain separate from the
-production API runtime.
+Dependencies are pinned in the nested package lock. The API's hosted MCP loads
+this same package; Docker and CI install it. After a fresh local checkout, run
+`npm run mcp:setup` before starting the API.
 
 ## Connect Codex
 
@@ -54,8 +55,73 @@ codex mcp add menofhunger -- node /absolute/path/menofhunger-api/tools/mcp/src/s
 
 Other MCP clients can launch `node` with the same absolute server path over stdio.
 Run the server directly rather than through npm: stdout is reserved for MCP JSON-RPC.
-This is a local desktop integration, not a public remote OAuth server for ChatGPT
-web or an integration that ordinary members can install.
+The desktop uses stdio; ChatGPT web uses the hosted HTTPS connection below.
+Both are private administrator integrations, not ordinary member integrations.
+
+## Connect ChatGPT web
+
+The server runs **inside the existing API**, at **`https://api.menofhunger.com/mcp`**,
+using MCP Streamable HTTP. There is no separate process, service, DNS record, or
+OpenAI API key to manage for the hosted server. It works while your laptop is off.
+`https://menofhunger.com` is the website, not the MCP endpoint.
+
+After the API changes are deployed:
+
+1. Sign in to [Men of Hunger](https://menofhunger.com) with your own site administrator account.
+2. In ChatGPT, enable **Settings → Security and login → Developer mode** if needed.
+   Availability depends on your account/workspace policy.
+3. Add a connection from ChatGPT's Plugins page. Name it **Men of Hunger**, use
+   **`https://api.menofhunger.com/mcp`**, and choose **OAuth** if authentication is requested.
+   Client registration is automatic; leave optional client ID/secret fields blank.
+4. On the Men of Hunger consent page, choose **Allow read access**. If it asks you
+   to sign in, open the website from that page, sign in, then return and continue.
+5. Start a conversation, enable the connection in the tools menu, and ask:
+   **“Give me a Men of Hunger briefing and three priorities, with evidence.”**
+
+The web connection exposes the same **16 read tools**. The four local draft/decision
+file tools stay on the desktop/CLI; ChatGPT web can draft and reason in the conversation.
+Desktop login and web OAuth are separate sessions. Disconnecting the web connection
+revokes its dedicated session without signing you out of the website or CLI.
+Reconnect after the 30-day authorization expires. Refresh the connection in ChatGPT
+after a deployment changes the tool catalog.
+
+Official setup reference: [Connect and test an MCP connection](https://developers.openai.com/plugins/deploy/connect-chatgpt).
+
+### Hosted implementation and deployment
+
+The API mounts `/mcp`, `/mcp/consent`, `/authorize`, `/token`, `/register`, `/revoke`,
+`/.well-known/oauth-authorization-server`, and `/.well-known/oauth-protected-resource/mcp`
+at the document root. These standard protocol responses do not use the REST `{ data }`
+envelope or `/v1` prefix. All business reads still pass through the existing `/v1/admin`
+controllers, guards, rate limits, and canonical services.
+
+It uses the existing Redis service, `SESSION_HMAC_SECRET`, public API URL
+`BROWSER_HANDOFF_BASE_URL` (production: `https://api.menofhunger.com/v1`), and frontend
+origin configuration. No database migration or new secret is required. Redis holds
+encrypted OAuth state; clearing it or rotating the session secret requires reconnecting.
+The deployment must preserve these root paths and avoid caching their responses.
+The API runtime requires Node 20.19+; the Docker image includes the shared package.
+
+Authorization uses the official MCP SDK's OAuth endpoints and PKCE S256. Client
+callbacks are restricted to ChatGPT's `/connector/oauth/<callback_id>` or
+`/connector_platform_oauth_redirect` HTTPS URLs. Codes are single-use (2 minutes),
+access tokens last up to 15 minutes, and rotating refresh tokens expire with the
+30-day grant. The bearer token is scoped to `moh:read` and this endpoint; it is never
+a raw product session token. Existing admin session policy is checked at consent,
+redemption, refresh, and MCP requests. The shared admin guards also check each API read.
+
+Read-only deployment checks (no credentials needed):
+
+```sh
+curl --fail https://api.menofhunger.com/.well-known/oauth-protected-resource/mcp
+curl --fail https://api.menofhunger.com/.well-known/oauth-authorization-server
+curl -i https://api.menofhunger.com/mcp
+```
+
+The first two should return metadata. The last should return **401** with a
+`WWW-Authenticate` header pointing at the resource metadata. A 404 means this version
+is not deployed or the proxy is not forwarding the route. These checks prove discovery;
+the final authenticated ChatGPT handshake requires your own consent in the browser.
 
 Ask your assistant:
 
@@ -141,6 +207,11 @@ An explicit `--env` overrides `MOH_API_BASE_URL`. The MCP launches on demand;
 neither instance starts a development API server. You can leave local unconfigured
 unless you want it in the AI tool catalog.
 
+The local API also serves `http://localhost:3001/mcp`. ChatGPT web cannot reach your
+computer's localhost directly; testing there requires a tunnel with reachable OAuth
+URLs. For normal operations, connect web to production and use the desktop/CLI local
+profile to test development changes. There is no need to set up a tunnel for daily use.
+
 | Variable | Default |
 | --- | --- |
 | `MOH_API_BASE_URL` | `https://api.menofhunger.com/v1` |
@@ -205,3 +276,6 @@ discovery, input validation, CLI JSON output, credential isolation and renewal,
 redaction, partial failures, cohort maturity, and local records. API HTTP tests
 exercise the real admin guard and controller routes with mocked domain services
 on an ephemeral loopback port. CI installs the nested package and runs its tests.
+Hosted tests exercise HTTP MCP initialization/tool calls, OAuth discovery, consent,
+CSRF, PKCE, callback/resource binding, single-use codes, refresh rotation, revocation,
+admin access removal, encrypted state, and exclusion of desktop filesystem tools.

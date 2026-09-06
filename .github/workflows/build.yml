@@ -19,6 +19,8 @@ jobs:
 
       - run: npm ci
 
+      - run: npm run mcp:setup
+
       - run: npm run lint
 
       - run: npm run build:typecheck
@@ -26,8 +28,6 @@ jobs:
       - run: npm run build:ci
 
       - run: npm run test:ci
-
-      - run: npm run mcp:setup
 
       - run: npm run mcp:test
 

@@ -11,6 +11,11 @@ member support, billing diagnostics, community research, and local drafts/decisi
 From this repository: `npm run mcp:setup`, `npm run moh -- login`, then
 `npm run moh -- briefing`. Use `npm run moh -- configure` to connect Codex and
 `npm run --silent moh -- tools --json` for machine-readable tool discovery.
+ChatGPT web connects to `https://api.menofhunger.com/mcp` over HTTPS with
+administrator OAuth consent. It runs inside this API; no separate hosted service
+is required. See the [connection guide](tools/mcp/README.md#connect-chatgpt-web).
+Run `npm run mcp:setup` after a fresh `npm ci` before starting the API locally;
+Docker and CI install the shared package automatically.
 
 New here? Start with [Getting started](docs/getting-started.md) for local setup, eight core concepts, authentication, and troubleshooting.
 
