@@ -29,7 +29,9 @@ Do not create a second service from `render.yaml` unless you intend to migrate o
 The Docker image includes Prisma and committed migrations, but its startup command
 only starts the API. Confirm the existing Render service's **Pre-Deploy Command**
 runs `npx prisma migrate deploy` against the intended production database before
-releasing a schema-dependent API build. If a different migration command is already
+releasing a schema-dependent API build. Render recommends this stage for migrations
+([pre-deploy documentation](https://render.com/docs/deploys#pre-deploy-command)).
+If a different migration command is already
 configured, review it before replacing it. Dashboard-managed settings are not
 proven by this repository's `render.yaml`.
 
