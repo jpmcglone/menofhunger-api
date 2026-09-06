@@ -76,7 +76,7 @@ export function retentionWithMaturity(rows, asOf) {
   });
 }
 
-export function createTools({ api, store }) {
+export function createTools({ api, store, localArtifacts = true }) {
   const definitions = [];
   // Centralize validation so MCP and the diagnostic CLI execute the identical tool contract.
   function tool(
@@ -424,5 +424,6 @@ export function createTools({ api, store }) {
     {},
     async () => ({ definitions: metricGuide }),
   );
-  return definitions;
+  return localArtifacts ? definitions : definitions.filter((tool) =>
+    !['record_decision', 'save_draft', 'list_decisions', 'list_drafts'].includes(tool.name));
 }

@@ -5,19 +5,20 @@ import { pathToFileURL } from 'node:url';
 import { MohApi } from './api.mjs';
 import { StateStore } from './state.mjs';
 import { createTools } from './tools.mjs';
-import { instructions, metricGuide, workflows } from './guidance.mjs';
+import { instructions, metricGuide, workflows, storageGuidance } from './guidance.mjs';
 import { serverName } from './config.mjs';
 
-export function createServer({ api, store } = {}) {
+export function createServer({ api, store, localArtifacts = true } = {}) {
   store ??= new StateStore();
   api ??= new MohApi({ store });
+  const guide = `${instructions}\n${storageGuidance(localArtifacts)}`;
   const server = new McpServer(
     { name: serverName(api.baseUrl), version: '0.1.0' },
     {
-      instructions: `Connected to ${api.baseUrl}. Localhost data is development data, not production business metrics.\n${instructions}`,
+      instructions: `Connected to ${api.baseUrl}. Localhost data is development data, not production business metrics.\n${guide}`,
     },
   );
-  for (const tool of createTools({ api, store })) {
+  for (const tool of createTools({ api, store, localArtifacts })) {
     server.registerTool(
       tool.name,
       {
@@ -54,7 +55,7 @@ export function createServer({ api, store } = {}) {
     );
   }
   for (const [name, text] of Object.entries({
-    guide: instructions,
+    guide,
     metrics: metricGuide,
   })) {
     server.registerResource(
@@ -67,6 +68,7 @@ export function createServer({ api, store } = {}) {
     );
   }
   for (const [name, text] of Object.entries(workflows)) {
+    if (!localArtifacts && ['weekly_decisions', 'community_digest'].includes(name)) continue;
     server.registerPrompt(name, { description: text }, async () => ({
       messages: [{ role: 'user', content: { type: 'text', text } }],
     }));
