@@ -14,4 +14,4 @@ Feeds should converge on one shared mental model:
 
 Before adding a feed mode, query param, collapse behavior, media endpoint, or realtime feed event, ask whether it can be expressed with these concepts. If not, state why the new concept is needed and which clients will consume it.
 
-Do not create parallel response shapes for the same feed entity. HTTP DTOs, realtime payloads, web types, and iOS models should describe the same thing with the same names.
+Use canonical entity fields across clients; snapshots and named partial patches follow the [realtime policy](../../docs/engineering-policy.md#realtime-contracts-and-ownership).

@@ -8,7 +8,7 @@ Preserve unrelated working-tree changes and inspect the nearest implementation b
 
 ## Guidance layout
 
-This is the shared entry point for Codex and Cursor. Repository skills live in `.agents/skills/<name>/SKILL.md`; read a skill when its description matches the task. Do not copy skills into editor-specific folders.
+This is the shared entry point for Codex and Cursor. Repository skills live in `.agents/skills/<name>/SKILL.md`; read a skill when its description matches the task. Do not copy skills into editor-specific folders. Shared skills (`api-contract-sync`, `design-simplicity-principles`, `moh-designer`, `moh-marketing`, `ux-review`) are maintained in the API repository; interface-polish references are maintained in web. Synchronize their checked copies with the API `scripts/sync-agent-guidance.py` command; do not edit a mirror independently.
 
 Detailed rules remain in `.cursor/rules/` as a single source. Cursor can attach them by glob or description; Codex should read the relevant files from the table below before editing that area. Do not load every rule or skill for every task. Paths in rules are relative to this repository unless a sibling repository is named.
 

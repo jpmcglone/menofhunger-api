@@ -51,7 +51,7 @@ So a mutation both emits its content event synchronously *and* dispatches the no
 
 - **Event names**: `<domain>:<verb-or-noun>` in kebab-case. Examples: `notifications:new`, `groups:invite-received`, `posts:live-updated`, `users:me-updated`.
 - **Pair every "received" with an "updated"** when the entity has a lifecycle (pending → accepted/declined/cancelled/expired). The receiver listens for `received`; the sender listens for `updated` so their UI reflects the response.
-- **Payload shape mirrors the HTTP response shape.** If `GET /groups/invites/inbox` returns `{ data: CommunityGroupInvite[] }`, then `groups:invite-received` carries `{ invite: CommunityGroupInvite }` — same DTO, no ad-hoc fields. This lets the web client patch its in-memory list with the socket payload as if it were a fresh fetch.
+- Choose snapshots or typed patches using the [realtime policy](../../docs/engineering-policy.md#realtime-contracts-and-ownership).
 - **Don't include private/auth-scoped data in room broadcasts.** Per-user emits use `emitToUser`; broadcasts use `emitToRoom`. If you need to send different payloads to different audiences, send two events — never overload one payload with viewer-specific fields.
 
 ## Update notifications, don't spawn duplicates
