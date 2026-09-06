@@ -84,7 +84,7 @@ export class MohOAuthProvider {
     await this.store.put('request', request, {
       clientId: client.client_id, clientName: client.client_name || 'ChatGPT',
       redirectUri: params.redirectUri, state: params.state,
-      challenge: params.codeChallenge, csrfHash: digest(csrf),
+      challenge: params.codeChallenge, csrfHash: digest(csrf), resourceUrl: this.resourceUrl,
     }, 600);
     res.cookie('moh_mcp_consent', csrf, {
       httpOnly: true, secure: new URL(this.resourceUrl).protocol === 'https:',
@@ -94,7 +94,7 @@ export class MohOAuthProvider {
   }
   async consentRequest(request, csrf) {
     const pending = await this.store.get('request', request);
-    if (!pending || typeof csrf !== 'string' || pending.csrfHash !== digest(csrf))
+    if (!pending || pending.resourceUrl !== this.resourceUrl || typeof csrf !== 'string' || pending.csrfHash !== digest(csrf))
       throw new InvalidRequestError('Connection request expired. Start again from ChatGPT.');
     return pending;
   }
@@ -120,7 +120,7 @@ export class MohOAuthProvider {
   }
   async codeFor(client, code) {
     const value = await this.store.get('code', code);
-    if (!value || value.clientId !== client.client_id) throw new InvalidGrantError('Invalid authorization code.');
+    if (!value || value.resourceUrl !== this.resourceUrl || value.clientId !== client.client_id) throw new InvalidGrantError('Invalid authorization code.');
     return value;
   }
   async challengeForAuthorizationCode(client, code) {
@@ -135,7 +135,7 @@ export class MohOAuthProvider {
     if (!(await this.store.get('code', code, true))) throw new InvalidGrantError('Authorization code was already used.');
     const session = await this.createSession(admin.id);
     const grantId = opaque();
-    const grant = { clientId: client.client_id, userId: admin.id, sessionToken: session.token,
+    const grant = { clientId: client.client_id, userId: admin.id, sessionToken: session.token, resourceUrl: this.resourceUrl,
       expiresAt: Math.min(Date.now() / 1000 + 30 * DAY, Date.parse(session.expiresAt) / 1000) };
     try {
       await this.store.put('grant', grantId, grant, grant.expiresAt - Date.now() / 1000);
@@ -147,7 +147,7 @@ export class MohOAuthProvider {
   }
   async grantFor(grantId) {
     const grant = await this.store.get('grant', grantId);
-    if (!grant || grant.expiresAt <= Date.now() / 1000) throw new InvalidGrantError('Connection expired. Reconnect in ChatGPT.');
+    if (!grant || grant.resourceUrl !== this.resourceUrl || grant.expiresAt <= Date.now() / 1000) throw new InvalidGrantError('Connection expired. Reconnect in ChatGPT.');
     const admin = await this.resolveAdmin(grant.sessionToken);
     if (!admin || admin.id !== grant.userId) throw new InvalidGrantError('Administrator access was revoked.');
     return grant;
@@ -185,7 +185,7 @@ export class MohOAuthProvider {
     const record = await this.store.get('refresh', token) || await this.store.get('access', token);
     if (!record) return;
     const grant = await this.store.get('grant', record.grantId);
-    if (!grant || grant.clientId !== client.client_id) return;
+    if (!grant || grant.resourceUrl !== this.resourceUrl || grant.clientId !== client.client_id) return;
     await this.store.remove('grant', record.grantId);
     await this.revokeSession(grant.sessionToken);
   }
