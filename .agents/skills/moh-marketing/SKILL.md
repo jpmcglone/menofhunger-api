@@ -130,4 +130,4 @@ Before handing copy over:
 
 - Could a stranger say what to do next in one read?
 - Does it sound like the lodge, not a growth hacker?
-- Would we cut one more sentence? Cut it.
+- Remove redundant copy when it improves clarity; preserve necessary context.

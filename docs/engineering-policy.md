@@ -57,8 +57,10 @@ raw transport messages. Clean up subscriptions and pending work with their owner
 The user owns persistent dev servers and watchers; do not start, restart, or kill them without
 an explicit request. A bounded automated test may launch an isolated preview server on a free
 port, with cleanup on success, failure, and interruption. Prefer an existing compatible server.
-Never kill a process merely because it occupies a port. Builds and checks must not rewrite
-source implicitly; use explicit fix commands for formatting. Preserve unrelated edits.
+Never kill a process merely because it occupies a port. Builds and checks must not autoformat
+application source; use explicit fix commands. The existing web prebuild stamps the service-worker
+cache version to invalidate stale assets; this generated metadata is the sole current source-writing
+build exception. Keep that diff separate from application edits. Preserve unrelated changes.
 
 ## Validation matrix
 

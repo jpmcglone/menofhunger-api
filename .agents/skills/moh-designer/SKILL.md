@@ -88,7 +88,7 @@ If a screen feels busy, remove a control — not the content.
 - Edge-to-edge. No full-page `rounded-* border` wrapper.
 - Real `<a>` / `NuxtLink` for navigation.
 - Hover reveals row actions. Keyboard users get the same actions in a menu.
-- Dark mode is first-class: borders, not shadows.
+- Dark mode is first-class; use the shared surface policy for separation and elevation.
 
 **iOS**
 - System chrome first (`TabView`, nav bar, search, sheets via `.mohSheet`).
@@ -98,34 +98,13 @@ If a screen feels busy, remove a control — not the content.
 
 ## Workflow
 
-When asked to design or restyle a screen:
+Identify the screen’s purpose, inspect the existing components, and apply the
+[product and visual policy](../../../docs/engineering-policy.md#product-and-visual-decisions).
+Implement within the user’s scope, or provide concrete findings for a review-only request.
+Use the [scope policy](../../../docs/engineering-policy.md#scope-and-precedence) for reporting;
+there is no mandatory deletion, table, or word count.
 
-1. State the **job** in five words.
-2. Show **what you would cut**.
-3. Propose structure: chrome, primary action, row anatomy.
-4. Implement with existing tokens and components.
-5. If reviewing only, use the table below.
-
-```markdown
-**Job:** [five words]
-
-| Cut | Why |
-|---|---|
-| [element] | [doesn't earn its place] |
-
-| Keep / change | Why |
-|---|---|
-| [element] | [Apple simplicity or Linear function] |
-```
-
-Do not deliver moodboards, new palettes, or "inspiration" screenshots. Deliver the screen.
-
-## Litmus
-
-- Would Apple ship this much chrome? If no, cut.
-- Would Linear make this row faster to scan? If no, densify or clarify metadata.
-- Can a stranger do the one job in ten seconds?
-- Did we add a color, card, or badge that isn't in the tokens? Revert it.
-- What would we cut? Cut it.
+Check that a newcomer can find the primary action, rows are easy to scan, and changes preserve
+accessibility, useful information, and theme consistency.
 
 Shipped patterns: [examples.md](examples.md)

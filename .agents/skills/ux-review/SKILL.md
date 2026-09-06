@@ -78,7 +78,7 @@ On iOS 26, also: **UI layer vs content layer.** System chrome (tabs, toolbars, s
 **MOH litmus (must pass)**
 
 - Five-word job?
-- What would we cut? Cut it.
+- Remove only demonstrably unnecessary complexity under the shared product policy.
 - Grandma: primary task on first try, no tooltip.
 - Ten seconds: obvious next action.
 - Affordance: interactive looks interactive; static looks static. No PUSH/PULL doors.
