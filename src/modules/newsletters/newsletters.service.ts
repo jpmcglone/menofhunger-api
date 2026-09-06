@@ -62,8 +62,8 @@ export class NewslettersService {
     private readonly prefs: NotificationPreferencesService,
   ) {}
 
-  async listAdmin(): Promise<NewsletterAdminDto[]> {
-    const rows = await this.prisma.newsletter.findMany({ orderBy: { createdAt: 'desc' } });
+  async listAdmin(limit?: number): Promise<NewsletterAdminDto[]> {
+    const rows = await this.prisma.newsletter.findMany({ orderBy: { createdAt: 'desc' }, ...(limit === undefined ? {} : { take: limit }) });
     const confirmedEmailCount = await this.countEligible([]);
     const eligibleCounts = await Promise.all(rows.map((row) => this.liveEligibleCount(row)));
     return rows.map((row, i) => this.toAdminDto(row, eligibleCounts[i] ?? 0, confirmedEmailCount));

@@ -1,0 +1,15 @@
+{
+  "title": "Example: test clearer introductions",
+  "decision": "Replace this example with the decision you adopted.",
+  "rationale": "Explain why the evidence supports this action.",
+  "evidence": [
+    {
+      "source": "https://menofhunger.com/admin/feedback",
+      "observation": "Replace with a real observation and its retrieval timestamp.",
+      "observedAt": "2026-09-05T12:00:00Z"
+    }
+  ],
+  "alternatives": ["Describe an alternative you considered."],
+  "successMeasure": "State the metric, current baseline, desired result, and observation period.",
+  "reviewOn": "2026-09-20"
+}

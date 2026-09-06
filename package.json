@@ -8,6 +8,10 @@
     "node": ">=20.19.0"
   },
   "scripts": {
+    "moh": "node tools/mcp/src/cli.mjs",
+    "mcp": "node tools/mcp/src/server.mjs",
+    "mcp:setup": "npm ci --prefix tools/mcp --ignore-scripts --no-audit --no-fund",
+    "mcp:test": "npm test --prefix tools/mcp",
     "dev": "nest start --watch",
     "dev:check": "node scripts/check-port.mjs",
     "dev:kill": "node scripts/kill-port.mjs",

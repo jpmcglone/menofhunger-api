@@ -51,6 +51,7 @@ import { PagesModule } from '../pages/pages.module';
 import { AdminPagesController } from './admin-pages.controller';
 import { NewslettersModule } from '../newsletters/newsletters.module';
 import { AdminNewslettersController } from './admin-newsletters.controller';
+import { AdminOperationsController } from './admin-operations.controller';
 
 @Module({
   imports: [
@@ -80,6 +81,7 @@ import { AdminNewslettersController } from './admin-newsletters.controller';
     NewslettersModule,
   ],
   controllers: [
+    AdminOperationsController,
     AdminUsersController,
     AdminSiteConfigController,
     AdminImageReviewController,
@@ -114,4 +116,3 @@ import { AdminNewslettersController } from './admin-newsletters.controller';
   exports: [AdminDailyDigestCron, AdminIntroBriefCron],
 })
 export class AdminModule {}
-

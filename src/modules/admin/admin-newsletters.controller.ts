@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { CurrentUserId } from '../users/users.decorator';
 import { PrismaService } from '../prisma/prisma.service';
@@ -30,6 +30,8 @@ const scheduleSchema = z.object({
   scheduledAt: z.string().datetime({ offset: true }).or(z.string().datetime()),
 });
 
+const listSchema = z.object({ limit: z.coerce.number().int().min(1).max(50).optional() });
+
 @UseGuards(AdminGuard)
 @Controller('admin/newsletters')
 export class AdminNewslettersController {
@@ -39,8 +41,9 @@ export class AdminNewslettersController {
   ) {}
 
   @Get()
-  async list() {
-    return { data: await this.newsletters.listAdmin() };
+  async list(@Query() query: unknown) {
+    const { limit } = listSchema.parse(query ?? {});
+    return { data: await this.newsletters.listAdmin(limit) };
   }
 
   @Post('preview')

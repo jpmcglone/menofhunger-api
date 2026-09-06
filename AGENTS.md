@@ -14,6 +14,13 @@ Detailed rules remain in `.cursor/rules/` as a single source. Cursor can attach 
 
 ## API essentials
 
+For live company/product checks, prefer the Men of Hunger MCP tools. If the tool
+catalog has not refreshed, use `npm run --silent moh -- tools --json` and the
+matching CLI command; both share the same implementation. Read
+[CLI/MCP guidance](tools/mcp/README.md) for setup, source coverage, and metric limits.
+Never inspect credential files or request session tokens/OTP codes in chat; the
+user signs in through `npm run moh -- login`. Drafts and decisions are local-only.
+
 NestJS + Prisma. Controllers return `{ data }` or `{ data, pagination }`; errors use the global exception filter. Define responses in the owning DTO, validate inputs with Zod, and use injected configuration. Non-admin users receive 404 on admin routes.
 
 For mutations, commit first, emit realtime changes, and dispatch notification/push/email fan-out through `SideEffectsService`. Keep permission-critical results on the request path. Do not introduce module cycles or use `forwardRef()` to conceal them.

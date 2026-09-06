@@ -76,6 +76,13 @@ function makeService() {
 }
 
 describe('NewslettersService', () => {
+  it('bounds CLI list requests without changing the default admin list', async () => {
+    const { svc, prisma } = makeService();
+    await svc.listAdmin(5);
+    expect(prisma.newsletter.findMany).toHaveBeenLastCalledWith({ orderBy: { createdAt: 'desc' }, take: 5 });
+    await svc.listAdmin();
+    expect(prisma.newsletter.findMany).toHaveBeenLastCalledWith({ orderBy: { createdAt: 'desc' } });
+  });
   it('eligibleWhere includes confirmed email, default-true prefs, and excludes bots/banned', () => {
     const { svc } = makeService();
     const where = svc.eligibleWhere();

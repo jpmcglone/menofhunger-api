@@ -4,6 +4,14 @@ Run `./init.sh` for local setup, or `./init.sh --setup-only` to prepare without 
 
 NestJS + Prisma API consumed by the Nuxt website and native SwiftUI app.
 
+## Founder CLI and AI integration
+
+The [Men of Hunger CLI and MCP](tools/mcp/README.md) share 20 tools for analytics,
+member support, billing diagnostics, community research, and local drafts/decisions.
+From this repository: `npm run mcp:setup`, `npm run moh -- login`, then
+`npm run moh -- briefing`. Use `npm run moh -- configure` to connect Codex and
+`npm run --silent moh -- tools --json` for machine-readable tool discovery.
+
 New here? Start with [Getting started](docs/getting-started.md) for local setup, eight core concepts, authentication, and troubleshooting.
 
 ## Requirements
