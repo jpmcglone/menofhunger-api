@@ -1,210 +1,122 @@
 ---
 name: ux-review
-description: Audit web or iOS UI/UX and recommend prioritized changes. Use for explicit UX reviews or screen audits; implement only when the user requests implementation.
+description: Audit web or iOS UI/UX, or compare Figma designs with implemented screens in both directions. Report evidence-backed gaps and recommendations; implement only when requested.
 ---
 
 # UX Review
 
-Review workflow. Follow the [scope policy](../../../docs/engineering-policy.md#scope-and-precedence); implement when requested.
+Follow the [engineering policy](../../../docs/engineering-policy.md), especially scope,
+product decisions, Figma as the visual source of truth, and native platform behavior.
+This skill supports a review; it does not authorize redesign, feature removal, or app changes.
 
-Review each requested platform using its native patterns.
+Read [web.md](web.md) for web and [ios.md](ios.md) for iOS. Inspect only the references
+and surfaces relevant to the requested review. Markdown links within this skill resolve
+from the file containing the link. Resolve implementation paths from the relevant
+repository root, discovered from the workspace and its `AGENTS.md`; do not assume the
+agent’s current working directory or a fixed arrangement of sibling checkouts.
 
-## Where this sits
+## Choose the review
 
-| Skill | Job |
-|---|---|
-| `design-simplicity-principles` | What to ship. Cut features. |
-| `moh-designer` | How a screen should work and look. |
-| `make-interfaces-feel-better` | Pixel polish after structure is right. |
-| **`ux-review`** | Walk a whole platform. Find what fails. Say what to change. |
+- **UX audit:** identify problems that affect understanding, task completion, accessibility,
+  feedback, or consistency. Use visual polish findings when they have concrete value.
+- **Design comparison:** inventory the supplied Figma scope and compare it with the app in
+  both directions. Distinguish missing behavior, visual differences, incomplete designs,
+  and intentional native adaptations. Do not replace this request with a general redesign.
+- **Focused review:** stay with the named screen, component, or journey. A full review covers
+  the requested product scope; include admin when explicitly requested or present in an
+  explicitly comprehensive design comparison. Otherwise report it as outside scope.
 
-Load the relevant design reference only when needed. Read the platform file for each requested platform:
+## Evidence and coverage
 
-- Web → [web.md](web.md)
-- iOS → [ios.md](ios.md)
+Record the Figma file/pages/components, app repositories or revisions, and running build
+when identifiable. A component library is not a full screen specification. An icon asset
+is not proof that its feature is implemented or even intended as a current feature.
 
-## Hard rules
+Inspect the current source and walk the running product when available. The live app is
+evidence of rendered behavior; source is evidence of the checked-out implementation.
+If the running build is older or its revision is unknown, keep those conclusions separate.
+Do not mark code absent just because a deployed build lacks it, or mark behavior working
+just because a function exists. Do not start dev servers or rebuild solely to make a
+read-only audit look more complete; report coverage limits and continue useful inspection.
 
-1. Scope and implementation authority come from the linked scope policy.
-3. **Live UI beats source.** Walk the running product when you can. Code is evidence for *why*, not a substitute for *what it feels like*.
-4. **Structure before polish.** A concentric radius on a screen with three jobs is the wrong finding.
-5. Apply the [product policy](../../../docs/engineering-policy.md#product-and-visual-decisions) before adding or removing UI.
-6. **Stay inside the lodge.** No new palette, typeface, card language, or "inspiration" aesthetic. Tokens already exist.
-7. **Do not port platforms.** Never recommend a web card on iOS or an iOS tab pattern on desktop. Name the native pattern.
+For broad reviews, keep a compact coverage inventory rather than relying on a few example
+screens. Check reusable masters and relevant instances, variants, themes, and breakpoints.
+Distinguish **observed live**, **confirmed in source/design**, and **not verified**.
+State which important states were not exercised; never imply an exhaustive runtime test.
 
-## Taste (do not renegotiate)
+## Preserve the product
 
-Apple decides what is on the screen. Linear decides how the work gets done.
+Before recommending changes, inventory information, actions, permissions, state, and
+navigation that the current implementation provides. Preserve useful behavior unless the
+user authorizes its removal or evidence supports a specific change and replacement path.
+Absence from a mockup is a design gap, not permission to delete the app feature.
 
-- One job per screen, nameable in five words.
-- Content over chrome. The page is the card.
-- The list is the product. Rows are scannable, dense, and calm.
-- One primary action. Everything else is menu, hover, swipe, or one tap deeper.
-- Neutrals for structure. Brass for focus. Semantic color only for its meaning.
-- No consumer-social candy. No enterprise dashboard. No bro-app chrome.
+Check applicable dimensions:
 
-If a recommendation would fail the `moh-designer` litmus, rewrite the recommendation.
+- Signed out, own profile/content, another member, organization/page, admin; membership
+  tiers and permission gates. Distinguish hidden, disabled, locked, and unavailable states.
+- Loading, empty, error/retry, offline/reconnect, submitting, success, stale/cached data.
+- Long text, missing optional fields, media, Dynamic Type/zoom, small widths, light/dark.
+- Active selections, combined filters, reset, drafts, unsaved changes, validation, and
+  background work. A closed menu must communicate selections when they affect the result.
+- Navigation/back behavior, deep links, keyboard/VoiceOver, full hit areas, and reduced motion.
+- Realtime updates, optimistic changes and rollback, unread versus unseen, grouped actors
+  versus event counts, and state preservation after navigation.
 
-## The lens
+These are review dimensions, not a mandatory test matrix for every small task.
 
-Judge every surface through these. Name the one that failed when you write a finding.
+## Evaluate before prescribing
 
-**HIG (Apple)**
+Prioritize task completion, information preservation, accessibility, and feedback over
+cosmetic consistency. Ask whether controls communicate their purpose and current state,
+navigation has a clear return path, and errors offer an appropriate next step.
 
-| Principle | Means here |
-|---|---|
-| Clarity | Legible type, precise icons, labels that remove doubt. "Post" not "Submit." |
-| Deference | Chrome serves content. Dual headers, floating palettes, and card-in-card fail this. |
-| Depth | Layers mean relationships: sheet over page, menu over row — not decorative blur. |
-| Consistency | The pattern learned on Home works on Groups. Same row, same empty, same error. |
-| Feedback | Every act answers. Press, save, fail, and "it's live" are visible. |
-| Direct manipulation | Touch or click the thing, don't operate a remote control for it. Full-row targets. |
+Reuse the approved Figma language and existing semantic components/tokens. Respect native
+navigation, keyboard, sheets, and interaction behavior. A native adaptation is not a defect
+just because it is not pixel-identical to a web mockup; record material differences and
+their rationale. Flag conflicts between Figma, guidance, and implementation explicitly.
 
-On iOS 26, also: **UI layer vs content layer.** System chrome (tabs, toolbars, search, glass) floats. Content scrolls underneath and carries the lodge. Do not put glass on content, and do not layer glass on glass.
+Simplicity is a heuristic, not a quota. Do not automatically cut stats, tabs, secondary
+actions, wrapped chips, inline composers, cards, or type levels. Recommend a change only
+when their particular use causes a concrete problem. Likewise, do not impose fixed toolbar
+counts, animation durations, word counts, skeletons instead of every spinner, or a new
+palette. Keep needed actions discoverable; hover, swipe, and overflow are contextual tools.
 
-**Modern UX (use these names, not a textbook dump)**
+For a proposed removal or demotion, state who uses it, what information or ability survives,
+and where the user can find it afterward. If usage evidence is missing, say so. Do not
+present personal taste as a usability failure or assume infrequent features are disposable.
 
-| Heuristic | Means here |
-|---|---|
-| System status | Loading, sending, live, offline — the user is never guessing. |
-| Speak the user's language | Lodge voice. No product jargon on a first-run screen. |
-| Control and freedom | Back, undo, dismiss. No trap doors. Confirm only destructive acts. |
-| Error prevention | Defaults so good a setting is unnecessary. Don't ask, then reject. |
-| Recognition over recall | Visible state and choices. Don't make them remember a hidden mode. |
-| Flexibility | Power paths (keyboard, swipe, hover) may exist. The basic path must not need them. |
-| Minimalist | Every control is a tax on every future scan. |
-| Recover from errors | Specific, human, next-step. Never raw transport text. |
+## Two-way Figma comparison
 
-**MOH litmus (must pass)**
+Figma is the visual source of truth. When implementing it would lose existing useful
+functionality or information, flag the design gap and update Figma before that migration.
+Do not silently remove the capability or silently diverge from the design.
 
-- Five-word job?
-- Remove only demonstrably unnecessary complexity under the shared product policy.
-- Grandma: primary task on first try, no tooltip.
-- Ten seconds: obvious next action.
-- Affordance: interactive looks interactive; static looks static. No PUSH/PULL doors.
-- Empty / loading / error designed, not leftover.
+For each designed family or screen, record:
 
-Accessibility and correctness beat simplicity when they conflict. Simplicity beats polish.
+1. Figma link and relevant variants/states.
+2. Web and iOS status separately: implemented, partial, missing, intentional adaptation,
+   or not verified. Separate **asset exists**, **component exists**, and **wired into screen**.
+3. Specific Figma-to-app differences, with source links or observations.
+4. App information, behavior, or states absent from Figma that implementation must preserve.
 
-## Method
+Group repeated issues under shared components. List app areas with no Figma coverage
+separately from gaps within designed screens. Do not turn every existing app feature into
+an automatic request for new design work; identify what is needed for the proposed migration.
+Do not copy sample counts, member details, credit prices, or other dynamic data literally.
 
-Do the passes in this order. Do not start with pixels.
+## Report
 
-### 0. Lock scope
+Lead with the consequential findings and their impact. For each actionable finding include
+the surface, concrete evidence, affected platform/state, proposed change, and preservation
+requirements. Separate confirmed findings from hypotheses and untested behavior.
 
-- Platform: the user’s requested platform(s); infer from context when clear.
-- Breadth: **full** (default when they say "full review") or **core loop** (Home → post → profile → notify) if they ask for a slice.
-- Skip admin unless they ask. Admin is a different user.
+Use impact-based priorities such as blocking, important, or polish. **Remove**, **simplify**,
+and **keep** describe recommendations, not severity. Scale structure and length to scope;
+use a coverage table for comprehensive comparisons and concise prose for focused reviews.
+Include implemented/working areas so the user can distinguish work remaining from work done.
 
-Read the platform file. List the walk order. Then walk.
-
-### 1. Inventory
-
-For each surface: name, job in five words, core / secondary / experimental, first-run / daily / rare.
-
-If you cannot name the job, that is already a finding.
-
-### 2. Walk three users
-
-Stay in character. Do not optimize for the person who built it.
-
-| User | Question |
-|---|---|
-| **Stranger** | First 10 seconds. Can I tell what this is and what to do? |
-| **Regular** | Daily loop (open, read, post, check in, reply, see a notification). Any extra tap, extra confirm, extra chrome? |
-| **Edge** | Empty, error, offline, long content, large type, dark mode, smallest width. Does it hold? |
-
-### 3. Passes
-
-On every surface you walk, run these. Stop a pass when the structure is wrong — don't polish a screen you would split.
-
-1. **Job and chrome** — one job, one title, one primary action. Dual headers? Stats row? Three equal CTAs? Cut.
-2. **Wayfinding** — where am I, how did I get here, how do I leave, can I open this in a new tab / pop the stack?
-3. **Rows and lists** — the unit of the product. Full-width, two type levels, metadata that informs, actions on hover/menu/swipe — not a button pile.
-4. **Actions and forms** — primary visible; secondary hidden; safe acts unconfirmed; destructive confirmed; composer obvious.
-5. **States** — skeleton over spinner; empty that starts the next act; error with a next step; live data without a refresh.
-6. **Copy** — short, imperative, second person. Labels that do the verb. No copy that explains the UI.
-7. **Motion and feedback** — 200–300ms, no bounce, interruptible. Press scale. Toasts for confirmation, not for chatter.
-8. **Accessibility** — contrast, hit targets, focus/VoiceOver, Dynamic Type / zoom, reduced motion, labels that name the thing.
-9. **Consistency** — same entity, same anatomy, same words, across the platform.
-10. **Polish last** — concentric radii, optical alignment, tabular nums, image outlines. Only if 1–9 are clean.
-
-### 4. Cross-surface sweep
-
-After the walk, look across screens — not at one more screen.
-
-- Same row used for posts / notifications / members / settings? If not, why.
-- Same words for the same act (`Post`, `Check in`, `Follow`).
-- Badge = unseen. Highlight = unread. Never swapped.
-- Dark and light both intentional.
-- Nav count: is everything in primary nav earning a permanent slot?
-
-## How to recommend
-
-A recommendation is a decision, not a vibe.
-
-### Severity
-
-| Severity | Use when | Typical action |
-|---|---|---|
-| **Cut** | It does not earn its place. Extra chrome, extra tab, extra setting, duplicate path. | Remove or demote one tap deeper. |
-| **Fix** | Users will fail, guess, or get stuck. Broken affordance, a11y miss, HIG/platform violation, wrong job. | Specific structural change. |
-| **Simplify** | It works, but it asks too much. Too many actions, modes, or words. | Collapse, hide, default. |
-| **Polish** | Structure is right; the detail is sloppy. | Token-legal visual/motion fix. |
-| **Keep** | You looked and it earns its place. | Say so. Silence is not a pass. |
-
-Prefer fewer findings. A review that files 40 polishes and misses a dual header has failed.
-
-Order the write-up: Cuts and Fixes first. Simplifies next. Polishes last. Keeps in a short list, not a speech.
-
-### Quality bar for each finding
-
-Every finding must have all of these. If you cannot fill them, you do not have a finding yet.
-
-1. **Surface** — screen / route / component a human can open.
-2. **Job** — five words.
-3. **Saw** — what is on the screen. Concrete. Not "feels cluttered."
-4. **Fails** — one named principle from the lens.
-5. **Change** — the specific thing to do. Name the element to remove, move, or replace. Name the pattern to use (`moh-divide` row, system toolbar, overflow menu).
-6. **Severity** — from the table.
-
-Do not recommend:
-
-- A new aesthetic, palette, display face, or illustration system.
-- Unrequested feature expansion without a concrete user need.
-- Parity with the other platform as a goal.
-- Pixel tweaks on a screen whose job is unclear.
-- "Add onboarding," "add a tooltip," or "add empty-state art" to paper over a bad affordance.
-- Confirmations for safe acts. Toasts for things the list already shows.
-
-Do recommend:
-
-- Cuts, with what the user does instead.
-- One primary action, and where the rest go.
-- The existing component or system control that should be used.
-- Copy in lodge voice when the current string is the problem.
-- Demotion: secondary surfaces out of primary nav, into More / menu / handoff.
-
-### Finding template
-
-```markdown
-### [Severity] [Surface] — [five-word job]
-
-**Saw:** [exactly what's on screen]
-**Fails:** [principle]
-**Change:** [the one thing to do]
-```
-
-## Output
-
-Report prioritized, concrete findings with affected surfaces, the user impact, and the proposed
-or implemented fix. Keep the length proportional to the task; no mandatory table, word count,
-or standalone report. State which surfaces were inspected in code versus exercised live.
-
-## If you get stuck
-
-- You want to add a control → what would we cut instead?
-- You want a new pattern → which shipped pattern in `moh-designer/examples.md` already covers this?
-- You want parity → is this core native, secondary handoff, or experimental?
-- You only have code → say what you could not walk in the live UI.
-- The screen is both a list and an editor → recommend a split or a sheet, don't polish the hybrid.
+An audit does not send messages, spend credits, submit forms, change membership, or mutate
+user content merely to exercise a state. Use existing states or code evidence and explain
+the untested boundary. When implementation is requested later, follow the repository's
+validation matrix and verify the changed behavior against both the design and preservation inventory.

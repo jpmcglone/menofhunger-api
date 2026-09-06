@@ -1,150 +1,59 @@
 # UX review — web
 
-Read this after [SKILL.md](SKILL.md) when the platform is **web**. Do not apply iOS recommendations here.
+Read after [SKILL.md](SKILL.md). The implementation is Nuxt/Vue/PrimeVue in
+`menofhunger-www`; theme tokens live in `assets/css/main.css`. Inspect current navigation
+and layout components rather than assuming a fixed tab or rail arrangement.
 
-Repo: `menofhunger-www`. Tokens: `assets/css/main.css`. Nav model: `composables/useAppNav.ts`. Layout: `layouts/app.vue` (app) and `layouts/default.vue` (marketing).
+## Inspect the requested surfaces
 
-## How to look
+Use the existing running app when available. For a broad daily-use audit, a useful route
+order is Home → post → profile → notifications → chat → explore, followed by the requested
+groups, check-ins, spaces, or secondary areas. For a Figma comparison, the Figma inventory
+determines coverage. Include designed admin surfaces in a comprehensive comparison.
 
-Walk the running app (assume the user has `npm run dev` up). Use the browser. Exercise the flow — don't screenshot one state.
+Inspect relevant desktop and narrow layouts, theme variants, keyboard behavior, and long
+content. A 390px layout and a 320px/zoom check are useful probes when responsive behavior
+matters, not a requirement to repeat every screen in every combination. Record omissions.
+Avoid changing saved preferences merely for inspection; restore temporary viewport changes.
 
-Required viewports on every core surface:
+## Product-specific checks
 
-- Desktop (~1280+): left rail + feed column.
-- Phone (~390): tab bar + More. No hover.
+- **Structure:** keep feeds edge-to-edge and use `moh-divide` for row separators. Check whether
+  repeated headers obscure content; distinguish a useful sticky title from redundant chrome.
+  Popover elevation and grouped cards can serve a purpose; do not ban shadows or cards outright.
+- **Navigation:** internal navigation uses actual anchors/`NuxtLink` so cmd-click, middle-click,
+  and open-in-new-tab work. Check full-row targets without nesting conflicting controls.
+  Changing tabs or filters should preserve in-page state; back/forward and deep links should
+  restore the intended context rather than resetting the feed.
+- **Rows:** inspect the shared post, notification, and member families in their actual contexts.
+  Preserve metadata and actions that support decisions. Long names, missing avatars, rich text,
+  media, quotes, polls, and thread relationships must not cover or displace essential controls.
+- **Selection:** verify sort and scope independently, including combined selections and reset.
+  Keep state understandable when the menu is closed and without relying on color alone.
+- **Actions:** primary actions should be easy to find; frequent secondary actions may remain
+  visible. Hover enhances mouse use but cannot be the sole route for touch or keyboard users.
+  Keep drafts, attachments/alt text, audience rules, scheduling, edit/reply context, validation,
+  progress, error recovery, and optimistic behavior when restyling a composer.
+- **Notifications:** badge count is unseen (`deliveredAt`); row highlight is unread (`readAt`).
+  Grouped event counts and distinct actor counts are different. Preserve actionable invites,
+  post-shaped notifications, safe system copy, and the correct destination for each event.
+- **Data:** initial loading, empty, retry, stale, and reconnect states should be informative.
+  Mutable server state fetches on activation and updates through existing realtime callbacks.
+  Inspect user-facing behavior; do not claim it works solely from a subscription's presence.
+- **Rendering:** inspect both SSR and hydrated behavior when relevant. Do not turn a review into
+  an unsolicited full hydration/build test run; use the engineering validation matrix for edits.
+- **Visual language:** use the current Figma library, semantic colors, typography, and generated
+  shared SVGs. Check actual contrast, rather than assuming a token or a raw color is always safe.
+  Literal example text, counts, and prices in Figma remain dynamic product data in the app.
+- **Accessibility:** clear names for controls, visible focus, logical keyboard order, reachable
+  menus, non-color state cues, appropriate headings, and reduced motion. Use the component's
+  intended hit target (44px for shared compact controls), and verify adjacent targets do not overlap.
+  At zoom/small widths, primary actions and information should remain reachable.
 
-Also check dark and light. Prefer borders over shadows.
+## Avoid false findings
 
-Skip admin unless asked. Skip `/api/*` docs and Sentry example pages.
-
-## Walk order
-
-Do these in order. Stop and write findings as you go; don't batch a 40-screen memory pass.
-
-### First-run (Apple density)
-
-1. Marketing home `/`
-2. Login `/login`
-3. About `/about`
-4. Tiers `/tiers` — only if the job of the review includes conversion
-
-Look for: one idea per section, one CTA, no feature dump, lodge voice. This is not a dashboard.
-
-### Daily loop (Linear density)
-
-5. Home `/home` — feed, compose entry, filters/tabs
-6. Post `/p/:id` — conversation, composer, overflow
-7. Profile `/u/:username` — identity, feed, follow
-8. Notifications `/notifications` — unseen vs unread
-9. Chat `/chat` — inbox + thread
-10. Explore `/explore` — search, discovery
-
-### Lodge loop
-
-11. Groups `/groups` → a group `/g/:slug`
-12. Check-ins `/check-ins`
-13. Spaces `/spaces` → a space `/spaces/:id`
-
-### Secondary (demote, don't polish into primary)
-
-14. Articles, bookmarks, crew, fitness, invite, scheduled, only-me, settings
-15. Radio / daily / leaderboard — ask whether they earn a nav slot at all
-
-On each, ask: would a stranger need this in the first week? If no, it should not compete with Home.
-
-## What to look for
-
-### Chrome and layout
-
-- Dual headers (layout title bar + in-page header). One or the other. `hideTopBar` exists for a reason.
-- Full-page `rounded-* border` wrappers. The page is the card. Edge to edge.
-- Left rail vs mobile tab bar: same jobs, different presentation. Mobile gets 4 tabs + More — is More a junk drawer?
-- Sticky title: quiet, hairline `moh-border`. Not a second product.
-- Filter chips that wrap to two lines. Collapse or cut.
-- Cards in cards, KPI tiles, stats rows above a list. Enterprise. Cut.
-
-### Navigation and links
-
-- Every navigation is a real `<a>` / `NuxtLink`. Right-click and cmd-click must work. Full-row cards use the overlay pattern (see `clickable-rows`).
-- Buttons that only navigate are a finding. Buttons that mutate (Accept, Follow) may stay buttons.
-- In-place tab/filter changes must not remount the page or blow scroll. URL can change; the list stays.
-- Back/forward restores the list you were in, not a different feed offset.
-- Deep links land on the thing, not a generic hub.
-
-### Rows
-
-- Full width. `moh-divide` only — never Tailwind `divide-y`.
-- Two type levels: body + `moh-meta`. A third size is a finding.
-- One tap target. Hover reveals secondary actions. Keyboard gets the same actions in a menu, not hover-only.
-- Avatar + name · time + body + meta. Not a media-card collage.
-- Status is a word or a small mark — not a badge pile, not a tinted row.
-- Long content: clamp with intent, don't collide with actions.
-
-### Actions and composer
-
-- One visible primary: Post, Check in, Join, Save.
-- Overflow / menu for the rest. Three equal buttons in a header is a finding.
-- Safe acts (follow, bookmark, like) — no confirm. Destructive (leave, delete) — confirm.
-- Optimistic update. Waiting for a refresh to see your own post is a Fix.
-- Composer: obvious from Home. Don't hide the main verb behind a mystery icon if the screen's job is "say something."
-
-### States
-
-- Skeleton over spinner on first paint of a list.
-- Empty: one sentence + the action that fills it. No illustration, no three tips, no carousel.
-- Error: `getSafeUserErrorMessage` only. No fetch/HTTP/stack in the UI.
-- Offline / reconnect: Connection banners should inform, not panic, not stack into a wall.
-- Realtime: if another tab or user can change it, this page should patch in place. "I had to refresh" is a Fix.
-
-### Copy
-
-- Lodge voice: short, imperative, second person. See `config/voice.ts`.
-- Labels are verbs: Post, Check in, Follow, Save.
-- Copy that explains the UI ("Click the three dots to…") means the UI failed.
-- Empty states and errors are product copy, not placeholders ("No results", "Something went wrong").
-- Same act, same word, every surface.
-
-### Motion and input
-
-- 200–300ms, `cubic-bezier(0.2, 0, 0, 1)` or spring bounce `0`.
-- Press `scale(0.96)`. No bounce, no confetti, no feed stagger on every visit.
-- Hover is an enhancement. Phone users never see it — essential actions cannot live only there.
-- Keyboard: Tab order matches reading order. Focus ring visible. Menus reachable without a pointer.
-- Hit area ≥ 40×40px. Don't overlap hit areas.
-
-### Visual system
-
-- Only lodge tokens. New color = wrong problem.
-- Serif / Literata only on quotes and daily prompts. Never chrome.
-- Dark mode: borders, not drop shadows. Dividers still `moh-divide`.
-- Images: subtle 1px black/white outline, not a tinted slate ring.
-- Type roles: `moh-h1`, `moh-h2`, `moh-body`, `moh-meta`. A fourth size is a finding.
-- Gutter: `moh-gutter-x`. Don't invent a third inset.
-- Nested radii concentric if a nested surface actually exists. Prefer not nesting surfaces.
-
-### Accessibility (web)
-
-- Contrast on muted text, brass on dark, placeholder text, and hairline borders that carry meaning.
-- Visible `:focus-visible`. Don't remove outlines without a replacement.
-- Icon-only controls have an accessible name.
-- Don't use color alone for verified / premium / check-in / unread.
-- `prefers-reduced-motion` honored.
-- Zoom to 200% and a 320px-wide window: no clipped primary action, no horizontal trap.
-- If it looks like a heading, it is a heading. If it looks like a list, it is a list.
-
-### Consistency sweep (web-specific)
-
-- Home row vs profile row vs group feed row vs notification row — same family?
-- Settings: rows, not cards. Grouped by job, not feature inventory.
-- Marketing vs app: more air on marketing is correct. App pages that look like marketing are a finding. Marketing pages that look like a dashboard are a finding.
-
-## Platform anti-recommendations
-
-Do not suggest:
-
-- Porting iOS tab order or Liquid Glass onto the website.
-- A floating action button as the main compose path on desktop (rail/header already can hold Post).
-- Hover-only essential actions.
-- `window.alert` / unexplained toasts as error UX.
-- New display fonts, gradients, or illustration libraries.
-- Making More into a second product.
+Wrapped controls, more than two type sizes, inline composition, secondary navigation, and
+informative stats are not defects by themselves. State the resulting usability problem.
+Do not force native iOS chrome onto web or reduce desktop capabilities to match a narrow mockup.
+For app functionality absent from Figma, recommend preserving it and documenting the necessary
+states before migration; do not silently hide or delete it.
