@@ -470,7 +470,13 @@ export class NotificationQueryService {
     // (Bell-enabled follows still receive reply/comment notifications separately.)
 
     function groupKey(n: NotificationDto): string | null {
-      if (n.kind === 'boost' && n.subjectPostId) return `boost:post:${n.subjectPostId}`;
+      if (n.kind === 'boost' && n.subjectPostId) {
+        const tier = n.actor?.isOrganization ? 'organization'
+          : n.actor?.premium ? 'premium'
+          : n.actor?.verifiedStatus && n.actor.verifiedStatus !== 'none' ? 'verified' : 'normal';
+        // A group has one arrow: keep each boost tier separate so its color remains truthful.
+        return `boost:post:${n.subjectPostId}:tier:${tier}`;
+      }
       if (n.kind === 'comment' && n.subjectPostId) return `comment:post:${n.subjectPostId}`;
       if (n.kind === 'community_group_member_joined' && n.subjectGroupId) return `community_group_member_joined:group:${n.subjectGroupId}`;
       if (n.kind === 'crew_member_joined' && n.subjectCrewId) return `crew_member_joined:crew:${n.subjectCrewId}`;

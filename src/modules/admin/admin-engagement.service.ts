@@ -71,7 +71,7 @@ export class AdminEngagementService {
     };
     const [health, verification, unanswered, posts] = await Promise.all([
       this.health(),
-      this.prisma.verificationRequest.count({ where: { status: 'pending', user: { bannedAt: null } } }),
+      this.prisma.verificationRequest.count({ where: { status: 'pending', user: { bannedAt: null, verifiedStatus: 'none' } } }),
       this.prisma.post.count({ where: unansweredWhere }),
       this.prisma.post.findMany({ where: unansweredWhere, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: 8,
         select: { id: true, body: true, createdAt: true, user: { select: { username: true } } } }),

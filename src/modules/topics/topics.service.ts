@@ -2,9 +2,8 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import type { PostWithAuthorAndMedia } from '../../common/dto/post.dto';
-import { toPostDto, type TopicCategoryDto, type TopicDto } from '../../common/dto';
-import { AppConfigService } from '../app/app-config.service';
+import type { FeedPost } from '../posts/posts-feed.types';
+import { type TopicCategoryDto, type TopicDto } from '../../common/dto';
 import { PostsService } from '../posts/posts.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
@@ -37,7 +36,6 @@ export class TopicsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly posts: PostsService,
-    private readonly appConfig: AppConfigService,
     private readonly viewerContext: ViewerContextService,
   ) {}
 
@@ -265,7 +263,7 @@ export class TopicsService {
     const rows = await this.prisma.post.findMany({
       where: {
         AND: [
-          { deletedAt: null },
+          { deletedAt: null, isDraft: false },
           { communityGroupId: null },
           { parentId: null },
           visibilityWhere,
@@ -281,31 +279,10 @@ export class TopicsService {
     const slice = rows.slice(0, limit);
     const nextCursor = rows.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
 
-    const postIds = slice.map((p) => p.id);
-    const boosted = params.viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId: params.viewerUserId, postIds }) : new Set<string>();
-    const bookmarksByPostId = params.viewerUserId
-      ? await this.posts.viewerBookmarksByPostId({ viewerUserId: params.viewerUserId, postIds })
-      : new Map<string, { collectionIds: string[] }>();
-
-    const viewerCtx = await this.posts.viewerContext(params.viewerUserId ?? null);
-    const viewerHasAdmin = Boolean(viewerCtx?.siteAdmin);
-    const internalByPostId = viewerHasAdmin && postIds.length > 0 ? await this.posts.ensureBoostScoresFresh(postIds) : null;
-    const scoreByPostId = viewerHasAdmin && postIds.length > 0 ? await this.posts.computeScoresForPostIds(postIds) : undefined;
-
-    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const posts = slice.map((p) => {
-      const base = internalByPostId?.get(p.id);
-      const score = scoreByPostId?.get(p.id);
-      return toPostDto(p as PostWithAuthorAndMedia, publicBaseUrl, {
-        viewerHasBoosted: boosted.has(p.id),
-        viewerHasBookmarked: bookmarksByPostId.has(p.id),
-        viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
-        includeInternal: viewerHasAdmin,
-        internalOverride:
-          base || (typeof score === 'number' ? { score } : undefined)
-            ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
-            : undefined,
-      });
+    const posts = await this.posts.composeFeedPostDtos({
+      viewerUserId: params.viewerUserId,
+      filteredPosts: slice as FeedPost[],
+      collapsedItemsByItemId: new Map(),
     });
 
     return { posts, nextCursor };
@@ -358,7 +335,7 @@ export class TopicsService {
     const rows = await this.prisma.post.findMany({
       where: {
         AND: [
-          { deletedAt: null },
+          { deletedAt: null, isDraft: false },
           { communityGroupId: null },
           { parentId: null },
           visibilityWhere,
@@ -374,31 +351,10 @@ export class TopicsService {
     const slice = rows.slice(0, limit);
     const nextCursor = rows.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
 
-    const postIds = slice.map((p) => p.id);
-    const boosted = params.viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId: params.viewerUserId, postIds }) : new Set<string>();
-    const bookmarksByPostId = params.viewerUserId
-      ? await this.posts.viewerBookmarksByPostId({ viewerUserId: params.viewerUserId, postIds })
-      : new Map<string, { collectionIds: string[] }>();
-
-    const viewerCtx = await this.posts.viewerContext(params.viewerUserId ?? null);
-    const viewerHasAdmin = Boolean(viewerCtx?.siteAdmin);
-    const internalByPostId = viewerHasAdmin && postIds.length > 0 ? await this.posts.ensureBoostScoresFresh(postIds) : null;
-    const scoreByPostId = viewerHasAdmin && postIds.length > 0 ? await this.posts.computeScoresForPostIds(postIds) : undefined;
-
-    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const posts = slice.map((p) => {
-      const base = internalByPostId?.get(p.id);
-      const score = scoreByPostId?.get(p.id);
-      return toPostDto(p as PostWithAuthorAndMedia, publicBaseUrl, {
-        viewerHasBoosted: boosted.has(p.id),
-        viewerHasBookmarked: bookmarksByPostId.has(p.id),
-        viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
-        includeInternal: viewerHasAdmin,
-        internalOverride:
-          base || (typeof score === 'number' ? { score } : undefined)
-            ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
-            : undefined,
-      });
+    const posts = await this.posts.composeFeedPostDtos({
+      viewerUserId: params.viewerUserId,
+      filteredPosts: slice as FeedPost[],
+      collapsedItemsByItemId: new Map(),
     });
 
     return { posts, nextCursor };

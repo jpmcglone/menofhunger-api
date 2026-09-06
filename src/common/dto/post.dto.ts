@@ -139,6 +139,7 @@ export type PostDto = {
   viewerBookmarkCollectionIds?: string[];
   /** True if the viewer has created a flat repost of this post. */
   viewerHasReposted?: boolean;
+  viewerHasCommented?: boolean;
   /** True if the viewer has viewed this post (exists in PostView table). */
   viewerHasViewed?: boolean;
   /** Viewer's last dwell on this post (ISO). Used for For You seen-aware thread rollup. */
@@ -300,6 +301,7 @@ export function toPostDto(
     viewerCreatorSkipped?: boolean;
     viewerBlockStatus?: 'viewer_blocked' | 'viewer_blocked_by' | null;
     viewerHasReposted?: boolean;
+  viewerHasCommented?: boolean;
     viewerHasViewed?: boolean;
     viewerLastSeenAt?: string;
     /** Pre-built nested DTO for a flat repost's original post. */
@@ -535,6 +537,7 @@ export function toPostDto(
     ...(typeof opts?.viewerHasBookmarked === 'boolean' ? { viewerHasBookmarked: opts.viewerHasBookmarked } : {}),
     ...(Array.isArray(opts?.viewerBookmarkCollectionIds) ? { viewerBookmarkCollectionIds: opts.viewerBookmarkCollectionIds } : {}),
     ...(typeof opts?.viewerHasReposted === 'boolean' ? { viewerHasReposted: opts.viewerHasReposted } : {}),
+    ...(typeof opts?.viewerHasCommented === 'boolean' ? { viewerHasCommented: opts.viewerHasCommented } : {}),
     ...(typeof opts?.viewerHasViewed === 'boolean' ? { viewerHasViewed: opts.viewerHasViewed } : {}),
     ...(opts?.viewerLastSeenAt ? { viewerLastSeenAt: opts.viewerLastSeenAt } : {}),
     ...(typeof opts?.viewerBlockStatus !== 'undefined' ? { viewerBlockStatus: opts.viewerBlockStatus ?? null } : {}),

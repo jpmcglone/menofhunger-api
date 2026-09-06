@@ -359,6 +359,19 @@ describe('UploadsService.commitAvatarUpload', () => {
     expect(commandNames).toContain('DeleteObjectCommand');
   });
 
+  it('rejects a non-square profile image before updating the user', async () => {
+    const { service, deps } = makeService();
+    const png = await makePng(640, 480);
+    const send = stubS3(service, (name) => {
+      if (name === 'HeadObjectCommand') return { ContentType: 'image/png', ContentLength: png.length };
+      if (name === 'GetObjectCommand') return { Body: Readable.from(png) };
+      return {};
+    });
+    await expect(service.commitAvatarUpload('u1', 'dev/avatars/u1/portrait.png')).rejects.toThrow(/1:1/);
+    expect(deps.prisma.user.update).not.toHaveBeenCalled();
+    expect(send.mock.calls.some(([cmd]) => cmd.constructor.name === 'DeleteObjectCommand')).toBe(true);
+  });
+
   it('persists the new avatar, invalidates caches, emits realtime, and deletes the old object', async () => {
     const { service, deps } = makeService();
     const oldKey = 'dev/avatars/u1/old.png';
@@ -366,10 +379,12 @@ describe('UploadsService.commitAvatarUpload', () => {
     deps.prisma.user.findUnique.mockResolvedValue(fullUserRow({ avatarKey: oldKey }));
     const updated = fullUserRow({ avatarKey: newKey, avatarUpdatedAt: new Date() });
     deps.prisma.user.update.mockResolvedValue(updated);
+    const png = await makePng(640, 640);
     const send = stubS3(service, (name) => {
       if (name === 'HeadObjectCommand') {
         return { ContentType: 'image/png', ContentLength: 1024 };
       }
+      if (name === 'GetObjectCommand') return { Body: Readable.from(png) };
       return {};
     });
 
@@ -435,6 +450,13 @@ describe('UploadsService.commitBannerUpload', () => {
     );
     const commandNames = send.mock.calls.map((c: any[]) => c[0].constructor.name);
     expect(commandNames).toContain('DeleteObjectCommand');
+  });
+
+  it('rejects a near-3:1 banner instead of accepting the old tolerance', async () => {
+    const { service, deps } = makeService();
+    bannerS3(service, await makePng(1501, 500));
+    await expect(service.commitBannerUpload('u1', 'dev/covers/u1/off.png')).rejects.toThrow(/3:1/);
+    expect(deps.prisma.user.update).not.toHaveBeenCalled();
   });
 
   it('rejects banners below the minimum dimensions', async () => {

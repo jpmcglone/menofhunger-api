@@ -32,6 +32,24 @@ Prefer short labels, visible affordances, and native platform patterns. Heuristi
 counts, modifier lengths, animation values, and word counts are prompts for judgment, not hard
 limits. Correctness, security/privacy, and accessibility take precedence over visual minimalism.
 
+## Figma is the visual source of truth
+
+Design and revise product UI in [Men of Hunger — UI Library](https://www.figma.com/design/YnuRSJB7p90n9jEY4mb4RN)
+first, then implement the approved visual direction in web and iOS, unless the user explicitly
+requests another order or source. Reuse the library's components, native light/dark variables,
+icon states, and typography. Update shared masters rather than creating detached copies.
+
+Inspect the existing implementation before redesigning. Preserve its information, permissions,
+accessibility, interactions, and platform behavior; an incomplete mockup is not permission to
+remove a feature. Keep an inventory when a screen has many states or actions. Export shared
+vector assets and reuse semantic components across both clients. Verify the result against
+Figma at relevant screen sizes and in both themes. Record component links in the implementation
+handoff so later changes can follow the same source.
+
+Behavior-only bug fixes do not require a cosmetic redesign. If a fix changes visible behavior
+or introduces a new UI state, reflect that state in Figma as part of the work. Explicit user
+instructions always take precedence over this default workflow.
+
 ## Realtime contracts and ownership
 
 Choose the payload from the operation:
@@ -52,6 +70,22 @@ simple lifecycle orchestration. Reusable reducers, cross-store effects, and comp
 logic belong in services/controllers/stores. Screens must not create private sockets or parse
 raw transport messages. Clean up subscriptions and pending work with their owner.
 
+## Media ownership and review
+
+Every feature that stores or embeds uploaded media must register all references in
+`AdminImageReviewService` before shipping. Cover direct object keys, public URLs,
+JSON/rich-text embeds, thumbnails, and every retained lifecycle state (including
+scheduled content, drafts, archives, and sent emails). Upload deduplication/index
+records are not content ownership. Reuse the central resolver; do not add a separate
+orphan scan that can disagree with media review.
+
+Update admin ownership labels/links and deletion behavior with the feature. Recheck
+ownership when deleting stale orphan selections, retain media used by sent email,
+and test both positive references and genuinely unreferenced assets. Maintain the
+schema coverage check when adding a media field; a field with an unconventional name
+or JSON payload needs explicit review too. Never treat an unregistered media feature
+as evidence that its assets are safe to remove.
+
 ## Development processes
 
 The user owns persistent dev servers and watchers; do not start, restart, or kill them without
@@ -65,19 +99,21 @@ build exception. Keep that diff separate from application edits. Preserve unrela
 ## Validation matrix
 
 This is the only task-to-check matrix. Rules and skills link here instead of restating it.
-Run focused checks while iterating, then one applicable final gate. Reuse successful results
-when the relevant code has not changed. Do not repeat a build's prebuild checks separately.
+Run only the tests needed to verify the work just changed. Full test suites run separately
+when explicitly requested or scheduled by the user. Reuse successful results when the relevant
+code has not changed. Do not rerun a suite or build without a new change, failure, or unresolved
+risk. Choose direct build commands when a package prebuild hook would run unrelated tests.
 
 | Change | Focused verification | Final verification |
 | --- | --- | --- |
 | Guidance/docs only | Metadata, relative links, policy sync (`--check`); shell syntax if scripts change | No app build or test suite solely for prose |
 | Web copy/style, no behavior | Lint changed files; inspect affected UI | Broaden only for unresolved risk |
-| Web behavior, rendering, contracts, or config | Relevant unit/component tests; targeted lint/types as needed | `npm run lint`, then `npm run build` (prebuild includes typecheck, contract validation, all unit tests) |
+| Web behavior, rendering, contracts, or config | Relevant unit/component tests; targeted lint/types as needed | Changed-file lint, typecheck, applicable contracts, focused tests, then `npx nuxt build` |
 | Web SSR/hydration | Compare server HTML and first client render; exercise the changed route | Above web gate plus `npm run check:hydration`; include affected public routes, and authenticated paths when applicable |
-| API behavior/config | Relevant tests and typecheck as needed | `npm run lint`, `npm run build:typecheck`, `npm run build` (module graph included), `npm test -- --runInBand` |
+| API behavior/config | Relevant tests and typecheck as needed | Changed-file lint, `npm run build:typecheck`, `npm run build` (module graph included), and only the relevant Jest test paths |
 | Prisma/schema | Generate and review SQL; verify target before applying locally; regenerate client/contracts first | API gate once after generation, plus affected consumer checks; never apply production migrations as an implicit test |
 | Swift copy/layout with no state/type change | Format changed source AND tests, strict formatter/SwiftLint; inspect UI | Build if compile risk; no full suite for a trivial visual change |
-| Swift behavior, model, transport, or project config | Changed-file format/strict lint plus relevant tests | `./scripts/check.sh` once (read-only source checks, build, tests), or equivalent individual steps |
+| Swift behavior, model, transport, or project config | Changed-file format/strict lint plus relevant tests | Changed-file format/lint, `xcodebuild build`, and relevant tests selected with `-only-testing` |
 | Navigation, scrolling, keyboard, sheets, UIKit bridges | Above platform checks | Focused simulator/browser interaction including the changed failure/edge state |
 | Shared contract/event | DTO plus both client decoding/merge tests for changed consumers | Respective platform gates; exercise missing/null, audience filtering, and echo deduplication when relevant |
 

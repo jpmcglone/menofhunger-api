@@ -87,7 +87,16 @@ export type AssetPrimaryType =
   | 'poll'
   | 'article'
   | 'article_inline'
+  | 'announcement'
+  | 'newsletter'
   | 'orphan';
+
+type PublicationRef = {
+  id: string;
+  title: string;
+  status: string;
+  isInline: boolean;
+};
 
 type AssetRefs = {
   posts: PostRef[];
@@ -97,8 +106,14 @@ type AssetRefs = {
   crews: CrewRef[];
   polls: PollRef[];
   articles: ArticleRef[];
+  announcements: PublicationRef[];
+  newsletters: PublicationRef[];
   primaryType: AssetPrimaryType;
 };
+
+function emptyAssetRefs(): AssetRefs {
+  return { posts: [], messages: [], users: [], groups: [], crews: [], polls: [], articles: [], announcements: [], newsletters: [], primaryType: 'orphan' };
+}
 
 // ============================================================
 
@@ -272,6 +287,8 @@ export class AdminImageReviewService {
    *   Crew.coverImageUrl             (full URL — crew wide banner)
    *   PostPollOption.imageR2Key    (poll option images)
    *   Article.thumbnailR2Key       (article cover thumbnails)
+   *   Announcement.imageKey       (notices and ads, including drafts/archived)
+   *   Newsletter.imageKey/bodyJson (covers and embeds, including sent history)
    *   Article.body (TipTap JSON)   (inline article-media/ images via attrs.src URL)
    * ============================================================
    */
@@ -280,7 +297,7 @@ export class AdminImageReviewService {
     const keySet = new Set(keys.filter(Boolean));
 
     for (const key of keySet) {
-      result.set(key, { posts: [], messages: [], users: [], groups: [], crews: [], polls: [], articles: [], primaryType: 'orphan' });
+      result.set(key, emptyAssetRefs());
     }
 
     if (!keySet.size) return result;
@@ -440,7 +457,7 @@ export class AdminImageReviewService {
 
     // Path-suffix fallback for host/CDN drift (exact IN miss). Cap scan size.
     const unresolvedForGroups = [...keySet].filter((k) => result.get(k)!.groups.length === 0);
-    if (unresolvedForGroups.length > 0 && unresolvedForGroups.length <= 40) {
+    if (unresolvedForGroups.length > 0) {
       const suffixGroups = await this.prisma.communityGroup.findMany({
         where: {
           OR: unresolvedForGroups.flatMap((k) => [
@@ -449,7 +466,6 @@ export class AdminImageReviewService {
           ]),
         },
         select: { id: true, slug: true, name: true, avatarImageUrl: true, coverImageUrl: true },
-        take: 200,
       });
       for (const g of suffixGroups) {
         const avatarKey = matchStoredAssetToKey(g.avatarImageUrl, keySet, urlToKey);
@@ -511,7 +527,7 @@ export class AdminImageReviewService {
     }
 
     const unresolvedForCrews = [...keySet].filter((k) => result.get(k)!.crews.length === 0);
-    if (unresolvedForCrews.length > 0 && unresolvedForCrews.length <= 40) {
+    if (unresolvedForCrews.length > 0) {
       const suffixCrews = await this.prisma.crew.findMany({
         where: {
           OR: unresolvedForCrews.flatMap((k) => [
@@ -520,7 +536,6 @@ export class AdminImageReviewService {
           ]),
         },
         select: { id: true, slug: true, name: true, avatarImageUrl: true, coverImageUrl: true },
-        take: 200,
       });
       for (const c of suffixCrews) {
         const avatarKey = matchStoredAssetToKey(c.avatarImageUrl, keySet, urlToKey);
@@ -602,7 +617,6 @@ export class AdminImageReviewService {
           OR: keysNeedingBodyScan.map((k) => ({ body: { contains: k } })),
         },
         select: { id: true, slug: true, title: true, authorId: true, body: true },
-        take: 500,
       });
       for (const a of bodyArticles) {
         for (const key of keysNeedingBodyScan) {
@@ -620,6 +634,14 @@ export class AdminImageReviewService {
       }
     }
 
+    // Publication media remains in use in every lifecycle state. Sent email images
+    // must keep working even after the send is over; draft assets are not orphans.
+    const publications = await this.resolvePublicationReferences(keyArr);
+    for (const [key, refs] of publications) {
+      result.get(key)!.announcements = refs.announcements;
+      result.get(key)!.newsletters = refs.newsletters;
+    }
+
     // ── Determine primaryType for each key ─────────────────────────────────
     for (const refs of result.values()) {
       if (refs.posts.some((p) => !p.isThumbnail)) refs.primaryType = 'post';
@@ -632,10 +654,44 @@ export class AdminImageReviewService {
       else if (refs.articles.some((a) => a.isInline)) refs.primaryType = 'article_inline';
       else if (refs.posts.some((p) => p.isThumbnail)) refs.primaryType = 'post_thumbnail';
       else if (refs.messages.some((m) => m.isThumbnail)) refs.primaryType = 'message_thumbnail';
+      else if (refs.announcements.length) refs.primaryType = 'announcement';
+      else if (refs.newsletters.length) refs.primaryType = 'newsletter';
       else refs.primaryType = 'orphan';
     }
 
     return result;
+  }
+
+  private async resolvePublicationReferences(keys: string[]) {
+    const refs = new Map(keys.map((key) => [key, {
+      announcements: [] as PublicationRef[], newsletters: [] as PublicationRef[],
+    }]));
+    if (!keys.length) return refs;
+    const [announcements, newsletters] = await Promise.all([
+      this.prisma.announcement.findMany({
+        where: { imageKey: { in: keys } },
+        select: { id: true, title: true, status: true, imageKey: true },
+      }),
+      this.prisma.newsletter.findMany({
+        where: { OR: [{ imageKey: { in: keys } }, ...keys.map((key) => ({ bodyJson: { contains: key } }))] },
+        select: { id: true, subject: true, status: true, imageKey: true, bodyJson: true },
+      }),
+    ]);
+    for (const row of announcements) {
+      if (row.imageKey) refs.get(row.imageKey)?.announcements.push({
+        id: row.id, title: row.title, status: row.status, isInline: false,
+      });
+    }
+    for (const row of newsletters) {
+      for (const key of keys) {
+        const cover = row.imageKey === key;
+        const inline = articleBodyContainsKey(row.bodyJson, key);
+        if (cover || inline) refs.get(key)!.newsletters.push({
+          id: row.id, title: row.subject, status: row.status, isInline: !cover,
+        });
+      }
+    }
+    return refs;
   }
 
   async list(params: {
@@ -703,9 +759,7 @@ export class AdminImageReviewService {
 
       for (const a of page) {
         scannedThrough = { r2LastModified: a.r2LastModified ?? a.createdAt, id: a.id };
-        const refs = refsMap.get(a.r2Key) ?? {
-          posts: [], messages: [], users: [], groups: [], crews: [], polls: [], articles: [], primaryType: 'orphan' as AssetPrimaryType,
-        };
+        const refs = refsMap.get(a.r2Key) ?? emptyAssetRefs();
         const { primaryType } = refs;
         if (onlyOrphans && primaryType !== 'orphan') continue;
 
@@ -742,6 +796,8 @@ export class AdminImageReviewService {
           articleId: articleRef?.articleId ?? null,
           articleSlug: articleRef?.slug ?? null,
           messageId: msgRef?.messageId ?? null,
+          announcementId: refs.announcements[0]?.id ?? null,
+          newsletterId: refs.newsletters[0]?.id ?? null,
         });
         if (out.length >= take) break;
       }
@@ -767,9 +823,7 @@ export class AdminImageReviewService {
     if (!a) throw new NotFoundException('Not found.');
 
     const refsMap = await this.resolveAllReferences([a.r2Key]);
-    const refs = refsMap.get(a.r2Key) ?? {
-      posts: [], messages: [], users: [], groups: [], crews: [], polls: [], articles: [], primaryType: 'orphan' as AssetPrimaryType,
-    };
+    const refs = refsMap.get(a.r2Key) ?? emptyAssetRefs();
 
     const publicUrl = this.publicUrlForKey(a.deletedAt ? null : a.r2Key);
 
@@ -814,11 +868,13 @@ export class AdminImageReviewService {
         crews: refs.crews,
         polls: refs.polls,
         articles: refs.articles,
+        announcements: refs.announcements,
+        newsletters: refs.newsletters,
       },
     };
   }
 
-  async deleteById(params: { id: string; adminUserId: string; reason?: string | null }) {
+  async deleteById(params: { id: string; adminUserId: string; reason?: string | null; onlyOrphans?: boolean }) {
     const assetId = (params.id ?? '').trim();
     if (!assetId) throw new NotFoundException('Not found.');
     const reason = (params.reason ?? '').trim() || null;
@@ -828,6 +884,20 @@ export class AdminImageReviewService {
     if (!a) throw new NotFoundException('Not found.');
     if (a.deletedAt) {
       return { success: true, alreadyDeleted: true };
+    }
+
+    if (params.onlyOrphans) {
+      const refs = (await this.resolveAllReferences([a.r2Key])).get(a.r2Key)!;
+      if (refs.primaryType !== 'orphan') {
+        throw new BadRequestException('This media is now in use and is no longer an orphan. Refresh media review before deleting.');
+      }
+    }
+
+    // Recheck on deletion, not just when the review list was loaded. Bulk deletion
+    // uses this same path, so stale orphan selections cannot erase publication media.
+    const publicationRefs = (await this.resolvePublicationReferences([a.r2Key])).get(a.r2Key)!;
+    if (publicationRefs.announcements.length || publicationRefs.newsletters.length) {
+      throw new BadRequestException('This media is still used by an announcement or newsletter. Remove or replace it there first; sent newsletter images must be retained.');
     }
 
     const now = new Date();
@@ -967,7 +1037,6 @@ export class AdminImageReviewService {
       const articlesWithBody = await tx.article.findMany({
         where: { body: { contains: r2Key } },
         select: { id: true, body: true },
-        take: 100,
       });
       let articleInlineCount = 0;
       for (const art of articlesWithBody) {
@@ -1017,6 +1086,7 @@ export class AdminImageReviewService {
     ids: string[];
     adminUserId: string;
     reason: string;
+    onlyOrphans?: boolean;
   }): Promise<{ deleted: number; skipped: number; errors: Array<{ id: string; message: string }> }> {
     const ids = [...new Set(params.ids.map((id) => id.trim()).filter(Boolean))].slice(0, 200);
     let deleted = 0;
@@ -1025,7 +1095,7 @@ export class AdminImageReviewService {
 
     for (const id of ids) {
       try {
-        const result = await this.deleteById({ id, adminUserId: params.adminUserId, reason: params.reason });
+        const result = await this.deleteById({ id, adminUserId: params.adminUserId, reason: params.reason, onlyOrphans: params.onlyOrphans });
         if (result.alreadyDeleted) skipped += 1;
         else deleted += 1;
       } catch (err) {

@@ -74,24 +74,15 @@ export class UserVerificationService {
     const previousUnverifiedAt = current.unverifiedAt ?? null;
 
     if (alreadyVerified) {
-      // Still mark any pending request approved when an admin is reviewing a queue item.
-      if (params.requestId && params.adminUserId) {
-        await this.markRequestApproved({
-          requestId: params.requestId,
-          adminUserId: params.adminUserId,
-          adminNote: params.adminNote ?? null,
-          now,
-        }).catch(() => undefined);
-        try {
-          this.presenceRealtime.emitAdminUpdated(params.adminUserId, {
-            kind: 'verification',
-            action: 'reviewed',
-            id: params.requestId,
-          });
-        } catch {
-          // Best-effort
-        }
-      }
+      await this.prisma.verificationRequest.updateMany({
+        where: { userId, status: 'pending' },
+        data: {
+          status: 'approved', reviewedAt: now, rejectionReason: null,
+          ...(params.adminUserId ? { reviewedByAdminId: params.adminUserId } : {}),
+          ...(params.adminNote != null ? { adminNote: params.adminNote } : {}),
+        },
+      });
+      await this.notifyAdminQueueChanged('reviewed', params.requestId);
       return { verified: false, alreadyVerified: true, userId, previousUnverifiedAt };
     }
 
@@ -105,32 +96,15 @@ export class UserVerificationService {
         },
       });
 
-      if (params.requestId && params.adminUserId) {
-        await tx.verificationRequest.updateMany({
-          where: { id: params.requestId, status: 'pending' },
-          data: {
-            status: 'approved',
-            provider: 'manual',
-            reviewedAt: now,
-            reviewedByAdminId: params.adminUserId,
-            adminNote: params.adminNote ?? null,
-            rejectionReason: null,
-          },
-        });
-      }
-
-      // Clear any other stale pending requests for this user (e.g. auto-verify).
+      // Verification resolves every pending request, regardless of the entry point.
+      // Preserve the original provider so the video-call agreement remains auditable.
       await tx.verificationRequest.updateMany({
-        where: {
-          userId,
-          status: 'pending',
-          ...(params.requestId ? { id: { not: params.requestId } } : {}),
-        },
+        where: { userId, status: 'pending' },
         data: {
           status: 'approved',
-          provider: 'manual',
           reviewedAt: now,
           ...(params.adminUserId ? { reviewedByAdminId: params.adminUserId } : {}),
+          ...(params.adminNote != null ? { adminNote: params.adminNote } : {}),
           rejectionReason: null,
         },
       });
@@ -166,13 +140,7 @@ export class UserVerificationService {
     this.sideEffects.dispatch('user.verified', { userId });
 
     try {
-      if (params.adminUserId && params.requestId) {
-        this.presenceRealtime.emitAdminUpdated(params.adminUserId, {
-          kind: 'verification',
-          action: 'reviewed',
-          id: params.requestId,
-        });
-      }
+      await this.notifyAdminQueueChanged('reviewed', params.requestId);
       await this.usersPublicRealtime.emitPublicProfileUpdated(userId);
       void this.usersMeRealtime.emitMeUpdated(userId, 'verification_status_changed');
     } catch {
@@ -183,22 +151,19 @@ export class UserVerificationService {
     return { verified: true, alreadyVerified: false, userId, previousUnverifiedAt };
   }
 
-  private async markRequestApproved(params: {
-    requestId: string;
-    adminUserId: string;
-    adminNote: string | null;
-    now: Date;
-  }): Promise<void> {
-    await this.prisma.verificationRequest.updateMany({
-      where: { id: params.requestId, status: 'pending' },
-      data: {
-        status: 'approved',
-        provider: 'manual',
-        reviewedAt: params.now,
-        reviewedByAdminId: params.adminUserId,
-        adminNote: params.adminNote,
-        rejectionReason: null,
-      },
-    });
+  /** Every admin sees queue changes, including approvals outside the request screen. */
+  async notifyAdminQueueChanged(action: 'created' | 'reviewed', requestId?: string | null): Promise<void> {
+    try {
+      const admins = await this.prisma.user.findMany({
+        where: { siteAdmin: true, bannedAt: null }, select: { id: true },
+      });
+      for (const admin of admins) {
+        this.presenceRealtime.emitAdminUpdated(admin.id, {
+          kind: 'verification', action, ...(requestId ? { id: requestId } : {}),
+        });
+      }
+    } catch (error) {
+      this.logger.warn(`Could not refresh verification queue: ${error}`);
+    }
   }
 }

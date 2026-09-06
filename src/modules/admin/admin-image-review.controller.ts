@@ -17,11 +17,13 @@ const listSchema = z.object({
 
 const deleteSchema = z.object({
   reason: z.string().trim().min(1).max(200),
+  onlyOrphans: z.boolean().optional(),
 });
 
 const bulkDeleteSchema = z.object({
   ids: z.array(z.string().trim().min(1)).min(1).max(200),
   reason: z.string().trim().min(1).max(200),
+  onlyOrphans: z.boolean().optional(),
 });
 
 @UseGuards(AdminGuard)
@@ -54,7 +56,7 @@ export class AdminImageReviewController {
   async bulkDel(@Req() req: Request, @Body() body: unknown) {
     const parsed = bulkDeleteSchema.parse(body);
     const adminUserId = (req as AdminRequest).user?.id ?? '';
-    const result = await this.svc.deleteManyByIds({ ids: parsed.ids, adminUserId, reason: parsed.reason });
+    const result = await this.svc.deleteManyByIds({ ids: parsed.ids, adminUserId, reason: parsed.reason, onlyOrphans: parsed.onlyOrphans });
     return { data: result };
   }
 
@@ -62,7 +64,7 @@ export class AdminImageReviewController {
   async del(@Req() req: Request, @Param('assetId') assetId: string, @Body() body: unknown) {
     const parsed = deleteSchema.parse(body);
     const adminUserId = (req as AdminRequest).user?.id ?? '';
-    const result = await this.svc.deleteById({ id: assetId, adminUserId, reason: parsed.reason });
+    const result = await this.svc.deleteById({ id: assetId, adminUserId, reason: parsed.reason, onlyOrphans: parsed.onlyOrphans });
     return { data: result };
   }
 }

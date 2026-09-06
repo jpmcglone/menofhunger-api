@@ -745,7 +745,7 @@ export class PostsFeedQueryService {
     const fetchIds = ancestorAndEmbedIds.filter((id) => !pageIdSet.has(id));
     const allPostIds = [...pageIdSet, ...ancestorAndEmbedIds];
 
-    const [viewer, fetchedEmbeds, boosted, bookmarksByPostId, votedPollOptionIdByPostId, blockSets, repostedByPostId, lastSeenAtByPostId] =
+    const [viewer, fetchedEmbeds, boosted, bookmarksByPostId, votedPollOptionIdByPostId, blockSets, repostedByPostId, lastSeenAtByPostId, commentedByPostId] =
       await Promise.all([
         this.enrichment.viewerContext(viewerUserId),
         fetchIds.length ? this.getByIds({ viewerUserId, ids: fetchIds }) : Promise.resolve([] as FeedPost[]),
@@ -767,6 +767,9 @@ export class PostsFeedQueryService {
         viewerUserId
           ? this.enrichment.viewerLastSeenAtByPostId({ viewerUserId, postIds: allPostIds })
           : Promise.resolve(new Map<string, Date>()),
+        viewerUserId
+          ? this.enrichment.viewerCommentedPostIds({ viewerUserId, postIds: allPostIds })
+          : Promise.resolve(new Set<string>()),
       ]);
     const viewedByPostId = new Set(lastSeenAtByPostId.keys());
 
@@ -838,6 +841,7 @@ export class PostsFeedQueryService {
       blockedByViewer,
       viewerBlockedBy,
       repostedByPostId,
+      commentedByPostId,
       repostedPostMap,
       quotedPostMap,
       groupPreviewByGroupId,
@@ -4241,7 +4245,7 @@ export class PostsFeedQueryService {
     const { viewerUserId, postId, limit, cursor } = params;
 
     const post = await this.prisma.post.findFirst({
-      where: { id: postId, deletedAt: null },
+      where: { id: postId, deletedAt: null, isDraft: false },
       select: { id: true, visibility: true, userId: true, communityGroupId: true },
     });
     if (!post) throw new NotFoundException('Post not found.');
@@ -4261,6 +4265,7 @@ export class PostsFeedQueryService {
       where: {
         quotedPostId: postId,
         deletedAt: null,
+        isDraft: false,
         visibility: { in: allowed },
         kind: { not: 'repost' },
         ...(cursor ? { createdAt: { lt: new Date(cursor) } } : {}),
@@ -4277,6 +4282,11 @@ export class PostsFeedQueryService {
     const hasMore = quotes.length > limit;
     const page = hasMore ? quotes.slice(0, limit) : quotes;
     const nextCursor = hasMore ? page[page.length - 1].createdAt.toISOString() : null;
-    return { posts: page as unknown as FeedPost[], nextCursor };
+    const visibleQuotes = await this.filterPostsByCommunityGroupAccess({
+      viewerUserId,
+      viewer,
+      posts: page as unknown as FeedPost[],
+    });
+    return { posts: visibleQuotes, nextCursor };
   }
 }

@@ -19,6 +19,8 @@ That is the taste. Apple decides what is on the screen. Linear decides how the w
 | `ux-review` | Full-platform UI/UX audit. Review and implement within the user’s requested scope. |
 | `moh-marketing` | Words outside the product. |
 
+Follow the [Figma-first design workflow](../../../docs/engineering-policy.md#figma-is-the-visual-source-of-truth) before implementation, unless the user specifies otherwise.
+
 Follow the [product and visual policy](../../../docs/engineering-policy.md#product-and-visual-decisions).
 
 ## The synthesis
@@ -92,7 +94,7 @@ If a screen feels busy, remove a control — not the content.
 
 **iOS**
 - System chrome first (`TabView`, nav bar, search, sheets via `.mohSheet`).
-- SF Symbols. 44pt hit targets. `.contentShape(Rectangle())` on rows.
+- Shared Figma vector icons for product UI; SF Symbols for native system controls without a library equivalent. 44pt hit targets. `.contentShape(Rectangle())` on rows.
 - Semantic type. `Color.moh*`. CSS-style padding shorthands.
 - Do not port web card chrome onto iOS.
 

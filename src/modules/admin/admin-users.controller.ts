@@ -741,7 +741,8 @@ export class AdminUsersController {
           // Unverifying: pause Stripe sub, recompute tier (strips premium access).
           await this.billingService.onUserUnverified(id);
         } else if (wasVerified && nowVerified) {
-          // Same verified category (e.g. identity → manual): just recompute.
+          // Keep stale requests closed without repeating verification rewards.
+          await this.userVerification.verifyUser({ userId: id, source: 'admin_patch' });
           await this.entitlementService.recomputeAndApply(id);
         }
       }

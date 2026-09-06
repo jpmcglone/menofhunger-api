@@ -26,6 +26,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
   viewerBlockedBy?: Set<string>;
   /** Set of canonical post IDs that the viewer has flat-reposted. */
   repostedByPostId?: Set<string>;
+  commentedByPostId?: Set<string>;
   /** Set of post IDs that the viewer has viewed (used for viewerHasViewed flag). */
   viewedByPostId?: Set<string>;
   /** Viewer's lastSeenAt per viewed post (ISO-stamped as viewerLastSeenAt). */
@@ -60,6 +61,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     blockedByViewer,
     viewerBlockedBy,
     repostedByPostId,
+    commentedByPostId,
     repostedPostMap,
     quotedPostMap,
     viewerCanAccessByPostId,
@@ -125,6 +127,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
       viewerCreatorSkipped: viewerCreatorSkipped || undefined,
       viewerBlockStatus: viewerBlockStatus ?? undefined,
       viewerHasReposted: repostedByPostId ? repostedByPostId.has(post.id) : undefined,
+      viewerHasCommented: commentedByPostId ? commentedByPostId.has(post.id) : undefined,
       viewerHasViewed: viewedByPostId ? viewedByPostId.has(post.id) : undefined,
       viewerLastSeenAt: lastSeenAtByPostId?.get(post.id)?.toISOString(),
       repostedPost: repostedPostDto,

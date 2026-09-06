@@ -2,7 +2,6 @@ import { BadRequestException, Injectable, NotFoundException, UnauthorizedExcepti
 import type { Prisma, VerificationRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
-import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { VERIFICATION_ADMIN_USER_SELECT } from '../../common/prisma-selects/user.select';
 import { SlackService } from '../../common/slack/slack.service';
 import { UserVerificationService } from './user-verification.service';
@@ -12,7 +11,6 @@ export class VerificationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly slack: SlackService,
-    private readonly presenceRealtime: PresenceRealtimeService,
     private readonly userVerification: UserVerificationService,
   ) {}
 
@@ -47,6 +45,7 @@ export class VerificationService {
     });
 
     this.slack.notifyVerificationRequested({ userId, providerHint: provider });
+    await this.userVerification.notifyAdminQueueChanged('created', created.id);
 
     return created;
   }
@@ -97,6 +96,12 @@ export class VerificationService {
     };
   }
 
+  async pendingCount(): Promise<number> {
+    return this.prisma.verificationRequest.count({
+      where: { status: 'pending', user: { bannedAt: null, verifiedStatus: 'none' } },
+    });
+  }
+
   async listAdmin(params: {
     limit: number;
     cursor: string | null;
@@ -115,6 +120,7 @@ export class VerificationService {
     const whereParts: Prisma.VerificationRequestWhereInput[] = [];
     if (cursorWhere) whereParts.push(cursorWhere);
     if (params.status) whereParts.push({ status: params.status });
+    if (params.status === 'pending') whereParts.push({ user: { bannedAt: null, verifiedStatus: 'none' } });
 
     const q = (params.q ?? '').trim();
     if (q) {
@@ -219,16 +225,7 @@ export class VerificationService {
       });
     });
 
-    // Realtime: admin cross-tab sync (self only).
-    try {
-      this.presenceRealtime.emitAdminUpdated(params.adminUserId, {
-        kind: 'verification',
-        action: 'reviewed',
-        id: updated.id,
-      });
-    } catch {
-      // Best-effort
-    }
+    await this.userVerification.notifyAdminQueueChanged('reviewed', updated.id);
 
     return updated;
   }

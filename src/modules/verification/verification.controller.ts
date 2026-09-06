@@ -10,6 +10,7 @@ import { VerificationService } from './verification.service';
 const createRequestSchema = z
   .object({
     // Provider-agnostic for now; this is here so we can extend later without breaking clients.
+    videoCallConsent: z.literal(true).optional(),
     providerHint: z.string().trim().min(1).max(50).optional(),
   })
   .partial();
@@ -28,7 +29,7 @@ export class VerificationController {
     const parsed = createRequestSchema.parse(body ?? {});
     const req = await this.verification.createRequestForUser({
       userId: userId ?? null,
-      providerHint: parsed.providerHint ?? null,
+      providerHint: parsed.videoCallConsent ? 'moh_video_call' : parsed.providerHint ?? null,
     });
     return { data: toVerificationRequestPublicDto(req) };
   }

@@ -106,3 +106,22 @@ describe('PostsViewerEnrichmentService.viewerLastSeenAtByPostId', () => {
     expect(prisma.postView.findMany).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('PostsViewerEnrichmentService.viewerCommentedPostIds', () => {
+  it('selects only parents of the viewer’s live replies in one batch', async () => {
+    const { service, prisma } = makeService();
+    prisma.post.findMany.mockResolvedValue([{ parentId: 'p1' }, { parentId: 'p1' }, { parentId: 'p3' }]);
+    expect(await service.viewerCommentedPostIds({ viewerUserId: 'viewer', postIds: ['p1', 'p2', 'p3', 'p1'] }))
+      .toEqual(new Set(['p1', 'p3']));
+    expect(prisma.post.findMany).toHaveBeenCalledWith({
+      where: { userId: 'viewer', parentId: { in: ['p1', 'p2', 'p3'] }, deletedAt: null, isDraft: false },
+      select: { parentId: true }, distinct: ['parentId'],
+    });
+  });
+  it('does not query for guests or empty pages', async () => {
+    const { service, prisma } = makeService();
+    expect(await service.viewerCommentedPostIds({ viewerUserId: '', postIds: ['p1'] })).toEqual(new Set());
+    expect(await service.viewerCommentedPostIds({ viewerUserId: 'viewer', postIds: [] })).toEqual(new Set());
+    expect(prisma.post.findMany).not.toHaveBeenCalled();
+  });
+});

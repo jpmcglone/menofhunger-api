@@ -2159,6 +2159,7 @@ export type PostDto = {
   viewerBookmarkCollectionIds?: string[];
   /** True if the viewer has created a flat repost of this post. */
   viewerHasReposted?: boolean;
+  viewerHasCommented?: boolean;
   /** True if the viewer has viewed this post (exists in PostView table). */
   viewerHasViewed?: boolean;
   /** Viewer's last dwell on this post (ISO). Used for For You seen-aware thread rollup. */

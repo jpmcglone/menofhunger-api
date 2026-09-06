@@ -50,7 +50,6 @@ const ALLOWED_POST_MEDIA_CONTENT_TYPES = new Set([
 ]);
 const ALLOWED_THUMBNAIL_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const BANNER_ASPECT_RATIO = 3; // 3:1
-const BANNER_ASPECT_TOLERANCE = 0.03; // +/- 3%
 const MIN_BANNER_WIDTH = 600;
 const MIN_BANNER_HEIGHT = 200;
 const MAX_ARTICLE_THUMBNAIL_BYTES = 8 * 1024 * 1024; // 8MB
@@ -492,16 +491,19 @@ export class UploadsService {
       throw new BadRequestException('Avatar is too large.');
     }
 
-    // Normalize JPEG orientation so avatars render correctly in all contexts (including metadata previews).
-    if (contentType === 'image/jpeg') {
-      await this.getImageInfoAndNormalizeJpegIfNeeded({
-        s3,
-        bucket,
-        key: cleaned,
-        contentType,
-        maxBytes: MAX_AVATAR_BYTES,
+    // Validate the decoded, orientation-normalized image for every supported format.
+    try {
+      const info = await this.getImageInfoAndNormalizeJpegIfNeeded({
+        s3, bucket, key: cleaned, contentType, maxBytes: MAX_AVATAR_BYTES,
         cacheControl: 'public, max-age=31536000, immutable',
-      }).catch(() => undefined);
+      });
+      if (!info.width || !info.height || info.width !== info.height) {
+        throw new BadRequestException('Profile image must be 1:1 (square).');
+      }
+    } catch (err) {
+      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
+      if (err instanceof BadRequestException) throw err;
+      throw new BadRequestException('Invalid profile image.');
     }
 
     const now = new Date();
@@ -578,8 +580,7 @@ export class UploadsService {
       if (w < MIN_BANNER_WIDTH || h < MIN_BANNER_HEIGHT) {
         throw new BadRequestException(`Banner is too small. Minimum is ${MIN_BANNER_WIDTH}×${MIN_BANNER_HEIGHT}.`);
       }
-      const ratio = w / h;
-      if (Math.abs(ratio - BANNER_ASPECT_RATIO) > BANNER_ASPECT_TOLERANCE) {
+      if (w !== h * BANNER_ASPECT_RATIO) {
         throw new BadRequestException('Banner must be 3:1 (for example, 1500×500).');
       }
     } catch (err) {

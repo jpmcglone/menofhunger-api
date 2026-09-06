@@ -60,6 +60,10 @@ export class PostsService {
     return this.enrichment.viewerBoostedPostIds(...args);
   }
 
+  viewerCommentedPostIds(...args: Parameters<PostsViewerEnrichmentService['viewerCommentedPostIds']>) {
+    return this.enrichment.viewerCommentedPostIds(...args);
+  }
+
   viewerRepostedPostIds(...args: Parameters<PostsViewerEnrichmentService['viewerRepostedPostIds']>) {
     return this.enrichment.viewerRepostedPostIds(...args);
   }

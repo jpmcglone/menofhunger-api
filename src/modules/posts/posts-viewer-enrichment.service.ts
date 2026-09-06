@@ -24,6 +24,18 @@ export class PostsViewerEnrichmentService {
     return await this.viewerContextService.getViewer(viewerUserId);
   }
 
+  /** One batch across visible rows and embedded posts; deleted replies do not select the icon. */
+  async viewerCommentedPostIds(params: { viewerUserId: string; postIds: string[] }) {
+    const { viewerUserId, postIds } = params;
+    if (!viewerUserId || postIds.length === 0) return new Set<string>();
+    const rows = await this.prisma.post.findMany({
+      where: { userId: viewerUserId, parentId: { in: [...new Set(postIds)] }, deletedAt: null, isDraft: false },
+      select: { parentId: true },
+      distinct: ['parentId'],
+    });
+    return new Set(rows.flatMap((row) => row.parentId ? [row.parentId] : []));
+  }
+
   async viewerBoostedPostIds(params: { viewerUserId: string; postIds: string[] }) {
     const { viewerUserId, postIds } = params;
     if (!viewerUserId) return new Set<string>();

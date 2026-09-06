@@ -4,7 +4,6 @@ import { VerificationService } from './verification.service';
 type Deps = {
   prisma: any;
   slack: any;
-  presenceRealtime: any;
   userVerification: any;
 };
 
@@ -37,8 +36,8 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
       __tx: tx,
     },
     slack: { notifyVerificationRequested: jest.fn() },
-    presenceRealtime: { emitAdminUpdated: jest.fn() },
-    userVerification: { verifyUser: jest.fn(async () => ({ verified: true, alreadyVerified: false })) },
+    userVerification: { notifyAdminQueueChanged: jest.fn(async () => undefined),
+      verifyUser: jest.fn(async () => ({ verified: true, alreadyVerified: false })) },
     ...overrides,
   };
 }
@@ -48,7 +47,6 @@ function makeService(overrides: Partial<Deps> = {}) {
   const service = new VerificationService(
     deps.prisma,
     deps.slack,
-    deps.presenceRealtime,
     deps.userVerification,
   );
   return { service, deps };
@@ -107,6 +105,7 @@ describe('VerificationService.createRequestForUser', () => {
     const result = await service.createRequestForUser({ userId: 'u1', providerHint: 'manual' });
 
     expect(result).toBe(created);
+    expect(deps.userVerification.notifyAdminQueueChanged).toHaveBeenCalledWith('created', 'vr1');
     expect(deps.slack.notifyVerificationRequested).toHaveBeenCalledWith({
       userId: 'u1',
       providerHint: 'manual',
@@ -241,10 +240,6 @@ describe('VerificationService.rejectAdmin', () => {
     });
 
     expect(result).toBe(updated);
-    expect(deps.presenceRealtime.emitAdminUpdated).toHaveBeenCalledWith('a1', {
-      kind: 'verification',
-      action: 'reviewed',
-      id: 'vr1',
-    });
+    expect(deps.userVerification.notifyAdminQueueChanged).toHaveBeenCalledWith('reviewed', 'vr1');
   });
 });

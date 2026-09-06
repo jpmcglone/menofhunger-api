@@ -1080,6 +1080,7 @@ export class PostsController {
       lastSeenAtByPostId,
       internalByPostId,
       scoreByPostIdGet,
+      commentedByPostId,
     ] = await Promise.all([
       groupIdsForPreview.length
         ? this.communityGroupPreviewMapForIds(viewerUserId, groupIdsForPreview)
@@ -1101,6 +1102,9 @@ export class PostsController {
         : Promise.resolve(new Map<string, Date>()),
       viewerHasAdmin ? this.posts.ensureBoostScoresFresh(postIds) : Promise.resolve(null),
       viewerHasAdmin ? this.posts.computeScoresForPostIds(postIds) : Promise.resolve(undefined),
+      viewerUserId
+        ? this.posts.viewerCommentedPostIds({ viewerUserId, postIds })
+        : Promise.resolve(new Set<string>()),
     ]);
     const viewedByPostId = new Set(lastSeenAtByPostId.keys());
     const videoEmbedByPostId = await this.posts.videoEmbedsForPosts([
@@ -1145,6 +1149,7 @@ export class PostsController {
         viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
         viewerVotedPollOptionId: votedPollOptionIdByPostId.get(p.id) ?? null,
         viewerHasReposted: repostedByPostId.has(p.id),
+        viewerHasCommented: commentedByPostId.has(p.id),
         viewerHasViewed: viewedByPostId.has(p.id),
         viewerLastSeenAt: lastSeenAtByPostId.get(p.id)?.toISOString(),
         viewerCreatorSkipped: viewerCreatorSkipped || undefined,
@@ -1220,16 +1225,11 @@ export class PostsController {
       .parse(query);
     const viewerUserId = userId ?? null;
     const result = await this.posts.listQuotes({ viewerUserId, postId: id, limit: limit ?? 20, cursor: cursor ?? null });
-    const r2BaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const allPostIds = result.posts.map((p) => p.id);
-    const viewerRepostedPostIds = viewerUserId
-      ? await this.posts.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
-      : new Set<string>();
-    const dtos = result.posts.map((p) =>
-      toPostDto(p, r2BaseUrl, {
-        viewerHasReposted: viewerRepostedPostIds.has(p.id),
-      }),
-    );
+    const dtos = await this.posts.composeFeedPostDtos({
+      viewerUserId,
+      filteredPosts: result.posts,
+      collapsedItemsByItemId: new Map(),
+    });
     setReadCache(httpRes, { viewerUserId });
     return { data: dtos, pagination: { nextCursor: result.nextCursor } };
   }

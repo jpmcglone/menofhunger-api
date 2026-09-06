@@ -26,6 +26,11 @@ export const rejectSchema = z.object({
 export class AdminVerificationController {
   constructor(private readonly verification: VerificationService) {}
 
+  @Get('count')
+  async count() {
+    return { data: { pending: await this.verification.pendingCount() } };
+  }
+
   @Get()
   async list(@Query() query: unknown) {
     const parsed = listSchema.parse(query);
