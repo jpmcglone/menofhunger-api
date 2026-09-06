@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { StateStore } from './state.mjs';
 import { MohApi } from './api.mjs';
 import { createTools } from './tools.mjs';
+import { configuredBaseUrl, serverName } from './config.mjs';
 import {
   parseCommand,
   describeTools,
@@ -70,11 +71,11 @@ async function login() {
 }
 
 try {
-  const { command, toolName, args, json, help } = await parseCommand(
+  const { command, toolName, args, json, help, profile } = await parseCommand(
     process.argv.slice(2),
   );
   store = new StateStore();
-  api = new MohApi({ store });
+  api = new MohApi({ store, baseUrl: configuredBaseUrl(profile) });
   const tools = createTools({ api, store });
   const print = (data) =>
     process.stdout.write(
@@ -110,7 +111,7 @@ try {
         [
           'mcp',
           'add',
-          'menofhunger',
+          serverName(api.baseUrl),
           '--env',
           `MOH_API_BASE_URL=${api.baseUrl}`,
           '--env',
@@ -128,7 +129,7 @@ try {
     }
     print({
       configured: true,
-      name: 'menofhunger',
+      name: serverName(api.baseUrl),
       environment: api.baseUrl,
       serverPath,
       nextStep:

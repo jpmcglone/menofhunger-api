@@ -120,6 +120,27 @@ text/Markdown artifacts, not live newsletter records.
 
 ## Environments and credentials
 
+Production is the default for operating the company. Localhost is useful for
+testing new API/MCP code against your development database before deployment.
+The local website is `http://localhost:3000`, but its API is
+`http://localhost:3001/v1`. The production website is `https://menofhunger.com`,
+but its API is `https://api.menofhunger.com/v1`. MCP uses those API addresses.
+
+```sh
+moh --env prod login
+moh --env prod briefing
+moh --env local login
+moh --env local status
+moh --env local configure
+```
+
+`--env local` selects localhost:3001 and registers `menofhunger-local` when used
+with configure. `--env prod` registers `menofhunger`. They have separate login
+sessions and local records, and every tool result identifies its environment.
+An explicit `--env` overrides `MOH_API_BASE_URL`. The MCP launches on demand;
+neither instance starts a development API server. You can leave local unconfigured
+unless you want it in the AI tool catalog.
+
 | Variable | Default |
 | --- | --- |
 | `MOH_API_BASE_URL` | `https://api.menofhunger.com/v1` |

@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import { configuredBaseUrl } from './config.mjs';
 
 export const aliases = {
   status: ['connection_status'],
@@ -38,6 +39,15 @@ export function describeTools(tools) {
 
 export async function parseCommand(argv) {
   const tokens = [...argv];
+  let profile;
+  const envIndex = tokens.indexOf('--env');
+  if (envIndex !== -1) {
+    profile = tokens[envIndex + 1];
+    if (!profile) throw new Error('Choose --env prod or --env local.');
+    configuredBaseUrl(profile);
+    tokens.splice(envIndex, 2);
+    if (tokens.includes('--env')) throw new Error('Specify --env only once.');
+  }
   const json = tokens.includes('--json');
   const help = tokens.includes('--help') || tokens.includes('-h');
   const filtered = tokens.filter(
@@ -51,7 +61,7 @@ export async function parseCommand(argv) {
   ) {
     if (filtered.length)
       throw new Error(`Unexpected arguments for ${command}.`);
-    return { command, json, help };
+    return { command, json, help, profile };
   }
   // Exact tool names and the generic call interface are supported for AI agents.
   const requested = command === 'call' ? filtered.shift() : command;
@@ -97,7 +107,7 @@ export async function parseCommand(argv) {
               : raw
           : raw;
   }
-  return { command, toolName, args, json, help };
+  return { command, toolName, args, json, help, profile };
 }
 
 export const helpText = `Men of Hunger — founder CLI and MCP
@@ -133,6 +143,8 @@ Optional global command: npm install --global ./tools/mcp, then moh <command>
   call TOOL '{"key":"value"}'        Invoke any tool using its MCP name/schema
 
 Add --json for a stable { ok, data, error } envelope. Nonzero exit means failure.
+Add --env prod (default) or --env local to any command. Local calls localhost:3001/v1.
+Examples: moh --env local login; moh --env local configure; moh --env prod briefing.
 Add --help to any command for its exact input schema. Hyphenated flags map to camelCase.
 Ranges: 7d, 30d, 3m, 1y, all. Areas: overview, retention, activity, membership,
 content, community, ai, coins. Timestamps are ISO UTC, e.g. 2026-09-01T00:00:00Z.

@@ -1,3 +1,5 @@
+import { configuredBaseUrl } from './config.mjs';
+
 const COOKIE = 'moh_session';
 const MAX_RESPONSE_BYTES = 2_000_000;
 const GET_PATHS = [
@@ -24,7 +26,7 @@ export class ApiError extends Error {
   }
 }
 
-export function normalizeBaseUrl(input = 'https://api.menofhunger.com/v1') {
+export function normalizeBaseUrl(input = configuredBaseUrl()) {
   const url = new URL(input);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if (

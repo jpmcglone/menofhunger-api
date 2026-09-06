@@ -6,13 +6,16 @@ import { MohApi } from './api.mjs';
 import { StateStore } from './state.mjs';
 import { createTools } from './tools.mjs';
 import { instructions, metricGuide, workflows } from './guidance.mjs';
+import { serverName } from './config.mjs';
 
 export function createServer({ api, store } = {}) {
   store ??= new StateStore();
   api ??= new MohApi({ store });
   const server = new McpServer(
-    { name: 'menofhunger', version: '0.1.0' },
-    { instructions },
+    { name: serverName(api.baseUrl), version: '0.1.0' },
+    {
+      instructions: `Connected to ${api.baseUrl}. Localhost data is development data, not production business metrics.\n${instructions}`,
+    },
   );
   for (const tool of createTools({ api, store })) {
     server.registerTool(

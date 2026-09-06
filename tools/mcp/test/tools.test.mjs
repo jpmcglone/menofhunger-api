@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StateStore } from '../src/state.mjs';
+import { configuredBaseUrl, serverName } from '../src/config.mjs';
 import { createTools, retentionWithMaturity } from '../src/tools.mjs';
 import { parseCommand, describeTools, formatHuman } from '../src/commands.mjs';
 
@@ -40,6 +41,26 @@ test('CLI aliases, flags and generic calls resolve to the same validated tool ar
     /Duplicate/,
   );
   await assert.rejects(parseCommand(['member', 'bob', 'extra']), /Expected/);
+});
+
+test('explicit local and production profiles isolate API targets and MCP registrations', async () => {
+  assert.equal(
+    (await parseCommand(['--env', 'local', 'status', '--json'])).profile,
+    'local',
+  );
+  assert.equal(
+    (await parseCommand(['briefing', '--env', 'prod'])).profile,
+    'prod',
+  );
+  assert.equal(configuredBaseUrl('local'), 'http://localhost:3001/v1');
+  assert.equal(configuredBaseUrl('prod'), 'https://api.menofhunger.com/v1');
+  assert.equal(serverName(configuredBaseUrl('local')), 'menofhunger-local');
+  assert.equal(serverName(configuredBaseUrl('prod')), 'menofhunger');
+  await assert.rejects(parseCommand(['--env', 'unknown', 'status']), /Choose/);
+  await assert.rejects(
+    parseCommand(['--env', 'local', '--env', 'prod', 'status']),
+    /only once/,
+  );
 });
 
 test('invalid tool arguments fail before the API is called; member contact fields stay out', async () => {

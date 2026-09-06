@@ -92,7 +92,11 @@ export function createTools({ api, store }) {
       description,
       schema,
       localWrite,
-      execute: async (args = {}) => sanitize(await handler(schema.parse(args))),
+      execute: async (args = {}) =>
+        sanitize({
+          environment: api.baseUrl,
+          ...(await handler(schema.parse(args))),
+        }),
     });
   }
   async function analytics(input) {
