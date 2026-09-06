@@ -86,11 +86,12 @@ export class NewslettersService {
     return { eligibleCount, confirmedEmailCount };
   }
 
-  async create(adminUserId: string): Promise<NewsletterAdminDto> {
+  async create(adminUserId: string, input: NewsletterWriteInput = {}): Promise<NewsletterAdminDto> {
     const row = await this.prisma.newsletter.create({
       data: {
         createdByAdminId: adminUserId,
         bodyJson: NEWSLETTER_STARTER_BODY_JSON,
+        ...this.writeData(input, { status: 'draft' }),
       },
     });
     return this.toAdminDto(row, await this.liveEligibleCount(row), await this.countEligible([]));
@@ -497,8 +498,8 @@ export class NewslettersService {
     if (!row.bodyJson.trim()) throw new BadRequestException('Add a body before sending.');
   }
 
-  private writeData(input: NewsletterWriteInput, current: Newsletter): Prisma.NewsletterUpdateInput {
-    const data: Prisma.NewsletterUpdateInput = {};
+  private writeData(input: NewsletterWriteInput, current: Pick<Newsletter, 'status'>) {
+    const data: Partial<Pick<Newsletter, 'subject' | 'preheader' | 'bodyJson' | 'ctaLabel' | 'ctaHref' | 'imageKey' | 'imageUpdatedAt' | 'scheduledAt'>> & { audienceFilters?: Prisma.InputJsonValue } = {};
     if (input.subject !== undefined) data.subject = (input.subject ?? '').trim();
     if (input.preheader !== undefined) data.preheader = (input.preheader ?? '').trim();
     if (input.bodyJson !== undefined) data.bodyJson = input.bodyJson ?? NEWSLETTER_STARTER_BODY_JSON;

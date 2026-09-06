@@ -1,3 +1,5 @@
+import { AdminAssistantController } from './admin-assistant.controller';
+import { AdminAssistantService } from './admin-assistant.service';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -81,6 +83,7 @@ import { AdminOperationsController } from './admin-operations.controller';
     NewslettersModule,
   ],
   controllers: [
+    AdminAssistantController,
     AdminOperationsController,
     AdminUsersController,
     AdminSiteConfigController,
@@ -105,6 +108,7 @@ import { AdminOperationsController } from './admin-operations.controller';
     AdminIntroBriefController,
   ],
   providers: [
+    AdminAssistantService,
     AdminGuard,
     AdminImageReviewService,
     AdminHashtagsService,

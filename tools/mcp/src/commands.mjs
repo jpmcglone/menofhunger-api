@@ -4,6 +4,8 @@ import { configuredBaseUrl } from './config.mjs';
 
 export const aliases = {
   status: ['connection_status'],
+  capabilities: ['admin_capabilities'],
+  workspace: ['admin_workspace', 'workspace'],
   briefing: ['founder_briefing'],
   analytics: ['analytics'],
   referrals: ['referral_analytics'],

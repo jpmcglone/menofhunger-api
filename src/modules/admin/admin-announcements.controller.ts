@@ -8,7 +8,7 @@ import {
 } from '../announcements/announcements.selection';
 import { AdminGuard } from './admin.guard';
 
-const writeSchema = z.object({
+export const writeSchema = z.object({
   title: z.string().trim().max(120).optional().nullable(),
   body: z.string().trim().max(2000).optional().nullable(),
   isAd: z.boolean().optional(),

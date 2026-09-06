@@ -325,6 +325,8 @@ enum SpaceMode {
 }
 
 model User {
+  adminAssistantTurns AdminAssistantTurn[]
+
   id                           String             @id @default(cuid())
   createdAt                    DateTime           @default(now())
   /**
@@ -2882,6 +2884,7 @@ model CoinTransfer {
 // rolling summaries, and per-user preferences — all keyed off the requesting User.
 
 enum MarvinSource {
+  admin_console
   public_thread
   private_session
   catch_up
@@ -3495,4 +3498,37 @@ model MarvinCostRollup {
   @@unique([dayKey, userId, mode])
   @@index([dayKey])
   @@index([userId, dayKey])
+}
+
+// Dedicated private admin workspace. Never part of member DM/public conversation context.
+model AdminAssistantTurn {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question String
+  answer String?
+  status String @default("running")
+  sources Json @default("[]")
+  createdAt DateTime @default(now())
+  completedAt DateTime?
+  actions AdminAssistantAction[]
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model AdminAssistantAction {
+  id String @id @default(uuid())
+  turnId String
+  turn AdminAssistantTurn @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  operation String
+  targetId String?
+  title String
+  path String
+  input Json
+  before Json
+  status String @default("pending")
+  resultMessage String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  completedAt DateTime?
+  @@index([turnId, createdAt])
 }

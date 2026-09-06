@@ -42,6 +42,8 @@ export type MarvAIToolDispatcher = (
 
 export type MarvAIRequest = {
   source: MarvinSource;
+  /** Dedicated admin tool set. Never supplied by public/private member processors. */
+  adminTools?: ReadonlyArray<Record<string, unknown>>;
   mode: ResolvedMarvinMode;
   /** Per-request developer note (who's asking, where, safety nudges). */
   developerNote: string;
@@ -182,6 +184,7 @@ export class MarvinAIService {
    * of posting a reply.
    */
   async respond(req: MarvAIRequest): Promise<MarvAIResult> {
+    const requestSignal = req.source === 'admin_console' ? AbortSignal.timeout(210_000) : undefined;
     const cfg = this.appConfig.marvOpenAI();
     const limits = this.appConfig.marvLimits();
     const promptId = cfg.promptId;
@@ -263,11 +266,11 @@ export class MarvinAIService {
     // 4k output cap often exhausts the budget before a visible reply, and the $0.03 search
     // fee dwarfs a Luna turn.
     const webSearchActive =
-      cfg.webSearchEnabled && cfg.webSearchModes.includes(req.mode as string);
+      req.source !== 'admin_console' && cfg.webSearchEnabled && cfg.webSearchModes.includes(req.mode as string);
 
     // When web search is active, use a higher output-token budget so the model has room to
     // both process results and write a reply. Falls back to the base limit if larger.
-    const effectiveMaxOutputTokens = webSearchActive
+    const effectiveMaxOutputTokens = req.source === 'admin_console' ? Math.max(limits.maxOutputTokens, 4096) : webSearchActive
       ? Math.max(limits.maxOutputTokens, cfg.webSearchMaxOutputTokens)
       : limits.maxOutputTokens;
 
@@ -276,7 +279,7 @@ export class MarvinAIService {
 
     const baseRequest: Record<string, unknown> = {
       model,
-      prompt,
+      ...(req.source === 'admin_console' ? { instructions: 'You are MARV, the private Men of Hunger admin assistant. Follow the developer note for this workspace.' } : { prompt }),
       max_output_tokens: effectiveMaxOutputTokens,
       reasoning: { effort: reasoningEffort },
       text: { verbosity: 'low' },
@@ -301,7 +304,7 @@ export class MarvinAIService {
 
     // Local tools always registered in-code so they work even if the Stored Prompt
     // tool list drifts. Keep the OpenAI Stored Prompt in sync for documentation.
-    const tools: unknown[] = [...MARV_LOCAL_FUNCTION_TOOLS];
+    const tools: unknown[] = req.source === 'admin_console' ? [...(req.adminTools ?? [])] : [...MARV_LOCAL_FUNCTION_TOOLS];
     if (webSearchActive) {
       // Hosted web_search (not the legacy web_search_preview). `low` context keeps
       // search dumps inside the 80-word reply budget; omit return_token_budget
@@ -351,7 +354,7 @@ export class MarvinAIService {
           let output: string;
           try {
             this.logger.log(
-              `[marv-ai] round=${round} tool="${call.name}" call=${call.call_id} args=${argsStr.slice(0, 200)}`,
+              `[marv-ai] round=${round} tool="${call.name}" call=${call.call_id} args=${req.source === 'admin_console' ? '[private]' : argsStr.slice(0, 200)}`,
             );
             output = await req.dispatchTool(call.name, args, req.toolContext);
             this.logger.log(
@@ -366,7 +369,9 @@ export class MarvinAIService {
           return {
             type: 'function_call_output' as const,
             call_id: call.call_id,
-            output: output.slice(0, 8_000),
+            output: req.source === 'admin_console' && output.length > 60_000
+              ? JSON.stringify({ error: 'result_too_large', message: 'Narrow the query or reduce the page limit.' })
+              : req.source === 'admin_console' ? output : output.slice(0, 8_000),
           };
         }),
       );
@@ -378,6 +383,7 @@ export class MarvinAIService {
       let result: any;
       try {
         result = await this.createResponse(client, nextRequest, {
+          signal: requestSignal,
           allowDropPreviousResponse: !isToolFollowUp,
         });
       } catch (err) {
@@ -436,7 +442,7 @@ export class MarvinAIService {
               input: followUpInput,
               tool_choice: 'none',
             },
-            { allowDropPreviousResponse: false },
+            { signal: requestSignal, allowDropPreviousResponse: false },
           );
           absorbUsage(forceResult?.usage);
           const forceText = MarvinAIService.extractText(forceResult);
@@ -491,7 +497,7 @@ export class MarvinAIService {
               input: [],
               tool_choice: 'none',
             },
-            { allowDropPreviousResponse: true },
+            { signal: requestSignal, allowDropPreviousResponse: true },
           );
           absorbUsage(retryResult?.usage);
           const retryText = MarvinAIService.extractText(retryResult);
@@ -530,7 +536,7 @@ export class MarvinAIService {
                 },
               ],
             },
-            { allowDropPreviousResponse: false },
+            { signal: requestSignal, allowDropPreviousResponse: false },
           );
           absorbUsage(freshResult?.usage);
           const freshText = MarvinAIService.extractText(freshResult);
@@ -601,13 +607,15 @@ export class MarvinAIService {
   private async createResponse(
     client: OpenAI,
     request: Record<string, unknown>,
-    opts: { allowDropPreviousResponse: boolean },
+    opts: { allowDropPreviousResponse: boolean; signal?: AbortSignal },
   ): Promise<any> {
     const current: Record<string, unknown> = { ...request };
     const maxAttempts = 1 + RATE_LIMIT_RETRIES;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        return await client.responses.create({ ...current } as any);
+        return opts.signal
+          ? await client.responses.create({ ...current } as any, { signal: opts.signal, maxRetries: 0 })
+          : await client.responses.create({ ...current } as any);
       } catch (err) {
         if (
           opts.allowDropPreviousResponse &&

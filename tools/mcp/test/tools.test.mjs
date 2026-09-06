@@ -233,3 +233,24 @@ test('decisions and drafts write only local files and are isolated by API enviro
   assert.equal(draft.draftKind, 'newsletter');
   assert.equal((await store.artifacts('draft', api.baseUrl)).total, 1);
 });
+
+test('shared admin workspace reads enforce named routes, pagination and redaction', async () => {
+  const calls = [];
+  const api = { baseUrl: 'https://api.example.com/v1', get: async (...args) => {
+    calls.push(args);
+    return { data: [{ id: 'one', email: 'private@example.com' }, { id: 'two' }], source: { url: 'https://api.example.com/v1/admin/announcements' } };
+  } };
+  const tools = createTools({ api, localArtifacts: false });
+  const read = tools.find(tool => tool.name === 'admin_workspace');
+  const result = await read.execute({ workspace: 'announcements', limit: 1 });
+  assert.equal(result.truncated, true);
+  assert.deepEqual(result.data, [{ id: 'one' }]);
+  await assert.rejects(read.execute({ workspace: 'auth/logout' }));
+  await assert.rejects(read.execute({ workspace: 'announcements', cursor: 'one' }));
+  await read.execute({ workspace: 'verification', cursor: 'one', limit: 5 });
+  assert.deepEqual(calls.at(-1), ['admin/verification', { cursor: 'one', limit: 5 }]);
+  assert.ok(tools.every(tool => !tool.name.startsWith('propose_')));
+  const catalog = await tools.find(tool => tool.name === 'admin_capabilities').execute({});
+  assert.ok(catalog.data.some(item => item.id === 'newsletters'));
+  assert.ok(catalog.data.some(item => item.id === 'intros'));
+});

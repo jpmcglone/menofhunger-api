@@ -1,3 +1,4 @@
+import { workspaceReads } from './admin-catalog.mjs';
 import { configuredBaseUrl } from './config.mjs';
 
 const COOKIE = 'moh_session';
@@ -70,7 +71,8 @@ export class MohApi {
   }
 
   async get(path, query = {}) {
-    if (!GET_PATHS.some((pattern) => pattern.test(path)))
+    if (!GET_PATHS.some((pattern) => pattern.test(path)) &&
+        !Object.values(workspaceReads).some((entry) => entry.path === path))
       throw new ApiError('API route is not available to this MCP.');
     return this.request(path, { query });
   }

@@ -6,7 +6,7 @@ import { newsletterAudienceFiltersSchema } from '../newsletters/newsletter-audie
 import { NewslettersService } from '../newsletters/newsletters.service';
 import { AdminGuard } from './admin.guard';
 
-const writeSchema = z.object({
+export const writeSchema = z.object({
   subject: z.string().max(200).optional().nullable(),
   preheader: z.string().max(200).optional().nullable(),
   bodyJson: z.string().max(100_000).optional().nullable(),
@@ -76,8 +76,8 @@ export class AdminNewslettersController {
   }
 
   @Post()
-  async create(@CurrentUserId() adminUserId: string) {
-    return { data: await this.newsletters.create(adminUserId) };
+  async create(@CurrentUserId() adminUserId: string, @Body() body: unknown) {
+    return { data: await this.newsletters.create(adminUserId, writeSchema.parse(body ?? {})) };
   }
 
   @Get(':id')

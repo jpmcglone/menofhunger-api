@@ -12,11 +12,11 @@ const listSchema = z.object({
   cursor: z.string().optional(),
 });
 
-const approveSchema = z.object({
+export const approveSchema = z.object({
   adminNote: z.union([z.string().trim().max(2000), z.null()]).optional(),
 });
 
-const rejectSchema = z.object({
+export const rejectSchema = z.object({
   rejectionReason: z.string().trim().min(1).max(2000),
   adminNote: z.union([z.string().trim().max(2000), z.null()]).optional(),
 });

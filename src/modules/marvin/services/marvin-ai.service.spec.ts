@@ -282,6 +282,18 @@ describe('MarvinAIService request knobs', () => {
     expect(mockResponsesCreate.mock.calls[0]?.[0]?.prompt).toEqual({ id: 'pmpt_test' });
   });
 
+  it('isolates admin tools and instructions from member tools and hosted web search', async () => {
+    const svc = makeService({ webSearchEnabled: true });
+    const adminTools = [{ type: 'function', name: 'admin_capabilities', parameters: { type: 'object' }, strict: false }];
+    await svc.respond({ ...baseReq, source: 'admin_console', adminTools });
+    expect(mockResponsesCreate.mock.calls[0][0].tools).toEqual(adminTools);
+    expect(mockResponsesCreate.mock.calls[0][0].prompt).toBeUndefined();
+    expect(mockResponsesCreate.mock.calls[0][0].metadata.moh_source).toBe('admin_console');
+    mockResponsesCreate.mockClear();
+    await svc.respond({ ...baseReq, adminTools });
+    expect(mockResponsesCreate.mock.calls[0][0].tools.map((tool: any) => tool.name)).not.toContain('admin_capabilities');
+  });
+
   it('registers every local function tool', async () => {
     const svc = makeService();
     await svc.respond({ ...baseReq });

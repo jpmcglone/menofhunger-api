@@ -15,7 +15,7 @@ const listSchema = z.object({
   cursor: z.string().optional(),
 });
 
-const updateSchema = z.object({
+export const updateSchema = z.object({
   status: z.enum(['new', 'triaged', 'resolved']).optional(),
   adminNote: z.union([z.string().trim().max(2000), z.null()]).optional(),
 });

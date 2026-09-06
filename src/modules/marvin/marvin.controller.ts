@@ -54,12 +54,12 @@ const myUsageQuerySchema = z.object({
 
 const adminUsageQuerySchema = z.object({
   userId: z.string().trim().max(64).optional(),
-  source: z.enum(['public_thread', 'private_session', 'catch_up']).optional(),
+  source: z.enum(['public_thread', 'private_session', 'catch_up', 'admin_console']).optional(),
   cursor: z.string().trim().max(64).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
-const adminUserPatchSchema = z.object({
+export const adminUserPatchSchema = z.object({
   credits: z.number().min(0).max(1_000_000).optional(),
   disabled: z.boolean().optional(),
 });

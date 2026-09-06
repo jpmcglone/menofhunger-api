@@ -70,7 +70,7 @@ export type PostsInteractionPayloadDto = {
   repostCount?: number;
 };
 
-export type AdminUpdateKind = 'reports' | 'verification' | 'feedback';
+export type AdminUpdateKind = 'reports' | 'verification' | 'feedback' | 'assistant';
 export type AdminUpdateAction = 'created' | 'updated' | 'deleted' | 'resolved' | 'reviewed' | 'other';
 
 /** Admin screen change hint for cross-tab sync (emitted to the acting admin's sockets). */

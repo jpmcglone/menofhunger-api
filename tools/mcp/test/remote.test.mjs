@@ -171,7 +171,7 @@ test('hosted MCP performs real HTTP handshake and reads via the shared API tools
     requestInit: { headers: { Authorization: `Bearer ${tokens.access_token}` } },
   }));
   const catalog = (await client.listTools()).tools;
-  assert.equal(catalog.length, 16);
+  assert.equal(catalog.length, 18);
   assert.ok(catalog.every((tool) => tool.annotations.readOnlyHint));
   assert.equal(catalog.some((tool) => tool.name === 'save_draft'), false);
   const result = await client.callTool({ name: 'feedback', arguments: { limit: 2 } });

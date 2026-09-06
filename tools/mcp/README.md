@@ -280,3 +280,13 @@ on an ephemeral loopback port. CI installs the nested package and runs its tests
 Hosted tests exercise HTTP MCP initialization/tool calls, OAuth discovery, consent,
 CSRF, PKCE, callback/resource binding, single-use codes, refresh rotation, revocation,
 admin access removal, encrypted state, and exclusion of desktop filesystem tools.
+
+## In-product admin MARV
+
+Web and iOS discover the same admin catalog through `admin_capabilities`. The new
+`admin_workspace` tool reads additional named admin areas; use `moh call
+admin_workspace '{"workspace":"verification"}' --json` or discover its schema with
+`moh tools --json`. The dedicated admin assistant reuses these read tools and has
+12 additional proposal operations that require an in-product confirmation button.
+MCP and the CLI do not execute those mutations. Local draft/decision files remain local.
+See [admin experience and coverage](../../docs/admin-experience.md).

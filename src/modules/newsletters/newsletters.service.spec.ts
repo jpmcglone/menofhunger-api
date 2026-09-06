@@ -76,6 +76,18 @@ function makeService() {
 }
 
 describe('NewslettersService', () => {
+  it('creates a complete unsent draft atomically using the same write normalization as edits', async () => {
+    const { svc, prisma, email, jobs } = makeService();
+    const bodyJson = JSON.stringify({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hello lodge' }] }] });
+    const result = await svc.create('admin-1', { subject: '  Weekly letter  ', bodyJson, ctaLabel: '' });
+    expect(result.subject).toBe('Weekly letter');
+    expect(prisma.newsletter.create).toHaveBeenCalledTimes(1);
+    expect(prisma.newsletter.create).toHaveBeenCalledWith({ data: expect.objectContaining({ subject: 'Weekly letter', bodyJson, ctaLabel: null, createdByAdminId: 'admin-1' }) });
+    expect(prisma.newsletter.update).not.toHaveBeenCalled();
+    expect(email.sendText).not.toHaveBeenCalled();
+    expect(jobs.enqueueCron).not.toHaveBeenCalled();
+  });
+
   it('bounds CLI list requests without changing the default admin list', async () => {
     const { svc, prisma } = makeService();
     await svc.listAdmin(5);

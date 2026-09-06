@@ -1,9 +1,9 @@
-import { Body, Controller, Get, NotFoundException, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUserId } from '../users/users.decorator';
-import { PrismaService } from '../prisma/prisma.service';
+import { AdminGuard } from '../admin/admin.guard';
 import { TaxonomyService } from './taxonomy.service';
 
 const searchSchema = z.object({
@@ -20,7 +20,6 @@ const preferenceSchema = z.object({
 export class TaxonomyController {
   constructor(
     private readonly taxonomy: TaxonomyService,
-    private readonly prisma: PrismaService,
   ) {}
 
   @Get('search')
@@ -47,14 +46,9 @@ export class TaxonomyController {
     return { data };
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AdminGuard)
   @Post('backfill')
-  async backfill(@CurrentUserId() userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { siteAdmin: true },
-    });
-    if (!user?.siteAdmin) throw new NotFoundException();
+  async backfill() {
     const data = await this.taxonomy.backfillAndSync();
     return { data };
   }
