@@ -14,8 +14,8 @@ From this repository: `npm run mcp:setup`, `npm run moh -- login`, then
 ChatGPT web connects to `https://api.menofhunger.com/mcp` over HTTPS with
 administrator OAuth consent. It runs inside this API; no separate hosted service
 is required. See the [connection guide](tools/mcp/README.md#connect-chatgpt-web).
-Run `npm run mcp:setup` after a fresh `npm ci` before starting the API locally;
-Docker and CI install the shared package automatically.
+The normal `npm ci`/`npm install` postinstall installs the shared MCP package
+automatically for local development, native Render deployments, Docker, and CI.
 
 New here? Start with [Getting started](docs/getting-started.md) for local setup, eight core concepts, authentication, and troubleshooting.
 

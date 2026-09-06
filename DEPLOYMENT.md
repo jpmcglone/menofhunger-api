@@ -2,7 +2,17 @@
 
 ## Render
 
-The API is a Docker web service (`Dockerfile`). Production health lives at the unversioned root: `GET /health` (not `/v1/health`).
+The existing dashboard-managed API uses Render's native Node runtime. This repository
+also supports Docker (`Dockerfile`); `render.yaml` describes that alternative and does
+not establish the existing service's runtime. Production health lives at the
+unversioned root: `GET /health` (not `/v1/health`).
+
+For native Node, use `npm ci && npm run build` as the build command and `npm run start`
+as the start command, preserving the existing pre-deploy migration command. The root
+postinstall generates Prisma and installs the shared MCP package from its own lockfile.
+Do not disable install lifecycle scripts without explicitly running `npm run postinstall`.
+Both runtimes need Node 20.19+. Startup failures exit immediately instead of leaving
+background Redis connections alive while Render waits for an HTTP port.
 
 ### Zero-downtime deploys
 

@@ -2,9 +2,8 @@ FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY prisma ./prisma/
-RUN npm ci
 COPY tools/mcp/package.json tools/mcp/package-lock.json ./tools/mcp/
-RUN npm ci --prefix tools/mcp --ignore-scripts --no-audit --no-fund
+RUN npm ci
 
 FROM node:20-alpine AS dev
 WORKDIR /app
@@ -28,10 +27,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 COPY prisma ./prisma/
+COPY tools/mcp/package.json tools/mcp/package-lock.json ./tools/mcp/
 RUN npm ci --omit=dev && npx prisma generate
 COPY --from=build /app/dist ./dist
-COPY --from=deps /app/tools/mcp/node_modules ./tools/mcp/node_modules
-COPY tools/mcp/package.json ./tools/mcp/package.json
 COPY tools/mcp/src ./tools/mcp/src
 EXPOSE 3001
 CMD ["node", "dist/main.js"]

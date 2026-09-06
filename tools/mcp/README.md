@@ -31,8 +31,9 @@ moh briefing --range 7d
 
 Without a global install, use `npm run --silent moh -- ...` from the API project.
 Dependencies are pinned in the nested package lock. The API's hosted MCP loads
-this same package; Docker and CI install it. After a fresh local checkout, run
-`npm run mcp:setup` before starting the API.
+this same package. The root install's postinstall runs `mcp:setup` automatically
+on native Render, Docker, CI, and local installs. If lifecycle scripts were
+intentionally disabled, run `npm run postinstall` before starting the API.
 
 ## Connect Codex
 

@@ -22,7 +22,7 @@
     "build:typecheck": "tsc --noEmit",
     "postbuild": "node scripts/check-module-graph.mjs",
     "check:module-graph": "node scripts/check-module-graph.mjs",
-    "postinstall": "prisma generate",
+    "postinstall": "prisma generate && npm run mcp:setup",
     "seed:prod": "node scripts/seed-prod.js",
     "seed:tickers": "node scripts/seed-tickers.mjs",
     "backfill:cashtags": "node scripts/backfill-cashtags.mjs",

@@ -452,4 +452,9 @@ async function bootstrap() {
   }
 }
 
-void bootstrap();
+void bootstrap().catch((error: unknown) => {
+  // Background queue connections can keep a failed bootstrap alive indefinitely.
+  // Exit so the deployment reports the actual startup failure, not a port timeout.
+  new Logger('Startup').error(error instanceof Error ? error.stack ?? error.message : String(error));
+  process.exit(1);
+});
