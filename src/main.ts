@@ -17,6 +17,9 @@ import { AppConfigService } from './modules/app/app-config.service';
 import { PresenceIoAdapter } from './common/adapters/presence-io.adapter';
 import { RequestCacheService } from './common/cache/request-cache.service';
 import { isOneClickUnsubscribePath } from './modules/newsletters/email-unsubscribe.helpers';
+import { createMcpMiddleware } from './modules/mcp/mcp-bootstrap';
+import { AuthService } from './modules/auth/auth.service';
+import { RedisService } from './modules/redis/redis.service';
 
 function isUnsafeMethod(method: string | undefined) {
   const m = (method ?? '').toUpperCase();
@@ -236,6 +239,10 @@ async function bootstrap() {
     requestCache.runWithNewStore(() => next());
   });
 
+  // MCP/OAuth uses bearer tokens and its own CSRF-protected consent flow. Mount
+  // exact protocol paths before cookie-only CSRF and raw URL logging (OAuth codes).
+  app.use(createMcpMiddleware(appConfig, app.get(AuthService), app.get(RedisService)));
+
   // Request id (for tracing + debugging). Returned as `x-request-id`.
   app.use((req: Request, res: Response, next: NextFunction) => {
     const incoming = String(req.headers['x-request-id'] ?? '').trim();
@@ -446,4 +453,3 @@ async function bootstrap() {
 }
 
 void bootstrap();
-

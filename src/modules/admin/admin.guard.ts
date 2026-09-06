@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { getSessionCookie } from '../../common/session-cookie';
 import { AuthService, type SessionResult } from '../auth/auth.service';
 import type { AuthedRequest } from '../auth/auth.guard';
+import { isOwnAdminSession } from './admin-session';
 
 /**
  * Same `user` shape as `AuthedRequest`, so handlers read it identically. Note that
@@ -25,11 +26,7 @@ export class AdminGuard implements CanActivate {
     }
 
     // Hide existence of admin routes from non-admins (and logged-out users).
-    if (!result || !result.user.siteAdmin) throw new NotFoundException();
-
-    // An impersonation session never carries admin powers, even if the impersonated
-    // account is later granted `siteAdmin`. Prevents privilege nesting.
-    if (result.impersonatedByUserId) throw new NotFoundException();
+    if (!isOwnAdminSession(result)) throw new NotFoundException();
 
     if (result.renewed && token) {
       const res = context.switchToHttp().getResponse<Response>();
