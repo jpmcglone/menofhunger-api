@@ -23,6 +23,7 @@ export class CoinsController {
       recipientUsername: parsed.recipientUsername,
       amount: parsed.amount,
       note: parsed.note ?? null,
+      postId: parsed.postId,
     });
     return { data: result };
   }

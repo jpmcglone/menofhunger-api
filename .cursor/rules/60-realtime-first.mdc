@@ -1,6 +1,6 @@
 ---
 description: Real-time first — every state change worth showing across pages/users must emit a websocket event in addition to the HTTP response.
-alwaysApply: true
+alwaysApply: false
 ---
 
 # Real-time First (API)
@@ -70,4 +70,4 @@ If you skip an emit because the change is "internal only", say so in the commit/
 
 ## Tests
 
-When you add an `emit*` method on `PresenceRealtimeService` or a service that calls it, add at least one unit test that asserts the emit happens. The `gateway-unit-tests` skill (`.cursor/skills/gateway-unit-tests/SKILL.md`) shows the FakeServer pattern for this.
+When you add an `emit*` method on `PresenceRealtimeService` or a service that calls it, add at least one unit test that asserts the emit happens. The `gateway-unit-tests` skill (`.agents/skills/gateway-unit-tests/SKILL.md`) shows the FakeServer pattern for this.

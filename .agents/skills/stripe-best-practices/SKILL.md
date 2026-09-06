@@ -13,7 +13,7 @@ description: >-
 
 ---
 
-Latest Stripe API version: **2026-03-25.dahlia**. Always use the latest API version and SDK unless the user specifies otherwise.
+Version selection follows the [dependency policy](../../../docs/engineering-policy.md#dependencies). Inspect the installed SDK and configured API version before applying these recommendations.
 
 ## Integration routing
 

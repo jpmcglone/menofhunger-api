@@ -1,59 +1,10 @@
 ---
 description: Definition of done for substantive api features (lint, types, tests, build, prisma, contracts)
-alwaysApply: true
+alwaysApply: false
 ---
 
-# Feature "Done" Checklist (menofhunger-api)
+# Development and validation
 
-After **substantive** work in this repo (new endpoint, new module, schema change, DTO change, controller refactor, auth/middleware changes, queue/worker changes), run this gate **before declaring the task complete**.
-
-A change is "substantive" if it touches: `src/**`, `prisma/**`, `test/**`, or any project config (`nest-cli.json`, `tsconfig.json`, `package.json`).
-
-## Multi-phase plan mode
-
-When implementing a **multi-phase plan** (a `.plan.md` file, or a todo list with multiple phases across which you are progressing):
-
-- **Between phases** (todos remain): run only **steps 1–3** (lint + typecheck + build). Skip `npm test`.
-- **After the final phase** (no more pending todos): run the **complete checklist** including tests.
-
-Rationale: `npm test` can take 30–90 seconds per run. In a multi-phase plan that overhead compounds. Lint + typecheck + build catch the vast majority of errors fast; the test suite at the end validates the fully integrated work.
-
-**Single task (no plan, or this is the only todo):** run all steps as usual.
-
-## Run, in order, from `menofhunger-api/`
-
-1. **Lint** — `npm run lint`
-   - Fix every error. Warnings: fix new ones you introduced; ignore pre-existing.
-2. **Types** — `npm run build:typecheck`
-   - Zero errors.
-3. **Build** — `npm run build`
- - Must succeed. Catches Nest module wiring issues that the typechecker misses.
- - Its `postbuild` hook runs `scripts/check-module-graph.mjs`, which requires the built root module to catch circular imports between `*.module.ts` files. If it fails with `Cannot access 'XModule' before initialization`, **break the cycle** — remove the dependency that shouldn't exist. Do not "fix" it with `forwardRef()`: that resolves DI ordering but the top-level `import` still executes, so the load-time cycle remains.
-4. **Tests** — `npm test` *(skip between phases in a multi-phase plan; always run after the final phase)*
-   - All green. If you added a controller, service, or DTO, add at least one targeted unit test. If you changed an endpoint contract, prefer an e2e/integration test.
-5. **Prisma (only if `prisma/schema.prisma` changed)**
-   - `npm run prisma:migrate:create -- <descriptive_name>` — generates the migration SQL.
-   - Review the generated SQL.
-   - `npm run prisma:migrate:deploy` — applies it locally.
-   - `npx prisma generate` — refresh client types.
-   - Re-run typecheck + build + tests.
-
-## API contract obligations
-
-When you add or change a response shape:
-
-1. Update the owning DTO under `src/common/dto/**` or the domain module's `*.dto.ts`.
-2. Mirror the change in `menofhunger-www/types/api.ts`.
-3. If iOS consumes the response, update the matching model under `menofhunger-ios/MenOfHunger/**/Model` and add/adjust a decoding test.
-4. From `menofhunger-www/`: `npx nuxi typecheck` and `node scripts/validate-api-types.mjs` must both pass.
-5. Honor the envelope: success is `{ data: T }` (or `{ data: T[], pagination }`); errors are handled by the global exception filter.
-
-## When something fails
-
-- Don't loosen the check. Fix the code.
-- Don't delete a failing test to make CI green. If the test is wrong, update it to encode the new correct invariant.
-- If a step is genuinely irrelevant to your change (e.g., docs-only edit), say so explicitly when reporting back.
-
-## Telling the user it's done
-
-Report which steps you ran and the outcome of each. Call out any DTO changes that require web or iOS follow-up.
+Read the authoritative [engineering policy](../../docs/engineering-policy.md), especially
+[development processes](../../docs/engineering-policy.md#development-processes) and the
+[validation matrix](../../docs/engineering-policy.md#validation-matrix). Do not maintain a second checklist here.

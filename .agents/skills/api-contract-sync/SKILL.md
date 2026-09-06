@@ -26,9 +26,9 @@ of an existing field is still a contract-parity bug.
 ## Required sync
 
 - API controllers return the envelope explicitly: `{ data }` or `{ data, pagination }`.
-- Web mirrors changed response shapes in `types/api.ts`; run `npx nuxi typecheck` and `node scripts/validate-api-types.mjs`.
+- Web mirrors changed response shapes in `types/api.ts`; validate using the [canonical matrix](../../../docs/engineering-policy.md#validation-matrix).
 - iOS updates the matching `Decodable` model and adds/updates a decoding test for any non-trivial or newly consumed shape.
-- Realtime payloads reuse the same DTO shape as HTTP unless there is a clear product reason not to.
+- Choose snapshots, typed patches, and invalidations using the [realtime policy](../../../docs/engineering-policy.md#realtime-contracts-and-ownership).
 - A client feature that starts consuming an existing optional field still requires a fixture that
   decodes the full nested shape and a UI path that handles missing/null values.
 - Preserve server strings exactly when case is meaningful (for example case-only username edits);
@@ -41,6 +41,6 @@ of an existing field is still a contract-parity bug.
 - A field exists only on one client because parity was assumed.
 - A new endpoint exists only because changing an existing DTO felt scary.
 - Web and iOS decode the same data with different names or optionality.
-- A socket payload has a parallel model for the same entity.
+- A socket payload duplicates a snapshot model, or a partial patch is decoded as a complete entity.
 - Web displays DTO-backed preview/content that iOS silently drops, or vice versa.
 - A client assumes "field absent" without checking the live DTO and the other client first.

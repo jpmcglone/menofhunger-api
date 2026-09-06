@@ -1,6 +1,6 @@
 ---
 description: Post-commit work (notifications, pushes, fan-out, emails) goes on the side-effects queue via SideEffectsService.dispatch — never inline on the request path, never setImmediate.
-alwaysApply: true
+alwaysApply: false
 ---
 
 # Async Side Effects (API)

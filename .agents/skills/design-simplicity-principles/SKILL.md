@@ -1,6 +1,6 @@
 ---
 name: design-simplicity-principles
-description: Core design and product principles for Men of Hunger — prioritize ruthlessly, ship simple, defend clarity. Use when designing or reviewing any user-facing feature, screen, component, API surface, or copy across web (Nuxt), iOS (SwiftUI), and API (NestJS). Triggers on UI design decisions, "should we add this", "feels cluttered", "feels overwhelming", "MVP scope", "feature creep", parity, completeness, product surface, core loop, Elon algorithm, new screen/page/endpoint design, PRs that add buttons/options/fields/tabs/menus, review for polish, "what would Jobs do", grandma test, simplicity, less is more, and copy / microcopy choices.
+description: Evaluate product scope, complexity, feature additions, and microcopy for Men of Hunger. Use for scope decisions or simplification; use moh-designer for layout and ux-review for an audit.
 ---
 
 # Design Simplicity Principles
@@ -10,7 +10,7 @@ Men of Hunger is an opinionated product. We win on clarity, not feature count. A
 ## The two rules to remember
 
 1. **The 10-second rule.** A new user decides in roughly ten seconds whether the screen they just opened is worth their attention. Every screen has a primary purpose. Make it obvious in the first second; let everything else fade behind it.
-2. **What would we cut?** Before shipping, ask "what would I cut if I had to remove one thing?" — and then cut it. If you can't, the design isn't done yet.
+2. Evaluate unnecessary complexity using the [product policy](../../../docs/engineering-policy.md#product-and-visual-decisions).
 
 ## Operating algorithm
 
@@ -86,7 +86,7 @@ This is the entire goal.
 Ask these out loud about any user-facing change:
 
 - [ ] **Primary purpose test:** Open the screen cold. Can you state its one job in five words or fewer?
-- [ ] **What would I cut?** Pick the one element you'd remove if forced. Then remove it.
+- [ ] Identify redundant elements; preserve elements that serve the user’s task.
 - [ ] **Grandma test:** Could a non-technical adult accomplish the primary task on first try, no tooltip required?
 - [ ] **The 10-second test:** In ten seconds of first impression, is it obvious what to do next?
 - [ ] **Affordance check:** Does every interactive element look interactive? Does every non-interactive element look non-interactive? No PUSH/PULL doors.
@@ -97,7 +97,7 @@ Ask these out loud about any user-facing change:
 
 How "less, but better" cashes out in each codebase:
 
-### Web (`menofhunger-www`, Nuxt 3 + Tailwind)
+### Web (`menofhunger-www`, Nuxt + Tailwind)
 
 - **Components:** prefer fewer props with smart defaults. A new prop must justify itself. If you're adding `variant="X" | "Y" | "Z"`, ask whether one of those should just be a separate component.
 - **Pages:** one primary action per route. Secondary actions live in menus, not in the header.
@@ -108,18 +108,18 @@ How "less, but better" cashes out in each codebase:
 ### iOS (`menofhunger-ios`, SwiftUI / ESF View-First)
 
 - **Screens:** one navigation goal per screen. If a screen has both a list *and* an editor, it should probably be two screens or a sheet.
-- **Toolbars:** at most three items. Anything else moves into a menu.
-- **Modifier soup:** if a view's modifier chain is longer than 8 lines, it's doing too much. Extract a small `View` rather than reaching for a `ViewModifier`.
+- **Toolbars:** aim for three prominent actions when that fits the task. Anything else moves into a menu.
+- **Modifier soup:** review long modifier chains for cohesive extraction. Extract a small `View` rather than reaching for a `ViewModifier`.
 - **Touch targets:** every tappable element ≥ 44×44pt. Don't make users aim.
 - **System over custom:** SF Symbols, system colors, and standard navigation patterns build instant familiarity. Custom anything must justify the cost.
-- **Animations:** `.spring(response:0.3, dampingFraction:1.0)` for state changes, never bouncy. Keep duration ≤ 0.3s.
+- **Animations:** `.spring(response:0.3, dampingFraction:1.0)` for state changes, as a starting point; follow existing motion tokens and Reduce Motion.
 
 ### API (`menofhunger-api`, NestJS + Prisma)
 
 - **Endpoints:** prefer adding fields to existing resources over multiplying endpoints. `GET /posts/:id` returning more is almost always better than introducing `GET /posts/:id/extras`.
 - **Request bodies:** every optional field is a question the client must answer "what do I send here". Keep them rare and document defaults in the DTO.
 - **Response envelopes:** the `{ data }` / `{ data, pagination }` / `{ meta }` contract IS our simplicity discipline — never invent a fourth shape.
-- **Realtime payloads:** include only what the client needs to patch state, not the whole resource. The client already has the rest.
+- **Realtime payloads:** follow the [realtime contract policy](../../../docs/engineering-policy.md#realtime-contracts-and-ownership).
 - **Errors:** specific, human-readable messages over codes. The error message is UX too — it's the only copy a user sees when things break.
 
 ## Common simplicity failures (and the fix)
@@ -146,4 +146,4 @@ Simplicity is the tiebreaker when other principles are equal — not a license t
 4. **Simplicity** ← default tiebreaker
 5. Visual polish
 
-When in doubt, ask: *"What would I cut?"* — and cut it.
+When in doubt, compare user outcomes and preserve the simplest complete solution.

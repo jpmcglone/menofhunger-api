@@ -665,6 +665,7 @@ export class PostsController {
           filteredPosts,
           collapsedItemsByItemId,
           scoreByPostId: popResult.scoreByPostId,
+          conversationContext: sortKind === 'forYou',
         });
         // Annotate collapsed repost rows so the UI can render "Alice and N others reposted".
         for (const dto of dtos) {

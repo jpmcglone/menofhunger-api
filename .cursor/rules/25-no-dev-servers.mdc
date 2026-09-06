@@ -1,11 +1,10 @@
 ---
 description: Do not start dev servers/watchers (user runs them).
-alwaysApply: true
+alwaysApply: false
 ---
 
-## Dev servers / watchers
+# Development and validation
 
-- Don’t start long-running dev servers/watchers (e.g. `npm run dev`).
-- Assume the user has them running with auto-reload.
-- If a restart is needed, tell the user the command—don’t run it.
-
+Read the authoritative [engineering policy](../../docs/engineering-policy.md), especially
+[development processes](../../docs/engineering-policy.md#development-processes) and the
+[validation matrix](../../docs/engineering-policy.md#validation-matrix). Do not maintain a second checklist here.

@@ -1,6 +1,6 @@
 ---
 description: Delete safely by checking cross-platform callers and choosing delete, redirect, handoff, or deprecate
-alwaysApply: true
+alwaysApply: false
 ---
 
 # Deletion and Deprecation

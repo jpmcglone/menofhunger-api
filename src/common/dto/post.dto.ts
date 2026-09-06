@@ -94,6 +94,7 @@ export type PostVideoEmbedDto = {
 };
 
 export type PostDto = {
+  conversationContext?: import('./conversation.dto').ConversationContextDto;
   id: string;
   createdAt: string;
   editedAt: string | null;

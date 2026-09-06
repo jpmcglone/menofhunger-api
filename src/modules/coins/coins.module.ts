@@ -1,3 +1,4 @@
+import { ConversationsModule } from '../posts/conversations.module';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -8,7 +9,7 @@ import { CoinsService } from './coins.service';
 import { CoinsSideEffectsHandler } from './coins-side-effects.handler';
 
 @Module({
-  imports: [AuthModule, PrismaModule, NotificationsModule, UsersModule],
+  imports: [ConversationsModule, AuthModule, PrismaModule, NotificationsModule, UsersModule],
   controllers: [CoinsController],
   providers: [CoinsService, CoinsSideEffectsHandler],
   exports: [CoinsService],

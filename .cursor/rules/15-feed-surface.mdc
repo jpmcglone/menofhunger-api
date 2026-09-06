@@ -1,6 +1,6 @@
 ---
 description: Keep feed concepts consistent across API, web, and iOS
-alwaysApply: true
+alwaysApply: false
 ---
 
 # Feed Surface

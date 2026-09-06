@@ -1,3 +1,4 @@
+import { ConversationsService } from './conversations.service';
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { CommunityGroupJoinPolicy, PostMediaKind, PostVisibility } from '@prisma/client';
@@ -85,6 +86,7 @@ export class PostsFeedQueryService {
     private readonly groupReadAccess: CommunityGroupReadAccessService,
     private readonly cache: CacheService,
     private readonly cacheInvalidation: CacheInvalidationService,
+    private readonly conversations: ConversationsService = undefined!,
   ) {}
 
   /**
@@ -723,6 +725,7 @@ export class PostsFeedQueryService {
     collapsedItemsByItemId: Map<string, FeedCollapsedItem<PostAuthorDto>[]>;
     scoreByPostId?: Map<string, number>;
     includeRestricted?: boolean;
+    conversationContext?: boolean;
   }): Promise<PostDto[]> {
     const { viewerUserId, filteredPosts, collapsedItemsByItemId } = params;
     const repostedPostIds = filteredPosts
@@ -844,8 +847,11 @@ export class PostsFeedQueryService {
       videoEmbedByPostId,
     });
 
+    const contexts = params.conversationContext && viewerUserId && this.conversations
+      ? await this.conversations.contexts(viewerUserId, filteredPosts.map(p => p.id)) : new Map();
     return filteredPosts.map((p) => {
       const dto = attachParentChain(p);
+      if (dto.viewerCanAccess !== false && !dto.deletedAt && contexts.has(p.id)) dto.conversationContext = contexts.get(p.id);
       applyCollapsedThreadSummary(dto, collapsedItemsByItemId.get(p.id));
       return dto;
     });
@@ -1642,6 +1648,26 @@ export class PostsFeedQueryService {
     addRows(trendingScanned, 'discovery');
     addRows(chronoScanned, 'discovery');
 
+    if (viewerUserId && this.conversations) {
+      const participated = await this.prisma.post.findMany({ where: { userId: viewerUserId, parentId: { not: null }, deletedAt: null, createdAt: { gte: engagedWithSince } }, select: { rootId: true, parentId: true }, orderBy: { createdAt: 'desc' }, take: 100 });
+      const roots = [...new Set(participated.map(p => p.rootId ?? p.parentId).filter((id): id is string => !!id))];
+      const linkedUpdates = await this.prisma.post.findMany({
+        where: { AND: [baseWhere, ...servedWhere, { parentId: null, createdAt: { gte: followedSince }, quotedPost: { OR: [
+          { boosts: { some: { userId: viewerUserId } } }, { bookmarks: { some: { userId: viewerUserId } } },
+          { replies: { some: { userId: viewerUserId, deletedAt: null } } },
+          { threadReplies: { some: { userId: viewerUserId, deletedAt: null } } },
+        ] } }] },
+        select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true, quotedPost: { select: { userId: true } } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 20,
+      });
+      addRows(linkedUpdates.filter(p => p.quotedPost?.userId === p.userId), 'discovery');
+
+      if (roots.length) {
+        const readable = await this.conversations.readableWhere(viewerUserId);
+        const active = await this.prisma.post.findMany({ where: { AND: [baseWhere, ...servedWhere, { id: { in: roots }, replies: { some: { AND: [readable, { createdAt: { gte: followedSince }, userId: { not: viewerUserId }, body: { not: '' } }] } } }] }, select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true }, take: 20 });
+        addRows(active, 'discovery');
+      }
+    }
     const candidates = [...candidateById.values()];
     if (candidates.length === 0) {
       const fallback = await fetchChronologicalMediaFallback(limit, []);
@@ -1657,6 +1683,7 @@ export class PostsFeedQueryService {
     }
 
     const candidateIds = candidates.map((c) => c.id);
+    const conversationContexts = viewerUserId && this.conversations ? await this.conversations.contexts(viewerUserId, candidateIds) : new Map();
     const authorIds = [...new Set(candidates.map((c) => c.userId))];
     const friendEngagedIds = candidates.filter((c) => c.friendEngaged).map((c) => c.id);
 
@@ -1783,6 +1810,7 @@ export class PostsFeedQueryService {
 
     const now = Date.now();
     const ranked = candidates.map((c) => {
+      const conversation = conversationContexts.get(c.id);
       const youFollowThem = youFollow.has(c.userId);
       const theyFollowYou = followsYou.has(c.userId);
       const youEngagedWithThem = youFollowThem && engagedWithAuthorIds.has(c.userId);
@@ -1837,7 +1865,7 @@ export class PostsFeedQueryService {
       // Effective age uses the freshest of (post createdAt, latest friend engagement) — a months-old
       // post with a 2h-ago reply from someone the viewer follows ranks like fresh content.
       const friendEngagementMs = c.lastFriendEngagementAt?.getTime() ?? 0;
-      const effectiveAtMs = Math.max(c.createdAt.getTime(), friendEngagementMs);
+      const effectiveAtMs = Math.max(c.createdAt.getTime(), friendEngagementMs, conversation?.reply ? Date.parse(conversation.reply.createdAt) : 0);
       const ageHours = Math.max(0, (now - effectiveAtMs) / (60 * 60 * 1000));
       const decay =
         POSTS_RANKING.forYouRecencyFloor +
@@ -1874,7 +1902,8 @@ export class PostsFeedQueryService {
       } else {
         rawBase = rawTrending;
       }
-      const base = c.friendEngaged ? Math.max(rawBase, POSTS_RANKING.forYouFriendEngagementBaseFloor) : rawBase;
+      const conversationBonus = conversation?.kind === 'unanswered' ? 1.5 : conversation?.kind === 'newReplies' ? 3 : conversation?.kind === 'followUp' ? 1 : 0;
+      const base = conversationBonus + (c.friendEngaged ? Math.max(rawBase, POSTS_RANKING.forYouFriendEngagementBaseFloor) : rawBase);
       // Jitter strength: anon viewers always get a baseline jitter (no seen-history signal
       // to lean on); authed viewers start at 0 (fully deterministic while there's unseen/fresh
       // content) and ramp up toward forYouSeenSaturationJitterMax as the candidate pool
@@ -1927,6 +1956,7 @@ export class PostsFeedQueryService {
     const pickedIdSet = new Set<string>();
     const skipped: typeof ranked = [];
 
+    let resurfacedCount = 0;
     const recentAuthors: string[] = [];
     const recentRoots: string[] = [];
     const recentWasReply: boolean[] = [];
@@ -1934,6 +1964,8 @@ export class PostsFeedQueryService {
       for (const r of source) {
         if (picked.length >= maxPicked) break;
         if (pickedIdSet.has(r.candidate.id)) continue;
+        const resurfaced = seenById.has(r.candidate.id) && conversationContexts.get(r.candidate.id)?.kind === 'newReplies';
+        if (resurfaced && resurfacedCount >= 2) continue;
         const rootKey = r.candidate.parentId ?? r.candidate.id;
         const isReply = Boolean(r.candidate.parentId);
         const hasUnpickedOriginal = source.some(
@@ -1948,6 +1980,7 @@ export class PostsFeedQueryService {
           continue;
         }
         picked.push(r);
+        if (resurfaced) resurfacedCount++;
         pickedIdSet.add(r.candidate.id);
         recentAuthors.push(r.candidate.userId);
         recentRoots.push(rootKey);
@@ -1999,6 +2032,9 @@ export class PostsFeedQueryService {
       for (const r of skipped) {
         if (picked.length >= limit) break;
         if (pickedIdSet.has(r.candidate.id)) continue;
+        const resurfaced = seenById.has(r.candidate.id) && conversationContexts.get(r.candidate.id)?.kind === 'newReplies';
+        if (resurfaced && resurfacedCount >= 2) continue;
+        if (resurfaced) resurfacedCount++;
         picked.push(r);
         pickedIdSet.add(r.candidate.id);
       }

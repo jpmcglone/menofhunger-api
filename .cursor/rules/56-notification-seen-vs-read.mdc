@@ -1,6 +1,6 @@
 ---
 description: Bell badge is unseen; list highlight is unread. Do not mix deliveredAt and readAt.
-alwaysApply: true
+alwaysApply: false
 ---
 
 # Notification seen vs read

@@ -1,6 +1,6 @@
 ---
 description: Spaces / Watch Party gateway architecture for PresenceGateway. Read when working on watch party sync, owner socket tracking, presence.gateway.ts, or WatchPartyStateService.
-globs: src/modules/presence/presence.gateway.ts,src/modules/spaces/watch-party-state.service.ts,src/modules/spaces/spaces-presence.service.ts
+globs: "src/modules/presence/presence.gateway.ts,src/modules/spaces/watch-party-state.service.ts,src/modules/spaces/spaces-presence.service.ts"
 alwaysApply: false
 ---
 

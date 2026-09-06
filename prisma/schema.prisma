@@ -1548,6 +1548,7 @@ model Post {
   versions                 PostVersion[]
   anonViews                PostAnonView[]
   pinnedByUser             User?          @relation("PinnedPost")
+  coinTransfers            CoinTransfer[]
   notificationsAsSubject   Notification[] @relation("Notification_subjectPost")
   notificationsAsActorPost Notification[] @relation("Notification_actorPost")
   reports                  Report[]       @relation("Report_subjectPost")
@@ -2857,6 +2858,10 @@ model ArticleCommentReaction {
 }
 
 model CoinTransfer {
+  postId      String?
+  post        Post? @relation(fields: [postId], references: [id], onDelete: SetNull)
+
+  @@index([postId, createdAt])
   id          String           @id @default(cuid())
   createdAt   DateTime         @default(now())
   senderId    String

@@ -1,6 +1,6 @@
 ---
 name: moh-designer
-description: Design Men of Hunger screens with Apple simplicity and Linear.app function. Use when designing or reviewing UI, layout, hierarchy, density, chrome, empty states, feed/list rows, navigation, or when the user mentions Apple, Linear, taste, visual design, "feels like a dashboard", "too sparse", "too busy", or "design this screen."
+description: Design or revise Men of Hunger screen structure, hierarchy, density, and navigation using existing tokens. Use for layout and visual design; use make-interfaces-feel-better for small polish fixes.
 ---
 
 # Men of Hunger Designer
@@ -16,10 +16,10 @@ That is the taste. Apple decides what is on the screen. Linear decides how the w
 | `design-simplicity-principles` | What to ship. Cut features. |
 | **`moh-designer`** | How the screen works and looks. Hierarchy, density, chrome. |
 | `make-interfaces-feel-better` | Pixel polish after the structure is right. Radius, motion, shadows. |
-| `ux-review` | Full-platform UI/UX audit. Look, judge, recommend. Do not implement. |
+| `ux-review` | Full-platform UI/UX audit. Review and implement within the user’s requested scope. |
 | `moh-marketing` | Words outside the product. |
 
-Do not redesign tokens. Do not invent a new aesthetic. Design inside the lodge.
+Follow the [product and visual policy](../../../docs/engineering-policy.md#product-and-visual-decisions).
 
 ## The synthesis
 
@@ -60,7 +60,7 @@ Web tokens live in `menofhunger-www/assets/css/main.css`. iOS mirrors them in `A
 - Serif (`moh-serif` / Literata): lodge moments only — quotes, daily prompts. Never UI chrome.
 - Font: Inter on web. System on iOS. Do not add a display face.
 
-If you need a new color, you are solving the wrong problem.
+Use the linked policy to decide when a semantic token is needed.
 
 ## Screen recipe
 

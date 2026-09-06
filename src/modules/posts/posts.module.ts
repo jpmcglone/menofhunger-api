@@ -1,3 +1,4 @@
+import { ConversationsModule } from './conversations.module';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -26,11 +27,11 @@ import { ScheduledPostsController } from './scheduled-posts.controller';
 import { ScheduledPostsPublishCron } from './scheduled-posts-publish.cron';
 
 @Module({
-  imports: [AuthModule, NotificationsModule, RealtimeModule, PostViewsModule, CashtagsModule, LinkMetadataModule],
+  imports: [ConversationsModule, AuthModule, NotificationsModule, RealtimeModule, PostViewsModule, CashtagsModule, LinkMetadataModule],
   // ScheduledPostsController must precede PostsController so the static
   // `/posts/scheduled` routes register before PostsController's `/posts/:id`
   // catch-all (otherwise GET /posts/scheduled resolves as id="scheduled" → 404).
-  controllers: [ScheduledPostsController, PostsController, DraftsController],
+  controllers: [ ScheduledPostsController, PostsController, DraftsController],
   providers: [
     PostsService,
     PostsDraftsService,

@@ -4,7 +4,7 @@ description: Guide for upgrading Stripe API versions and SDKs
 
 ---
 
-The latest Stripe API version is 2026-03-25.dahlia - use this version when upgrading unless the user specifies a different target version.
+Use only for an explicitly requested or separately scoped upgrade. Follow the [dependency policy](../../../docs/engineering-policy.md#dependencies); verify the current supported target in official Stripe documentation rather than a hardcoded date.
 
 # Upgrading Stripe Versions
 

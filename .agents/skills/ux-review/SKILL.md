@@ -1,13 +1,13 @@
 ---
 name: ux-review
-description: Full UI/UX review of one platform (web or iOS) using HIG, modern UX heuristics, and Men of Hunger taste. Use when asked to review UI/UX, audit screens, do a design review, or recommend UX changes. Look and recommend only — do not implement during the review.
+description: Audit web or iOS UI/UX and recommend prioritized changes. Use for explicit UX reviews or screen audits; implement only when the user requests implementation.
 ---
 
 # UX Review
 
-Instructions for a full UI/UX review. **Look. Judge. Recommend. Do not implement.**
+Review workflow. Follow the [scope policy](../../../docs/engineering-policy.md#scope-and-precedence); implement when requested.
 
-One platform per review. Web and iOS are different products that share taste, not one UI to port.
+Review each requested platform using its native patterns.
 
 ## Where this sits
 
@@ -18,18 +18,17 @@ One platform per review. Web and iOS are different products that share taste, no
 | `make-interfaces-feel-better` | Pixel polish after structure is right. |
 | **`ux-review`** | Walk a whole platform. Find what fails. Say what to change. |
 
-Read the three skills above before judging anything. This file is the method. After you pick a platform, read that platform file:
+Load the relevant design reference only when needed. Read the platform file for each requested platform:
 
 - Web → [web.md](web.md)
 - iOS → [ios.md](ios.md)
 
 ## Hard rules
 
-1. **One platform.** If the user did not name one, ask. Do not "also glance at" the other.
-2. **Review only.** No code, no restyles, no new components. Findings and recommendations only.
+1. Scope and implementation authority come from the linked scope policy.
 3. **Live UI beats source.** Walk the running product when you can. Code is evidence for *why*, not a substitute for *what it feels like*.
 4. **Structure before polish.** A concentric radius on a screen with three jobs is the wrong finding.
-5. **Cut before add.** If the fix is a new control, tab, badge, color, or setting, you have not finished thinking.
+5. Apply the [product policy](../../../docs/engineering-policy.md#product-and-visual-decisions) before adding or removing UI.
 6. **Stay inside the lodge.** No new palette, typeface, card language, or "inspiration" aesthetic. Tokens already exist.
 7. **Do not port platforms.** Never recommend a web card on iOS or an iOS tab pattern on desktop. Name the native pattern.
 
@@ -93,7 +92,7 @@ Do the passes in this order. Do not start with pixels.
 
 ### 0. Lock scope
 
-- Platform: `web` or `ios` — exactly one.
+- Platform: the user’s requested platform(s); infer from context when clear.
 - Breadth: **full** (default when they say "full review") or **core loop** (Home → post → profile → notify) if they ask for a slice.
 - Skip admin unless they ask. Admin is a different user.
 
@@ -167,13 +166,12 @@ Every finding must have all of these. If you cannot fill them, you do not have a
 3. **Saw** — what is on the screen. Concrete. Not "feels cluttered."
 4. **Fails** — one named principle from the lens.
 5. **Change** — the specific thing to do. Name the element to remove, move, or replace. Name the pattern to use (`moh-divide` row, system toolbar, overflow menu).
-6. **Not this** — the redesign to refuse (new color, extra card, web pattern on iOS, a setting).
-7. **Severity** — from the table.
+6. **Severity** — from the table.
 
 Do not recommend:
 
 - A new aesthetic, palette, display face, or illustration system.
-- A new feature, mode, tab, or setting unless it *replaces* something you are cutting.
+- Unrequested feature expansion without a concrete user need.
 - Parity with the other platform as a goal.
 - Pixel tweaks on a screen whose job is unclear.
 - "Add onboarding," "add a tooltip," or "add empty-state art" to paper over a bad affordance.
@@ -195,49 +193,13 @@ Do recommend:
 **Saw:** [exactly what's on screen]
 **Fails:** [principle]
 **Change:** [the one thing to do]
-**Not this:** [the tempting wrong fix]
 ```
 
 ## Output
 
-Write the review as a standalone markdown the user can file. No moodboards. No screenshots-as-argument unless they prove a specific saw.
-
-```markdown
-# UX review — [web | iOS]
-
-**Scope:** [full | core loop | named surfaces]
-**Walked as:** stranger, regular, edge
-**Not reviewed:** [admin, marketing, handoff, …]
-
-## Verdict
-
-[8–12 sentences. What the platform is doing well. The one or two problems that matter most. What we would cut first.]
-
-## Cuts and fixes
-
-[finding blocks, worst first]
-
-## Simplifies
-
-[finding blocks]
-
-## Polishes
-
-[finding blocks — omit if structure is still wrong]
-
-## Keeps
-
-- [Surface]: [why it earns its place]
-- [Surface]: [why]
-
-## Suggested order
-
-1. [first change — usually a cut]
-2. [second]
-3. [third]
-```
-
-End with the suggested order. Three to seven items. That is the review's actual output. The rest is evidence.
+Report prioritized, concrete findings with affected surfaces, the user impact, and the proposed
+or implemented fix. Keep the length proportional to the task; no mandatory table, word count,
+or standalone report. State which surfaces were inspected in code versus exercised live.
 
 ## If you get stuck
 

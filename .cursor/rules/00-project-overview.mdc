@@ -1,6 +1,6 @@
 ---
 description: menofhunger-api core conventions (Nest + Prisma)
-alwaysApply: true
+alwaysApply: false
 ---
 
 ## API contract (must follow)

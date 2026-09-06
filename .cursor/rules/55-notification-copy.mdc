@@ -1,6 +1,6 @@
 ---
 description: Keep notification rows and lock-screen push copy human-readable and free of internal identifiers
-globs: src/modules/notifications/**/*.ts
+globs: "src/modules/notifications/**/*.ts"
 alwaysApply: false
 ---
 

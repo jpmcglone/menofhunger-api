@@ -1,3 +1,4 @@
+import { ConversationsService } from '../posts/conversations.service';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
@@ -10,6 +11,7 @@ import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cu
 import type { CoinTransferDto, CoinTransferReceiptDto, TransferCoinsResponse } from '../../common/dto/coin-transfer.dto';
 
 export const transferCoinsSchema = z.object({
+  postId: z.string().cuid().optional(),
   recipientUsername: z.string().trim().min(1),
   amount: z.number().int().min(1, 'Amount must be at least 1'),
   note: z.string().trim().max(140).optional().nullable(),
@@ -32,6 +34,7 @@ export class CoinsService {
     private readonly appConfig: AppConfigService,
     private readonly sideEffects: SideEffectsService,
     private readonly usersMeRealtime: UsersMeRealtimeService,
+    private readonly conversations: ConversationsService = undefined!,
   ) {}
 
   private async assertCoinsAccess(userId: string) {
@@ -51,6 +54,7 @@ export class CoinsService {
     recipientUsername: string;
     amount: number;
     note?: string | null;
+    postId?: string;
   }): Promise<TransferCoinsResponse> {
     const { senderUserId, recipientUsername, amount, note } = params;
     await this.assertCoinsAccess(senderUserId);
@@ -65,6 +69,11 @@ export class CoinsService {
     if (recipient.verifiedStatus === 'none') throw new BadRequestException('Cannot send coins to unverified users.');
     if (recipient.id === senderUserId) throw new BadRequestException('You cannot send coins to yourself.');
 
+    if (params.postId) {
+      const readable = await this.conversations.readableWhere(senderUserId);
+      const post = await this.prisma.post.findFirst({ where: { AND: [readable, { id: params.postId, userId: recipient.id, visibility: { not: 'onlyMe' }, kind: { not: 'repost' } }] }, select: { id: true } });
+      if (!post) throw new NotFoundException('Post not found.');
+    }
     const { senderAfter, transfer } = await this.prisma.$transaction(async (tx) => {
       // Guarded atomic decrement: WHERE coins >= amount serializes concurrent sends and
       // prevents the balance from going negative (no DB-level non-negative constraint exists).
@@ -88,6 +97,7 @@ export class CoinsService {
           senderId: senderUserId,
           recipientId: recipient.id,
           kind: 'transfer',
+          postId: params.postId,
           amount,
           note: note ?? undefined,
         },

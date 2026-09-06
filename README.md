@@ -1,6 +1,10 @@
 # menofhunger-api
 
-NestJS + Prisma API intended to be consumed by a Next.js app.
+Run `./init.sh` for local setup, or `./init.sh --setup-only` to prepare without launching. See [Getting started](docs/getting-started.md) for prerequisites and the full walkthrough.
+
+NestJS + Prisma API consumed by the Nuxt website and native SwiftUI app.
+
+New here? Start with [Getting started](docs/getting-started.md) for local setup, eight core concepts, authentication, and troubleshooting.
 
 ## Requirements
 
@@ -71,15 +75,16 @@ See `docs/api-contract.md` for the stability contract and type-sync process. The
 
 Any new unversioned surface must be added to `UNVERSIONED_ROOT_PATHS` (and the exclude list + normalization logic + these docs) in the same commit.
 
-## Using from Next.js (local)
+## Using from the website (local)
 
-In your Next.js app, set the base to the versioned root (product routes live under `/v1`):
+In the Nuxt website, set the base to the versioned root (product routes live under `/v1`):
 
-- `NEXT_PUBLIC_API_URL=http://localhost:3001/v1`
+- `NUXT_PUBLIC_API_BASE_URL=http://localhost:3001/v1`
+- Optionally `NUXT_API_BASE_URL=http://localhost:3001/v1` for server-side requests.
 
-Then call (example for an unversioned infra endpoint; most product calls append their path under the `/v1` base):
+Product requests use the website's shared `useApiClient` and append paths such as `/auth/me` to that base.
 
-- `${process.env.NEXT_PUBLIC_API_URL}/health`  (note: health is one of the few endpoints that stays at the raw host root)
+Health stays at the raw host root: `http://localhost:3001/health` (not `/v1/health`).
 
 Deploy: see `DEPLOYMENT.md` (Render health check + zero-downtime).
 
