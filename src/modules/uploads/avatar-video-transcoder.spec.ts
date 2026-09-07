@@ -30,8 +30,12 @@ describe('native avatar video processing', () => {
       const color = kind === 'hdr' ? ['-vf', 'setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc'] : [];
       execFileSync('ffmpeg', ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x320:rate=24',
         '-t', '1', '-c:v', 'libx264', ...color, source], { timeout: 30_000 });
+      // Older FFmpeg builds use stream metadata; newer builds require display_rotation.
+      const useDisplayRotation = kind === 'rotated' && execFileSync('ffmpeg', ['-hide_banner', '-h', 'full'],
+        { encoding: 'utf8', timeout: 15_000, maxBuffer: 4 * 1024 * 1024 }).includes('-display_rotation');
       execFileSync('ffmpeg', ['-nostdin', '-v', 'error',
-        ...(kind === 'rotated' ? ['-display_rotation', '90'] : []), '-i', source, '-c', 'copy', input], { timeout: 15_000 });
+        ...(useDisplayRotation ? ['-display_rotation', '90'] : []), '-i', source, '-c', 'copy',
+        ...(kind === 'rotated' && !useDisplayRotation ? ['-metadata:s:v:0', 'rotate=90'] : []), input], { timeout: 15_000 });
       const transcoder = new AvatarVideoTranscoder();
       const inputProbe = await transcoder.probe(input);
       if (kind === 'rotated') expect(inputProbe.streams[0]?.side_data_list?.[0]?.rotation).toBe(90);
