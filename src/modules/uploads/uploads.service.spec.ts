@@ -497,6 +497,54 @@ describe('UploadsService EXIF orientation normalization', () => {
     expect(puts[0][0].input.ContentType).toBe('image/jpeg');
   });
 
+  it('bounds the dimensions of a large rotated JPEG', async () => {
+    const { service } = makeService();
+    const jpeg = await makeJpeg(4000, 2000, 6);
+    const send = jest.fn(async (cmd: any) => {
+      if (cmd.constructor.name === 'GetObjectCommand') return { Body: Readable.from(jpeg) };
+      return {};
+    });
+    const result = await (service as any).getImageInfoAndNormalizeJpegIfNeeded({
+      s3: { send }, bucket: 'test', key: 'photo.jpg', contentType: 'image/jpeg',
+      maxBytes: 12 * 1024 * 1024, cacheControl: 'public',
+    });
+    expect([result.width, result.height]).toEqual([1920, 3840]);
+    const put = send.mock.calls.find((call: any[]) => call[0].constructor.name === 'PutObjectCommand');
+    const output = await sharp(put![0].input.Body).metadata();
+    expect(output.orientation).toBeUndefined();
+  });
+
+  it('does not resize or rewrite a large upright JPEG', async () => {
+    const { service } = makeService();
+    const jpeg = await makeJpeg(4000, 2000);
+    const send = jest.fn(async (cmd: any) => {
+      if (cmd.constructor.name === 'GetObjectCommand') return { Body: Readable.from(jpeg) };
+      return {};
+    });
+    const result = await (service as any).getImageInfoAndNormalizeJpegIfNeeded({
+      s3: { send }, bucket: 'test', key: 'photo.jpg', contentType: 'image/jpeg',
+      maxBytes: 12 * 1024 * 1024, cacheControl: 'public',
+    });
+    expect([result.width, result.height]).toEqual([4000, 2000]);
+    expect(result.didNormalize).toBe(false);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([['commitAvatarUpload', 'avatars'], ['commitBannerUpload', 'covers']] as const)(
+    'keeps %s intact when image processing is busy', async (method, prefix) => {
+    const { service, deps } = makeService();
+    const send = stubS3(service, name => {
+      if (name === 'HeadObjectCommand') return { ContentType: 'image/jpeg', ContentLength: 100 };
+      return {};
+    });
+    jest.spyOn(service as any, 'getImageInfoAndNormalizeJpegIfNeeded')
+      .mockRejectedValue(new ServiceUnavailableException('busy'));
+    await expect(service[method]('u1', `dev/${prefix}/u1/photo.jpg`))
+      .rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(send.mock.calls.some(call => call[0].constructor.name === 'DeleteObjectCommand')).toBe(false);
+    expect(deps.prisma.user.update).not.toHaveBeenCalled();
+  });
+
   it('leaves upright JPEGs untouched', async () => {
     const { service } = makeService();
     const jpeg = await makeJpeg(10, 20);

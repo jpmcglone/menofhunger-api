@@ -12,12 +12,7 @@ import { CheckinsService } from './checkins.service';
 const createSchema = z.object({
   body: z.string().trim().min(1).max(1000),
   visibility: z.enum(['verifiedOnly', 'premiumOnly']),
-  /**
-   * The prompt text the client actually showed the user.
-   * Sending this ensures the stored prompt matches what the user responded to —
-   * without it, a submission that crosses ET midnight stores the new day's prompt
-   * against an answer written for yesterday's prompt.
-   */
+  /** Reject stale answers when the displayed prompt no longer matches today's prompt. */
   prompt: z.string().trim().min(1).max(500).optional(),
 });
 

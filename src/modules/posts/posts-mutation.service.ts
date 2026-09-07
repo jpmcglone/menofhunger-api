@@ -1,3 +1,4 @@
+import { isCheckinOpen, CHECKIN_CLOSED_MESSAGE } from '../checkins/checkin-schedule';
 import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { PostVisibility } from '@prisma/client';
@@ -700,6 +701,7 @@ export class PostsMutationService {
     const checkinPromptRaw = (params.checkinPrompt ?? null)?.trim() || null;
 
     if (kind === 'checkin') {
+      if (!isCheckinOpen(now)) throw new BadRequestException(CHECKIN_CLOSED_MESSAGE);
       if (requestedCommunityGroupId) {
         throw new BadRequestException('Check-ins cannot be posted inside a community group.');
       }
@@ -1317,6 +1319,7 @@ export class PostsMutationService {
       })
       .catch((e: unknown) => {
         if (kind === 'checkin') {
+      if (!isCheckinOpen(now)) throw new BadRequestException(CHECKIN_CLOSED_MESSAGE);
           // One-per-day uniqueness.
           if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
             throw new BadRequestException('Already checked in today.');

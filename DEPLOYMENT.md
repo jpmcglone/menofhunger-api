@@ -66,3 +66,33 @@ For the conversation-insights release:
 If application rollback is needed, keep the additive nullable schema in place; do
 not drop attribution data as part of rolling back application code. Production
 migrations are a deployment action, not an implicit local validation step.
+
+## Runtime memory and image uploads
+
+Production logs include a `runtime_memory` sample at startup and every minute:
+RSS, JavaScript heap used/total, external memory, ArrayBuffers, V8 heap limit,
+container limit when Node can detect it, and process uptime. RSS includes native
+allocations; `external`/`arrayBuffers` do not account for every libvips allocation.
+Compare these logs with Render's memory graph and instance restart events. A short
+spike may fall between samples; absence of a sampled peak does not rule it out.
+
+Clients prepare photos before upload. The API reads image metadata but **does not
+rotate, resize, or rewrite upright JPEGs**, including large upright images. For
+legacy JPEGs whose EXIF orientation still needs correction, it normalizes one image
+at a time, rejects inputs over 64 megapixels before decoding, and fits large rotated
+outputs within 3840 pixels. At most eight requests wait, without downloading their
+image bytes, for up to 15 seconds. Busy responses use retryable HTTP 503 and retain
+the uploaded object. PNG/WebP/GIF bytes are not re-encoded by this fallback.
+
+The September 7, 2026 incident was confirmed in Render at 1:43:46pm ET: the API
+exceeded its 512 MB limit. Its preceding 12-hour graph was broadly steady near
+65–70%, with roughly 80% usage after restarting. This supports an acute spike and
+limited capacity, but does not establish the triggering request or prove the absence
+of another leak. A local synthetic 48MP rotated JPEG reproduced a substantial image
+memory spike. Keep production attribution separate from that isolated benchmark.
+
+For this combined HTTP/realtime/job-worker process, recommend the 1 CPU / 2 GB
+compute plan (`1c-2g`, formerly Standard) for operating headroom. The live service is
+dashboard-managed: a Blueprint edit alone will not upgrade it. Verify the current
+price in Render before changing billing. Apply API changes before web changes, then
+inspect runtime memory under normal traffic and image uploads.

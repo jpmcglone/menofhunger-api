@@ -6,12 +6,14 @@ import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
-import { CHECKIN_PROMPTS, isKnownCheckinPrompt } from './checkin-prompts';
+import { CHECKIN_PROMPTS } from './checkin-prompts';
 import { dayIndexEastern, easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
+
+import { checkinSchedule, isCheckinOpen, CHECKIN_CLOSED_MESSAGE } from './checkin-schedule';
 
 const LEADERBOARD_CACHE_TTL_SECONDS = 60;
 const WEEKLY_LEADERBOARD_CACHE_TTL_SECONDS = 120;
@@ -47,17 +49,24 @@ export class CheckinsService {
     const { dayKey, prompt } = pickCheckinPrompt(now);
     const publicBaseUrl = params.publicBaseUrl ?? null;
 
+    const schedule = checkinSchedule(now);
+    const withSchedule = (data: Awaited<ReturnType<typeof this._getTodayStateRaw>>) => ({
+      ...data,
+      ...schedule,
+      // Do not reveal today's question before its 5pm release.
+      prompt: schedule.isOpen ? prompt : '',
+    });
     const cacheKey = RedisKeys.checkinTodayState(params.userId, dayKey);
     try {
       const cached = await this.redis.getJson<Awaited<ReturnType<typeof this._getTodayStateRaw>>>(cacheKey);
-      if (cached) return cached;
+      if (cached) return withSchedule(cached);
     } catch {
       // Redis unavailable — fall through to DB.
     }
 
     const result = await this._getTodayStateRaw(params.userId, now, dayKey, prompt, publicBaseUrl);
     void this.redis.setJson(cacheKey, result, { ttlSeconds: TODAY_STATE_CACHE_TTL_SECONDS }).catch(() => undefined);
-    return result;
+    return withSchedule(result);
   }
 
   private async _getTodayStateRaw(
@@ -194,13 +203,11 @@ export class CheckinsService {
 
   async createTodayCheckin(params: { userId: string; body: string; visibility: PostVisibility; clientPrompt?: string; now?: Date }) {
     const now = params.now ?? new Date();
-    const { dayKey, prompt: serverPrompt } = pickCheckinPrompt(now);
-    // Use the prompt the client actually showed the user (if it's a known prompt text).
-    // This prevents the ET-midnight skew where a user writes their answer before midnight
-    // but submits after, causing the server to store the next day's prompt against their answer.
-    const prompt = (params.clientPrompt && isKnownCheckinPrompt(params.clientPrompt))
-      ? params.clientPrompt
-      : serverPrompt;
+    if (!isCheckinOpen(now)) throw new BadRequestException(CHECKIN_CLOSED_MESSAGE);
+    const { dayKey, prompt } = pickCheckinPrompt(now);
+    if (params.clientPrompt && params.clientPrompt !== prompt) {
+      throw new BadRequestException("Today's check-in prompt has changed. Please close the composer and try again.");
+    }
 
     if (params.visibility !== 'verifiedOnly' && params.visibility !== 'premiumOnly') {
       throw new BadRequestException('Check-ins must be verified-only or premium-only.');

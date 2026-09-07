@@ -4,6 +4,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException,
 import { randomUUID } from 'node:crypto';
 import { imageSize } from 'image-size';
 import sharp from 'sharp';
+import { ImageProcessingGate } from './image-processing-gate';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { toUserDto } from '../../common/dto';
@@ -118,6 +119,7 @@ async function streamToBuffer(stream: any, maxBytes: number): Promise<Buffer> {
 export class UploadsService {
   private readonly s3: S3Client | null;
   private readonly bucket: string | null;
+  private readonly imageProcessing = new ImageProcessingGate();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -224,9 +226,14 @@ export class UploadsService {
       };
     }
 
-    // Apply orientation to pixels and strip metadata by re-encoding.
-    const rotated = await sharp(buf, { failOn: 'none' })
+    // Compressed bytes do not bound decoded memory (a small JPEG can be 48MP).
+    // Older clients still need rotation; keep that fallback within a single bounded job.
+    if ((meta.width ?? 0) * (meta.height ?? 0) > 64_000_000) {
+      throw new BadRequestException('Please resize this photo to 64 megapixels or smaller.');
+    }
+    const rotated = await sharp(buf, { failOn: 'none', limitInputPixels: 64_000_000 })
       .rotate()
+      .resize({ width: 3840, height: 3840, fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: 92 })
       .toBuffer({ resolveWithObject: true });
 
@@ -256,6 +263,17 @@ export class UploadsService {
   }
 
   private async getImageInfoAndNormalizeJpegIfNeeded(params: {
+    s3: S3Client;
+    bucket: string;
+    key: string;
+    contentType: string;
+    maxBytes: number;
+    cacheControl: string;
+  }): Promise<{ width: number | null; height: number | null; bytes: number; didNormalize: boolean }> {
+    return this.imageProcessing.run(() => this.readImageInfoAndNormalizeJpegIfNeeded(params));
+  }
+
+  private async readImageInfoAndNormalizeJpegIfNeeded(params: {
     s3: S3Client;
     bucket: string;
     key: string;
@@ -501,6 +519,7 @@ export class UploadsService {
         throw new BadRequestException('Profile image must be 1:1 (square).');
       }
     } catch (err) {
+      if (err instanceof ServiceUnavailableException) throw err;
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
       if (err instanceof BadRequestException) throw err;
       throw new BadRequestException('Invalid profile image.');
@@ -584,6 +603,7 @@ export class UploadsService {
         throw new BadRequestException('Banner must be 3:1 (for example, 1500×500).');
       }
     } catch (err) {
+      if (err instanceof ServiceUnavailableException) throw err;
       // If validation fails, cleanup the uploaded object.
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
       if (err instanceof BadRequestException) throw err;
@@ -874,8 +894,9 @@ export class UploadsService {
         width = normalized.width;
         height = normalized.height;
         finalBytes = normalized.bytes;
-      } catch {
-        // ignore; dims optional
+      } catch (err) {
+        if (err instanceof ServiceUnavailableException || err instanceof BadRequestException) throw err;
+        // Unreadable optional dimensions do not prevent otherwise valid uploads.
       }
     }
 
@@ -981,6 +1002,7 @@ export class UploadsService {
         throw new BadRequestException('Thumbnail must be 16:9 (for example, 1200×675).');
       }
     } catch (err) {
+      if (err instanceof ServiceUnavailableException) throw err;
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
       if (err instanceof BadRequestException) throw err;
       throw new BadRequestException('Invalid thumbnail image.');
@@ -1058,6 +1080,7 @@ export class UploadsService {
         throw new BadRequestException('Image must be 16:9 (for example, 1200×675).');
       }
     } catch (err) {
+      if (err instanceof ServiceUnavailableException) throw err;
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
       if (err instanceof BadRequestException) throw err;
       throw new BadRequestException('Invalid announcement image.');
@@ -1130,7 +1153,7 @@ export class UploadsService {
         s3, bucket, key: cleaned, contentType,
         maxBytes: MAX_ARTICLE_MEDIA_BYTES,
         cacheControl: 'public, max-age=31536000, immutable',
-      }).catch(() => undefined);
+      });
     }
 
     return { key: cleaned };

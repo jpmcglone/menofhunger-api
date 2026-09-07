@@ -1865,7 +1865,7 @@ export class NotificationWriterService {
 
     const kind = 'checkin_reminder' as const;
     const title = 'Have you checked in today?';
-    const body = 'Tap to post your check-in and keep your streak alive.';
+    const body = 'Answer today’s prompt before midnight ET to keep your streak alive.';
     const url = '/home?checkin=1';
 
     const CHUNK = 500;
