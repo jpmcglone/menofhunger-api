@@ -395,7 +395,7 @@ describe('UploadsService.commitAvatarUpload', () => {
     expect(deps.prisma.user.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'u1' },
-        data: expect.objectContaining({ avatarKey: newKey }),
+        data: expect.objectContaining({ avatarKey: newKey, avatarVideoKey: null, avatarVideoDurationMs: null, avatarRevision: { increment: 1 } }),
       }),
     );
     expect(deps.publicProfileCache.invalidateForUser).toHaveBeenCalledWith({

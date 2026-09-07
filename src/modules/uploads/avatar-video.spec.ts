@@ -1,3 +1,5 @@
+import { S3Client } from '@aws-sdk/client-s3';
+import { Readable } from 'node:stream';
 import { AvatarVideoService } from './avatar-video.service';
 import { avatarCropPixels, avatarVideoSelectionSchema } from './avatar-video-policy';
 import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
@@ -31,6 +33,19 @@ describe('video avatar entitlement', () => {
     expect(await setup({}, {}).service.canSet('page', 'operator')).toBe(false);
     expect(await setup({}, { premium: true, bannedAt: new Date() }).service.canSet('page', 'operator')).toBe(false);
   });
+  it('allows an active administrator to edit a free or banned target', async () => {
+    expect(await setup({}, { siteAdmin: true }).service.canSet('person', null, 'admin')).toBe(true);
+    expect(await setup({ bannedAt: new Date() }, { siteAdmin: true }).service.canSet('person', null, 'admin')).toBe(true);
+  });
+  it('rejects revoked or banned administrators and missing targets', async () => {
+    for (const admin of [{ siteAdmin: false }, { siteAdmin: true, bannedAt: new Date() }, null]) {
+      expect(await setup({}, admin).service.canSet('person', null, 'admin')).toBe(false);
+    }
+    expect(await setup(null, { siteAdmin: true }).service.canSet('missing', null, 'admin')).toBe(false);
+  });
+  it('does not grant a free admin account premium features on the ordinary user route', async () => {
+    expect(await setup({ siteAdmin: true }).service.canSet('admin')).toBe(false);
+  });
   it('authorizes before creating an upload or queueing a commit', async () => {
     await expect(setup({}).service.init('free', null, 'video/mp4')).rejects.toThrow('Premium');
     await expect(setup({}).service.commit('free', null, 'upload', {} as never)).rejects.toThrow('Premium');
@@ -38,12 +53,15 @@ describe('video avatar entitlement', () => {
 });
 
 describe('video avatar contract and crop', () => {
-  const selection = { startSeconds: 2, durationSeconds: 5, crop: { x: 0.25, y: 0, width: 0.5, height: 1 } };
+  const selection = { startSeconds: 2, durationSeconds: 7, crop: { x: 0.25, y: 0, width: 0.5, height: 1 } };
   it('maps a normalized landscape selection to square source pixels', () => {
     expect(avatarCropPixels(avatarVideoSelectionSchema.parse(selection), 640, 320)).toEqual({ x: 160, y: 0, size: 320 });
   });
+  it('accepts exactly seven seconds', () => {
+    expect(avatarVideoSelectionSchema.parse(selection).durationSeconds).toBe(7);
+  });
   it('rejects overlong, nonfinite, out-of-bounds, and nonsquare crops', () => {
-    expect(avatarVideoSelectionSchema.safeParse({ ...selection, durationSeconds: 5.01 }).success).toBe(false);
+    expect(avatarVideoSelectionSchema.safeParse({ ...selection, durationSeconds: 7.01 }).success).toBe(false);
     expect(avatarVideoSelectionSchema.safeParse({ ...selection, startSeconds: Infinity }).success).toBe(false);
     expect(avatarVideoSelectionSchema.safeParse({ ...selection, crop: { ...selection.crop, x: 0.75 } }).success).toBe(false);
     expect(() => avatarCropPixels(selection, 320, 320)).toThrow('square');
@@ -71,7 +89,7 @@ describe('avatar publication races', () => {
     };
     prisma.$transaction.mockImplementation(async action => action(prisma));
     const transcode = jest.fn();
-    const service = new AvatarVideoService(prisma as never, {} as never, {} as never, { transcode } as never, {} as never, {} as never, {} as never);
+    const service = new AvatarVideoService(prisma as never, { r2: () => ({ accountId: 'test', bucket: 'test', accessKeyId: 'test', secretAccessKey: 'test' }) } as never, {} as never, { transcode } as never, {} as never, {} as never, {} as never);
     return { service, prisma, transcode };
   }
   it('never processes an older upload after a newer avatar edit', async () => {
@@ -86,6 +104,31 @@ describe('avatar publication races', () => {
     await service.process('old');
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
     expect(transcode).not.toHaveBeenCalled();
+  });
+  it('rechecks the initiating admin before processing a queued job', async () => {
+    const { service, transcode } = setup({ id: 'job', userId: 'person', adminUserId: 'revoked', status: 'queued', revision: 2 });
+    await expect(service.process('job')).rejects.toThrow('Administrator');
+    expect(transcode).not.toHaveBeenCalled();
+  });
+  it('never publishes when admin rights are revoked during encoding', async () => {
+    const { service, prisma, transcode } = setup({ id: 'job', userId: 'person', adminUserId: 'admin', operatorUserId: null,
+      sourceKey: 'source', videoKey: 'video', posterKey: 'poster', status: 'queued', revision: 2,
+      selection: { startSeconds: 0, durationSeconds: 7, crop: { x: 0, y: 0, width: 1, height: 1 } } });
+    const authorization = jest.spyOn(service, 'canSet').mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    transcode.mockResolvedValue({ video: Buffer.from('mp4'), poster: Buffer.from('jpeg'), durationMs: 7000 });
+    const storage = jest.spyOn(S3Client.prototype, 'send').mockResolvedValue({ Body: Readable.from(Buffer.from('source')) } as never);
+    try {
+      await expect(service.process('job')).rejects.toThrow('Administrator');
+      expect(authorization).toHaveBeenNthCalledWith(2, 'person', null, 'admin');
+      expect(transcode).toHaveBeenCalledTimes(1);
+      expect(prisma.user.updateMany).not.toHaveBeenCalled();
+    } finally { storage.mockRestore(); }
+  });
+  it('prevents the target or another admin from committing an admin-owned upload', async () => {
+    const { service } = setup({ id: 'job', userId: 'person', operatorUserId: null, adminUserId: 'admin', status: 'uploading' });
+    jest.spyOn(service, 'canSet').mockResolvedValue(true);
+    await expect(service.commit('person', null, 'job', {} as never)).rejects.toThrow('Switch back');
+    await expect(service.commit('person', null, 'job', {} as never, 'other-admin')).rejects.toThrow('Switch back');
   });
   it('cancels only an unfinished job and invalidates its matching revision', async () => {
     const { service, prisma } = setup({ id: 'job', userId: 'person', status: 'queued', revision: 2 });

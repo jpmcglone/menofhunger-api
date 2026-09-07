@@ -31,9 +31,14 @@ export class AvatarVideoService {
     private readonly profileCache: PublicProfileCacheService<any>,
   ) {}
 
-  async canSet(userId: string, operatorUserId?: string | null): Promise<boolean> {
+  async canSet(userId: string, operatorUserId?: string | null, adminUserId?: string | null): Promise<boolean> {
     const target = await this.prisma.user.findUnique({ where: { id: userId }, select: { premium: true, premiumPlus: true, bannedAt: true } });
-    if (!target || target.bannedAt) return false;
+    if (!target) return false;
+    if (adminUserId) {
+      const admin = await this.prisma.user.findUnique({ where: { id: adminUserId }, select: { siteAdmin: true, bannedAt: true } });
+      return Boolean(admin?.siteAdmin && !admin.bannedAt);
+    }
+    if (target.bannedAt) return false;
     if (operatorUserId && operatorUserId !== userId) {
       const membership = await this.prisma.userPageOperator.findFirst({ where: { pageUserId: userId, operatorUserId } });
       if (!membership) return false;
@@ -43,8 +48,10 @@ export class AvatarVideoService {
     return Boolean(target.premium || target.premiumPlus);
   }
 
-  private async authorize(userId: string, operatorUserId?: string | null) {
-    if (!(await this.canSet(userId, operatorUserId))) throw new ForbiddenException('Video avatars require Premium or Premium Plus, including accounts you operate.');
+  private async authorize(userId: string, operatorUserId?: string | null, adminUserId?: string | null) {
+    if (!(await this.canSet(userId, operatorUserId, adminUserId))) throw new ForbiddenException(adminUserId
+      ? 'Administrator access is required to edit this avatar.'
+      : 'Video avatars require Premium or Premium Plus, including accounts you operate.');
   }
 
   private storage() {
@@ -54,15 +61,15 @@ export class AvatarVideoService {
       credentials: { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey } }) };
   }
 
-  async init(userId: string, operatorUserId: string | null, contentType: string) {
-    await this.authorize(userId, operatorUserId);
+  async init(userId: string, operatorUserId: string | null, contentType: string, adminUserId: string | null = null) {
+    await this.authorize(userId, operatorUserId, adminUserId);
     const extension = ({ 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm', 'video/x-m4v': 'm4v' } as Record<string, string>)[contentType];
     if (!extension) throw new BadRequestException('Choose an MP4, MOV, or WebM video.');
     const id = randomUUID();
     const prefix = `${this.config.isProd() ? '' : 'dev/'}avatars/${userId}/video/${id}`;
     const row = await this.prisma.$transaction(async tx => {
       const user = await tx.user.update({ where: { id: userId }, data: { avatarRevision: { increment: 1 } }, select: { avatarRevision: true } });
-      return tx.avatarVideoUpload.create({ data: { id, userId, operatorUserId, revision: user.avatarRevision,
+      return tx.avatarVideoUpload.create({ data: { id, userId, operatorUserId, adminUserId, revision: user.avatarRevision,
         sourceKey: `${prefix}/source.${extension}`, videoKey: `${prefix}/avatar.mp4`, posterKey: `${prefix}/poster.jpg` } });
     });
     const { client, bucket } = this.storage();
@@ -84,10 +91,10 @@ export class AvatarVideoService {
     return { id: row.id, status: row.status, error: row.error, user: user ? toUserDto(user, this.config.r2()?.publicBaseUrl ?? null) : null };
   }
 
-  async commit(userId: string, operatorUserId: string | null, id: string, selection: AvatarVideoSelection) {
-    await this.authorize(userId, operatorUserId);
+  async commit(userId: string, operatorUserId: string | null, id: string, selection: AvatarVideoSelection, adminUserId: string | null = null) {
+    await this.authorize(userId, operatorUserId, adminUserId);
     const row = await this.owned(userId, id);
-    if (row.operatorUserId !== operatorUserId) throw new ForbiddenException('Switch back to the account that started this upload.');
+    if ((row.operatorUserId ?? null) !== operatorUserId || (row.adminUserId ?? null) !== adminUserId) throw new ForbiddenException('Switch back to the account that started this upload.');
     if (row.status !== 'uploading' && row.status !== 'queued') return this.status(userId, id);
     const { client, bucket } = this.storage();
     try {
@@ -122,7 +129,7 @@ export class AvatarVideoService {
       await this.prisma.avatarVideoUpload.update({ where: { id }, data: { status: 'superseded' } });
       return;
     }
-    await this.authorize(row.userId, row.operatorUserId);
+    await this.authorize(row.userId, row.operatorUserId, row.adminUserId);
     const claimed = await this.prisma.avatarVideoUpload.updateMany({ where: { id, status: { in: ['queued', 'processing'] } }, data: { status: 'processing' } });
     if (!claimed.count) return;
     const directory = await mkdtemp(join(tmpdir(), 'moh-avatar-'));
@@ -140,7 +147,7 @@ export class AvatarVideoService {
       const output = await this.transcoder.transcode(input, directory, avatarVideoSelectionSchema.parse(row.selection));
       await client.send(new PutObjectCommand({ Bucket: bucket, Key: row.videoKey, Body: output.video, ContentType: 'video/mp4', CacheControl: 'public, max-age=31536000, immutable' }));
       await client.send(new PutObjectCommand({ Bucket: bucket, Key: row.posterKey, Body: output.poster, ContentType: 'image/jpeg', CacheControl: 'public, max-age=31536000, immutable' }));
-      await this.authorize(row.userId, row.operatorUserId);
+      await this.authorize(row.userId, row.operatorUserId, row.adminUserId);
       const published = await this.prisma.$transaction(async tx => {
         const claimed = await tx.avatarVideoUpload.updateMany({ where: { id, status: 'processing' }, data: { status: 'publishing' } });
         if (!claimed.count) return false;

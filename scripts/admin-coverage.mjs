@@ -9,7 +9,7 @@ const root = resolve(import.meta.dirname, '..');
 const homes = {
   'admin-affiliate': 'affiliates', 'admin-analytics': 'analytics',
   'admin-announcements': 'announcements', 'admin-assistant': 'assistant',
-  'admin-billing': 'users', 'admin-crews': 'crews', 'admin-daily-content': 'jobs',
+  'admin-avatar-video': 'users', 'admin-billing': 'users', 'admin-crews': 'crews', 'admin-daily-content': 'jobs',
   'admin-email-samples': 'site-settings', 'admin-feedback': 'feedback',
   'admin-image-review': 'media-review', 'admin-impersonation': 'impersonate',
   'admin-intro-brief': 'intros', 'admin-jobs': 'jobs', 'admin-newsletters': 'newsletters',

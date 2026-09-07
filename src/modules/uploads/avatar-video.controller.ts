@@ -3,7 +3,7 @@ import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { AuthGuard, type AuthedRequest } from '../auth/auth.guard';
 import { AvatarVideoService } from './avatar-video.service';
-import { AVATAR_VIDEO_MAX_INPUT_BYTES, avatarVideoSelectionSchema } from './avatar-video-policy';
+import { AVATAR_VIDEO_MAX_DURATION_SECONDS, AVATAR_VIDEO_MAX_INPUT_BYTES, avatarVideoSelectionSchema } from './avatar-video-policy';
 
 @UseGuards(AuthGuard)
 @Controller('uploads/avatar/video')
@@ -12,7 +12,7 @@ export class AvatarVideoController {
 
   @Get('capabilities')
   async capabilities(@Req() request: AuthedRequest) {
-    return { data: { canSet: await this.videos.canSet(request.user!.id, request.user!.operatedByUserId), maxBytes: AVATAR_VIDEO_MAX_INPUT_BYTES, maxDurationSeconds: 5 } };
+    return { data: { canSet: await this.videos.canSet(request.user!.id, request.user!.operatedByUserId), maxBytes: AVATAR_VIDEO_MAX_DURATION_SECONDS, AVATAR_VIDEO_MAX_INPUT_BYTES, maxDurationSeconds: AVATAR_VIDEO_MAX_DURATION_SECONDS } };
   }
 
   @Post('init')

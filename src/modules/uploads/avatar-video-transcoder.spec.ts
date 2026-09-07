@@ -10,11 +10,11 @@ describe('native avatar video processing', () => {
     try {
       const input = join(directory, 'input.mp4');
       execFileSync('ffmpeg', ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x320:rate=30',
-        '-f', 'lavfi', '-i', 'sine=frequency=440', '-t', '6', '-c:v', 'libx264', '-c:a', 'aac', input], { timeout: 30_000 });
+        '-f', 'lavfi', '-i', 'sine=frequency=440', '-t', '8', '-c:v', 'libx264', '-c:a', 'aac', input], { timeout: 30_000 });
       const transcoder = new AvatarVideoTranscoder();
-      const output = await transcoder.transcode(input, directory, { startSeconds: 1, durationSeconds: 5, crop: { x: 0.25, y: 0, width: 0.5, height: 1 } });
-      expect(output.durationMs).toBeLessThanOrEqual(5000);
-      expect(output.durationMs).toBeGreaterThan(4900);
+      const output = await transcoder.transcode(input, directory, { startSeconds: 1, durationSeconds: 7, crop: { x: 0.25, y: 0, width: 0.5, height: 1 } });
+      expect(output.durationMs).toBeLessThanOrEqual(7000);
+      expect(output.durationMs).toBeGreaterThan(6900);
       expect(output.video.length).toBeLessThanOrEqual(512 * 1024);
       expect(output.poster.length).toBeGreaterThan(100);
       const probe = await transcoder.probe(join(directory, 'avatar.mp4'));

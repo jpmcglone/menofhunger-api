@@ -1,3 +1,5 @@
+import { AdminAvatarVideoController } from './admin-avatar-video.controller';
+import { AvatarVideoModule } from '../uploads/avatar-video.module';
 import { AdminEngagementService } from './admin-engagement.service';
 import { AdminAssistantController } from './admin-assistant.controller';
 import { AdminAssistantService } from './admin-assistant.service';
@@ -58,6 +60,7 @@ import { AdminOperationsController } from './admin-operations.controller';
 
 @Module({
   imports: [
+    AvatarVideoModule,
     AuthModule,
     PrismaModule,
     RealtimeModule,
@@ -84,6 +87,7 @@ import { AdminOperationsController } from './admin-operations.controller';
     NewslettersModule,
   ],
   controllers: [
+    AdminAvatarVideoController,
     AdminAssistantController,
     AdminOperationsController,
     AdminUsersController,

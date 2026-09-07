@@ -677,6 +677,7 @@ model AvatarVideoUpload {
   userId         String
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   operatorUserId String?
+  adminUserId    String?
   sourceKey      String   @unique
   videoKey       String   @unique
   posterKey      String   @unique

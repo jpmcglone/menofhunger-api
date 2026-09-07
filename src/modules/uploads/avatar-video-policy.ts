@@ -1,11 +1,12 @@
 import { z } from 'zod';
 
+export const AVATAR_VIDEO_MAX_DURATION_SECONDS = 7;
 export const AVATAR_VIDEO_QUEUE = 'moh_avatar_video';
 export const AVATAR_VIDEO_MAX_INPUT_BYTES = 100 * 1024 * 1024;
 export const AVATAR_VIDEO_MAX_OUTPUT_BYTES = 512 * 1024;
 export const avatarVideoSelectionSchema = z.object({
   startSeconds: z.number().finite().min(0).max(600),
-  durationSeconds: z.number().finite().min(0.1).max(5),
+  durationSeconds: z.number().finite().min(0.1).max(AVATAR_VIDEO_MAX_DURATION_SECONDS),
   // Normalized coordinates in the orientation-corrected source image.
   crop: z.object({
     x: z.number().finite().min(0).max(1),
