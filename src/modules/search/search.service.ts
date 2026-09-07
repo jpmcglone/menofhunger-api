@@ -107,10 +107,10 @@ export type SearchUserRow = {
   isOrganization: boolean;
   accountKind?: 'person' | 'page';
   verifiedStatus: VerifiedStatus;
-  avatarKey: string | null;
+  avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
   avatarUpdatedAt: Date | null;
   relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean };
-  orgMemberships: Array<{ org: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarUpdatedAt: Date | null } }>;
+  orgMemberships: Array<{ org: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null; avatarUpdatedAt: Date | null } }>;
 };
 
 /** Unique, non-empty words from query (lowercase). Used for fuzzy author + body matching (e.g. "john steve" → @john or @steve or body). */
@@ -292,7 +292,7 @@ export class SearchService {
       isOrganization: boolean;
       accountKind?: 'person' | 'page';
       verifiedStatus: VerifiedStatus;
-      avatarKey: string | null;
+      avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
       avatarUpdatedAt: Date | null;
       lastOnlineAt: Date | null;
     };
@@ -326,7 +326,7 @@ export class SearchService {
           u."isOrganization",
           u."accountKind",
           u."verifiedStatus",
-          u."avatarKey",
+          u."avatarKey", u."avatarVideoKey", u."avatarVideoDurationMs",
           u."avatarUpdatedAt",
           u."lastOnlineAt"
         FROM "User" u, q
@@ -443,7 +443,7 @@ export class SearchService {
           isOrganization: true,
           accountKind: true,
           verifiedStatus: true,
-          avatarKey: true,
+          avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
           avatarUpdatedAt: true,
           lastOnlineAt: true,
         },
@@ -460,7 +460,7 @@ export class SearchService {
             where: { userId: { in: userIds } },
             select: {
               userId: true,
-              org: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } },
+              org: { select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true } },
             },
             orderBy: { createdAt: 'asc' },
           })
@@ -552,7 +552,7 @@ export class SearchService {
       isOrganization: Boolean(u.isOrganization),
       accountKind: u.accountKind ?? 'person',
       verifiedStatus: u.verifiedStatus,
-      avatarKey: u.avatarKey,
+      avatarKey: u.avatarKey, avatarVideoKey: u.avatarVideoKey, avatarVideoDurationMs: u.avatarVideoDurationMs,
       avatarUpdatedAt: u.avatarUpdatedAt,
       orgMemberships: orgsByUserId.get(u.id) ?? [],
       relationship: {

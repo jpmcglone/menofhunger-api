@@ -1,3 +1,4 @@
+import type { AvatarVideoDto } from './avatar-video.dto';
 import type { UserDto } from './user.dto';
 
 export type BrowserHandoffDto = {
@@ -32,7 +33,7 @@ export type SwitchableAccountDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   accountKind: 'person' | 'page';
   isOrganization: boolean;
   isCurrent: boolean;

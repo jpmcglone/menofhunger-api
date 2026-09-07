@@ -1,3 +1,4 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import {
   BadRequestException,
   ForbiddenException,
@@ -32,7 +33,7 @@ export class AccountSwitchService {
     if (!id) return null;
     const operator = await this.prisma.user.findUnique({
       where: { id },
-      select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true },
+      select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true },
     });
     if (!operator) return null;
     return {
@@ -260,7 +261,7 @@ export class AccountSwitchService {
           id: true,
           username: true,
           name: true,
-          avatarKey: true,
+          avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
           avatarUpdatedAt: true,
           accountKind: true,
           isOrganization: true,
@@ -276,7 +277,7 @@ export class AccountSwitchService {
               id: true,
               username: true,
               name: true,
-              avatarKey: true,
+              avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
               avatarUpdatedAt: true,
               accountKind: true,
               isOrganization: true,
@@ -300,7 +301,7 @@ export class AccountSwitchService {
         publicBaseUrl: this.publicBaseUrl,
         key: row.avatarKey,
         updatedAt: row.avatarUpdatedAt,
-      }),
+      }), avatarVideo: toAvatarVideoDto(row, this.publicBaseUrl),
       accountKind: row.accountKind,
       isOrganization: row.isOrganization,
       isCurrent: row.id === params.effectiveUserId,

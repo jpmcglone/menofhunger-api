@@ -1,3 +1,4 @@
+import { AvatarVideoModule, AvatarVideoConsumersModule } from '../uploads/avatar-video.module';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
@@ -110,6 +111,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     VerificationModule,
     AdminModule,
     UploadsModule,
+    AvatarVideoModule,
     PostsModule,
     FollowsModule,
     GiphyModule,
@@ -151,7 +153,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     FitnessModule,
     AnnouncementsModule,
     NewslettersModule,
-    ...(RUN_JOB_CONSUMERS ? [JobsConsumersModule, SideEffectsConsumersModule] : []),
+    ...(RUN_JOB_CONSUMERS ? [JobsConsumersModule, SideEffectsConsumersModule, AvatarVideoConsumersModule] : []),
   ],
   controllers: [AppController],
   providers: [

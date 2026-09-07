@@ -1,3 +1,4 @@
+import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { Injectable, Logger } from '@nestjs/common';
 import type { NotificationKind } from '@prisma/client';
 import * as webpush from 'web-push';
@@ -16,7 +17,7 @@ export type PushActorContext = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarKey: string | null;
+  avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
   /** Accepts a Date or an ISO string — publicAssetUrl handles both. */
   avatarUpdatedAt: Date | string | null;
 };
@@ -135,7 +136,7 @@ export class NotificationPushService {
       compute: () =>
         this.prisma.user.findUnique({
           where: { id: userId },
-          select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true },
+          select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true },
         }),
     });
   }
@@ -720,7 +721,7 @@ export class NotificationPushService {
       subtitle?: string | null;
       threadId?: string | null;
       category?: string | null;
-      avatarUrl?: string | null;
+      avatarUrl?: string | null; avatarVideo?: AvatarVideoDto | null;
       mediaUrl?: string | null;
       actorUsername?: string | null;
       actorName?: string | null;

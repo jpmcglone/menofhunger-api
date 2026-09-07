@@ -1,3 +1,5 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
+import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { OrgAffiliationDto } from '../../common/dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
@@ -27,7 +29,7 @@ export type PublicProfilePayload = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: string;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   pinnedPostId: string | null;
   lastOnlineAt: string | null;
@@ -80,7 +82,7 @@ export class PublicProfilesService {
       where: { userId: { in: userIds } },
       select: {
         userId: true,
-        org: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } },
+        org: { select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true } },
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -95,7 +97,7 @@ export class PublicProfilesService {
           publicBaseUrl,
           key: membership.org.avatarKey ?? null,
           updatedAt: membership.org.avatarUpdatedAt ?? null,
-        }),
+        }), avatarVideo: toAvatarVideoDto(membership.org, publicBaseUrl),
       });
       map.set(membership.userId, list);
     }
@@ -198,7 +200,7 @@ export class PublicProfilesService {
             premiumPlus: boolean;
             isOrganization: boolean;
             verifiedStatus: string;
-            avatarKey: string | null;
+            avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
             avatarUpdatedAt: Date | null;
             bannerKey: string | null;
             bannerUpdatedAt: Date | null;
@@ -260,7 +262,7 @@ export class PublicProfilesService {
       premiumPlus: user.premiumPlus,
       isOrganization: user.isOrganization,
       verifiedStatus: user.verifiedStatus,
-      avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }),
+      avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey, updatedAt: user.avatarUpdatedAt }), avatarVideo: toAvatarVideoDto(user, publicBaseUrl),
       bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey, updatedAt: user.bannerUpdatedAt }),
       pinnedPostId,
       lastOnlineAt: user.lastOnlineAt ? user.lastOnlineAt.toISOString() : null,

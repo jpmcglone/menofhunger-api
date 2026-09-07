@@ -1,3 +1,5 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
+import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -154,7 +156,7 @@ export class CheckinsService {
                 id: true,
                 username: true,
                 name: true,
-                avatarKey: true,
+                avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
                 avatarUpdatedAt: true,
               },
             },
@@ -184,7 +186,7 @@ export class CheckinsService {
         publicBaseUrl: params.publicBaseUrl,
         key: m.user.avatarKey,
         updatedAt: m.user.avatarUpdatedAt,
-      }),
+      }), avatarVideo: toAvatarVideoDto(m.user, params.publicBaseUrl),
       answeredToday: checkedInSet.has(m.user.id),
       isViewer: m.user.id === params.userId,
     }));
@@ -432,7 +434,7 @@ export class CheckinsService {
             id: true,
             username: true,
             name: true,
-            avatarKey: true,
+            avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
             avatarUpdatedAt: true,
             verifiedStatus: true,
             premium: true,
@@ -463,7 +465,7 @@ export class CheckinsService {
         publicBaseUrl: params.publicBaseUrl,
         key: row.user.avatarKey,
         updatedAt: row.user.avatarUpdatedAt,
-      }),
+      }), avatarVideo: toAvatarVideoDto(row.user, params.publicBaseUrl),
       answeredAt: row.createdAt.toISOString(),
       isFollowed: followedSet.has(row.user.id),
     }));
@@ -483,7 +485,7 @@ export class CheckinsService {
     // since it depends on the calling user and is only needed for out-of-top-N viewers.
     type LeaderboardUser = {
       id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
-      isOrganization: boolean; verifiedStatus: string; avatarUrl: string | null;
+      isOrganization: boolean; verifiedStatus: string; avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
       checkinStreakDays: number; longestStreakDays: number;
     };
     let cachedUsers: LeaderboardUser[] | null = null;
@@ -499,7 +501,7 @@ export class CheckinsService {
       premiumPlus: true,
       isOrganization: true,
       verifiedStatus: true,
-      avatarKey: true,
+      avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
       avatarUpdatedAt: true,
       checkinStreakDays: true,
       longestStreakDays: true,
@@ -509,7 +511,7 @@ export class CheckinsService {
     const toDto = (u: {
       id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
       isOrganization: boolean; verifiedStatus: string;
-      avatarKey: string | null; avatarUpdatedAt: Date | null; checkinStreakDays: number | null; longestStreakDays: number | null;
+      avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null; avatarUpdatedAt: Date | null; checkinStreakDays: number | null; longestStreakDays: number | null;
     }): LeaderboardUser => ({
       id: u.id,
       username: u.username,
@@ -522,7 +524,7 @@ export class CheckinsService {
         publicBaseUrl: params.publicBaseUrl,
         key: u.avatarKey ?? null,
         updatedAt: u.avatarUpdatedAt ?? null,
-      }),
+      }), avatarVideo: toAvatarVideoDto(u, params.publicBaseUrl),
       checkinStreakDays: u.checkinStreakDays ?? 0,
       longestStreakDays: Math.max(u.longestStreakDays ?? 0, u.checkinStreakDays ?? 0),
     });
@@ -611,7 +613,7 @@ export class CheckinsService {
 
     type LeaderboardUser = {
       id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
-      isOrganization: boolean; verifiedStatus: string; avatarUrl: string | null;
+      isOrganization: boolean; verifiedStatus: string; avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
       checkinStreakDays: number; longestStreakDays: number;
     };
     let cachedUsers: LeaderboardUser[] | null = null;
@@ -627,7 +629,7 @@ export class CheckinsService {
       premiumPlus: true,
       isOrganization: true,
       verifiedStatus: true,
-      avatarKey: true,
+      avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
       avatarUpdatedAt: true,
       checkinStreakDays: true,
       longestStreakDays: true,
@@ -637,7 +639,7 @@ export class CheckinsService {
     const toDto = (u: {
       id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
       isOrganization: boolean; verifiedStatus: string;
-      avatarKey: string | null; avatarUpdatedAt: Date | null; checkinStreakDays: number | null; longestStreakDays: number | null;
+      avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null; avatarUpdatedAt: Date | null; checkinStreakDays: number | null; longestStreakDays: number | null;
     }): LeaderboardUser => ({
       id: u.id,
       username: u.username,
@@ -650,7 +652,7 @@ export class CheckinsService {
         publicBaseUrl: params.publicBaseUrl,
         key: u.avatarKey ?? null,
         updatedAt: u.avatarUpdatedAt ?? null,
-      }),
+      }), avatarVideo: toAvatarVideoDto(u, params.publicBaseUrl),
       checkinStreakDays: u.checkinStreakDays ?? 0,
       longestStreakDays: Math.max(u.longestStreakDays ?? 0, u.checkinStreakDays ?? 0),
     });
@@ -759,7 +761,7 @@ export class CheckinsService {
 
     type WeeklyLeaderboardUser = {
       id: string; username: string | null; name: string | null; premium: boolean; premiumPlus: boolean;
-      isOrganization: boolean; verifiedStatus: string; avatarUrl: string | null;
+      isOrganization: boolean; verifiedStatus: string; avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
       checkinStreakDays: number; longestStreakDays: number; daysThisWeek: number;
     };
 
@@ -806,7 +808,7 @@ export class CheckinsService {
         premiumPlus: true,
         isOrganization: true,
         verifiedStatus: true,
-        avatarKey: true,
+        avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
         avatarUpdatedAt: true,
         checkinStreakDays: true,
         longestStreakDays: true,
@@ -839,7 +841,7 @@ export class CheckinsService {
         publicBaseUrl: params.publicBaseUrl,
         key: u.avatarKey ?? null,
         updatedAt: u.avatarUpdatedAt ?? null,
-      }),
+      }), avatarVideo: toAvatarVideoDto(u, params.publicBaseUrl),
       checkinStreakDays: u.checkinStreakDays ?? 0,
       longestStreakDays: Math.max(u.longestStreakDays ?? 0, u.checkinStreakDays ?? 0),
       daysThisWeek: u.daysThisWeek,
@@ -860,7 +862,7 @@ export class CheckinsService {
           premiumPlus: true,
           isOrganization: true,
           verifiedStatus: true,
-          avatarKey: true,
+          avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
           avatarUpdatedAt: true,
           checkinStreakDays: true,
           longestStreakDays: true,

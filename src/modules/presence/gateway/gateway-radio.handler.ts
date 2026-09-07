@@ -45,7 +45,7 @@ export class RadioGatewayHandler {
           listeners.push({
             id: u.id,
             username: u.username,
-            avatarUrl: u.avatarUrl ?? null,
+            avatarUrl: u.avatarUrl ?? null, avatarVideo: u.avatarVideo ?? null,
             premium: u.premium ?? false,
             premiumPlus: u.premiumPlus ?? false,
             isOrganization: u.isOrganization ?? false,

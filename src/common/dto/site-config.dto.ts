@@ -1,3 +1,4 @@
+import type { AvatarVideoDto } from './avatar-video.dto';
 export type SiteConfigAutoVerifyRecruiterDto = {
   id: string;
   username: string | null;
@@ -21,7 +22,7 @@ export type AutoVerifyPreviewUserDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   createdAt: string;
   recruitedAt: string | null;
 };

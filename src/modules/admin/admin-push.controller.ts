@@ -49,7 +49,7 @@ export class AdminPushController {
       select: {
         username: true,
         name: true,
-        avatarKey: true,
+        avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
         avatarUpdatedAt: true,
       },
     });

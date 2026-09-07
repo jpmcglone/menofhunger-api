@@ -1,3 +1,5 @@
+import { toAvatarVideoDto } from './avatar-video.dto';
+import type { AvatarVideoDto } from './avatar-video.dto';
 import type {
   Post,
   PostMedia,
@@ -22,7 +24,7 @@ export type PostAuthorDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: VerifiedStatus;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;
   isBot?: boolean;
   /** When true, author is banned; id/username/name/avatar are redacted. */
@@ -211,12 +213,12 @@ export type PostAuthorRow = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: VerifiedStatus;
-  avatarKey: string | null;
+  avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
   avatarUpdatedAt: Date | null;
   bannedAt: Date | null;
   isBot?: boolean | null;
   orgMemberships?: Array<{
-    org: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarUpdatedAt: Date | null };
+    org: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null; avatarUpdatedAt: Date | null };
   }>;
 };
 
@@ -484,7 +486,7 @@ export function toPostDto(
           publicBaseUrl: publicAssetBaseUrl,
           key: post.user.avatarKey ?? null,
           updatedAt: post.user.avatarUpdatedAt ?? null,
-        }),
+        }), avatarVideo: toAvatarVideoDto(post.user, publicAssetBaseUrl),
         orgAffiliations: (post.user.orgMemberships ?? []).map((m) => ({
           id: m.org.id,
           username: m.org.username,
@@ -493,7 +495,7 @@ export function toPostDto(
             publicBaseUrl: publicAssetBaseUrl,
             key: m.org.avatarKey ?? null,
             updatedAt: m.org.avatarUpdatedAt ?? null,
-          }),
+          }), avatarVideo: toAvatarVideoDto(m.org, publicAssetBaseUrl),
         })),
         ...(post.user.isBot ? { isBot: true } : {}),
       },
@@ -548,7 +550,7 @@ export function toPostDto(
       const a = (post as { article?: {
         id: string; title: string; excerpt: string | null; thumbnailR2Key: string | null;
         visibility: PostVisibility; publishedAt: Date | null;
-        author: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarUpdatedAt: Date | null; verifiedStatus: VerifiedStatus; premium: boolean; premiumPlus: boolean };
+        author: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null; avatarUpdatedAt: Date | null; verifiedStatus: VerifiedStatus; premium: boolean; premiumPlus: boolean };
       } | null }).article;
       if (!a) return {};
       return {
@@ -569,7 +571,7 @@ export function toPostDto(
               publicBaseUrl: publicAssetBaseUrl,
               key: a.author.avatarKey ?? null,
               updatedAt: a.author.avatarUpdatedAt ?? null,
-            }),
+            }), avatarVideo: toAvatarVideoDto(a.author, publicAssetBaseUrl),
             verifiedStatus: a.author.verifiedStatus,
             premium: a.author.premium,
             premiumPlus: a.author.premiumPlus,
@@ -613,7 +615,7 @@ export function toPostDto(
         publicBaseUrl: publicAssetBaseUrl,
         key: post.user.avatarKey ?? null,
         updatedAt: post.user.avatarUpdatedAt ?? null,
-      }),
+      }), avatarVideo: toAvatarVideoDto(post.user, publicAssetBaseUrl),
       orgAffiliations: (post.user.orgMemberships ?? []).map((m) => ({
         id: m.org.id,
         username: m.org.username,
@@ -622,7 +624,7 @@ export function toPostDto(
           publicBaseUrl: publicAssetBaseUrl,
           key: m.org.avatarKey ?? null,
           updatedAt: m.org.avatarUpdatedAt ?? null,
-        }),
+        }), avatarVideo: toAvatarVideoDto(m.org, publicAssetBaseUrl),
       })),
       ...(post.user.isBot ? { isBot: true } : {}),
     },
@@ -661,7 +663,7 @@ export function toPostAuthorDtoFromFeedRow(
       publicBaseUrl: publicAssetBaseUrl,
       key: post.user.avatarKey ?? null,
       updatedAt: post.user.avatarUpdatedAt ?? null,
-    }),
+    }), avatarVideo: toAvatarVideoDto(post.user, publicAssetBaseUrl),
     orgAffiliations: (post.user.orgMemberships ?? []).map((m) => ({
       id: m.org.id,
       username: m.org.username,
@@ -670,7 +672,7 @@ export function toPostAuthorDtoFromFeedRow(
         publicBaseUrl: publicAssetBaseUrl,
         key: m.org.avatarKey ?? null,
         updatedAt: m.org.avatarUpdatedAt ?? null,
-      }),
+      }), avatarVideo: toAvatarVideoDto(m.org, publicAssetBaseUrl),
     })),
     ...(post.user.isBot ? { isBot: true } : {}),
   };

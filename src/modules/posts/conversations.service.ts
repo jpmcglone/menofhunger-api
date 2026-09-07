@@ -1,3 +1,4 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -19,7 +20,7 @@ const personSelect = {
   id: true,
   username: true,
   name: true,
-  avatarKey: true,
+  avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
   avatarUpdatedAt: true,
 } as const;
 type Person = Prisma.UserGetPayload<{ select: typeof personSelect }>;
@@ -40,7 +41,7 @@ export class ConversationsService {
         publicBaseUrl: this.config.r2()?.publicBaseUrl,
         key: user.avatarKey,
         updatedAt: user.avatarUpdatedAt,
-      }),
+      }), avatarVideo: toAvatarVideoDto(user, this.config.r2()?.publicBaseUrl),
     };
   }
   async readableWhere(userId: string): Promise<Prisma.PostWhereInput> {

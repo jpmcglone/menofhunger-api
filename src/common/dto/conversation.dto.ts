@@ -1,8 +1,9 @@
+import type { AvatarVideoDto } from './avatar-video.dto';
 export type ConversationPersonDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
 };
 export type ConversationReplyDto = {
   id: string;

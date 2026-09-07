@@ -437,6 +437,10 @@ model User {
   birthdayVisibility           BirthdayVisibility @default(monthDay)
   // Public media (stored in object storage; API stores keys only).
   avatarKey                    String?
+  avatarVideoKey               String?
+  avatarVideoDurationMs        Int?
+  avatarRevision               Int       @default(0)
+  avatarVideoUploads           AvatarVideoUpload[]
   avatarUpdatedAt              DateTime?
   bannerKey                    String?
   bannerUpdatedAt              DateTime?
@@ -668,6 +672,25 @@ model UserOrgMembership {
  * Switch rights: a person who can act as a page (org or plain).
  * Distinct from UserOrgMembership (public "belongs to" affiliation).
  */
+model AvatarVideoUpload {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  operatorUserId String?
+  sourceKey      String   @unique
+  videoKey       String   @unique
+  posterKey      String   @unique
+  status         String   @default("uploading")
+  selection      Json?
+  revision       Int?
+  error          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status, updatedAt])
+}
+
 model UserPageOperator {
   operatorUserId String
   pageUserId     String

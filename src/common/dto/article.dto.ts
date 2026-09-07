@@ -1,3 +1,5 @@
+import { toAvatarVideoDto } from './avatar-video.dto';
+import type { AvatarVideoDto } from './avatar-video.dto';
 import type { Article, ArticleComment, ArticleBoost, ArticleReaction, ArticleCommentReaction, ArticleTag, PostVisibility, VerifiedStatus } from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
 import type { PostAuthorRow } from './post.dto';
@@ -20,7 +22,7 @@ export type ArticleAuthorDto = {
   bio: string | null;
   /** Per-author override bio shown at the bottom of articles. Falls back to `bio` if null. */
   articleBio: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
@@ -42,7 +44,7 @@ export type ArticleSharePreviewDto = {
   thumbnailUrl: string | null;
   visibility: PostVisibility;
   publishedAt: string | null;
-  author: Pick<ArticleAuthorDto, 'id' | 'username' | 'name' | 'avatarUrl' | 'verifiedStatus' | 'premium' | 'premiumPlus'>;
+  author: Pick<ArticleAuthorDto, 'id' | 'username' | 'name' | 'avatarUrl' | 'avatarVideo' | 'verifiedStatus' | 'premium' | 'premiumPlus'>;
 };
 
 // ─── Article comment ─────────────────────────────────────────────────────────
@@ -148,7 +150,7 @@ export const articleAuthorInclude = {
   premiumPlus: true,
   isOrganization: true,
   verifiedStatus: true,
-  avatarKey: true,
+  avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
   avatarUpdatedAt: true,
   bannedAt: true,
   orgMemberships: {
@@ -158,7 +160,7 @@ export const articleAuthorInclude = {
           id: true,
           username: true,
           name: true,
-          avatarKey: true,
+          avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
           avatarUpdatedAt: true,
         },
       },
@@ -179,7 +181,7 @@ export function toArticleAuthorDto(author: ArticleAuthorRow, publicAssetBaseUrl:
       publicBaseUrl: publicAssetBaseUrl,
       key: author.avatarKey ?? null,
       updatedAt: author.avatarUpdatedAt ?? null,
-    }),
+    }), avatarVideo: toAvatarVideoDto(author, publicAssetBaseUrl),
     premium: author.premium,
     premiumPlus: author.premiumPlus,
     isOrganization: Boolean(author.isOrganization),
@@ -192,7 +194,7 @@ export function toArticleAuthorDto(author: ArticleAuthorRow, publicAssetBaseUrl:
         publicBaseUrl: publicAssetBaseUrl,
         key: m.org.avatarKey ?? null,
         updatedAt: m.org.avatarUpdatedAt ?? null,
-      }),
+      }), avatarVideo: toAvatarVideoDto(m.org, publicAssetBaseUrl),
     })),
   };
 }
@@ -325,7 +327,7 @@ export function toArticleSharePreviewDto(
         publicBaseUrl: publicAssetBaseUrl,
         key: article.author.avatarKey ?? null,
         updatedAt: article.author.avatarUpdatedAt ?? null,
-      }),
+      }), avatarVideo: toAvatarVideoDto(article.author, publicAssetBaseUrl),
       verifiedStatus: article.author.verifiedStatus,
       premium: article.author.premium,
       premiumPlus: article.author.premiumPlus,

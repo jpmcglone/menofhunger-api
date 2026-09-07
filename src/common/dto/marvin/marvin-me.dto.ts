@@ -1,3 +1,4 @@
+import type { AvatarVideoDto } from '../avatar-video.dto';
 import type { MarvinCreditSummaryDto } from './marvin-credit-summary.dto';
 import type { MarvinModeDto } from './marvin-mode.dto';
 
@@ -41,7 +42,7 @@ export type MarvinMeDto = {
      * Resolved public avatar URL for Marv, or `null` when no avatar is set
      * (the pinned row falls back to a styled icon in that case).
      */
-    avatarUrl: string | null;
+    avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   } | null;
 };
 

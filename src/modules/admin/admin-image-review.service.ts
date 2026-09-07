@@ -371,7 +371,7 @@ export class AdminImageReviewService {
 
     // ── 3. User (avatarKey + bannerKey) ────────────────────────────────────
     const userRows = await this.prisma.user.findMany({
-      where: { OR: [{ avatarKey: { in: keyArr } }, { bannerKey: { in: keyArr } }] },
+      where: { OR: [{ avatarKey: { in: keyArr } }, { avatarVideoKey: { in: keyArr } }, { bannerKey: { in: keyArr } }] },
       select: {
         id: true,
         username: true,
@@ -379,7 +379,7 @@ export class AdminImageReviewService {
         premium: true,
         premiumPlus: true,
         verifiedStatus: true,
-        avatarKey: true,
+        avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
         bannerKey: true,
       },
     });
@@ -397,8 +397,25 @@ export class AdminImageReviewService {
       if (u.avatarKey && keySet.has(u.avatarKey)) {
         result.get(u.avatarKey)!.users.push({ ...base, isAvatar: true });
       }
+      if (u.avatarVideoKey && keySet.has(u.avatarVideoKey)) {
+        result.get(u.avatarVideoKey)!.users.push({ ...base, isAvatar: true });
+      }
       if (u.bannerKey && keySet.has(u.bannerKey)) {
         result.get(u.bannerKey)!.users.push({ ...base, isBanner: true });
+      }
+    }
+
+    const avatarUploads = await this.prisma.avatarVideoUpload.findMany({
+      where: { OR: [{ sourceKey: { in: keyArr } }, { videoKey: { in: keyArr } }, { posterKey: { in: keyArr } }] },
+      include: { user: { select: { id: true, username: true, name: true, premium: true, premiumPlus: true, verifiedStatus: true } } },
+    });
+    for (const upload of avatarUploads) {
+      for (const key of [upload.sourceKey, upload.videoKey, upload.posterKey]) {
+        if (!keySet.has(key)) continue;
+        const refs = result.get(key)!.users;
+        if (!refs.some(ref => ref.userId === upload.userId)) refs.push({ userId: upload.userId,
+          username: upload.user.username, name: upload.user.name, premium: upload.user.premium,
+          premiumPlus: upload.user.premiumPlus, verifiedStatus: upload.user.verifiedStatus, isAvatar: true, isBanner: false });
       }
     }
 
@@ -946,15 +963,19 @@ export class AdminImageReviewService {
         data: { thumbnailR2Key: null },
       });
 
+      await tx.avatarVideoUpload.updateMany({
+        where: { OR: [{ sourceKey: r2Key }, { videoKey: r2Key }, { posterKey: r2Key }] },
+        data: { status: 'cancelled' },
+      });
       // ── User avatar / banner ───────────────────────────────────────────────
       const users = await tx.user.findMany({
-        where: { OR: [{ avatarKey: r2Key }, { bannerKey: r2Key }] },
-        select: { id: true, username: true, avatarKey: true, bannerKey: true },
+        where: { OR: [{ avatarKey: r2Key }, { avatarVideoKey: r2Key }, { bannerKey: r2Key }] },
+        select: { id: true, username: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, bannerKey: true },
       });
       const invalidatedUsers: Array<{ id: string; username: string | null }> = [];
       for (const u of users) {
         const data: Prisma.UserUpdateInput = {};
-        if (u.avatarKey === r2Key) { data.avatarKey = null; data.avatarUpdatedAt = now; }
+        if (u.avatarKey === r2Key || u.avatarVideoKey === r2Key) { data.avatarKey = null; data.avatarVideoKey = null; data.avatarVideoDurationMs = null; data.avatarRevision = { increment: 1 }; data.avatarUpdatedAt = now; }
         if (u.bannerKey === r2Key) { data.bannerKey = null; data.bannerUpdatedAt = now; }
         if (Object.keys(data).length) {
           await tx.user.update({ where: { id: u.id }, data });

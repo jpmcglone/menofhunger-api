@@ -5,6 +5,8 @@ const COOKIE = 'moh_session';
 const MAX_RESPONSE_BYTES = 2_000_000;
 const GET_PATHS = [
   /^auth\/me$/,
+  /^auth\/accounts$/,
+  /^posts\/[A-Za-z0-9_-]+$/,
   /^admin\/analytics(?:\/referrals)?$/,
   /^admin\/users\/search$/,
   /^admin\/users\/by-username\/[A-Za-z0-9_-]+$/,
@@ -85,6 +87,18 @@ export class MohApi {
       body,
       anonymous: path !== 'auth/logout',
     });
+  }
+
+  // Deliberately narrower than an arbitrary HTTP mutation tool. Callers must
+  // verify the administrator and requested author before invoking these routes.
+  async publish(body) {
+    return this.request('posts', { method: 'POST', body });
+  }
+
+  async switchAccount(userId) {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId))
+      throw new ApiError('Invalid publishing account.');
+    return this.request('auth/switch', { method: 'POST', body: { userId } });
   }
 
   async accountExists(phone) {

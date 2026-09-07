@@ -1,3 +1,4 @@
+import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import type { NotificationKind, VerifiedStatus } from '@prisma/client';
 import type { PostDto } from '../../common/dto/post.dto';
 
@@ -5,7 +6,7 @@ export type NotificationActorDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   premium: boolean;
   isOrganization: boolean;
   verifiedStatus: VerifiedStatus;

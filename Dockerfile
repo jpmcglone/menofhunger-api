@@ -6,6 +6,7 @@ COPY tools/mcp/package.json tools/mcp/package-lock.json ./tools/mcp/
 RUN npm ci
 
 FROM node:20-alpine AS dev
+RUN apk add --no-cache ffmpeg
 WORKDIR /app
 ENV NODE_ENV=development
 COPY --from=deps /app/node_modules ./node_modules
@@ -23,6 +24,7 @@ RUN npm run build
 
 # Runner: production deps only (smaller image, no devDependencies copy).
 FROM node:20-alpine AS runner
+RUN apk add --no-cache ffmpeg
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./

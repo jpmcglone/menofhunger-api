@@ -1,3 +1,4 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -71,7 +72,7 @@ export class UsersRealtimeService {
         premiumPlus: true,
         isOrganization: true,
         verifiedStatus: true,
-        avatarKey: true,
+        avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
         avatarUpdatedAt: true,
         bannerKey: true,
         bannerUpdatedAt: true,
@@ -125,7 +126,7 @@ export class UsersRealtimeService {
       premiumPlus: user.premiumPlus,
       isOrganization: Boolean(user.isOrganization),
       verifiedStatus: user.verifiedStatus,
-      avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey ?? null, updatedAt: user.avatarUpdatedAt ?? null }),
+      avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey ?? null, updatedAt: user.avatarUpdatedAt ?? null }), avatarVideo: toAvatarVideoDto(user, publicBaseUrl),
       bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey ?? null, updatedAt: user.bannerUpdatedAt ?? null }),
       pinnedPostId,
       // Privacy: last-online timestamps are only for verified viewers via HTTP endpoints.

@@ -26,6 +26,9 @@ export const aliases = {
   decisions: ['list_decisions'],
   draft: ['save_draft'],
   drafts: ['list_drafts'],
+  accounts: ['publishing_accounts'],
+  publish: ['publish_post'],
+  post: ['get_post', 'postId'],
 };
 
 export function describeTools(tools) {
@@ -35,7 +38,7 @@ export function describeTools(tools) {
       ([, [name]]) => name === tool.name,
     )?.[0],
     description: tool.description,
-    effects: tool.localWrite ? 'local-file-write' : 'read',
+    effects: tool.remoteWrite ? 'remote-write' : tool.localWrite ? 'local-file-write' : 'read',
     inputSchema: zodToJsonSchema(tool.schema, { $refStrategy: 'none' }),
   }));
 }
@@ -144,6 +147,9 @@ Optional global command: npm install --global ./tools/mcp, then moh <command>
   decisions                          Read local decision history
   draft --input draft.json           Save a local draft; never sends or publishes
   drafts                             Read local drafts
+  accounts                           List your administrator account and operated pages
+  publish --input post.json          Publish a public post as authorUsername
+  post POST_ID                       Verify a published post
   tools [--json]                     Discover every tool and its input schema
   call TOOL '{"key":"value"}'        Invoke any tool using its MCP name/schema
 
@@ -157,7 +163,7 @@ content, community, ai, coins. Timestamps are ISO UTC, e.g. 2026-09-01T00:00:00Z
 MOH_API_BASE_URL defaults to https://api.menofhunger.com/v1.
 MOH_MCP_STATE_DIR sets the private session/draft/decision directory.
 New diagnostics/content endpoints require deploying the accompanying API change.
-No remote writes or automatic monitoring. No OpenAI API key needed.
+Only publish performs a remote content write; it requires user authorization. No automatic monitoring or OpenAI API key needed.
 `;
 
 export function formatHuman(result) {

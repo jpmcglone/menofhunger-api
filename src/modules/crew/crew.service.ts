@@ -1,3 +1,5 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
+import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import {
   BadRequestException,
   ForbiddenException,
@@ -34,8 +36,8 @@ type OpenMemberEntry = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: string;
-  avatarUrl: string | null;
-  avatarKey?: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarKey?: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
   avatarUpdatedAt?: Date | null;
 };
 type CrewWithRelations = Crew & {
@@ -689,7 +691,7 @@ export class CrewService {
             publicBaseUrl,
             key: user.avatarKey ?? null,
             updatedAt: user.avatarUpdatedAt ?? null,
-          }),
+          }), avatarVideo: toAvatarVideoDto(user, publicBaseUrl),
         } as OpenMemberEntry,
         sharedInterests,
       }));

@@ -1,3 +1,4 @@
+import type { AvatarVideoDto } from './avatar-video.dto';
 export type RadioStationDto = {
   id: string;
   name: string;
@@ -9,7 +10,7 @@ export type RadioStationDto = {
 export type RadioListenerDto = {
   id: string;
   username: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;

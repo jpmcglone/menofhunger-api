@@ -1,3 +1,5 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
+import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import {
   BadRequestException,
   ConflictException,
@@ -21,14 +23,14 @@ export type PageOperatorDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
 };
 
 export type OperatedPageDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   accountKind: AccountKind;
   isOrganization: boolean;
 };
@@ -202,7 +204,7 @@ export class PagesService {
       orderBy: { createdAt: 'asc' },
       include: {
         operator: {
-          select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true },
+          select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true },
         },
       },
     });
@@ -219,7 +221,7 @@ export class PagesService {
             id: true,
             username: true,
             name: true,
-            avatarKey: true,
+            avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
             avatarUpdatedAt: true,
             accountKind: true,
             isOrganization: true,
@@ -235,7 +237,7 @@ export class PagesService {
         publicBaseUrl: this.publicBaseUrl,
         key: r.page.avatarKey,
         updatedAt: r.page.avatarUpdatedAt,
-      }),
+      }), avatarVideo: toAvatarVideoDto(r.page, this.publicBaseUrl),
       accountKind: r.page.accountKind,
       isOrganization: r.page.isOrganization,
     }));
@@ -314,7 +316,7 @@ export class PagesService {
         id: true,
         username: true,
         name: true,
-        avatarKey: true,
+        avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
         avatarUpdatedAt: true,
         accountKind: true,
         bannedAt: true,
@@ -358,7 +360,7 @@ export class PagesService {
     id: string;
     username: string | null;
     name: string | null;
-    avatarKey: string | null;
+    avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
     avatarUpdatedAt: Date | null;
   }): PageOperatorDto {
     return {
@@ -369,7 +371,7 @@ export class PagesService {
         publicBaseUrl: this.publicBaseUrl,
         key: row.avatarKey,
         updatedAt: row.avatarUpdatedAt,
-      }),
+      }), avatarVideo: toAvatarVideoDto(row, this.publicBaseUrl),
     };
   }
 }

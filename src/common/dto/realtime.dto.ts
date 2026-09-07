@@ -1,3 +1,4 @@
+import type { AvatarVideoDto } from './avatar-video.dto';
 import type { VerifiedStatus } from '@prisma/client';
 import type { MessageDto } from '../../modules/messages/message.dto';
 import type { NotificationDto } from '../../modules/notifications/notification.dto';
@@ -104,7 +105,7 @@ export type PublicProfileDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: VerifiedStatus;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   pinnedPostId: string | null;
   lastOnlineAt: string | null;
@@ -454,7 +455,7 @@ export type CheckinAnsweredTodayPayloadDto = {
     id: string;
     username: string | null;
     displayName: string | null;
-    avatarUrl: string | null;
+    avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
     isFollowed?: boolean;
   };
 };

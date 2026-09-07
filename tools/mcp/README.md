@@ -1,6 +1,6 @@
 # Men of Hunger CLI and MCP
 
-One shared set of 20 tools for the founder, scripts, and AI assistants. The CLI and
+One shared tool catalog for the founder, scripts, and AI assistants. The CLI and
 MCP share validation, API calls, authentication, redaction, and local persistence.
 They use the existing Men of Hunger API; the host AI does the reasoning. No extra
 OpenAI API key, model call, or database connection is required.
@@ -79,7 +79,7 @@ After the API changes are deployed:
 5. Start a conversation, enable the connection in the tools menu, and ask:
    **“Give me a Men of Hunger briefing and three priorities, with evidence.”**
 
-The web connection exposes the same **16 read tools**. The four local draft/decision
+The web connection exposes the **19 read tools**. The four local draft/decision
 file tools stay on the desktop/CLI; ChatGPT web can draft and reason in the conversation.
 Desktop login and web OAuth are separate sessions. Disconnecting the web connection
 revokes its dedicated session without signing you out of the website or CLI.
@@ -185,6 +185,47 @@ Drafts and decisions live only on this computer, separated by API environment.
 Saving a decision does not execute it or schedule its review. Drafts are plain
 text/Markdown artifacts, not live newsletter records.
 
+## Publish as your account or an operated page (desktop/CLI)
+
+The local MCP provides `publishing_accounts`, `publish_post`, and `get_post`.
+Publishing must be explicitly requested by the user. Resolve the account first:
+
+```sh
+npm run --silent moh -- accounts --json
+npm run --silent moh -- publish --input post.json --json
+npm run --silent moh -- post POST_ID --json
+```
+
+`post.json` contains an explicit author and the complete text, including source links:
+
+```json
+{
+  "authorUsername": "mohnews",
+  "body": "A concise, verified news summary. Source: https://example.com/news"
+}
+```
+
+Posts are public, top-level text posts, limited to 1,000 characters including URLs.
+Only the administrator's own account and pages they already operate are accepted.
+For pages, the tool uses the existing account switch endpoint, verifies the page
+and operator, publishes through the normal post API (including normal realtime
+and notification handling), then restores and verifies the personal admin session.
+No API deployment, permission grant, page impersonation, or browser cookie extraction
+is needed. Refresh the desktop MCP catalog to see newly added tools; the CLI uses
+the same implementation immediately.
+
+A per-environment lock prevents concurrent publishing from mixing identities.
+Do not switch accounts, log in, or log out in another CLI during publishing.
+If a process is interrupted, check the author's feed for a created post, sign in
+again, and remove only the stale `publishing-lock-*.json` for that environment
+from the private state directory. Do not inspect or copy credential files.
+No publish request is automatically retried. A connection failure may happen
+after creation; inspect the feed before retrying. A confirmed post with a session
+restoration failure returns `published: true` plus a warning to sign in again.
+
+The hosted OAuth connector and in-product MARV retain their read-only shared tool
+catalog. Existing `moh:read` grants do not acquire publishing access.
+
 ## Environments and credentials
 
 Production is the default for operating the company. Localhost is useful for
@@ -228,8 +269,8 @@ credential is still removed and the CLI reports failed server revocation.
 
 Session files use mode 600 in a directory with mode 700. Do not commit, copy into
 prompts, or inspect those files with AI tools. The session has the account's
-existing administrator privileges; the MCP exposes only its explicit read
-allowlist plus local file writes. Contact/credential fields are removed from tool
+existing administrator privileges; the desktop MCP exposes an explicit read
+allowlist, local file writes, and public posting as the administrator or an operated page. Contact/credential fields are removed from tool
 results, but free-text support content can still contain member-provided personal
 information. Treat support and moderation results as internal.
 
@@ -258,7 +299,7 @@ endpoint is not yet deployed.
 
 Not connected in this version: payment receipts/revenue accounting, release
 history, HTTP error tracking, mobile crashes, member-facing OAuth, scheduled
-monitoring, and external writes. These need their actual source integrations or
+monitoring, and writes beyond public posting. These need their actual source integrations or
 separately scoped tools. The integration never infers those facts from unrelated
 metrics. See `moh definitions` for metric-specific limits.
 

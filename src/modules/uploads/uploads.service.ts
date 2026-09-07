@@ -534,6 +534,7 @@ export class UploadsService {
       where: { id: userId },
       data: {
         avatarKey: cleaned,
+        avatarVideoKey: null, avatarVideoDurationMs: null, avatarRevision: { increment: 1 },
         avatarUpdatedAt: now,
       },
     });
@@ -647,13 +648,13 @@ export class UploadsService {
   async deleteAvatarForUser(userId: string) {
     const existing = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!existing) throw new NotFoundException('User not found.');
-    if (!existing.avatarKey) {
+    if (!existing.avatarKey && !existing.avatarRevision) {
       return { user: toUserDto(existing, this.appConfig.r2()?.publicBaseUrl ?? null) };
     }
     const oldKey = existing.avatarKey;
     const updated = await this.prisma.user.update({
       where: { id: userId },
-      data: { avatarKey: null, avatarUpdatedAt: new Date() },
+      data: { avatarKey: null, avatarVideoKey: null, avatarVideoDurationMs: null, avatarRevision: { increment: 1 }, avatarUpdatedAt: new Date() },
     });
 
     await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
@@ -661,7 +662,7 @@ export class UploadsService {
     this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'avatar_changed');
 
     const prefix = this.objectKeyPrefix();
-    if (prefix === '' || oldKey.startsWith(prefix)) {
+    if (oldKey && (prefix === '' || oldKey.startsWith(prefix))) {
       try {
         const { s3, bucket } = this.requireR2();
         s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: oldKey })).catch(() => undefined);
@@ -693,7 +694,7 @@ export class UploadsService {
     this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'banner_changed');
 
     const prefix = this.objectKeyPrefix();
-    if (prefix === '' || oldKey.startsWith(prefix)) {
+    if (oldKey && (prefix === '' || oldKey.startsWith(prefix))) {
       try {
         const { s3, bucket } = this.requireR2();
         s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: oldKey })).catch(() => undefined);

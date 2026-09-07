@@ -9,7 +9,7 @@ export const ORG_AFFILIATION_SELECT = {
   id: true,
   username: true,
   name: true,
-  avatarKey: true,
+  avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
   avatarUpdatedAt: true,
 } as const;
 
@@ -22,7 +22,7 @@ export const USER_LIST_SELECT = {
   isOrganization: true,
   accountKind: true,
   verifiedStatus: true,
-  avatarKey: true,
+  avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
   avatarUpdatedAt: true,
   bannedAt: true,
   isBot: true,
@@ -88,7 +88,7 @@ export const USER_DTO_SELECT = {
   unverifiedAt: true,
   followVisibility: true,
   birthdayVisibility: true,
-  avatarKey: true,
+  avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
   avatarUpdatedAt: true,
   bannerKey: true,
   bannerUpdatedAt: true,

@@ -1,3 +1,4 @@
+import type { AvatarVideoDto } from './avatar-video.dto';
 import type { Crew, CrewInvite, CrewInviteStatus, CrewMember, CrewMemberRole } from '@prisma/client';
 import { toUserListDto, type UserListDto, type UserListRow } from './user.dto';
 
@@ -12,7 +13,7 @@ export type CrewPublicDto = {
   name: string | null;
   tagline: string | null;
   bio: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   coverUrl: string | null;
   memberCount: number;
   createdAt: string;

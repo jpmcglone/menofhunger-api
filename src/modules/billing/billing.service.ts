@@ -1,3 +1,4 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import type Stripe from 'stripe';
 import { PrismaService } from '../prisma/prisma.service';
@@ -91,7 +92,7 @@ export class BillingService {
             id: true,
             username: true,
             name: true,
-            avatarKey: true,
+            avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
             avatarUpdatedAt: true,
             premium: true,
             premiumPlus: true,
@@ -158,7 +159,7 @@ export class BillingService {
               publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
               key: user.recruitedBy.avatarKey ?? null,
               updatedAt: user.recruitedBy.avatarUpdatedAt ?? null,
-            }),
+            }), avatarVideo: toAvatarVideoDto(user.recruitedBy, this.appConfig.r2()?.publicBaseUrl ?? null),
             premium: Boolean(user.recruitedBy.premium),
             premiumPlus: Boolean(user.recruitedBy.premiumPlus),
             verifiedStatus: (user.recruitedBy.verifiedStatus ?? 'none') as 'none' | 'identity' | 'manual',

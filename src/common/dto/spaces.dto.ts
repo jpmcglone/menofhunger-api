@@ -1,7 +1,8 @@
+import type { AvatarVideoDto } from './avatar-video.dto';
 export type SpaceOwnerDto = {
   id: string;
   username: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
@@ -33,7 +34,7 @@ export type SpaceDto = {
 export type SpaceListenerDto = {
   id: string;
   username: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;

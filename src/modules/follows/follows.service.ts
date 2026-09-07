@@ -1,3 +1,5 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
+import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import type { FollowVisibility, VerifiedStatus } from '@prisma/client';
 import { Prisma } from '@prisma/client';
@@ -40,7 +42,7 @@ type RecommendationRow = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: VerifiedStatus;
-  avatarKey: string | null;
+  avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
   avatarUpdatedAt: Date | null;
   createdAt: Date;
   mutualCount: number;
@@ -74,7 +76,7 @@ export type FollowListUser = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: VerifiedStatus;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   relationship: FollowRelationship;
 };
 
@@ -561,7 +563,7 @@ export class FollowsService {
       premiumPlus: boolean;
       isOrganization: boolean;
       verifiedStatus: VerifiedStatus;
-      avatarKey: string | null;
+      avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
       avatarUpdatedAt: Date | null;
       createdAt: Date;
     };
@@ -1003,7 +1005,7 @@ export class FollowsService {
       where: { userId: { in: userIds } },
       select: {
         userId: true,
-        org: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } },
+        org: { select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true } },
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -1015,7 +1017,7 @@ export class FollowsService {
         id: m.org.id,
         username: m.org.username,
         name: m.org.name,
-        avatarUrl: publicAssetUrl({ publicBaseUrl, key: m.org.avatarKey ?? null, updatedAt: m.org.avatarUpdatedAt ?? null }),
+        avatarUrl: publicAssetUrl({ publicBaseUrl, key: m.org.avatarKey ?? null, updatedAt: m.org.avatarUpdatedAt ?? null }), avatarVideo: toAvatarVideoDto(m.org, publicBaseUrl),
       });
       map.set(m.userId, list);
     }

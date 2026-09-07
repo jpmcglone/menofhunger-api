@@ -1,3 +1,4 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import {
   BadRequestException,
   Body,
@@ -173,7 +174,7 @@ export class AdminUsersController {
       where: { userId: { in: userIds } },
       select: {
         userId: true,
-        org: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } },
+        org: { select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true } },
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -184,7 +185,7 @@ export class AdminUsersController {
         id: m.org.id,
         username: m.org.username,
         name: m.org.name,
-        avatarUrl: publicAssetUrl({ publicBaseUrl, key: m.org.avatarKey ?? null, updatedAt: m.org.avatarUpdatedAt ?? null }),
+        avatarUrl: publicAssetUrl({ publicBaseUrl, key: m.org.avatarKey ?? null, updatedAt: m.org.avatarUpdatedAt ?? null }), avatarVideo: toAvatarVideoDto(m.org, publicBaseUrl),
       });
       map.set(m.userId, list);
     }
@@ -853,7 +854,7 @@ export class AdminUsersController {
       where: { userId: id },
       include: {
         org: {
-          select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true },
+          select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true },
         },
       },
       orderBy: { createdAt: 'asc' },
@@ -863,7 +864,7 @@ export class AdminUsersController {
       id: m.org.id,
       username: m.org.username,
       name: m.org.name,
-      avatarUrl: publicAssetUrl({ publicBaseUrl: this.publicBaseUrl, key: m.org.avatarKey ?? null, updatedAt: m.org.avatarUpdatedAt ?? null }),
+      avatarUrl: publicAssetUrl({ publicBaseUrl: this.publicBaseUrl, key: m.org.avatarKey ?? null, updatedAt: m.org.avatarUpdatedAt ?? null }), avatarVideo: toAvatarVideoDto(m.org, this.publicBaseUrl),
     }));
 
     return { data };
@@ -895,14 +896,14 @@ export class AdminUsersController {
 
     const orgFull = await this.prisma.user.findUniqueOrThrow({
       where: { id: orgId },
-      select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true },
+      select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true },
     });
 
     const data: OrgAffiliationDto = {
       id: orgFull.id,
       username: orgFull.username,
       name: orgFull.name,
-      avatarUrl: publicAssetUrl({ publicBaseUrl: this.publicBaseUrl, key: orgFull.avatarKey ?? null, updatedAt: orgFull.avatarUpdatedAt ?? null }),
+      avatarUrl: publicAssetUrl({ publicBaseUrl: this.publicBaseUrl, key: orgFull.avatarKey ?? null, updatedAt: orgFull.avatarUpdatedAt ?? null }), avatarVideo: toAvatarVideoDto(orgFull, this.publicBaseUrl),
     };
 
     return { data };

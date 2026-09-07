@@ -1,3 +1,5 @@
+import { toAvatarVideoDto } from './avatar-video.dto';
+import type { AvatarVideoDto } from './avatar-video.dto';
 import type { Feedback, FeedbackCategory, FeedbackStatus } from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
 
@@ -18,7 +20,7 @@ export type FeedbackAdminDto = FeedbackDto & {
     id: string;
     username: string | null;
     name: string | null;
-    avatarUrl: string | null;
+    avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   } | null;
 };
 
@@ -37,7 +39,7 @@ export function toFeedbackDto(feedback: Feedback): FeedbackDto {
 
 export function toFeedbackAdminDto(
   feedback: Feedback & {
-    user?: { id: string; username: string | null; name: string | null; avatarKey?: string | null; avatarUpdatedAt?: Date | null } | null;
+    user?: { id: string; username: string | null; name: string | null; avatarKey?: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null; avatarUpdatedAt?: Date | null } | null;
   },
   publicAssetBaseUrl: string | null = null,
 ): FeedbackAdminDto {
@@ -53,7 +55,7 @@ export function toFeedbackAdminDto(
             publicBaseUrl: publicAssetBaseUrl,
             key: feedback.user.avatarKey ?? null,
             updatedAt: feedback.user.avatarUpdatedAt ?? null,
-          }),
+          }), avatarVideo: toAvatarVideoDto(feedback.user, publicAssetBaseUrl),
         }
       : null,
   };

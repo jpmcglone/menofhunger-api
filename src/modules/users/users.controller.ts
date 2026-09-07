@@ -1,3 +1,4 @@
+import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, NotFoundException, Param, Patch, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
@@ -160,7 +161,7 @@ type UserPreviewPayload = {
   isOrganization: boolean;
   accountKind?: 'person' | 'page';
   verifiedStatus: string;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   lastOnlineAt: string | null;
   checkinStreakDays: number;
@@ -827,7 +828,7 @@ export class UsersController {
       isOrganization: Boolean((profile as any).isOrganization),
       accountKind: (profile as any).accountKind === 'page' ? 'page' : 'person',
       verifiedStatus: profile.verifiedStatus,
-      avatarUrl: profile.avatarUrl,
+      avatarUrl: profile.avatarUrl, avatarVideo: profile.avatarVideo ?? null,
       bannerUrl: profile.bannerUrl,
       lastOnlineAt: canSeeLastOnline ? (profile.lastOnlineAt ?? null) : null,
       checkinStreakDays: Math.max(0, Math.floor(Number((profile as any).checkinStreakDays) || 0)),

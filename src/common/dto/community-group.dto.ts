@@ -1,3 +1,4 @@
+import type { AvatarVideoDto } from './avatar-video.dto';
 import type {
   CommunityGroup,
   CommunityGroupInvite,
@@ -76,7 +77,7 @@ export type CommunityGroupMemberListItemDto = {
   username: string | null;
   name: string | null;
   role: CommunityGroupMemberRole;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   joinedAt: string;
 };
 

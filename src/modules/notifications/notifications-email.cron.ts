@@ -1,3 +1,4 @@
+import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
@@ -24,7 +25,7 @@ function safeBaseUrl(raw: string | null): string {
 
 function renderEmailAvatar(params: {
   profileUrl: string;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   displayName: string;
   size?: number;
 }): string {
@@ -873,7 +874,7 @@ export class NotificationsEmailCron {
         id: true,
         username: true,
         name: true,
-        avatarKey: true,
+        avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
         avatarUpdatedAt: true,
       } as const;
       const weeklyNewMembersTotal = await this.prisma.user.count({
@@ -1583,7 +1584,7 @@ ${chatPreviewRows
         username: string | null;
         name: string | null;
         createdAt: Date;
-        avatarKey: string | null;
+        avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
         bannerKey: string | null;
         bio: string | null;
         profileReminder24hSentAt: Date | null;
@@ -1620,7 +1621,7 @@ ${chatPreviewRows
             username: true,
             name: true,
             createdAt: true,
-            avatarKey: true,
+            avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
             bannerKey: true,
             bio: true,
             profileReminder24hSentAt: true,
@@ -1742,7 +1743,7 @@ ${chatPreviewRows
               name: true,
               bio: true,
               articleBio: true,
-              avatarKey: true,
+              avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
               avatarUpdatedAt: true,
               verifiedStatus: true,
               premium: true,

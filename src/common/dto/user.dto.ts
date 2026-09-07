@@ -1,3 +1,5 @@
+import { toAvatarVideoDto } from './avatar-video.dto';
+import type { AvatarVideoDto } from './avatar-video.dto';
 import type { AccountKind, BirthdayVisibility, FollowVisibility, HeardAboutUs, VerifiedStatus } from '@prisma/client';
 import { publicAssetUrl } from '../assets/public-asset-url';
 import { sanitizeFeatureToggles, type AppFeatureToggle } from '../feature-toggles';
@@ -7,7 +9,7 @@ export type OrgAffiliationDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
 };
 
 /** Relationship fields for list-user DTOs (follows, search). */
@@ -43,7 +45,7 @@ type OrgMembershipRow = {
     id: string;
     username: string | null;
     name: string | null;
-    avatarKey: string | null;
+    avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
     avatarUpdatedAt: Date | null;
   };
 };
@@ -58,7 +60,7 @@ export type UserListRow = {
   isOrganization: boolean;
   accountKind?: AccountKind;
   verifiedStatus: VerifiedStatus;
-  avatarKey: string | null;
+  avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
   avatarUpdatedAt: Date | null;
   createdAt?: Date;
   isBot?: boolean;
@@ -76,7 +78,7 @@ export type UserListDto = {
   isOrganization: boolean;
   accountKind?: AccountKind;
   verifiedStatus: VerifiedStatus;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   orgAffiliations: OrgAffiliationDto[];
   relationship?: UserListRelationship;
   createdAt?: string;
@@ -101,7 +103,7 @@ export function toUserListDto(
       publicBaseUrl,
       key: row.avatarKey ?? null,
       updatedAt: row.avatarUpdatedAt ?? null,
-    }),
+    }), avatarVideo: toAvatarVideoDto(row, publicBaseUrl),
     // Prefer pre-computed affiliations (e.g. from raw SQL paths), fall back to row.orgMemberships.
     orgAffiliations: opts?.orgAffiliations ?? (row.orgMemberships ?? []).map((m) => ({
       id: m.org.id,
@@ -111,7 +113,7 @@ export function toUserListDto(
         publicBaseUrl,
         key: m.org.avatarKey ?? null,
         updatedAt: m.org.avatarUpdatedAt ?? null,
-      }),
+      }), avatarVideo: toAvatarVideoDto(m.org, publicBaseUrl),
     })),
   };
   if (row.isBot) dto.isBot = true;
@@ -163,7 +165,7 @@ export type UserDto = {
   unverifiedAt: string | null;
   followVisibility: FollowVisibility;
   birthdayVisibility: BirthdayVisibility;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   pinnedPostId: string | null;
   // Private rewards (self-only surfaces).
@@ -248,7 +250,7 @@ export type UserPreviewDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: string;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   lastOnlineAt: string | null;
   relationship: UserListRelationship;
@@ -300,7 +302,7 @@ export type UserDtoRow = {
   unverifiedAt: Date | null;
   followVisibility: FollowVisibility;
   birthdayVisibility: BirthdayVisibility;
-  avatarKey: string | null;
+  avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
   avatarUpdatedAt: Date | null;
   bannerKey: string | null;
   bannerUpdatedAt: Date | null;
@@ -361,7 +363,7 @@ export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = 
       publicBaseUrl: publicAssetBaseUrl,
       key: user.avatarKey ?? null,
       updatedAt: user.avatarUpdatedAt ?? null,
-    }),
+    }), avatarVideo: toAvatarVideoDto(user, publicAssetBaseUrl),
     bannerUrl: publicAssetUrl({
       publicBaseUrl: publicAssetBaseUrl,
       key: user.bannerKey ?? null,

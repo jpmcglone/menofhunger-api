@@ -17,6 +17,7 @@ describe('publication media ownership', () => {
       postPollOption: { findMany: jest.fn().mockResolvedValue([]) },
       article: { findMany: jest.fn().mockResolvedValue([]) },
       announcement: { findMany: jest.fn().mockResolvedValue([]) },
+      avatarVideoUpload: { findMany: jest.fn().mockResolvedValue([]) },
       newsletter: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(),
     };

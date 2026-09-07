@@ -1,8 +1,9 @@
+import type { AvatarVideoDto } from './avatar-video.dto';
 export type CoinTransferCounterpartyDto = {
   userId: string;
   username: string;
   displayName: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
 };
 
 export type CoinTransferDto = {
@@ -18,7 +19,7 @@ export type CoinTransferReceiptPartyDto = {
   userId: string;
   username: string | null;
   displayName: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
 };
 
 export type CoinTransferReceiptDto = {

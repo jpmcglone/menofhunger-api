@@ -1,3 +1,4 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { BadRequestException, Body, Controller, Get, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import type {
@@ -143,7 +144,7 @@ export class AdminSiteConfigController {
           id: true,
           username: true,
           name: true,
-          avatarKey: true,
+          avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
           avatarUpdatedAt: true,
           createdAt: true,
         },
@@ -163,7 +164,7 @@ export class AdminSiteConfigController {
             publicBaseUrl,
             key: u.avatarKey,
             updatedAt: u.avatarUpdatedAt,
-          }),
+          }), avatarVideo: toAvatarVideoDto(u, publicBaseUrl),
           createdAt: u.createdAt.toISOString(),
           recruitedAt: u.createdAt.toISOString(),
         })),

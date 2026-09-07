@@ -87,6 +87,25 @@ export class StateStore {
     return `session-${createHash('sha256').update(baseUrl).digest('hex').slice(0, 20)}.json`;
   }
 
+  async withPublishingLock(baseUrl, callback) {
+    await this.ready();
+    const name = this.credentialName(baseUrl).replace('session-', 'publishing-lock-');
+    let file;
+    try {
+      file = await open(this.path(name), 'wx', 0o600);
+    } catch (error) {
+      if (error.code === 'EEXIST')
+        throw new Error('Publishing is already in progress. If it was interrupted, verify the post and sign in again before removing the stale publishing lock. Do not retry the post blindly.');
+      throw error;
+    }
+    try {
+      return await callback();
+    } finally {
+      await file.close();
+      await this.remove(name);
+    }
+  }
+
   async saveArtifact(kind, value, environment) {
     const id = randomUUID();
     const entry = {

@@ -131,7 +131,7 @@ export class FeedbackService {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: params.limit + 1,
       include: {
-        user: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } },
+        user: { select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true } },
       },
     });
 
@@ -149,7 +149,7 @@ export class FeedbackService {
         ...(input.adminNote !== undefined ? { adminNote: input.adminNote } : {}),
       },
       include: {
-        user: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } },
+        user: { select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true } },
       },
     });
   }

@@ -361,7 +361,7 @@ export class MarvinController {
     if (marvUserId) {
       const marvRow = await this.prisma.user.findUnique({
         where: { id: marvUserId },
-        select: { avatarKey: true, avatarUpdatedAt: true },
+        select: { avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true },
       });
       marvAvatarUrl = publicAssetUrl({
         publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,

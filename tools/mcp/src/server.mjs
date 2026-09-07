@@ -25,9 +25,9 @@ export function createServer({ api, store, localArtifacts = true } = {}) {
         description: tool.description,
         inputSchema: tool.schema,
         annotations: {
-          readOnlyHint: !tool.localWrite,
+          readOnlyHint: !tool.localWrite && !tool.remoteWrite,
           destructiveHint: false,
-          idempotentHint: !tool.localWrite,
+          idempotentHint: !tool.localWrite && !tool.remoteWrite,
           openWorldHint: !tool.localWrite,
         },
       },

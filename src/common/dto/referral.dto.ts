@@ -1,3 +1,4 @@
+import type { AvatarVideoDto } from './avatar-video.dto';
 export type RecruitDto = {
   // Full user identity fields (mirrors UserListDto so the web can render UserRow)
   id: string;
@@ -7,7 +8,7 @@ export type RecruitDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: 'none' | 'identity' | 'manual';
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;
   // Referral-specific fields
   recruitedAt: string;

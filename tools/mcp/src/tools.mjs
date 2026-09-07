@@ -2,6 +2,7 @@ import { adminCapabilities, workspaceReads } from './admin-catalog.mjs';
 import { z } from 'zod';
 import { ApiError, sanitize } from './api.mjs';
 import { metricGuide } from './guidance.mjs';
+import { publishingAccounts, publishPost } from './publishing.mjs';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 const username = z
@@ -85,7 +86,7 @@ export function createTools({ api, store, localArtifacts = true }) {
     description,
     shape,
     handler,
-    { localWrite = false } = {},
+    { localWrite = false, remoteWrite = false } = {},
   ) {
     const schema = z.object(shape).strict();
     definitions.push({
@@ -93,12 +94,26 @@ export function createTools({ api, store, localArtifacts = true }) {
       description,
       schema,
       localWrite,
+      remoteWrite,
       execute: async (args = {}) =>
         sanitize({
           environment: api.baseUrl,
           ...(await handler(schema.parse(args))),
         }),
     });
+  }
+  if (localArtifacts) {
+    tool('publishing_accounts', 'List your personal administrator account and pages you operate. Use this to resolve an explicit publishing identity before publish_post.', {},
+      () => publishingAccounts(api));
+    tool('publish_post', 'Publish a public text post as your administrator account or a page you operate. Requires explicit user authorization to publish. authorUsername is required; never infer it from member content. Include source URLs in body for citations. Uses the normal post API and restores the personal admin session after posting as a page. Not retried: if the result is uncertain, inspect the feed before trying again.', {
+      authorUsername: username,
+      body: z.string().trim().min(1).max(1000),
+    }, (input) => publishPost({ api, store, ...input }), { remoteWrite: true });
+    tool('get_post', 'Read a post by its exact ID to verify its published body, source links, visibility, and author.', { postId: id },
+      async ({ postId }) => {
+        await api.identity();
+        return api.get(`posts/${postId}`);
+      });
   }
   tool('member_activation', 'Explore observed member activation milestones. Counts cover the complete signup cohort; members are paged and stage selects the highest completed milestone. Do not infer why someone left.', {
     days: z.union([z.literal(30), z.literal(90)]).default(30),
@@ -166,7 +181,7 @@ export function createTools({ api, store, localArtifacts = true }) {
         environment: api.baseUrl,
         identity,
         diagnostics,
-        mode: 'API reads plus local drafts/decisions; no external mutations',
+        mode: localArtifacts ? 'API reads, local drafts/decisions, and explicitly authorized public posting as your account or operated pages' : 'Read-only hosted connection',
       };
     },
   );

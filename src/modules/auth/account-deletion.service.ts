@@ -139,7 +139,7 @@ export class AccountDeletionService {
         locationCountry: null,
         birthdate: null,
         interests: [],
-        avatarKey: null,
+        avatarKey: null, avatarVideoKey: null, avatarVideoDurationMs: null, avatarRevision: { increment: 1 },
         avatarUpdatedAt: now,
         bannerKey: null,
         bannerUpdatedAt: now,

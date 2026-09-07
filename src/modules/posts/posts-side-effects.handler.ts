@@ -783,7 +783,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
                 id: true,
                 username: true,
                 name: true,
-                avatarKey: true,
+                avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
                 avatarUpdatedAt: true,
               },
             }),

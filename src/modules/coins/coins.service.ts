@@ -1,3 +1,4 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { ConversationsService } from '../posts/conversations.service';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
@@ -21,7 +22,7 @@ const COUNTERPARTY_SELECT = {
   id: true,
   username: true,
   name: true,
-  avatarKey: true,
+  avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
   avatarUpdatedAt: true,
   bannedAt: true,
   verifiedStatus: true,
@@ -292,7 +293,7 @@ export class CoinsService {
               publicBaseUrl,
               key: t.sender.avatarKey,
               updatedAt: t.sender.avatarUpdatedAt ?? null,
-            }),
+            }), avatarVideo: toAvatarVideoDto(t.sender, publicBaseUrl),
           },
         };
       }
@@ -314,7 +315,7 @@ export class CoinsService {
               publicBaseUrl,
               key: counterparty.avatarKey,
               updatedAt: counterparty.avatarUpdatedAt ?? null,
-            }),
+            }), avatarVideo: toAvatarVideoDto(counterparty, publicBaseUrl),
           },
         };
       }
@@ -335,7 +336,7 @@ export class CoinsService {
             publicBaseUrl,
             key: counterparty.avatarKey,
             updatedAt: counterparty.avatarUpdatedAt ?? null,
-          }),
+          }), avatarVideo: toAvatarVideoDto(counterparty, publicBaseUrl),
         },
       };
     });
@@ -379,7 +380,7 @@ export class CoinsService {
         publicBaseUrl,
         key: transfer.sender.avatarKey,
         updatedAt: transfer.sender.avatarUpdatedAt ?? null,
-      }),
+      }), avatarVideo: toAvatarVideoDto(transfer.sender, publicBaseUrl),
     };
     const recipient = {
       userId: transfer.recipient.id,
@@ -389,7 +390,7 @@ export class CoinsService {
         publicBaseUrl,
         key: transfer.recipient.avatarKey,
         updatedAt: transfer.recipient.avatarUpdatedAt ?? null,
-      }),
+      }), avatarVideo: toAvatarVideoDto(transfer.recipient, publicBaseUrl),
     };
     const isStreakReward = transfer.kind === 'streak_reward';
     const isVerificationGift = transfer.kind === 'verification_gift';
@@ -419,7 +420,7 @@ export class CoinsService {
         userId: counterparty.userId,
         username: counterparty.username ?? '',
         displayName: counterparty.displayName,
-        avatarUrl: counterparty.avatarUrl,
+        avatarUrl: counterparty.avatarUrl, avatarVideo: counterparty.avatarVideo ?? null,
       },
     };
   }

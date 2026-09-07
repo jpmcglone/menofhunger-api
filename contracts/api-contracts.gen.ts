@@ -639,7 +639,7 @@ export type ArticleAuthorDto = {
   bio: string | null;
   /** Per-author override bio shown at the bottom of articles. Falls back to `bio` if null. */
   articleBio: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
@@ -654,7 +654,7 @@ export type ArticleSharePreviewDto = {
   thumbnailUrl: string | null;
   visibility: PostVisibility;
   publishedAt: string | null;
-  author: Pick<ArticleAuthorDto, 'id' | 'username' | 'name' | 'avatarUrl' | 'verifiedStatus' | 'premium' | 'premiumPlus'>;
+  author: Pick<ArticleAuthorDto, 'id' | 'username' | 'name' | 'avatarUrl' | 'avatarVideo' | 'verifiedStatus' | 'premium' | 'premiumPlus'>;
 };
 
 export type ArticleCommentDto = {
@@ -745,7 +745,7 @@ export type SwitchableAccountDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   accountKind: 'person' | 'page';
   isOrganization: boolean;
   isCurrent: boolean;
@@ -773,6 +773,28 @@ export type AuthMeDto = UserDto & {
     primary: number;
     requests: number;
   };
+};
+
+// ─── src/common/dto/avatar-video.dto.ts ────────────────────────────────────────
+
+export type AvatarVideoDto = {
+  id: string;
+  url: string;
+  durationMs: number;
+  width: number;
+  height: number;
+};
+
+export type AvatarVideoCapabilitiesDto = {
+  canSet: boolean;
+  maxBytes: number;
+  maxDurationSeconds: number;
+};
+
+export type AvatarVideoUploadDto = {
+  id: string;
+  status: string;
+  error: string | null;
 };
 
 // ─── src/common/dto/billing.dto.ts ─────────────────────────────────────────────
@@ -827,7 +849,7 @@ export type BillingMeDto = {
     id: string;
     username: string | null;
     name: string | null;
-    avatarUrl: string | null;
+    avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
     premium: boolean;
     premiumPlus: boolean;
     verifiedStatus: 'none' | 'identity' | 'manual';
@@ -1050,7 +1072,7 @@ export type CoinTransferCounterpartyDto = {
   userId: string;
   username: string;
   displayName: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
 };
 
 export type CoinTransferDto = {
@@ -1066,7 +1088,7 @@ export type CoinTransferReceiptPartyDto = {
   userId: string;
   username: string | null;
   displayName: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
 };
 
 export type CoinTransferReceiptDto = {
@@ -1161,7 +1183,7 @@ export type CommunityGroupMemberListItemDto = {
   username: string | null;
   name: string | null;
   role: CommunityGroupMemberRole;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   joinedAt: string;
 };
 
@@ -1219,7 +1241,7 @@ export type ConversationPersonDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
 };
 
 export type ConversationReplyDto = {
@@ -1279,7 +1301,7 @@ export type CrewPublicDto = {
   name: string | null;
   tagline: string | null;
   bio: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   coverUrl: string | null;
   memberCount: number;
   createdAt: string;
@@ -1375,7 +1397,7 @@ export type FeedbackAdminDto = FeedbackDto & {
     id: string;
     username: string | null;
     name: string | null;
-    avatarUrl: string | null;
+    avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   } | null;
 };
 
@@ -1794,7 +1816,7 @@ export type MarvinMeDto = {
      * Resolved public avatar URL for Marv, or `null` when no avatar is set
      * (the pinned row falls back to a styled icon in that case).
      */
-    avatarUrl: string | null;
+    avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   } | null;
 };
 
@@ -2042,7 +2064,7 @@ export type PostAuthorDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: VerifiedStatus;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;
   isBot?: boolean;
   /** When true, author is banned; id/username/name/avatar are redacted. */
@@ -2300,7 +2322,7 @@ export type RadioStationDto = {
 export type RadioListenerDto = {
   id: string;
   username: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
@@ -2439,7 +2461,7 @@ export type PublicProfileDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: VerifiedStatus;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   pinnedPostId: string | null;
   lastOnlineAt: string | null;
@@ -2731,7 +2753,7 @@ export type CheckinAnsweredTodayPayloadDto = {
     id: string;
     username: string | null;
     displayName: string | null;
-    avatarUrl: string | null;
+    avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
     isFollowed?: boolean;
   };
 };
@@ -2772,7 +2794,7 @@ export type RecruitDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: 'none' | 'identity' | 'manual';
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;
   // Referral-specific fields
   recruitedAt: string;
@@ -2924,7 +2946,7 @@ export type AutoVerifyPreviewUserDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   createdAt: string;
   recruitedAt: string | null;
 };
@@ -2945,7 +2967,7 @@ export type AutoVerifyApplyDto = {
 export type SpaceOwnerDto = {
   id: string;
   username: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
@@ -2977,7 +2999,7 @@ export type SpaceDto = {
 export type SpaceListenerDto = {
   id: string;
   username: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
@@ -3142,7 +3164,7 @@ export type OrgAffiliationDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
 };
 
 /** Relationship fields for list-user DTOs (follows, search). */
@@ -3182,7 +3204,7 @@ export type UserListDto = {
   isOrganization: boolean;
   accountKind?: AccountKind;
   verifiedStatus: VerifiedStatus;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   orgAffiliations: OrgAffiliationDto[];
   relationship?: UserListRelationship;
   createdAt?: string;
@@ -3231,7 +3253,7 @@ export type UserDto = {
   unverifiedAt: string | null;
   followVisibility: FollowVisibility;
   birthdayVisibility: BirthdayVisibility;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   pinnedPostId: string | null;
   // Private rewards (self-only surfaces).
@@ -3316,7 +3338,7 @@ export type UserPreviewDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: string;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   lastOnlineAt: string | null;
   relationship: UserListRelationship;
@@ -3480,7 +3502,7 @@ export type MessageConversationCrewSummaryDto = {
   slug: string;
   /** Display name; null when the crew hasn't been named yet. */
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
 };
 
 export type MessageConversationDto = {
@@ -3518,7 +3540,7 @@ export type NotificationActorDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   premium: boolean;
   isOrganization: boolean;
   verifiedStatus: VerifiedStatus;

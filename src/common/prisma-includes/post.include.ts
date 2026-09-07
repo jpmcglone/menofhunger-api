@@ -20,7 +20,7 @@ export const ARTICLE_SHARE_AUTHOR_SELECT = {
   premiumPlus: true,
   isOrganization: true,
   verifiedStatus: true,
-  avatarKey: true,
+  avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
   avatarUpdatedAt: true,
 } as const;
 

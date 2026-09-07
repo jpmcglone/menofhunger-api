@@ -1,3 +1,4 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import {
   BadRequestException,
   ForbiddenException,
@@ -997,7 +998,7 @@ export class GroupsService {
         publicBaseUrl: r2,
         key: m.user.avatarKey ?? null,
         updatedAt: m.user.avatarUpdatedAt ?? null,
-      }),
+      }), avatarVideo: toAvatarVideoDto(m.user, r2),
       joinedAt: m.createdAt.toISOString(),
     }));
 

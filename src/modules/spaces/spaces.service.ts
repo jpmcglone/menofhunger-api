@@ -1,3 +1,4 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { Injectable, NotFoundException, ForbiddenException, ConflictException, BadRequestException } from '@nestjs/common';
 import type { SpaceMode } from '@prisma/client';
 import type { SpaceDto, SpaceOwnerDto, SpaceReactionDto, SpacesUpdatedPatchDto } from '../../common/dto';
@@ -777,7 +778,7 @@ export class SpacesService {
       owner: {
         id: string;
         username: string | null;
-        avatarKey: string | null;
+        avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
         avatarUpdatedAt: Date | null;
         premium: boolean;
         premiumPlus: boolean;
@@ -801,7 +802,7 @@ export class SpacesService {
         publicBaseUrl: this.r2PublicBaseUrl,
         key: space.owner.avatarKey,
         updatedAt: space.owner.avatarUpdatedAt,
-      }),
+      }), avatarVideo: toAvatarVideoDto(space.owner, this.r2PublicBaseUrl),
       premium: space.owner.premium,
       premiumPlus: space.owner.premiumPlus,
       isOrganization: space.owner.isOrganization,

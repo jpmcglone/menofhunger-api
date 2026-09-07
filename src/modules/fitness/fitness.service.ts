@@ -752,8 +752,8 @@ export class FitnessService {
           select: {
             id: true, username: true, name: true, premium: true, premiumPlus: true,
             isOrganization: true, verifiedStatus: true,
-            avatarKey: true, avatarUpdatedAt: true, bannedAt: true,
-            orgMemberships: { include: { org: { select: { id: true, username: true, name: true, avatarKey: true, avatarUpdatedAt: true } } } },
+            avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true, bannedAt: true,
+            orgMemberships: { include: { org: { select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true } } } },
           },
         },
         media: true,

@@ -206,7 +206,7 @@ export class SpacesGatewayHandler {
           listeners.push({
             id,
             username: u?.username ?? null,
-            avatarUrl: u?.avatarUrl ?? null,
+            avatarUrl: u?.avatarUrl ?? null, avatarVideo: u?.avatarVideo ?? null,
             premium: u?.premium ?? false,
             premiumPlus: u?.premiumPlus ?? false,
             isOrganization: u?.isOrganization ?? false,

@@ -1,3 +1,4 @@
+import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import type { Message, MessageConversation, MessageMedia, MessageParticipantStatus, MessageParticipantRole } from '@prisma/client';
 import { toUserListDto, type UserListDto, type UserListRow } from '../../common/dto';
 import type { CallSessionDto, MessageCallDto } from '../../common/dto/call.dto';
@@ -71,7 +72,7 @@ export type MessageConversationCrewSummaryDto = {
   slug: string;
   /** Display name; null when the crew hasn't been named yet. */
   name: string | null;
-  avatarUrl: string | null;
+  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
 };
 
 export type MessageConversationDto = {
@@ -108,7 +109,7 @@ type MessageReactionRow = {
   reactionId: string;
   emoji: string;
   userId: string;
-  user: { id: string; username: string | null; avatarKey: string | null; avatarUpdatedAt: Date | null };
+  user: { id: string; username: string | null; avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null; avatarUpdatedAt: Date | null };
 };
 
 type MessageWithRelations = Message & {

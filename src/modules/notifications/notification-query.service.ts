@@ -1,3 +1,4 @@
+import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { Injectable } from '@nestjs/common';
 import { Prisma, type NotificationKind, type VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -196,7 +197,7 @@ export class NotificationQueryService {
             id: true,
             username: true,
             name: true,
-            avatarKey: true,
+            avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
             avatarUpdatedAt: true,
             premium: true,
             isOrganization: true,
@@ -788,7 +789,7 @@ export class NotificationQueryService {
         id: string;
         username: string | null;
         name: string | null;
-        avatarKey: string | null;
+        avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
         avatarUpdatedAt: Date | null;
         premium: boolean;
         isOrganization: boolean;
@@ -819,7 +820,7 @@ export class NotificationQueryService {
           publicBaseUrl,
           key: n.actor.avatarKey,
           updatedAt: n.actor.avatarUpdatedAt,
-        }),
+        }), avatarVideo: toAvatarVideoDto(n.actor, publicBaseUrl),
         premium: n.actor.premium,
         isOrganization: Boolean((n.actor as any).isOrganization),
         verifiedStatus: n.actor.verifiedStatus,
@@ -879,7 +880,7 @@ export class NotificationQueryService {
             id: true,
             username: true,
             name: true,
-            avatarKey: true,
+            avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
             avatarUpdatedAt: true,
             premium: true,
             isOrganization: true,

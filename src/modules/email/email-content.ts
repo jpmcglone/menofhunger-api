@@ -12,7 +12,7 @@ export interface ProfileReminderEmailParams {
 }
 
 export function getMissingProfileFields(params: {
-  avatarKey: string | null;
+  avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
   bio: string | null;
   bannerKey: string | null;
 }): MissingProfileField[] {
