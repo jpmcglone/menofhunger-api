@@ -72,6 +72,11 @@ raw transport messages. Clean up subscriptions and pending work with their owner
 
 ## Media ownership and review
 
+Consider media review when planning every new or changed upload area on web, iOS,
+or the API, including admin-only flows. This applies to images, video, audio,
+attachments, embedded media, and generated derivatives. Shipping the upload feature
+includes its media-review integration; it is not a separate follow-up.
+
 Every feature that stores or embeds uploaded media must register all references in
 `AdminImageReviewService` before shipping. Cover direct object keys, public URLs,
 JSON/rich-text embeds, thumbnails, and every retained lifecycle state (including
@@ -79,12 +84,30 @@ scheduled content, drafts, archives, and sent emails). Upload deduplication/inde
 records are not content ownership. Reuse the central resolver; do not add a separate
 orphan scan that can disagree with media review.
 
+Verify that media review discovers the new storage paths and recognizes their media
+types. Update its sync prefix registry and type handling when needed, including
+source uploads and generated derivatives.
+
 Update admin ownership labels/links and deletion behavior with the feature. Recheck
 ownership when deleting stale orphan selections, retain media used by sent email,
 and test both positive references and genuinely unreferenced assets. Maintain the
 schema coverage check when adding a media field; a field with an unconventional name
 or JSON payload needs explicit review too. Never treat an unregistered media feature
 as evidence that its assets are safe to remove.
+
+A currently referenced profile avatar is never an orphan: protect both
+`User.avatarVideoKey` (MP4) and `User.avatarKey` (photo or video poster), even after
+upload-job records expire or the account loses its paid tier. Apply the same rule
+to other current owners. Define temporary job/draft retention explicitly; do not
+exempt an entire storage prefix forever.
+
+For each upload area, add resolver tests that show owned media is excluded from
+orphan results, genuinely unreferenced media remains discoverable, and stale
+single/bulk orphan deletion refuses media that has since acquired an owner.
+Include every stored derivative and relevant lifecycle state. Update
+`admin-image-review.coverage.spec.ts` alongside the schema; its field-name heuristic
+does not replace explicit review of JSON fields or unconventional names. If an
+existing resolver already covers the area, prove that with a regression fixture.
 
 ## Development processes
 

@@ -3,12 +3,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 
-describe('publication media ownership', () => {
+describe('profile and publication media ownership', () => {
   const key = 'announcements/notice.webp';
   const asset = { id: 'asset', r2Key: key, createdAt: new Date(), deletedAt: null };
-  const setup = () => {
+  const setup = (assetKey = key) => {
+    const indexedAsset = { ...asset, r2Key: assetKey };
     const prisma = {
-      mediaAsset: { findUnique: jest.fn().mockResolvedValue(asset), findMany: jest.fn().mockResolvedValue([asset]) },
+      mediaAsset: { findUnique: jest.fn().mockResolvedValue(indexedAsset), findMany: jest.fn().mockResolvedValue([indexedAsset]) },
       postMedia: { findMany: jest.fn().mockResolvedValue([]) },
       messageMedia: { findMany: jest.fn().mockResolvedValue([]) },
       user: { findMany: jest.fn().mockResolvedValue([]) },
@@ -28,6 +29,59 @@ describe('publication media ownership', () => {
     );
     return { prisma, service };
   };
+
+  const avatarVideoKey = 'avatars/user/video/version/avatar.mp4';
+  const avatarPosterKey = 'avatars/user/video/version/poster.jpg';
+  const avatarUser = {
+    id: 'user', username: 'john', name: 'John', premium: false, premiumPlus: false,
+    verifiedStatus: 'none', avatarKey: avatarPosterKey, avatarVideoKey, bannerKey: null,
+  };
+
+  it.each([
+    ['photo', 'avatars/user/photo.webp'], ['video', avatarVideoKey], ['poster', avatarPosterKey],
+  ])('keeps a current profile %s out of orphans without an upload record or paid tier', async (kind, assetKey) => {
+    const { prisma, service } = setup(assetKey);
+    prisma.user.findMany.mockResolvedValue([{ ...avatarUser,
+      ...(kind === 'photo' ? { avatarKey: assetKey, avatarVideoKey: null } : {}),
+    }]);
+    // Upload bookkeeping can expire; the current profile remains the authoritative owner.
+    const detail = await service.getById('asset');
+    expect(detail.asset.primaryType).toBe('user');
+    expect(detail.references.users).toEqual([expect.objectContaining({ id: 'user', isAvatar: true })]);
+    const list = await service.list({ limit: 30, cursor: null, onlyOrphans: true });
+    expect(list.items).toEqual([]);
+    expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { OR: [{ avatarKey: { in: [assetKey] } }, { avatarVideoKey: { in: [assetKey] } }, { bannerKey: { in: [assetKey] } }] },
+    }));
+  });
+
+  it.each(['queued', 'processing'].flatMap(status => ['sourceKey', 'videoKey', 'posterKey'].map(field => [status, field])))
+  ('protects %s avatar job media referenced by %s', async (status, field) => {
+    const keys: Record<string, string> = { sourceKey: 'avatars/user/video/version/source.mov', videoKey: avatarVideoKey, posterKey: avatarPosterKey };
+    const { prisma, service } = setup(keys[field]);
+    prisma.avatarVideoUpload.findMany.mockResolvedValue([{ ...keys, id: 'job', userId: 'user', user: avatarUser, status }]);
+    expect((await service.getById('asset')).asset.primaryType).toBe('user');
+    expect((await service.list({ limit: 30, cursor: null, onlyOrphans: true })).items).toEqual([]);
+  });
+
+  it.each([avatarVideoKey, avatarPosterKey])('rejects stale single and bulk orphan deletion after a profile adopts %s', async assetKey => {
+    const { prisma, service } = setup(assetKey);
+    expect((await service.getById('asset')).asset.primaryType).toBe('orphan');
+    prisma.user.findMany.mockResolvedValue([avatarUser]);
+    await expect(service.deleteById({ id: 'asset', adminUserId: 'admin', reason: 'Orphan cleanup', onlyOrphans: true }))
+      .rejects.toThrow('no longer an orphan');
+    const bulk = await service.deleteManyByIds({ ids: ['asset'], adminUserId: 'admin', reason: 'Orphan cleanup', onlyOrphans: true });
+    expect(bulk.deleted).toBe(0);
+    expect(bulk.errors).toHaveLength(1);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('classifies an unreferenced old avatar as an orphan instead of exempting the whole avatar prefix', async () => {
+    const { service } = setup('avatars/user/video/replaced/avatar.mp4');
+    expect((await service.getById('asset')).asset.primaryType).toBe('orphan');
+    const list = await service.list({ limit: 30, cursor: null, onlyOrphans: true });
+    expect(list.items).toEqual([expect.objectContaining({ id: 'asset', belongsToSummary: 'orphan' })]);
+  });
 
   it.each(['draft', 'published', 'archived'])('recognizes %s announcement images and excludes them from orphans', async (status) => {
     const { prisma, service } = setup();

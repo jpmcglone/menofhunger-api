@@ -279,7 +279,9 @@ export class AdminImageReviewService {
    *   PostMedia.thumbnailR2Key     (video poster frames for posts)
    *   MessageMedia.r2Key           (DM / crew-wall images)
    *   MessageMedia.thumbnailR2Key  (DM / crew-wall video thumbnails)
-   *   User.avatarKey               (profile avatar)
+   *   User.avatarKey               (profile photo or video poster)
+   *   User.avatarVideoKey          (current profile avatar MP4; independent of upload bookkeeping)
+   *   AvatarVideoUpload.sourceKey/videoKey/posterKey (retained avatar upload jobs)
    *   User.bannerKey               (profile banner)
    *   CommunityGroup.avatarImageUrl  (full URL — group square avatar)
    *   CommunityGroup.coverImageUrl   (full URL — group wide banner)
@@ -369,7 +371,7 @@ export class AdminImageReviewService {
       }
     }
 
-    // ── 3. User (avatarKey + bannerKey) ────────────────────────────────────
+    // ── 3. User (photo/poster + avatar MP4 + banner) ───────────────────────
     const userRows = await this.prisma.user.findMany({
       where: { OR: [{ avatarKey: { in: keyArr } }, { avatarVideoKey: { in: keyArr } }, { bannerKey: { in: keyArr } }] },
       select: {
