@@ -21,6 +21,7 @@ type MockPrisma = {
     findMany: jest.Mock;
     deleteMany: jest.Mock;
     createMany: jest.Mock;
+    count: jest.Mock;
   };
   $executeRaw: jest.Mock;
 };
@@ -37,11 +38,12 @@ function makeService(): { service: NotificationWriterService; prisma: MockPrisma
       findMany: jest.fn().mockResolvedValue([]),
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      count: jest.fn().mockResolvedValue(1),
     },
     $executeRaw: jest.fn().mockResolvedValue(0),
   };
 
-  const presenceRealtime = { emitNotificationsUpdated: jest.fn() };
+  const presenceRealtime = { emitNotificationsUpdated: jest.fn(), emitDailyContentPublished: jest.fn().mockResolvedValue(undefined) };
   const presenceRedis = { isOnline: jest.fn().mockResolvedValue(false) };
   const jobs = { dispatch: jest.fn() };
   const sideEffects = { dispatch: jest.fn() };
@@ -64,7 +66,9 @@ function makeService(): { service: NotificationWriterService; prisma: MockPrisma
 }
 
 const baseSnap = {
-  websters1828: { word: 'Overmuch' },
+  websters1828: { word: 'Overmuch', definition: 'Too much.' },
+  websters1828RefreshedAt: new Date('2026-08-03T13:00:00Z'),
+  quoteRefreshedAt: new Date('2026-08-03T13:30:00Z'),
   quote: { author: 'Thomas Carlyle', text: 'Do the thing before you.' },
   wordNotifiedAt: null,
   quoteNotifiedAt: null,
@@ -217,5 +221,28 @@ describe('fanOutCheckinReminders – person accounts only', () => {
         where: expect.objectContaining({ accountKind: 'person', bannedAt: null }),
       }),
     );
+  });
+});
+
+
+describe('daily content readiness before notifications', () => {
+  it.each(['word', 'quote'] as const)('refuses an in-progress %s snapshot', async (item) => {
+    const { service, prisma, sideEffects } = makeService();
+    prisma.dailyContentSnapshot.findUnique.mockResolvedValue({ ...baseSnap,
+      [item === 'word' ? 'websters1828RefreshedAt' : 'quoteRefreshedAt']: new Date(1),
+    });
+    await expect(service.fanOutDailyContentNotifications({ item, dayKey: '2026-08-03' })).rejects.toThrow('not ready');
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+    expect(prisma.notification.createMany).not.toHaveBeenCalled();
+    expect(sideEffects.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each(['word', 'quote'] as const)('refuses incomplete %s content despite a timestamp', async (item) => {
+    const { service, prisma, sideEffects } = makeService();
+    prisma.dailyContentSnapshot.findUnique.mockResolvedValue({ ...baseSnap,
+      [item === 'word' ? 'websters1828' : 'quote']: {},
+    });
+    await expect(service.fanOutDailyContentNotifications({ item, dayKey: '2026-08-03' })).rejects.toThrow('not ready');
+    expect(sideEffects.dispatch).not.toHaveBeenCalled();
   });
 });

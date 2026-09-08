@@ -125,8 +125,12 @@ export class PresenceRealtimeService {
    * Clients on the word/quote pages or the right-rail can refetch and show the fresh content
    * without waiting for the push/email notification or a manual reload.
    */
-  emitDailyContentPublished(item: 'word' | 'quote', dayKey: string): void {
-    this.emitBroadcast('daily:content-published', { item, dayKey });
+  async emitDailyContentPublished(item: 'word' | 'quote', dayKey: string): Promise<void> {
+    const event = 'daily:content-published';
+    const payload = { item, dayKey };
+    // Publication invalidation must reach the transport before notification fan-out.
+    await this.presenceRedis.publishBroadcast({ event, payload, required: true });
+    this.server?.emit(event, payload);
   }
 
   /**

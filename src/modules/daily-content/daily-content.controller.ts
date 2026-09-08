@@ -9,8 +9,9 @@ export class DailyContentController {
   @Get('today')
   async today(@Res({ passthrough: true }) res: Response) {
     const data = await this.daily.getToday();
-    const maxAge = this.daily.getCacheControlMaxAgeSeconds(new Date());
-    res.setHeader('Cache-Control', `private, max-age=${maxAge}`);
+    // A publish can finish after its scheduled boundary or be corrected by an admin.
+    // Never cache a missing/old snapshot while notifications announce the new one.
+    res.setHeader('Cache-Control', 'private, no-store');
     return { data };
   }
 }

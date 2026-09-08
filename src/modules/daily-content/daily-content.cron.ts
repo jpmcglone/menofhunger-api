@@ -67,22 +67,7 @@ export class DailyContentCron {
       this.logger.warn('[daily-content] runPublishWord called without dayKey');
       return;
     }
-    const { published } = await this.dailyContent.publish({ item: 'word', dayKey });
-    if (published) {
-      this.logger.log(`[daily-content] word published for ${dayKey}`);
-      // Broadcast to all connected clients so they can update in real-time.
-      this.realtime.emitDailyContentPublished('word', dayKey);
-      try {
-        await this.jobs.enqueueCron(
-          JOBS.dailyContentFanoutWord,
-          { item: 'word', dayKey },
-          `cron:dailyContentFanoutWord:${dayKey}`,
-          { attempts: 3, backoff: { type: 'exponential', delay: 30_000 } },
-        );
-      } catch {
-        // Already queued — safe no-op.
-      }
-    }
+    await this.publishAndNotify('word', dayKey);
   }
 
   async runPublishQuote(data: { item: string; dayKey: string }): Promise<void> {
@@ -91,21 +76,23 @@ export class DailyContentCron {
       this.logger.warn('[daily-content] runPublishQuote called without dayKey');
       return;
     }
-    const { published } = await this.dailyContent.publish({ item: 'quote', dayKey });
-    if (published) {
-      this.logger.log(`[daily-content] quote published for ${dayKey}`);
-      // Broadcast to all connected clients so they can update in real-time.
-      this.realtime.emitDailyContentPublished('quote', dayKey);
-      try {
-        await this.jobs.enqueueCron(
-          JOBS.dailyContentFanoutQuote,
-          { item: 'quote', dayKey },
-          `cron:dailyContentFanoutQuote:${dayKey}`,
-          { attempts: 3, backoff: { type: 'exponential', delay: 30_000 } },
-        );
-      } catch {
-        // Already queued — safe no-op.
-      }
+    await this.publishAndNotify('quote', dayKey);
+  }
+
+  private async publishAndNotify(item: 'word' | 'quote', dayKey: string): Promise<void> {
+    await this.dailyContent.publish({ item, dayKey });
+    // Also resume after a prior attempt committed but failed before enqueueing fan-out.
+    if (!(await this.dailyContent.isPublished(item, dayKey))) {
+      throw new Error(`[daily-content] ${item} is not ready for ${dayKey}`);
     }
+    if (await this.dailyContent.isNotified(item, dayKey)) return;
+    await this.realtime.emitDailyContentPublished(item, dayKey);
+    const job = item === 'word' ? JOBS.dailyContentFanoutWord : JOBS.dailyContentFanoutQuote;
+    // BullMQ deduplicates job IDs. Real enqueue failures must propagate for retry.
+    await this.jobs.enqueueCron(
+      job, { item, dayKey },
+      `cron:dailyContentFanout${item === 'word' ? 'Word' : 'Quote'}:${dayKey}`,
+      { attempts: 3, backoff: { type: 'exponential', delay: 30_000 } },
+    );
   }
 }

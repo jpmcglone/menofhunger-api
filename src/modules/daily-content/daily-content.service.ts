@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { Websters1828Service, type Websters1828WordOfDaySnapshot } from '../websters1828/websters1828.service';
 import { DAILY_QUOTES, type DailyQuote } from './daily-quotes';
 import type { DailyContentTodayDto, DailyQuoteDto } from '../../common/dto/daily-content.dto';
@@ -58,21 +59,15 @@ export class DailyContentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly websters1828: Websters1828Service,
+    private readonly realtime: PresenceRealtimeService,
   ) {}
-
-  /** Cache-Control max-age in seconds (until the next publish boundary). */
-  getCacheControlMaxAgeSeconds(now: Date = new Date()): number {
-    const nextBoundary = nextPublishBoundaryUtcMs(now);
-    return Math.max(60, Math.floor((nextBoundary - now.getTime()) / 1000));
-  }
 
   /**
    * Pure read: return the currently-active word and quote, each from their
    * respective publish-boundary day key. May return null fields if the
    * relevant snapshot has not been published yet.
    *
-   * Does NOT scrape inline. If a snapshot is missing it fire-and-forgets the
-   * publish job via the cron; the next request will find the row.
+   * Does NOT scrape inline. The scheduler publishes missing snapshots.
    */
   async getToday(now: Date = new Date()): Promise<DailyContentTodayDto> {
     const todayKey = easternDayKey(now);
@@ -119,7 +114,9 @@ export class DailyContentService {
   async publish(params: { item: DailyContentItem; dayKey: string }): Promise<{ published: boolean }> {
     const { item, dayKey } = params;
 
-    // Ensure the row exists before claiming.
+    if (await this.isPublished(item, dayKey)) return { published: false };
+
+    // Ensure the row exists before the atomic final write.
     await this.prisma.dailyContentSnapshot.upsert({
       where: { dayKey },
       create: { dayKey },
@@ -133,69 +130,28 @@ export class DailyContentService {
   }
 
   private async publishWord(dayKey: string): Promise<{ published: boolean }> {
-    // Atomic claim: only proceed if websters1828RefreshedAt is still null.
-    const claimed = await this.prisma.dailyContentSnapshot.updateMany({
-      where: { dayKey, websters1828RefreshedAt: null },
-      data: { websters1828RefreshedAt: new Date(1) }, // sentinel "in-progress"
-    });
-    if (claimed.count === 0) {
-      this.logger.debug(`[daily-content] word already published for ${dayKey}`);
-      return { published: false };
+    // Fetch the complete definition before exposing either content or a publish timestamp.
+    // Competing workers may scrape, but only one can commit. No in-progress sentinel can
+    // strand a day after a worker crashes; old sentinels are recoverable too.
+    const wotd = await this.websters1828.fetchWordOfDay();
+    if (!wotd.word?.trim() || !wotd.definition?.trim()) {
+      throw new Error(`[daily-content] Incomplete word snapshot for ${dayKey}`);
     }
-
-    let wotd: Websters1828WordOfDaySnapshot;
-    try {
-      wotd = await this.websters1828.fetchWordOfDay();
-    } catch (err) {
-      // Roll back the claim so the next cron cycle retries.
-      await this.prisma.dailyContentSnapshot.updateMany({
-        where: { dayKey, websters1828RefreshedAt: new Date(1) },
-        data: { websters1828RefreshedAt: null },
-      }).catch(() => undefined);
-      throw err;
-    }
-
-    const now = new Date();
-    await this.prisma.dailyContentSnapshot.update({
-      where: { dayKey },
-      data: { websters1828: wotd as any, websters1828RefreshedAt: now },
+    const result = await this.prisma.dailyContentSnapshot.updateMany({
+      where: { dayKey, OR: [{ websters1828RefreshedAt: null }, { websters1828RefreshedAt: new Date(1) }] },
+      data: { websters1828: wotd as any, websters1828RefreshedAt: new Date() },
     });
-    this.logger.log(`[daily-content] word published for ${dayKey}: "${wotd.word}"`);
-    return { published: true };
+    return { published: result.count > 0 };
   }
 
   private async publishQuote(dayKey: string): Promise<{ published: boolean }> {
-    // Atomic claim: only proceed if quoteRefreshedAt is still null.
-    const claimed = await this.prisma.dailyContentSnapshot.updateMany({
-      where: { dayKey, quoteRefreshedAt: null },
-      data: { quoteRefreshedAt: new Date(1) }, // sentinel "in-progress"
+    const quote = pickDailyQuote(this.quotes, dayKeyToDate(dayKey));
+    if (!quote) throw new Error('[daily-content] No quotes available to publish');
+    const result = await this.prisma.dailyContentSnapshot.updateMany({
+      where: { dayKey, OR: [{ quoteRefreshedAt: null }, { quoteRefreshedAt: new Date(1) }] },
+      data: { quote: quote as any, quoteRefreshedAt: new Date() },
     });
-    if (claimed.count === 0) {
-      this.logger.debug(`[daily-content] quote already published for ${dayKey}`);
-      return { published: false };
-    }
-
-    // Pick the quote for the specific dayKey.
-    const dateForDay = dayKeyToDate(dayKey);
-    const quote = pickDailyQuote(this.quotes, dateForDay);
-
-    if (!quote) {
-      // No quotes configured; roll back sentinel.
-      await this.prisma.dailyContentSnapshot.updateMany({
-        where: { dayKey, quoteRefreshedAt: new Date(1) },
-        data: { quoteRefreshedAt: null },
-      }).catch(() => undefined);
-      this.logger.warn('[daily-content] No quotes available to publish');
-      return { published: false };
-    }
-
-    const now = new Date();
-    await this.prisma.dailyContentSnapshot.update({
-      where: { dayKey },
-      data: { quote: quote as any, quoteRefreshedAt: now },
-    });
-    this.logger.log(`[daily-content] quote published for ${dayKey} by "${quote.author}"`);
-    return { published: true };
+    return { published: result.count > 0 };
   }
 
   /**
@@ -211,6 +167,7 @@ export class DailyContentService {
     const dayKey = params?.dayKey ?? easternDayKey(now);
     const item = params?.item;
 
+    const updated: DailyContentItem[] = [];
     const refreshWord = !item || item === 'word';
     const refreshQuote = !item || item === 'quote';
 
@@ -221,12 +178,13 @@ export class DailyContentService {
       } catch (err) {
         this.logger.warn(`[daily-content] republish word failed: ${(err as Error)?.message ?? String(err)}`);
       }
-      if (wotd) {
+      if (wotd?.word?.trim() && wotd.definition?.trim()) {
         await this.prisma.dailyContentSnapshot.upsert({
           where: { dayKey },
           create: { dayKey, websters1828: wotd as any, websters1828RefreshedAt: now },
           update: { websters1828: wotd as any, websters1828RefreshedAt: now },
         });
+        updated.push('word');
       }
     }
 
@@ -239,10 +197,22 @@ export class DailyContentService {
           create: { dayKey, quote: quote as any, quoteRefreshedAt: now },
           update: { quote: quote as any, quoteRefreshedAt: now },
         });
+        updated.push('quote');
       }
     }
 
+    for (const publishedItem of updated) {
+      await this.realtime.emitDailyContentPublished(publishedItem, dayKey);
+    }
     return this.getToday(now);
+  }
+
+  async isNotified(item: DailyContentItem, dayKey: string): Promise<boolean> {
+    const snap = await this.prisma.dailyContentSnapshot.findUnique({
+      where: { dayKey }, select: { wordNotifiedAt: true, quoteNotifiedAt: true },
+    });
+    const timestamp = item === 'word' ? snap?.wordNotifiedAt : snap?.quoteNotifiedAt;
+    return timestamp != null && timestamp.getTime() > 1;
   }
 
   /**

@@ -28,6 +28,7 @@ import {
   type VideoEmbedDto,
 } from './rumble-link-metadata';
 import { isSubstackPostUrl, enrichSubstackPost } from './substack-link-metadata';
+import { fetchYoutubeMetadata, needsYoutubeEnrichment, youtubeVideoId } from './youtube-link-metadata';
 
 export type LinkMetadataDto = {
   url: string;
@@ -188,7 +189,10 @@ export class LinkMetadataService {
       }
     } catch { /* fall through */ }
 
-    const cacheKey = RedisKeys.linkMeta(normalized);
+    const youtube = youtubeVideoId(normalized) != null;
+    // Bypass old scraper/null results without flushing unrelated caches.
+    const cacheIdentity = youtube ? `${normalized}:youtube-v1` : normalized;
+    const cacheKey = RedisKeys.linkMeta(cacheIdentity);
     const cached = await this.cache.getJson<{ meta: LinkMetadataDto | null }>(cacheKey);
     if (cached && Object.prototype.hasOwnProperty.call(cached, 'meta')) {
       const cachedMeta = cached.meta ?? null;
@@ -233,6 +237,7 @@ export class LinkMetadataService {
       !existingNeedsPickaxEnrichment &&
       !existingNeedsXEnrichment &&
       !existingNeedsRumbleRefresh &&
+      !(youtube && needsYoutubeEnrichment(existing)) &&
       existing
     ) {
       const dto = this.toDto(existing);
@@ -242,16 +247,16 @@ export class LinkMetadataService {
     }
 
     // Stampede protection: one fetch per URL at a time.
-    const lockKey = RedisKeys.linkMetaLock(normalized);
+    const lockKey = RedisKeys.linkMetaLock(cacheIdentity);
     const pickax = isPickaxPostUrl(normalized);
     const xPost = isXPostUrl(normalized);
     const rumble = isRumbleVideoUrl(normalized);
     const wrapped = await this.cache.getOrSetJsonWithLock<{ meta: LinkMetadataDto | null }>({
       enabled: true,
       key: cacheKey,
-      ttlSeconds: CacheTtl.linkMetaFrontSeconds,
+      ttlSeconds: (value) => value.meta ? CacheTtl.linkMetaFrontSeconds : CacheTtl.linkMetaNullSeconds,
       lockKey,
-      lockTtlMs: pickax ? 12_000 : xPost ? 10_000 : rumble ? 8_000 : 4_000,
+      lockTtlMs: youtube ? 6_000 : pickax ? 12_000 : xPost ? 10_000 : rumble ? 8_000 : 4_000,
       lockWaitMs: pickax || xPost || rumble ? 500 : 250,
       computeAndSet: async () => {
         const fresh = await this.fetchAndUpsert(normalized);
@@ -375,7 +380,7 @@ export class LinkMetadataService {
 
   private async fetchFromExternal(url: string): Promise<LinkMetadataDto | null> {
     const controller = new AbortController();
-    const timeoutMs = isPickaxPostUrl(url)
+    const timeoutMs = youtubeVideoId(url) ? 4_000 : isPickaxPostUrl(url)
       ? PICKAX_ENRICH_TIMEOUT_MS
       : isXPostUrl(url)
         ? X_ENRICH_TIMEOUT_MS
@@ -389,6 +394,11 @@ export class LinkMetadataService {
     try {
       const u = new URL(url);
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+
+      if (youtubeVideoId(url)) {
+        const meta = await fetchYoutubeMetadata(url, controller.signal);
+        return meta ? { url, ...meta, socialPost: null, videoEmbed: null } : null;
+      }
 
       let base: LinkMetadataDto | null = null;
       const pickaxPost = isPickaxPostUrl(u.toString());

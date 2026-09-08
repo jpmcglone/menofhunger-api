@@ -1689,12 +1689,22 @@ export class NotificationWriterService {
         quoteFanoutCursor: true,
         websters1828: true,
         quote: true,
+        websters1828RefreshedAt: true,
+        quoteRefreshedAt: true,
       },
     });
 
     if (!snap) {
       this.logger.warn(`[daily-content fan-out] No snapshot found for dayKey=${dayKey}`);
-      return;
+      throw new Error(`[daily-content fan-out] Missing snapshot for ${dayKey}`);
+    }
+
+    const refreshedAt = item === 'word' ? snap.websters1828RefreshedAt : snap.quoteRefreshedAt;
+    const content = (item === 'word' ? snap.websters1828 : snap.quote) as Record<string, unknown> | null;
+    const requiredFields = item === 'word' ? ['word', 'definition'] : ['author', 'text'];
+    if (!refreshedAt || refreshedAt.getTime() <= 1 ||
+        !requiredFields.every((key) => typeof content?.[key] === 'string' && String(content[key]).trim())) {
+      throw new Error(`[daily-content fan-out] ${item} snapshot is not ready for ${dayKey}`);
     }
 
     const alreadyNotified = item === 'word' ? snap.wordNotifiedAt : snap.quoteNotifiedAt;
@@ -1703,6 +1713,9 @@ export class NotificationWriterService {
       this.logger.debug(`[daily-content fan-out] ${item} already notified for ${dayKey}`);
       return;
     }
+
+    // Covers retries and directly queued fan-outs as well as the normal publish job.
+    await this.presenceRealtime.emitDailyContentPublished(item, dayKey);
 
     const kind: NotificationKind = item === 'word' ? 'word_of_the_day' : 'quote_of_the_day';
     const url = item === 'word' ? '/daily/word' : '/daily/quote';

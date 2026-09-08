@@ -177,6 +177,10 @@ export class AppConfigService {
     return Boolean(this.config.get<string>('DATABASE_URL')?.trim());
   }
 
+  databaseUrl(): string {
+    return this.config.get<string>('DATABASE_URL')?.trim() ?? '';
+  }
+
   runHttp(): boolean {
     return this.readBool('RUN_HTTP', true);
   }
@@ -841,4 +845,3 @@ export class AppConfigService {
     };
   }
 }
-

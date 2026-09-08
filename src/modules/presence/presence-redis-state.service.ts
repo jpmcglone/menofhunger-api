@@ -702,10 +702,15 @@ export class PresenceRedisStateService implements OnModuleInit, OnModuleDestroy 
    * connected sockets. Needed so broadcasts originating from a worker process (which has no
    * Socket.IO server of its own) still reach clients.
    */
-  async publishBroadcast(params: { event: string; payload: unknown }): Promise<void> {
+  async publishBroadcast(params: { event: string; payload: unknown; required?: boolean }): Promise<void> {
     const event = String(params.event ?? '').trim();
     if (!event) return;
-    await this.publish({ type: 'broadcast', instanceId: this.instanceId, event, payload: params.payload });
+    const message: PresenceEvent = { type: 'broadcast', instanceId: this.instanceId, event, payload: params.payload };
+    if (params.required) {
+      await this.redis.raw().publish(RedisKeys.presencePubSubChannel(), JSON.stringify(message));
+    } else {
+      await this.publish(message);
+    }
   }
 
   async isIdle(userId: string): Promise<boolean> {

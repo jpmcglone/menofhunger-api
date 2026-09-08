@@ -27,8 +27,8 @@ export class LinkMetadataController {
   async get(@Query() query: unknown, @Res({ passthrough: true }) res: Response) {
     const parsed = getSchema.parse(query);
     const meta = await this.linkMetadata.getMetadata(parsed.url);
-    // Response is already DB-cached; allow long edge/browser caching.
-    res.setHeader('Cache-Control', 'public, max-age=604800');
+    // Failed lookups must recover on retry, not persist in client/edge caches.
+    res.setHeader('Cache-Control', meta ? 'public, max-age=604800' : 'no-store');
     return { data: meta };
   }
 }

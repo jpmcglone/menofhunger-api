@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { PrismaClient } from '@prisma/client';
 import * as crypto from 'node:crypto';
 import { AppConfigService } from '../app/app-config.service';
+import { resolvePrismaConnectionConfig } from './prisma-connection-config';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
@@ -10,14 +11,13 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   constructor(private readonly appConfig: AppConfigService) {
     // NOTE: must not access `this` before `super()` in derived constructors.
     const enabled = appConfig.prismaLogSlowQueries();
-    super(
-      enabled
-        ? {
-            // Use Prisma query events for timing (Prisma v6+; avoids middleware APIs).
-            log: [{ emit: 'event', level: 'query' }],
-          }
-        : undefined,
-    );
+    const connection = resolvePrismaConnectionConfig(appConfig.databaseUrl());
+    super({
+      datasources: { db: { url: connection.url } },
+      // Use Prisma query events for timing (Prisma v6+; avoids middleware APIs).
+      ...(enabled ? { log: [{ emit: 'event' as const, level: 'query' as const }] } : {}),
+    });
+    this.logger.log(`Database pool: max=${connection.connectionLimit}, wait=${connection.poolTimeoutSeconds}s per process`);
 
     if (enabled) {
       const slowMs = appConfig.prismaSlowQueryMs();
@@ -62,4 +62,3 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     await this.$disconnect();
   }
 }
-

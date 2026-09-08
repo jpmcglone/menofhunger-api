@@ -10,12 +10,21 @@ function setup() {
   const service = new CacheService(redis as any);
   return { service, redis, values };
 }
-const options = (compute: () => Promise<unknown>) => ({
+const options = <T>(compute: () => Promise<T>) => ({
   enabled: true, key: 'viewer:feed', lockKey: 'lock:viewer:feed', ttlSeconds: 15,
   lockTtlMs: 200, lockWaitMs: 10, computeAndSet: compute, fallback: compute, waitForResult: true,
 });
 
 describe('cache work sharing', () => {
+  it.each([null, { title: 'Video title' }])('retains the appropriate TTL for metadata %j', async (meta) => {
+    const { service, redis } = setup();
+    await service.getOrSetJsonWithLock({
+      ...options(async () => ({ meta })),
+      ttlSeconds: (value: { meta: unknown }) => value.meta ? 21600 : 60,
+    });
+    expect(redis.setJson).toHaveBeenLastCalledWith('viewer:feed', { meta }, { ttlSeconds: meta ? 21600 : 60 });
+  });
+
   it('runs only one computation for 100 concurrent requests', async () => {
     const { service } = setup();
     const compute = jest.fn(async () => ({ ids: ['post'] }));

@@ -70,7 +70,7 @@ export class CacheService {
   async getOrSetJsonWithLock<T>(params: {
     enabled: boolean;
     key: string;
-    ttlSeconds: number;
+    ttlSeconds: number | ((value: T) => number);
     lockKey: string;
     lockTtlMs: number;
     lockWaitMs: number;
@@ -103,7 +103,8 @@ export class CacheService {
             if (cachedInside !== null) return cachedInside;
             started = true;
             const value = await params.computeAndSet();
-            await this.redis.setJson(key, value, { ttlSeconds: Math.max(1, params.ttlSeconds) }).catch(() => undefined);
+            const ttlSeconds = typeof params.ttlSeconds === 'function' ? params.ttlSeconds(value) : params.ttlSeconds;
+            await this.redis.setJson(key, value, { ttlSeconds: Math.max(1, ttlSeconds) }).catch(() => undefined);
             return value;
           },
         );

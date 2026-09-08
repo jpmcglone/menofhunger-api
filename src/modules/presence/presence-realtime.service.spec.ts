@@ -193,14 +193,15 @@ describe('PresenceRealtimeService without a local socket server', () => {
     });
   });
 
-  it('publishes global broadcasts cross-instance even with no server attached', () => {
+  it('publishes global broadcasts cross-instance even with no server attached', async () => {
     const { service, presenceRedis } = makeServerlessService();
 
-    service.emitDailyContentPublished('word', '2026-08-03');
+    await service.emitDailyContentPublished('word', '2026-08-03');
 
     expect(presenceRedis.publishBroadcast).toHaveBeenCalledWith({
       event: 'daily:content-published',
       payload: { item: 'word', dayKey: '2026-08-03' },
+      required: true,
     });
   });
 
