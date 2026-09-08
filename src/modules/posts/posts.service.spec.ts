@@ -76,7 +76,10 @@ function makeService(
     feedGlobalVersion: jest.fn(async () => 1),
     forYouUserVersion: jest.fn(async () => 1),
   };
+  const cursorValues = new Map<string, unknown>();
   const cache: any = {
+    getJson: jest.fn(async (key: string) => cursorValues.get(key) ?? null),
+    setJson: jest.fn(async (key: string, value: unknown) => { cursorValues.set(key, value); }),
     getOrSetJson: jest.fn(async (params: any) => params.compute()),
     getOrSetJsonWithLock: jest.fn(async (params: any) => params.computeAndSet()),
   };
@@ -112,6 +115,8 @@ function makeService(
     sideEffects,
     ...extraOverrides,
   };
+
+  deps.cache = { ...cache, ...extraOverrides.cache };
 
   const ranking = new PostsRankingService(deps.prisma, deps.jobs);
   const drafts = new PostsDraftsService(deps.prisma);
@@ -1542,7 +1547,7 @@ describe('PostsService.listForYouFeed', () => {
 
   function isChronoScan(args: any): boolean {
     const ands: any[] = args?.where?.AND ?? [];
-    return ands.some(
+    return ands.some(c => c?.createdAt?.lte instanceof Date) || ands.some(
       (c) =>
         Array.isArray(c?.OR) &&
         c.OR.some((o: any) => o?.trendingScore === 0) &&
@@ -1618,7 +1623,7 @@ describe('PostsService.listForYouFeed', () => {
     blockedAuthorIds?: string[];
     memberGroupIds?: string[];
     viewerVerified?: boolean;
-    cache?: { getOrSetJsonWithLock: jest.Mock; getOrSetJson?: jest.Mock };
+    cache?: { getOrSetJsonWithLock: jest.Mock; getOrSetJson?: jest.Mock; getJson?: jest.Mock; setJson?: jest.Mock };
     /** Author IDs the viewer has recently boosted (A+ tier engagement history). */
     viewerBoostedAuthorIds?: string[];
     /** Author IDs of posts the viewer has recently replied to (A+ tier engagement history). */
@@ -1702,7 +1707,9 @@ describe('PostsService.listForYouFeed', () => {
             pool = pool.filter((c) => c.trendingScore != null && c.trendingScore > 0);
             pool.sort(sortTrending);
           } else if (isChronoScan(args)) {
-            pool = pool.filter((c) => c.trendingScore == null || c.trendingScore === 0);
+            if (!(args?.where?.AND ?? []).some((c: any) => c?.createdAt?.lte instanceof Date)) {
+              pool = pool.filter((c) => c.trendingScore == null || c.trendingScore === 0);
+            }
             pool.sort(sortChrono);
           } else {
             pool.sort(sortTrending);
@@ -1845,6 +1852,9 @@ describe('PostsService.listForYouFeed', () => {
         follow,
         postView,
         boost,
+        $queryRaw: jest.fn(async () => [...new Set([...friendBoostPostIds, ...friendReplyParentIds])].map(postId => ({
+          postId, people: 1, latestAt: friendEngagementAtByPostId[postId] ?? candidates.find(p => p.id === postId)?.createdAt ?? new Date(),
+        }))),
         userBlock: {
           findMany: jest.fn(async () => blockedAuthorIds.map((blockedId) => ({ blockerId: 'viewer', blockedId }))),
         },
@@ -1886,7 +1896,91 @@ describe('PostsService.listForYouFeed', () => {
     return Buffer.from(JSON.stringify({ v: 3, s: servedIds, seed: 'test-seed' }), 'utf8').toString('base64url');
   }
 
-  it('reuses ranking inputs across cursor pages but still queries fresh candidates', async () => {
+  it('does not repeat posts after the old 300-ID cursor boundary', async () => {
+    const candidates = Array.from({ length: 450 }, (_, i) => cand(`p${i}`, `u${i}`, 1000 - i));
+    const { service } = setupForYou({ candidates });
+    const seen = new Set<string>();
+    let cursor: string | null = null;
+    for (let page = 0; page < 15; page++) {
+      const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 40, cursor, visibility: 'all' });
+      expect(out.posts.some((p: any) => seen.has(p.id))).toBe(false);
+      out.posts.forEach((p: any) => seen.add(p.id));
+      cursor = out.nextCursor;
+      if (!cursor) break;
+      expect(cursor.length).toBeLessThan(300);
+    }
+    expect(seen.size).toBe(450);
+    expect(cursor).toBeNull();
+  });
+
+  it('keeps pagination retries independent and rejects another viewer’s cursor', async () => {
+    const { service } = setupForYou({ candidates: Array.from({ length: 40 }, (_, i) => cand(`p${i}`, `u${i}`, 100 - i)) });
+    const params = { viewerUserId: 'viewer', limit: 10, cursor: null as string | null, visibility: 'all' as const };
+    const first = await service.listForYouFeed(params);
+    const second = await service.listForYouFeed({ ...params, cursor: first.nextCursor });
+    const retry = await service.listForYouFeed({ ...params, cursor: first.nextCursor });
+    expect(retry.posts.map((p: any) => p.id)).toEqual(second.posts.map((p: any) => p.id));
+    await expect(service.listForYouFeed({ ...params, viewerUserId: 'other', cursor: first.nextCursor })).rejects.toThrow('Feed session expired');
+  });
+
+  it('requires refresh when server-side cursor history expires', async () => {
+    const { service } = setupForYou({
+      candidates: Array.from({ length: 30 }, (_, i) => cand(`p${i}`, `u${i}`, 100 - i)),
+      cache: { getOrSetJsonWithLock: jest.fn(async p => p.computeAndSet()), getJson: jest.fn(async () => null) },
+    });
+    const first = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    await expect(service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: first.nextCursor, visibility: 'all' })).rejects.toThrow('Feed session expired');
+  });
+
+  it('ends safely instead of repeating history when Redis writes fail', async () => {
+    const { service } = setupForYou({
+      candidates: Array.from({ length: 200 }, (_, i) => cand(`p${i}`, `u${i}`, 1000 - i)),
+      cache: { getOrSetJsonWithLock: jest.fn(async p => p.computeAndSet()), setJson: jest.fn(async () => { throw new Error('offline'); }) },
+    });
+    let cursor: string | null = null;
+    const seen = new Set<string>();
+    for (let page = 0; page < 3; page++) {
+      const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 40, cursor, visibility: 'all' });
+      expect(out.posts.some((p: any) => seen.has(p.id))).toBe(false);
+      out.posts.forEach((p: any) => seen.add(p.id));
+      cursor = out.nextCursor;
+    }
+    expect(cursor).toBeNull();
+    expect(seen.size).toBe(120);
+  });
+
+  it('keeps zero-score fresh discovery eligible when the trending pool is fully seen', async () => {
+    const old = Array.from({ length: 81 }, (_, i) => cand(`old${i}`, `u${i}`, 0.1, 24));
+    const { service } = setupForYou({ candidates: [...old, cand('fresh', 'new-author', null, 0)], seenAtByPostId: Object.fromEntries(old.map(p => [p.id, new Date()])) });
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 40, cursor: null, visibility: 'all' });
+    expect(out.posts[0].id).toBe('fresh');
+  });
+
+  it('never lowers the base score when a post gains its first positive engagement', async () => {
+    const { service } = setupForYou({ candidates: [cand('zero', 'a', null), cand('positive', 'b', 0.2)] });
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.scoreByPostId.get('positive')).toBeGreaterThan(out.scoreByPostId.get('zero')!);
+  });
+
+  it('recognizes friend-engaged discovery on the first page', async () => {
+    const { service } = setupForYou({ candidates: [cand('social', 'new-author', 1), cand('global', 'stranger', 2)], youFollowAuthorIds: ['friend'], friendBoostPostIds: ['social'] });
+    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
+    expect(out.posts[0].id).toBe('social');
+  });
+
+  it('refresh rotates discovery membership even when scores differ greatly', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(1788868800000);
+    jest.spyOn(Math, 'random').mockReturnValueOnce(0.123).mockReturnValueOnce(0.789);
+    try {
+      const { service } = setupForYou({ candidates: Array.from({ length: 40 }, (_, i) => cand(`p${i}`, `u${i}`, Math.pow(2, 40 - i))) });
+      const params = { viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' as const, refresh: true };
+      const a = await service.listForYouFeed(params);
+      const b = await service.listForYouFeed(params);
+      expect(new Set(a.posts.map((p: any) => p.id))).not.toEqual(new Set(b.posts.map((p: any) => p.id)));
+    } finally { jest.restoreAllMocks(); }
+  });
+
+  it('reuses brief graph caches on refresh while still querying fresh candidates', async () => {
     const values = new Map<string, unknown>();
     const cache = {
       getOrSetJsonWithLock: jest.fn(async (p: any) => p.computeAndSet()),
@@ -1908,7 +2002,7 @@ describe('PostsService.listForYouFeed', () => {
     const followingReads = () => follow.findMany.mock.calls.filter((call: any) => call[0]?.where?.followerId === 'viewer').length;
     expect(followingReads()).toBe(1);
     await service.listForYouFeed({ ...params, cursor: null, refresh: true });
-    expect(followingReads()).toBe(2);
+    expect(followingReads()).toBe(1);
   });
 
   it('excludes the viewer from candidate authors via the prisma where filter', async () => {
@@ -2020,7 +2114,7 @@ describe('PostsService.listForYouFeed', () => {
     expect(ands.some((c) => Array.isArray(c?.id?.notIn) && c.id.notIn.includes('p-seen'))).toBe(true);
   });
 
-  it('bounds page-one scans and skips friend-engaged and second-degree discovery work', async () => {
+  it('bounds page-one scans including friend-engaged and second-degree discovery', async () => {
     const { service, post, follow } = setupForYou({
       candidates: [
         cand('p-trending', 'u-stranger', 20),
@@ -2037,13 +2131,15 @@ describe('PostsService.listForYouFeed', () => {
     const selectCalls = (post.findMany as jest.Mock).mock.calls.map((call) => call[0]).filter((args) => args?.select);
     const trendingCall = selectCalls.find(isTrendingScan);
     expect(trendingCall?.take).toBe(61);
-    expect(selectCalls.some(isFriendEngagedScan)).toBe(false);
-    expect(selectCalls.some(isSecondDegreeScan)).toBe(false);
+    expect(selectCalls.find(isFriendEngagedScan)?.take).toBe(31);
+    expect(selectCalls.find(isSecondDegreeScan)?.take).toBe(16);
+    expect(selectCalls.some(isFriendEngagedScan)).toBe(true);
+    expect(selectCalls.some(isSecondDegreeScan)).toBe(true);
     expect(
       (follow.findMany as jest.Mock).mock.calls.some(
         (call) => Array.isArray(call[0]?.where?.followerId?.in) && typeof call[0]?.where?.followingId !== 'string',
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('preserves wider friend-engaged and second-degree discovery on deeper pages', async () => {
@@ -2114,12 +2210,12 @@ describe('PostsService.listForYouFeed', () => {
       cursor: deeperForYouCursor(),
       visibility: 'all',
     });
-    await service.listForYouFeed({
+    await expect(service.listForYouFeed({
       viewerUserId: 'viewer',
       limit: 10,
       cursor: 'legacy-or-malformed-cursor',
       visibility: 'all',
-    });
+    })).rejects.toThrow('Feed session expired');
 
     expect(cache.getOrSetJsonWithLock).not.toHaveBeenCalled();
   });

@@ -27,7 +27,7 @@ export const POSTS_RANKING = {
   popularCandidatesCommentedTake: 1500,
   popularCandidatesRepliesTake: 1200,
   /** Weight for comment score in trending (same as bookmarks: quieter signal than boosts). */
-  commentScoreWeight: 0.5,
+  commentScoreWeight: 0.8,
   /** Top-level posts get this multiplier so they rank slightly above replies with similar engagement. */
   popularTopLevelScoreBoost: 1.15,
   /** Pin score: "I think this is important" — premium pinner > verified > neither (same hierarchy as boost weights). */
@@ -67,7 +67,13 @@ export const POSTS_RANKING = {
   forYouScanTakeMax: 240,
   /** Keep the latency-sensitive first page bounded; deeper pages retain the wider discovery scan. */
   forYouPage1ScanTakeMax: 80,
+  /** Legacy inline cursor limit; new sessions keep immutable history in Redis. */
   forYouCursorServedIdMax: 300,
+  forYouSessionMaxPosts: 2000,
+  forYouSessionTtlSeconds: 60 * 60,
+  forYouInlineCursorMaxPosts: 100,
+  forYouSocialProofMaxPeople: 10,
+  forYouRefreshExplorationRatio: 0.2,
   forYouRecentFollowedWindowHours: 48,
   /**
    * Followed-unseen quota ratio is now depth-aware (see listForYouFeed):

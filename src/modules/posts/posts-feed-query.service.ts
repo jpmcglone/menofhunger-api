@@ -1,5 +1,5 @@
 import { ConversationsService } from './conversations.service';
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { CommunityGroupJoinPolicy, PostMediaKind, PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -18,6 +18,7 @@ import { applyCollapsedThreadSummary } from '../../common/feed-collapse/collapse
 import { collapseRepostsByCanonical } from '../../common/feed-collapse/collapse-reposts-by-canonical';
 import { toPostDto, toPostAuthorDtoFromFeedRow, type PostAuthorDto, type PostDto } from '../../common/dto/post.dto';
 import { buildAttachParentChain } from './posts.utils';
+import { friendEngagementSql } from './posts-friend-engagement.sql';
 import { POSTS_RANKING } from './posts-ranking.config';
 import { generateRandomSeed, seededUnitInterval } from '../../common/random/seeded-random';
 import {
@@ -287,39 +288,51 @@ export class PostsFeedQueryService {
     }
   }
 
-  private encodeForYouCursor(servedIds: string[], seed: string) {
-    const ids = [...new Set((servedIds ?? []).map((id) => (id ?? '').trim()).filter(Boolean))]
-      .slice(-POSTS_RANKING.forYouCursorServedIdMax);
-    if (ids.length === 0) return null;
-    return Buffer.from(JSON.stringify({ v: 3, s: ids, seed }), 'utf8').toString('base64url');
+  private async encodeForYouCursor(servedIds: string[], seed: string, viewerUserId: string | null) {
+    const ids = [...new Set(servedIds.filter(Boolean))];
+    if (!ids.length || ids.length >= POSTS_RANKING.forYouSessionMaxPosts) return null;
+    // Immutable records keep retries and concurrent pagination from advancing each other.
+    const ref = stableJsonHash({ ids, seed, viewerUserId });
+    try {
+      await this.cache.setJson(`feed:foryou:cursor:v4:${ref}`, { ids, seed, viewerUserId }, {
+        ttlSeconds: POSTS_RANKING.forYouSessionTtlSeconds,
+      });
+      return Buffer.from(JSON.stringify({ v: 4, ref, seed })).toString('base64url');
+    } catch {
+      // During a Redis outage, continue a short session without losing exclusion history.
+      if (ids.length > POSTS_RANKING.forYouInlineCursorMaxPosts) return null;
+      return Buffer.from(JSON.stringify({ v: 3, s: ids, seed })).toString('base64url');
+    }
   }
 
-  private decodeForYouCursor(
-    token: string | null,
-  ): { servedIds: string[]; seed: string | null; legacyPopular: { score: number; createdAt: string; id: string } | null } {
+  private async decodeForYouCursor(
+    token: string | null, viewerUserId: string | null,
+  ): Promise<{ servedIds: string[]; seed: string | null; legacyPopular: { score: number; createdAt: string; id: string } | null }> {
+    const empty = { servedIds: [], seed: null, legacyPopular: null };
     const t = (token ?? '').trim();
-    if (!t) return { servedIds: [], seed: null, legacyPopular: null };
-    try {
-      const raw = Buffer.from(t, 'base64url').toString('utf8');
-      const parsed = JSON.parse(raw) as Partial<{ v: number; s: unknown; seed: unknown }>;
-      // v3 carries a jitter seed so pagination re-uses the same shuffle within a session
-      // while a fresh page-1 request (refresh) mints a new one. v2 (pre-seed) cursors
-      // decode with seed: null, which listForYouFeed treats as "generate a new seed" —
-      // acceptable for the rare in-flight session spanning the deploy.
-      if ((parsed.v === 3 || parsed.v === 2) && Array.isArray(parsed.s)) {
-        return {
-          servedIds: parsed.s
-            .map((id) => (typeof id === 'string' ? id.trim() : ''))
-            .filter(Boolean)
-            .slice(-POSTS_RANKING.forYouCursorServedIdMax),
-          seed: parsed.v === 3 && typeof parsed.seed === 'string' && parsed.seed ? parsed.seed : null,
-          legacyPopular: null,
-        };
+    if (!t) return empty;
+    let parsed: { v?: number; ref?: string; s?: unknown; seed?: string };
+    try { parsed = JSON.parse(Buffer.from(t, 'base64url').toString('utf8')); }
+    catch { throw new BadRequestException('Feed session expired. Refresh your feed to continue.'); }
+    if (!parsed || typeof parsed !== 'object') throw new BadRequestException('Refresh your feed to continue.');
+    if (parsed.v === 4) {
+      const state = typeof parsed.ref === 'string' && /^[a-f0-9]{20}$/.test(parsed.ref)
+        ? await this.cache.getJson<{ ids: string[]; seed: string; viewerUserId: string | null }>(`feed:foryou:cursor:v4:${parsed.ref}`).catch(() => null)
+        : null;
+      if (!state || state.viewerUserId !== viewerUserId || !Array.isArray(state.ids) || state.ids.length > POSTS_RANKING.forYouSessionMaxPosts) {
+        throw new BadRequestException('Feed session expired. Refresh your feed to continue.');
       }
-    } catch {
-      // Fall through to legacy cursor handling below.
+      return { servedIds: state.ids, seed: state.seed, legacyPopular: null };
     }
-    return { servedIds: [], seed: null, legacyPopular: this.decodePopularCursor(token) };
+    if ((parsed.v === 3 || parsed.v === 2) && Array.isArray(parsed.s)) {
+      // Preserve old in-flight sessions, but never truncate IDs and make them eligible again.
+      const ids = [...new Set(parsed.s.filter((id): id is string => typeof id === 'string' && Boolean(id.trim())))];
+      if (ids.length > POSTS_RANKING.forYouCursorServedIdMax) throw new BadRequestException('Refresh your feed to continue.');
+      return { servedIds: ids, seed: typeof parsed.seed === 'string' ? parsed.seed : null, legacyPopular: null };
+    }
+    const legacyPopular = this.decodePopularCursor(t);
+    if (!legacyPopular) throw new BadRequestException('Feed session expired. Refresh your feed to continue.');
+    return { ...empty, legacyPopular };
   }
 
   async listOnlyMe(params: { userId: string; limit: number; cursor: string | null }) {
@@ -1120,9 +1133,8 @@ export class PostsFeedQueryService {
    */
   async listForYouFeed(params: ForYouFeedParams): Promise<PopularFeedResult> {
     const viewerUserId = params.viewerUserId?.trim() || null;
-    const isPage1 = this.decodeForYouCursor(params.cursor).servedIds.length === 0;
     const hasCursor = Boolean(params.cursor?.trim());
-    if (!viewerUserId || !isPage1 || hasCursor || params.refresh) {
+    if (!viewerUserId || hasCursor || params.refresh) {
       return this.listForYouFeedUncached(params);
     }
 
@@ -1183,8 +1195,8 @@ export class PostsFeedQueryService {
   }
 
   /** Ranking signals only: permissions and block filters are always read fresh. */
-  private rankingInput<T>(viewerUserId: string | null, name: string, refresh: boolean | undefined, compute: () => Promise<T>): Promise<T> {
-    if (!viewerUserId || refresh) return compute();
+  private rankingInput<T>(viewerUserId: string | null, name: string, compute: () => Promise<T>): Promise<T> {
+    if (!viewerUserId) return compute();
     return this.cache.getOrSetJson({
       enabled: true,
       key: `cache:forYou:input:v1:${viewerUserId}:${name}`,
@@ -1194,7 +1206,8 @@ export class PostsFeedQueryService {
   }
 
   private async listForYouFeedUncached(params: ForYouFeedParams): Promise<PopularFeedResult> {
-    const { viewerUserId, limit, cursor, visibility } = params;
+    const { viewerUserId, cursor, visibility } = params;
+    let limit = params.limit;
     const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
     const checkinDayKey = (params.checkinDayKey ?? null)?.trim() || null;
     const requestedAuthorUserIds =
@@ -1262,8 +1275,10 @@ export class PostsFeedQueryService {
       communityGroupId: null,
     };
 
-    const decodedForYouCursor = this.decodeForYouCursor(cursor);
+    const decodedForYouCursor = await this.decodeForYouCursor(cursor, viewerUserId);
     const servedIds = decodedForYouCursor.servedIds;
+    limit = Math.min(limit, POSTS_RANKING.forYouSessionMaxPosts - servedIds.length);
+    if (limit <= 0) return { posts: [], nextCursor: null, scoreByPostId: new Map() };
     const isPage1 = servedIds.length === 0;
     const servedWhere: Prisma.PostWhereInput[] =
       servedIds.length > 0 ? [{ id: { notIn: servedIds } }] : [];
@@ -1330,7 +1345,7 @@ export class PostsFeedQueryService {
     let discoveryOverflow = false;
 
     const viewerFollowingRows = viewerUserId
-      ? await this.rankingInput(viewerUserId, 'following', params.refresh, () => this.prisma.follow.findMany({
+      ? await this.rankingInput(viewerUserId, 'following', () => this.prisma.follow.findMany({
           where: { followerId: viewerUserId },
           select: { followingId: true },
         }))
@@ -1351,8 +1366,8 @@ export class PostsFeedQueryService {
     const memberGroupIds: string[] = [];
     const viewerCanReadOpenGroups = false;
     const secondDegreePathCountByAuthor = new Map<string, number>();
-    if (!isPage1 && viewerFollowingIds.length > 0) {
-      const secondDegreeRows = await this.rankingInput(viewerUserId, `secondDegree:${stableJsonHash({ viewerFollowingIds, directNetworkExcludedIds, requestedAuthorUserIds })}`, params.refresh, () => this.prisma.follow.findMany({
+    if (viewerFollowingIds.length > 0) {
+      const secondDegreeRows = await this.rankingInput(viewerUserId, `secondDegree:${isPage1 ? 300 : 1000}:${stableJsonHash({ viewerFollowingIds, directNetworkExcludedIds, requestedAuthorUserIds })}`, () => this.prisma.follow.findMany({
         where: {
           followerId: { in: viewerFollowingIds },
           followingId: requestedAuthorUserIds?.length
@@ -1360,7 +1375,7 @@ export class PostsFeedQueryService {
             : { notIn: directNetworkExcludedIds },
         },
         select: { followingId: true },
-        take: 1000,
+        take: isPage1 ? 300 : 1000,
       }));
       for (const row of secondDegreeRows) {
         const authorId = row.followingId;
@@ -1378,7 +1393,7 @@ export class PostsFeedQueryService {
     // Prefetch ID sets in parallel with the trending/chrono scan so followed-unseen
     // and friend-engaged lanes can use IN / NOT IN instead of correlated subqueries.
     const prefetchTake = Math.min(500, Math.max(scanTake + 1, scanTake * 3));
-    const friendPrefetchNeeded = !isPage1 && viewerFollowingIds.length > 0;
+    const friendPrefetchNeeded = viewerFollowingIds.length > 0;
     const laneIdPrefetch = Promise.all([
       followingCandidateIds.length > 0 && viewerUserId
         ? this.prisma.postView.findMany({
@@ -1453,34 +1468,26 @@ export class PostsFeedQueryService {
             ]
           : [];
 
-      const tRows = (await this.prisma.post.findMany({
-        where: { AND: [baseWhere, ...servedWhere, { trendingScore: { gt: 0 } }, ...trendingCursorWhere] },
-        orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
-        take: scanTake + 1,
-        select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
-      })) as ScannedRow[];
-
-      const haveMoreTrending = tRows.length > scanTake;
-      trendingScanned = tRows.slice(0, scanTake);
-      discoveryOverflow = discoveryOverflow || haveMoreTrending;
-
-      // Trending didn't fill the scan window → supplement with the chrono tail so the page never
-      // feels sparse.
-      if (!haveMoreTrending && trendingScanned.length < scanTake) {
-        const remaining = scanTake - trendingScanned.length;
-        const cRows = (await this.prisma.post.findMany({
-          where: {
-            AND: [baseWhere, ...servedWhere, { OR: [{ trendingScore: 0 }, { trendingScore: null }] }],
-          },
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-          take: remaining + 1,
+      const recentTake = Math.max(1, Math.floor(scanTake / 2));
+      const trendingTake = scanTake;
+      const [tRows, cRows] = await Promise.all([
+        this.prisma.post.findMany({
+          where: { AND: [baseWhere, ...servedWhere, { trendingScore: { gt: 0 } }, ...trendingCursorWhere] },
+          orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          take: trendingTake + 1,
           select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
-        })) as ScannedRow[];
+        }),
+        this.prisma.post.findMany({
+          where: { AND: [baseWhere, ...servedWhere, { createdAt: { lte: new Date() } }] },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: recentTake + 1,
+          select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
+        }),
+      ]);
+      trendingScanned = tRows.slice(0, trendingTake);
+      chronoScanned = cRows.slice(0, recentTake);
+      discoveryOverflow = tRows.length > trendingTake || cRows.length > recentTake;
 
-        const haveMoreChrono = cRows.length > remaining;
-        chronoScanned = cRows.slice(0, remaining);
-        discoveryOverflow = discoveryOverflow || haveMoreChrono;
-      }
     } else {
       const chronoCursorWhere: Prisma.PostWhereInput[] = cursorRow
         ? [
@@ -1523,6 +1530,8 @@ export class PostsFeedQueryService {
       ...friendRepostPrefetch.map((r) => r.repostedPostId).filter((id): id is string => Boolean(id)),
     ])];
 
+    const friendTake = isPage1 ? Math.min(scanTake, limit) : scanTake;
+    const secondDegreeTake = isPage1 ? Math.min(scanTake, Math.max(5, Math.ceil(limit / 2))) : scanTake;
     const [followedRowsRaw, friendRowsRaw, secondDegreeRowsRaw, memberGroupRowsRaw, openFollowGroupRowsRaw] = await Promise.all([
       followingCandidateIds.length > 0
         ? this.prisma.post.findMany({
@@ -1550,11 +1559,11 @@ export class PostsFeedQueryService {
               ],
             },
             orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-            take: scanTake + 1,
+            take: friendTake + 1,
             select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
           }) as Promise<ScannedRow[]>
         : Promise.resolve([] as ScannedRow[]),
-      !isPage1 && secondDegreeAuthorIds.length > 0
+      secondDegreeAuthorIds.length > 0
         ? this.prisma.post.findMany({
             where: {
               AND: [
@@ -1565,7 +1574,7 @@ export class PostsFeedQueryService {
               ],
             },
             orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
-            take: scanTake + 1,
+            take: secondDegreeTake + 1,
             select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
           }) as Promise<ScannedRow[]>
         : Promise.resolve([] as ScannedRow[]),
@@ -1606,13 +1615,13 @@ export class PostsFeedQueryService {
     ]);
 
     const followedOverflow = followedRowsRaw.length > scanTake;
-    const friendOverflow = friendRowsRaw.length > scanTake;
-    const secondDegreeOverflow = secondDegreeRowsRaw.length > scanTake;
+    const friendOverflow = friendRowsRaw.length > friendTake;
+    const secondDegreeOverflow = secondDegreeRowsRaw.length > secondDegreeTake;
     const memberGroupOverflow = memberGroupRowsRaw.length > scanTake;
     const openFollowGroupOverflow = openFollowGroupRowsRaw.length > scanTake;
     const followedRows = followedRowsRaw.slice(0, scanTake);
-    const friendRows = friendRowsRaw.slice(0, scanTake);
-    const secondDegreeRows = secondDegreeRowsRaw.slice(0, scanTake);
+    const friendRows = friendRowsRaw.slice(0, friendTake);
+    const secondDegreeRows = secondDegreeRowsRaw.slice(0, secondDegreeTake);
     const memberGroupRows = memberGroupRowsRaw.slice(0, scanTake);
     const openFollowGroupRows = openFollowGroupRowsRaw.slice(0, scanTake);
 
@@ -1679,7 +1688,7 @@ export class PostsFeedQueryService {
         const fallbackIds = fallback.posts.map((p) => p.id);
         return {
           posts: fallback.posts,
-          nextCursor: fallback.overflow ? this.encodeForYouCursor([...servedIds, ...fallbackIds], jitterSeed) : null,
+          nextCursor: fallback.overflow ? await this.encodeForYouCursor([...servedIds, ...fallbackIds], jitterSeed, viewerUserId) : null,
           scoreByPostId: new Map(fallbackIds.map((id) => [id, 0])),
         };
       }
@@ -1691,7 +1700,7 @@ export class PostsFeedQueryService {
     const authorIds = [...new Set(candidates.map((c) => c.userId))];
     const friendEngagedIds = candidates.filter((c) => c.friendEngaged).map((c) => c.id);
 
-    const [followerRows, viewedRows, friendBoostRows, friendReplyRows, viewerBoostRows, viewerReplyRows] = await Promise.all([
+    const [followerRows, viewedRows, friendEngagementRows, viewerBoostRows, viewerReplyRows] = await Promise.all([
       // Who follows the viewer — used for mutual-follow scoring. Skip when anonymous.
       viewerUserId
         ? this.prisma.follow.findMany({
@@ -1706,34 +1715,16 @@ export class PostsFeedQueryService {
             select: { postId: true, createdAt: true, lastSeenAt: true, seenCount: true, lastSource: true },
           })
         : Promise.resolve([] as Array<{ postId: string; createdAt: Date; lastSeenAt: Date | null; seenCount: bigint | number | null; lastSource: string | null }>),
-      // Latest boost timestamp + count of following-users per post. Drives `lastFriendEngagementAt`
-      // so an old post with a fresh friend-boost ranks like fresh content, and `_count` feeds the
-      // social-proof base score so graph density beats global virality in discovery.
+      // Aggregate in SQL so prolific friends cannot inflate proof or response size.
       friendEngagedIds.length > 0 && viewerFollowingIds.length > 0
-        ? this.prisma.boost.groupBy({
-            by: ['postId'],
-            where: { postId: { in: friendEngagedIds }, userId: { in: viewerFollowingIds } },
-            _max: { createdAt: true },
-            _count: { userId: true },
-          })
-        : Promise.resolve([] as Array<{ postId: string; _max: { createdAt: Date | null }; _count: { userId: number } }>),
-      // Latest reply timestamp + count of following-users per post.
-      friendEngagedIds.length > 0 && viewerFollowingIds.length > 0
-        ? this.prisma.post.groupBy({
-            by: ['parentId'],
-            where: {
-              parentId: { in: friendEngagedIds },
-              userId: { in: viewerFollowingIds },
-              deletedAt: null,
-            },
-            _max: { createdAt: true },
-            _count: { userId: true },
-          })
-        : Promise.resolve([] as Array<{ parentId: string | null; _max: { createdAt: Date | null }; _count: { userId: number } }>),
+        ? this.prisma.$queryRaw<Array<{ postId: string; people: number; latestAt: Date }>>(
+            friendEngagementSql(friendEngagedIds, viewerFollowingIds),
+          )
+        : Promise.resolve([] as Array<{ postId: string; people: number; latestAt: Date }>),
       // Viewer's own recent boosts — used to identify A+ tier authors (people you actively engage with).
       // Boost has @@unique([postId, userId]) so _count is effectively distinct users.
       viewerUserId
-        ? this.rankingInput(viewerUserId, 'engagedBoostAuthors', params.refresh, () => this.prisma.boost.findMany({
+        ? this.rankingInput(viewerUserId, 'engagedBoostAuthors', () => this.prisma.boost.findMany({
             where: { userId: viewerUserId, createdAt: { gte: engagedWithSince } },
             select: { post: { select: { userId: true } } },
             take: 200,
@@ -1741,7 +1732,7 @@ export class PostsFeedQueryService {
         : Promise.resolve([] as Array<{ post: { userId: string } }>),
       // Viewer's own recent replies — surfaces authors the viewer actively talks to.
       viewerUserId
-        ? this.rankingInput(viewerUserId, 'engagedReplyAuthors', params.refresh, () => this.prisma.post.findMany({
+        ? this.rankingInput(viewerUserId, 'engagedReplyAuthors', () => this.prisma.post.findMany({
             where: { userId: viewerUserId, parentId: { not: null }, createdAt: { gte: engagedWithSince } },
             select: { parent: { select: { userId: true } } },
             take: 200,
@@ -1758,17 +1749,7 @@ export class PostsFeedQueryService {
       ...viewerReplyRows.map((r) => r.parent?.userId).filter((id): id is string => Boolean(id)),
     ]);
 
-    // Social proof count: total engagements from following-users per candidate post.
-    // Used to make social-graph density the primary base for discovery slots instead of global trending.
-    const socialProofCountById = new Map<string, number>();
-    for (const row of friendBoostRows) {
-      socialProofCountById.set(row.postId, (socialProofCountById.get(row.postId) ?? 0) + row._count.userId);
-    }
-    for (const row of friendReplyRows) {
-      const pid = row.parentId;
-      if (!pid) continue;
-      socialProofCountById.set(pid, (socialProofCountById.get(pid) ?? 0) + row._count.userId);
-    }
+    const socialProofCountById = new Map(friendEngagementRows.map(r => [r.postId, Number(r.people)]));
 
     const seenById = new Map<string, { lastSeenAt: Date; seenCount: number; lastSource: string | null }>(
       viewedRows.map((r) => [
@@ -1781,18 +1762,7 @@ export class PostsFeedQueryService {
       ]),
     );
 
-    const lastFriendEngagementAt = new Map<string, Date>();
-    for (const row of friendBoostRows) {
-      const at = row._max.createdAt;
-      if (at) lastFriendEngagementAt.set(row.postId, at);
-    }
-    for (const row of friendReplyRows) {
-      const pid = row.parentId;
-      const at = row._max.createdAt;
-      if (!pid || !at) continue;
-      const existing = lastFriendEngagementAt.get(pid);
-      if (!existing || at.getTime() > existing.getTime()) lastFriendEngagementAt.set(pid, at);
-    }
+    const lastFriendEngagementAt = new Map(friendEngagementRows.map(r => [r.postId, r.latestAt]));
     for (const c of candidates) {
       if (c.friendEngaged) {
         c.lastFriendEngagementAt = lastFriendEngagementAt.get(c.id) ?? null;
@@ -1894,8 +1864,8 @@ export class PostsFeedQueryService {
       //     post from a followed author only enters via trending scan (followingUnseen=false) but still
       //     has a social connection and must NOT be demoted.
       //   - All other cases (author in social graph, second-degree, groups): use trendingScore as-is.
-      const rawTrending = c.trendingScore != null && c.trendingScore > 0 ? c.trendingScore : 1.0;
-      const socialProofCount = socialProofCountById.get(c.id) ?? 0;
+      const rawTrending = 1 + Math.max(0, c.trendingScore ?? 0);
+      const socialProofCount = Math.min(POSTS_RANKING.forYouSocialProofMaxPeople, socialProofCountById.get(c.id) ?? 0);
       const noSocialConnection = !youFollowThem && !theyFollowYou && !c.secondDegree && !c.memberGroup && !c.openFollowGroup;
       let rawBase: number;
       if (c.friendEngaged) {
@@ -2030,6 +2000,16 @@ export class PostsFeedQueryService {
         return b.candidate.createdAt.getTime() - a.candidate.createdAt.getTime();
       });
     pickFrom(followedUnseenSorted, followedQuota);
+    if (params.refresh && isPage1) {
+      const exploration = ranked.filter(r => !r.candidate.followingUnseen)
+        .sort((a, b) => {
+          const aSeen = seenById.has(a.candidate.id);
+          const bSeen = seenById.has(b.candidate.id);
+          if (aSeen !== bSeen) return aSeen ? 1 : -1;
+          return seededUnitInterval(jitterSeed, b.candidate.id) - seededUnitInterval(jitterSeed, a.candidate.id);
+        });
+      pickFrom(exploration, Math.min(limit, picked.length + Math.ceil(limit * POSTS_RANKING.forYouRefreshExplorationRatio)));
+    }
     pickFrom(ranked, limit);
 
     if (picked.length < limit && skipped.length > 0) {
@@ -2068,7 +2048,7 @@ export class PostsFeedQueryService {
       openFollowGroupOverflow ||
       discoveryOverflow ||
       fallback.overflow;
-    const nextCursor = moreAvailable ? this.encodeForYouCursor([...servedIds, ...orderedIds], jitterSeed) : null;
+    const nextCursor = moreAvailable ? await this.encodeForYouCursor([...servedIds, ...orderedIds], jitterSeed, viewerUserId) : null;
 
     const scoreByPostId = new Map<string, number>(picked.map((p) => [p.candidate.id, p.adjusted]));
     for (const post of fallback.posts) scoreByPostId.set(post.id, 0);
