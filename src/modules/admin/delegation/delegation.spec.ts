@@ -1,3 +1,4 @@
+import { PostsMutationService } from '../../posts/posts-mutation.service';
 import { DelegationPolicyService } from './delegation-policy.service';
 import { DelegationService } from './delegation.service';
 import { DelegationActionsService, publicationBody } from './delegation-actions.service';
@@ -112,5 +113,35 @@ describe('canonical draft and media execution', () => {
   it('retains citations exactly once in published text', () => {
     const source = { title: 'Reporting', url: 'https://example.com/report' };
     expect(publicationBody(actionSchema.parse({ operation: 'post_publish', body: source.url, sources: [source] }) as any)).toBe(source.url);
+  });
+});
+
+describe('canonical post audiences', () => {
+  it.each(['public', 'verifiedOnly', 'premiumOnly', 'onlyMe'])('forwards %s without administrator visibility overrides', async visibility => {
+    const posts = { createPost: jest.fn().mockResolvedValue({ id: 'post' }) };
+    const service = new DelegationActionsService({} as any, posts as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    await service.execute('admin', 'page', { operation: 'post_publish', body: 'Hello', visibility });
+    expect(posts.createPost).toHaveBeenCalledWith(expect.objectContaining({ userId: 'page', visibility }));
+  });
+  it('preserves visibility when scheduling through the existing scheduler', async () => {
+    const scheduled = { createScheduled: jest.fn() };
+    const service = new DelegationActionsService({} as any, {} as any, scheduled as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const scheduledAt = new Date(Date.now() + 3600000).toISOString();
+    await service.execute('admin', 'page', { operation: 'post_schedule', body: 'Hello', visibility: 'verifiedOnly', scheduledAt });
+    expect(scheduled.createScheduled).toHaveBeenCalledWith(expect.objectContaining({ userId: 'page', visibility: 'verifiedOnly', scheduledAt: new Date(scheduledAt) }));
+  });
+});
+
+describe('existing post service permission enforcement', () => {
+  it.each([
+    ['verifiedOnly', 'none', false, 'Verify your account'],
+    ['premiumOnly', 'manual', false, 'Upgrade to premium'],
+  ])('rejects disallowed %s before any post write', async (visibility, verifiedStatus, premium, message) => {
+    const mutation = Object.create(PostsMutationService.prototype);
+    mutation.viewerContextService = { getViewer: jest.fn(async () => ({ id: 'actor', verifiedStatus, premium, premiumPlus: false })), assertNotBanned: jest.fn() };
+    mutation.enrichment = { allowedVisibilitiesForViewer: jest.fn(() => ['public']) };
+    mutation.prisma = { post: { create: jest.fn() } };
+    await expect(mutation.createPost({ userId: 'actor', body: 'Hello', visibility, media: null, poll: null })).rejects.toThrow(String(message));
+    expect(mutation.prisma.post.create).not.toHaveBeenCalled();
   });
 });

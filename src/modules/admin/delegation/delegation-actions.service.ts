@@ -179,25 +179,27 @@ export class DelegationActionsService {
           throw new BadRequestException(
             "A draft cannot be published as a reply.",
           );
+        if (input.draftId && input.visibility === "onlyMe")
+          throw new BadRequestException("Use draft editing to keep this draft in Only me.");
         const body = publicationBody(input);
         const result = input.draftId
           ? await this.posts.publishFromOnlyMe({
               userId: actorId,
               sourcePostId: input.draftId,
               body,
-              visibility: "public",
+              visibility: input.visibility as "public" | "verifiedOnly" | "premiumOnly",
             })
           : await this.posts.createPost({
               userId: actorId,
               body,
-              visibility: "public",
+              visibility: input.visibility,
               parentId: input.parentId,
               media: null,
               poll: null,
             });
         return link(
-          input.parentId ? "Reply published." : "Post published.",
-          `/p/${"post" in result ? result.post.id : result.id}`,
+          input.visibility === "onlyMe" ? "Post saved to Only me for this account." : input.parentId ? "Reply published." : "Post published.",
+          input.visibility === "onlyMe" && actorId !== ownerId ? null : `/p/${"post" in result ? result.post.id : result.id}`,
         );
       }
       case "post_draft": {
@@ -251,7 +253,7 @@ export class DelegationActionsService {
           userId: actorId,
           body: input.body,
           scheduledAt: new Date(input.scheduledAt),
-          visibility: "public",
+          visibility: input.visibility,
           communityGroupId: null,
           media: media ?? null,
           poll: null,

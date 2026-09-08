@@ -3,6 +3,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  HttpException,
   NotFoundException,
 } from "@nestjs/common";
 import { isDeepStrictEqual } from "node:util";
@@ -575,12 +576,13 @@ export class DelegationService {
             where: { id },
             data: { ...receipt, status: "complete", completedAt: new Date() },
           });
-        } catch {
+        } catch (error) {
+          const rejected = error instanceof HttpException && error.getStatus() >= 400 && error.getStatus() < 500;
           await this.prisma.delegationAction.update({
             where: { id },
             data: {
-              status: "uncertain",
-              receipt:
+              status: rejected ? "failed" : "uncertain",
+              receipt: rejected ? error.message :
                 "The result could not be confirmed. Check the destination before taking further action.",
               completedAt: new Date(),
             },

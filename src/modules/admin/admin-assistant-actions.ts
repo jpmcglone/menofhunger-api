@@ -9,6 +9,12 @@ import { writeSchema as newsletterSchema } from './admin-newsletters.controller'
 import { approveSchema, rejectSchema } from './admin-verification.controller';
 import { adminUserPatchSchema } from '../marvin/marvin.controller';
 
+export const assistantPostSchema = z.object({
+  body: z.string().trim().min(1).max(1000),
+  visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly', 'onlyMe']).default('public'),
+  authorUsername: z.string().regex(/^@?[A-Za-z0-9_]{1,40}$/).optional(),
+}).strict();
+
 const target = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 const changed = <T extends z.ZodRawShape>(schema: z.ZodObject<T>) => schema.strict().refine(
   (input) => Object.keys(input).length > 0, 'Provide at least one change.',
@@ -24,6 +30,7 @@ type Operation = {
 };
 /** Adapters share the controllers' input schemas; no business rules or fan-out here. */
 export const adminActions: Operation[] = [
+  { name: 'post_publish', description: 'Publish this exact post immediately after review, with body, visibility (public, verifiedOnly, premiumOnly, onlyMe), and optional authorUsername. Omitted author means your personal admin account; explicit authors must be your account or an operated page. Uses canonical post permissions. Do not create a job for a request to post now.', method: 'POST', path: 'posts', schema: assistantPostSchema, target: null, link: '/admin/assistant' },
   { name: 'delegation_job_create', description: 'Create an admin-only delegated job. Default actor is your own account; choose an operated page only when requested. Review is default. Automatic sourced-news publication requires explicit authorization. Inspect delegation_workspace first. The job continues until paused or cancelled.', method: 'POST', path: 'admin/delegation/jobs', schema: jobInputSchema, target: null, link: '/admin/delegation' },
   { name: 'feedback_update', description: 'Change feedback status or internal admin note. Does not send a reply.', method: 'PATCH', path: 'admin/feedback/:id', schema: changed(feedbackSchema), target: 'feedback', link: '/admin/feedback' },
   { name: 'report_update', description: 'Change a report status or internal note. Marking actionTaken records a decision; it does not ban a user or remove a post.', method: 'PATCH', path: 'admin/reports/:id', schema: changed(reportSchema), target: 'report', link: '/admin/reports' },

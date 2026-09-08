@@ -201,11 +201,16 @@ npm run --silent moh -- post POST_ID --json
 ```json
 {
   "authorUsername": "mohnews",
+  "visibility": "public",
   "body": "A concise, verified news summary. Source: https://example.com/news"
 }
 ```
 
-Posts are public, top-level text posts, limited to 1,000 characters including URLs.
+Posts are top-level text posts with `visibility`: `public` (default), `verifiedOnly`,
+`premiumOnly`, or `onlyMe`. The normal API checks verification and membership for
+the selected account and returns its permission error; the tool never widens the
+audience on failure. Posts are limited to the account’s normal limit, up to 1,000
+characters including URLs.
 Only the administrator's own account and pages they already operate are accepted.
 For pages, the tool uses the existing account switch endpoint, verifies the page
 and operator, publishes through the normal post API (including normal realtime
@@ -270,7 +275,7 @@ credential is still removed and the CLI reports failed server revocation.
 Session files use mode 600 in a directory with mode 700. Do not commit, copy into
 prompts, or inspect those files with AI tools. The session has the account's
 existing administrator privileges; the desktop MCP exposes an explicit read
-allowlist, local file writes, and public posting as the administrator or an operated page. Contact/credential fields are removed from tool
+allowlist, local file writes, and visibility-controlled posting as the administrator or an operated page. Contact/credential fields are removed from tool
 results, but free-text support content can still contain member-provided personal
 information. Treat support and moderation results as internal.
 
@@ -299,7 +304,7 @@ endpoint is not yet deployed.
 
 Not connected in this version: payment receipts/revenue accounting, release
 history, HTTP error tracking, mobile crashes, member-facing OAuth, scheduled
-monitoring, and writes beyond public posting. These need their actual source integrations or
+monitoring, and unsupported writes. These need their actual source integrations or
 separately scoped tools. The integration never infers those facts from unrelated
 metrics. See `moh definitions` for metric-specific limits.
 
@@ -344,3 +349,14 @@ comparing with older analytics activation percentages.
 
 These reads share the product admin API. Personal member actions are reviewed in the
 member's private MARV chat; they do not grant the external MCP or CLI mutation permissions.
+
+### Immediate posts in Ask MARV
+
+“Post now” uses a direct `post_publish` proposal with body, visibility, and optional
+authorUsername. The Publish now review button calls the existing post service once;
+it does not create a scheduled job. The proposal binds the acting account at review
+and rechecks page-operation rights at confirmation. API permission errors remain
+failed receipts with their normal message. Unknown transport outcomes are never retried.
+Only explicit future or recurring work uses delegated jobs. For once schedules, `at`
+is an absolute instant; without `at`, work begins when the job is created. Recurring
+`time` and `weekday` defaults do not apply to a once schedule.

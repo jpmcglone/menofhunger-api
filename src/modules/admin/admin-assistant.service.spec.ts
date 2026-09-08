@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { AdminAssistantService } from './admin-assistant.service';
 import { sessionApi } from '../mcp/mcp-tools';
 
@@ -31,8 +31,11 @@ function fixture() {
   const realtime: any = { emitAdminUpdated: jest.fn() };
   const ai: any = { isConfigured: () => true, respond: jest.fn() };
   const redis: any = { withLock: jest.fn(async () => null) };
-  const svc = new AdminAssistantService(prisma, auth, {} as any, redis, realtime, ai, {} as any, { getGlobalSettings: async () => ({ enabled: true }) } as any);
-  return { svc, prisma, action, before, session, auth, api, realtime, ai };
+  const actor = { id: 'admin1', username: 'john', name: 'John', accountKind: 'person' };
+  const policy: any = { actor: jest.fn(async () => actor) };
+  const posting: any = { execute: jest.fn(async () => ({ receipt: 'Post published.', path: '/p/post1' })) };
+  const svc = new AdminAssistantService(prisma, auth, {} as any, redis, realtime, ai, {} as any, { getGlobalSettings: async () => ({ enabled: true }) } as any, posting, policy);
+  return { svc, prisma, action, before, session, auth, api, realtime, ai, actor, policy, posting };
 }
 
 describe('Admin assistant authorization and action receipts', () => {
@@ -97,5 +100,35 @@ describe('Admin assistant authorization and action receipts', () => {
     const { svc, ai } = fixture();
     await expect(svc.ask('admin1', 'token', { id: 'new', message: 'Hello' })).rejects.toBeInstanceOf(ConflictException);
     expect(ai.respond).not.toHaveBeenCalled();
+  });
+});
+
+describe('direct post review', () => {
+  it('publishes immediately once as the reviewed actor with visibility, without creating a job', async () => {
+    const { svc, action, actor, posting, api } = fixture();
+    Object.assign(action, { operation: 'post_publish', input: { body: 'Keep going, men.', visibility: 'verifiedOnly', authorUsername: 'john' }, before: { actor } });
+    await Promise.all([svc.decide('admin1', 'token', 'action1', 'confirm'), svc.decide('admin1', 'token', 'action1', 'confirm')]);
+    expect(posting.execute).toHaveBeenCalledTimes(1);
+    expect(posting.execute).toHaveBeenCalledWith('admin1', 'admin1', { operation: 'post_publish', body: 'Keep going, men.', visibility: 'verifiedOnly' });
+    expect(api.request).not.toHaveBeenCalled();
+    expect(action.status).toBe('complete');
+    expect(action.path).toBe('/p/post1');
+  });
+  it('surfaces canonical permission rejection without retry or audience fallback', async () => {
+    const { svc, action, actor, posting } = fixture();
+    Object.assign(action, { operation: 'post_publish', input: { body: 'Hello', visibility: 'premiumOnly' }, before: { actor } });
+    posting.execute.mockRejectedValue(new ForbiddenException('Upgrade to premium to create premium-only posts.'));
+    const result = await svc.decide('admin1', 'token', 'action1', 'confirm');
+    expect(result.status).toBe('failed');
+    expect(result.resultMessage).toBe('Upgrade to premium to create premium-only posts.');
+    await svc.decide('admin1', 'token', 'action1', 'confirm');
+    expect(posting.execute).toHaveBeenCalledTimes(1);
+  });
+  it('rechecks page operation rights at confirmation', async () => {
+    const { svc, action, policy, posting } = fixture();
+    Object.assign(action, { operation: 'post_publish', input: { body: 'Hello', authorUsername: 'mohnews' }, before: { actor: { id: 'page' } } });
+    policy.actor.mockRejectedValue(new NotFoundException('Choose your account or a page you operate.'));
+    expect((await svc.decide('admin1', 'token', 'action1', 'confirm')).status).toBe('failed');
+    expect(posting.execute).not.toHaveBeenCalled();
   });
 });

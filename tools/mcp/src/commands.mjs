@@ -148,7 +148,7 @@ Optional global command: npm install --global ./tools/mcp, then moh <command>
   draft --input draft.json           Save a local draft; never sends or publishes
   drafts                             Read local drafts
   accounts                           List your administrator account and operated pages
-  publish --input post.json          Publish a public post as authorUsername
+  publish --input post.json          Publish as authorUsername with chosen visibility
   post POST_ID                       Verify a published post
   tools [--json]                     Discover every tool and its input schema
   call TOOL '{"key":"value"}'        Invoke any tool using its MCP name/schema

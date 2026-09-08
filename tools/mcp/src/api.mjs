@@ -178,8 +178,15 @@ export class MohApi {
         404: 'This resource or admin endpoint is unavailable. Check admin access and whether the API update is deployed.',
         429: 'Men of Hunger rate-limited the request. Try again later.',
       };
+      let postError;
+      if (method === 'POST' && path === 'posts' && [400, 403, 404].includes(response.status)) {
+        try {
+          const errors = JSON.parse(text)?.meta?.errors;
+          if (Array.isArray(errors)) postError = errors.filter(e => typeof e.message === 'string').map(e => e.message).join(' ').slice(0, 1000);
+        } catch { /* Fall back to the safe status message. */ }
+      }
       throw new ApiError(
-        messages[response.status] ||
+        postError || messages[response.status] ||
           `Men of Hunger API returned HTTP ${response.status}.`,
         response.status,
       );

@@ -72,6 +72,7 @@ export const actionSchema = z.discriminatedUnion("operation", [
     .object({
       operation: z.literal("post_publish"),
       body,
+      visibility: z.enum(["public", "verifiedOnly", "premiumOnly", "onlyMe"]).default("public"),
       sources: z.array(sourceSchema).max(8).default([]),
       parentId: delegationId.optional(),
       draftId: delegationId.optional(),
@@ -93,6 +94,7 @@ export const actionSchema = z.discriminatedUnion("operation", [
       operation: z.literal("post_schedule"),
       body,
       scheduledAt: z.string().datetime(),
+      visibility: z.enum(["public", "verifiedOnly", "premiumOnly"]).default("public"),
       draftId: delegationId.optional(),
     })
     .strict(),

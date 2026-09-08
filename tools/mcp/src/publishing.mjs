@@ -7,7 +7,7 @@ export async function publishingAccounts(api) {
     account.id === administrator.id || account.accountKind === 'page') };
 }
 
-export async function publishPost({ api, store, authorUsername, body }) {
+export async function publishPost({ api, store, authorUsername, body, visibility = 'public' }) {
   return store.withPublishingLock(api.baseUrl, async () => {
     const accounts = await publishingAccounts(api);
     const author = accounts.data.find((account) =>
@@ -30,9 +30,11 @@ export async function publishPost({ api, store, authorUsername, body }) {
           (!switching && (!current.siteAdmin || current.accountSwitch)))
         throw new ApiError('The active account does not match the requested publishing identity.', 403);
       publishAttempted = true;
-      result = await api.publish({ body, visibility: 'public' });
+      result = await api.publish({ body, visibility });
       if (!result.data?.post?.id || result.data.post.author?.id !== author.id)
         throw new ApiError('The API did not confirm the requested post author. Check the feed before retrying.');
+      if (result.data.post.visibility !== visibility)
+        throw new ApiError('The API did not confirm the requested visibility. Inspect the post before taking further action.');
     } catch (error) {
       failure = error;
     } finally {
@@ -51,7 +53,7 @@ export async function publishPost({ api, store, authorUsername, body }) {
         }
       }
     }
-    if (failure) throw new ApiError(`${failure.message}${publishAttempted ? ' Publication may have occurred; inspect the author’s feed before retrying. No publish request was retried.' : ''}${restorationError ? ` ${restorationError}` : ''}`);
+    if (failure) throw new ApiError(`${failure.message}${publishAttempted && !(failure.status >= 400 && failure.status < 500) ? ' Publication may have occurred; inspect the author’s feed before retrying. No publish request was retried.' : ''}${restorationError ? ` ${restorationError}` : ''}`, failure.status);
     return { ...result, published: true, author: { id: author.id, username: author.username },
       administratorRestored: !restorationError, ...(restorationError ? { warning: restorationError } : {}) };
   });

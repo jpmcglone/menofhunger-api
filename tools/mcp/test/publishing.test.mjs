@@ -8,7 +8,7 @@ import { MohApi } from '../src/api.mjs';
 import { createTools } from '../src/tools.mjs';
 import { describeTools } from '../src/commands.mjs';
 
-async function setup(t, { failPost = false, wrongIdentity = false, failRestore = false } = {}) {
+async function setup(t, { failPost = false, wrongIdentity = false, failRestore = false, denied = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'moh-publish-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new StateStore(directory);
@@ -36,6 +36,7 @@ async function setup(t, { failPost = false, wrongIdentity = false, failRestore =
       } });
     }
     if (route === 'posts') {
+      if (denied) return Response.json({ meta: { errors: [{ message: 'Verify your account to create verified-only posts.' }] } }, { status: 403 });
       if (failPost) throw new Error('connection lost after commit');
       return Response.json({ data: { post: { id: 'post1', author: { id: current.id, username: current.username }, ...body } } });
     }
@@ -67,7 +68,7 @@ test('personal publishing avoids account switching; unknown authors and invalid 
   const { publish, writes } = await setup(t);
   for (const args of [{ authorUsername: 'john', body: ' ' },
     { authorUsername: 'john', body: 'x'.repeat(1001) },
-    { authorUsername: 'john', body: 'news', visibility: 'onlyMe' }])
+    { authorUsername: 'john', body: 'news', visibility: 'followersOnly' }])
     await assert.rejects(publish.execute(args));
   await assert.rejects(publish.execute({ authorUsername: 'notmyaccount', body: 'news' }), /page you operate/);
   assert.equal(writes.length, 0);
@@ -114,4 +115,20 @@ test('read-only hosted integrations never expose publishing tools', async (t) =>
   for (const name of ['publish_post', 'publishing_accounts', 'get_post'])
     assert.ok(!hosted.some((tool) => tool.name === name));
   assert.equal(describeTools(tools).find((tool) => tool.name === 'publish_post').effects, 'remote-write');
+});
+
+for (const visibility of ['public', 'verifiedOnly', 'premiumOnly', 'onlyMe']) {
+  test(`passes ${visibility} to the normal post API`, async (t) => {
+    const { publish, writes } = await setup(t);
+    const result = await publish.execute({ authorUsername: 'john', body: 'Keep going.', visibility });
+    assert.equal(result.data.post.visibility, visibility);
+    assert.equal(writes[0].body.visibility, visibility);
+  });
+}
+test('preserves API permission failures and never widens the audience', async (t) => {
+  const { publish, writes, api } = await setup(t, { denied: true });
+  await assert.rejects(publish.execute({ authorUsername: 'mohnews', body: 'Keep going.', visibility: 'verifiedOnly' }), error => error.status === 403 && error.message.includes('Verify your account') && !error.message.includes('may have occurred'));
+  assert.equal(writes.filter(w => w.route === 'posts').length, 1);
+  assert.equal(writes.find(w => w.route === 'posts').body.visibility, 'verifiedOnly');
+  assert.equal((await api.identity()).id, 'admin');
 });
