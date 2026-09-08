@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { z } from 'zod';
+import { toAvatarVideoDto, type AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import type { MarvinMode } from '@prisma/client';
 import { AuthGuard } from '../auth/auth.guard';
 import { AdminGuard, type AdminRequest } from '../admin/admin.guard';
@@ -358,6 +359,7 @@ export class MarvinController {
     const marvUserId = await this.identity.getMarvUserId();
 
     let marvAvatarUrl: string | null = null;
+    let marvAvatarVideo: AvatarVideoDto | null = null;
     if (marvUserId) {
       const marvRow = await this.prisma.user.findUnique({
         where: { id: marvUserId },
@@ -368,6 +370,7 @@ export class MarvinController {
         key: marvRow?.avatarKey ?? null,
         updatedAt: marvRow?.avatarUpdatedAt ?? null,
       });
+      marvAvatarVideo = toAvatarVideoDto(marvRow ?? {}, this.appConfig.r2()?.publicBaseUrl ?? null);
     }
 
     const creditCfg = this.appConfig.marvCredits();
@@ -391,6 +394,7 @@ export class MarvinController {
             username: cfg.username,
             displayName: cfg.displayName,
             avatarUrl: marvAvatarUrl,
+            avatarVideo: marvAvatarVideo,
           }
         : null,
     };

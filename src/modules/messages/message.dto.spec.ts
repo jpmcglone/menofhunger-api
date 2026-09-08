@@ -9,6 +9,12 @@ const message = (extra: Record<string, unknown> = {}): any => ({
 const dto = (m: any) => toMessageDto({ message: m, publicBaseUrl: 'https://assets.example.com' });
 
 describe('deleted message redaction', () => {
+  it('preserves a reactor video and its profile poster for avatar playback', () => {
+    const result = dto(message({ reactions: [{ id: 'reaction', reactionId: 'like', emoji: '👍', userId: 'viewer',
+      user: { id: 'viewer', username: 'viewer', avatarKey: 'avatars/poster.jpg', avatarVideoKey: 'avatars/clip.mp4', avatarVideoDurationMs: 7000 } }] }));
+    expect(result.reactions[0].reactors[0]).toEqual({ id: 'viewer', username: 'viewer', avatarUrl: 'https://assets.example.com/avatars/poster.jpg',
+      avatarVideo: { id: 'avatars/clip.mp4', url: 'https://assets.example.com/avatars/clip.mp4', durationMs: 7000, width: 320, height: 320 } });
+  });
   it('removes content and media from a message deleted for everyone', () => {
     const result = dto(message({ deletedForAll: true, replyTo: message() }));
     expect(result.deletedForAll).toBe(true);

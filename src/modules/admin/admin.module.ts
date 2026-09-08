@@ -1,3 +1,13 @@
+import { DelegationService } from './delegation/delegation.service';
+import { DelegationPolicyService } from './delegation/delegation-policy.service';
+import { DelegationActionsService } from './delegation/delegation-actions.service';
+import { DelegationEvidenceService } from './delegation/delegation-evidence.service';
+import { DelegationRunnerService } from './delegation/delegation-runner.service';
+import { DelegationCron } from './delegation/delegation.cron';
+import { DelegationController } from './delegation/delegation.controller';
+import { BookmarksModule } from '../bookmarks/bookmarks.module';
+import { SpacesModule } from '../spaces/spaces.module';
+import { JobsModule } from '../jobs/jobs.module';
 import { AdminAvatarVideoController } from './admin-avatar-video.controller';
 import { AvatarVideoModule } from '../uploads/avatar-video.module';
 import { AdminEngagementService } from './admin-engagement.service';
@@ -60,6 +70,7 @@ import { AdminOperationsController } from './admin-operations.controller';
 
 @Module({
   imports: [
+    BookmarksModule, SpacesModule, JobsModule,
     AvatarVideoModule,
     AuthModule,
     PrismaModule,
@@ -87,6 +98,7 @@ import { AdminOperationsController } from './admin-operations.controller';
     NewslettersModule,
   ],
   controllers: [
+    DelegationController,
     AdminAvatarVideoController,
     AdminAssistantController,
     AdminOperationsController,
@@ -113,6 +125,7 @@ import { AdminOperationsController } from './admin-operations.controller';
     AdminIntroBriefController,
   ],
   providers: [
+    DelegationService, DelegationPolicyService, DelegationActionsService, DelegationEvidenceService, DelegationRunnerService, DelegationCron,
     AdminEngagementService,
     AdminAssistantService,
     AdminGuard,
@@ -123,6 +136,6 @@ import { AdminOperationsController } from './admin-operations.controller';
     AdminIntroBriefService,
     AdminIntroBriefCron,
   ],
-  exports: [AdminDailyDigestCron, AdminIntroBriefCron],
+  exports: [DelegationRunnerService, AdminDailyDigestCron, AdminIntroBriefCron],
 })
 export class AdminModule {}

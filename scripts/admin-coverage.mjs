@@ -7,6 +7,7 @@ import { adminCapabilities } from '../tools/mcp/src/admin-catalog.mjs';
 const ts = createRequire(import.meta.url)('typescript');
 const root = resolve(import.meta.dirname, '..');
 const homes = {
+  delegation: 'delegation',
   'admin-affiliate': 'affiliates', 'admin-analytics': 'analytics',
   'admin-announcements': 'announcements', 'admin-assistant': 'assistant',
   'admin-avatar-video': 'users', 'admin-billing': 'users', 'admin-crews': 'crews', 'admin-daily-content': 'jobs',

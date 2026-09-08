@@ -5,7 +5,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createServer } from './server.mjs';
 import { MohApi, normalizeBaseUrl } from './api.mjs';
-import { MohOAuthProvider, OAuthStore, READ_SCOPE } from './oauth.mjs';
+import { MohOAuthProvider, OAuthStore, READ_SCOPE, WRITE_SCOPE } from './oauth.mjs';
 
 const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (ch) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -33,7 +33,7 @@ export function createRemoteMcp({ redis, secret, baseUrl, frontendUrl, resolveAd
   router.use(express.json({ limit: '128kb' }));
   router.use(express.urlencoded({ extended: false, limit: '16kb' }));
   router.use(mcpAuthRouter({ provider, issuerUrl: new URL(origin), resourceServerUrl: new URL(resourceUrl),
-    scopesSupported: [READ_SCOPE], resourceName: 'Men of Hunger',
+    scopesSupported: [READ_SCOPE, WRITE_SCOPE], resourceName: 'Men of Hunger',
     // Keep registration valid as long as its encrypted client record (90 days).
     clientRegistrationOptions: { clientSecretExpirySeconds: 90 * 86400 },
   }));
@@ -57,7 +57,8 @@ export function createRemoteMcp({ redis, secret, baseUrl, frontendUrl, resolveAd
       if (!admin) {
         return page(res, 'Sign in to connect', `<p>Sign in to Men of Hunger with your own site administrator account, then return to this tab.</p><p><a href="${escapeHtml(frontendUrl)}" target="_blank" rel="noopener noreferrer">Open Men of Hunger</a></p><p><a href="/mcp/consent?request=${escapeHtml(request)}">I’m signed in — continue</a></p>`);
       }
-      return page(res, 'Connect Men of Hunger', `<p>${escapeHtml(pending.clientName)} is requesting read access as <strong>@${escapeHtml(admin.username || admin.id)}</strong>.</p><p>Access includes company analytics, member account diagnostics, support and moderation queues, public posts, newsletters, verification, search history, MARV usage, referrals, and crew administration data. Support content may contain personal information.</p><p>This connection cannot publish, send messages, change memberships, or take moderation actions. You can disconnect it in ChatGPT.</p><form method="post" action="/mcp/consent"><input type="hidden" name="request" value="${escapeHtml(request)}"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button name="decision" value="allow">Allow read access</button><button name="decision" value="deny">Cancel</button></form><p><small>Environment: ${escapeHtml(baseUrl)}</small></p>`);
+      const writes = pending.scopes?.includes(WRITE_SCOPE);
+      return page(res, 'Connect Men of Hunger', `<p>${escapeHtml(pending.clientName)} is requesting ${writes ? 'read and delegated-action access' : 'read access'} as <strong>@${escapeHtml(admin.username || admin.id)}</strong>.</p><p>Access includes company analytics, member account diagnostics, support and moderation queues, public posts, newsletters, verification, search history, MARV usage, referrals, and crew administration data, your delegated jobs, and their account-specific activity and drafts. Support content may contain personal information.</p><p>${writes ? 'This connection can create and manage delegated jobs, and apply actions you authorize as your account or pages you operate. Jobs can continue after this chat ends until you pause or cancel them in Delegated work.' : 'This connection cannot publish or apply changes.'} You can disconnect this client in ChatGPT.</p><form method="post" action="/mcp/consent"><input type="hidden" name="request" value="${escapeHtml(request)}"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button name="decision" value="allow">${writes ? 'Allow delegated actions' : 'Allow read access'}</button><button name="decision" value="deny">Cancel</button></form><p><small>Environment: ${escapeHtml(baseUrl)}</small></p>`);
     } catch {
       res.status(400); page(res, 'Reconnect from ChatGPT', '<p>This connection request expired or your administrator sign-in could not be verified. Start again from ChatGPT.</p>');
     }
@@ -78,8 +79,8 @@ export function createRemoteMcp({ redis, secret, baseUrl, frontendUrl, resolveAd
           expiresAt: new Date(req.auth.expiresAt * 1000).toISOString() }),
         write: async () => {},
       };
-      const api = new MohApi({ baseUrl, store, fetchImpl });
-      const server = createServer({ api, store, localArtifacts: false });
+      const api = new MohApi({ baseUrl, store, fetchImpl: (input, init) => fetchImpl(input, { ...init, headers: { ...init.headers, Origin: frontendUrl } }) });
+      const server = createServer({ api, store, localArtifacts: false, remoteWrites: req.auth.scopes.includes(WRITE_SCOPE) });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on('close', () => { void server.close().catch(() => {}); });
       try {

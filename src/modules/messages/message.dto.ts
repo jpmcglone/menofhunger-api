@@ -1,4 +1,4 @@
-import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
+import { toAvatarVideoDto, type AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import type { Message, MessageConversation, MessageMedia, MessageParticipantStatus, MessageParticipantRole } from '@prisma/client';
 import { toUserListDto, type UserListDto, type UserListRow } from '../../common/dto';
 import type { CallSessionDto, MessageCallDto } from '../../common/dto/call.dto';
@@ -18,7 +18,7 @@ export type MessageReactionSummaryDto = {
   emoji: string;
   count: number;
   reactedByMe: boolean;
-  reactors: { id: string; username: string | null; avatarUrl: string | null }[];
+  reactors: { id: string; username: string | null; avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null }[];
 };
 
 export type MessageReplySnippetDto = {
@@ -178,7 +178,7 @@ function buildReactionSummaries(
       r.user.avatarKey && publicBaseUrl
         ? `${publicBaseUrl}/${r.user.avatarKey}`
         : null;
-    group.reactors.push({ id: r.user.id, username: r.user.username, avatarUrl });
+    group.reactors.push({ id: r.user.id, username: r.user.username, avatarUrl, avatarVideo: toAvatarVideoDto(r.user, publicBaseUrl) });
   }
   return [...byReactionId.values()];
 }

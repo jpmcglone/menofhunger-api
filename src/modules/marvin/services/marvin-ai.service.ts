@@ -46,6 +46,8 @@ export type MarvAIRequest = {
   source: MarvinSource;
   /** Dedicated admin tool set. Never supplied by public/private member processors. */
   adminTools?: ReadonlyArray<Record<string, unknown>>;
+  /** Server-owned opt-in for delegated research; existing web-search configuration still applies. */
+  adminWebSearch?: boolean;
   mode: ResolvedMarvinMode;
   /** Per-request developer note (who's asking, where, safety nudges). */
   developerNote: string;
@@ -268,7 +270,7 @@ export class MarvinAIService {
     // 4k output cap often exhausts the budget before a visible reply, and the $0.03 search
     // fee dwarfs a Luna turn.
     const webSearchActive =
-      req.source !== 'admin_console' && cfg.webSearchEnabled && cfg.webSearchModes.includes(req.mode as string);
+      (req.source !== 'admin_console' || req.adminWebSearch === true) && cfg.webSearchEnabled && cfg.webSearchModes.includes(req.mode as string);
 
     // When web search is active, use a higher output-token budget so the model has room to
     // both process results and write a reply. Falls back to the base limit if larger.

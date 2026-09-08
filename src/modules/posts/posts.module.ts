@@ -53,7 +53,7 @@ import { ScheduledPostsPublishCron } from './scheduled-posts-publish.cron';
     ScheduledPostsService,
     ScheduledPostsPublishCron,
   ],
-  exports: [PostsService, PollsService, PostsPopularScoreCron, PostsTopicsBackfillCron, PostsTopicsClassifyService, PostsPollResultsReadyCron, ScheduledPostsPublishCron],
+  exports: [ScheduledPostsService, PostsService, PollsService, PostsPopularScoreCron, PostsTopicsBackfillCron, PostsTopicsClassifyService, PostsPollResultsReadyCron, ScheduledPostsPublishCron],
 })
 export class PostsModule {}
 

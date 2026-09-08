@@ -17,6 +17,9 @@ describe('native avatar video processing', () => {
       expect(output.durationMs).toBeGreaterThan(6900);
       expect(output.video.length).toBeLessThanOrEqual(512 * 1024);
       expect(output.poster.length).toBeGreaterThan(100);
+      const firstFrame = execFileSync('ffmpeg', ['-nostdin', '-v', 'error', '-i', join(directory, 'avatar.mp4'),
+        '-frames:v', '1', '-q:v', '3', '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1'], { timeout: 15_000 });
+      expect(output.poster.equals(firstFrame)).toBe(true);
       const probe = await transcoder.probe(join(directory, 'avatar.mp4'));
       expect(probe.streams.map(s => s.codec_type)).toEqual(['video']);
       expect(probe.streams[0]).toMatchObject({ codec_name: 'h264', width: 320, height: 320 });

@@ -1,3 +1,4 @@
+import { jobInputSchema } from './delegation/delegation.schemas';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
 import type { PrismaService } from '../prisma/prisma.service';
@@ -23,6 +24,7 @@ type Operation = {
 };
 /** Adapters share the controllers' input schemas; no business rules or fan-out here. */
 export const adminActions: Operation[] = [
+  { name: 'delegation_job_create', description: 'Create an admin-only delegated job. Default actor is your own account; choose an operated page only when requested. Review is default. Automatic sourced-news publication requires explicit authorization. Inspect delegation_workspace first. The job continues until paused or cancelled.', method: 'POST', path: 'admin/delegation/jobs', schema: jobInputSchema, target: null, link: '/admin/delegation' },
   { name: 'feedback_update', description: 'Change feedback status or internal admin note. Does not send a reply.', method: 'PATCH', path: 'admin/feedback/:id', schema: changed(feedbackSchema), target: 'feedback', link: '/admin/feedback' },
   { name: 'report_update', description: 'Change a report status or internal note. Marking actionTaken records a decision; it does not ban a user or remove a post.', method: 'PATCH', path: 'admin/reports/:id', schema: changed(reportSchema), target: 'report', link: '/admin/reports' },
   { name: 'verification_approve', description: 'Approve this pending verification request.', method: 'PATCH', path: 'admin/verification/:id/approve', schema: approveSchema.strict(), target: 'verification', link: '/admin/verification' },

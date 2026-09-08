@@ -59,6 +59,8 @@ export const JOBS = {
   articlesFollowedArticleEmail: 'articles.followedArticleEmail',
 
   // Admin
+  adminDelegationRun: 'admin.delegationRun',
+  adminDelegationSweep: 'admin.delegationSweep',
   adminDailyDigest: 'admin.dailyDigest',
   adminIntroBrief: 'admin.introBrief',
   newslettersScheduledSweep: 'newsletters.scheduledSweep',

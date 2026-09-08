@@ -89,7 +89,8 @@ describe('avatar publication races', () => {
     };
     prisma.$transaction.mockImplementation(async action => action(prisma));
     const transcode = jest.fn();
-    const service = new AvatarVideoService(prisma as never, { r2: () => ({ accountId: 'test', bucket: 'test', accessKeyId: 'test', secretAccessKey: 'test' }) } as never, {} as never, { transcode } as never, {} as never, {} as never, {} as never);
+    const service = new AvatarVideoService(prisma as never, { r2: () => ({ accountId: 'test', bucket: 'test', accessKeyId: 'test', secretAccessKey: 'test' }) } as never, {} as never, { transcode } as never,
+      { emitMeUpdated: jest.fn() } as never, { emitPublicProfileUpdated: jest.fn() } as never, { invalidateForUser: jest.fn() } as never);
     return { service, prisma, transcode };
   }
   it('never processes an older upload after a newer avatar edit', async () => {
@@ -122,6 +123,19 @@ describe('avatar publication races', () => {
       expect(authorization).toHaveBeenNthCalledWith(2, 'person', null, 'admin');
       expect(transcode).toHaveBeenCalledTimes(1);
       expect(prisma.user.updateMany).not.toHaveBeenCalled();
+    } finally { storage.mockRestore(); }
+  });
+  it('publishes the first-frame poster as the profile avatar and leaves the banner alone', async () => {
+    const { service, prisma, transcode } = setup({ id: 'job', userId: 'person', sourceKey: 'source', videoKey: 'clip.mp4', posterKey: 'first-frame.jpg',
+      status: 'queued', revision: 2, selection: { startSeconds: 2, durationSeconds: 7, crop: { x: 0, y: 0, width: 1, height: 1 } } });
+    jest.spyOn(service, 'canSet').mockResolvedValue(true);
+    transcode.mockResolvedValue({ video: Buffer.from('mp4'), poster: Buffer.from('first frame'), durationMs: 7000 });
+    const storage = jest.spyOn(S3Client.prototype, 'send').mockResolvedValue({ Body: Readable.from(Buffer.from('source')) } as never);
+    try {
+      await service.process('job');
+      const data = prisma.user.updateMany.mock.calls[0][0].data;
+      expect(data).toMatchObject({ avatarKey: 'first-frame.jpg', avatarVideoKey: 'clip.mp4', avatarVideoDurationMs: 7000 });
+      expect(data).not.toHaveProperty('bannerKey');
     } finally { storage.mockRestore(); }
   });
   it('prevents the target or another admin from committing an admin-owned upload', async () => {

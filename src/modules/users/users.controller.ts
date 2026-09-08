@@ -1,3 +1,4 @@
+import { UsersProfileWriteService } from './users-profile-write.service';
 import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, NotFoundException, Param, Patch, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -194,6 +195,7 @@ export class UsersController {
     private readonly slack: SlackService,
     private readonly presence: PresenceService,
     private readonly auth: AuthService,
+    private readonly profileWrite: UsersProfileWriteService,
   ) {}
 
   private async viewerCanSeeLastOnline(viewerUserId: string | null): Promise<boolean> {
@@ -1012,14 +1014,7 @@ export class UsersController {
         update.interests = mapped;
       }
 
-      const updated = await this.prisma.user.update({
-        where: { id: userId },
-        data: update,
-      });
-
-      await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
-      await this.emitUserSelfUpdated(updated.id);
-      this.usersMeRealtime.emitMeUpdatedFromUser(updated, emailChanged ? 'email_changed' : 'profile_changed');
+      const updated = await this.profileWrite.commit(userId, update, emailChanged);
       this.presence.markSeenFromHttp(userId);
 
       if (emailChanged && nextEmail) {

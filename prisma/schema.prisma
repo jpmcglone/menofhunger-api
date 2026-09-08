@@ -507,6 +507,8 @@ model User {
    * Pages this person can switch into.
    */
   operatedPages            UserPageOperator[]      @relation("PageOperators")
+  delegatedJobs DelegationJob[] @relation("DelegationOwner")
+  delegatedAsActor DelegationJob[] @relation("DelegationActor")
   /**
    * Persons who can switch into this page.
    */
@@ -3574,4 +3576,61 @@ model MarvinPersonalAction {
   createdAt DateTime @default(now())
   expiresAt DateTime
   @@index([userId, createdAt])
+}
+
+
+// Admin-only delegation; policy is centralized so future grants need no storage redesign.
+model DelegationJob {
+  id String @id @default(uuid())
+  ownerId String
+  owner User @relation("DelegationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  actorId String
+  actor User @relation("DelegationActor", fields: [actorId], references: [id], onDelete: Cascade)
+  title String
+  workflow String
+  instruction String @db.Text
+  permission String @default("review")
+  schedule Json
+  status String @default("active")
+  nextRunAt DateTime?
+  revision Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  runs DelegationRun[]
+  @@index([ownerId, createdAt(sort: Desc)])
+  @@index([status, nextRunAt])
+}
+
+model DelegationRun {
+  id String @id @default(uuid())
+  jobId String
+  job DelegationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  requestKey String @unique
+  status String @default("queued")
+  jobSnapshot Json
+  evidence Json @default("{}")
+  summary String? @db.Text
+  createdAt DateTime @default(now())
+  startedAt DateTime?
+  completedAt DateTime?
+  actions DelegationAction[]
+  @@index([jobId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+}
+
+model DelegationAction {
+  id String @id @default(uuid())
+  runId String
+  run DelegationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  operation String
+  title String
+  input Json
+  before Json
+  status String @default("pending")
+  receipt String?
+  path String?
+  createdAt DateTime @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+  @@index([runId, createdAt])
 }

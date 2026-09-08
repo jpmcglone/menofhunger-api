@@ -111,13 +111,13 @@ test('OAuth discovery challenges anonymous callers; protocol handling stays on e
   assert.equal((await f.post('/token/unexpected', {})).status, 404);
 });
 
-test('DCR rejects arbitrary callbacks and write scopes; authorization binds its resource', async (t) => {
+test('DCR rejects arbitrary callbacks and unknown scopes; authorization binds its resource', async (t) => {
   const f = await fixture(t);
   for (const uri of ['https://evil.example/callback', 'https://chatgpt.com.evil.example/connector/oauth/a',
     'https://chatgpt.com/connector/oauth/a?redirect=evil']) {
     assert.equal((await f.register({ redirect_uris: [uri] })).response.status, 400);
   }
-  assert.equal((await f.register({ scope: 'moh:write' })).response.status, 400);
+  assert.equal((await f.register({ scope: 'moh:admin' })).response.status, 400);
   const { client } = await f.register();
   const auth = await f.authorize(client, { resource: 'https://evil.example/mcp' });
   assert.equal(new URL(auth.path).searchParams.get('error'), 'invalid_target');
@@ -171,7 +171,7 @@ test('hosted MCP performs real HTTP handshake and reads via the shared API tools
     requestInit: { headers: { Authorization: `Bearer ${tokens.access_token}` } },
   }));
   const catalog = (await client.listTools()).tools;
-  assert.equal(catalog.length, 19);
+  assert.equal(catalog.length, 22);
   assert.ok(catalog.every((tool) => tool.annotations.readOnlyHint));
   assert.equal(catalog.some((tool) => tool.name === 'save_draft'), false);
   const result = await client.callTool({ name: 'feedback', arguments: { limit: 2 } });
@@ -239,4 +239,34 @@ test('encrypted OAuth state rejects tampering and cannot be substituted between 
   await assert.rejects(store.get('grant', 'b'));
   assert.deepEqual(await store.get('grant', 'a', true), { sessionToken: 'private' });
   assert.equal(await store.get('grant', 'a', true), null);
+});
+
+test('write authorization adds delegated mutations; read grants cannot escalate on refresh', async (t) => {
+  const f = await fixture(t);
+  const read = await f.connect();
+  const escalation = await f.post('/token', { client_id: read.client.client_id, client_secret: read.client.client_secret,
+    grant_type: 'refresh_token', refresh_token: read.tokens.refresh_token, scope: 'moh:read moh:write', resource: `${f.origin}/mcp` });
+  assert.equal(escalation.status, 400);
+  const { client } = await f.register({ scope: 'moh:read moh:write' });
+  const auth = await f.authorize(client, { scope: 'moh:read moh:write' });
+  const consent = await f.request(auth.path, { headers: { Cookie: `${auth.cookie}; moh_session=browser-admin` } });
+  assert.match(await consent.text(), /delegated actions/);
+  const allowed = await f.approve(auth);
+  const code = new URL(allowed.headers.get('location')).searchParams.get('code');
+  const response = await f.exchange(client, code, auth.verifier);
+  const tokens = await response.json();
+  assert.equal(tokens.scope, 'moh:read moh:write');
+  const transport = new StreamableHTTPClientTransport(new URL(`${f.origin}/mcp`), {
+    requestInit: { headers: { Authorization: `Bearer ${tokens.access_token}` } },
+  });
+  const mcp = new Client({ name: 'delegation-test', version: '1' });
+  t.after(() => mcp.close());
+  await mcp.connect(transport);
+  const { tools } = await mcp.listTools();
+  assert.ok(tools.some(tool => tool.name === 'create_delegated_job' && !tool.annotations.readOnlyHint));
+  assert.ok(tools.some(tool => tool.name === 'decide_delegated_action'));
+  assert.ok(!tools.some(tool => tool.name === 'publish_post'));
+  const reduction = await f.post('/token', { client_id: client.client_id, client_secret: client.client_secret,
+    grant_type: 'refresh_token', refresh_token: tokens.refresh_token, scope: 'moh:read', resource: `${f.origin}/mcp` });
+  assert.equal((await reduction.json()).scope, 'moh:read');
 });

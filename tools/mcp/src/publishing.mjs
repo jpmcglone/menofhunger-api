@@ -11,7 +11,7 @@ export async function publishPost({ api, store, authorUsername, body }) {
   return store.withPublishingLock(api.baseUrl, async () => {
     const accounts = await publishingAccounts(api);
     const author = accounts.data.find((account) =>
-      account.username?.toLowerCase() === authorUsername.toLowerCase());
+      authorUsername ? account.username?.toLowerCase() === authorUsername.replace(/^@/, '').toLowerCase() : account.id === accounts.administrator.id);
     if (!author) throw new ApiError('Choose your own account or a page you operate from publishing_accounts.', 403);
     const administrator = accounts.administrator;
     const switching = author.id !== administrator.id;

@@ -5,6 +5,7 @@ import {
 } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 
 export const READ_SCOPE = 'moh:read';
+export const WRITE_SCOPE = 'moh:write';
 const DAY = 86400;
 const opaque = () => randomBytes(32).toString('base64url');
 const digest = (value) => createHash('sha256').update(value).digest('hex');
@@ -57,7 +58,7 @@ export class MohOAuthProvider {
               (url.pathname === '/connector_platform_oauth_redirect' ||
                 /^\/connector\/oauth\/[A-Za-z0-9_-]+$/.test(url.pathname));
           })) throw new InvalidClientMetadataError('Use the ChatGPT OAuth callback URL shown in connection settings.');
-        if (client.scope && client.scope !== READ_SCOPE) throw new InvalidScopeError('Only moh:read is supported.');
+        this.checkScopes(client.scope?.split(' '));
         if (client.client_name?.length > 200) throw new InvalidClientMetadataError('Client name is too long.');
         if (!client.client_id) throw new InvalidClientMetadataError('Missing client ID.');
         await store.put('client', client.client_id, client, 90 * DAY);
@@ -71,8 +72,8 @@ export class MohOAuthProvider {
       throw new InvalidTargetError('Resource must match this Men of Hunger MCP endpoint.');
   }
   checkScopes(scopes) {
-    if (scopes?.some((scope) => scope !== READ_SCOPE))
-      throw new InvalidScopeError('Only moh:read is supported.');
+    if (scopes?.some((scope) => scope !== READ_SCOPE && scope !== WRITE_SCOPE))
+      throw new InvalidScopeError('Only moh:read and moh:write are supported.');
   }
   async authorize(client, params, res) {
     this.checkResource(params.resource, true);
@@ -84,6 +85,7 @@ export class MohOAuthProvider {
     await this.store.put('request', request, {
       clientId: client.client_id, clientName: client.client_name || 'ChatGPT',
       redirectUri: params.redirectUri, state: params.state,
+      scopes: [...new Set([READ_SCOPE, ...(params.scopes ?? [])])],
       challenge: params.codeChallenge, csrfHash: digest(csrf), resourceUrl: this.resourceUrl,
     }, 600);
     res.cookie('moh_mcp_consent', csrf, {
@@ -135,7 +137,7 @@ export class MohOAuthProvider {
     if (!(await this.store.get('code', code, true))) throw new InvalidGrantError('Authorization code was already used.');
     const session = await this.createSession(admin.id);
     const grantId = opaque();
-    const grant = { clientId: client.client_id, userId: admin.id, sessionToken: session.token, resourceUrl: this.resourceUrl,
+    const grant = { scopes: pending.scopes ?? [READ_SCOPE], clientId: client.client_id, userId: admin.id, sessionToken: session.token, resourceUrl: this.resourceUrl,
       expiresAt: Math.min(Date.now() / 1000 + 30 * DAY, Date.parse(session.expiresAt) / 1000) };
     try {
       await this.store.put('grant', grantId, grant, grant.expiresAt - Date.now() / 1000);
@@ -158,7 +160,7 @@ export class MohOAuthProvider {
     const ttl = Math.min(900, Math.floor(grant.expiresAt - Date.now() / 1000));
     await this.store.put('access', access, { grantId, expiresAt: Math.floor(Date.now() / 1000) + ttl }, ttl);
     await this.store.put('refresh', refresh, { grantId, clientId: grant.clientId }, grant.expiresAt - Date.now() / 1000);
-    return { access_token: access, token_type: 'Bearer', expires_in: ttl, refresh_token: refresh, scope: READ_SCOPE };
+    return { access_token: access, token_type: 'Bearer', expires_in: ttl, refresh_token: refresh, scope: (grant.scopes ?? [READ_SCOPE]).join(' ') };
   }
   async exchangeRefreshToken(client, token, scopes, resource) {
     this.checkResource(resource);
@@ -166,7 +168,12 @@ export class MohOAuthProvider {
     const refresh = await this.store.get('refresh', token);
     if (!refresh || refresh.clientId !== client.client_id) throw new InvalidGrantError('Invalid refresh token.');
     const grant = await this.grantFor(refresh.grantId);
+    if (scopes?.some(scope => !(grant.scopes ?? [READ_SCOPE]).includes(scope))) throw new InvalidScopeError('Reconnect to request additional permissions.');
     if (!(await this.store.get('refresh', token, true))) throw new InvalidGrantError('Refresh token was already used.');
+    if (scopes?.length) {
+      grant.scopes = [...new Set([READ_SCOPE, ...scopes])];
+      await this.store.put('grant', refresh.grantId, grant, grant.expiresAt - Date.now() / 1000);
+    }
     return this.issueTokens(refresh.grantId, grant);
   }
   async verifyAccessToken(token) {
@@ -178,7 +185,7 @@ export class MohOAuthProvider {
       if (error instanceof InvalidGrantError) throw new InvalidTokenError('Connection expired or administrator access revoked.');
       throw error;
     }
-    return { token, clientId: grant.clientId, scopes: [READ_SCOPE], expiresAt: access.expiresAt,
+    return { token, clientId: grant.clientId, scopes: grant.scopes ?? [READ_SCOPE], expiresAt: access.expiresAt,
       resource: new URL(this.resourceUrl), extra: { sessionToken: grant.sessionToken, userId: grant.userId } };
   }
   async revokeToken(client, { token }) {

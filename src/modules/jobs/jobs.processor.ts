@@ -1,3 +1,4 @@
+import { DelegationRunnerService } from '../admin/delegation/delegation-runner.service';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import type { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
@@ -62,6 +63,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly notificationWriter: NotificationWriterService,
     private readonly sideEffects: SideEffectsService,
     private readonly calls: CallsService,
+    private readonly delegation: DelegationRunnerService,
   ) {
     super();
   }
@@ -71,6 +73,8 @@ export class JobsProcessor extends WorkerHost {
     const startedAt = Date.now();
     try {
       switch (name) {
+        case JOBS.adminDelegationRun: await this.delegation.run(String(job.data?.runId ?? '')); return { ok: true };
+        case JOBS.adminDelegationSweep: await this.delegation.sweep(); return { ok: true };
         case JOBS.postsPollResultsReadySweep:
           await this.postsPollResultsReady.runPollResultsReadySweep();
           return { ok: true };

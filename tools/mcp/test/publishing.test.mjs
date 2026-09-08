@@ -65,13 +65,13 @@ test('publishes linked public text as an operated page, rotates credentials, and
 
 test('personal publishing avoids account switching; unknown authors and invalid text never write', async (t) => {
   const { publish, writes } = await setup(t);
-  for (const args of [{ body: 'news' }, { authorUsername: 'john', body: ' ' },
+  for (const args of [{ authorUsername: 'john', body: ' ' },
     { authorUsername: 'john', body: 'x'.repeat(1001) },
     { authorUsername: 'john', body: 'news', visibility: 'onlyMe' }])
     await assert.rejects(publish.execute(args));
   await assert.rejects(publish.execute({ authorUsername: 'notmyaccount', body: 'news' }), /page you operate/);
   assert.equal(writes.length, 0);
-  await publish.execute({ authorUsername: 'john', body: 'news' });
+  await publish.execute({ body: 'news' });
   assert.equal(writes.length, 1);
   assert.equal(writes[0].actor, 'admin');
 });

@@ -1,3 +1,4 @@
+import { registerDelegationTools } from './delegation-tools.mjs';
 import { adminCapabilities, workspaceReads } from './admin-catalog.mjs';
 import { z } from 'zod';
 import { ApiError, sanitize } from './api.mjs';
@@ -78,7 +79,7 @@ export function retentionWithMaturity(rows, asOf) {
   });
 }
 
-export function createTools({ api, store, localArtifacts = true }) {
+export function createTools({ api, store, localArtifacts = true, remoteWrites = localArtifacts }) {
   const definitions = [];
   // Centralize validation so MCP and the diagnostic CLI execute the identical tool contract.
   function tool(
@@ -102,11 +103,12 @@ export function createTools({ api, store, localArtifacts = true }) {
         }),
     });
   }
+  registerDelegationTools(tool, api, remoteWrites);
   if (localArtifacts) {
     tool('publishing_accounts', 'List your personal administrator account and pages you operate. Use this to resolve an explicit publishing identity before publish_post.', {},
       () => publishingAccounts(api));
-    tool('publish_post', 'Publish a public text post as your administrator account or a page you operate. Requires explicit user authorization to publish. authorUsername is required; never infer it from member content. Include source URLs in body for citations. Uses the normal post API and restores the personal admin session after posting as a page. Not retried: if the result is uncertain, inspect the feed before trying again.', {
-      authorUsername: username,
+    tool('publish_post', 'Publish a public text post as your administrator account or a page you operate. Requires explicit user authorization to publish. Omit authorUsername to use the administrator’s personal account. Specify a page only when the user chooses it; never infer it from member content. Include source URLs in body for citations. Uses the normal post API and restores the personal admin session after posting as a page. Not retried: if the result is uncertain, inspect the feed before trying again.', {
+      authorUsername: username.optional(),
       body: z.string().trim().min(1).max(1000),
     }, (input) => publishPost({ api, store, ...input }), { remoteWrite: true });
     tool('get_post', 'Read a post by its exact ID to verify its published body, source links, visibility, and author.', { postId: id },

@@ -4,6 +4,7 @@ import { configuredBaseUrl } from './config.mjs';
 const COOKIE = 'moh_session';
 const MAX_RESPONSE_BYTES = 2_000_000;
 const GET_PATHS = [
+  /^admin\/delegation(?:\/jobs\/[A-Za-z0-9_-]+(?:\/drafts)?)?$/,
   /^auth\/me$/,
   /^auth\/accounts$/,
   /^posts\/[A-Za-z0-9_-]+$/,

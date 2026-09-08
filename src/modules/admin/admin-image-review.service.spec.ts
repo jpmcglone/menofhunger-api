@@ -83,6 +83,17 @@ describe('profile and publication media ownership', () => {
     expect(list.items).toEqual([expect.objectContaining({ id: 'asset', belongsToSummary: 'orphan' })]);
   });
 
+  it('protects canonical media used by delegated drafts and scheduled publications', async () => {
+    const { prisma, service } = setup('posts/page/photo.webp');
+    expect((await service.getById('asset')).asset.primaryType).toBe('orphan');
+    prisma.postMedia.findMany.mockResolvedValue([{ id: 'media', postId: 'draft', r2Key: 'posts/page/photo.webp', thumbnailR2Key: null, deletedAt: null,
+      post: { id: 'draft', createdAt: new Date(), visibility: 'onlyMe', user: { id: 'page', username: 'mohnews' } } }]);
+    expect((await service.getById('asset')).asset.primaryType).toBe('post');
+    expect((await service.list({ limit: 30, cursor: null, onlyOrphans: true })).items).toEqual([]);
+    await expect(service.deleteById({ id: 'asset', adminUserId: 'admin', reason: 'cleanup', onlyOrphans: true })).rejects.toThrow('no longer an orphan');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it.each(['draft', 'published', 'archived'])('recognizes %s announcement images and excludes them from orphans', async (status) => {
     const { prisma, service } = setup();
     prisma.announcement.findMany.mockResolvedValue([{ id: 'notice', title: 'Conference', status, imageKey: key }]);

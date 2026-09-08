@@ -1,3 +1,4 @@
+import { UsersProfileWriteService } from './users-profile-write.service';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { FollowsModule } from '../follows/follows.module';
@@ -16,6 +17,7 @@ import { PublicProfilesService } from './public-profiles.service';
   imports: [AuthModule, FollowsModule, NotificationsModule, RealtimeModule, EmailModule],
   controllers: [UsersController],
   providers: [
+    UsersProfileWriteService,
     PublicProfileCacheService,
     UsersRealtimeService,
     UsersLocationService,
@@ -24,6 +26,7 @@ import { PublicProfilesService } from './public-profiles.service';
     PublicProfilesService,
   ],
   exports: [
+    UsersProfileWriteService,
     PublicProfileCacheService,
     UsersRealtimeService,
     UsersLocationService,

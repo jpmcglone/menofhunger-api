@@ -8,17 +8,17 @@ import { createTools } from './tools.mjs';
 import { instructions, metricGuide, workflows, storageGuidance } from './guidance.mjs';
 import { serverName } from './config.mjs';
 
-export function createServer({ api, store, localArtifacts = true } = {}) {
+export function createServer({ api, store, localArtifacts = true, remoteWrites = localArtifacts } = {}) {
   store ??= new StateStore();
   api ??= new MohApi({ store });
-  const guide = `${instructions}\n${storageGuidance(localArtifacts)}`;
+  const guide = `${instructions}\n${storageGuidance(localArtifacts, remoteWrites)}${remoteWrites ? "\nThis connection can manage delegated jobs and apply explicitly authorized proposals. Delegated jobs may continue on their saved schedule until paused or cancelled. Omitted actor means the administrator’s personal account." : ""}`;
   const server = new McpServer(
     { name: serverName(api.baseUrl), version: '0.1.0' },
     {
       instructions: `Connected to ${api.baseUrl}. Localhost data is development data, not production business metrics.\n${guide}`,
     },
   );
-  for (const tool of createTools({ api, store, localArtifacts })) {
+  for (const tool of createTools({ api, store, localArtifacts, remoteWrites })) {
     server.registerTool(
       tool.name,
       {
