@@ -9,6 +9,7 @@ describe('admin engagement snapshots', () => {
     };
     const result = await new AdminEngagementService(prisma).attention();
     expect(result.items.find(i => i.id === 'unanswered')?.count).toBe(20);
+    expect(result.items.find(i => i.id === 'unanswered')?.path).toBe('/admin/attention/conversations');
     expect(result.unansweredPosts).toHaveLength(1);
     expect(result.items.find(i => i.id === 'verification')?.count).toBe(2);
     expect(prisma.post.findMany.mock.calls[0][0].where.replies.none.user.isBot).toBe(false);

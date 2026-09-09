@@ -82,7 +82,7 @@ export class AdminEngagementService {
       { id: 'scheduled', title: 'Scheduled posts with failures', detail: 'Saved drafts with a recorded scheduling failure', count: health.scheduledPostsWithFailures, path: '/admin/jobs', priority: 'investigate' },
       { id: 'verification', title: 'Members waiting for verification', detail: 'Pending requests from active accounts', count: verification, path: '/admin/verification', priority: 'review' },
       { id: 'feedback', title: 'Feedback to follow up', detail: 'New and triaged feedback', count: health.feedback.new + health.feedback.triaged, path: '/admin/feedback', priority: 'review' },
-      { id: 'unanswered', title: 'Conversations needing a reply', detail: 'Public posts from the past 14 days with no human replies', count: unanswered, path: '/admin/attention#conversations', priority: 'participate' },
+      { id: 'unanswered', title: 'Conversations needing a reply', detail: 'Public posts from the past 14 days with no human replies', count: unanswered, path: '/admin/attention/conversations', priority: 'participate' },
     ];
     return { asOf: now.toISOString(), items, unansweredPosts: posts.map(p => ({ id: p.id, body: p.body.slice(0, 300), username: p.user.username, createdAt: p.createdAt.toISOString() })) };
   }
