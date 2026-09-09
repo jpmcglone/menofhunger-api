@@ -1,3 +1,6 @@
+export type NotificationCategory = 'posts' | 'replies' | 'mentions' | 'statuses' | 'follows' | 'boosts' | 'other';
+export type NotificationUnreadByCategory = Record<NotificationCategory | 'all', number>;
+
 import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import type { NotificationKind, VerifiedStatus } from '@prisma/client';
 import type { PostDto } from '../../common/dto/post.dto';
@@ -37,6 +40,8 @@ export type NotificationDto = {
   id: string;
   createdAt: string;
   kind: NotificationKind;
+  /** Canonical inbox category; optional for older cached responses. */
+  category?: NotificationCategory;
   deliveredAt: string | null;
   readAt: string | null;
   ignoredAt: string | null;

@@ -538,7 +538,7 @@ describe('NotificationsService.list batching', () => {
     expect(res.items[2].notification.post?.id).toBe('p_mention');
   });
 
-  it('collapses two post-shaped notifications for the same causing post into one row', async () => {
+  it('preserves distinct notification events for the same causing post', async () => {
     const actor = {
       id: 'a1',
       username: 'actor',
@@ -607,7 +607,7 @@ describe('NotificationsService.list batching', () => {
 
     const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null });
 
-    expect(res.items).toHaveLength(1);
+    expect(res.items).toHaveLength(2);
     expect(res.items[0]?.type).toBe('single');
     if (res.items[0]?.type !== 'single') throw new Error('Expected single notification item');
     expect(res.items[0].notification.post?.id).toBe('p_reply');
@@ -733,7 +733,7 @@ describe('NotificationsService.list batching', () => {
     expect(item.notification.subjectPostPreview?.bodySnippet).toBe('Original post preview.');
   });
 
-  it('does not expose chat message notifications in the notifications feed', async () => {
+  it('includes chat notification records without changing chat read state', async () => {
     const { svc, prisma } = makeService({
       prisma: {
         notification: {
@@ -751,8 +751,8 @@ describe('NotificationsService.list batching', () => {
 
     const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null, kind: 'message' as any });
 
-    expect(res).toEqual({ items: [], nextCursor: null, undeliveredCount: 0, unreadByKind: { all: 0 } });
-    expect(prisma.notification.findMany).not.toHaveBeenCalled();
+    expect(res.items).toEqual([]);
+    expect(prisma.notification.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { recipientUserId: 'u_recipient', kind: 'message' } }));
   });
 
   it('filters with notIn primary kinds when kind is "other"', async () => {
@@ -803,7 +803,7 @@ describe('NotificationsService.list batching', () => {
     expect(prisma.notification.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          kind: expect.objectContaining({ notIn: expect.arrayContaining(['comment', 'mention', 'followed_post', 'follow', 'boost', 'message']) }),
+          kind: expect.objectContaining({ notIn: expect.arrayContaining(['comment', 'mention', 'crew_wall_mention', 'followed_post', 'checkin_post', 'community_group_post', 'status_update', 'follow', 'boost']) }),
         }),
       }),
     );
@@ -815,7 +815,7 @@ describe('NotificationsService.list batching', () => {
     expect(res.items[0].notification.kind).toBe('coin_transfer');
   });
 
-  it('keeps the Posts chip to top-level followed posts only', async () => {
+  it('includes followed root posts, check-ins and community posts in Posts', async () => {
     const { svc, prisma } = makeService({
       prisma: {
         notification: {
@@ -836,8 +836,10 @@ describe('NotificationsService.list batching', () => {
     expect(prisma.notification.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          kind: 'followed_post',
-          subjectPost: { is: { parentId: null } },
+          OR: expect.arrayContaining([
+            { kind: { in: ['checkin_post', 'community_group_post'] } },
+            { kind: 'followed_post', OR: [{ subjectPost: { is: { parentId: null } } }, { subjectPost: { is: null } }] },
+          ]),
         }),
       }),
     );

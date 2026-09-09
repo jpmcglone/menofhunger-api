@@ -3609,6 +3609,10 @@ export type MessageConversationDto = {
 
 // ─── src/modules/notifications/notification.dto.ts ─────────────────────────────
 
+export type NotificationCategory = 'posts' | 'replies' | 'mentions' | 'statuses' | 'follows' | 'boosts' | 'other';
+
+export type NotificationUnreadByCategory = Record<NotificationCategory | 'all', number>;
+
 export type NotificationActorDto = {
   id: string;
   username: string | null;
@@ -3644,6 +3648,8 @@ export type NotificationDto = {
   id: string;
   createdAt: string;
   kind: NotificationKind;
+  /** Canonical inbox category; optional for older cached responses. */
+  category?: NotificationCategory;
   deliveredAt: string | null;
   readAt: string | null;
   ignoredAt: string | null;

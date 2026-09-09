@@ -124,17 +124,13 @@ export class NotificationReadStateService {
     return Math.max(0, Math.floor(Number(user?.undeliveredNotificationCount) || 0));
   }
 
-  async getUnreadCountsByKind(recipientUserId: string): Promise<NotificationUnreadByKind> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: recipientUserId },
-      select: { accountKind: true },
-    });
+  async getUnreadCountsByKind(recipientUserId: string, blockedActorIds: string[] = []): Promise<NotificationUnreadByKind> {
     const rows = await this.prisma.notification.groupBy({
       by: ['kind'],
       where: {
         recipientUserId,
         readAt: null,
-        kind: { notIn: bellExcludedKindsForAccount(user?.accountKind) },
+        ...(blockedActorIds.length ? { NOT: { AND: [{ actorUserId: { not: null } }, { actorUserId: { in: blockedActorIds } }] } } : {}),
       },
       _count: { _all: true },
     });
@@ -823,7 +819,7 @@ export class NotificationReadStateService {
     const undeliveredCount = await this.prisma.$transaction(async (tx) => {
       const now = new Date();
       await tx.notification.updateMany({
-        where: { recipientUserId, readAt: null, kind: { not: 'message' } },
+        where: { recipientUserId, readAt: null },
         data: { readAt: now },
       });
       const deliveredRes = await tx.notification.updateMany({

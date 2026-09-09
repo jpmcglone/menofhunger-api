@@ -1420,6 +1420,15 @@ export class NotificationWriterService {
     // per recipient.
     await runInBatches(toCreate, FANOUT_CONCURRENCY, async (recipientUserId) => {
       await this.readState.emitGroupsUnreadForUser(recipientUserId);
+      await this.cacheInvalidation?.bumpNotificationsList(recipientUserId);
+      const record = await this.prisma.notification.findFirst({
+        where: { recipientUserId, kind: 'community_group_post', subjectPostId: postId },
+        select: { id: true },
+      });
+      if (record) {
+        const dto = await this.query.buildNotificationDtoForRecipient({ recipientUserId, notificationId: record.id });
+        if (dto) this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
+      }
     });
   }
 

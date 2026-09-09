@@ -19,6 +19,7 @@ const listQuerySchema = z.object({
     'comment', 'boost', 'repost', 'follow', 'followed_post',
     'followed_article', 'mention', 'nudge', 'coin_transfer',
     'poll_results_ready', 'generic', 'message',
+    'community_group_post',
     'group_join_request',
     'community_group_member_joined',
     'community_group_join_approved',
@@ -169,6 +170,7 @@ export class NotificationsController {
         nextCursor: res.nextCursor,
         undeliveredCount: res.undeliveredCount,
         unreadByKind: res.unreadByKind,
+        unreadByCategory: res.unreadByCategory,
       },
     };
   }

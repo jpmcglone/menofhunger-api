@@ -1,16 +1,13 @@
 import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { Injectable } from '@nestjs/common';
-import { Prisma, type NotificationKind, type VerifiedStatus } from '@prisma/client';
+import { type NotificationKind, type VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { PostVisibilityReadService } from '../viewer/post-visibility-read.service';
-import {
-  NotificationReadStateService,
-  PERSON_ONLY_NOTIFICATION_KINDS,
-  bellExcludedKindsForAccount,
-} from './notification-read-state.service';
+import { NotificationReadStateService } from './notification-read-state.service';
+import { notificationCategory, notificationCategoryCounts, notificationFilterWhere } from './notification-category';
 import { CacheService } from '../redis/cache.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { CacheTtl } from '../redis/cache-ttl';
@@ -24,47 +21,13 @@ import type {
 import type { PostDto } from '../../common/dto/post.dto';
 import { collapseFeedByRoot, type FeedCollapseMode, type FeedCollapsePrefer } from '../../common/feed-collapse/collapse-by-root';
 
-/**
- * Kinds that have dedicated filter chips on the notifications page.
- * "Other" = every kind that is NOT in this set and NOT 'message'.
- */
-const PRIMARY_NOTIFICATION_KINDS = ['comment', 'mention', 'followed_post', 'status_update', 'checkin_post', 'follow', 'boost'] as const satisfies NotificationKind[];
-
-/**
- * Posts chip = top-level followed posts only.
- * Replies chip = comment rows plus followed_post rows whose causing post has a parent.
- */
-function listKindWhere(
-  kind: NotificationKind | 'other' | undefined,
-  alwaysExcluded: NotificationKind[],
-): Prisma.NotificationWhereInput {
-  if (kind === 'other') {
-    return { kind: { notIn: [...PRIMARY_NOTIFICATION_KINDS, ...alwaysExcluded] } };
-  }
-  if (kind === 'followed_post') {
-    return {
-      kind: 'followed_post',
-      subjectPost: { is: { parentId: null } },
-    };
-  }
-  if (kind === 'comment') {
-    return {
-      OR: [
-        { kind: 'comment' },
-        { kind: 'followed_post', subjectPost: { is: { parentId: { not: null } } } },
-      ],
-    };
-  }
-  if (kind) return { kind };
-  return { kind: { notIn: alwaysExcluded } };
-}
-
 /** Kinds that embed a full PostDto card in the bell. Everything else uses subjectPostPreview. */
 const NOTIFICATION_POST_CARD_KINDS = new Set<NotificationKind>([
   'comment',
   'mention',
   'followed_post',
   'checkin_post',
+  'community_group_post',
   'repost',
 ]);
 
@@ -87,7 +50,7 @@ export class NotificationQueryService {
   notificationPostId(
     n: { kind: NotificationKind; actorPostId?: string | null; subjectPostId?: string | null },
   ): string | null {
-    if (n.kind === 'followed_post' || n.kind === 'checkin_post') return (n.subjectPostId ?? '').trim() || null;
+    if (n.kind === 'followed_post' || n.kind === 'checkin_post' || n.kind === 'community_group_post') return (n.subjectPostId ?? '').trim() || null;
     if (n.kind === 'comment') return (n.actorPostId ?? '').trim() || null;
     if (n.kind === 'mention') return (n.actorPostId ?? '').trim() || null;
     if (n.kind === 'repost') return (n.actorPostId ?? n.subjectPostId ?? '').trim() || null;
@@ -111,7 +74,7 @@ export class NotificationQueryService {
       limit: params.limit,
       kind: params.kind ?? null,
       // Bump when Posts/Replies chip predicates change so stale page-1 caches miss.
-      replySplit: 1,
+      categories: 2,
     });
     return this.cache.getOrSetJsonWithLock({
       enabled: true,
@@ -135,20 +98,7 @@ export class NotificationQueryService {
     const desiredItemLimit = Math.max(1, Math.min(limit, 50));
     const maxGroupNotifications = 50;
     const rawFetchLimit = Math.min(desiredItemLimit * 6, 250);
-    if (kind === 'message') {
-      const [undeliveredCount, unreadByKind] = await Promise.all([
-        this.readState.getUndeliveredCount(recipientUserId),
-        this.readState.getUnreadCountsByKind(recipientUserId),
-      ]);
-      return {
-        items: [] as NotificationFeedItemDto[],
-        nextCursor: null,
-        undeliveredCount,
-        unreadByKind,
-      };
-    }
-
-    const [cursorWhere, blockSets, recipient] = await Promise.all([
+    const [cursorWhere, blockSets] = await Promise.all([
       createdAtIdCursorWhere({
         cursor,
         lookup: async (id) =>
@@ -160,38 +110,17 @@ export class NotificationQueryService {
             .then((r) => (r ? { id: r.id, createdAt: r.createdAt } : null)),
       }),
       this.postVisibility.viewerBlockSets(recipientUserId),
-      this.prisma.user.findUnique({
-        where: { id: recipientUserId },
-        select: { accountKind: true },
-      }),
     ]);
     const blockedActorIds = [...blockSets.blockedByViewer, ...blockSets.viewerBlockedBy];
-    const pageExcludedKinds =
-      recipient?.accountKind === 'page' ? PERSON_ONLY_NOTIFICATION_KINDS : [];
-    if (kind && kind !== 'other' && pageExcludedKinds.includes(kind)) {
-      const [undeliveredCount, unreadByKind] = await Promise.all([
-        this.readState.getUndeliveredCount(recipientUserId),
-        this.readState.getUnreadCountsByKind(recipientUserId),
-      ]);
-      return {
-        items: [] as NotificationFeedItemDto[],
-        nextCursor: null,
-        undeliveredCount,
-        unreadByKind,
-      };
-    }
-    const alwaysExcluded: NotificationKind[] = [
-      ...bellExcludedKindsForAccount(recipient?.accountKind),
-    ];
-
     const notifications = await this.prisma.notification.findMany({
       where: {
         recipientUserId,
-        ...listKindWhere(kind, alwaysExcluded),
-        ...(blockedActorIds.length > 0 ? { NOT: { actorUserId: { in: blockedActorIds } } } : {}),
+        ...notificationFilterWhere(kind),
+        ...(blockedActorIds.length > 0 ? { NOT: { AND: [{ actorUserId: { not: null } }, { actorUserId: { in: blockedActorIds } }] } } : {}),
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },
       include: {
+        subjectPost: { select: { parentId: true } },
         actor: {
           select: {
             id: true,
@@ -214,8 +143,17 @@ export class NotificationQueryService {
     const hasMoreRaw = notifications.length > rawFetchLimit;
     const [undeliveredCount, unreadByKind] = await Promise.all([
       this.readState.getUndeliveredCount(recipientUserId),
-      this.readState.getUnreadCountsByKind(recipientUserId),
+      this.readState.getUnreadCountsByKind(recipientUserId, blockedActorIds),
     ]);
+
+    const followedReplies = await this.prisma.notification.count({
+      where: {
+        recipientUserId, readAt: null, kind: 'followed_post',
+        subjectPost: { is: { parentId: { not: null } } },
+        ...(blockedActorIds.length ? { NOT: { AND: [{ actorUserId: { not: null } }, { actorUserId: { in: blockedActorIds } }] } } : {}),
+      },
+    });
+    const unreadByCategory = notificationCategoryCounts(unreadByKind, followedReplies ?? 0);
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const previewPostIds = [
@@ -541,17 +479,11 @@ export class NotificationQueryService {
       };
     }
 
-    // When filtering by a specific kind, skip all grouping and return individual items.
-    // The user opted in to see this kind explicitly — collapsing defeats the purpose.
-    // Still collapse post-shaped rows that point at the same causing post: a retry or a
-    // comment+followed_post pair must not render as two identical PostRows.
-    const seenPostRowIds = new Set<string>();
+    // Group supported events, but never drop distinct notification IDs for the same post.
+    const seenNotificationIds = new Set<string>();
     const pushSingle = (target: NotificationFeedItemDto[], n: NotificationDto): void => {
-      const postId = n.post ? this.notificationPostId(n) : null;
-      if (postId) {
-        if (seenPostRowIds.has(postId)) return;
-        seenPostRowIds.add(postId);
-      }
+      if (seenNotificationIds.has(n.id)) return;
+      seenNotificationIds.add(n.id);
       target.push({ type: 'single', notification: n });
     };
 
@@ -568,6 +500,7 @@ export class NotificationQueryService {
         nextCursor: hasMore ? (lastItem?.type === 'single' ? lastItem.notification.id : null) : null,
         undeliveredCount,
         unreadByKind,
+        unreadByCategory,
       };
     }
 
@@ -578,7 +511,7 @@ export class NotificationQueryService {
 
       // followed_post / checkin_post notifications always appear as standalone items regardless of bell setting.
       // The bell only controls whether reply notifications from followed users are delivered.
-      if (n.kind === 'followed_post' || n.kind === 'checkin_post') {
+      if (n.kind === 'followed_post' || n.kind === 'checkin_post' || n.kind === 'community_group_post') {
         pushSingle(items, n);
         i += 1;
         continue;
@@ -614,7 +547,7 @@ export class NotificationQueryService {
       i = j;
     }
 
-        const lastConsumedId = i > 0 ? dtos[i - 1]?.id ?? null : null;
+    const lastConsumedId = i > 0 ? dtos[i - 1]?.id ?? null : null;
     const hasMore = i < dtos.length || hasMoreRaw;
     const nextCursor = hasMore ? lastConsumedId : null;
 
@@ -623,6 +556,7 @@ export class NotificationQueryService {
       nextCursor,
       undeliveredCount,
       unreadByKind,
+      unreadByCategory,
     };
   }
 
@@ -693,7 +627,7 @@ export class NotificationQueryService {
               ]
             : []),
         ],
-        ...(blockedActorIds.length > 0 ? { NOT: { actorUserId: { in: blockedActorIds } } } : {}),
+        ...(blockedActorIds.length > 0 ? { NOT: { AND: [{ actorUserId: { not: null } }, { actorUserId: { in: blockedActorIds } }] } } : {}),
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -707,7 +641,7 @@ export class NotificationQueryService {
     const orderedSubjectPostIds: string[] = [];
     const seenSubjectPostIds = new Set<string>();
     for (const n of raw) {
-      const postId = (n.kind === 'followed_post' || n.kind === 'checkin_post'
+      const postId = (n.kind === 'followed_post' || n.kind === 'checkin_post' || n.kind === 'community_group_post'
         ? (n.subjectPostId ?? '')
         : (n.actorPostId ?? '')).trim();
       if (!postId || seenSubjectPostIds.has(postId)) continue;
@@ -768,6 +702,7 @@ export class NotificationQueryService {
       id: string;
       createdAt: Date;
       kind: NotificationKind;
+      subjectPost?: { parentId: string | null } | null;
       deliveredAt: Date | null;
       readAt: Date | null;
       ignoredAt: Date | null;
@@ -830,6 +765,7 @@ export class NotificationQueryService {
       id: n.id,
       createdAt: n.createdAt.toISOString(),
       kind: n.kind,
+      category: notificationCategory(n.kind, n.subjectPost?.parentId ?? post?.parentId),
       deliveredAt: n.deliveredAt ? n.deliveredAt.toISOString() : null,
       readAt: n.readAt ? n.readAt.toISOString() : null,
       ignoredAt: n.ignoredAt ? n.ignoredAt.toISOString() : null,
@@ -872,9 +808,12 @@ export class NotificationQueryService {
     const id = (notificationId ?? '').trim();
     if (!id) return null;
 
+    const blockSets = await this.postVisibility.viewerBlockSets(recipientUserId);
+    const blockedActorIds = [...blockSets.blockedByViewer, ...blockSets.viewerBlockedBy];
     const n = await this.prisma.notification.findFirst({
-      where: { id, recipientUserId },
+      where: { id, recipientUserId, ...(blockedActorIds.length ? { NOT: { AND: [{ actorUserId: { not: null } }, { actorUserId: { in: blockedActorIds } }] } } : {}) },
       include: {
+        subjectPost: { select: { parentId: true } },
         actor: {
           select: {
             id: true,
