@@ -351,7 +351,7 @@ export function createTools({ api, store, localArtifacts = true, remoteWrites = 
   );
   tool(
     'founder_briefing',
-    'Gather a dated business overview, referrals, new feedback, pending reports, queue health, and operational diagnostics. Failed sections are explicitly unavailable; never interpret them as zero.',
+    'Gather a dated business overview, the weekly member-reply pulse, referrals, new feedback, pending reports, queue health, and operational diagnostics. Failed sections are explicitly unavailable; never interpret them as zero.',
     { range },
     async ({ range }) => {
       // Low bounded concurrency; avoid hammering the admin API with a large fan-out.
@@ -360,6 +360,10 @@ export function createTools({ api, store, localArtifacts = true, remoteWrites = 
         ...reads
           .filter(([name]) => name !== 'feedback' && name !== 'reports')
           .map(([name, , path]) => [name, () => api.get(path)]),
+        [
+          'attention',
+          () => api.get('admin/operations/attention'),
+        ],
         [
           'feedback',
           () => api.get('admin/feedback', { status: 'new', limit: 10 }),

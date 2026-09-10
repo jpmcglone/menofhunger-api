@@ -122,7 +122,7 @@ From the API project: npm run --silent moh -- <command> [options]
 Optional global command: npm install --global ./tools/mcp, then moh <command>
 
   login                              Sign in with SMS (hidden interactive input)
-  configure                          Register this MCP installation with local Codex
+  configure                          Register this MCP installation with local Cursor and Codex
   logout                             Revoke this session and remove local credentials
   status                             Verify administrator identity and API readiness
   briefing [--range 7d]               Business, community, support, and operations
@@ -137,7 +137,7 @@ Optional global command: npm install --global ./tools/mcp, then moh <command>
   health                             Support totals and operational issues
   queues                             Background job queue health
   activation --days 90 --stage verified  Explore member activation
-  workspace attention                Pending admin work
+  workspace attention                Weekly reply pulse and pending work
   content --unanswered --limit 20     Public posts needing a response
   content --q "leadership"            Public content research, up to a 31-day window
   referrals                          Referral metrics
@@ -167,8 +167,18 @@ Only publish performs a remote content write; it requires user authorization. No
 `;
 
 export function formatHuman(result) {
-  if (typeof result?.definitions === 'string' && !result.data)
-    return result.definitions;
+  if (result?.clients && result?.serverPath) {
+    return [
+      `Registered ${result.name} for ${result.environment}`,
+      result.clients.cursor.configured
+        ? `Cursor: ${result.clients.cursor.path}`
+        : `Cursor: not configured (${result.clients.cursor.reason})`,
+      result.clients.codex.configured
+        ? 'Codex: registered'
+        : `Codex: not configured (${result.clients.codex.reason})`,
+      result.nextStep,
+    ].join('\n');
+  }
   if (Object.hasOwn(result ?? {}, 'connected')) {
     return (
       `${result.connected ? 'Connected' : 'Not connected'}: ${result.environment}\n` +
@@ -186,6 +196,9 @@ export function formatHuman(result) {
     const health = sections.operations_health?.available
       ? sections.operations_health.data
       : null;
+    const pulse = sections.attention?.available
+      ? sections.attention.data?.pulse
+      : null;
     const lines = [
       `Men of Hunger — ${result.range} briefing`,
       `Fetched: ${result.asOf}`,
@@ -200,6 +213,17 @@ export function formatHuman(result) {
         `Average daily active: ${number(summary.dau)} | Monthly active: ${number(summary.mau)}`,
         `Premium access: ${number(summary.premiumUsers)} (includes ${number(summary.premiumPlusUsers)} Premium+; includes grants)`,
         `30-day retention: ${business.engagement?.d30RetentionPct == null ? 'not measurable' : `${business.engagement.d30RetentionPct}%`} | Cohort: ${number(business.engagement?.d30CohortSize)}`,
+      );
+    }
+    if (pulse) {
+      lines.push(
+        '',
+        `This week: ${number(pulse.repliedWithin24h)} of ${number(pulse.memberRoots)} member posts answered in 24h` +
+          (pulse.replyRate24hPct == null ? '' : ` (${pulse.replyRate24hPct}%)`),
+        `Authors back: ${number(pulse.authorsReturned)} of ${number(pulse.authors)}` +
+          (pulse.authorsReturnedPct == null ? '' : ` (${pulse.authorsReturnedPct}%)`),
+        `Lodge prompt replies: ${pulse.lodgePromptReplies == null ? 'no prompt this week' : number(pulse.lodgePromptReplies)}`,
+        `Oldest verification wait: ${pulse.oldestVerificationRequestedAt || 'none'}`,
       );
     }
     if (health)

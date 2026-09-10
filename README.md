@@ -9,8 +9,8 @@ NestJS + Prisma API consumed by the Nuxt website and native SwiftUI app.
 The [Men of Hunger CLI and MCP](tools/mcp/README.md) share 20 tools for analytics,
 member support, billing diagnostics, community research, and local drafts/decisions.
 From this repository: `npm run mcp:setup`, `npm run moh -- login`, then
-`npm run moh -- briefing`. Use `npm run moh -- configure` to connect Codex and
-`npm run --silent moh -- tools --json` for machine-readable tool discovery.
+`npm run moh -- briefing`. Use `npm run moh -- configure` to connect Cursor and
+Codex. Use `npm run --silent moh -- tools --json` for machine-readable tool discovery.
 ChatGPT web connects to `https://api.menofhunger.com/mcp` over HTTPS with
 administrator OAuth consent. It runs inside this API; no separate hosted service
 is required. See the [connection guide](tools/mcp/README.md#connect-chatgpt-web).

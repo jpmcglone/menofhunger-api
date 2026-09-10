@@ -1,7 +1,7 @@
 // Shared discovery for the panel, MARV, MCP, and CLI. Paths are product links,
 // never API targets supplied by the model. Long-tail actions remain in their editor.
 export const adminCapabilities = [
-  { id: 'attention', section: 'Overview', title: 'Attention inbox', path: '/admin/attention', icon: 'tabler:inbox', summary: 'Review pending work and conversations needing a human reply', tools: ['admin_workspace'], ios: 'web' },
+  { id: 'attention', section: 'Overview', title: 'Attention inbox', path: '/admin/attention', icon: 'tabler:inbox', summary: 'Weekly member-reply pulse plus pending work that needs a human', tools: ['admin_workspace', 'founder_briefing'], ios: 'web' },
   { id: 'activation', section: 'Overview', title: 'Member activation', path: '/admin/activation', icon: 'tabler:chart-funnel', summary: 'Explore signup, verification, first contribution, and return milestones', tools: ['member_activation'], ios: 'web' },
   { id: 'assistant', section: 'Overview', title: 'Ask MARV', path: '/admin/assistant', icon: 'tabler:sparkles', summary: 'Check the business and prepare admin actions', tools: ['founder_briefing', 'metric_definitions'], ios: 'web' },
   { id: 'delegation', section: 'Overview', title: 'Delegated work', path: '/admin/delegation', icon: 'tabler:calendar-check', summary: 'Schedule sourced news, prepare community follow-up, and review actions as yourself or an operated page', tools: ['delegation_workspace', 'delegation_job', 'create_delegated_job', 'edit_delegated_job', 'control_delegated_job', 'decide_delegated_action'], ios: 'native' },

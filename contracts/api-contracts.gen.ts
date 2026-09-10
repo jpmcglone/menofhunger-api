@@ -397,10 +397,28 @@ export type AdminAttentionItemDto = {
   priority: 'review' | 'investigate' | 'participate';
 };
 
+export type AdminAttentionPulseDto = {
+  windowDays: number;
+  since: string;
+  before: string;
+  memberRoots: number;
+  repliedWithin24h: number;
+  replyRate24hPct: number | null;
+  authors: number;
+  authorsReturned: number;
+  authorsReturnedPct: number | null;
+  lodgePromptReplies: number | null;
+  lodgePromptId: string | null;
+  verificationPending: number;
+  oldestVerificationRequestedAt: string | null;
+  definitions: string[];
+};
+
 export type AdminAttentionDto = {
   asOf: string;
   items: AdminAttentionItemDto[];
   unansweredPosts: { id: string; body: string; username: string | null; createdAt: string }[];
+  pulse: AdminAttentionPulseDto;
 };
 
 export type AdminActivationMemberDto = {

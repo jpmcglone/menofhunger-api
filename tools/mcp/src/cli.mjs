@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { StateStore } from './state.mjs';
 import { MohApi } from './api.mjs';
 import { createTools } from './tools.mjs';
 import { configuredBaseUrl, serverName } from './config.mjs';
+import { configureDesktopClients } from './configure.mjs';
 import {
   parseCommand,
   describeTools,
@@ -104,37 +103,14 @@ try {
       );
   } else if (command === 'version') print({ version: '0.1.0' });
   else if (command === 'configure') {
-    const serverPath = fileURLToPath(new URL('./server.mjs', import.meta.url));
-    try {
-      await promisify(execFile)(
-        'codex',
-        [
-          'mcp',
-          'add',
-          serverName(api.baseUrl),
-          '--env',
-          `MOH_API_BASE_URL=${api.baseUrl}`,
-          '--env',
-          `MOH_MCP_STATE_DIR=${store.directory}`,
-          '--',
-          'node',
-          serverPath,
-        ],
-        { timeout: 30_000 },
-      );
-    } catch {
-      throw new Error(
-        'Could not configure Codex. Ensure codex and node are on PATH and the Codex configuration is writable.',
-      );
-    }
-    print({
-      configured: true,
-      name: serverName(api.baseUrl),
-      environment: api.baseUrl,
-      serverPath,
-      nextStep:
-        'Sign in with moh login, then reload MCP tools or start a new Codex session. The current tool catalog may need to refresh.',
-    });
+    print(
+      await configureDesktopClients({
+        name: serverName(api.baseUrl),
+        serverPath: fileURLToPath(new URL('./server.mjs', import.meta.url)),
+        baseUrl: api.baseUrl,
+        stateDir: store.directory,
+      }),
+    );
   } else if (command === 'login') {
     await login();
     if (json) print({ connected: true, environment: api.baseUrl });

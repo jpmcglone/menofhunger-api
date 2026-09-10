@@ -149,10 +149,27 @@ test('human output keeps analytics data and calls unavailable queue data out', (
         },
       },
       operations_health: { available: false, reason: 'Not deployed' },
+      attention: {
+        available: true,
+        data: {
+          pulse: {
+            memberRoots: 8,
+            repliedWithin24h: 3,
+            replyRate24hPct: 37.5,
+            authors: 3,
+            authorsReturned: 2,
+            authorsReturnedPct: 66.7,
+            lodgePromptReplies: 0,
+            oldestVerificationRequestedAt: '2026-08-05T00:00:00.000Z',
+          },
+        },
+      },
     },
   });
   assert.match(rendered, /42/);
   assert.match(rendered, /not measurable/);
+  assert.match(rendered, /3 of 8 member posts answered in 24h/);
+  assert.match(rendered, /Lodge prompt replies: 0/);
   assert.match(rendered, /jobs: unavailable/);
   assert.doesNotMatch(rendered, /jobs: workers=0/);
   assert.match(rendered, /Unavailable — operations_health/);
@@ -182,6 +199,7 @@ test('founder briefing preserves good sections and marks failed sections unavail
   );
   const result = await tool.execute({});
   assert.equal(result.sections.business.data.summary.totalUsers, 42);
+  assert.equal(result.sections.attention.available, true);
   assert.equal(result.sections.queue_health.available, false);
   assert.equal(Object.hasOwn(result.sections.queue_health, 'data'), false);
   api.get = async () => {

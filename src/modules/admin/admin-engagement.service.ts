@@ -2,7 +2,75 @@ import type { AdminOperationsHealthDto } from '../../common/dto/admin-operations
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import type { AdminActivationDto, AdminAttentionDto, AdminAttentionItemDto } from '../../common/dto/admin-engagement.dto';
+import type {
+  AdminActivationDto,
+  AdminAttentionDto,
+  AdminAttentionItemDto,
+  AdminAttentionPulseDto,
+} from '../../common/dto/admin-engagement.dto';
+
+const MS_DAY = 86400000;
+const PULSE_WINDOW_DAYS = 7;
+const PREVIEW_LIMIT = 8;
+const memberAuthor: Prisma.UserWhereInput = {
+  isBot: false, bannedAt: null, accountKind: 'person', siteAdmin: false,
+};
+const humanAuthor: Prisma.UserWhereInput = { isBot: false, bannedAt: null };
+const publicRoot: Prisma.PostWhereInput = {
+  visibility: 'public', communityGroupId: null, parentId: null, kind: 'regular',
+  isDraft: false, deletedAt: null,
+};
+const humanReply: Prisma.PostWhereInput = { isDraft: false, deletedAt: null, user: humanAuthor };
+
+export function utcDayMs(value: Date): number {
+  return Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
+}
+
+function rate(part: number, whole: number): number | null {
+  return whole === 0 ? null : Math.round((part / whole) * 1000) / 10;
+}
+
+export function summarizeAttentionPulse(input: {
+  now: Date;
+  since: Date;
+  roots: Array<{ userId: string; createdAt: Date; firstHumanReplyAt: Date | null }>;
+  activityDays: Array<{ userId: string; day: Date }>;
+  lodge: { id: string; humanReplies: number } | null;
+  verificationPending: number;
+  oldestVerificationRequestedAt: Date | null;
+}): AdminAttentionPulseDto {
+  const authorIds = [...new Set(input.roots.map((root) => root.userId))];
+  const repliedWithin24h = input.roots.filter((root) => {
+    if (!root.firstHumanReplyAt) return false;
+    return root.firstHumanReplyAt.getTime() - root.createdAt.getTime() <= MS_DAY;
+  }).length;
+  const authorsReturned = authorIds.filter((userId) => {
+    const rootDays = input.roots.filter((root) => root.userId === userId).map((root) => utcDayMs(root.createdAt));
+    return input.activityDays.some((row) => row.userId === userId && rootDays.some((day) => utcDayMs(row.day) > day));
+  }).length;
+  return {
+    windowDays: PULSE_WINDOW_DAYS,
+    since: input.since.toISOString(),
+    before: input.now.toISOString(),
+    memberRoots: input.roots.length,
+    repliedWithin24h,
+    replyRate24hPct: rate(repliedWithin24h, input.roots.length),
+    authors: authorIds.length,
+    authorsReturned,
+    authorsReturnedPct: rate(authorsReturned, authorIds.length),
+    lodgePromptReplies: input.lodge?.humanReplies ?? null,
+    lodgePromptId: input.lodge?.id ?? null,
+    verificationPending: input.verificationPending,
+    oldestVerificationRequestedAt: input.oldestVerificationRequestedAt?.toISOString() ?? null,
+    definitions: [
+      'Member posts: public regular roots from personal, non-admin, non-bot, non-banned accounts in this 7-day window. Pages and site admins are excluded.',
+      'Answered in 24 hours: a published human reply arrived within 24 hours of the post. Bot replies do not count.',
+      'Authors active again: those member-post authors had recorded activity on a later UTC day after at least one of those posts.',
+      'Lodge prompt: human replies to the latest public @menofhunger root in the window. Null when there is no such prompt.',
+      'Oldest verification wait: the earliest pending request from an active unverified account. Inbox unanswered counts still include official posts over 14 days.',
+    ],
+  };
+}
 
 @Injectable()
 export class AdminEngagementService {
@@ -63,28 +131,87 @@ export class AdminEngagementService {
 
   async attention(): Promise<AdminAttentionDto> {
     const now = new Date();
+    const since = new Date(now.getTime() - PULSE_WINDOW_DAYS * MS_DAY);
     const unansweredWhere: Prisma.PostWhereInput = {
-      createdAt: { gte: new Date(now.getTime() - 14 * 86400000) },
-      visibility: 'public', communityGroupId: null, parentId: null, kind: 'regular',
-      isDraft: false, deletedAt: null, user: { isBot: false, bannedAt: null },
-      replies: { none: { isDraft: false, deletedAt: null, user: { isBot: false, bannedAt: null } } },
+      ...publicRoot,
+      createdAt: { gte: new Date(now.getTime() - 14 * MS_DAY) },
+      user: humanAuthor,
+      replies: { none: humanReply },
     };
-    const [health, verification, unanswered, posts] = await Promise.all([
+    const previewSelect = { id: true, body: true, createdAt: true, user: { select: { username: true } } };
+    const pendingVerification = { status: 'pending' as const, user: { bannedAt: null, verifiedStatus: 'none' as const } };
+    const [health, verification, unanswered, memberPreview, oldestVerification, roots, lodge] = await Promise.all([
       this.health(),
-      this.prisma.verificationRequest.count({ where: { status: 'pending', user: { bannedAt: null, verifiedStatus: 'none' } } }),
+      this.prisma.verificationRequest.count({ where: pendingVerification }),
       this.prisma.post.count({ where: unansweredWhere }),
-      this.prisma.post.findMany({ where: unansweredWhere, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: 8,
-        select: { id: true, body: true, createdAt: true, user: { select: { username: true } } } }),
+      this.prisma.post.findMany({
+        where: { ...unansweredWhere, user: memberAuthor },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: PREVIEW_LIMIT,
+        select: previewSelect,
+      }),
+      this.prisma.verificationRequest.findFirst({
+        where: pendingVerification,
+        orderBy: { createdAt: 'asc' },
+        select: { createdAt: true },
+      }),
+      this.prisma.post.findMany({
+        where: { ...publicRoot, createdAt: { gte: since, lte: now }, user: memberAuthor },
+        select: {
+          userId: true,
+          createdAt: true,
+          replies: { where: humanReply, orderBy: { createdAt: 'asc' }, take: 1, select: { createdAt: true } },
+        },
+      }),
+      this.prisma.post.findFirst({
+        where: { ...publicRoot, createdAt: { gte: since, lte: now }, user: { username: 'menofhunger' } },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, replies: { where: humanReply, select: { id: true } } },
+      }),
     ]);
+    const otherPreview = memberPreview.length >= PREVIEW_LIMIT ? [] : await this.prisma.post.findMany({
+      where: {
+        ...unansweredWhere,
+        user: { ...humanAuthor, OR: [{ siteAdmin: true }, { accountKind: { not: 'person' } }] },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: PREVIEW_LIMIT - memberPreview.length,
+      select: previewSelect,
+    });
+    const authorIds = [...new Set(roots.map((root) => root.userId))];
+    const earliestRootDay = authorIds.length === 0 ? null : new Date(Math.min(...roots.map((root) => utcDayMs(root.createdAt))));
+    const activityDays = earliestRootDay == null ? [] : await this.prisma.userDailyActivity.findMany({
+      where: { userId: { in: authorIds }, day: { gt: earliestRootDay } },
+      select: { userId: true, day: true },
+    });
     const items: AdminAttentionItemDto[] = [
       { id: 'reports', title: 'Reports to review', detail: 'Pending reports', count: health.pendingReports, path: '/admin/reports', priority: 'review' },
       { id: 'webhooks', title: 'Payment events to investigate', detail: 'Unprocessed for over 15 minutes; this does not prove a payment failed', count: health.stripeWebhooks.olderThan15Minutes, path: '/admin/jobs', priority: 'investigate' },
       { id: 'scheduled', title: 'Scheduled posts with failures', detail: 'Saved drafts with a recorded scheduling failure', count: health.scheduledPostsWithFailures, path: '/admin/jobs', priority: 'investigate' },
-      { id: 'verification', title: 'Members waiting for verification', detail: 'Pending requests from active accounts', count: verification, path: '/admin/verification', priority: 'review' },
+      { id: 'verification', title: 'Members waiting for verification', detail: 'Pending requests from people who are not banned.', count: verification, path: '/admin/verification', priority: 'review' },
       { id: 'feedback', title: 'Feedback to follow up', detail: 'New and triaged feedback', count: health.feedback.new + health.feedback.triaged, path: '/admin/feedback', priority: 'review' },
-      { id: 'unanswered', title: 'Conversations needing a reply', detail: 'Public posts from the past 14 days with no human replies', count: unanswered, path: '/admin/attention/conversations', priority: 'participate' },
+      { id: 'unanswered', title: 'Conversations needing a reply', detail: 'Public posts from the past 14 days with no human replies. Member posts are listed first.', count: unanswered, path: '/admin/attention/conversations', priority: 'participate' },
     ];
-    return { asOf: now.toISOString(), items, unansweredPosts: posts.map(p => ({ id: p.id, body: p.body.slice(0, 300), username: p.user.username, createdAt: p.createdAt.toISOString() })) };
+    return {
+      asOf: now.toISOString(),
+      items,
+      unansweredPosts: [...memberPreview, ...otherPreview].map((post) => ({
+        id: post.id, body: post.body.slice(0, 300), username: post.user.username, createdAt: post.createdAt.toISOString(),
+      })),
+      pulse: summarizeAttentionPulse({
+        now,
+        since,
+        roots: roots.map((root) => ({
+          userId: root.userId,
+          createdAt: root.createdAt,
+          firstHumanReplyAt: root.replies[0]?.createdAt ?? null,
+        })),
+        activityDays,
+        lodge: lodge ? { id: lodge.id, humanReplies: lodge.replies.length } : null,
+        verificationPending: verification,
+        oldestVerificationRequestedAt: oldestVerification?.createdAt ?? null,
+      }),
+    };
   }
 
   async activation(input: { days: number; stage?: string; offset: number; limit: number }): Promise<AdminActivationDto> {

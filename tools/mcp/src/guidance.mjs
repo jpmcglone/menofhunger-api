@@ -1,5 +1,5 @@
 export const instructions = `You have access to Men of Hunger's administrator data through its existing API.
-Start broad business questions with founder_briefing. Use analytics for deeper investigation. For actionable work use admin_workspace with workspace attention. Use member_activation to explore signup cohorts, recorded verification, public contributions, and later-day returns; this is a different definition from the legacy analytics activation metric.
+Start broad business questions with founder_briefing. Use analytics for deeper investigation. For actionable work use admin_workspace with workspace attention — its pulse is the weekly member-reply experiment, not activation or d30 retention. Use member_activation to explore signup cohorts, recorded verification, public contributions, and later-day returns; this is a different definition from both the attention pulse and the legacy analytics activation metric.
 Check connection_status when authentication or deployment is uncertain.
 Report facts with their source URLs, asOf/fetchedAt timestamps, range, and denominators.
 Separate observations, hypotheses, and recommendations. Never present correlation as causation.
@@ -31,6 +31,7 @@ export const metricGuide = `Men of Hunger metric interpretation (source: API adm
 - messages/aiMessages are aggregate counts. This integration does not read direct-message bodies.
 - referral totals are all-time; recruitsOverTime is the last 30 days regardless of the analytics range.
 - topPostsAllTime is all-time even when a shorter range is selected. Public-content research uses its own explicit since/before interval.
+- Attention pulse.memberRoots are public regular roots from personal, non-admin, non-bot accounts in the last 7 days. replyRate24hPct is the share that received a human reply within 24 hours. authorsReturned is later-UTC-day activity after those posts. lodgePromptReplies is human replies to the latest public @menofhunger root in the window, or null if none. Do not use activation or d30RetentionPct as the success measure for the weekly reply experiment. The unanswered inbox count still includes official posts over 14 days.
 - Public content is regular, top-level, published, non-deleted, outside groups, from non-banned human authors. Unanswered means no published public direct reply from a non-banned author (a bot reply counts as a reply).
 - Health lists received-but-unprocessed Stripe events. An old event warrants investigation; it is not by itself a failed payment.
 - A queue with a non-null error is unavailable: its zero counts are placeholders, not measured empty queues.
@@ -41,7 +42,7 @@ export const metricGuide = `Men of Hunger metric interpretation (source: API adm
 
 export const workflows = {
   morning_briefing:
-    'Use founder_briefing with a 7d range. Give a dated Men of Hunger briefing: measured business health, open member/support issues, community opportunities, operational issues, and at most three priorities. Follow up with relevant tools. Link evidence, state missing sections, and do not take external actions.',
+    'Use founder_briefing with a 7d range. Give a dated Men of Hunger briefing: measured business health, the attention pulse for member replies within 24 hours, open member/support issues, community opportunities, operational issues, and at most three priorities. Judge the weekly reply experiment by pulse, not activation or d30. Follow up with relevant tools. Link evidence, state missing sections, and do not take external actions.',
   membership_investigation:
     'Search for the exact member, verify their identity, then use member_diagnostics and relevant feedback. Explain account/verification state, existing entitlement, grants, Stripe/Apple recorded state, and any gaps. Distinguish an access issue from a payment issue. Propose the next check; do not modify membership.',
   weekly_decisions:

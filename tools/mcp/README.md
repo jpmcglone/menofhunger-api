@@ -35,23 +35,67 @@ this same package. The root install's postinstall runs `mcp:setup` automatically
 on native Render, Docker, CI, and local installs. If lifecycle scripts were
 intentionally disabled, run `npm run postinstall` before starting the API.
 
-## Connect Codex
+## Connect Cursor and Codex
 
 ```sh
 npm run moh -- configure
 ```
 
-This registers the local stdio server as `menofhunger` using `codex mcp add`, its
-absolute source path, and your API/state-directory settings. It only changes the
-Men of Hunger MCP entry. Both `codex` and `node` must be on PATH. Re-run configure
-if you move the repository or intentionally change environments. Refresh MCP
-tools or start a new Codex session if the current session still has its old tool
-catalog. Configuration alone does not authenticate the account.
+This registers the local stdio server as `menofhunger` (or `menofhunger-local`)
+with its absolute source path and your API/state-directory settings. It only
+changes the Men of Hunger MCP entry. Cursor is written to the user config
+`~/.cursor/mcp.json`. Codex uses `codex mcp add` when `codex` is on PATH; the
+ChatGPT Codex app reads the same servers from `~/.codex/config.toml`. The
+command succeeds when either client is registered. `node` must be on PATH.
+Re-run configure if you move the repository or intentionally change environments.
+Refresh MCP tools or start a new Cursor or Codex session if the current session
+still has its old tool catalog. Configuration alone does not authenticate the
+account.
 
-Equivalent manual registration:
+Do not add a project `.cursor/mcp.json` for this server. Absolute machine paths
+do not belong in the repository.
+
+### Connect Cursor
+
+`configure` writes the user-level Cursor file. Equivalent manual registration,
+merged into any existing `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "menofhunger": {
+      "command": "node",
+      "args": ["/absolute/path/menofhunger-api/tools/mcp/src/server.mjs"],
+      "env": {
+        "MOH_API_BASE_URL": "https://api.menofhunger.com/v1",
+        "MOH_MCP_STATE_DIR": "/Users/you/.local/share/menofhunger-mcp"
+      }
+    }
+  }
+}
+```
+
+You can also add the same stdio server from Cursor Settings → MCP. Reload MCP
+tools or start a new chat after changing the file.
+
+### Connect Codex
+
+Equivalent CLI registration, when `codex` is on PATH:
 
 ```sh
 codex mcp add menofhunger -- node /absolute/path/menofhunger-api/tools/mcp/src/server.mjs
+```
+
+If the CLI is missing, add the same stdio server to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.menofhunger]
+command = "node"
+args = ["/absolute/path/menofhunger-api/tools/mcp/src/server.mjs"]
+
+[mcp_servers.menofhunger.env]
+MOH_API_BASE_URL = "https://api.menofhunger.com/v1"
+MOH_MCP_STATE_DIR = "/Users/you/.local/share/menofhunger-mcp"
 ```
 
 Other MCP clients can launch `node` with the same absolute server path over stdio.
@@ -339,8 +383,11 @@ See [admin experience and coverage](../../docs/admin-experience.md).
 
 ### Attention and member activation
 
-`moh workspace attention` returns pending admin work and bounded previews of unanswered
-public conversations. `moh activation --days 90 --stage verified` explores the full signup
+`moh workspace attention` and `moh briefing` return the weekly member-reply pulse
+(personal accounts only: 24-hour human replies, later-day author return, lodge prompt
+replies, oldest verification wait) plus pending admin work and a bounded preview of
+unanswered public conversations. Member posts are listed first in that preview.
+`moh activation --days 90 --stage verified` explores the full signup
 cohort and lists members who have verified but have not yet contributed publicly. Use
 `--offset 25 --limit 25` for another page. Supported windows are 30 and 90 days; stage is the
 highest observed milestone (`joined`, `verified`, `contributed`, `returned`). Counts remain
