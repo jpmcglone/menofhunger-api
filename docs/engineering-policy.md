@@ -123,15 +123,18 @@ build exception. Keep that diff separate from application edits. Preserve unrela
 
 This is the only task-to-check matrix. Rules and skills link here instead of restating it.
 Run only the tests needed to verify the work just changed. Full test suites run separately
-when explicitly requested or scheduled by the user. Reuse successful results when the relevant
-code has not changed. Do not rerun a suite or build without a new change, failure, or unresolved
-risk. Choose direct build commands when a package prebuild hook would run unrelated tests.
+when explicitly requested or scheduled by the user. Exception: web `npm test` when the change
+can fail Render's www `prebuild` (see matrix). `npx nuxt build` skips that suite. Reuse
+successful results when the relevant code has not changed. Do not rerun a suite or build
+without a new change, failure, or unresolved risk. Choose direct build commands when a
+package prebuild hook would run unrelated tests.
 
 | Change | Focused verification | Final verification |
 | --- | --- | --- |
 | Guidance/docs only | Metadata, relative links, policy sync (`--check`); shell syntax if scripts change | No app build or test suite solely for prose |
 | Web copy/style, no behavior | Lint changed files; inspect affected UI | Broaden only for unresolved risk |
 | Web behavior, rendering, contracts, or config | Relevant unit/component tests; targeted lint/types as needed | Changed-file lint, typecheck, applicable contracts, focused tests, then `npx nuxt build` |
+| Web Vitest config, stubs, client plugins, presence/socket, or `mock*Once` tests | Affected test files; keep `vitest.config.ts` aliases for sentry, posthog, and `socket.io-client` | Full `npm test` from www. Render `prebuild` runs that suite; a focused Vitest run or `npx nuxt build` is not deploy-ready |
 | Web SSR/hydration | Compare server HTML and first client render; exercise the changed route | Above web gate plus `npm run check:hydration`; include affected public routes, and authenticated paths when applicable |
 | API behavior/config | Relevant tests and typecheck as needed | Changed-file lint, `npm run build:typecheck`, `npm run build` (module graph included), and only the relevant Jest test paths |
 | Prisma/schema | Generate and review SQL; verify target before applying locally; regenerate client/contracts first | API gate once after generation, plus affected consumer checks; never apply production migrations as an implicit test |
