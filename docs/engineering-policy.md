@@ -4,6 +4,11 @@ Authoritative source: `menofhunger-api/docs/engineering-policy.md`. Web and iOS 
 identical checked copies so a standalone checkout works in both Codex and Cursor.
 Edit the source, then run `python3 scripts/sync-agent-guidance.py` in the API repository.
 Use `--check` to detect drift; no background process or editor-specific skill copies.
+The same command also syncs shared Cursor rule *bodies* (`15-feed-surface`,
+`20-deletion-deprecation`, `56-notification-seen-vs-read`). Per-repo frontmatter
+(`globs`) and any `<!-- guidance-addendum -->` stay local. `60-realtime-first` is
+platform-specific and is not a checked copy. API CI runs `--check` (www always;
+iOS when `GUIDANCE_SYNC_TOKEN` can read the private iOS repo).
 
 ## Scope and precedence
 

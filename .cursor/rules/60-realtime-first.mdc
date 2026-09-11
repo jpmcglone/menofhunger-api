@@ -1,9 +1,12 @@
 ---
 description: Real-time first — every state change worth showing across pages/users must emit a websocket event in addition to the HTTP response.
+globs: "src/modules/presence/**/*.ts,src/modules/**/*.service.ts,src/modules/**/*.controller.ts,src/common/dto/realtime.dto.ts"
 alwaysApply: false
 ---
 
 # Real-time First (API)
+
+This rule is platform-specific and is not a checked copy.
 
 The default for any new feature is **real-time over websockets, with the HTTP response as the on-load sync**. The HTTP layer is how a client gets caught up when a page mounts; sockets are how it stays caught up while it's open. Don't ship a feature that only works after a manual refresh.
 

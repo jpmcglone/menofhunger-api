@@ -1,5 +1,6 @@
 ---
 description: Bell badge is unseen; list highlight is unread. Do not mix deliveredAt and readAt.
+globs: "src/modules/notifications/**/*.ts"
 alwaysApply: false
 ---
 
