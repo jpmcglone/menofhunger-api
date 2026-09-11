@@ -26,6 +26,7 @@ import { UsersMeRealtimeService } from '../src/modules/users/users-me-realtime.s
 import { UsersPublicRealtimeService } from '../src/modules/users/users-public-realtime.service';
 import { PosthogService } from '../src/common/posthog/posthog.service';
 import { SlackService } from '../src/common/slack/slack.service';
+import { SideEffectsService } from '../src/modules/side-effects/side-effects.service';
 import { AuthGuard } from '../src/modules/auth/auth.guard';
 
 const WEBHOOK_SECRET = 'whsec_test_secret';
@@ -96,6 +97,7 @@ describe('POST /billing/webhook (e2e)', () => {
         { provide: ReferralService, useValue: { maybeGrantReferralBonus: jest.fn(async () => undefined) } },
         { provide: AffiliateService, useValue: { getAffiliateSummary: jest.fn(async () => undefined) } },
         { provide: AppleIapService, useValue: { handleNotification: jest.fn(async () => undefined), verifyTransaction: jest.fn(async () => undefined) } },
+        { provide: SideEffectsService, useValue: { dispatch: jest.fn() } },
       ],
     })
       // The webhook route is unauthenticated; other routes on this controller use
@@ -117,7 +119,7 @@ describe('POST /billing/webhook (e2e)', () => {
   });
 
   afterEach(async () => {
-    await app.close();
+    await app?.close();
   });
 
   function subscriptionUpdatedPayload(): string {
