@@ -7,6 +7,76 @@ on:
     branches: [main, master]
 
 jobs:
+  guidance:
+    name: Guidance sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: menofhunger-api
+
+      - uses: actions/checkout@v5
+        id: www_branch
+        continue-on-error: true
+        with:
+          repository: jpmcglone/menofhunger-www
+          path: menofhunger-www
+          ref: ${{ github.head_ref || github.ref_name }}
+          sparse-checkout: |
+            AGENTS.md
+            docs/engineering-policy.md
+            .agents/skills
+            .cursor/rules
+
+      - uses: actions/checkout@v5
+        if: steps.www_branch.outcome == 'failure'
+        with:
+          repository: jpmcglone/menofhunger-www
+          path: menofhunger-www
+          sparse-checkout: |
+            AGENTS.md
+            docs/engineering-policy.md
+            .agents/skills
+            .cursor/rules
+
+      - uses: actions/checkout@v5
+        id: ios_branch
+        continue-on-error: true
+        if: ${{ secrets.GUIDANCE_SYNC_TOKEN != '' }}
+        with:
+          repository: jpmcglone/menofhunger-ios
+          path: menofhunger-ios
+          ref: ${{ github.head_ref || github.ref_name }}
+          token: ${{ secrets.GUIDANCE_SYNC_TOKEN }}
+          sparse-checkout: |
+            AGENTS.md
+            docs/engineering-policy.md
+            .agents/skills
+            .cursor/rules
+
+      - uses: actions/checkout@v5
+        if: ${{ secrets.GUIDANCE_SYNC_TOKEN != '' && steps.ios_branch.outcome == 'failure' }}
+        with:
+          repository: jpmcglone/menofhunger-ios
+          path: menofhunger-ios
+          token: ${{ secrets.GUIDANCE_SYNC_TOKEN }}
+          sparse-checkout: |
+            AGENTS.md
+            docs/engineering-policy.md
+            .agents/skills
+            .cursor/rules
+
+      - name: Check agent guidance copies
+        working-directory: menofhunger-api
+        run: |
+          extra=()
+          if [ ! -f "$GITHUB_WORKSPACE/menofhunger-ios/AGENTS.md" ]; then
+            echo "::warning::Skipped private iOS copies. Add repo secret GUIDANCE_SYNC_TOKEN (contents:read on jpmcglone/menofhunger-ios) to gate them."
+            extra+=(--allow-missing ios)
+          fi
+          python3 scripts/sync-agent-guidance_test.py
+          python3 scripts/sync-agent-guidance.py --check "${extra[@]}"
+
   build:
     runs-on: ubuntu-latest
     steps:

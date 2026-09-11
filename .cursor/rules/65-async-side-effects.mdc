@@ -1,5 +1,6 @@
 ---
 description: Post-commit work (notifications, pushes, fan-out, emails) goes on the side-effects queue via SideEffectsService.dispatch — never inline on the request path, never setImmediate.
+globs: "src/modules/side-effects/**/*.ts,src/modules/**/*side-effects*,src/modules/**/*.service.ts,src/modules/**/*.controller.ts"
 alwaysApply: false
 ---
 

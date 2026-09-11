@@ -1,5 +1,6 @@
 ---
 description: Keep feed concepts consistent across API, web, and iOS
+globs: "src/modules/posts/**/*.ts,src/common/feed-collapse/**/*.ts,src/common/dto/realtime.dto.ts,src/modules/uploads/**/*.ts,src/modules/admin/admin-image-review*.ts"
 alwaysApply: false
 ---
 
