@@ -42,12 +42,11 @@ jobs:
       - uses: actions/checkout@v5
         id: ios_branch
         continue-on-error: true
-        if: ${{ secrets.GUIDANCE_SYNC_TOKEN != '' }}
         with:
           repository: jpmcglone/menofhunger-ios
           path: menofhunger-ios
           ref: ${{ github.head_ref || github.ref_name }}
-          token: ${{ secrets.GUIDANCE_SYNC_TOKEN }}
+          token: ${{ secrets.GUIDANCE_SYNC_TOKEN || github.token }}
           sparse-checkout: |
             AGENTS.md
             docs/engineering-policy.md
@@ -55,11 +54,12 @@ jobs:
             .cursor/rules
 
       - uses: actions/checkout@v5
-        if: ${{ secrets.GUIDANCE_SYNC_TOKEN != '' && steps.ios_branch.outcome == 'failure' }}
+        if: steps.ios_branch.outcome == 'failure'
+        continue-on-error: true
         with:
           repository: jpmcglone/menofhunger-ios
           path: menofhunger-ios
-          token: ${{ secrets.GUIDANCE_SYNC_TOKEN }}
+          token: ${{ secrets.GUIDANCE_SYNC_TOKEN || github.token }}
           sparse-checkout: |
             AGENTS.md
             docs/engineering-policy.md
