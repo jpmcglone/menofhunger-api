@@ -1001,6 +1001,49 @@ export class ArticlesService {
     };
   }
 
+  /**
+   * One comment (and its parent thread, when nested) so push/hash landings can scroll
+   * to a reply that is not on the first comments page.
+   */
+  async getComment(opts: {
+    articleId: string;
+    commentId: string;
+    viewerUserId?: string | null;
+  }) {
+    await this.assertArticleAccessible(opts.articleId, opts.viewerUserId);
+    const comment = await this.prisma.articleComment.findFirst({
+      where: { id: opts.commentId, articleId: opts.articleId, deletedAt: null },
+      include: this.commentLeafIncludes(),
+    }) as ArticleCommentWithAuthorAndReactions | null;
+    if (!comment) throw new NotFoundException('Reply not found.');
+
+    const commentDto = toArticleCommentDto(comment, this.r2BaseUrl, {
+      viewerUserId: opts.viewerUserId,
+    });
+    if (!comment.parentId) {
+      return { comment: commentDto, parent: null };
+    }
+
+    const parent = await this.prisma.articleComment.findFirst({
+      where: { id: comment.parentId, articleId: opts.articleId },
+      include: this.commentLeafIncludes(),
+    }) as ArticleCommentWithAuthorAndReactions | null;
+    if (!parent) {
+      return { comment: commentDto, parent: null };
+    }
+
+    const parentWithReply = {
+      ...parent,
+      replies: [comment],
+    } as ArticleCommentWithAuthorAndReactions;
+    return {
+      comment: commentDto,
+      parent: toArticleCommentDto(parentWithReply, this.r2BaseUrl, {
+        viewerUserId: opts.viewerUserId,
+      }),
+    };
+  }
+
   async listCommentReplies(opts: {
     articleId: string;
     parentCommentId: string;

@@ -818,6 +818,69 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
     );
   });
 
+  it('forwards the article comment click-through URL to APNs', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'actor-1',
+      username: 'alice',
+      name: 'Alice',
+      avatarKey: 'avatars/alice.jpg',
+      avatarUpdatedAt: null,
+    });
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendKindPushForActor({
+      recipientUserId: 'user-1',
+      kind: 'comment',
+      actorUserId: 'actor-1',
+      subjectArticleId: 'article-1',
+      url: '/a/article-1#comment-c1',
+      notificationId: 'notif-1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        url: '/a/article-1#comment-c1',
+        postId: null,
+        category: null,
+      }),
+    );
+  });
+
+  it('does not attach a post reply action when the subject is an article', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'actor-1',
+      username: 'alice',
+      name: 'Alice',
+      avatarKey: 'avatars/alice.jpg',
+      avatarUpdatedAt: null,
+    });
+    const { svc, apnsSendToUser } = makeService({ prisma });
+
+    await svc.sendKindPushForActor({
+      recipientUserId: 'user-1',
+      kind: 'comment',
+      actorUserId: 'actor-1',
+      subjectArticleId: 'article-1',
+      actorPostId: 'should-not-win',
+      url: '/a/article-1#comment-c1',
+      notificationId: 'notif-1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(apnsSendToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        url: '/a/article-1#comment-c1',
+        postId: null,
+        category: null,
+      }),
+    );
+  });
+
   it('sets mutableContent true for actor with avatar', async () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockResolvedValue({

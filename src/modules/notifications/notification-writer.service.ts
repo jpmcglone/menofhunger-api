@@ -15,6 +15,10 @@ import {
   PERSON_ONLY_NOTIFICATION_KINDS,
 } from './notification-read-state.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import {
+  ARTICLE_NOTIFICATION_CLICK_KINDS,
+  articleNotificationClickPath,
+} from './notification-article-path';
 
 /** Kinds that announce the actor's own post/publish. Operators of a page actor already did the action. */
 const ACTOR_SELF_ECHO_KINDS = new Set<NotificationKind>([
@@ -317,14 +321,13 @@ export class NotificationWriterService {
     }
 
     // Web push is optional (VAPID + user preference).
-    const commentHash = subjectArticleCommentId ? `#comment-${subjectArticleCommentId}` : '';
-    // Route to the article page for all article-related notification kinds.
-    let pushUrl: string | null =
-      subjectArticleId && (
-        kind === 'comment' || kind === 'mention' || kind === 'followed_article' || kind === 'boost'
-      )
-        ? `/a/${subjectArticleId}${commentHash}`
-        : kind === 'comment' && actorPostId
+    // Article kinds (including replies) always open `/a/:id` with `#comment-` when present.
+    let pushUrl: string | null = ARTICLE_NOTIFICATION_CLICK_KINDS.has(kind)
+      ? articleNotificationClickPath(subjectArticleId, subjectArticleCommentId)
+      : null;
+    if (!pushUrl) {
+      pushUrl =
+        kind === 'comment' && actorPostId
           ? `/p/${actorPostId}`
           : kind === 'mention' && actorPostId
             ? `/p/${actorPostId}`
@@ -335,6 +338,7 @@ export class NotificationWriterService {
               : kind === 'coin_transfer'
                 ? '/coins'
                 : null;
+    }
 
     if (
       !pushUrl &&

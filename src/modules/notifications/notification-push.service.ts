@@ -1344,8 +1344,9 @@ export class NotificationPushService {
           : resolvedThreadPost
             ? `post-${resolvedThreadPost.rootId ?? resolvedThreadPost.id}`
             : null;
-      const postId =
-        kind === 'comment' || kind === 'mention'
+      const postId = params.subjectArticleId
+        ? null
+        : kind === 'comment' || kind === 'mention'
           ? params.subjectPostId ?? params.actorPostId ?? null
           : params.actorPostId ?? params.subjectPostId ?? null;
       const groupUrl =

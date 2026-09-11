@@ -303,6 +303,22 @@ export class ArticlesController {
 
   @UseGuards(OptionalAuthGuard)
   @Throttle(readThrottle)
+  @Get(':id/comments/:commentId')
+  async getComment(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('id') id: string,
+    @Param('commentId') commentId: string,
+  ) {
+    const result = await this.articles.getComment({
+      articleId: id,
+      commentId,
+      viewerUserId: userId,
+    });
+    return { data: result };
+  }
+
+  @UseGuards(OptionalAuthGuard)
+  @Throttle(readThrottle)
   @Get(':id/comments/:commentId/replies')
   async listReplies(
     @OptionalCurrentUserId() userId: string | undefined,
