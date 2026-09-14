@@ -157,7 +157,8 @@ export class ScheduledPostsService {
         where: { groupId_userId: { groupId: resolvedGroupId, userId } },
         select: { status: true },
       });
-      if (!membership) throw new ForbiddenException('You must be a member of this group to post in it.');
+      if (!userIsVerified) throw new ForbiddenException('Verify your account to post in groups.');
+      if (membership?.status !== 'active') throw new ForbiddenException('You must be a member of this group to post in it.');
     }
 
     const scheduledPollJson = params.poll
@@ -174,7 +175,7 @@ export class ScheduledPostsService {
         visibility: 'onlyMe',
         isDraft: true,
         scheduledAt: params.scheduledAt,
-        scheduledVisibility: visibility,
+        scheduledVisibility: resolvedGroupId ? 'verifiedOnly' : visibility,
         scheduledCommunityGroupId: resolvedGroupId,
         scheduledPollJson: scheduledPollJson ?? undefined,
         ...(media.length
@@ -329,12 +330,13 @@ export class ScheduledPostsService {
       params.communityGroupId !== undefined
         ? (params.communityGroupId ?? '').trim() || null
         : post.scheduledCommunityGroupId;
-    if (resolvedGroupId && resolvedGroupId !== post.scheduledCommunityGroupId) {
+    if (resolvedGroupId) {
       const membership = await this.prisma.communityGroupMember.findUnique({
         where: { groupId_userId: { groupId: resolvedGroupId, userId: params.userId } },
         select: { status: true },
       });
-      if (!membership) throw new ForbiddenException('You must be a member of this group to post in it.');
+      if (!userIsVerified) throw new ForbiddenException('Verify your account to post in groups.');
+      if (membership?.status !== 'active') throw new ForbiddenException('You must be a member of this group to post in it.');
     }
 
     // Validate poll if provided.
@@ -365,7 +367,7 @@ export class ScheduledPostsService {
         data: {
           body: nextBody,
           scheduledAt: nextScheduledAt,
-          scheduledVisibility: nextVisibility,
+          scheduledVisibility: resolvedGroupId ? 'verifiedOnly' : nextVisibility,
           scheduledCommunityGroupId: resolvedGroupId,
           scheduledPollJson: nextPollJson ?? undefined,
           scheduledError: null,

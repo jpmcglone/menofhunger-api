@@ -10,7 +10,7 @@ import { ViewerContextService } from './viewer-context.service';
  *   - `filterReadableGroupIds` is a batch, non-throwing variant for the WS
  *     gateway (silently drops unreadable ids).
  *
- * Read rule: site admins always; active members always; open groups are
+ * Read rule: site admins always; verified active members; open groups are
  * readable by any verified, signed-in user.
  */
 @Injectable()
@@ -42,6 +42,7 @@ export class CommunityGroupReadAccessService {
     }
 
     if (!viewerUserId) throw new ForbiddenException('This group is private.');
+    if (!this.viewerContextService.isVerified(viewer)) throw new ForbiddenException('Verify your account to view groups.');
     const m = await this.prisma.communityGroupMember.findUnique({
       where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
       select: { status: true },
@@ -85,8 +86,7 @@ export class CommunityGroupReadAccessService {
       if (!policy) continue;
       const canRead =
         params.viewerIsAdmin ||
-        activeGroupIds.has(groupId) ||
-        (policy === 'open' && params.viewerIsVerified);
+        (params.viewerIsVerified && (activeGroupIds.has(groupId) || policy === 'open'));
       if (canRead) readable.add(groupId);
     }
     return readable;

@@ -1216,6 +1216,20 @@ describe('NotificationsService.markConversationMessageNotificationRead', () => {
 // ─── Groups unread badge: markGroupPostsDelivered ─────────────────────────────
 
 describe('NotificationReadStateService.markGroupPostsDelivered', () => {
+  it('acknowledges a snapshot without clearing arrivals after its boundary', async () => {
+    const through = new Date('2026-09-14T12:00:00Z');
+    const updateMany = jest.fn(async () => ({ count: 0 }));
+    const { readState } = buildFacade({
+      prisma: { $transaction: jest.fn(async (fn: any) => fn({ notification: { updateMany } })) },
+      appConfig: {}, presenceRealtime: { emitNotificationsLockScreenClear: jest.fn() },
+      presence: {}, jobs: {}, posthog: {}, viewerContextService: {},
+    });
+    await readState.markGroupPostsDelivered('u1', 'g1', through);
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { recipientUserId: 'u1', kind: 'community_group_post', subjectGroupId: 'g1', deliveredAt: null, createdAt: { lte: through } },
+      data: { deliveredAt: expect.any(Date) },
+    });
+  });
   it('sets deliveredAt for community_group_post rows in the given group and emits groups:unreadChanged', async () => {
     const groupBy = jest.fn(async () => [{ subjectGroupId: 'g1', _count: { _all: 2 } }]);
     const updateMany = jest.fn(async () => ({ count: 2 }));
@@ -1534,7 +1548,8 @@ describe('NotificationWriterService.createGroupPostBadgeNotifications', () => {
       emitGroupsUnreadChanged: jest.fn(),
     } as any;
     const prisma = {
-      notification: { createMany, groupBy },
+      notification: { createMany, groupBy, findFirst: jest.fn(async () => null) },
+      communityGroupMember: { findMany: jest.fn(async () => []) },
       user: {
         findUnique: jest.fn(),
         updateMany: jest.fn(async () => ({ count: 2 })),

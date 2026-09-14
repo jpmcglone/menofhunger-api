@@ -232,3 +232,17 @@ export function toCommunityGroupShellDto(
     viewerPendingApproval: pending,
   };
 }
+
+/** Per-member notification setting. Does not change membership or reading access. */
+export type GroupNotificationPreferencesDto = {
+  groupId: string;
+  preference: 'all' | 'repliesAndMentions' | 'muted';
+};
+
+/** Snapshot of unseen group posts; acknowledge only through the returned timestamp. */
+export type GroupActivityDto = {
+  groupId: string;
+  through: string;
+  newPostCount: number;
+  newPostIds: string[];
+};

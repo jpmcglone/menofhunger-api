@@ -557,12 +557,12 @@ describe('CommunityGroupReadAccessService', () => {
   });
 
   it('assertCanRead: rejects non-members of approval groups', async () => {
-    const svc = makeService({ group: { joinPolicy: 'approval' }, viewer: {}, membership: null });
+    const svc = makeService({ group: { joinPolicy: 'approval' }, viewer: {}, isVerified: true, membership: null });
     await expect(svc.assertCanRead('u1', 'g1')).rejects.toThrow('You are not a member of this group.');
   });
 
   it('assertCanRead: allows active members of approval groups', async () => {
-    const svc = makeService({ group: { joinPolicy: 'approval' }, viewer: {}, membership: { status: 'active' } });
+    const svc = makeService({ group: { joinPolicy: 'approval' }, viewer: {}, isVerified: true, membership: { status: 'active' } });
     await expect(svc.assertCanRead('u1', 'g1')).resolves.toBeUndefined();
   });
 
@@ -576,6 +576,12 @@ describe('CommunityGroupReadAccessService', () => {
     await expect(
       anonSvc.filterReadableGroupIds({ viewerUserId: null, viewerIsAdmin: false, viewerIsVerified: false, groupIds: ['g1'] }),
     ).resolves.toEqual(new Set());
+  });
+
+  it('rejects revoked verification for approval-group members over HTTP and sockets', async () => {
+    const svc = makeService({ group: { joinPolicy: 'approval' }, viewer: {}, isVerified: false, membership: { status: 'active' } });
+    await expect(svc.assertCanRead('u1', 'g1')).rejects.toThrow('Verify your account to view groups.');
+    await expect(svc.filterReadableGroupIds({ viewerUserId: 'u1', viewerIsAdmin: false, viewerIsVerified: false, groupIds: ['g1'] })).resolves.toEqual(new Set());
   });
 
   it('filterReadableGroupIds: open group requires verification', async () => {

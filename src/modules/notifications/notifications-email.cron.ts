@@ -192,6 +192,11 @@ export class NotificationsEmailCron {
           AND n."readAt" IS NULL
           AND n."presentAt" IS NULL
           AND n."kind" NOT IN ('message', 'word_of_the_day', 'quote_of_the_day')
+          AND (n."kind" != 'community_group_post' OR EXISTS (
+            SELECT 1 FROM "CommunityGroupMember" gm
+            WHERE gm."groupId" = n."subjectGroupId" AND gm."userId" = n."recipientUserId"
+              AND gm."status" = 'active' AND gm."notificationPreference" = 'all'
+          ))
       )
       SELECT "recipientUserId", "title", "body", "subjectPostId"
       FROM ranked
@@ -240,6 +245,11 @@ export class NotificationsEmailCron {
           AND n."readAt" IS NULL
           AND n."presentAt" IS NULL
           AND n."kind" NOT IN ('message', 'word_of_the_day', 'quote_of_the_day')
+          AND (n."kind" != 'community_group_post' OR EXISTS (
+            SELECT 1 FROM "CommunityGroupMember" gm
+            WHERE gm."groupId" = n."subjectGroupId" AND gm."userId" = n."recipientUserId"
+              AND gm."status" = 'active' AND gm."notificationPreference" = 'all'
+          ))
         GROUP BY n."recipientUserId"
       `,
     );

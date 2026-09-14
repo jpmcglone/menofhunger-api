@@ -52,7 +52,7 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
   };
 
   const marvIdentity: any = { cachedMarvUserId: jest.fn(() => null), getMarvUserId: jest.fn(async () => null) };
-  const presenceRealtime: any = { emitGroupMarvChanged: jest.fn() };
+  const presenceRealtime: any = { emitGroupMarvChanged: jest.fn(), emitGroupNotificationPreferencesChanged: jest.fn() };
   const service = new GroupsService(prisma, posts, appConfig, sideEffects, redis, marvIdentity, presenceRealtime);
   return { service, prisma, presenceRealtime, sideEffects };
 }
@@ -1196,7 +1196,7 @@ describe('GroupsService.addMarvToGroup', () => {
     const appConfig: any = { r2: jest.fn(() => null), marvBot: jest.fn(() => ({ enabled: true })) };
     const sideEffects: any = { dispatch: jest.fn() };
     const redis: any = {};
-    const presenceRealtime: any = { emitGroupMarvChanged: jest.fn() };
+    const presenceRealtime: any = { emitGroupMarvChanged: jest.fn(), emitGroupNotificationPreferencesChanged: jest.fn() };
     const service = new GroupsService(prisma, posts, appConfig, sideEffects, redis, marvIdentityLocal, presenceRealtime);
     return { service, memberCreate, memberUpdate, groupUpdate, inviteUpdateMany, transactionFn, presenceRealtime };
   }
@@ -1252,7 +1252,7 @@ describe('GroupsService.removeMember — Marv realtime', () => {
       cachedMarvUserId: jest.fn(() => MARV_ID),
       getMarvUserId: jest.fn(async () => MARV_ID),
     };
-    const presenceRealtime: any = { emitGroupMarvChanged: jest.fn() };
+    const presenceRealtime: any = { emitGroupMarvChanged: jest.fn(), emitGroupNotificationPreferencesChanged: jest.fn() };
     const sideEffects: any = { dispatch: jest.fn() };
 
     const memberFindUnique = jest.fn(async ({ where }: any) => {
@@ -1344,5 +1344,41 @@ describe('GroupsService.listFeatured', () => {
       status: 'active',
       role: 'member',
     });
+  });
+});
+
+
+describe('Group member preferences and activity snapshots', () => {
+  it('saves only an active membership and emits the persisted preference', async () => {
+    const updateMany = jest.fn(async () => ({ count: 1 }));
+    const { service, presenceRealtime } = makeService({ communityGroupMember: { updateMany } });
+    await expect(service.setNotificationPreferences('u1', 'g1', 'muted')).resolves.toEqual({ groupId: 'g1', preference: 'muted' });
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { groupId: 'g1', userId: 'u1', status: 'active', group: { deletedAt: null } },
+      data: { notificationPreference: 'muted' },
+    });
+    expect(presenceRealtime.emitGroupNotificationPreferencesChanged).toHaveBeenCalledWith('u1', { groupId: 'g1', preference: 'muted' });
+  });
+  it('rejects a removed membership without emitting success', async () => {
+    const { service, presenceRealtime } = makeService({ communityGroupMember: { updateMany: jest.fn(async () => ({ count: 0 })) } });
+    await expect(service.setNotificationPreferences('u1', 'g1', 'all')).rejects.toThrow(ForbiddenException);
+    expect(presenceRealtime.emitGroupNotificationPreferencesChanged).not.toHaveBeenCalled();
+  });
+  it('does not expose activity for a missing, deleted, or inactive membership', async () => {
+    const count = jest.fn();
+    const { service } = makeService({ communityGroupMember: { findFirst: jest.fn(async () => null) }, notification: { count } });
+    await expect(service.getActivity('u1', 'g1')).rejects.toThrow(ForbiddenException);
+    expect(count).not.toHaveBeenCalled();
+  });
+  it('uses the same time boundary for its unread count and post identities', async () => {
+    const count = jest.fn(async () => 2);
+    const findMany = jest.fn(async () => [{ subjectPostId: 'p2' }, { subjectPostId: 'p1' }]);
+    const { service } = makeService({ communityGroupMember: { findFirst: jest.fn(async () => ({ notificationPreference: 'all' })) }, notification: { count, findMany } });
+    const result = await service.getActivity('u1', 'g1');
+    expect(result.newPostIds).toEqual(['p2', 'p1']);
+    expect(result.newPostCount).toBe(2);
+    const where = { recipientUserId: 'u1', subjectGroupId: 'g1', kind: 'community_group_post', deliveredAt: null, createdAt: { lte: new Date(result.through) }, subjectPost: { deletedAt: null, isDraft: false } };
+    expect(count).toHaveBeenCalledWith({ where });
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where, take: 100 }));
   });
 });

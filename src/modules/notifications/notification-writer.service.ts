@@ -159,6 +159,18 @@ export class NotificationWriterService {
     return Boolean(existing);
   }
 
+  private async permitsGroupActivity(recipientUserId: string, postId: string | null | undefined, kind: string): Promise<boolean> {
+    if (!postId) return true;
+    const post = await this.prisma.post.findUnique({ where: { id: postId }, select: { communityGroupId: true } });
+    if (!post?.communityGroupId) return true;
+    const member = await this.prisma.communityGroupMember.findUnique({
+      where: { groupId_userId: { groupId: post.communityGroupId, userId: recipientUserId } },
+      select: { notificationPreference: true },
+    });
+    if (member?.notificationPreference === 'muted') return false;
+    return member?.notificationPreference !== 'repliesAndMentions' || kind === 'comment' || kind === 'mention';
+  }
+
   async create(params: CreateNotificationParams) {
     const {
       recipientUserId,
@@ -244,6 +256,8 @@ export class NotificationWriterService {
         followed_space: 'scheduled a space',
       } as Partial<Record<NotificationKind, string>>)[kind] ??
       null;
+
+    if (['comment', 'mention', 'followed_post'].includes(kind) && !(await this.permitsGroupActivity(recipientUserId, actorPostId ?? subjectPostId, kind))) return;
 
     // Resolve presence before the transaction so the Redis call doesn't extend it.
     const presentAt = await this.presentAtForRecipient(recipientUserId);
@@ -426,6 +440,7 @@ export class NotificationWriterService {
     subjectPostKind?: string | null;
   }) {
     const { recipientUserId, actorUserId, subjectPostId, bodySnippet, subjectPostKind } = params;
+    if (!(await this.permitsGroupActivity(recipientUserId, subjectPostId, 'boost'))) return;
     // Never notify a user about their own boost.
     if (actorUserId && actorUserId === recipientUserId) return;
     const boostTitle =
@@ -573,6 +588,7 @@ export class NotificationWriterService {
     title?: string;
   }) {
     const { recipientUserId, actorUserId, subjectPostId, actorPostId, title = 'reposted your post' } = params;
+    if (!(await this.permitsGroupActivity(recipientUserId, actorPostId ?? subjectPostId, 'repost'))) return;
     // Never notify a user about their own repost/quote.
     if (actorUserId && actorUserId === recipientUserId) return;
     const isQuote = title === 'quoted your post';
@@ -1420,6 +1436,12 @@ export class NotificationWriterService {
       });
     }
 
+    const members = await this.prisma.communityGroupMember.findMany({
+      where: { groupId, userId: { in: toCreate }, status: 'active' },
+      select: { userId: true, notificationPreference: true },
+    });
+    const quietRecipients = new Set(members.filter(m => m.notificationPreference && m.notificationPreference !== 'all').map(m => m.userId));
+
     // Each badge emit is its own count query, so this is bounded rather than one promise
     // per recipient.
     await runInBatches(toCreate, FANOUT_CONCURRENCY, async (recipientUserId) => {
@@ -1429,7 +1451,7 @@ export class NotificationWriterService {
         where: { recipientUserId, kind: 'community_group_post', subjectPostId: postId },
         select: { id: true },
       });
-      if (record) {
+      if (record && !quietRecipients.has(recipientUserId)) {
         const dto = await this.query.buildNotificationDtoForRecipient({ recipientUserId, notificationId: record.id });
         if (dto) this.presenceRealtime.emitNotificationNew(recipientUserId, { notification: dto });
       }

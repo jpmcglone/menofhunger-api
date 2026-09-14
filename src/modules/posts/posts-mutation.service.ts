@@ -757,6 +757,10 @@ export class PostsMutationService {
       }
     }
 
+    if ((requestedCommunityGroupId || parentPost?.communityGroupId) && !viewerIsVerified) {
+      throw new ForbiddenException('Verify your account to post in groups.');
+    }
+
     let visibility: PostVisibility = requestedVisibility;
     let resolvedCommunityGroupId: string | null = null;
     let threadParticipantIds: string[] = [];
@@ -818,7 +822,7 @@ export class PostsMutationService {
         if (!groupMember || groupMember.status !== 'active') {
           throw new ForbiddenException('Join this group to reply in this thread.');
         }
-        visibility = 'public';
+        visibility = 'verifiedOnly';
       } else {
         if (requestedCommunityGroupId) {
           throw new BadRequestException('This thread is not in a community group.');
@@ -857,7 +861,7 @@ export class PostsMutationService {
       if (!mem || mem.status !== 'active') {
         throw new ForbiddenException('Join this group to post here.');
       }
-      visibility = 'public';
+      visibility = 'verifiedOnly';
     }
 
     // Compute rate-limit window parameters synchronously; the actual count query is
@@ -1120,7 +1124,7 @@ export class PostsMutationService {
         // check-ins are no longer bypassed.
         //
         // `visibility` is already the effective value: parentPost.visibility for replies,
-        // 'public' for group posts, requestedVisibility otherwise.
+        // 'verifiedOnly' for group posts, requestedVisibility otherwise.
         //
         // Exception: a group post quoting a post that lives in the same group is allowed
         // because every member of the group has read access regardless of their tier.
@@ -1371,12 +1375,12 @@ export class PostsMutationService {
     // see the new post instantly. Top-level group posts only — replies surface through the
     // post-room `posts:commentAdded` channel.
     //
-    // Only the public case stays here: it needs no extra query, and making group content appear
-    // is the same class of emit as `posts:commentAdded`. Non-public posts need a full member+tier
-    // scan to build the audience, so that branch runs in the side-effects handler instead.
+    // Group rooms require verification and the group’s read permissions. Emit the standard
+    // group audience immediately, including verified non-members reading an open group.
+    // Historically premium-scoped posts still need a narrower audience in side effects.
     const createdGroupId = (post as { communityGroupId?: string | null }).communityGroupId ?? null;
     const createdVisibility = (post as { visibility?: string }).visibility ?? 'public';
-    if (!parentId && createdGroupId && createdVisibility === 'public') {
+    if (!parentId && createdGroupId && (createdVisibility === 'public' || createdVisibility === 'verifiedOnly')) {
       try {
         const groupPostDto = toPostDto(post, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: false,

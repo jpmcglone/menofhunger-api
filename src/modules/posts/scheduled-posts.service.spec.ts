@@ -110,6 +110,17 @@ const TOO_FAR = new Date(Date.now() + 61 * 24 * 60 * 60 * 1000); // +61 days
 
 describe('ScheduledPostsService', () => {
   describe('createScheduled', () => {
+    it('stores the verified publishing audience while keeping the group holding row private', async () => {
+      const { service, prisma } = makeService();
+      await service.createScheduled({ userId: 'u1', body: 'Group post', visibility: 'public', communityGroupId: 'g1', scheduledAt: VALID_FUTURE, media: null, poll: null });
+      expect(prisma.post.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ visibility: 'onlyMe', isDraft: true, scheduledVisibility: 'verifiedOnly', scheduledCommunityGroupId: 'g1' }) }));
+    });
+
+    it.each(['pending', 'removed'])('rejects scheduling with a %s membership', async (status) => {
+      const { service } = makeService({ communityGroupMember: { findUnique: jest.fn(async () => ({ status })) } });
+      await expect(service.createScheduled({ userId: 'u1', body: 'Hello', visibility: 'public', communityGroupId: 'g1', scheduledAt: VALID_FUTURE, media: null, poll: null })).rejects.toThrow('You must be a member');
+    });
+
     it('throws if user is not premium', async () => {
       const { service } = makeService({
         user: { findUnique: jest.fn(async () => makeScheduledUser({ premium: false, premiumPlus: false })) },

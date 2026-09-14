@@ -432,7 +432,7 @@ export class PostsEngagementService {
         repostedPost: repostedPostDto,
       });
       const repostVisibility = (repostRow as any).visibility ?? 'public';
-      if (repostVisibility === 'public') {
+      if (repostVisibility === 'public' || repostVisibility === 'verifiedOnly') {
         this.presenceRealtime.emitGroupNewPost(groupId, { groupId, post: repostDto });
       } else {
         const eligibleMembers = await this.prisma.communityGroupMember.findMany({

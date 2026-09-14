@@ -199,6 +199,10 @@ export class PresenceRealtimeService {
     this.emitToUser(userId, 'notifications:waitingCountChanged', payload);
   }
 
+  emitGroupNotificationPreferencesChanged(userId: string, payload: import('../../common/dto/community-group.dto').GroupNotificationPreferencesDto): void {
+    this.emitToUser(userId, 'groups:notification-preferences-changed', payload);
+  }
+
   emitGroupsUnreadChanged(userId: string, payload: { total: number; byGroupId: Record<string, number> }): void {
     this.emitToUser(userId, 'groups:unreadChanged', payload);
   }

@@ -1286,6 +1286,7 @@ export class NotificationPushService {
                 id: true,
                 deletedAt: true,
                 rootId: true,
+                communityGroupId: true,
                 media: {
                   where: { deletedAt: null },
                   orderBy: { position: 'asc' },
@@ -1314,6 +1315,16 @@ export class NotificationPushService {
             })
           : null,
       ]);
+      // Re-check at delivery time: queued pushes may outlive a preference change.
+      const activityGroupId = mediaPost?.communityGroupId;
+      if (activityGroupId && ['comment', 'mention', 'boost', 'repost', 'followed_post', 'community_group_post'].includes(kind)) {
+        const member = await this.prisma.communityGroupMember.findUnique({
+          where: { groupId_userId: { groupId: activityGroupId, userId: recipientUserId } },
+          select: { notificationPreference: true },
+        });
+        if (member?.notificationPreference === 'muted') return;
+        if (member?.notificationPreference === 'repliesAndMentions' && kind !== 'comment' && kind !== 'mention') return;
+      }
       const pushCopy = this.buildPushCopy({
         kind,
         actor,

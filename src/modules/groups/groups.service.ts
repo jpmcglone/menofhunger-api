@@ -11,6 +11,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   toCommunityGroupShellDto,
   type CommunityGroupMemberListItemDto,
+  type GroupNotificationPreferencesDto,
+  type GroupActivityDto,
 } from '../../common/dto/community-group.dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { PostsService } from '../posts/posts.service';
@@ -150,6 +152,45 @@ export class GroupsService {
     if (!m || m.status !== 'active') {
       throw new ForbiddenException('You must be a member of this group.');
     }
+  }
+
+  async getNotificationPreferences(viewerUserId: string, groupId: string): Promise<GroupNotificationPreferencesDto> {
+    const member = await this.prisma.communityGroupMember.findFirst({
+      where: { groupId, userId: viewerUserId, status: 'active', group: { deletedAt: null } },
+      select: { notificationPreference: true },
+    });
+    if (!member) throw new ForbiddenException('You must be a member of this group.');
+    return { groupId, preference: member.notificationPreference };
+  }
+
+  async setNotificationPreferences(viewerUserId: string, groupId: string, preference: GroupNotificationPreferencesDto['preference']): Promise<GroupNotificationPreferencesDto> {
+    // Conditional update prevents a concurrent leave/removal from writing member settings.
+    const result = await this.prisma.communityGroupMember.updateMany({
+      where: { groupId, userId: viewerUserId, status: 'active', group: { deletedAt: null } },
+      data: { notificationPreference: preference },
+    });
+    if (!result.count) throw new ForbiddenException('You must be a member of this group.');
+    const data = { groupId, preference };
+    this.presenceRealtime.emitGroupNotificationPreferencesChanged(viewerUserId, data);
+    return data;
+  }
+
+  async getActivity(viewerUserId: string, groupId: string): Promise<GroupActivityDto> {
+    await this.getNotificationPreferences(viewerUserId, groupId);
+    const through = new Date();
+    const where: Prisma.NotificationWhereInput = {
+      recipientUserId: viewerUserId, subjectGroupId: groupId,
+      kind: 'community_group_post', deliveredAt: null,
+      createdAt: { lte: through },
+      subjectPost: { deletedAt: null, isDraft: false },
+    };
+    const [newPostCount, rows] = await Promise.all([
+      this.prisma.notification.count({ where }),
+      this.prisma.notification.findMany({ where, select: { subjectPostId: true },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100 }),
+    ]);
+    return { groupId, through: through.toISOString(), newPostCount,
+      newPostIds: rows.flatMap(row => row.subjectPostId ? [row.subjectPostId] : []) };
   }
 
   async getShellBySlug(params: { slug: string; viewerUserId: string | null }) {

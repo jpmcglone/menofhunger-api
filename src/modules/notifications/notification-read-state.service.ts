@@ -212,7 +212,7 @@ export class NotificationReadStateService {
    * but NOT read (readAt left null). Called when the user opens a group page.
    * Read is set separately when the post is actually viewed on screen via `markReadBySubject({ postId })`.
    */
-  async markGroupPostsDelivered(recipientUserId: string, groupId: string): Promise<void> {
+  async markGroupPostsDelivered(recipientUserId: string, groupId: string, through?: Date): Promise<void> {
     const deliveredRes = await this.prisma.$transaction(async (tx) => {
       const res = await tx.notification.updateMany({
         where: {
@@ -220,6 +220,7 @@ export class NotificationReadStateService {
           kind: 'community_group_post',
           subjectGroupId: groupId,
           deliveredAt: null,
+          ...(through ? { createdAt: { lte: through } } : {}),
         },
         data: { deliveredAt: new Date() },
       });

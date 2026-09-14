@@ -333,6 +333,7 @@ describe('PostsSideEffectsHandler — mention privacy gating', () => {
   it('notifies every mentioned user when the post is in an OPEN community group', async () => {
     const { handler, deps } = setup();
     deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy: 'open' });
+    deps.prisma.user.findUnique.mockResolvedValue({ verifiedStatus: 'identity' });
 
     await callSideEffects(handler, {
       bodyMentionIds: ['u1', 'u2'],
@@ -342,12 +343,11 @@ describe('PostsSideEffectsHandler — mention privacy gating', () => {
     expect(deps.prisma.communityGroup.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'g1' } }),
     );
-    // For open groups, findMany must NOT be called for mention-gating (userId.in check).
-    // The badge fan-out may call findMany with a different shape (userId.not).
+    // Read preferences in one batch even for open groups so muted members stay muted.
     const mentionGatingCalls = deps.prisma.communityGroupMember.findMany.mock.calls.filter((c: any[]) =>
       Array.isArray(c[0]?.where?.userId?.in),
     );
-    expect(mentionGatingCalls).toHaveLength(0);
+    expect(mentionGatingCalls).toHaveLength(1);
     const mentionCalls = deps.notifications.create.mock.calls.filter((c: any[]) => c[0]?.kind === 'mention');
     expect(mentionCalls.map((c: any[]) => c[0].recipientUserId).sort()).toEqual(['u1', 'u2']);
   });
@@ -368,7 +368,7 @@ describe('PostsSideEffectsHandler — mention privacy gating', () => {
         userId: { in: ['u1', 'u2'] },
         status: 'active',
       },
-      select: { userId: true },
+      select: { userId: true, notificationPreference: true },
     });
     const mentionCalls = deps.notifications.create.mock.calls.filter((c: any[]) => c[0]?.kind === 'mention');
     expect(mentionCalls.map((c: any[]) => c[0].recipientUserId)).toEqual(['u1']);
@@ -626,6 +626,19 @@ describe('PostsSideEffectsHandler — group notification gating', () => {
     });
   }
 
+  it.each(['approval', 'open'])('suppresses replies and mentions for a muted member of an %s group', async (joinPolicy) => {
+    const { handler, deps } = setup(['member']);
+    deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy });
+    deps.prisma.communityGroupMember.findMany = jest.fn(async () => [{ userId: 'member', notificationPreference: 'muted' }]);
+    await callSideEffects(handler, { parentId: 'parent-1', parentAuthorUserId: 'member', bodyMentionIds: ['member'] });
+    expect(deps.notifications.create.mock.calls.filter((c: any[]) => ['comment', 'mention'].includes(c[0]?.kind))).toHaveLength(0);
+  });
+  it('retains reply notifications for replies-and-mentions members', async () => {
+    const { handler, deps } = setup(['member']);
+    deps.prisma.communityGroupMember.findMany = jest.fn(async () => [{ userId: 'member', notificationPreference: 'repliesAndMentions' }]);
+    await callSideEffects(handler, { parentId: 'parent-1', parentAuthorUserId: 'member' });
+    expect(deps.notifications.create.mock.calls.some((c: any[]) => c[0]?.kind === 'comment' && c[0]?.recipientUserId === 'member')).toBe(true);
+  });
   it('skips followed_post notifications and emitFeedNewPost for top-level group posts', async () => {
     const { handler, deps } = setup(['member-follower']);
     deps.prisma.follow.findMany = jest.fn(async () => [
@@ -680,6 +693,7 @@ describe('PostsSideEffectsHandler — group notification gating', () => {
   it('allows non-member mentions only for public posts in open groups', async () => {
     const { handler, deps } = setup([]);
     deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy: 'open' });
+    deps.prisma.user.findUnique.mockResolvedValue({ verifiedStatus: 'identity' });
 
     await callSideEffects(handler, {
       bodyMentionIds: ['outside-mentioned'],
@@ -689,17 +703,17 @@ describe('PostsSideEffectsHandler — group notification gating', () => {
 
     const mentionCalls = deps.notifications.create.mock.calls.filter((c: any[]) => c[0]?.kind === 'mention');
     expect(mentionCalls.map((c: any[]) => c[0].recipientUserId)).toEqual(['outside-mentioned']);
-    // For open groups, findMany must NOT be called for mention-gating (userId.in check).
-    // The badge fan-out may call findMany with a different shape (userId.not).
+    // Read preferences in one batch even for open groups so muted members stay muted.
     const mentionGatingCalls = deps.prisma.communityGroupMember.findMany.mock.calls.filter((c: any[]) =>
       Array.isArray(c[0]?.where?.userId?.in),
     );
-    expect(mentionGatingCalls).toHaveLength(0);
+    expect(mentionGatingCalls).toHaveLength(1);
   });
 
-  it('suppresses non-member mentions in open groups when the post is not public', async () => {
+  it('allows non-member mentions in open groups for the standard verified audience', async () => {
     const { handler, deps } = setup([]);
     deps.prisma.communityGroup.findUnique.mockResolvedValue({ joinPolicy: 'open' });
+    deps.prisma.user.findUnique.mockResolvedValue({ verifiedStatus: 'identity' });
 
     await callSideEffects(handler, {
       bodyMentionIds: ['outside-mentioned'],
@@ -708,7 +722,7 @@ describe('PostsSideEffectsHandler — group notification gating', () => {
     });
 
     const mentionCalls = deps.notifications.create.mock.calls.filter((c: any[]) => c[0]?.kind === 'mention');
-    expect(mentionCalls).toHaveLength(0);
+    expect(mentionCalls.map((c: any[]) => c[0].recipientUserId)).toEqual(['outside-mentioned']);
   });
 });
 
@@ -754,10 +768,10 @@ describe('PostsSideEffectsHandler — tier-scoped groups:newPost', () => {
     );
   });
 
-  it('does not run for public group posts (createPost already emitted those)', async () => {
+  it.each(['public', 'verifiedOnly'])('does not duplicate the synchronous %s group emit', async (visibility) => {
     const { handler, deps } = makeHandler();
 
-    await (handler as any).emitTierScopedGroupNewPost(makePost({ visibility: 'public' }));
+    await (handler as any).emitTierScopedGroupNewPost(makePost({ visibility }));
 
     expect(deps.prisma.communityGroupMember.findMany).not.toHaveBeenCalled();
     expect(deps.presenceRealtime.emitGroupNewPost).not.toHaveBeenCalled();

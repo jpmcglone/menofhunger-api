@@ -1047,6 +1047,12 @@ model CommunityGroup {
   @@index([createdAt])
 }
 
+enum GroupNotificationPreference {
+  all
+  repliesAndMentions
+  muted
+}
+
 model CommunityGroupMember {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1059,6 +1065,8 @@ model CommunityGroupMember {
 
   role   CommunityGroupMemberRole
   status CommunityGroupMemberStatus
+
+  notificationPreference GroupNotificationPreference @default(all)
 
   @@id([groupId, userId])
   @@index([userId, status])

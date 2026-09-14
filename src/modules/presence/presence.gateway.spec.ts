@@ -1139,7 +1139,7 @@ function makeGroupsSubscribeFixture(opts: {
 
 describe('groups:subscribe', () => {
   it('subscribes an active member to the group room', async () => {
-    const { gw, socket } = makeGroupsSubscribeFixture({ joinPolicy: 'approval', activeMember: true });
+    const { gw, socket } = makeGroupsSubscribeFixture({ joinPolicy: 'approval', activeMember: true, viewer: { verified: true } });
 
     await (gw as any).handleGroupsSubscribe(socket, { groupIds: [GROUP_ID] });
 

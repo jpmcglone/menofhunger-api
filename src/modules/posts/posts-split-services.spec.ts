@@ -312,7 +312,7 @@ describe('PostsMutationService.createPost quote floor enforcement', () => {
       { dispatch: jest.fn() } as any,
       { enqueueIfNeeded: jest.fn(async () => undefined) } as any,
     );
-    return { svc, QUOTED_POST_URL };
+    return { svc, prisma, txPost, QUOTED_POST_URL };
   }
 
   it('blocks a quote of verifiedOnly post with public visibility', async () => {
@@ -373,19 +373,32 @@ describe('PostsMutationService.createPost quote floor enforcement', () => {
     });
   });
 
-  it('does not enforce the floor for group posts (group forces public anyway)', async () => {
-    const { svc, QUOTED_POST_URL } = makeQuoteFloorService('verifiedOnly');
-    // group post passes the community group membership check (but we have no group mock)
-    // — the floor check is skipped so error (if any) is about group membership, not the floor
-    await expect(
-      svc.createPost({
-        userId: 'u1',
-        body: `My thoughts\n\n${QUOTED_POST_URL}`,
-        visibility: 'public',
-        communityGroupId: 'g1',
-        media: null,
-        poll: null,
-      }),
-    ).rejects.not.toThrow(new ForbiddenException("A quote can't be more public than the post it quotes."));
+  it.each(['public', 'verifiedOnly', 'premiumOnly'] as const)('normalizes group root %s to verified and allows verified quotes', async (visibility) => {
+    const { svc, prisma, txPost } = makeQuoteFloorService('verifiedOnly', premiumUser);
+    prisma.communityGroupMember = { findUnique: jest.fn(async () => ({ status: 'active' })) };
+    // Stop at the write boundary so the test observes the validated persisted audience.
+    txPost.create.mockRejectedValueOnce(new Error('write boundary'));
+    await expect(svc.createPost({ userId: 'u1', body: QUOTED_POST_URL, visibility, communityGroupId: 'g1', media: null, poll: null })).rejects.toThrow('write boundary');
+    expect(txPost.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ visibility: 'verifiedOnly', communityGroupId: 'g1' }) }));
+  });
+
+  it('keeps group replies verified even for a legacy public parent', async () => {
+    const { svc, prisma, txPost } = makeQuoteFloorService('public');
+    prisma.communityGroupMember = { findUnique: jest.fn(async () => ({ status: 'active' })) };
+    prisma.post.findFirst.mockResolvedValue({ id: 'parent', userId: 'u1', visibility: 'public', communityGroupId: 'g1', rootId: null, topics: [] });
+    txPost.create.mockRejectedValueOnce(new Error('write boundary'));
+    await expect(svc.createPost({ userId: 'u1', body: 'Reply', visibility: 'public', parentId: 'parent', media: null, poll: null })).rejects.toThrow('write boundary');
+    expect(txPost.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ visibility: 'verifiedOnly', communityGroupId: 'g1' }) }));
+  });
+
+  it('still rejects premium quotes from a verified group audience', async () => {
+    const { svc, prisma } = makeQuoteFloorService('premiumOnly', premiumUser);
+    prisma.communityGroupMember = { findUnique: jest.fn(async () => ({ status: 'active' })) };
+    await expect(svc.createPost({ userId: 'u1', body: QUOTED_POST_URL, visibility: 'public', communityGroupId: 'g1', media: null, poll: null })).rejects.toThrow("A quote can't be more public than the post it quotes.");
+  });
+
+  it('requires current verification even with an old group membership', async () => {
+    const { svc } = makeQuoteFloorService('public', { ...verifiedUser, verifiedStatus: 'none' });
+    await expect(svc.createPost({ userId: 'u1', body: 'Hello', visibility: 'public', communityGroupId: 'g1', media: null, poll: null })).rejects.toThrow('Verify your account to post in groups.');
   });
 });

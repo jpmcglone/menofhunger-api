@@ -404,10 +404,13 @@ export class NotificationsController {
   async markGroupPostsDelivered(
     @CurrentUserId() userId: string,
     @Param('groupId') groupId: string,
+    @Body() body: unknown,
   ) {
     const gid = (groupId ?? '').trim();
     if (!gid) return { data: {} };
-    await this.notifications.markGroupPostsDelivered(userId, gid);
+    const parsed = z.object({ through: z.string().datetime().optional() }).parse(body ?? {});
+    const through = parsed.through ? new Date(Math.min(Date.parse(parsed.through), Date.now())) : undefined;
+    await this.notifications.markGroupPostsDelivered(userId, gid, through);
     return { data: {} };
   }
 

@@ -324,7 +324,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
   /**
    * Tier-scoped `groups:newPost` emit for non-public group posts.
    *
-   * The public case is emitted synchronously from `createPost` because it needs no extra query
+   * The public and verified cases are emitted synchronously from `createPost` because it needs no extra query
    * and members should see the post appear immediately. This branch needs a full member+tier
    * scan to build the audience, which is exactly the kind of work that does not belong on a
    * request.
@@ -332,7 +332,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
   private async emitTierScopedGroupNewPost(post: PostWithRelations): Promise<void> {
     const groupId = post.communityGroupId ?? null;
     const visibility = post.visibility as string;
-    if (post.parentId || !groupId || visibility === 'public') return;
+    if (post.parentId || !groupId || (visibility === 'public' || visibility === 'verifiedOnly')) return;
 
     const tierScoped = visibility === 'premiumOnly' || visibility === 'verifiedOnly';
     if (!tierScoped) return;
@@ -432,6 +432,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     let postGroupJoinPolicy: CommunityGroupJoinPolicy | null | undefined = undefined;
     const checkedGroupNotificationMemberIds = new Set<string>();
     const activeGroupNotificationMemberIds = new Set<string>();
+    const mutedGroupMemberIds = new Set<string>();
     let groupNotificationMembershipLookupFailed = false;
 
     const loadPostGroupJoinPolicy = async (): Promise<CommunityGroupJoinPolicy | null> => {
@@ -465,10 +466,13 @@ export class PostsSideEffectsHandler implements OnModuleInit {
             userId: { in: missingIds },
             status: 'active',
           },
-          select: { userId: true },
+          select: { userId: true, notificationPreference: true },
         });
         for (const uid of missingIds) checkedGroupNotificationMemberIds.add(uid);
-        for (const member of members) activeGroupNotificationMemberIds.add(member.userId);
+        for (const member of members) {
+          activeGroupNotificationMemberIds.add(member.userId);
+          if (member.notificationPreference === 'muted') mutedGroupMemberIds.add(member.userId);
+        }
       } catch (err) {
         this.logger.warn(
           `[notifications] Failed to evaluate group membership for post notifications: ${err instanceof Error ? err.message : String(err)}`,
@@ -479,19 +483,14 @@ export class PostsSideEffectsHandler implements OnModuleInit {
 
     const canNotifyForGroupPost = async (
       recipientUserId: string | null | undefined,
-      opts?: { allowPublicOpenGroupMention?: boolean },
     ): Promise<boolean> => {
       if (!postCommunityGroupId) return true;
       const uid = (recipientUserId ?? '').trim();
       if (!uid) return false;
 
-      if (opts?.allowPublicOpenGroupMention && visibility === 'public') {
-        const joinPolicy = await loadPostGroupJoinPolicy();
-        if (joinPolicy === 'open') return true;
-      }
-
       await loadActiveGroupNotificationMembers([uid]);
-      if (groupNotificationMembershipLookupFailed) return false;
+      if (groupNotificationMembershipLookupFailed || mutedGroupMemberIds.has(uid)) return false;
+
       return activeGroupNotificationMemberIds.has(uid);
     };
 
@@ -570,21 +569,28 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       }
 
       // Explicit @mentions in body: one notification each (priority over comment notifications).
-      // Group posts are members-only for notifications, except public posts in OPEN
-      // groups where an explicit mention is allowed to reach a non-member.
-      const canMentionNonMembersInPublicOpenGroup =
+      // Open groups allow explicit mentions of verified non-members. The notification
+      // recipient must still meet the verified reading requirement.
+      const canMentionNonMembersInOpenGroup =
         Boolean(postCommunityGroupId) &&
         bodyMentionIds.length > 0 &&
-        visibility === 'public' &&
+        (visibility === 'public' || visibility === 'verifiedOnly') &&
         (await loadPostGroupJoinPolicy()) === 'open';
-      if (postCommunityGroupId && bodyMentionIds.length > 0 && !canMentionNonMembersInPublicOpenGroup) {
+      if (postCommunityGroupId && bodyMentionIds.length > 0) {
         await loadActiveGroupNotificationMembers(bodyMentionIds.filter((uid) => uid !== userId));
       }
 
       const mentionRecipients: string[] = [];
       for (const uid of bodyMentionIds) {
         if (uid === userId) continue;
-        if (!canMentionNonMembersInPublicOpenGroup && !(await canNotifyForGroupPost(uid))) continue;
+        // Always check preferences, including muted members of open groups.
+        const activeAndNotMuted = await canNotifyForGroupPost(uid);
+        if (groupNotificationMembershipLookupFailed || mutedGroupMemberIds.has(uid)) continue;
+        if (!canMentionNonMembersInOpenGroup && !activeAndNotMuted) continue;
+        if (canMentionNonMembersInOpenGroup && !activeAndNotMuted) {
+          const recipient = await this.prisma.user.findUnique({ where: { id: uid }, select: { verifiedStatus: true, siteAdmin: true } });
+          if (!recipient?.siteAdmin && (!recipient?.verifiedStatus || recipient.verifiedStatus === 'none')) continue;
+        }
         mentionRecipients.push(uid);
       }
       await runInBatches(mentionRecipients, FANOUT_CONCURRENCY, async (uid) => {

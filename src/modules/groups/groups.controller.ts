@@ -252,6 +252,25 @@ export class GroupsController {
   }
 
   @UseGuards(AuthGuard)
+  @Get(':groupId/notification-preferences')
+  async notificationPreferences(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string) {
+    return { data: await this.groups.getNotificationPreferences(viewerUserId, groupId) };
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch(':groupId/notification-preferences')
+  async setNotificationPreferences(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Body() body: unknown) {
+    const { preference } = z.object({ preference: z.enum(['all', 'repliesAndMentions', 'muted']) }).parse(body);
+    return { data: await this.groups.setNotificationPreferences(viewerUserId, groupId, preference) };
+  }
+
+  @UseGuards(AuthGuard)
+  @Get(':groupId/activity')
+  async activity(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string) {
+    return { data: await this.groups.getActivity(viewerUserId, groupId) };
+  }
+
+  @UseGuards(AuthGuard)
   @Patch(':groupId')
   async update(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Body() body: unknown) {
     const parsed = updateGroupSchema.parse(body);
