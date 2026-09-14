@@ -73,7 +73,8 @@ export class PostViewsService {
   /**
    * Record that a user viewed a post.
    * Unique viewerCount stays 1 per person. Total increments on first look and
-   * again when lastImpressionAt is older than 30s.
+   * again when a later report arrives after lastImpressionAt is older than 30s
+   * (leave-and-return, not a sitting heartbeat).
    */
   async markViewed(
     userId: string | null | undefined,

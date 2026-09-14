@@ -5,7 +5,7 @@ const ANON_ID_RE = /^[A-Za-z0-9_-]+$/;
 export const ANON_VIEW_RECOUNT_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Collapse double-flush races only. Unique viewerCount stays 1; lastSeenAt can move on the next refresh. */
 export const LAST_SEEN_REFRESH_WINDOW_MS = 8 * 1000;
-/** Same identity can add another total view after this window since lastImpressionAt. */
+/** Leave-and-return gate: same identity can add another total view after this window. Not a sitting heartbeat. */
 export const TOTAL_VIEW_RECOUNT_WINDOW_MS = 30 * 1000;
 /** Throttle room live-updates for total-only increments (not debounce). */
 export const VIEW_ROOM_EMIT_THROTTLE_MS = 2 * 1000;
