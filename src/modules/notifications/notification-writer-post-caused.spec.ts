@@ -41,6 +41,9 @@ function makeDeps(existing: { id: string } | null = null) {
     notification: { create: notifCreate, count: notifCount, findFirst: notifFindFirst },
     user: { update: userUpdate },
     userPageOperator: { findUnique: jest.fn(async () => null) },
+    // Home posts: permitsGroupActivity returns true without a membership lookup.
+    post: { findUnique: jest.fn(async () => ({ communityGroupId: null })) },
+    communityGroupMember: { findUnique: jest.fn(async () => null) },
   };
 
   return {
