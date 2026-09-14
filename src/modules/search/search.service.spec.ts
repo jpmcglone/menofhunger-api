@@ -281,6 +281,7 @@ describe('SearchService.searchUsers — ranking', () => {
         viewerFollows: new Set(),
         followsViewer: new Set(),
         viewerBellEnabled: new Set(),
+        viewerNotificationPreferences: new Map(),
       })),
     };
     const service = new SearchService(

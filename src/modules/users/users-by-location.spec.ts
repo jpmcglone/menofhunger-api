@@ -13,6 +13,7 @@ describe('UsersController.byLocation', () => {
         viewerFollows: new Set<string>(),
         followsViewer: new Set<string>(),
         viewerBellEnabled: new Set<string>(),
+        viewerNotificationPreferences: new Map(),
       })),
     };
     const controller = new UsersController(

@@ -560,7 +560,7 @@ export class SearchService {
         viewerFollowsUser: rel.viewerFollows.has(u.id),
         userFollowsViewer: rel.followsViewer.has(u.id),
         viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(u.id),
-        viewerNotificationPreference: rel.viewerNotificationPreferences.get(u.id) ?? 'off',
+        viewerNotificationPreference: rel.viewerNotificationPreferences?.get(u.id) ?? 'off',
       },
     }));
 
