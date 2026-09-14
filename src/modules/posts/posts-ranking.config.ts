@@ -184,7 +184,9 @@ export const POSTS_RANKING = {
   /**
    * As the candidate pool saturates with already-seen posts, jitter strength ramps from
    * forYouSeenJitterBase up to this ceiling so a "seen everything" refresh visibly reshuffles
-   * instead of returning the exact same order every time.
+   * instead of returning the exact same order every time. Applied only to already-seen rows;
+   * unseen authed posts keep the refresh/anon floor so leftover fresh discovery cannot lose
+   * to a just-seen post solely because the rest of the pool is exhausted.
    */
   forYouSeenSaturationJitterMax: 0.9,
   /**

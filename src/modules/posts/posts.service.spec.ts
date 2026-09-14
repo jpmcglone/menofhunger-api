@@ -1952,8 +1952,10 @@ describe('PostsService.listForYouFeed', () => {
   it('keeps zero-score fresh discovery eligible when the trending pool is fully seen', async () => {
     const old = Array.from({ length: 81 }, (_, i) => cand(`old${i}`, `u${i}`, 0.1, 24));
     const { service } = setupForYou({ candidates: [...old, cand('fresh', 'new-author', null, 0)], seenAtByPostId: Object.fromEntries(old.map(p => [p.id, new Date()])) });
-    const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 40, cursor: null, visibility: 'all' });
-    expect(out.posts[0].id).toBe('fresh');
+    for (let i = 0; i < 8; i++) {
+      const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 40, cursor: null, visibility: 'all' });
+      expect(out.posts[0].id).toBe('fresh');
+    }
   });
 
   it('never lowers the base score when a post gains its first positive engagement', async () => {

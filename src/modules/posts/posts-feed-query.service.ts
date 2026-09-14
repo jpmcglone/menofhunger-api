@@ -1783,6 +1783,16 @@ export class PostsFeedQueryService {
     );
 
     const now = Date.now();
+    // Anon always jitters (no seen-history). Authed first paint stays deterministic for unseen
+    // rows; pull-to-refresh uses a floor so a new seed actually moves the page.
+    const refreshJitterFloor = params.refresh && isPage1 ? POSTS_RANKING.forYouRefreshJitterFloor : 0;
+    const jitterStrengthBase = viewerUserId == null
+      ? POSTS_RANKING.forYouAnonJitterStrength
+      : Math.max(POSTS_RANKING.forYouSeenJitterBase, refreshJitterFloor);
+    const jitterStrength = Math.min(
+      1,
+      jitterStrengthBase + (POSTS_RANKING.forYouSeenSaturationJitterMax - jitterStrengthBase) * saturationRamp,
+    );
     const ranked = candidates.map((c) => {
       const conversation = conversationContexts.get(c.id);
       const youFollowThem = youFollow.has(c.userId);
@@ -1878,20 +1888,11 @@ export class PostsFeedQueryService {
       }
       const conversationBonus = conversation?.kind === 'unanswered' ? 1.5 : conversation?.kind === 'newReplies' ? 3 : conversation?.kind === 'followUp' ? 1 : 0;
       const base = conversationBonus + (c.friendEngaged ? Math.max(rawBase, POSTS_RANKING.forYouFriendEngagementBaseFloor) : rawBase);
-      // Jitter strength: anon viewers always get a baseline jitter (no seen-history signal
-      // to lean on); authed viewers start at 0 (fully deterministic while there's unseen/fresh
-      // content) and ramp up toward forYouSeenSaturationJitterMax as the candidate pool
-      // saturates with already-seen posts. Seeded per-request so it's stable across
-      // pagination within one refresh but different on the next refresh (new seed).
-      const refreshJitterFloor = params.refresh && isPage1 ? POSTS_RANKING.forYouRefreshJitterFloor : 0;
-      const jitterStrengthBase = viewerUserId == null
-        ? POSTS_RANKING.forYouAnonJitterStrength
-        : Math.max(POSTS_RANKING.forYouSeenJitterBase, refreshJitterFloor);
-      const jitterStrength = Math.min(
-        1,
-        jitterStrengthBase + (POSTS_RANKING.forYouSeenSaturationJitterMax - jitterStrengthBase) * saturationRamp,
-      );
-      const jitter = 1 + (seededUnitInterval(jitterSeed, c.id) * 2 - 1) * jitterStrength;
+      // Saturation jitter reshuffles already-seen rows so a "seen everything" refresh is not
+      // identical. Unseen authed posts keep only the refresh/anon floor — otherwise ±90% jitter
+      // can bury a brand-new discovery item under a just-seen trending post.
+      const postJitterStrength = seen || viewerUserId == null ? jitterStrength : jitterStrengthBase;
+      const jitter = 1 + (seededUnitInterval(jitterSeed, c.id) * 2 - 1) * postJitterStrength;
       const adjusted =
         base *
         recencyMult *
