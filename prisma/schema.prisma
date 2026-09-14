@@ -963,6 +963,12 @@ model ApnsDeviceToken {
   @@index([userId])
 }
 
+enum FollowNotificationPreference {
+  all
+  posts
+  off
+}
+
 model Follow {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
@@ -974,6 +980,7 @@ model Follow {
    * When true, viewer receives “every post” notifications (bell icon enabled).
    */
   postNotificationsEnabled Boolean @default(true)
+  notificationPreference FollowNotificationPreference @default(all)
 
   follower  User @relation("Follow_follower", fields: [followerId], references: [id], onDelete: Cascade)
   following User @relation("Follow_following", fields: [followingId], references: [id], onDelete: Cascade)

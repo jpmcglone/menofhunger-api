@@ -23,6 +23,7 @@ function makePrisma(opts?: {
   coalesceRow?: { sentAt: Date } | null;
 }) {
   return {
+    follow: { findUnique: jest.fn(async () => ({ notificationPreference: 'all', postNotificationsEnabled: true })) },
     pushSubscription: {
       count: jest.fn(async () => (opts?.pushSubscriptions ?? []).length),
       findMany: jest.fn(async () => opts?.pushSubscriptions ?? [
@@ -49,7 +50,7 @@ function makePrisma(opts?: {
       findMany: jest.fn(async () => []),
     },
     post: {
-      findUnique: jest.fn(async () => null),
+      findUnique: jest.fn(async () => ({ parentId: null, deletedAt: null, media: [] })),
     },
     communityGroup: {
       findUnique: jest.fn(async () => null),

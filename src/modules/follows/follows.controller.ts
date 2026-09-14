@@ -26,8 +26,9 @@ const topUsersSchema = z.object({
 });
 
 const postNotificationsSchema = z.object({
-  enabled: z.boolean(),
-});
+  enabled: z.boolean().optional(),
+  preference: z.enum(['all', 'posts', 'off']).optional(),
+}).refine(body => (body.enabled !== undefined) !== (body.preference !== undefined), { message: 'Choose one notification preference.' });
 
 @Controller('follows')
 export class FollowsController {
@@ -128,6 +129,7 @@ export class FollowsController {
       viewerUserId,
       username,
       enabled: parsed.enabled,
+      preference: parsed.preference,
     });
     return { data: result };
   }

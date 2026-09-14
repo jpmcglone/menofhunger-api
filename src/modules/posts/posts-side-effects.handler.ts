@@ -670,6 +670,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
               select: {
                 followerId: true,
                 postNotificationsEnabled: true,
+                notificationPreference: true,
                 follower: {
                   select: {
                     verifiedStatus: true,
@@ -692,7 +693,8 @@ export class PostsSideEffectsHandler implements OnModuleInit {
             if (!recipientUserId || recipientUserId === userId) continue;
             if (bodyMentionSet.has(recipientUserId)) continue;
             if (parentId && (recipientUserId === parentAuthorUserId || threadRoles?.has(recipientUserId))) continue;
-            if (parentId && !f.postNotificationsEnabled) continue;
+            const preference = f.notificationPreference ?? (f.postNotificationsEnabled ? 'all' : 'posts');
+            if (parentId && preference !== 'all') continue;
             if (!(await canNotifyForGroupPost(recipientUserId))) continue;
 
             if (visibility === 'verifiedOnly') {
@@ -710,6 +712,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
             // Operators of this page already posted; they still get the home-feed emit.
             // Pages never receive checkin_post bells — person-only, both as actor and follower.
             if (
+              preference !== 'off' &&
               post.kind !== 'status' &&
               !operatorIds.has(recipientUserId) &&
               !(post.kind === 'checkin' && f.follower?.accountKind === 'page')

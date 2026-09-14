@@ -1,3 +1,4 @@
+import { permitsFollowNotification } from './follow-notification-policy';
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, type NotificationKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -207,6 +208,8 @@ export class NotificationWriterService {
     ) {
       return;
     }
+
+    if (!(await permitsFollowNotification(this.prisma, params))) return;
 
     const fallbackTitle =
       title ??

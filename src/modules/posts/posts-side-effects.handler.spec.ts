@@ -479,6 +479,17 @@ describe('PostsSideEffectsHandler — followed-post bell semantics', () => {
     });
   }
 
+  it('keeps Off followers in the feed while suppressing author notifications', async () => {
+    const { handler, deps } = setup();
+    deps.prisma.follow.findMany = jest.fn(async () => [{
+      followerId: 'off-follower', notificationPreference: 'off', postNotificationsEnabled: false,
+      follower: { verifiedStatus: 'identity', premium: false, premiumPlus: false },
+    }]);
+    await callSideEffects(handler, {});
+    expect(deps.notifications.create.mock.calls.filter((c: any[]) => c[0]?.kind === 'followed_post')).toHaveLength(0);
+    expect(deps.presenceRealtime.emitFeedNewPost).toHaveBeenCalledWith(['off-follower'], expect.any(Object));
+  });
+
   it('notifies all eligible followers for top-level posts', async () => {
     const { handler, deps } = setup();
 

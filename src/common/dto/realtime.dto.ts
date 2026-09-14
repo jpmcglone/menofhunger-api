@@ -2,7 +2,7 @@ import type { AvatarVideoDto } from './avatar-video.dto';
 import type { VerifiedStatus } from '@prisma/client';
 import type { MessageDto } from '../../modules/messages/message.dto';
 import type { NotificationDto } from '../../modules/notifications/notification.dto';
-import type { UserDto, UserListDto } from './user.dto';
+import type { UserDto, UserListDto, UserNotificationPreference } from './user.dto';
 import type { ArticleCommentDto, ArticleReactionSummaryDto } from './article.dto';
 import type { PostDto, PostPollDto } from './post.dto';
 import type { UserStatusDto } from './presence.dto';
@@ -56,6 +56,7 @@ export type FollowsChangedPayloadDto = {
   actorUserId: string;
   targetUserId: string;
   viewerFollowsUser: boolean;
+  viewerNotificationPreference?: UserNotificationPreference;
 };
 
 export type PostInteractionKind = 'boost' | 'bookmark' | 'repost';

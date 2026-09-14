@@ -13,11 +13,20 @@ export type OrgAffiliationDto = {
 };
 
 /** Relationship fields for list-user DTOs (follows, search). */
+export type UserNotificationPreference = 'all' | 'posts' | 'off';
+
+export type UserNotificationPreferencesDto = {
+  preference: UserNotificationPreference;
+  /** Legacy reply-notification switch, retained for older clients. */
+  enabled: boolean;
+};
+
 export type UserListRelationship = {
   viewerFollowsUser: boolean;
   userFollowsViewer: boolean;
   /** True when the viewer has enabled reply notifications (bell icon) for this follow. */
   viewerPostNotificationsEnabled: boolean;
+  viewerNotificationPreference?: UserNotificationPreference;
 };
 
 export type NudgeStateDto = {

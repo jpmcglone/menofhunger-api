@@ -333,6 +333,7 @@ export class UsersController {
           viewerFollowsUser: rel.viewerFollows.has(u.id),
           userFollowsViewer: rel.followsViewer.has(u.id),
           viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(u.id),
+          viewerNotificationPreference: rel.viewerNotificationPreferences.get(u.id) ?? 'off',
         },
       }),
     );
@@ -428,6 +429,7 @@ export class UsersController {
             viewerFollowsUser: rel.viewerFollows.has(u.id),
             userFollowsViewer: rel.followsViewer.has(u.id),
             viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(u.id),
+            viewerNotificationPreference: rel.viewerNotificationPreferences.get(u.id) ?? 'off',
           },
         }),
       );
@@ -770,7 +772,7 @@ export class UsersController {
       return { data: { banned: true } };
     }
 
-    let relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean; viewerPostNotificationsEnabled: boolean } =
+    let relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean; viewerPostNotificationsEnabled: boolean; viewerNotificationPreference?: import('../../common/dto/user.dto').UserNotificationPreference } =
       {
       viewerFollowsUser: false,
       userFollowsViewer: false,
@@ -786,6 +788,7 @@ export class UsersController {
         viewerFollowsUser: summary.viewerFollowsUser,
         userFollowsViewer: summary.userFollowsViewer,
         viewerPostNotificationsEnabled: summary.viewerPostNotificationsEnabled,
+        viewerNotificationPreference: summary.viewerNotificationPreference,
       };
       nudge = summary.nudge;
       followerCount = summary.followerCount;
@@ -799,6 +802,7 @@ export class UsersController {
         viewerFollowsUser: rel.viewerFollows.has(profile.id),
         userFollowsViewer: rel.followsViewer.has(profile.id),
         viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(profile.id),
+        viewerNotificationPreference: rel.viewerNotificationPreferences.get(profile.id) ?? 'off',
       };
     }
 

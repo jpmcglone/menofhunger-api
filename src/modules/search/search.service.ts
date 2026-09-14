@@ -11,6 +11,7 @@ import { queryToTopicValues } from '../../common/topics/topic-utils';
 import { HASHTAG_IN_TEXT_DISPLAY_RE, parseHashtagsFromText } from '../../common/hashtags/hashtag-regex';
 import { CASHTAG_IN_TEXT_DISPLAY_RE, parseCashtagCandidatesFromText } from '../../common/cashtags/cashtag-regex';
 import { TickerService } from '../cashtags/ticker.service';
+import type { UserListRelationship } from '../../common/dto/user.dto';
 import type { CashtagResultDto } from '../../common/dto';
 import { POST_BASE_INCLUDE } from '../../common/prisma-includes/post.include';
 import { articleAuthorInclude } from '../../common/dto/article.dto';
@@ -109,7 +110,7 @@ export type SearchUserRow = {
   verifiedStatus: VerifiedStatus;
   avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
   avatarUpdatedAt: Date | null;
-  relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean };
+  relationship: UserListRelationship;
   orgMemberships: Array<{ org: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null; avatarUpdatedAt: Date | null } }>;
 };
 
@@ -559,6 +560,7 @@ export class SearchService {
         viewerFollowsUser: rel.viewerFollows.has(u.id),
         userFollowsViewer: rel.followsViewer.has(u.id),
         viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(u.id),
+        viewerNotificationPreference: rel.viewerNotificationPreferences.get(u.id) ?? 'off',
       },
     }));
 

@@ -102,6 +102,7 @@ export class ExploreService {
             viewerFollowsUser: newestRel.viewerFollows.has(u.id),
             userFollowsViewer: newestRel.followsViewer.has(u.id),
             viewerPostNotificationsEnabled: newestRel.viewerBellEnabled.has(u.id),
+            viewerNotificationPreference: newestRel.viewerNotificationPreferences.get(u.id) ?? 'off',
           },
         }),
       );

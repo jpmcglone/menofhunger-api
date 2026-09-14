@@ -30,6 +30,7 @@ function makeDeps() {
   const presenceRealtime = { emitNotificationsUpdated: jest.fn(), emitNotificationNew: jest.fn() };
   const sideEffects = { dispatch: jest.fn() };
   const prisma = {
+    follow: { findUnique: jest.fn(async () => ({ notificationPreference: 'all', postNotificationsEnabled: true })) },
     $transaction,
     notification: { create: notifCreate, count: notifCount, findFirst: notifFindFirst },
     user: { update: userUpdate },

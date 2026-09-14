@@ -1,3 +1,4 @@
+import type { UserNotificationPreference, UserNotificationPreferencesDto } from '../../common/dto/user.dto';
 import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
@@ -59,6 +60,7 @@ export type FollowRelationship = {
   userFollowsViewer: boolean;
   /** True when viewer enabled reply notifications for this follow (bell icon). */
   viewerPostNotificationsEnabled: boolean;
+  viewerNotificationPreference?: UserNotificationPreference;
 };
 
 export type FollowSummary = FollowRelationship & {
@@ -176,25 +178,31 @@ export class FollowsService {
           viewerFollowsUser: rel.viewerFollows.has(r.id),
           userFollowsViewer: rel.followsViewer.has(r.id),
           viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(r.id),
+          viewerNotificationPreference: rel.viewerNotificationPreferences.get(r.id) ?? 'off',
         },
         orgAffiliations: orgMap.get(r.id) ?? [],
       }) as FollowListUser,
     );
   }
 
-  async setPostNotificationsEnabled(params: { viewerUserId: string; username: string; enabled: boolean }) {
-    const { viewerUserId, username, enabled } = params;
+  async setPostNotificationsEnabled(params: { viewerUserId: string; username: string; enabled?: boolean; preference?: UserNotificationPreference }): Promise<UserNotificationPreferencesDto> {
+    const { viewerUserId, username } = params;
+    const preference = params.preference ?? (params.enabled ? 'all' : 'posts');
     const target = await this.userByUsernameOrThrow(username);
     if (target.id === viewerUserId) throw new BadRequestException('You cannot update post notifications for yourself.');
 
     // Hide this surface unless the viewer is following the target (404).
     const updated = await this.prisma.follow.updateMany({
       where: { followerId: viewerUserId, followingId: target.id },
-      data: { postNotificationsEnabled: Boolean(enabled) },
+      data: { notificationPreference: preference, postNotificationsEnabled: preference === 'all' },
     });
     if (updated.count === 0) throw new NotFoundException('Not found.');
 
-    return { enabled: Boolean(enabled) };
+    this.presenceRealtime.emitFollowsChanged(viewerUserId, {
+      actorUserId: viewerUserId, targetUserId: target.id, viewerFollowsUser: true,
+      viewerNotificationPreference: preference,
+    });
+    return { preference, enabled: preference === 'all' };
   }
 
   /**
@@ -612,7 +620,7 @@ export class FollowsService {
     const [rel, orgMap] = await Promise.all([
       viewerUserId
         ? this.batchRelationshipForUserIds({ viewerUserId, userIds })
-        : Promise.resolve({ viewerFollows: new Set<string>(), followsViewer: new Set<string>(), viewerBellEnabled: new Set<string>() }),
+        : Promise.resolve({ viewerFollows: new Set<string>(), followsViewer: new Set<string>(), viewerNotificationPreferences: new Map<string, UserNotificationPreference>(), viewerBellEnabled: new Set<string>() }),
       this.batchOrgAffiliations(userIds, publicBaseUrl),
     ]);
 
@@ -622,6 +630,7 @@ export class FollowsService {
           viewerFollowsUser: rel.viewerFollows.has(r.id),
           userFollowsViewer: rel.followsViewer.has(r.id),
           viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(r.id),
+          viewerNotificationPreference: rel.viewerNotificationPreferences.get(r.id) ?? 'off',
         },
         orgAffiliations: orgMap.get(r.id) ?? [],
       }) as FollowListUser,
@@ -753,6 +762,7 @@ export class FollowsService {
       actorUserId: viewerUserId,
       targetUserId: target.id,
       viewerFollowsUser: true,
+      ...(created ? { viewerNotificationPreference: 'all' as const } : {}),
     });
 
     return {
@@ -902,7 +912,7 @@ export class FollowsService {
     const [a, b] = await Promise.all([
       this.prisma.follow.findFirst({
         where: { followerId: viewerUserId, followingId: target.id },
-        select: { id: true, postNotificationsEnabled: true },
+        select: { id: true, postNotificationsEnabled: true, notificationPreference: true },
       }),
       this.prisma.follow.findFirst({
         where: { followerId: target.id, followingId: viewerUserId },
@@ -914,6 +924,7 @@ export class FollowsService {
       viewerFollowsUser: Boolean(a),
       userFollowsViewer: Boolean(b),
       viewerPostNotificationsEnabled: Boolean(a?.postNotificationsEnabled),
+      viewerNotificationPreference: a?.notificationPreference ?? (a ? (a.postNotificationsEnabled ? 'all' : 'posts') : 'off'),
     };
   }
 
@@ -976,14 +987,14 @@ export class FollowsService {
       return {
         viewerFollows: new Set<string>(),
         followsViewer: new Set<string>(),
-        viewerBellEnabled: new Set<string>(),
+        viewerNotificationPreferences: new Map<string, UserNotificationPreference>(), viewerBellEnabled: new Set<string>(),
       };
     }
 
     const [viewerFollowing, usersFollowingViewer] = await Promise.all([
       this.prisma.follow.findMany({
         where: { followerId: viewerUserId, followingId: { in: userIds } },
-        select: { followingId: true, postNotificationsEnabled: true },
+        select: { followingId: true, postNotificationsEnabled: true, notificationPreference: true },
       }),
       this.prisma.follow.findMany({
         where: { followingId: viewerUserId, followerId: { in: userIds } },
@@ -994,6 +1005,7 @@ export class FollowsService {
     return {
       viewerFollows: new Set(viewerFollowing.map((r) => r.followingId)),
       followsViewer: new Set(usersFollowingViewer.map((r) => r.followerId)),
+      viewerNotificationPreferences: new Map(viewerFollowing.map(r => [r.followingId, r.notificationPreference ?? (r.postNotificationsEnabled ? 'all' : 'posts')])),
       viewerBellEnabled: new Set(viewerFollowing.filter((r) => r.postNotificationsEnabled).map((r) => r.followingId)),
     };
   }
@@ -1073,6 +1085,7 @@ export class FollowsService {
           viewerFollowsUser: rel.viewerFollows.has(r.follower.id),
           userFollowsViewer: rel.followsViewer.has(r.follower.id),
           viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(r.follower.id),
+          viewerNotificationPreference: rel.viewerNotificationPreferences.get(r.follower.id) ?? 'off',
         },
       }) as FollowListUser,
     );
@@ -1129,6 +1142,7 @@ export class FollowsService {
           viewerFollowsUser: rel.viewerFollows.has(r.following.id),
           userFollowsViewer: rel.followsViewer.has(r.following.id),
           viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(r.following.id),
+          viewerNotificationPreference: rel.viewerNotificationPreferences.get(r.following.id) ?? 'off',
         },
       }) as FollowListUser,
     );
@@ -1162,6 +1176,7 @@ export class FollowsService {
           viewerFollowsUser: rel.viewerFollows.has(u.id),
           userFollowsViewer: rel.followsViewer.has(u.id),
           viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(u.id),
+          viewerNotificationPreference: rel.viewerNotificationPreferences.get(u.id) ?? 'off',
         },
       }) as FollowListUser,
     );

@@ -56,6 +56,7 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
         where: { followingId: authorUserId },
         select: {
           followerId: true,
+          notificationPreference: true,
           follower: { select: { verifiedStatus: true, premium: true, premiumPlus: true } },
         },
       }),
@@ -73,7 +74,7 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
     for (const f of follows) {
       const recipientUserId = f.followerId;
       if (!recipientUserId || recipientUserId === authorUserId) continue;
-      if (operatorIds.has(recipientUserId)) continue;
+      if (operatorIds.has(recipientUserId) || f.notificationPreference === 'off') continue;
 
       if (article.visibility === 'verifiedOnly') {
         const vs = f.follower?.verifiedStatus ?? 'none';

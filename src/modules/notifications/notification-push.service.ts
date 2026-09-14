@@ -1,4 +1,5 @@
 import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
+import { permitsFollowNotification } from './follow-notification-policy';
 import { Injectable, Logger } from '@nestjs/common';
 import type { NotificationKind } from '@prisma/client';
 import * as webpush from 'web-push';
@@ -1275,6 +1276,7 @@ export class NotificationPushService {
     try {
       const prefs = await this.preferences.getPreferencesInternal(recipientUserId);
       if (!this.shouldSendPushForKind(prefs, kind)) return;
+      if (!(await permitsFollowNotification(this.prisma, params))) return;
       const mediaPostId = params.actorPostId ?? params.subjectPostId ?? null;
       const threadPostId = params.subjectPostId ?? params.actorPostId ?? null;
       const [actor, mediaPost, threadPost, group] = await Promise.all([
