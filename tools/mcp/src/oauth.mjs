@@ -52,10 +52,15 @@ export function isAllowedOAuthRedirectUri(uri) {
     return url.pathname === '/connector_platform_oauth_redirect' ||
       /^\/connector\/oauth\/[A-Za-z0-9_-]+$/.test(url.pathname);
   }
-  if (url.href === 'https://www.cursor.com/agents/mcp/oauth/callback') return true;
+  // Cursor/Grok DCR often sends several of these together. Rejecting one URI
+  // rejects the whole registration, so keep the Grok Bot / Cloud extras here.
+  if ((url.origin === 'https://www.cursor.com' || url.origin === 'https://cursor.com') &&
+    (url.pathname === '/agents/mcp/oauth/callback' || url.pathname === '/bot/mcp/oauth/callback'))
+    return true;
   if (url.href === 'http://localhost:8787/callback' || url.href === 'http://127.0.0.1:8787/callback') return true;
   if (url.href === 'cursor://anysphere.cursor-mcp/oauth/callback') return true;
   if (url.href === 'cursor-nightly://anysphere.cursor-mcp/oauth/callback') return true;
+  if (url.href === 'grokbot://mcp/oauth/callback') return true;
   return false;
 }
 

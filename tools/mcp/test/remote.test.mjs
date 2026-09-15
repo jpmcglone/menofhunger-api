@@ -132,17 +132,25 @@ test('DCR accepts Cursor and loopback callbacks alongside ChatGPT; multiple redi
   const allowed = [
     'https://chatgpt.com/connector_platform_oauth_redirect',
     'https://www.cursor.com/agents/mcp/oauth/callback',
+    'https://www.cursor.com/bot/mcp/oauth/callback',
+    'https://cursor.com/agents/mcp/oauth/callback',
     'http://localhost:8787/callback',
     'http://127.0.0.1:8787/callback',
     'cursor://anysphere.cursor-mcp/oauth/callback',
     'cursor-nightly://anysphere.cursor-mcp/oauth/callback',
+    'grokbot://mcp/oauth/callback',
   ];
   for (const uri of allowed) {
     assert.equal((await f.register({ redirect_uris: [uri], client_name: 'Cursor' })).response.status, 201);
   }
-  const multi = await f.register({ redirect_uris: allowed.slice(0, 6), client_name: 'Multi' });
+  const grokDcr = [
+    'https://www.cursor.com/agents/mcp/oauth/callback',
+    'https://www.cursor.com/bot/mcp/oauth/callback',
+    'http://localhost:8787/callback',
+  ];
+  const multi = await f.register({ redirect_uris: grokDcr, client_name: 'Grok Bot' });
   assert.equal(multi.response.status, 201);
-  assert.equal(multi.client.redirect_uris.length, 6);
+  assert.equal(multi.client.redirect_uris.length, 3);
 });
 
 test('consent requires administrator sign-in, origin and CSRF; HTML escapes member content', async (t) => {
@@ -159,7 +167,9 @@ test('consent requires administrator sign-in, origin and CSRF; HTML escapes memb
   assert.equal((await f.approve(auth, { headers: { Cookie: `${auth.cookie}; moh_session=non-admin` } })).status, 400);
   assert.equal(f.createdSessions(), 0);
   const canceled = await f.approve(auth, { body: { decision: 'deny' } });
+  assert.equal(canceled.status, 303);
   assert.equal(new URL(canceled.headers.get('location')).searchParams.get('error'), 'access_denied');
+  assert.match(await canceled.text(), /open your MCP client/);
   assert.equal(f.createdSessions(), 0);
   // Same-site HTML form POSTs may omit Origin; CSRF still gates the request.
   const auth2 = await f.authorize(client);

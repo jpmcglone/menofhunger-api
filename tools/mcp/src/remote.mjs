@@ -14,6 +14,8 @@ const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (ch) => ({
 function page(res, title, content) {
   res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   res.setHeader('Referrer-Policy', 'no-referrer');
+  // Popup OAuth (Grok Bot / Cursor webview) needs the opener relationship.
+  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
   res.type('html').send(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Men of Hunger</title><style>body{font:18px/1.6 system-ui;margin:10vh auto;padding:0 24px;max-width:580px;color:#ece8e1;background:#171916}h1{line-height:1.15}p{color:#c5c9bd}a{color:#d7ec97}button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:12px 18px;margin:8px 8px 0 0;background:#d7ec97;color:#171916}button[value=deny]{background:#363b31;color:#ece8e1}small{color:#a8af9e}</style><main><small>MEN OF HUNGER</small><h1>${escapeHtml(title)}</h1>${content}</main></html>`);
 }
 
@@ -66,7 +68,11 @@ export function createRemoteMcp({ redis, secret, baseUrl, frontendUrl, resolveAd
         }
         const callback = await provider.consent(request, bodyCsrf, sessionCookie(req), decision === 'allow');
         res.clearCookie('moh_mcp_consent', { path: '/mcp/consent' });
-        return res.redirect(303, callback);
+        // 303 Location is the protocol path. Some embedded browsers swallow that
+        // navigation after a form POST; keep an HTML continue link + meta refresh.
+        res.status(303).setHeader('Location', callback);
+        return page(res, 'Returning to your MCP client',
+          `<meta http-equiv="refresh" content="0;url=${escapeHtml(callback)}"><p>If this doesn’t continue automatically, <a href="${escapeHtml(callback)}">open your MCP client</a>.</p>`);
       }
       const csrf = req.cookies?.moh_mcp_consent;
       const pending = await provider.consentRequest(request, csrf);
