@@ -21,6 +21,7 @@ export const aliases = {
   'member-referrals': ['member_referrals', 'memberId'],
   content: ['public_content'],
   newsletters: ['newsletters', 'newsletterId'],
+  'newsletter-draft': ['create_newsletter_draft'],
   definitions: ['metric_definitions'],
   decision: ['record_decision'],
   decisions: ['list_decisions'],
@@ -142,6 +143,7 @@ Optional global command: npm install --global ./tools/mcp, then moh <command>
   content --q "leadership"            Public content research, up to a 31-day window
   referrals                          Referral metrics
   newsletters [ID]                   Newsletter summaries or one existing draft
+  newsletter-draft --input FILE      Create a live admin newsletter draft (does not send)
   definitions                        Metric windows and interpretation
   decision --input decision.json     Save an adopted decision locally
   decisions                          Read local decision history
@@ -163,7 +165,7 @@ content, community, ai, coins. Timestamps are ISO UTC, e.g. 2026-09-01T00:00:00Z
 MOH_API_BASE_URL defaults to https://api.menofhunger.com/v1.
 MOH_MCP_STATE_DIR sets the private session/draft/decision directory.
 New diagnostics/content endpoints require deploying the accompanying API change.
-Only publish performs a remote content write; it requires user authorization. No automatic monitoring or OpenAI API key needed.
+Remote writes (publish, create_newsletter_draft, delegation) require user authorization. No automatic monitoring or OpenAI API key needed.
 `;
 
 export function formatHuman(result) {

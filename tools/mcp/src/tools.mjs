@@ -79,6 +79,41 @@ export function retentionWithMaturity(rows, asOf) {
   });
 }
 
+
+const DURATION_UNITS = ['days', 'weeks', 'months', 'years'];
+const audienceFilterSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('inactive'), amount: z.number().int().min(1).max(3650), unit: z.enum(DURATION_UNITS) }).strict(),
+  z.object({
+    type: z.literal('joined'),
+    cmp: z.enum(['atLeast', 'inTheLast']),
+    amount: z.number().int().min(1).max(3650),
+    unit: z.enum(DURATION_UNITS),
+  }).strict(),
+  z.object({ type: z.literal('tier'), min: z.enum(['verified', 'premium']) }).strict(),
+  z.object({ type: z.literal('noCheckin'), amount: z.number().int().min(1).max(3650), unit: z.enum(DURATION_UNITS) }).strict(),
+]);
+const audienceFiltersSchema = z
+  .array(audienceFilterSchema)
+  .max(4)
+  .superRefine((filters, ctx) => {
+    const types = filters.map((filter) => filter.type);
+    if (new Set(types).size !== types.length) {
+      ctx.addIssue({ code: 'custom', message: 'Each audience filter can only be used once.' });
+    }
+  })
+  .default([]);
+
+/** Match delegation newsletter_create: plain text → ProseMirror doc JSON (paragraphs on blank lines). */
+export function plainBodyToNewsletterJson(body) {
+  return JSON.stringify({
+    type: 'doc',
+    content: String(body).split(/\n\n+/).map((text) => ({
+      type: 'paragraph',
+      content: [{ type: 'text', text }],
+    })),
+  });
+}
+
 export function createTools({ api, store, localArtifacts = true, remoteWrites = localArtifacts }) {
   const definitions = [];
   // Centralize validation so MCP and the diagnostic CLI execute the identical tool contract.
@@ -307,6 +342,42 @@ export function createTools({ api, store, localArtifacts = true, remoteWrites = 
       };
     },
   );
+  if (remoteWrites) {
+    tool(
+      'create_newsletter_draft',
+      'Create a real admin newsletter draft via POST /v1/admin/newsletters. Converts plain/markdown-ish body text to ProseMirror bodyJson. Returns id, status, subject, and adminPath for review on the website. Does not send, schedule, or email anyone — open /admin/newsletters/:id to approve and send.',
+      {
+        subject: z.string().trim().min(1).max(200),
+        body: z.string().trim().min(1).max(30_000),
+        preheader: z.string().trim().max(200).optional(),
+        audienceFilters: audienceFiltersSchema,
+        ctaLabel: z.string().trim().max(40).optional(),
+        ctaHref: z.string().trim().max(500).optional(),
+      },
+      async ({ subject, body, preheader, audienceFilters, ctaLabel, ctaHref }) => {
+        const payload = {
+          subject,
+          bodyJson: plainBodyToNewsletterJson(body),
+          audienceFilters,
+        };
+        if (preheader !== undefined) payload.preheader = preheader;
+        if (ctaLabel !== undefined) payload.ctaLabel = ctaLabel;
+        if (ctaHref !== undefined) payload.ctaHref = ctaHref;
+        const result = await api.request('admin/newsletters', { method: 'POST', body: payload });
+        const data = result?.data ?? result;
+        const id = data?.id;
+        return {
+          id,
+          status: data?.status ?? 'draft',
+          subject: data?.subject ?? subject,
+          adminPath: id ? `/admin/newsletters/${id}` : null,
+          note: 'Draft only — does not send. Open adminPath on the website to approve and send.',
+          data,
+        };
+      },
+      { remoteWrite: true },
+    );
+  }
   tool(
     'newsletters',
     'Read existing newsletter summaries or one newsletter by ID for planning. Does not send, schedule, or update newsletters.',

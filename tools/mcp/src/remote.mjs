@@ -46,7 +46,7 @@ export function createRemoteMcp({ redis, secret, baseUrl, frontendUrl, resolveAd
       if (req.method === 'POST') {
         if (req.headers.origin !== origin || typeof req.body?.csrf !== 'string' ||
           req.body.csrf !== csrf || !['allow', 'deny'].includes(req.body?.decision)) {
-          res.status(403); return page(res, 'Connection blocked', '<p>Start again from ChatGPT.</p>');
+          res.status(403); return page(res, 'Connection blocked', '<p>Start again from your MCP client.</p>');
         }
         const callback = await provider.consent(request, csrf, sessionCookie(req), req.body.decision === 'allow');
         res.clearCookie('moh_mcp_consent', { path: '/mcp/consent' });
@@ -58,9 +58,9 @@ export function createRemoteMcp({ redis, secret, baseUrl, frontendUrl, resolveAd
         return page(res, 'Sign in to connect', `<p>Sign in to Men of Hunger with your own site administrator account, then return to this tab.</p><p><a href="${escapeHtml(frontendUrl)}" target="_blank" rel="noopener noreferrer">Open Men of Hunger</a></p><p><a href="/mcp/consent?request=${escapeHtml(request)}">I’m signed in — continue</a></p>`);
       }
       const writes = pending.scopes?.includes(WRITE_SCOPE);
-      return page(res, 'Connect Men of Hunger', `<p>${escapeHtml(pending.clientName)} is requesting ${writes ? 'read and delegated-action access' : 'read access'} as <strong>@${escapeHtml(admin.username || admin.id)}</strong>.</p><p>Access includes company analytics, member account diagnostics, support and moderation queues, public posts, newsletters, verification, search history, MARV usage, referrals, and crew administration data, your delegated jobs, and their account-specific activity and drafts. Support content may contain personal information.</p><p>${writes ? 'This connection can create and manage delegated jobs, and apply actions you authorize as your account or pages you operate. Jobs can continue after this chat ends until you pause or cancel them in Delegated work.' : 'This connection cannot publish or apply changes.'} You can disconnect this client in ChatGPT.</p><form method="post" action="/mcp/consent"><input type="hidden" name="request" value="${escapeHtml(request)}"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button name="decision" value="allow">${writes ? 'Allow delegated actions' : 'Allow read access'}</button><button name="decision" value="deny">Cancel</button></form><p><small>Environment: ${escapeHtml(baseUrl)}</small></p>`);
+      return page(res, 'Connect Men of Hunger', `<p>${escapeHtml(pending.clientName)} is requesting ${writes ? 'read and delegated-action access' : 'read access'} as <strong>@${escapeHtml(admin.username || admin.id)}</strong>.</p><p>Access includes company analytics, member account diagnostics, support and moderation queues, public posts, newsletters, verification, search history, MARV usage, referrals, and crew administration data, your delegated jobs, and their account-specific activity and drafts. Support content may contain personal information.</p><p>${writes ? 'This connection can create and manage delegated jobs, and apply actions you authorize as your account or pages you operate. Jobs can continue after this chat ends until you pause or cancel them in Delegated work.' : 'This connection cannot publish or apply changes.'} You can disconnect this client in Cursor or ChatGPT.</p><form method="post" action="/mcp/consent"><input type="hidden" name="request" value="${escapeHtml(request)}"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button name="decision" value="allow">${writes ? 'Allow delegated actions' : 'Allow read access'}</button><button name="decision" value="deny">Cancel</button></form><p><small>Environment: ${escapeHtml(baseUrl)}</small></p>`);
     } catch {
-      res.status(400); page(res, 'Reconnect from ChatGPT', '<p>This connection request expired or your administrator sign-in could not be verified. Start again from ChatGPT.</p>');
+      res.status(400); page(res, 'Reconnect from your MCP client', '<p>This connection request expired or your administrator sign-in could not be verified. Start again from your MCP client.</p>');
     }
   });
 
@@ -68,7 +68,8 @@ export function createRemoteMcp({ redis, secret, baseUrl, frontendUrl, resolveAd
     requireBearerAuth({ verifier: provider, requiredScopes: [READ_SCOPE],
       resourceMetadataUrl: `${origin}/.well-known/oauth-protected-resource/mcp` }),
     async (req, res) => {
-      if (req.headers.origin && req.headers.origin !== origin && req.headers.origin !== 'https://chatgpt.com')
+      const allowedOrigins = new Set([origin, 'https://chatgpt.com', 'https://www.cursor.com', 'https://cursor.com']);
+      if (req.headers.origin && !allowedOrigins.has(req.headers.origin))
         return res.status(403).json({ error: 'invalid_origin' });
       if (req.method !== 'POST') return res.status(405).setHeader('Allow', 'POST').end();
       // A request-bound session never touches local credentials or files. The

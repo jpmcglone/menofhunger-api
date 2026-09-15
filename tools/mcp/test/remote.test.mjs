@@ -114,7 +114,10 @@ test('OAuth discovery challenges anonymous callers; protocol handling stays on e
 test('DCR rejects arbitrary callbacks and unknown scopes; authorization binds its resource', async (t) => {
   const f = await fixture(t);
   for (const uri of ['https://evil.example/callback', 'https://chatgpt.com.evil.example/connector/oauth/a',
-    'https://chatgpt.com/connector/oauth/a?redirect=evil']) {
+    'https://chatgpt.com/connector/oauth/a?redirect=evil',
+    'https://www.cursor.com/agents/mcp/oauth/callback?x=1',
+    'http://localhost:8787/callback#frag',
+    'https://evil.cursor.com/agents/mcp/oauth/callback']) {
     assert.equal((await f.register({ redirect_uris: [uri] })).response.status, 400);
   }
   assert.equal((await f.register({ scope: 'moh:admin' })).response.status, 400);
@@ -122,6 +125,24 @@ test('DCR rejects arbitrary callbacks and unknown scopes; authorization binds it
   const auth = await f.authorize(client, { resource: 'https://evil.example/mcp' });
   assert.equal(new URL(auth.path).searchParams.get('error'), 'invalid_target');
   assert.equal(f.createdSessions(), 0);
+});
+
+test('DCR accepts Cursor and loopback callbacks alongside ChatGPT; multiple redirects allowed', async (t) => {
+  const f = await fixture(t);
+  const allowed = [
+    'https://chatgpt.com/connector_platform_oauth_redirect',
+    'https://www.cursor.com/agents/mcp/oauth/callback',
+    'http://localhost:8787/callback',
+    'http://127.0.0.1:8787/callback',
+    'cursor://anysphere.cursor-mcp/oauth/callback',
+    'cursor-nightly://anysphere.cursor-mcp/oauth/callback',
+  ];
+  for (const uri of allowed) {
+    assert.equal((await f.register({ redirect_uris: [uri], client_name: 'Cursor' })).response.status, 201);
+  }
+  const multi = await f.register({ redirect_uris: allowed.slice(0, 6), client_name: 'Multi' });
+  assert.equal(multi.response.status, 201);
+  assert.equal(multi.client.redirect_uris.length, 6);
 });
 
 test('consent requires administrator sign-in, origin and CSRF; HTML escapes member content', async (t) => {
@@ -241,6 +262,21 @@ test('encrypted OAuth state rejects tampering and cannot be substituted between 
   assert.equal(await store.get('grant', 'a', true), null);
 });
 
+
+test('hosted MCP allows ChatGPT and Cursor Origin headers; rejects others', async (t) => {
+  const f = await fixture(t);
+  const { tokens } = await f.connect();
+  const auth = { Authorization: `Bearer ${tokens.access_token}`, 'Content-Type': 'application/json' };
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' });
+  for (const origin of ['https://chatgpt.com', 'https://www.cursor.com', 'https://cursor.com']) {
+    const response = await f.request('/mcp', { method: 'POST', headers: { ...auth, Origin: origin }, body });
+    assert.notEqual(response.status, 403);
+  }
+  const blocked = await f.request('/mcp', { method: 'POST', headers: { ...auth, Origin: 'https://evil.example' }, body });
+  assert.equal(blocked.status, 403);
+  assert.equal((await blocked.json()).error, 'invalid_origin');
+});
+
 test('write authorization adds delegated mutations; read grants cannot escalate on refresh', async (t) => {
   const f = await fixture(t);
   const read = await f.connect();
@@ -250,7 +286,9 @@ test('write authorization adds delegated mutations; read grants cannot escalate 
   const { client } = await f.register({ scope: 'moh:read moh:write' });
   const auth = await f.authorize(client, { scope: 'moh:read moh:write' });
   const consent = await f.request(auth.path, { headers: { Cookie: `${auth.cookie}; moh_session=browser-admin` } });
-  assert.match(await consent.text(), /delegated actions/);
+  const consentHtml = await consent.text();
+  assert.match(consentHtml, /delegated actions/);
+  assert.match(consentHtml, /Cursor or ChatGPT/);
   const allowed = await f.approve(auth);
   const code = new URL(allowed.headers.get('location')).searchParams.get('code');
   const response = await f.exchange(client, code, auth.verifier);
@@ -265,6 +303,7 @@ test('write authorization adds delegated mutations; read grants cannot escalate 
   const { tools } = await mcp.listTools();
   assert.ok(tools.some(tool => tool.name === 'create_delegated_job' && !tool.annotations.readOnlyHint));
   assert.ok(tools.some(tool => tool.name === 'decide_delegated_action'));
+  assert.ok(tools.some(tool => tool.name === 'create_newsletter_draft' && !tool.annotations.readOnlyHint));
   assert.ok(!tools.some(tool => tool.name === 'publish_post'));
   const reduction = await f.post('/token', { client_id: client.client_id, client_secret: client.client_secret,
     grant_type: 'refresh_token', refresh_token: tokens.refresh_token, scope: 'moh:read', resource: `${f.origin}/mcp` });

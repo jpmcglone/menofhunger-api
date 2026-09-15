@@ -43,6 +43,24 @@ export class OAuthStore {
   async remove(kind, token) { await this.redis.del(this.keyFor(kind, token)); }
 }
 
+/** Exact allowlisted OAuth redirect URIs for ChatGPT and Cursor MCP clients. */
+export function isAllowedOAuthRedirectUri(uri) {
+  let url;
+  try { url = new URL(uri); } catch { return false; }
+  if (url.search || url.hash) return false;
+  if (url.protocol === 'https:' && url.origin === 'https://chatgpt.com') {
+    return url.pathname === '/connector_platform_oauth_redirect' ||
+      /^\/connector\/oauth\/[A-Za-z0-9_-]+$/.test(url.pathname);
+  }
+  if (url.href === 'https://www.cursor.com/agents/mcp/oauth/callback') return true;
+  if (url.href === 'http://localhost:8787/callback' || url.href === 'http://127.0.0.1:8787/callback') return true;
+  if (url.href === 'cursor://anysphere.cursor-mcp/oauth/callback') return true;
+  if (url.href === 'cursor-nightly://anysphere.cursor-mcp/oauth/callback') return true;
+  return false;
+}
+
+export const MAX_OAUTH_REDIRECT_URIS = 10;
+
 export class MohOAuthProvider {
   constructor({ store, resourceUrl, resolveAdmin, createSession, revokeSession }) {
     Object.assign(this, { store, resourceUrl, resolveAdmin, createSession, revokeSession });
@@ -51,13 +69,9 @@ export class MohOAuthProvider {
       registerClient: async (client) => {
         // This is a private founder integration. DCR cannot introduce arbitrary
         // redirect hosts; each registered callback still needs an exact match.
-        if (!client.redirect_uris?.length || client.redirect_uris.length > 5 ||
-          !client.redirect_uris.every((uri) => {
-            const url = new URL(uri);
-            return url.origin === 'https://chatgpt.com' && !url.search && !url.hash &&
-              (url.pathname === '/connector_platform_oauth_redirect' ||
-                /^\/connector\/oauth\/[A-Za-z0-9_-]+$/.test(url.pathname));
-          })) throw new InvalidClientMetadataError('Use the ChatGPT OAuth callback URL shown in connection settings.');
+        if (!client.redirect_uris?.length || client.redirect_uris.length > MAX_OAUTH_REDIRECT_URIS ||
+          !client.redirect_uris.every(isAllowedOAuthRedirectUri))
+          throw new InvalidClientMetadataError('Use an allowlisted ChatGPT or Cursor OAuth callback URL shown in connection settings.');
         this.checkScopes(client.scope?.split(' '));
         if (client.client_name?.length > 200) throw new InvalidClientMetadataError('Client name is too long.');
         if (!client.client_id) throw new InvalidClientMetadataError('Missing client ID.');
@@ -83,7 +97,7 @@ export class MohOAuthProvider {
     const request = opaque();
     const csrf = opaque();
     await this.store.put('request', request, {
-      clientId: client.client_id, clientName: client.client_name || 'ChatGPT',
+      clientId: client.client_id, clientName: client.client_name || 'MCP client',
       redirectUri: params.redirectUri, state: params.state,
       scopes: [...new Set([READ_SCOPE, ...(params.scopes ?? [])])],
       challenge: params.codeChallenge, csrfHash: digest(csrf), resourceUrl: this.resourceUrl,
@@ -97,7 +111,7 @@ export class MohOAuthProvider {
   async consentRequest(request, csrf) {
     const pending = await this.store.get('request', request);
     if (!pending || pending.resourceUrl !== this.resourceUrl || typeof csrf !== 'string' || pending.csrfHash !== digest(csrf))
-      throw new InvalidRequestError('Connection request expired. Start again from ChatGPT.');
+      throw new InvalidRequestError('Connection request expired. Start again from your MCP client.');
     return pending;
   }
   async consent(request, csrf, sessionToken, allow) {
@@ -149,7 +163,7 @@ export class MohOAuthProvider {
   }
   async grantFor(grantId) {
     const grant = await this.store.get('grant', grantId);
-    if (!grant || grant.resourceUrl !== this.resourceUrl || grant.expiresAt <= Date.now() / 1000) throw new InvalidGrantError('Connection expired. Reconnect in ChatGPT.');
+    if (!grant || grant.resourceUrl !== this.resourceUrl || grant.expiresAt <= Date.now() / 1000) throw new InvalidGrantError('Connection expired. Reconnect in your MCP client.');
     const admin = await this.resolveAdmin(grant.sessionToken);
     if (!admin || admin.id !== grant.userId) throw new InvalidGrantError('Administrator access was revoked.');
     return grant;

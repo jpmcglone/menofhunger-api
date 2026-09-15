@@ -78,6 +78,23 @@ merged into any existing `mcpServers`:
 You can also add the same stdio server from Cursor Settings → MCP. Reload MCP
 tools or start a new chat after changing the file.
 
+
+### Hosted MCP from Cursor / Grok Bot
+
+Cursor Cloud Agents and Grok Bot can use the same hosted endpoint
+**`https://api.menofhunger.com/mcp`** with OAuth. Dynamic client registration
+accepts these exact redirect URIs (in addition to ChatGPT’s callbacks):
+
+- `https://www.cursor.com/agents/mcp/oauth/callback`
+- `http://localhost:8787/callback` and `http://127.0.0.1:8787/callback`
+- `cursor://anysphere.cursor-mcp/oauth/callback`
+- `cursor-nightly://anysphere.cursor-mcp/oauth/callback`
+
+Consent still happens on `api.menofhunger.com`. After connecting with write
+scope (`moh:write`), you can create a **draft** newsletter via MCP, then open
+`/admin/newsletters/:id` on the website to approve and send. MCP never sends
+or schedules newsletters.
+
 ### Connect Codex
 
 Equivalent CLI registration, when `codex` is on PATH:
@@ -148,8 +165,9 @@ The deployment must preserve these root paths and avoid caching their responses.
 The API runtime requires Node 20.19+; the Docker image includes the shared package.
 
 Authorization uses the official MCP SDK's OAuth endpoints and PKCE S256. Client
-callbacks are restricted to ChatGPT's `/connector/oauth/<callback_id>` or
-`/connector_platform_oauth_redirect` HTTPS URLs. Codes are single-use (2 minutes),
+callbacks are restricted to an exact allowlist: ChatGPT’s `/connector/oauth/<callback_id>` or
+`/connector_platform_oauth_redirect` HTTPS URLs, plus Cursor’s documented MCP OAuth callbacks
+(HTTPS agents callback, localhost:8787 loopback, and `cursor://` / `cursor-nightly://` schemes). Codes are single-use (2 minutes),
 access tokens last up to 15 minutes, and rotating refresh tokens expire with the
 30-day grant. The bearer token is scoped to `moh:read` and this endpoint; it is never
 a raw product session token. Existing admin session policy is checked at consent,
@@ -174,7 +192,7 @@ Ask your assistant:
 - “Investigate why this member has a subscription but cannot access Premium.”
 - “Review retention, showing sample sizes and only mature cohorts.”
 - “Find unanswered public posts from the last week.”
-- “Draft a newsletter from public discussions, and save it for review.”
+- “Draft a newsletter from public discussions, and create an admin draft for me to send on the website.”
 - “Record this decision, its evidence, success measure, and review date.”
 
 The server includes four prompts (`morning_briefing`, `membership_investigation`,
@@ -195,6 +213,7 @@ npm run --silent moh -- health
 npm run --silent moh -- content --unanswered --limit 20
 npm run --silent moh -- content --since 2026-09-01T00:00:00Z --before 2026-09-05T00:00:00Z
 npm run --silent moh -- decisions
+npm run --silent moh -- newsletter-draft --subject "Week in review" --body "Hello members."
 ```
 
 Discover exact input schemas rather than guessing arguments:
@@ -227,7 +246,7 @@ npm run --silent moh -- draft --input tools/mcp/examples/draft.json
 Replace sample evidence with real observations before recording a decision.
 Drafts and decisions live only on this computer, separated by API environment.
 Saving a decision does not execute it or schedule its review. Drafts are plain
-text/Markdown artifacts, not live newsletter records.
+text/Markdown artifacts, not live newsletter records. Use `create_newsletter_draft` / `newsletter-draft` for a real admin draft, then send from `/admin/newsletters/:id` on the website.
 
 ## Publish as your account or an operated page (desktop/CLI)
 

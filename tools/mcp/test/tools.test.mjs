@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StateStore } from '../src/state.mjs';
 import { configuredBaseUrl, serverName } from '../src/config.mjs';
-import { createTools, retentionWithMaturity } from '../src/tools.mjs';
+import { createTools, retentionWithMaturity, plainBodyToNewsletterJson } from '../src/tools.mjs';
 import { parseCommand, describeTools, formatHuman } from '../src/commands.mjs';
 
 test('CLI aliases, flags and generic calls resolve to the same validated tool arguments', async () => {
@@ -286,4 +286,66 @@ test('activation and attention use shared admin routes and bounded validated inp
   await assert.rejects(activation.execute({ offset: -1 }));
   await tools.find(tool => tool.name === 'admin_workspace').execute({ workspace: 'attention' });
   assert.equal(calls.at(-1)[0], 'admin/operations/attention');
+});
+
+test('plainBodyToNewsletterJson matches delegation multi-paragraph conversion', () => {
+  assert.equal(
+    plainBodyToNewsletterJson('Hello'),
+    JSON.stringify({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hello' }] }] }),
+  );
+  assert.deepEqual(JSON.parse(plainBodyToNewsletterJson('One\n\nTwo')), {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'One' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Two' }] },
+    ],
+  });
+});
+
+test('create_newsletter_draft posts admin draft and is gated by remoteWrites', async () => {
+  const calls = [];
+  const api = {
+    baseUrl: 'https://api.menofhunger.com/v1',
+    request: async (path, init) => {
+      calls.push({ path, init });
+      return { data: { id: 'nl_1', status: 'draft', subject: 'Week in review' } };
+    },
+  };
+  const withWrite = createTools({ api, store: {}, localArtifacts: false, remoteWrites: true });
+  const without = createTools({ api, store: {}, localArtifacts: false, remoteWrites: false });
+  assert.ok(withWrite.some((tool) => tool.name === 'create_newsletter_draft'));
+  assert.ok(!without.some((tool) => tool.name === 'create_newsletter_draft'));
+  const tool = withWrite.find((tool) => tool.name === 'create_newsletter_draft');
+  assert.equal(tool.remoteWrite, true);
+  const result = await tool.execute({
+    subject: 'Week in review',
+    body: 'Hello members.\n\nSee you Thursday.',
+    preheader: 'A short note',
+    audienceFilters: [{ type: 'tier', min: 'verified' }],
+  });
+  assert.equal(result.id, 'nl_1');
+  assert.equal(result.status, 'draft');
+  assert.equal(result.adminPath, '/admin/newsletters/nl_1');
+  assert.match(result.note, /does not send/i);
+  assert.equal(calls[0].path, 'admin/newsletters');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.body.subject, 'Week in review');
+  assert.equal(calls[0].init.body.preheader, 'A short note');
+  assert.deepEqual(calls[0].init.body.audienceFilters, [{ type: 'tier', min: 'verified' }]);
+  assert.deepEqual(JSON.parse(calls[0].init.body.bodyJson), {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Hello members.' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'See you Thursday.' }] },
+    ],
+  });
+  const command = await parseCommand([
+    'newsletter-draft',
+    '--subject',
+    'Week in review',
+    '--body',
+    'Hello',
+  ]);
+  assert.equal(command.toolName, 'create_newsletter_draft');
+  assert.deepEqual(command.args, { subject: 'Week in review', body: 'Hello' });
 });
