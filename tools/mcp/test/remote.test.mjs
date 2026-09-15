@@ -161,6 +161,11 @@ test('consent requires administrator sign-in, origin and CSRF; HTML escapes memb
   const canceled = await f.approve(auth, { body: { decision: 'deny' } });
   assert.equal(new URL(canceled.headers.get('location')).searchParams.get('error'), 'access_denied');
   assert.equal(f.createdSessions(), 0);
+  // Same-site HTML form POSTs may omit Origin; CSRF still gates the request.
+  const auth2 = await f.authorize(client);
+  const withoutOrigin = await f.approve(auth2, { headers: { Origin: '' } });
+  assert.equal(withoutOrigin.status, 303);
+  assert.ok(new URL(withoutOrigin.headers.get('location')).searchParams.get('code'));
 });
 
 test('authorization code enforces PKCE, redirect and one-time redemption', async (t) => {

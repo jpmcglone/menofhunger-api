@@ -44,7 +44,10 @@ export function createRemoteMcp({ redis, secret, baseUrl, frontendUrl, resolveAd
       const csrf = req.cookies?.moh_mcp_consent;
       const pending = await provider.consentRequest(request, csrf);
       if (req.method === 'POST') {
-        if (req.headers.origin !== origin || typeof req.body?.csrf !== 'string' ||
+        // Some browsers omit Origin on same-site HTML form POSTs. CSRF cookie +
+        // matching body token already gate this; reject only a wrong Origin.
+        const requestOrigin = req.headers.origin;
+        if ((requestOrigin && requestOrigin !== origin) || typeof req.body?.csrf !== 'string' ||
           req.body.csrf !== csrf || !['allow', 'deny'].includes(req.body?.decision)) {
           res.status(403); return page(res, 'Connection blocked', '<p>Start again from your MCP client.</p>');
         }
