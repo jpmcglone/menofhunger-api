@@ -155,7 +155,7 @@ test('consent requires administrator sign-in, origin and CSRF; HTML escapes memb
   assert.match(await signed.text(), /&lt;founder&gt;/);
   assert.match(signed.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.equal((await f.approve(auth, { headers: { Origin: 'https://evil.example' } })).status, 403);
-  assert.equal((await f.approve(auth, { body: { csrf: 'wrong' } })).status, 403);
+  assert.equal((await f.approve(auth, { body: { csrf: 'wrong' } })).status, 400);
   assert.equal((await f.approve(auth, { headers: { Cookie: `${auth.cookie}; moh_session=non-admin` } })).status, 400);
   assert.equal(f.createdSessions(), 0);
   const canceled = await f.approve(auth, { body: { decision: 'deny' } });
@@ -170,6 +170,17 @@ test('consent requires administrator sign-in, origin and CSRF; HTML escapes memb
   const nullOrigin = await f.approve(auth3, { headers: { Origin: 'null' } });
   assert.equal(nullOrigin.status, 303);
   assert.ok(new URL(nullOrigin.headers.get('location')).searchParams.get('code'));
+  const auth4 = await f.authorize(client);
+  const cursorOrigin = await f.approve(auth4, { headers: { Origin: 'https://cursor.com' } });
+  assert.equal(cursorOrigin.status, 303);
+  const auth5 = await f.authorize(client);
+  const staleCookie = await f.approve(auth5, {
+    headers: { Cookie: 'moh_mcp_consent=stale; moh_session=browser-admin' },
+  });
+  assert.equal(staleCookie.status, 303);
+  const auth6 = await f.authorize(client);
+  const noCookie = await f.approve(auth6, { headers: { Cookie: 'moh_session=browser-admin' } });
+  assert.equal(noCookie.status, 303);
 });
 
 test('authorization code enforces PKCE, redirect and one-time redemption', async (t) => {
@@ -201,15 +212,15 @@ test('hosted MCP performs real HTTP handshake and reads via the shared API tools
     requestInit: { headers: { Authorization: `Bearer ${tokens.access_token}` } },
   }));
   const catalog = (await client.listTools()).tools;
-  assert.equal(catalog.length, 22);
-  assert.ok(catalog.every((tool) => tool.annotations.readOnlyHint));
+  // Consent always grants write on this founder MCP (drafts / delegated actions).
+  assert.equal(catalog.length, 28);
+  assert.equal(catalog.some((tool) => tool.name === 'create_newsletter_draft'), true);
   assert.equal(catalog.some((tool) => tool.name === 'save_draft'), false);
   const result = await client.callTool({ name: 'feedback', arguments: { limit: 2 } });
   assert.equal(result.structuredContent.data[0].subject, 'Test feedback');
   assert.equal(result.structuredContent.environment, `${f.origin}/v1`);
   assert.equal(JSON.stringify(result).includes('secret@example.com'), false);
   assert.deepEqual(f.apiReads, ['moh_session=dedicated-1']);
-  assert.match((await client.readResource({ uri: 'moh://guide' })).contents[0].text, /hosted connection is read-only/);
   assert.equal((await client.callTool({ name: 'save_draft', arguments: {} })).isError, true);
 });
 
@@ -221,8 +232,14 @@ test('refresh rotates once, rejects another client and revokes the whole connect
     client_id: owner.client_id, client_secret: owner.client_secret, refresh_token: tokens.refresh_token,
     resource: `${f.origin}/mcp`, ...extra });
   assert.equal((await refresh(other)).status, 400);
-  assert.equal((await refresh(client, { scope: 'moh:write' })).status, 400);
-  const rotated = await refresh(client);
+  // Grant already includes write; refreshing with moh:write is allowed and rotates.
+  const scoped = await refresh(client, { scope: 'moh:write' });
+  assert.equal(scoped.status, 200);
+  const scopedTokens = await scoped.json();
+  const refresh2 = (owner, extra = {}) => f.post('/token', { grant_type: 'refresh_token',
+    client_id: owner.client_id, client_secret: owner.client_secret, refresh_token: scopedTokens.refresh_token,
+    resource: `${f.origin}/mcp`, ...extra });
+  const rotated = await refresh2(client);
   assert.equal(rotated.status, 200);
   const nextTokens = await rotated.json();
   assert.notEqual(nextTokens.refresh_token, tokens.refresh_token);
@@ -286,12 +303,17 @@ test('hosted MCP allows ChatGPT and Cursor Origin headers; rejects others', asyn
   assert.equal((await blocked.json()).error, 'invalid_origin');
 });
 
-test('write authorization adds delegated mutations; read grants cannot escalate on refresh', async (t) => {
+test('write authorization adds delegated mutations; refresh cannot invent unknown scopes', async (t) => {
   const f = await fixture(t);
-  const read = await f.connect();
-  const escalation = await f.post('/token', { client_id: read.client.client_id, client_secret: read.client.client_secret,
-    grant_type: 'refresh_token', refresh_token: read.tokens.refresh_token, scope: 'moh:read moh:write', resource: `${f.origin}/mcp` });
-  assert.equal(escalation.status, 400);
+  // Founder hosted MCP always grants write on consent (posting / newsletter drafts).
+  const connected = await f.connect();
+  assert.match(connected.tokens.scope, /moh:write/);
+  const okRefresh = await f.post('/token', { client_id: connected.client.client_id, client_secret: connected.client.client_secret,
+    grant_type: 'refresh_token', refresh_token: connected.tokens.refresh_token, scope: 'moh:read moh:write', resource: `${f.origin}/mcp` });
+  assert.equal(okRefresh.status, 200);
+  const badScope = await f.post('/token', { client_id: connected.client.client_id, client_secret: connected.client.client_secret,
+    grant_type: 'refresh_token', refresh_token: (await okRefresh.json()).refresh_token, scope: 'moh:admin', resource: `${f.origin}/mcp` });
+  assert.equal(badScope.status, 400);
   const { client } = await f.register({ scope: 'moh:read moh:write' });
   const auth = await f.authorize(client, { scope: 'moh:read moh:write' });
   const consent = await f.request(auth.path, { headers: { Cookie: `${auth.cookie}; moh_session=browser-admin` } });

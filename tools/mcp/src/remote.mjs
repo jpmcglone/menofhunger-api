@@ -42,20 +42,20 @@ export function createRemoteMcp({ redis, secret, baseUrl, frontendUrl, resolveAd
     try {
       const request = req.method === 'POST' ? req.body?.request : req.query.request;
       if (req.method === 'POST') {
-        // Prefer the form CSRF token (double-submit). The cookie is optional extra
-        // proof — some embedded browsers drop it on POST while still showing the form.
+        // Form CSRF is bound to the pending request in Redis. Do not also require
+        // the cookie: embedded browsers drop it, or send a stale one from an
+        // earlier attempt, which used to 403 every Allow click.
         const bodyCsrf = req.body?.csrf;
-        const cookieCsrf = req.cookies?.moh_mcp_consent;
         const decision = req.body?.decision;
         const requestOrigin = req.headers.origin;
-        // Compare to the host that actually served this form, not only BROWSER_HANDOFF
-        // origin — a mis-set handoff URL used to block every Allow click.
+        // Compare to the host that served this form, not only BROWSER_HANDOFF
+        // origin. Cursor/Grok in-app browsers often send their own Origin.
         const hostHeader = String(req.headers.host || '').split(',')[0].trim();
         const hostOrigin = hostHeader ? `${req.protocol}://${hostHeader}` : origin;
-        const allowedOrigins = new Set([origin, hostOrigin]);
+        const allowedOrigins = new Set([origin, hostOrigin,
+          'https://chatgpt.com', 'https://www.cursor.com', 'https://cursor.com']);
         const originOk = !requestOrigin || requestOrigin === 'null' || allowedOrigins.has(requestOrigin);
-        const csrfOk = typeof bodyCsrf === 'string' && bodyCsrf.length > 0 &&
-          (!cookieCsrf || cookieCsrf === bodyCsrf);
+        const csrfOk = typeof bodyCsrf === 'string' && bodyCsrf.length > 0;
         const decisionOk = decision === 'allow' || decision === 'deny';
         if (!originOk || !csrfOk || !decisionOk) {
           res.status(403);

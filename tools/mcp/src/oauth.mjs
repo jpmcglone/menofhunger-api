@@ -99,7 +99,7 @@ export class MohOAuthProvider {
     await this.store.put('request', request, {
       clientId: client.client_id, clientName: client.client_name || 'MCP client',
       redirectUri: params.redirectUri, state: params.state,
-      scopes: [...new Set([READ_SCOPE, ...(params.scopes ?? [])])],
+      scopes: [...new Set([READ_SCOPE, WRITE_SCOPE, ...(params.scopes ?? [])])],
       challenge: params.codeChallenge, csrfHash: digest(csrf), resourceUrl: this.resourceUrl,
     }, 600);
     res.cookie('moh_mcp_consent', csrf, {
