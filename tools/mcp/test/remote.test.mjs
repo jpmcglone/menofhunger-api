@@ -166,6 +166,10 @@ test('consent requires administrator sign-in, origin and CSRF; HTML escapes memb
   const withoutOrigin = await f.approve(auth2, { headers: { Origin: '' } });
   assert.equal(withoutOrigin.status, 303);
   assert.ok(new URL(withoutOrigin.headers.get('location')).searchParams.get('code'));
+  const auth3 = await f.authorize(client);
+  const nullOrigin = await f.approve(auth3, { headers: { Origin: 'null' } });
+  assert.equal(nullOrigin.status, 303);
+  assert.ok(new URL(nullOrigin.headers.get('location')).searchParams.get('code'));
 });
 
 test('authorization code enforces PKCE, redirect and one-time redemption', async (t) => {

@@ -41,20 +41,35 @@ export function createRemoteMcp({ redis, secret, baseUrl, frontendUrl, resolveAd
   router.all('/mcp/consent', rateLimit({ windowMs: 60_000, limit: 30, legacyHeaders: false }), async (req, res) => {
     try {
       const request = req.method === 'POST' ? req.body?.request : req.query.request;
-      const csrf = req.cookies?.moh_mcp_consent;
-      const pending = await provider.consentRequest(request, csrf);
       if (req.method === 'POST') {
-        // Some browsers omit Origin on same-site HTML form POSTs. CSRF cookie +
-        // matching body token already gate this; reject only a wrong Origin.
+        // Prefer the form CSRF token (double-submit). The cookie is optional extra
+        // proof — some embedded browsers drop it on POST while still showing the form.
+        const bodyCsrf = req.body?.csrf;
+        const cookieCsrf = req.cookies?.moh_mcp_consent;
+        const decision = req.body?.decision;
         const requestOrigin = req.headers.origin;
-        if ((requestOrigin && requestOrigin !== origin) || typeof req.body?.csrf !== 'string' ||
-          req.body.csrf !== csrf || !['allow', 'deny'].includes(req.body?.decision)) {
-          res.status(403); return page(res, 'Connection blocked', '<p>Start again from your MCP client.</p>');
+        // Compare to the host that actually served this form, not only BROWSER_HANDOFF
+        // origin — a mis-set handoff URL used to block every Allow click.
+        const hostHeader = String(req.headers.host || '').split(',')[0].trim();
+        const hostOrigin = hostHeader ? `${req.protocol}://${hostHeader}` : origin;
+        const allowedOrigins = new Set([origin, hostOrigin]);
+        const originOk = !requestOrigin || requestOrigin === 'null' || allowedOrigins.has(requestOrigin);
+        const csrfOk = typeof bodyCsrf === 'string' && bodyCsrf.length > 0 &&
+          (!cookieCsrf || cookieCsrf === bodyCsrf);
+        const decisionOk = decision === 'allow' || decision === 'deny';
+        if (!originOk || !csrfOk || !decisionOk) {
+          res.status(403);
+          const hint = !originOk ? `origin (${requestOrigin || 'none'} vs ${hostOrigin})`
+            : !csrfOk ? 'csrf' : 'decision';
+          return page(res, 'Connection blocked',
+            `<p>Start again from your MCP client.</p><p><small>${escapeHtml(hint)}</small></p>`);
         }
-        const callback = await provider.consent(request, csrf, sessionCookie(req), req.body.decision === 'allow');
+        const callback = await provider.consent(request, bodyCsrf, sessionCookie(req), decision === 'allow');
         res.clearCookie('moh_mcp_consent', { path: '/mcp/consent' });
         return res.redirect(303, callback);
       }
+      const csrf = req.cookies?.moh_mcp_consent;
+      const pending = await provider.consentRequest(request, csrf);
       if (req.method !== 'GET') return res.status(405).end();
       const admin = await resolveAdmin(sessionCookie(req));
       if (!admin) {
