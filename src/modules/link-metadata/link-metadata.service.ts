@@ -1,3 +1,4 @@
+import { spotifyContent, isSpotifyShareUrl, resolveSpotifyShareUrl, fetchSpotifyMetadata } from './spotify-link-metadata';
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -179,6 +180,26 @@ export class LinkMetadataService {
   async getMetadata(url: string): Promise<LinkMetadataDto | null> {
     const normalized = normalizeUrl(url);
     if (!normalized) return null;
+
+    // Keep canonical URLs in the existing metadata contract; no new persisted media fields.
+    if (isSpotifyShareUrl(normalized)) {
+      const identity = `${normalized}:spotify-share-v1`;
+      const result = await this.cache.getOrSetJsonWithLock<{ meta: LinkMetadataDto | null }>({
+        enabled: true, key: RedisKeys.linkMeta(identity), lockKey: RedisKeys.linkMetaLock(identity),
+        ttlSeconds: value => value.meta ? CacheTtl.linkMetaFrontSeconds : CacheTtl.linkMetaNullSeconds,
+        lockTtlMs: 8_000, lockWaitMs: 250,
+        computeAndSet: async () => {
+          try {
+            const canonical = await resolveSpotifyShareUrl(normalized, AbortSignal.timeout(4_000));
+            if (!canonical) return { meta: null };
+            const meta = await this.getMetadata(canonical);
+            return { meta: meta ?? { url: canonical, title: 'Spotify', description: null, imageUrl: null, siteName: 'Spotify', socialPost: null, videoEmbed: null } };
+          } catch { return { meta: null }; }
+        },
+        fallback: async () => ({ meta: null }),
+      });
+      return result?.meta ?? null;
+    }
 
     // MoH internal links: return synthetic metadata immediately without hitting external
     // scrapers. Avoids caching "Login | Men of Hunger" for auth-gated pages.
@@ -380,7 +401,7 @@ export class LinkMetadataService {
 
   private async fetchFromExternal(url: string): Promise<LinkMetadataDto | null> {
     const controller = new AbortController();
-    const timeoutMs = youtubeVideoId(url) ? 4_000 : isPickaxPostUrl(url)
+    const timeoutMs = youtubeVideoId(url) || spotifyContent(url) ? 4_000 : isPickaxPostUrl(url)
       ? PICKAX_ENRICH_TIMEOUT_MS
       : isXPostUrl(url)
         ? X_ENRICH_TIMEOUT_MS
@@ -394,6 +415,11 @@ export class LinkMetadataService {
     try {
       const u = new URL(url);
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+
+      if (spotifyContent(url)) {
+        const meta = await fetchSpotifyMetadata(url, controller.signal);
+        return meta ? { url, ...meta, socialPost: null, videoEmbed: null } : null;
+      }
 
       if (youtubeVideoId(url)) {
         const meta = await fetchYoutubeMetadata(url, controller.signal);

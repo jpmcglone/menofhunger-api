@@ -25,6 +25,11 @@ describe('matchStoredAssetToKey', () => {
     expect(matchStoredAssetToKey(`https://other.cdn/${key}`, keySet, urlToKey)).toBe(key);
   });
 
+  it('does not treat external Spotify players or artwork as owned uploads', () => {
+    expect(matchStoredAssetToKey('https://open.spotify.com/embed/track/4cOdK2wGLETKBW3PvgPWqT', keySet, urlToKey)).toBeNull();
+    expect(matchStoredAssetToKey('https://i.scdn.co/image/abcdef', keySet, urlToKey)).toBeNull();
+  });
+
   it('returns null for unrelated values', () => {
     expect(matchStoredAssetToKey('https://cdn.example/other.jpg', keySet, urlToKey)).toBeNull();
     expect(matchStoredAssetToKey(null, keySet, urlToKey)).toBeNull();
