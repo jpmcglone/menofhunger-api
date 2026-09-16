@@ -18,7 +18,7 @@
     "dev:clean": "npm run dev:kill && npm run dev",
     "start": "node dist/main.js",
     "build": "nest build",
-    "build:ci": "nest build",
+    "build:ci": "npm run build",
     "build:typecheck": "tsc --noEmit",
     "postbuild": "node scripts/check-module-graph.mjs && node scripts/admin-coverage.mjs --check",
     "check:admin-coverage": "node scripts/admin-coverage.mjs --check",
@@ -35,12 +35,17 @@
     "test": "jest",
     "test:ci": "jest --ci --runInBand",
     "test:watch": "jest --watch --passWithNoTests",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:e2e": "jest --runInBand --config ./test/jest-e2e.json",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:create": "node scripts/create-migration-from-db.js",
     "prisma:migrate:deploy": "node scripts/prisma-deploy.mjs",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "check:contracts": "node scripts/emit-contracts.mjs --check && ts-node scripts/sync-contract-fixtures.ts --check",
+    "sync:contract-fixtures": "ts-node scripts/sync-contract-fixtures.ts",
+    "check": "node scripts/check-local.mjs",
+    "check:database": "bash scripts/check-database.sh",
+    "check:guidance": "python3 scripts/sync-agent-guidance_test.py && python3 scripts/sync-agent-guidance.py --check"
   },
   "dependencies": {
     "@apple/app-store-server-library": "^3.1.0",

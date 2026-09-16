@@ -28,6 +28,11 @@ postgresTests("post ranking on PostgreSQL", () => {
         ? String(value)
         : `'${(value instanceof Date ? value.toISOString() : String(value)).replace(/'/g, "''")}'`;
   async function sql(query: string) {
+    if (process.env.POST_RANKING_FIXTURE_CONTAINER) {
+      return execFileSync('docker', ['exec', process.env.POST_RANKING_FIXTURE_CONTAINER,
+        'psql', '-X', '-qAt', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres',
+        '-d', 'moh_ranking_fixture', '-c', query], { encoding: 'utf8' }).trim();
+    }
     if (embedded) {
       const results = await embedded.exec(query);
       return results
@@ -89,7 +94,7 @@ postgresTests("post ranking on PostgreSQL", () => {
     if (process.env.POST_RANKING_PGLITE_MODULE) {
       const { PGlite } = require(process.env.POST_RANKING_PGLITE_MODULE);
       embedded = new PGlite();
-    } else {
+    } else if (!process.env.POST_RANKING_FIXTURE_CONTAINER) {
       directory = mkdtempSync(join(tmpdir(), "moh-ranking-pg-"));
       execFileSync(
         "initdb",

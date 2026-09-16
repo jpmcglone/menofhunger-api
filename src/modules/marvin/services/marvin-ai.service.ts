@@ -1,5 +1,7 @@
 import { marvPersonalFunctionTools } from './marvin-personal-tools';
 import { Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
+import { requireAiConsent } from './ai-consent';
 import OpenAI from 'openai';
 import type { MarvinSource } from '@prisma/client';
 import { AppConfigService } from '../../app/app-config.service';
@@ -44,6 +46,8 @@ export type MarvAIToolDispatcher = (
 
 export type MarvAIRequest = {
   source: MarvinSource;
+  /** Internal background processing of already-shared content; never set from a client body. */
+  sharedContentOnly?: boolean;
   /** Dedicated admin tool set. Never supplied by public/private member processors. */
   adminTools?: ReadonlyArray<Record<string, unknown>>;
   /** Server-owned opt-in for delegated research; existing web-search configuration still applies. */
@@ -155,7 +159,7 @@ export class MarvinAIService {
   private readonly logger = new Logger(MarvinAIService.name);
   private clientPromise: Promise<OpenAI | null> | null = null;
 
-  constructor(private readonly appConfig: AppConfigService) {}
+  constructor(private readonly appConfig: AppConfigService, private readonly prisma: PrismaService) {}
 
   /**
    * Returns true when OpenAI is configured (api key + stored prompt id).
@@ -188,6 +192,7 @@ export class MarvinAIService {
    * of posting a reply.
    */
   async respond(req: MarvAIRequest): Promise<MarvAIResult> {
+    if (!req.sharedContentOnly) await requireAiConsent(this.prisma, req.toolContext.requesterUserId);
     const requestSignal = req.source === 'admin_console' ? AbortSignal.timeout(210_000) : undefined;
     const cfg = this.appConfig.marvOpenAI();
     const limits = this.appConfig.marvLimits();

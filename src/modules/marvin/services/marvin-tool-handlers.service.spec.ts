@@ -63,9 +63,10 @@ function makeFakeCache() {
 function makeService() {
   const prisma: any = {
     $queryRaw: jest.fn(async () => []),
-    user: { findFirst: jest.fn(), findMany: jest.fn(async () => []) },
+    user: { findUnique: jest.fn(async () => ({ verifiedStatus: 'identity', premium: true, premiumPlus: false })), findFirst: jest.fn(), findMany: jest.fn(async () => []) },
+    communityGroupMember: { findUnique: jest.fn(async () => null) },
     userContextCard: { findFirst: jest.fn() },
-    post: { findFirst: jest.fn(), findMany: jest.fn(async () => []) },
+    post: { findUnique: jest.fn(async () => null), findFirst: jest.fn(), findMany: jest.fn(async () => []) },
     marvinThreadSummary: { findUnique: jest.fn() },
     message: { findMany: jest.fn(async () => []) },
   };
@@ -274,7 +275,7 @@ describe('MarvinToolHandlersService.dispatch', () => {
       expect(c.hits).toBe(1);
     });
 
-    it('get_post: same postId twice → one DB call', async () => {
+    it('get_post: rechecks access on repeated calls', async () => {
       const { svc, prisma, cache } = makeService();
       prisma.post.findFirst.mockResolvedValue({
         id: 'p-1',
@@ -287,8 +288,8 @@ describe('MarvinToolHandlersService.dispatch', () => {
       });
       await svc.dispatch('get_post', { postId: 'p-1' }, baseCtx);
       await svc.dispatch('get_post', { postId: 'p-1' }, baseCtx);
-      expect(prisma.post.findFirst).toHaveBeenCalledTimes(1);
-      expect(cache.counters().hits).toBe(1);
+      expect(prisma.post.findFirst).toHaveBeenCalledTimes(2);
+      expect(cache.counters().hits).toBe(0);
     });
 
     it('get_post: refuses private-group posts unless they are in the current thread', async () => {
@@ -298,9 +299,20 @@ describe('MarvinToolHandlersService.dispatch', () => {
       const where = prisma.post.findFirst.mock.calls[0][0].where;
       expect(where.OR).toEqual([
         { communityGroupId: null },
-        { communityGroup: { deletedAt: null, joinPolicy: 'open' } },
       ]);
       expect(where.OR).not.toContainEqual({ id: 'r-1' });
+    });
+
+    it('allows another post in the current group only for a current member', async () => {
+      const { svc, prisma } = makeService();
+      prisma.post.findUnique.mockResolvedValue({ communityGroupId: 'group-1' });
+      prisma.communityGroupMember.findUnique.mockResolvedValue({ status: 'active' });
+      prisma.post.findFirst.mockResolvedValue(null);
+      await svc.dispatch('get_post', { postId: 'group-post' }, baseCtx);
+      expect(prisma.post.findFirst.mock.calls[0][0].where.OR).toContainEqual({ communityGroupId: 'group-1', communityGroup: { deletedAt: null } });
+      prisma.communityGroupMember.findUnique.mockResolvedValue({ status: 'left' });
+      await svc.dispatch('get_post', { postId: 'group-post' }, baseCtx);
+      expect(prisma.post.findFirst.mock.calls[1][0].where.OR).not.toContainEqual({ communityGroupId: 'group-1', communityGroup: { deletedAt: null } });
     });
 
     it('get_post: current-thread OR lets a private-group @marv mention still load', async () => {
@@ -321,7 +333,7 @@ describe('MarvinToolHandlersService.dispatch', () => {
       expect(where.OR).toContainEqual({ rootId: 'r-1' });
     });
 
-    it('get_post_thread_recent_messages: same root + same limit → one DB pair', async () => {
+    it('get_post_thread_recent_messages: rechecks conversation access for repeat requests', async () => {
       const { svc, prisma } = makeService();
       prisma.post.findFirst.mockResolvedValue({
         id: 'r-1',
@@ -333,8 +345,8 @@ describe('MarvinToolHandlersService.dispatch', () => {
       await svc.dispatch('get_post_thread_recent_messages', { rootPostId: 'r-1' }, baseCtx);
       await svc.dispatch('get_post_thread_recent_messages', { rootPostId: 'r-1' }, baseCtx);
       // findFirst (root) + findMany (replies) run once total.
-      expect(prisma.post.findFirst).toHaveBeenCalledTimes(1);
-      expect(prisma.post.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.post.findFirst).toHaveBeenCalledTimes(2);
+      expect(prisma.post.findMany).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -349,7 +361,7 @@ describe('MarvinToolHandlersService.dispatch', () => {
       expect(cache.get('marv:tool:user-card:eve')).toEqual({ meta: null });
     });
 
-    it('get_post_thread_summary: missing summary returns no_summary and dedupes', async () => {
+    it('get_post_thread_summary: missing summary returns no_summary after checking current access', async () => {
       const { svc, prisma, cache } = makeService();
       prisma.post.findFirst.mockResolvedValue({ id: 'r-1' });
       prisma.marvinThreadSummary.findUnique.mockResolvedValue(null);
@@ -357,8 +369,8 @@ describe('MarvinToolHandlersService.dispatch', () => {
       const b = await svc.dispatch('get_post_thread_summary', { rootPostId: 'r-1' }, baseCtx);
       expect(JSON.parse(a)).toEqual({ error: 'no_summary', note: expect.any(String) });
       expect(JSON.parse(b)).toEqual({ error: 'no_summary', note: expect.any(String) });
-      expect(prisma.marvinThreadSummary.findUnique).toHaveBeenCalledTimes(1);
-      expect(cache.counters().hits).toBe(1);
+      expect(prisma.marvinThreadSummary.findUnique).toHaveBeenCalledTimes(2);
+      expect(cache.counters().hits).toBe(0);
     });
   });
 

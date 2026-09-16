@@ -1,3 +1,4 @@
+import { requireAiConsent } from './ai-consent';
 import { ForbiddenException, HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import type { MarvinMode } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -121,6 +122,8 @@ export class MarvinCatchUpService {
         error: MARV_ERROR_CODES.notPremium,
       });
     }
+
+    await requireAiConsent(this.prisma, userId);
 
     // 3. Visibility gate — resolve through PostsService so gated/onlyMe content never leaks.
     //    Throws ForbiddenException/NotFoundException, which the global filter surfaces verbatim.

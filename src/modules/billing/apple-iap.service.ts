@@ -26,7 +26,8 @@ const ACTIVE_ASSN_TYPES = new Set([
 
 const EXPIRED_ASSN_TYPES = new Set([
   'EXPIRED',
-  'REVOKED',
+  'REVOKE',
+  'REFUND',
 ]);
 
 @Injectable()
@@ -120,12 +121,8 @@ export class AppleIapService {
       throw new UnprocessableEntityException('Verified transaction is missing required fields.');
     }
 
-    // Reject sandbox receipts in production — the App Review fallback in verifyAgainstEnvironments
-    // allows sandbox JWS through on a prod bundle, so we must explicitly guard here.
-    // Server notifications use handleNotification (server-signed payload); this path is client-submitted.
-    if (cfg.environment === 'production' && txn.environment === Environment.SANDBOX) {
-      throw new UnprocessableEntityException('Sandbox transactions are not accepted in production.');
-    }
+    // App Review and TestFlight use Apple-signed Sandbox transactions. Persist them
+    // separately so testing cannot replace a real subscription or earn cash/referrals.
 
     const tier = cfg.productTierMap[txn.productId];
     if (!tier) {
@@ -133,7 +130,7 @@ export class AppleIapService {
     }
 
     const expiresAt = txn.expiresDate ? new Date(txn.expiresDate) : null;
-    const isActive = expiresAt ? expiresAt > new Date() : false;
+    const isActive = !txn.revocationDate && Boolean(expiresAt && expiresAt > new Date());
 
     await this.upsertAppleSub({
       originalTransactionId: txn.originalTransactionId,
@@ -151,7 +148,7 @@ export class AppleIapService {
     // Mirror the Stripe path: trigger the one-time referral bonus when this user's
     // Apple subscription first becomes active.  maybeGrantReferralBonus is idempotent
     // via referralBonusGrantedAt, so calling it on every active transaction is safe.
-    if (isActive) {
+    if (isActive && txn.environment === Environment.PRODUCTION) {
       try {
         await this.referral.maybeGrantReferralBonus(userId);
       } catch (err) {
@@ -205,7 +202,9 @@ export class AppleIapService {
     }
 
     const user = await this.prisma.user.findFirst({
-      where: { appleOriginalTransactionId: txn.originalTransactionId },
+      where: txn.environment === Environment.SANDBOX
+        ? { appleSandboxOriginalTransactionId: txn.originalTransactionId }
+        : { appleOriginalTransactionId: txn.originalTransactionId },
       select: { id: true },
     });
 
@@ -218,7 +217,9 @@ export class AppleIapService {
     const now = new Date();
 
     let status: string;
-    if (notificationType && ACTIVE_ASSN_TYPES.has(notificationType)) {
+    if (txn.revocationDate) {
+      status = 'expired';
+    } else if (notificationType && ACTIVE_ASSN_TYPES.has(notificationType)) {
       status = 'active';
     } else if (notificationType && EXPIRED_ASSN_TYPES.has(notificationType)) {
       status = 'expired';
@@ -253,7 +254,7 @@ export class AppleIapService {
     this.logger.log(`[apple-iap] Recomputed entitlement for user ${user.id} after ${notificationType ?? 'notification'}`);
 
     // Trigger one-time referral bonus on active subscription events (idempotent).
-    if (status === 'active') {
+    if (status === 'active' && txn.environment === Environment.PRODUCTION) {
       try {
         await this.referral.maybeGrantReferralBonus(user.id);
       } catch (err) {
@@ -273,9 +274,24 @@ export class AppleIapService {
     environment: string;
     userId: string;
   }) {
+    const sandbox = params.environment === Environment.SANDBOX;
+    const owner = await this.prisma.user.findFirst({
+      where: sandbox
+        ? { appleSandboxOriginalTransactionId: params.originalTransactionId }
+        : { appleOriginalTransactionId: params.originalTransactionId },
+      select: { id: true },
+    });
+    if (owner && owner.id !== params.userId) {
+      throw new UnprocessableEntityException('This purchase is already linked to another account.');
+    }
     await this.prisma.user.update({
       where: { id: params.userId },
-      data: {
+      data: sandbox ? {
+        appleSandboxOriginalTransactionId: params.originalTransactionId,
+        appleSandboxProductId: params.productId,
+        appleSandboxStatus: params.status,
+        appleSandboxExpiresAt: params.expiresAt,
+      } : {
         appleOriginalTransactionId: params.originalTransactionId,
         appleProductId: params.productId,
         appleStatus: params.status,

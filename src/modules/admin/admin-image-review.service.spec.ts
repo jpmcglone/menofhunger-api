@@ -30,6 +30,29 @@ describe('profile and publication media ownership', () => {
     return { prisma, service };
   };
 
+  it('account erasure rechecks ownership and only deletes unreferenced media', async () => {
+    const { prisma, service } = setup('avatars/user/photo.webp');
+    const send = jest.fn(async () => ({}));
+    jest.spyOn(service as any, 'requireR2').mockReturnValue({ s3: { send }, bucket: 'synthetic' });
+    (prisma as any).mediaContentHash = { deleteMany: jest.fn(async () => ({ count: 1 })) };
+    (prisma.mediaAsset as any).deleteMany = jest.fn(async () => ({ count: 1 }));
+    prisma.user.findMany.mockResolvedValue([{ id: 'other', username: 'other', name: 'Other', avatarKey: 'avatars/user/photo.webp', avatarVideoKey: null, bannerKey: null }]);
+    await service.eraseUnreferencedAccountMedia(['avatars/user/photo.webp']);
+    expect(send).not.toHaveBeenCalled();
+    prisma.user.findMany.mockResolvedValue([]);
+    await service.eraseUnreferencedAccountMedia(['avatars/user/photo.webp']);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect((prisma.mediaAsset as any).deleteMany).toHaveBeenCalledWith({ where: { r2Key: 'avatars/user/photo.webp' } });
+  });
+
+  it('leaves external deletion failures retryable instead of dropping the ownership index', async () => {
+    const { prisma, service } = setup();
+    jest.spyOn(service as any, 'requireR2').mockReturnValue({ s3: { send: jest.fn(async () => { throw new Error('synthetic offline'); }) }, bucket: 'synthetic' });
+    (prisma.mediaAsset as any).deleteMany = jest.fn();
+    await expect(service.eraseUnreferencedAccountMedia([key])).rejects.toThrow('synthetic offline');
+    expect((prisma.mediaAsset as any).deleteMany).not.toHaveBeenCalled();
+  });
+
   const avatarVideoKey = 'avatars/user/video/version/avatar.mp4';
   const avatarPosterKey = 'avatars/user/video/version/poster.jpg';
   const avatarUser = {

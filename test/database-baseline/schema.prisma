@@ -431,11 +431,6 @@ model User {
   appleExpiresAt               DateTime?
   appleAutoRenew               Boolean            @default(false)
   appleEnvironment             String?
-  // Review/TestFlight purchases never overwrite a real subscription or earn referral rewards.
-  appleSandboxOriginalTransactionId String? @unique
-  appleSandboxProductId        String?
-  appleSandboxStatus           String?
-  appleSandboxExpiresAt        DateTime?
   // Follow list privacy (controls counts + follower/following lists).
   followVisibility             FollowVisibility   @default(all)
   // Birthday privacy/display preference for public profile.
@@ -3137,30 +3132,12 @@ model MarvinUserSettings {
   userId          String     @id
   user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   preferredMode   MarvinMode @default(auto)
-  aiConsentAt     DateTime?
-  aiConsentVersion Int       @default(0)
   /**
    * Set by an admin to silence Marv for this specific user without affecting the global toggle.
    */
   disabledByAdmin Boolean    @default(false)
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
-}
-
-// Durable erasure work and a private receipt, independent of the deleted User row.
-// Completed receipts contain no contact details and expire after 90 days.
-model AccountDeletionReceipt {
-  id String @id @default(uuid())
-  userId String? @unique
-  scheduledAt DateTime
-  startedAt DateTime?
-  erasedAt DateTime?
-  completedAt DateTime?
-  cancelledAt DateTime?
-  confirmationEmail String?
-  mediaKeys String[] @default([])
-  expiresAt DateTime
-  @@index([scheduledAt, completedAt])
 }
 
 // ─── Fitness ─────────────────────────────────────────────────────────────────

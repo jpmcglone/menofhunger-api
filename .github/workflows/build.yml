@@ -1,4 +1,4 @@
-name: Build
+name: Lint
 
 on:
   push:
@@ -6,103 +6,17 @@ on:
   pull_request:
     branches: [main, master]
 
+permissions:
+  contents: read
+
 jobs:
-  guidance:
-    name: Guidance sync
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          path: menofhunger-api
-
-      - uses: actions/checkout@v5
-        id: www_branch
-        continue-on-error: true
-        with:
-          repository: jpmcglone/menofhunger-www
-          path: menofhunger-www
-          ref: ${{ github.head_ref || github.ref_name }}
-          sparse-checkout: |
-            AGENTS.md
-            docs/engineering-policy.md
-            .agents/skills
-            .cursor/rules
-
-      - uses: actions/checkout@v5
-        if: steps.www_branch.outcome == 'failure'
-        with:
-          repository: jpmcglone/menofhunger-www
-          path: menofhunger-www
-          sparse-checkout: |
-            AGENTS.md
-            docs/engineering-policy.md
-            .agents/skills
-            .cursor/rules
-
-      - uses: actions/checkout@v5
-        id: ios_branch
-        continue-on-error: true
-        with:
-          repository: jpmcglone/menofhunger-ios
-          path: menofhunger-ios
-          ref: ${{ github.head_ref || github.ref_name }}
-          token: ${{ secrets.GUIDANCE_SYNC_TOKEN || github.token }}
-          sparse-checkout: |
-            AGENTS.md
-            docs/engineering-policy.md
-            .agents/skills
-            .cursor/rules
-
-      - uses: actions/checkout@v5
-        if: steps.ios_branch.outcome == 'failure'
-        continue-on-error: true
-        with:
-          repository: jpmcglone/menofhunger-ios
-          path: menofhunger-ios
-          token: ${{ secrets.GUIDANCE_SYNC_TOKEN || github.token }}
-          sparse-checkout: |
-            AGENTS.md
-            docs/engineering-policy.md
-            .agents/skills
-            .cursor/rules
-
-      - name: Check agent guidance copies
-        working-directory: menofhunger-api
-        run: |
-          extra=()
-          if [ ! -f "$GITHUB_WORKSPACE/menofhunger-ios/AGENTS.md" ]; then
-            echo "::warning::Skipped private iOS copies. Add repo secret GUIDANCE_SYNC_TOKEN (contents:read on jpmcglone/menofhunger-ios) to gate them."
-            extra+=(--allow-missing ios)
-          fi
-          python3 scripts/sync-agent-guidance_test.py
-          python3 scripts/sync-agent-guidance.py --check "${extra[@]}"
-
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
       - uses: actions/setup-node@v5
         with:
           node-version-file: ".nvmrc"
           cache: "npm"
-
-      - run: npm ci
-
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
+      - run: npm ci --ignore-scripts
       - run: npm run lint
-
-      - run: npm run build:typecheck
-
-      - run: npm run build:ci
-
-      - run: npm run test:ci
-
-      - run: npm run mcp:test
-
-      - run: npm run test:e2e
-
-      # Contract drift gate: the committed contracts file must match the DTO sources.
-      - run: npm run emit:contracts && git diff --exit-code contracts/

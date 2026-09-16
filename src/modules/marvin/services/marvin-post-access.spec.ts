@@ -7,10 +7,16 @@ describe('marvPublicProfilePostWhere', () => {
 });
 
 describe('marvToolGroupAccessOr', () => {
-  it('allows non-group and open-group posts when Marv is not in a thread', () => {
+  it('allows only non-group posts without a permitted group context', () => {
     expect(marvToolGroupAccessOr(null)).toEqual([
       { communityGroupId: null },
-      { communityGroup: { deletedAt: null, joinPolicy: 'open' } },
+    ]);
+  });
+
+  it('allows only the explicitly permitted group', () => {
+    expect(marvToolGroupAccessOr(null, 'group-1')).toEqual([
+      { communityGroupId: null },
+      { communityGroupId: 'group-1', communityGroup: { deletedAt: null } },
     ]);
   });
 

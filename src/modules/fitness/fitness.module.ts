@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
-import { VerifiedGuard } from '../auth/verified.guard';
+import { IdentityVerifiedGuard } from '../auth/identity-verified.guard';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PostsModule } from '../posts/posts.module';
 import { RedisModule } from '../redis/redis.module';
@@ -14,7 +14,7 @@ import { FitnessCron } from './fitness.cron';
 @Module({
   imports: [AuthModule, PrismaModule, PostsModule, RedisModule],
   controllers: [FitnessController],
-  providers: [FitnessService, FitnessStravaService, FitnessIngestService, VerifiedGuard, FitnessStravaGuard, FitnessCron],
+  providers: [FitnessService, FitnessStravaService, FitnessIngestService, IdentityVerifiedGuard, FitnessStravaGuard, FitnessCron],
   exports: [FitnessService],
 })
 export class FitnessModule {}

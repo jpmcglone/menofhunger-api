@@ -140,6 +140,7 @@ function makeService(opts?: {
     },
     marvinUserSettings: {
       findUnique: jest.fn(async () => ({
+        aiConsentAt: new Date(), aiConsentVersion: 1,
         disabledByAdmin: opts?.disabledByAdmin ?? false,
         preferredMode: opts?.preferredMode ?? 'auto',
       })),

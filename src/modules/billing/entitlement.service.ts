@@ -227,6 +227,9 @@ export class EntitlementService {
         appleProductId: true,
         appleStatus: true,
         appleExpiresAt: true,
+        appleSandboxProductId: true,
+        appleSandboxStatus: true,
+        appleSandboxExpiresAt: true,
         subscriptionGrants: {
           where: { revokedAt: null, endsAt: { gt: now } },
           orderBy: { endsAt: 'desc' },
@@ -261,7 +264,11 @@ export class EntitlementService {
     const appleIsPlus = appleActive && appleTierKey === 'premiumPlus';
     const appleIsPremium = appleActive && (appleTierKey === 'premium' || appleIsPlus);
     const appleTier: EffectiveTier = appleIsPlus ? 'premiumPlus' : appleIsPremium ? 'premium' : 'none';
-    const appleExpiresAt = appleActive ? (user.appleExpiresAt ?? null) : null;
+    const sandboxActive = verified && (user.appleSandboxStatus === 'active' || user.appleSandboxStatus === 'grace')
+      && user.appleSandboxExpiresAt != null && user.appleSandboxExpiresAt > now;
+    const sandboxTier: EffectiveTier = sandboxActive
+      ? (appleCfg?.productTierMap?.[user.appleSandboxProductId ?? ''] ?? 'none') : 'none';
+    const appleExpiresAt = laterDate(appleActive ? user.appleExpiresAt : null, sandboxActive ? user.appleSandboxExpiresAt : null);
 
     // ── Grant entitlement ───────────────────────────────────────────────────
     const allActiveGrants = user.subscriptionGrants.map(this.toGrantInfo);
@@ -280,7 +287,7 @@ export class EntitlementService {
     const grantExpiresAt = verified && effectiveGrants.length > 0 ? effectiveGrants[0]!.endsAt : null;
 
     // ── Effective tier = max(stripe, apple, grants) ─────────────────────────
-    let effectiveTier = maxTier(maxTier(grantTier, stripeTier), appleTier);
+    let effectiveTier = maxTier(maxTier(maxTier(grantTier, stripeTier), appleTier), sandboxTier);
 
     // Pages inherit the best tier among their operators.
     if (user.accountKind === 'page') {

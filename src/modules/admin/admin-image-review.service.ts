@@ -189,6 +189,40 @@ export class AdminImageReviewService {
     return this.cfg.isProd() ? '' : 'dev/';
   }
 
+  /** Snapshot every owned upload, including unused uploads and video derivatives. */
+  async accountErasureKeys(userId: string): Promise<string[]> {
+    if (!userId || /[/\\]/.test(userId)) throw new BadRequestException('Invalid account.');
+    const { s3, bucket } = this.requireR2();
+    const keys = new Set<string>();
+    for (const area of ['uploads', 'avatars', 'covers', 'banners', 'article-thumbnails', 'article-media', 'announcement-images']) {
+      let continuation: string | undefined;
+      do {
+        const page = await s3.send(new ListObjectsV2Command({ Bucket: bucket,
+          Prefix: `${this.objectKeyPrefix()}${area}/${userId}/`, ContinuationToken: continuation }));
+        for (const item of page.Contents ?? []) if (item.Key) keys.add(item.Key);
+        continuation = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (continuation);
+    }
+    return [...keys];
+  }
+
+  /** Reuse the central ownership resolver; never remove another member's referenced media. */
+  async eraseUnreferencedAccountMedia(keys: string[]): Promise<void> {
+    if (!keys.length) return;
+    const { s3, bucket } = this.requireR2();
+    for (let start = 0; start < keys.length; start += 100) {
+      const batch = keys.slice(start, start + 100);
+      const references = await this.resolveAllReferences(batch);
+      for (const key of batch) {
+        if (references.get(key)?.primaryType !== 'orphan') continue;
+        // S3 deletion is idempotent. Keep the durable receipt until every operation succeeds.
+        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+        await this.prisma.mediaContentHash.deleteMany({ where: { r2Key: key } });
+        await this.prisma.mediaAsset.deleteMany({ where: { r2Key: key } });
+      }
+    }
+  }
+
   private publicUrlForKey(key: string | null): string | null {
     return publicAssetUrl({ publicBaseUrl: this.cfg.r2()?.publicBaseUrl ?? null, key });
   }

@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Put, 
 import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
-import { VerifiedGuard } from '../auth/verified.guard';
+import { IdentityVerifiedGuard } from '../auth/identity-verified.guard';
 import { FitnessStravaGuard } from './fitness-strava.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { PersonAccountGuard } from '../pages/person-account.guard';
@@ -105,7 +105,7 @@ const createSharePostSchema = z.object({
 
 @ApiTags('Fitness')
 @Controller('fitness')
-@UseGuards(AuthGuard, VerifiedGuard, PersonAccountGuard)
+@UseGuards(AuthGuard, IdentityVerifiedGuard, PersonAccountGuard)
 export class FitnessController {
   constructor(
     private readonly fitness: FitnessService,

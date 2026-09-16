@@ -7,7 +7,7 @@
  * Prisma enum types as string-literal unions, and emits a single generated
  * TypeScript file:
  *
- *   - menofhunger-api/contracts/api-contracts.gen.ts   (committed; CI drift gate)
+ *   - menofhunger-api/contracts/api-contracts.gen.ts   (committed; local drift gate)
  *   - menofhunger-www/types/api-contracts.gen.ts       (when the sibling repo exists)
  *
  * Server-only types are excluded automatically:
@@ -16,11 +16,11 @@
  *     non-contract types that can't be resolved to literal unions
  *
  * Usage: npm run emit:contracts
- * CI:    npm run emit:contracts && git diff --exit-code contracts/
+ * Check: npm run check:contracts (read-only, also checks shared release fixtures)
  */
 
 import { createRequire } from 'node:module'
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -343,15 +343,25 @@ for (const [rel, texts] of sections) {
 const output = lines.join('\n')
 
 const apiOut = resolve(REPO, 'contracts/api-contracts.gen.ts')
-mkdirSync(dirname(apiOut), { recursive: true })
-writeFileSync(apiOut, output)
-console.log(`[emit-contracts] wrote ${apiOut}`)
+const check = process.argv.includes('--check')
+function emit(path) {
+  if (check) {
+    if (!existsSync(path) || readFileSync(path, 'utf8') !== output) {
+      console.error(`[emit-contracts] stale: ${path}; run npm run emit:contracts`)
+      process.exitCode = 1
+    }
+  } else {
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, output)
+    console.log(`[emit-contracts] wrote ${path}`)
+  }
+}
+emit(apiOut)
 
 const wwwTypesDir = resolve(REPO, '../menofhunger-www/types')
 if (existsSync(wwwTypesDir)) {
   const wwwOut = join(wwwTypesDir, 'api-contracts.gen.ts')
-  writeFileSync(wwwOut, output)
-  console.log(`[emit-contracts] wrote ${wwwOut}`)
+  emit(wwwOut)
 } else {
   console.log('[emit-contracts] sibling menofhunger-www not found; skipped copy')
 }

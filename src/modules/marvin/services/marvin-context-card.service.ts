@@ -472,6 +472,7 @@ export class MarvinContextCardService {
 
     const result = await this.ai.respond({
       source: 'public_thread',
+      sharedContentOnly: true,
       mode,
       developerNote,
       userMessage,

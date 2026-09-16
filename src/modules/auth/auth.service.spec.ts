@@ -942,7 +942,7 @@ describe('AuthService account deletion restore', () => {
       deletionRequestedAt: null,
       deletionScheduledAt: null,
     });
-    const userUpdate = jest.fn(async () => restored);
+    const userUpdate = jest.fn(async () => ({ count: 1 }));
     const sessionCreate = jest.fn(async () => ({
       id: 'session-restored',
       userId: restored.id,
@@ -950,6 +950,7 @@ describe('AuthService account deletion restore', () => {
     }));
     const { svc, posthog } = makeService({
       prisma: {
+        $transaction: jest.fn(async (fn) => fn({ user: { updateMany: userUpdate, findUniqueOrThrow: async () => restored }, accountDeletionReceipt: { updateMany: jest.fn(async () => ({ count: 1 })) } })),
         user: {
           findUnique: jest.fn(async () => pending),
           update: userUpdate,
@@ -974,7 +975,7 @@ describe('AuthService account deletion restore', () => {
     expect(result.isNewUser).toBe(false);
     expect(result.sessionId).toBe('session-restored');
     expect(userUpdate).toHaveBeenCalledWith({
-      where: { id: pending.id },
+      where: { id: pending.id, bannedReason: 'self_deleted_pending', deletionScheduledAt: { gt: expect.any(Date) } },
       data: {
         bannedAt: null,
         bannedReason: null,

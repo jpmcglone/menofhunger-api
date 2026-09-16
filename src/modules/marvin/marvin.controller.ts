@@ -30,9 +30,11 @@ import { MarvinBotIdentityService } from './services/marvin-bot-identity.service
 import { MarvinAdminService } from './services/marvin-admin.service';
 import { MarvinCatchUpService } from './services/marvin-catch-up.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
+import { AI_CONSENT_VERSION } from './services/ai-consent';
 
 const updatePreferencesSchema = z.object({
   preferredMode: z.enum(['auto', 'fast', 'regular', 'smart']).optional(),
+  aiConsent: z.boolean().optional(),
 });
 
 const catchUpBodySchema = z.object({
@@ -110,11 +112,15 @@ export class MarvinController {
     @Body() body: unknown,
   ): Promise<{ data: MarvinMeDto }> {
     const parsed = updatePreferencesSchema.parse(body ?? {});
-    if (parsed.preferredMode !== undefined) {
+    if (parsed.preferredMode !== undefined || parsed.aiConsent !== undefined) {
+      const preferences = {
+        ...(parsed.preferredMode !== undefined ? { preferredMode: parsed.preferredMode as MarvinMode } : {}),
+        ...(parsed.aiConsent !== undefined ? { aiConsentAt: parsed.aiConsent ? new Date() : null, aiConsentVersion: parsed.aiConsent ? AI_CONSENT_VERSION : 0 } : {}),
+      };
       await this.prisma.marvinUserSettings.upsert({
         where: { userId },
-        update: { preferredMode: parsed.preferredMode as MarvinMode },
-        create: { userId, preferredMode: parsed.preferredMode as MarvinMode },
+        update: preferences,
+        create: { userId, ...preferences },
       });
     }
     return { data: await this.buildMe(userId) };
@@ -349,7 +355,7 @@ export class MarvinController {
       }),
       this.prisma.marvinUserSettings.findUnique({
         where: { userId },
-        select: { preferredMode: true, disabledByAdmin: true },
+        select: { preferredMode: true, disabledByAdmin: true, aiConsentAt: true, aiConsentVersion: true },
       }),
       this.credits.getSummary(userId),
     ]);
@@ -379,6 +385,7 @@ export class MarvinController {
       enabled: cfg.enabled && !disabled,
       isPremium,
       preferredMode: (settings?.preferredMode ?? 'auto') as MarvinModeDto,
+      aiConsentGranted: Boolean(settings?.aiConsentAt && settings.aiConsentVersion === AI_CONSENT_VERSION),
       credits: creditSummaryToDto(summary),
       costs: {
         fast: creditCfg.fastCost,

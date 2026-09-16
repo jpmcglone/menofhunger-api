@@ -1,3 +1,5 @@
+import { assertPublishableText } from '../../common/moderation/content-filter';
+import { requireAiConsent } from '../marvin/services/ai-consent';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { MessageConversation, PostMediaKind } from '@prisma/client';
@@ -1381,6 +1383,7 @@ export class MessagesService {
     body: string;
     media?: MessageMediaInput[];
   }) {
+    assertPublishableText(params.body, params.title);
     const { userId, recipientUserIds, title, body } = params;
     const trimmed = (body ?? '').trim();
     const media = params.media ?? [];
@@ -1389,6 +1392,9 @@ export class MessagesService {
 
     const uniqueRecipients = [...new Set(recipientUserIds.filter(Boolean))].filter((id) => id !== userId);
     if (uniqueRecipients.length === 0) throw new BadRequestException('At least one recipient is required.');
+
+    const marvRecipient = await this.marvIdentity.getMarvUserId();
+    if (marvRecipient && uniqueRecipients.length === 1 && uniqueRecipients.includes(marvRecipient)) await requireAiConsent(this.prisma, userId);
 
     // Tier rule:
     // - Site admins can start new chats with any user (verified or not) and bypass the mutual-follow gate.
@@ -1632,6 +1638,7 @@ export class MessagesService {
     replyToId?: string | null;
     media?: MessageMediaInput[];
   }) {
+    assertPublishableText(params.body);
     const { userId, conversationId } = params;
     const trimmed = (params.body ?? '').trim();
     const media = params.media ?? [];
@@ -1697,6 +1704,9 @@ export class MessagesService {
       });
       if (!replyTarget) throw new BadRequestException('Reply target not found in this conversation.');
     }
+
+    const marvId = await this.marvIdentity.getMarvUserId();
+    if (conversation.participants.some(p => p.userId === marvId)) await requireAiConsent(this.prisma, userId);
 
     const now = new Date();
     const result = await this.prisma.$transaction(async (tx) => {
@@ -2180,6 +2190,7 @@ export class MessagesService {
   }
 
   async editMessage(params: { userId: string; conversationId: string; messageId: string; body: string }): Promise<void> {
+    assertPublishableText(params.body);
     const { userId, conversationId, messageId, body } = params;
 
     const conversation = await this.getConversationOrThrow({ userId, conversationId });

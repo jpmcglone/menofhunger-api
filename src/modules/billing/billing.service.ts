@@ -51,8 +51,7 @@ export class BillingService {
 
   /**
    * Immediately cancels the user's Stripe subscription (if any) as part of
-   * self-service account deletion. Best-effort: failures are logged, never thrown,
-   * so a Stripe outage can't block the user's right to delete their account.
+   * self-service account deletion. Failures keep the durable erasure job pending for retry; they never silently leave billing active.
    */
   async cancelSubscriptionForAccountDeletion(userId: string): Promise<void> {
     try {
@@ -67,7 +66,8 @@ export class BillingService {
       });
       this.logger.log(`[billing] Cancelled Stripe subscription on account deletion for user ${userId}`);
     } catch (err) {
-      this.logger.warn(`[billing] Could not cancel Stripe subscription on account deletion for user ${userId}: ${err}`);
+      if ((err as { code?: string })?.code === 'resource_missing') return;
+      throw err;
     }
   }
 
@@ -85,6 +85,8 @@ export class BillingService {
         appleProductId: true,
         appleStatus: true,
         appleExpiresAt: true,
+        appleSandboxStatus: true,
+        appleSandboxExpiresAt: true,
         referralCode: true,
         referralBonusGrantedAt: true,
         recruitedBy: {
@@ -111,10 +113,13 @@ export class BillingService {
     const activeGrants = await this.entitlement.getActiveGrants(userId);
     const grantExpiresAt = activeGrants.length > 0 ? activeGrants[0]!.endsAt : null;
     const stripeExpiresAt = user.stripeCurrentPeriodEnd ?? null;
-    const appleExpiresAt =
-      user.appleStatus === 'active' && user.appleExpiresAt != null && user.appleExpiresAt > now
+    const productionAppleExpiresAt =
+      (user.appleStatus === 'active' || user.appleStatus === 'grace') && user.appleExpiresAt != null && user.appleExpiresAt > now
         ? user.appleExpiresAt
         : null;
+    const sandboxExpiresAt = (user.appleSandboxStatus === 'active' || user.appleSandboxStatus === 'grace') && user.appleSandboxExpiresAt && user.appleSandboxExpiresAt > now
+      ? user.appleSandboxExpiresAt : null;
+    const appleExpiresAt = laterDate(productionAppleExpiresAt, sandboxExpiresAt);
     const effectiveExpiresAt = laterDate(laterDate(stripeExpiresAt, grantExpiresAt), appleExpiresAt);
 
     // Determine the primary billing source for cross-platform purchase guard.

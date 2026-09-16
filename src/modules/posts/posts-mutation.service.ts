@@ -1,3 +1,5 @@
+import { assertPublishableText } from '../../common/moderation/content-filter';
+import { requireAiConsent } from '../marvin/services/ai-consent';
 import { isCheckinOpen, CHECKIN_CLOSED_MESSAGE } from '../checkins/checkin-schedule';
 import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -251,6 +253,7 @@ export class PostsMutationService {
     if (!id) throw new NotFoundException('Post not found.');
 
     const nextBody = (params.body ?? '').trim();
+    assertPublishableText(nextBody);
     if (!nextBody) throw new BadRequestException('Post must include text.');
 
     const post = await this.prisma.post.findUnique({
@@ -532,6 +535,7 @@ export class PostsMutationService {
     if (source.parentId) throw new ForbiddenException('Not allowed.');
 
     const body = (params.body ?? source.body ?? '').trim();
+    assertPublishableText(body);
 
     const sourceMediaSorted = (source.media ?? [])
       .slice()
@@ -693,6 +697,8 @@ export class PostsMutationService {
     marvMode?: 'fast' | 'regular' | 'smart' | null;
   }) {
     const { userId, body, visibility: requestedVisibility, parentId, mentions: clientMentions } = params;
+    assertPublishableText(body, params.checkinPrompt, ...(params.poll?.options?.map(option => typeof option === 'string' ? option : option.text) ?? []));
+    if (this.parseMentionsFromBody(body).some(username => username.toLowerCase() === 'marv')) await requireAiConsent(this.prisma, userId);
     const requestedMarvMode = params.marvMode ?? null;
     const requestedCommunityGroupId = (params.communityGroupId ?? '').trim() || null;
     const kind = (params.kind ?? 'regular') as 'regular' | 'checkin' | 'status';

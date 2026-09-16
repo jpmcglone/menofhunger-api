@@ -29,6 +29,7 @@ export type MarvinMeDto = {
   isPremium: boolean;
   /** Mode this user picked in settings. The composer + processor honor this by default. */
   preferredMode: MarvinModeDto;
+  aiConsentGranted: boolean;
   /** Latest credit-bucket snapshot. */
   credits: MarvinCreditSummaryDto;
   /** Per-mode base costs + surcharges. Used by the UI to preview spend before hitting "Catch me up". */
@@ -51,4 +52,5 @@ export type MarvinMeDto = {
  */
 export type MarvinUpdatePreferencesBodyDto = {
   preferredMode?: MarvinModeDto;
+  aiConsent?: boolean;
 };

@@ -615,3 +615,14 @@ describe('EntitlementService — standalone referral grant (requiresActiveSubscr
     expect(result.effectiveTier).toBe('premium');
   });
 });
+
+
+describe('Sandbox entitlement verification prerequisite', () => {
+  it.each(['none', 'identity', 'manual'])('requires verification for a %s account', async (verifiedStatus) => {
+    const { service, deps } = makeService();
+    deps.appConfig.appleIap.mockReturnValue({ productTierMap: { sandbox: 'premium' } });
+    deps.prisma.user.findUnique.mockResolvedValue(userRow({ verifiedStatus, appleSandboxProductId: 'sandbox', appleSandboxStatus: 'active', appleSandboxExpiresAt: new Date(Date.now() + 86400000) }));
+    const result = await service.recomputeAndApply('u1');
+    expect(result.isPremium).toBe(verifiedStatus !== 'none');
+  });
+});

@@ -1,3 +1,4 @@
+import { assertPublishableText } from '../../common/moderation/content-filter';
 import {
   Injectable,
   NotFoundException,
@@ -622,6 +623,7 @@ export class ArticlesService {
         : article.slug;
     const newBody = typeof data.body === 'string' ? data.body : article.body;
     const excerpt = extractExcerpt(newBody);
+    assertPublishableText(newTitle, extractExcerpt(newBody, 100000));
 
     const updated = await this.prisma.article.update({
       where: { id: articleId },
@@ -1093,6 +1095,7 @@ export class ArticlesService {
     }
 
     const normalizedBody = normalizeCommentBody(data.body);
+    assertPublishableText(normalizedBody);
     const maxCommentLength = this.viewer.isPremium(viewerCtx) ? 1000 : 500;
     if (normalizedBody.length > maxCommentLength) {
       throw new BadRequestException(`Comment must be ${maxCommentLength} characters or fewer.`);
@@ -1165,6 +1168,7 @@ export class ArticlesService {
 
     const viewerCtx = await this.viewer.getViewerOrThrow(userId);
     const normalizedBody = normalizeCommentBody(body);
+    assertPublishableText(normalizedBody);
     const maxCommentLength = this.viewer.isPremium(viewerCtx) ? 1000 : 500;
     if (normalizedBody.length > maxCommentLength) {
       throw new BadRequestException(`Comment must be ${maxCommentLength} characters or fewer.`);

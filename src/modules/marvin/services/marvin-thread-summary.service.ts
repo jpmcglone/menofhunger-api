@@ -151,6 +151,7 @@ export class MarvinThreadSummaryService {
 
     const result = await this.ai.respond({
       source: 'public_thread',
+      sharedContentOnly: true,
       mode: 'fast',
       developerNote,
       userMessage,

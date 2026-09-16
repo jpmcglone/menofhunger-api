@@ -25,7 +25,7 @@ databaseTests('coin concurrency and chat deletion (PostgreSQL)', () => {
     for (const sql of [
       `CREATE TYPE "${schema}"."CoinTransferKind" AS ENUM ('transfer', 'admin_adjust', 'verification_gift')`,
       `CREATE TABLE "User" (id text PRIMARY KEY, coins integer NOT NULL DEFAULT 0)`,
-      `CREATE TABLE "CoinTransfer" (id text PRIMARY KEY, "createdAt" timestamp NOT NULL DEFAULT now(), "senderId" text NOT NULL REFERENCES "User"(id), "recipientId" text NOT NULL REFERENCES "User"(id), kind "${schema}"."CoinTransferKind" NOT NULL, amount integer NOT NULL CHECK (amount < 100), note text)`,
+      `CREATE TABLE "CoinTransfer" (id text PRIMARY KEY, "createdAt" timestamp NOT NULL DEFAULT now(), "senderId" text NOT NULL REFERENCES "User"(id), "recipientId" text NOT NULL REFERENCES "User"(id), "postId" text, kind "${schema}"."CoinTransferKind" NOT NULL, amount integer NOT NULL CHECK (amount < 100), note text)`,
       `CREATE INDEX ON "CoinTransfer" ("recipientId", "createdAt" DESC)`,
       `CREATE TABLE "Message" (id text PRIMARY KEY, "conversationId" text NOT NULL, body text NOT NULL, "createdAt" timestamp NOT NULL, "deletedForAll" boolean NOT NULL DEFAULT false)`,
       `CREATE TABLE "MessageParticipant" ("conversationId" text NOT NULL, "userId" text NOT NULL, status text NOT NULL, PRIMARY KEY ("conversationId", "userId"))`,

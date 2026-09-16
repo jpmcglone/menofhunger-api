@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { MarvinPersonalService } from './marvin-personal.service';
 import { MarvinParticipationService } from './marvin-participation.service';
 import crypto from 'node:crypto';
@@ -334,21 +335,30 @@ export class MarvinToolHandlersService {
     return await this.lookupMemberCards(usernames);
   }
 
+  private async permittedPostWhere(ctx: MarvAIToolCallContext): Promise<Prisma.PostWhereInput> {
+    const viewer = await this.prisma.user.findUnique({ where: { id: ctx.requesterUserId }, select: { verifiedStatus: true, premium: true, premiumPlus: true, siteAdmin: true } });
+    const visibility: Array<'public' | 'verifiedOnly' | 'premiumOnly'> = ['public'];
+    if (viewer && viewer.verifiedStatus !== 'none') visibility.push('verifiedOnly');
+    if (viewer?.premium || viewer?.premiumPlus) visibility.push('premiumOnly');
+    const root = ctx.rootPostId ? await this.prisma.post.findUnique({ where: { id: ctx.rootPostId }, select: { communityGroupId: true } }) : null;
+    const member = root?.communityGroupId ? await this.prisma.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: root.communityGroupId, userId: ctx.requesterUserId } }, select: { status: true } }) : null;
+    const permittedGroupId = member?.status === 'active' || viewer?.siteAdmin ? root?.communityGroupId : null;
+    return { deletedAt: null, visibility: { in: visibility }, OR: marvToolGroupAccessOr(ctx.rootPostId, permittedGroupId) };
+  }
+
   private async getPost(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
     const parsed = getPostSchema.safeParse(rawArgs);
     if (!parsed.success) return { error: 'invalid_args' };
     const scope = (ctx.rootPostId ?? '').trim() || '-';
     return await this.cache.getOrSetJson<unknown>({
-      enabled: true,
+      enabled: false,
       key: `marv:tool:post:${parsed.data.postId}:root:${scope}`,
       ttlSeconds: TTL_POST,
       compute: async () => {
         const post = await this.prisma.post.findFirst({
           where: {
             id: parsed.data.postId,
-            deletedAt: null,
-            visibility: { not: 'onlyMe' },
-            OR: marvToolGroupAccessOr(ctx.rootPostId),
+            ...await this.permittedPostWhere(ctx),
           },
           select: marvPostSelect(),
         });
@@ -428,16 +438,14 @@ export class MarvinToolHandlersService {
     const limit = Math.min(RECENT_MESSAGES_MAX, parsed.data.limit ?? RECENT_MESSAGES_DEFAULT);
     const scope = (ctx.rootPostId ?? '').trim() || '-';
     return await this.cache.getOrSetJson<unknown>({
-      enabled: true,
+      enabled: false,
       key: `marv:tool:thread-recent:${requestedRoot}:${limit}:root:${scope}`,
       ttlSeconds: TTL_THREAD_RECENT,
       compute: async () => {
         const root = await this.prisma.post.findFirst({
           where: {
             id: requestedRoot,
-            deletedAt: null,
-            visibility: { not: 'onlyMe' },
-            OR: marvToolGroupAccessOr(ctx.rootPostId),
+            ...await this.permittedPostWhere(ctx),
           },
           select: {
             id: true,
@@ -462,9 +470,7 @@ export class MarvinToolHandlersService {
         const replies = await this.prisma.post.findMany({
           where: {
             rootId: requestedRoot,
-            deletedAt: null,
-            visibility: { not: 'onlyMe' },
-            OR: marvToolGroupAccessOr(ctx.rootPostId),
+            ...await this.permittedPostWhere(ctx),
           },
           select: {
             id: true,
@@ -535,7 +541,7 @@ export class MarvinToolHandlersService {
       lastMessageIdIncluded: string | null;
       updatedAt: string;
     }>({
-      enabled: true,
+      enabled: false,
       key: `marv:tool:thread-summary:${rootPostId}:root:${scope}`,
       ttlSeconds: TTL_THREAD_SUMMARY,
       nullTtlSeconds: TTL_NEGATIVE,
@@ -543,9 +549,7 @@ export class MarvinToolHandlersService {
         const root = await this.prisma.post.findFirst({
           where: {
             id: rootPostId,
-            deletedAt: null,
-            visibility: { not: 'onlyMe' },
-            OR: marvToolGroupAccessOr(ctx.rootPostId),
+            ...await this.permittedPostWhere(ctx),
           },
           select: { id: true },
         });

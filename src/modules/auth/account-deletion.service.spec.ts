@@ -1,107 +1,70 @@
 import { AccountDeletionService } from './account-deletion.service';
+import { eraseAccountRecords } from './account-erasure';
 import { BillingService } from '../billing/billing.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
+import { AdminImageReviewService } from '../admin/admin-image-review.service';
+import { RedisService } from '../redis/redis.service';
+import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { EmailService } from '../email/email.service';
 
-function makeHarness() {
-  const user = {
-    id: 'user-1',
-    username: 'tester',
-    isBot: false,
-    bannedAt: null,
-    bannedReason: null,
+jest.mock('./account-erasure', () => ({ eraseAccountRecords: jest.fn(async () => undefined) }));
+function harness() {
+  let receipt: any = { id: '11111111-1111-4111-8111-111111111111', userId: 'u1', scheduledAt: new Date(Date.now() - 1000), expiresAt: new Date(Date.now() + 86400000), startedAt: null, erasedAt: null, completedAt: null, cancelledAt: null, confirmationEmail: null, mediaKeys: [] };
+  const user = { id: 'u1', username: 'tester', accountKind: 'person', isBot: false, email: null };
+  const prisma: any = {
+    user: { findUnique: jest.fn(async () => user), findMany: jest.fn(async () => []), update: jest.fn(async () => user), updateMany: jest.fn(async () => ({ count: 1 })) },
+    accountDeletionReceipt: { findUnique: jest.fn(async () => receipt), findUniqueOrThrow: jest.fn(async () => receipt), findMany: jest.fn(async () => [receipt]), upsert: jest.fn(async () => receipt), update: jest.fn(async ({ data }) => { receipt = { ...receipt, ...data }; return receipt; }), deleteMany: jest.fn(async () => ({ count: 0 })) },
   };
-  const updated = { ...user, bannedAt: new Date('2026-06-26T00:00:00.000Z') };
-  const prisma = {
-    user: {
-      findUnique: jest.fn(async () => user),
-      findMany: jest.fn(async () => []),
-      update: jest.fn(async () => updated),
-    },
-  } as any;
-  const auth = {
-    revokeAllSessionsForUser: jest.fn(async () => undefined),
-  } as any;
-  const billing = {
-    cancelSubscriptionForAccountDeletion: jest.fn(async () => undefined),
-  };
-  const presenceRealtime = {
-    disconnectUserSockets: jest.fn(),
-  };
-  const usersMeRealtime = {
-    emitMeUpdatedFromUser: jest.fn(),
-  };
-  const publicProfileCache = {
-    invalidateForUser: jest.fn(async () => undefined),
-  };
-  const moduleRef = {
-    get: jest.fn((token: unknown) => {
-      if (token === BillingService) return billing;
-      if (token === PresenceRealtimeService) return presenceRealtime;
-      if (token === UsersMeRealtimeService) return usersMeRealtime;
-      if (token === PublicProfileCacheService) return publicProfileCache;
-      return undefined;
-    }),
-  } as any;
-  const service = new AccountDeletionService(prisma, auth, moduleRef);
-
-  return { service, prisma, auth, billing, presenceRealtime, usersMeRealtime, publicProfileCache };
+  prisma.$transaction = jest.fn(async (fn) => fn(prisma));
+  const auth: any = { revokeAllSessionsForUser: jest.fn(async () => undefined) };
+  const billing = { cancelSubscriptionForAccountDeletion: jest.fn(async () => undefined) };
+  const media = { accountErasureKeys: jest.fn(async () => ['uploads/u1/photo.jpg']), eraseUnreferencedAccountMedia: jest.fn(async () => undefined) };
+  const redis = { withLock: jest.fn(async (_key, _options, fn) => fn()), raw: () => ({ scan: jest.fn(async () => ['0', []]), del: jest.fn() }) };
+  const cache = { invalidateForUser: jest.fn(async () => undefined), bumpFeedGlobal: jest.fn(), bumpSearchGlobal: jest.fn() };
+  const presence = { disconnectUserSockets: jest.fn(), emitMeUpdatedFromUser: jest.fn() };
+  const email = { sendText: jest.fn(async () => ({ sent: true })) };
+  const services = new Map<any, any>([[BillingService, billing], [AdminImageReviewService, media], [RedisService, redis], [CacheInvalidationService, cache], [PublicProfileCacheService, cache], [PresenceRealtimeService, presence], [UsersMeRealtimeService, presence], [EmailService, email]]);
+  const service = new AccountDeletionService(prisma, auth, { get: (token: unknown) => services.get(token) } as any);
+  return { service, prisma, auth, billing, media, email, redis, receipt: () => receipt, setReceipt: (data: any) => { receipt = { ...receipt, ...data }; } };
 }
-
-describe('AccountDeletionService', () => {
-  it('marks an account for deletion without wiping PII immediately', async () => {
-    const { service, prisma, auth, presenceRealtime, usersMeRealtime, publicProfileCache } = makeHarness();
-
-    const result = await service.requestDeletion('user-1', {
-      reason: 'privacy',
-      details: 'Please delete me',
-    });
-
-    expect(result.success).toBe(true);
-    expect(result.deletionScheduledAt).toEqual(expect.any(String));
-    expect(prisma.user.update).toHaveBeenCalledTimes(1);
-    const update = prisma.user.update.mock.calls[0][0];
-    expect(update.data).toMatchObject({
-      bannedReason: 'self_deleted_pending',
-      deletionRequestedAt: expect.any(Date),
-      deletionScheduledAt: expect.any(Date),
-    });
-    expect(update.data.phone).toBeUndefined();
-    expect(update.data.email).toBeUndefined();
-    expect(auth.revokeAllSessionsForUser).toHaveBeenCalledWith('user-1');
-    expect(presenceRealtime.disconnectUserSockets).toHaveBeenCalledWith('user-1');
-    expect(usersMeRealtime.emitMeUpdatedFromUser).toHaveBeenCalledWith(expect.anything(), 'account_deleted');
-    expect(publicProfileCache.invalidateForUser).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1', username: 'tester' }));
+afterEach(() => jest.clearAllMocks());
+describe('durable account deletion', () => {
+  it('returns a receipt only after scheduling and revoking sessions', async () => {
+    const h = harness();
+    const result = await h.service.requestDeletion('u1');
+    expect(result).toMatchObject({ success: true, deletionStatusToken: h.receipt().id });
+    expect(h.auth.revokeAllSessionsForUser).toHaveBeenCalledWith('u1');
+    expect(h.prisma.user.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ bannedReason: 'self_deleted_pending' }) }));
+    expect(eraseAccountRecords).not.toHaveBeenCalled();
   });
-
-  it('finalizes due pending deletions by anonymizing the account', async () => {
-    const { service, prisma, auth, billing, presenceRealtime, publicProfileCache } = makeHarness();
-    prisma.user.findMany.mockResolvedValueOnce([{ id: 'user-1' }]);
-    prisma.user.findUnique.mockResolvedValueOnce({
-      id: 'user-1',
-      username: 'tester',
-      isBot: false,
-      bannedAt: new Date('2026-06-26T00:00:00.000Z'),
-      bannedReason: 'self_deleted_pending',
-    });
-
-    const result = await service.finalizeDueDeletions();
-
-    expect(result).toEqual({ finalized: 1 });
-    expect(billing.cancelSubscriptionForAccountDeletion).toHaveBeenCalledWith('user-1');
-    expect(prisma.user.update).toHaveBeenCalledTimes(1);
-    expect(prisma.user.update.mock.calls[0][0].data).toMatchObject({
-      phone: 'deleted:user-1',
-      email: null,
-      username: null,
-      name: null,
-      bannedReason: 'self_deleted',
-      deletionRequestedAt: null,
-      deletionScheduledAt: null,
-    });
-    expect(auth.revokeAllSessionsForUser).toHaveBeenCalledWith('user-1');
-    expect(presenceRealtime.disconnectUserSockets).toHaveBeenCalledWith('user-1');
-    expect(publicProfileCache.invalidateForUser).toHaveBeenCalledWith({ id: 'user-1', username: 'tester' });
+  it('does not erase records if billing cancellation fails', async () => {
+    const h = harness(); h.billing.cancelSubscriptionForAccountDeletion.mockRejectedValue(new Error('offline'));
+    expect(await h.service.finalizeDueDeletions()).toEqual({ finalized: 0 });
+    expect(eraseAccountRecords).not.toHaveBeenCalled(); expect(h.receipt().completedAt).toBeNull();
+  });
+  it('retries external cleanup after database erasure without erasing twice', async () => {
+    const h = harness(); h.media.eraseUnreferencedAccountMedia.mockRejectedValueOnce(new Error('storage offline'));
+    expect(await h.service.finalizeDueDeletions()).toEqual({ finalized: 0 });
+    expect(h.receipt().erasedAt).toBeInstanceOf(Date); expect(h.receipt().completedAt).toBeNull();
+    expect(await h.service.finalizeDueDeletions()).toEqual({ finalized: 1 });
+    expect(eraseAccountRecords).toHaveBeenCalledTimes(1);
+    expect(h.receipt()).toMatchObject({ userId: null, confirmationEmail: null, mediaKeys: [] });
+    expect(h.receipt().completedAt).toBeInstanceOf(Date);
+  });
+  it('does not erase a cancelled or not-yet-due account', async () => {
+    const h = harness(); h.setReceipt({ cancelledAt: new Date() });
+    expect(await h.service.finalizeDeletion('u1')).toBe(false);
+    h.setReceipt({ cancelledAt: null, scheduledAt: new Date(Date.now() + 100000) });
+    expect(await h.service.finalizeDeletion('u1')).toBe(false);
+    expect(eraseAccountRecords).not.toHaveBeenCalled();
+  });
+  it('keeps confirmation retryable and exposes no identity in the public receipt', async () => {
+    const h = harness(); h.setReceipt({ confirmationEmail: 'synthetic@example.invalid' });
+    h.email.sendText.mockResolvedValueOnce({ sent: false });
+    expect(await h.service.finalizeDueDeletions()).toEqual({ finalized: 0 });
+    expect(await h.service.status(h.receipt().id)).toEqual({ status: 'processing', scheduledAt: h.receipt().scheduledAt.toISOString(), completedAt: null });
+    expect(await h.service.finalizeDueDeletions()).toEqual({ finalized: 1 });
   });
 });

@@ -14,17 +14,17 @@ export function marvPublicProfilePostWhere(): Prisma.PostWhereInput {
 /**
  * Extra OR clauses for Marv tools (`get_post`, thread recent/summary).
  *
- * Allows: non-group posts, open-group posts, and — only when Marv is already
+ * Allows: non-group posts and — only when Marv is already
  * in that conversation — posts in the current thread (so a @marv mention inside
  * a private group still works). Blocks fetching a private-group post from a DM
  * or a different thread.
  */
-export function marvToolGroupAccessOr(rootPostId?: string | null): Prisma.PostWhereInput[] {
+export function marvToolGroupAccessOr(rootPostId?: string | null, permittedGroupId?: string | null): Prisma.PostWhereInput[] {
   const root = (rootPostId ?? '').trim();
   const or: Prisma.PostWhereInput[] = [
     { communityGroupId: null },
-    { communityGroup: { deletedAt: null, joinPolicy: 'open' } },
   ];
+  if (permittedGroupId) or.push({ communityGroupId: permittedGroupId, communityGroup: { deletedAt: null } });
   if (root) {
     or.push({ id: root }, { rootId: root });
   }

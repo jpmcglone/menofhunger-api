@@ -42,6 +42,21 @@ export type ReportTargetType = 'post' | 'user'
 export type VerificationRequestStatus = 'pending' | 'cancelled' | 'approved' | 'rejected'
 export type VerifiedStatus = 'none' | 'identity' | 'manual'
 
+// ─── src/common/dto/account-deletion.dto.ts ────────────────────────────────────
+
+export type AccountDeletionRequestDto = {
+  success: true;
+  deletionScheduledAt: string;
+  /** Private capability; reveal only to the account requesting deletion. */
+  deletionStatusToken: string;
+};
+
+export type AccountDeletionStatusDto = {
+  status: 'scheduled' | 'processing' | 'completed' | 'cancelled';
+  scheduledAt: string;
+  completedAt: string | null;
+};
+
 // ─── src/common/dto/admin-analytics.dto.ts ─────────────────────────────────────
 
 export type AnalyticsRange = '7d' | '30d' | '3m' | '1y' | 'all';
@@ -1908,6 +1923,7 @@ export type MarvinMeDto = {
   isPremium: boolean;
   /** Mode this user picked in settings. The composer + processor honor this by default. */
   preferredMode: MarvinModeDto;
+  aiConsentGranted: boolean;
   /** Latest credit-bucket snapshot. */
   credits: MarvinCreditSummaryDto;
   /** Per-mode base costs + surcharges. Used by the UI to preview spend before hitting "Catch me up". */
@@ -1930,6 +1946,7 @@ export type MarvinMeDto = {
  */
 export type MarvinUpdatePreferencesBodyDto = {
   preferredMode?: MarvinModeDto;
+  aiConsent?: boolean;
 };
 
 // ─── src/common/dto/marvin/marvin-mode.dto.ts ──────────────────────────────────

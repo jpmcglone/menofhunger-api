@@ -420,6 +420,12 @@ export class AuthController {
     return { data: result };
   }
 
+  @Post('account/deletion-status')
+  async deletionStatus(@Body() body: unknown) {
+    const { token } = z.object({ token: z.string().uuid() }).parse(body);
+    return { data: await this.accountDeletion.status(token) };
+  }
+
   @ApiOperation({ summary: 'Logout current session, clear cookie, and disconnect realtime sockets' })
   @Post('logout')
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
@@ -458,4 +464,3 @@ export class AuthController {
     return { data: { success: true } };
   }
 }
-

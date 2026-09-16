@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Inject,
   Injectable,
   InternalServerErrorException,
@@ -428,16 +429,18 @@ export class AuthService {
     if (existing) {
       if (!restoredPendingDeletion) return existing;
       try {
-        return await this.prisma.user.update({
-          where: { id: existing.id },
-          data: {
-            bannedAt: null,
-            bannedReason: null,
-            deletionRequestedAt: null,
-            deletionScheduledAt: null,
-          },
+        return await this.prisma.$transaction(async tx => {
+          const restored = await tx.user.updateMany({
+            where: { id: existing.id, bannedReason: ACCOUNT_DELETION_PENDING_REASON, deletionScheduledAt: { gt: now } },
+            data: { bannedAt: null, bannedReason: null, deletionRequestedAt: null, deletionScheduledAt: null },
+          });
+          if (!restored.count) throw new ForbiddenException('Account deletion has already started.');
+          await tx.accountDeletionReceipt.updateMany({ where: { userId: existing.id, startedAt: null },
+            data: { cancelledAt: now, userId: null, confirmationEmail: null } });
+          return tx.user.findUniqueOrThrow({ where: { id: existing.id } });
         });
       } catch (err) {
+        if (err instanceof ForbiddenException) throw err;
         this.logger.error(
           `Failed to restore pending-deletion account for phone=${this.maskPhone(phone)}: ${(err as Error)?.message}`,
           (err as Error)?.stack,
@@ -860,4 +863,3 @@ export class AuthService {
     return session;
   }
 }
-

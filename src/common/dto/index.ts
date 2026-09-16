@@ -33,3 +33,5 @@ export * from './view-ack.dto';
 export * from './newsletter.dto';
 export * from './call.dto';
 export * from './admin-operations.dto';
+
+export * from './account-deletion.dto';
