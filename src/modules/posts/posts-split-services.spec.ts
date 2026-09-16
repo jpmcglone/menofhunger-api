@@ -315,6 +315,67 @@ describe('PostsMutationService.createPost quote floor enforcement', () => {
     return { svc, prisma, txPost, QUOTED_POST_URL };
   }
 
+  describe('internal Marv replies', () => {
+    function makeMarvReply(visibility = 'public', groupId: string | null = null) {
+      const fixture = makeQuoteFloorService('public', premiumUser);
+      const { svc, prisma, txPost } = fixture;
+      prisma.user = { findUnique: jest.fn(async () => ({ isBot: true, botType: 'marvin', username: 'marv' })), findMany: jest.fn(async () => []) };
+      prisma.post.findFirst.mockResolvedValue({ id: 'trigger', userId: 'u1', visibility, rootId: null, topics: [], communityGroupId: groupId });
+      prisma.communityGroupMember = { findUnique: jest.fn(async () => ({ status: 'active' })) };
+      (svc as any).viewerContextService.getViewer.mockImplementation(async (id: string) =>
+        id === 'bot' ? { ...verifiedUser, id: 'bot', isBot: true } : premiumUser);
+      txPost.create.mockRejectedValue(new Error('write boundary'));
+      return { ...fixture, params: { botUserId: 'bot', requestingUserId: 'u1', parentId: 'trigger', body: 'Helpful answer. '.repeat(45) } };
+    }
+
+    it.each(['public', 'verifiedOnly', 'premiumOnly'])('does not require paid billing on Marv to reply in a %s thread', async (visibility) => {
+      const { svc, txPost, params } = makeMarvReply(visibility);
+      await expect(svc.createMarvReply(params)).rejects.toThrow('write boundary');
+      expect(txPost.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ userId: 'bot', visibility }) }));
+    });
+
+    it('uses the requesting member’s group membership and preserves the group audience', async () => {
+      const { svc, prisma, txPost, params } = makeMarvReply('verifiedOnly', 'group');
+      await expect(svc.createMarvReply(params)).rejects.toThrow('write boundary');
+      expect(prisma.communityGroupMember.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { groupId_userId: { groupId: 'group', userId: 'u1' } } }));
+      expect(txPost.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ communityGroupId: 'group', visibility: 'verifiedOnly' }) }));
+    });
+
+    it('does not grant a requesting member access to Premium threads', async () => {
+      const { svc, params, txPost } = makeMarvReply('premiumOnly');
+      (svc as any).viewerContextService.getViewer.mockResolvedValue(verifiedUser);
+      await expect(svc.createMarvReply(params)).rejects.toThrow('Upgrade to premium');
+      expect(txPost.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a revoked group membership', async () => {
+      const { svc, prisma, txPost, params } = makeMarvReply('verifiedOnly', 'group');
+      prisma.communityGroupMember.findUnique.mockResolvedValue(null);
+      await expect(svc.createMarvReply(params)).rejects.toThrow('Join this group');
+      expect(txPost.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a blocked bot and only-me posts', async () => {
+      const { svc, prisma, params } = makeMarvReply();
+      prisma.userBlock.count.mockResolvedValue(1);
+      await expect(svc.createMarvReply(params)).rejects.toThrow('You cannot reply');
+      const privateFixture = makeMarvReply('onlyMe');
+      await expect(privateFixture.svc.createMarvReply(privateFixture.params)).rejects.toThrow('Replies are not allowed');
+    });
+
+    it('rejects another author posing as Marv and a mismatched requesting member', async () => {
+      const { svc, prisma, params } = makeMarvReply();
+      await expect(svc.createMarvReply({ ...params, requestingUserId: 'other' })).rejects.toThrow('requesting member');
+      prisma.user.findUnique.mockResolvedValue({ isBot: false, username: 'marv' });
+      await expect(svc.createMarvReply(params)).rejects.toThrow('Invalid Marv');
+    });
+
+    it('does not ask Marv to consent to a mention in its own generated answer', async () => {
+      const { svc, params } = makeMarvReply();
+      await expect(svc.createMarvReply({ ...params, body: 'You can ask @marv here.' })).rejects.toThrow('write boundary');
+    });
+  });
+
   it('blocks a quote of verifiedOnly post with public visibility', async () => {
     const { svc, QUOTED_POST_URL } = makeQuoteFloorService('verifiedOnly');
     await expect(

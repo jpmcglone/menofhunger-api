@@ -34,6 +34,44 @@ import { SiteConfigService } from '../site-config/site-config.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { PostsTopicsClassifyService } from './posts-topics-classify.service';
 
+type CreatePostParams = {
+  userId: string;
+  body: string;
+  visibility: PostVisibility;
+  parentId?: string | null;
+  mentions?: string[] | null;
+  media: Array<{
+    source: 'upload' | 'giphy';
+    kind: 'image' | 'gif' | 'video';
+    r2Key?: string;
+    thumbnailR2Key?: string;
+    url?: string;
+    mp4Url?: string;
+    width?: number;
+    height?: number;
+    durationSeconds?: number;
+    alt?: string | null;
+  }> | null;
+  poll: {
+    endsAt: Date;
+    options: Array<{
+      text: string;
+      image: { r2Key: string; width: number | null; height: number | null; alt: string | null } | null;
+    }>;
+  } | null;
+  kind?: 'regular' | 'checkin' | 'status';
+  checkinDayKey?: string | null;
+  checkinPrompt?: string | null;
+  /** Top-level post only: creates a post inside this community group (membership required). */
+  communityGroupId?: string | null;
+  /**
+   * Optional Marv reply-mode hint, sourced from the `x-marv-mode` request header. Only
+   * has any effect when @marv is mentioned in the body — the public-reply processor reads
+   * this off the enqueued job to choose the OpenAI model. Ignored otherwise.
+   */
+  marvMode?: 'fast' | 'regular' | 'smart' | null;
+};
+
 /**
  * Post write paths: create (with the full side-effect pipeline), update,
  * delete, publish-from-onlyMe. Reads stay in PostsFeedQueryService;
@@ -659,46 +697,33 @@ export class PostsMutationService {
     return candidates.filter((s) => this.ticker.isValid(s));
   }
 
-  async createPost(params: {
-    userId: string;
-    body: string;
-    visibility: PostVisibility;
-    parentId?: string | null;
-    mentions?: string[] | null;
-    media: Array<{
-      source: 'upload' | 'giphy';
-      kind: 'image' | 'gif' | 'video';
-      r2Key?: string;
-      thumbnailR2Key?: string;
-      url?: string;
-      mp4Url?: string;
-      width?: number;
-      height?: number;
-      durationSeconds?: number;
-      alt?: string | null;
-    }> | null;
-    poll: {
-      endsAt: Date;
-      options: Array<{
-        text: string;
-        image: { r2Key: string; width: number | null; height: number | null; alt: string | null } | null;
-      }>;
-    } | null;
-    kind?: 'regular' | 'checkin' | 'status';
-    checkinDayKey?: string | null;
-    checkinPrompt?: string | null;
-    /** Top-level post only: creates a post inside this community group (membership required). */
-    communityGroupId?: string | null;
-    /**
-     * Optional Marv reply-mode hint, sourced from the `x-marv-mode` request header. Only
-     * has any effect when @marv is mentioned in the body — the public-reply processor reads
-     * this off the enqueued job to choose the OpenAI model. Ignored otherwise.
-     */
-    marvMode?: 'fast' | 'regular' | 'smart' | null;
-  }) {
+  async createPost(params: CreatePostParams) {
+    return this.writePost(params);
+  }
+
+  /** Internal reply path: only the configured bot, inside the requesting author's thread. */
+  async createMarvReply(params: { botUserId: string; requestingUserId: string; parentId: string; body: string }) {
+    const cfg = this.appConfig.marvBot();
+    const bot = await this.prisma.user.findUnique({
+      where: { id: params.botUserId },
+      select: { isBot: true, botType: true, username: true },
+    });
+    const matchesIdentity = cfg.userId
+      ? cfg.userId === params.botUserId
+      : bot?.username?.toLowerCase() === cfg.username.trim().toLowerCase();
+    if (!bot?.isBot || bot.botType !== 'marvin' || !matchesIdentity) {
+      throw new ForbiddenException('Invalid Marv reply author.');
+    }
+    return this.writePost({
+      userId: params.botUserId, body: params.body, parentId: params.parentId,
+      visibility: 'public', media: null, poll: null,
+    }, params.requestingUserId);
+  }
+
+  private async writePost(params: CreatePostParams, marvRequesterId?: string) {
     const { userId, body, visibility: requestedVisibility, parentId, mentions: clientMentions } = params;
     assertPublishableText(body, params.checkinPrompt, ...(params.poll?.options?.map(option => typeof option === 'string' ? option : option.text) ?? []));
-    if (this.parseMentionsFromBody(body).some(username => username.toLowerCase() === 'marv')) await requireAiConsent(this.prisma, userId);
+    if (!marvRequesterId && this.parseMentionsFromBody(body).some(username => username.toLowerCase() === this.appConfig.marvBot().username.trim().toLowerCase())) await requireAiConsent(this.prisma, userId);
     const requestedMarvMode = params.marvMode ?? null;
     const requestedCommunityGroupId = (params.communityGroupId ?? '').trim() || null;
     const kind = (params.kind ?? 'regular') as 'regular' | 'checkin' | 'status';
@@ -732,7 +757,7 @@ export class PostsMutationService {
     // Fetch viewer context (request-cached) and parent post in parallel.
     // Using viewerContextService populates the per-request cache so subsequent
     // `getViewer(userId)` calls (incl. the controller's `viewerContext()`) are free.
-    const [viewer, parentPost] = await Promise.all([
+    const [author, parentPost] = await Promise.all([
       this.viewerContextService.getViewer(userId),
       parentId
         ? this.prisma.post.findFirst({
@@ -741,8 +766,14 @@ export class PostsMutationService {
           })
         : Promise.resolve(null),
     ]);
-    if (!viewer) throw new NotFoundException('User not found.');
+    if (!author) throw new NotFoundException('User not found.');
+    this.viewerContextService.assertNotBanned(author);
+    const viewer = marvRequesterId ? await this.viewerContextService.getViewer(marvRequesterId) : author;
+    if (!viewer) throw new NotFoundException('Requesting user not found.');
     this.viewerContextService.assertNotBanned(viewer);
+    if (marvRequesterId && (!parentPost || parentPost.userId !== marvRequesterId)) {
+      throw new ForbiddenException('Marv can only reply to the requesting member’s post.');
+    }
     if (parentId && !parentPost) throw new NotFoundException('Post not found.');
     const user = { verifiedStatus: viewer.verifiedStatus, premium: viewer.premium, premiumPlus: viewer.premiumPlus };
     const viewerIsVerified = Boolean(viewer.verifiedStatus && viewer.verifiedStatus !== 'none');
@@ -802,7 +833,7 @@ export class PostsMutationService {
           : Promise.resolve(0),
         parentGid
           ? this.prisma.communityGroupMember.findUnique({
-              where: { groupId_userId: { groupId: parentGid, userId } },
+              where: { groupId_userId: { groupId: parentGid, userId: marvRequesterId ?? userId } },
               select: { status: true },
             })
           : Promise.resolve(null),
@@ -873,7 +904,7 @@ export class PostsMutationService {
     // Compute rate-limit window parameters synchronously; the actual count query is
     // batched in parallel with media-hash + mention resolution below.
     let rateLimitParams: { postsPerWindow: number; windowSeconds: number; windowStart: Date } | null = null;
-    if (viewerIsVerified) {
+    if (viewerIsVerified && !marvRequesterId) {
       const cfg = await this.siteConfig.get(); // in-memory cached; near-free
       const isPremium = Boolean(user.premium || user.premiumPlus);
       const postsPerWindow = isPremium ? cfg.premiumPostsPerWindow : cfg.verifiedPostsPerWindow;
@@ -883,10 +914,10 @@ export class PostsMutationService {
     }
 
     const viewerIsPremium = Boolean(user.premium || user.premiumPlus);
-    const maxLen = viewerIsPremium ? 1000 : 500;
+    const maxLen = viewerIsPremium || marvRequesterId ? 1000 : 500;
     if (body.length > maxLen) {
       throw new BadRequestException(
-        viewerIsPremium ? 'Posts are limited to 1000 characters.' : 'Posts are limited to 500 characters.',
+        maxLen === 1000 ? 'Posts are limited to 1000 characters.' : 'Posts are limited to 500 characters.',
       );
     }
 
@@ -1262,7 +1293,7 @@ export class PostsMutationService {
 
         // Self-view seed: create the row then increment view counters (sequential by data dep).
         // Bots (e.g. Marv) do not count as viewers of their own posts.
-        const selfViewOp = viewer.isBot
+        const selfViewOp = author.isBot
           ? Promise.resolve()
           : (async () => {
               const seededView = await tx.postView.createMany({

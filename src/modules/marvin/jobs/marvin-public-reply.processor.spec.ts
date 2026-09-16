@@ -120,7 +120,7 @@ function makeProcessor(opts?: {
   };
 
   const posts: any = {
-    createPost: jest.fn(async () => ({ post: { id: 'reply-1' } })),
+    createMarvReply: jest.fn(async () => ({ post: { id: 'reply-1' } })),
   };
 
   const creditSummary = {
@@ -184,6 +184,7 @@ function makeProcessor(opts?: {
   };
 
   const canned: any = {
+    sendTransientErrorThreadReply: jest.fn(async () => null),
     sendNonPremiumThreadReply: jest.fn(async () => 'reply-1'),
     sendOutOfCreditsDm: jest.fn(async () => ({ conversationId: 'c-1', messageId: 'm-1' })),
     sendNotConfiguredThreadReply: jest.fn(async () => 'reply-not-configured'),
@@ -264,6 +265,22 @@ function makeProcessor(opts?: {
 }
 
 describe('MarvinPublicReplyProcessor', () => {
+  it('fits a long generated reply into a post without depending on the bot tier', async () => {
+    const m = makeProcessor({ aiText: 'A useful answer. '.repeat(100) });
+    await m.processor.process({ postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' });
+    const reply = m.posts.createMarvReply.mock.calls[0][0];
+    expect(reply.body.length).toBeLessThanOrEqual(1000);
+    expect(reply.requestingUserId).toBe('u-requester');
+  });
+
+  it('refunds failed delivery and persists a safe diagnostic', async () => {
+    const m = makeProcessor();
+    m.posts.createMarvReply.mockRejectedValue(new Error('database secret text'));
+    await m.processor.process({ postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' });
+    expect(m.credits.refund).toHaveBeenCalled();
+    expect(m.usage.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ errorCode: 'post_failed', routingReason: 'user_selected;delivery:unexpected_error', creditsSpent: 0 }));
+  });
+
   it('short-circuits on duplicate idempotency key', async () => {
     const m = makeProcessor({ alreadyClaimedIdempotency: true });
     await m.processor.process({
@@ -271,7 +288,7 @@ describe('MarvinPublicReplyProcessor', () => {
       rootPostId: 'r-1',
       requestingUserId: 'u-requester',
     });
-    expect(m.posts.createPost).not.toHaveBeenCalled();
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
     expect(m.usage.recordEvent).not.toHaveBeenCalled();
   });
 
@@ -290,7 +307,7 @@ describe('MarvinPublicReplyProcessor', () => {
       rootPostId: 'r-1',
       requestingUserId: 'u-requester',
     });
-    expect(m.posts.createPost).not.toHaveBeenCalled();
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
   });
 
   it('sends canned non-premium reply for non-premium users', async () => {
@@ -305,7 +322,7 @@ describe('MarvinPublicReplyProcessor', () => {
       triggeringPostId: 'p-1',
       rootPostId: 'r-1',
     });
-    expect(m.posts.createPost).not.toHaveBeenCalled();
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
     expect(m.usage.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 'not_premium' }),
     );
@@ -319,7 +336,7 @@ describe('MarvinPublicReplyProcessor', () => {
       requestingUserId: 'u-requester',
     });
     expect(m.canned.sendOutOfCreditsDm).toHaveBeenCalled();
-    expect(m.posts.createPost).not.toHaveBeenCalled();
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
     expect(m.usage.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 'no_credits' }),
     );
@@ -332,7 +349,7 @@ describe('MarvinPublicReplyProcessor', () => {
       rootPostId: 'r-1',
       requestingUserId: 'u-requester',
     });
-    expect(m.posts.createPost).not.toHaveBeenCalled();
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
     expect(m.usage.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 'visibility_only_me' }),
     );
@@ -345,8 +362,8 @@ describe('MarvinPublicReplyProcessor', () => {
       rootPostId: 'r-1',
       requestingUserId: 'u-requester',
     });
-    // We never go through the model-driven createPost path...
-    expect(m.posts.createPost).not.toHaveBeenCalled();
+    // We never go through the model-driven createMarvReply path...
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
     // ...but we DO surface a canned thread reply so the user knows Marv isn't ignoring them.
     expect(m.canned.sendNotConfiguredThreadReply).toHaveBeenCalledWith({
       requestingUserId: 'u-requester',
@@ -376,9 +393,10 @@ describe('MarvinPublicReplyProcessor', () => {
       rootPostId: 'r-1',
       requestingUserId: 'u-requester',
     });
-    expect(m.posts.createPost).toHaveBeenCalledWith(
+    expect(m.posts.createMarvReply).toHaveBeenCalledWith(
       expect.objectContaining({
-        userId: 'marv-id',
+        botUserId: 'marv-id',
+        requestingUserId: 'u-requester',
         body: 'Brief, kind reply.',
         parentId: 'p-1',
       }),
@@ -512,7 +530,7 @@ describe('MarvinPublicReplyProcessor', () => {
       rootPostId: 'r-1',
       requestingUserId: 'u-requester',
     });
-    expect(m.posts.createPost).not.toHaveBeenCalled();
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
     expect(m.usage.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 'ai_no_text' }),
     );
@@ -528,7 +546,7 @@ describe('MarvinPublicReplyProcessor', () => {
       rootPostId: 'r-1',
       requestingUserId: 'u-requester',
     });
-    expect(m.posts.createPost).not.toHaveBeenCalled();
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
     expect(m.canned.sendRateLimitedDm).toHaveBeenCalledWith({
       userId: 'u-requester',
       kind: 'daily',
@@ -553,7 +571,7 @@ describe('MarvinPublicReplyProcessor', () => {
       userId: 'u-requester',
       windowSeconds: 60,
     });
-    expect(m.posts.createPost).not.toHaveBeenCalled();
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
     expect(m.canned.sendRateLimitedDm).toHaveBeenCalledWith({
       userId: 'u-requester',
       kind: 'thread_cooldown',
@@ -591,7 +609,7 @@ describe('MarvinPublicReplyProcessor', () => {
       requestingUserId: 'u-requester',
     });
     expect(m.canned.sendRateLimitedDm).toHaveBeenCalledTimes(1);
-    expect(m.posts.createPost).not.toHaveBeenCalled();
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
 
     // Second attempt: window has rolled, the prior successes have aged out → count=0.
     // The processor must let this one through and post a public reply.
@@ -604,7 +622,7 @@ describe('MarvinPublicReplyProcessor', () => {
 
     // Still only the one cooldown DM from the first attempt — no new block.
     expect(m.canned.sendRateLimitedDm).toHaveBeenCalledTimes(1);
-    expect(m.posts.createPost).toHaveBeenCalled();
+    expect(m.posts.createMarvReply).toHaveBeenCalled();
   });
 
   it('does not block one user just because another user hit the burst limit in the same thread', async () => {
@@ -629,7 +647,7 @@ describe('MarvinPublicReplyProcessor', () => {
       windowSeconds: 60,
     });
     expect(m.canned.sendRateLimitedDm).not.toHaveBeenCalled();
-    expect(m.posts.createPost).toHaveBeenCalled();
+    expect(m.posts.createMarvReply).toHaveBeenCalled();
   });
 
   describe('vision: image selection (first-then-tail rule)', () => {

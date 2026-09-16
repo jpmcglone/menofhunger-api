@@ -126,14 +126,11 @@ export class MarvinCannedRepliesService {
     }
 
     try {
-      const result = await this.posts.createPost({
-        userId: marvId,
+      const result = await this.posts.createMarvReply({
+        botUserId: marvId,
+        requestingUserId: args.requestingUserId,
         body: args.body,
-        // Visibility is overridden by createPost to match the parent's visibility.
-        visibility: 'public',
         parentId: args.triggeringPostId,
-        media: [],
-        poll: null,
       });
       const postId = result.post?.id ?? null;
       if (postId) {

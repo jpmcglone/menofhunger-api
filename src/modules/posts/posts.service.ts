@@ -220,6 +220,10 @@ export class PostsService {
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
+  createMarvReply(...args: Parameters<PostsMutationService['createMarvReply']>) {
+    return this.mutation.createMarvReply(...args);
+  }
+
   createPost(...args: Parameters<PostsMutationService['createPost']>) {
     return this.mutation.createPost(...args);
   }

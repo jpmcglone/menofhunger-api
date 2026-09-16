@@ -1,3 +1,4 @@
+import { marvinFailureReason, fitMarvinPost } from '../services/marvin-failure';
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, type MarvinMode } from '@prisma/client';
 import type { ResolvedMarvinMode } from '../services/marvin-routing.service';
@@ -574,10 +575,7 @@ export class MarvinPublicReplyProcessor {
         `[marv] public-reply AI call THREW after ${Date.now() - aiStartedAt}ms: ${err instanceof Error ? err.message : String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
-      // If the failure was specifically "AI not configured", surface it to the user
-      // as the canned thread reply (idempotent per (user, rootPostId, ai_not_configured)).
-      // Other AI errors stay observability-only — they could be transient, and we don't
-      // want to spam the thread on a flaky upstream.
+      // Canned responses are rate-limited per member/thread, so failures do not disappear silently.
       if (isNotConfigured) {
         try {
           await this.canned.sendNotConfiguredThreadReply({
@@ -591,6 +589,10 @@ export class MarvinPublicReplyProcessor {
           );
         }
       }
+      if (!isNotConfigured) {
+        await this.canned.sendTransientErrorThreadReply({ requestingUserId, triggeringPostId: postId, rootPostId })
+          .catch(() => undefined);
+      }
       await this.usage.recordEvent({
         userId: requestingUserId,
         source: 'public_thread',
@@ -600,14 +602,14 @@ export class MarvinPublicReplyProcessor {
         effectiveMode: effectiveMode,
         creditsSpent: 0,
         modelUsed: this.ai.modelForMode(effectiveMode),
-        routingReason: routed.reason,
+        routingReason: `${routed.reason};generation:${marvinFailureReason(err)}`,
         errorCode: code,
         latencyMs: Date.now() - startedAt,
       });
       return;
     }
 
-    const replyText = (aiResult.text ?? '').trim();
+    const replyText = fitMarvinPost(aiResult.text ?? '');
     if (!replyText) {
       stopTyping();
       await refundHeld();
@@ -749,14 +751,11 @@ export class MarvinPublicReplyProcessor {
     );
     let createdPostId: string | null = null;
     try {
-      const created = await this.posts.createPost({
-        userId: marvId,
+      const created = await this.posts.createMarvReply({
+        botUserId: marvId,
+        requestingUserId,
         body: replyText,
-        // Visibility is overridden by createPost to mirror parent's visibility.
-        visibility: 'public',
         parentId: postId,
-        media: [],
-        poll: null,
       });
       createdPostId = created.post?.id ?? null;
       this.logger.log(`[marv] public-reply post CREATED id=${createdPostId} parent=${postId}`);
@@ -777,7 +776,7 @@ export class MarvinPublicReplyProcessor {
         effectiveMode,
         creditsSpent: 0,
         modelUsed: aiResult.modelUsed,
-        routingReason: routed.reason,
+        routingReason: `${routed.reason};delivery:${marvinFailureReason(err)}`,
         responseId: aiResult.responseId,
         errorCode: MARV_ERROR_CODES.postFailed,
         latencyMs: Date.now() - startedAt,

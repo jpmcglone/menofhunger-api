@@ -237,6 +237,15 @@ function makeProcessor(opts?: {
 }
 
 describe('MarvinPrivateReplyProcessor', () => {
+  it('treats refused delivery as failure and never chains an unseen reply', async () => {
+    const m = makeProcessor();
+    m.messages.sendBotDirectMessage.mockResolvedValue(null);
+    await m.processor.process({ conversationId: 'c-1', messageId: 'm-1', requestingUserId: 'u-requester' });
+    expect(m.credits.refund).toHaveBeenCalled();
+    expect(m.sessionStateUpsert).not.toHaveBeenCalled();
+    expect(m.usage.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ errorCode: 'message_failed', routingReason: 'user_selected;delivery:delivery_refused', creditsSpent: 0 }));
+  });
+
   it('short-circuits on duplicate idempotency key', async () => {
     const m = makeProcessor({ alreadyClaimedIdempotency: true });
     await m.processor.process({

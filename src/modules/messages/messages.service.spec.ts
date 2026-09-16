@@ -743,3 +743,37 @@ describe('MessagesController — VerifiedGuard invariant', () => {
     expect(classGuards).not.toContain(VerifiedGuard);
   });
 });
+
+
+describe('Marv message consent belongs to the requesting human', () => {
+  function makeSendService() {
+    const prisma: any = {
+      user: { findUnique: jest.fn(async () => ({ bannedAt: null, verifiedStatus: 'manual' })) },
+      userBlock: { findMany: jest.fn(async () => []) },
+      marvinUserSettings: { findUnique: jest.fn(async () => null) },
+      $transaction: jest.fn(async () => { throw new Error('write boundary'); }),
+    };
+    const { svc } = makeService({ prisma });
+    jest.spyOn(svc as any, 'getConversationOrThrow').mockResolvedValue({
+      type: 'direct', directKey: 'human:marv', participants: [
+        { userId: 'human', status: 'accepted' }, { userId: 'marv', status: 'accepted' },
+      ],
+    });
+    (svc as any).marvIdentity.getMarvUserId.mockResolvedValue('marv');
+    return { svc, prisma };
+  }
+
+  it('allows a Marv answer to reach persistence without bot consent', async () => {
+    const { svc, prisma } = makeSendService();
+    await expect(svc.sendMessage({ userId: 'marv', conversationId: 'c1', body: 'Here is your answer.' })).rejects.toThrow('write boundary');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.marvinUserSettings.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('still blocks a human request without consent before writing anything', async () => {
+    const { svc, prisma } = makeSendService();
+    await expect(svc.sendMessage({ userId: 'human', conversationId: 'c1', body: 'Hello' })).rejects.toThrow('Choose whether to share data');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.marvinUserSettings.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: 'human' } }));
+  });
+});

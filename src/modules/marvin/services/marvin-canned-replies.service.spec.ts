@@ -28,7 +28,7 @@ function makeService(opts?: {
     getMarvUserId: jest.fn(async () => marvUserId),
   };
   const posts: any = {
-    createPost: jest.fn(async (args: any) => ({
+    createMarvReply: jest.fn(async (args: any) => ({
       post: opts?.postReturnsId === undefined
         ? { id: 'p-canned' }
         : opts.postReturnsId
@@ -85,8 +85,8 @@ describe('MarvinCannedRepliesService', () => {
         rootPostId: 'r1',
         reason: 'ai_not_configured',
       });
-      expect(posts.createPost).toHaveBeenCalledTimes(1);
-      const call = posts.createPost.mock.calls[0][0];
+      expect(posts.createMarvReply).toHaveBeenCalledTimes(1);
+      const call = posts.createMarvReply.mock.calls[0][0];
       expect(call.parentId).toBe('p1');
       expect(call.body).toMatch(/not fully set up yet/i);
       expect(nonPremium.setMarvPostId).toHaveBeenCalledWith({
@@ -105,7 +105,7 @@ describe('MarvinCannedRepliesService', () => {
         rootPostId: 'r1',
       });
       expect(id).toBeNull();
-      expect(posts.createPost).not.toHaveBeenCalled();
+      expect(posts.createMarvReply).not.toHaveBeenCalled();
     });
 
     it('returns null when Marv user is unresolved', async () => {
@@ -116,7 +116,7 @@ describe('MarvinCannedRepliesService', () => {
         rootPostId: 'r1',
       });
       expect(id).toBeNull();
-      expect(posts.createPost).not.toHaveBeenCalled();
+      expect(posts.createMarvReply).not.toHaveBeenCalled();
     });
   });
 

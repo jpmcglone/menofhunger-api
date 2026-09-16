@@ -1,3 +1,4 @@
+import { marvinFailureReason } from '../services/marvin-failure';
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, type MarvinMode } from '@prisma/client';
 import type { ResolvedMarvinMode } from '../services/marvin-routing.service';
@@ -593,7 +594,7 @@ export class MarvinPrivateReplyProcessor {
         effectiveMode,
         creditsSpent: 0,
         modelUsed: this.ai.modelForMode(effectiveMode),
-        routingReason: routed.reason,
+        routingReason: `${routed.reason};generation:${marvinFailureReason(err)}`,
         errorCode: code,
         latencyMs: Date.now() - startedAt,
       });
@@ -666,14 +667,6 @@ export class MarvinPrivateReplyProcessor {
     }
 
     // 9. Settle reservation to actual cost, then deliver.
-    if (aiResult.responseId) {
-      await this.prisma.marvinPrivateSessionState.upsert({
-        where: { conversationId },
-        update: { lastResponseId: aiResult.responseId, lastMessageId: messageId },
-        create: { conversationId, lastResponseId: aiResult.responseId, lastMessageId: messageId },
-      });
-    }
-
     const actualVisionCost = (aiResult.imagesAttached ?? 0) * creditCfg.visionCreditCostPerImage;
     const webSearchSurcharge = (aiResult.webSearchCount ?? 0) * creditCfg.webSearchCreditCost;
     const urlFetchSurcharge = (aiResult.urlFetchCount ?? 0) * creditCfg.urlFetchCreditCost;
@@ -747,6 +740,7 @@ export class MarvinPrivateReplyProcessor {
         body: replyText,
         media: [],
       });
+      if (!sendResult?.message?.id) throw new Error('Marv message delivery was refused.');
       this.logger.log(
         `[marv] private-reply DM sent ok msg=${sendResult?.message?.id ?? '?'} convo=${sendResult?.conversationId ?? '?'}`,
       );
@@ -769,7 +763,7 @@ export class MarvinPrivateReplyProcessor {
         effectiveMode,
         creditsSpent: 0,
         modelUsed: aiResult.modelUsed,
-        routingReason: routed.reason,
+        routingReason: `${routed.reason};delivery:${marvinFailureReason(err)}`,
         responseId: aiResult.responseId,
         errorCode: MARV_ERROR_CODES.messageFailed,
         latencyMs: Date.now() - startedAt,
@@ -779,6 +773,14 @@ export class MarvinPrivateReplyProcessor {
 
     // Delivery successful.
     delivered = true;
+
+    if (aiResult.responseId) {
+      await this.prisma.marvinPrivateSessionState.upsert({
+        where: { conversationId },
+        update: { lastResponseId: aiResult.responseId, lastMessageId: messageId },
+        create: { conversationId, lastResponseId: aiResult.responseId, lastMessageId: messageId },
+      }).catch(() => this.logger.warn('[marv] private-reply response chain save failed'));
+    }
 
     // Post-delivery steps are best-effort — must not propagate and block the job.
     try {

@@ -1706,7 +1706,8 @@ export class MessagesService {
     }
 
     const marvId = await this.marvIdentity.getMarvUserId();
-    if (conversation.participants.some(p => p.userId === marvId)) await requireAiConsent(this.prisma, userId);
+    // Consent belongs to the human requesting AI, never to the bot delivering its answer.
+    if (userId !== marvId && conversation.participants.some(p => p.userId === marvId)) await requireAiConsent(this.prisma, userId);
 
     const now = new Date();
     const result = await this.prisma.$transaction(async (tx) => {

@@ -73,12 +73,13 @@ export class MarvinUsageService {
       );
     }
 
-    this.logger.log(
-      `[marv] reply user=${input.userId} source=${input.source} requested=${input.requestedMode} ` +
+    const logMessage = `[marv] reply user=${input.userId} source=${input.source} requested=${input.requestedMode} ` +
+        `sourceId=${input.sourceId} responseId=${input.responseId ?? '-'} rootPostId=${input.rootPostId ?? '-'} ` +
         `effective=${input.effectiveMode} model=${input.modelUsed ?? '-'} spent=${input.creditsSpent} ` +
         `latencyMs=${input.latencyMs ?? '-'} cost=${input.estimatedCostUsd ?? '-'} reason=${input.routingReason ?? '-'} ` +
-        `error=${input.errorCode ?? '-'}`,
-    );
+        `error=${input.errorCode ?? '-'}`;
+    if (input.errorCode) this.logger.warn(logMessage);
+    else this.logger.log(logMessage);
 
     if (input.postSpendSummary) {
       this.emitCreditsUpdated(input.userId, input.postSpendSummary);

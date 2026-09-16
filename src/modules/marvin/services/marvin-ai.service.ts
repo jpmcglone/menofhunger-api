@@ -193,7 +193,8 @@ export class MarvinAIService {
    */
   async respond(req: MarvAIRequest): Promise<MarvAIResult> {
     if (!req.sharedContentOnly) await requireAiConsent(this.prisma, req.toolContext.requesterUserId);
-    const requestSignal = req.source === 'admin_console' ? AbortSignal.timeout(210_000) : undefined;
+    // One deadline covers all rounds and retries; typing must never wait indefinitely.
+    const requestSignal = AbortSignal.timeout(210_000);
     const cfg = this.appConfig.marvOpenAI();
     const limits = this.appConfig.marvLimits();
     const promptId = cfg.promptId;
