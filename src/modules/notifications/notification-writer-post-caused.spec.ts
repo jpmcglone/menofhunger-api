@@ -107,3 +107,23 @@ describe('NotificationWriterService — post-caused create is idempotent', () =>
     expect(sideEffects.dispatch).not.toHaveBeenCalled();
   });
 });
+
+
+describe('page publication subscriptions', () => {
+  it('delivers followed posts to page operators through the normal bell and push pipeline', async () => {
+    const { writer, prisma, presenceRealtime, sideEffects } = makeDeps();
+    prisma.userPageOperator.findUnique = jest.fn(async () => ({ operatorUserId: 'user-1' })) as never;
+    await writer.create({ recipientUserId: 'user-1', actorUserId: 'mohnews', kind: 'followed_post', subjectPostId: 'daily-news' });
+    expect(prisma.notification.create).toHaveBeenCalledTimes(1);
+    expect(prisma.userPageOperator.findUnique).not.toHaveBeenCalled();
+    expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalled();
+    expect(sideEffects.dispatch).toHaveBeenCalledWith('notification.push', expect.objectContaining({ recipientUserId: 'user-1', actorUserId: 'mohnews', kind: 'followed_post' }));
+  });
+  it('still suppresses true self-notifications and muted page subscriptions', async () => {
+    const { writer, prisma } = makeDeps();
+    await writer.create({ recipientUserId: 'mohnews', actorUserId: 'mohnews', kind: 'followed_post', subjectPostId: 'daily-news' });
+    prisma.follow.findUnique = jest.fn(async () => ({ notificationPreference: 'off', postNotificationsEnabled: false }));
+    await writer.create({ recipientUserId: 'user-1', actorUserId: 'mohnews', kind: 'followed_post', subjectPostId: 'daily-news' });
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+  });
+});

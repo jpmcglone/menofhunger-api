@@ -508,7 +508,7 @@ describe('PostsSideEffectsHandler — followed-post bell semantics', () => {
     );
   });
 
-  it('does not notify page operators who follow the page, but still emits to their feed', async () => {
+  it('notifies page operators who follow scheduled or delegated page publications', async () => {
     const { handler, deps } = setup();
     deps.prisma.userPageOperator.findMany = jest.fn(async () => [
       { operatorUserId: 'bell-follower' },
@@ -519,7 +519,7 @@ describe('PostsSideEffectsHandler — followed-post bell semantics', () => {
     const followedPostCalls = deps.notifications.create.mock.calls.filter(
       (c: any[]) => c[0]?.kind === 'followed_post',
     );
-    expect(followedPostCalls.map((c: any[]) => c[0].recipientUserId)).toEqual(['normal-follower']);
+    expect(followedPostCalls.map((c: any[]) => c[0].recipientUserId)).toEqual(['normal-follower', 'bell-follower']);
     expect(deps.presenceRealtime.emitFeedNewPost).toHaveBeenCalledWith(
       ['normal-follower', 'bell-follower'],
       expect.any(Object),

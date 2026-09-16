@@ -21,27 +21,6 @@ function makeService() {
 }
 
 describe('NotificationWriterService — operator self-echo', () => {
-  it('skips followed_post when the recipient operates the actor page', async () => {
-    const { service, prisma } = makeService();
-    prisma.userPageOperator.findUnique.mockResolvedValue({ operatorUserId: 'john' });
-
-    await expect(
-      service.create({
-        recipientUserId: 'john',
-        kind: 'followed_post',
-        actorUserId: 'page-1',
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(prisma.userPageOperator.findUnique).toHaveBeenCalledWith({
-      where: {
-        operatorUserId_pageUserId: { operatorUserId: 'john', pageUserId: 'page-1' },
-      },
-      select: { operatorUserId: true },
-    });
-    expect(prisma.notification.create).not.toHaveBeenCalled();
-  });
-
   it('skips status_update when the recipient operates the actor page', async () => {
     const { service, prisma } = makeService();
     prisma.userPageOperator.findUnique.mockResolvedValue({ operatorUserId: 'john' });

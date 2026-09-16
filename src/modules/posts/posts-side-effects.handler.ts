@@ -664,29 +664,22 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       const followerNotificationIds: string[] = [];
       if (!postCommunityGroupId && visibility !== 'onlyMe') {
         try {
-          const [follows, operators] = await Promise.all([
-            this.prisma.follow.findMany({
-              where: { followingId: userId },
-              select: {
-                followerId: true,
-                postNotificationsEnabled: true,
-                notificationPreference: true,
-                follower: {
-                  select: {
-                    verifiedStatus: true,
-                    premium: true,
-                    premiumPlus: true,
-                    accountKind: true,
-                  },
+          const follows = await this.prisma.follow.findMany({
+            where: { followingId: userId },
+            select: {
+              followerId: true,
+              postNotificationsEnabled: true,
+              notificationPreference: true,
+              follower: {
+                select: {
+                  verifiedStatus: true,
+                  premium: true,
+                  premiumPlus: true,
+                  accountKind: true,
                 },
               },
-            }),
-            this.prisma.userPageOperator.findMany({
-              where: { pageUserId: userId },
-              select: { operatorUserId: true },
-            }),
-          ]);
-          const operatorIds = new Set(operators.map((row) => row.operatorUserId));
+            },
+          });
 
           for (const f of follows) {
             const recipientUserId = f.followerId;
@@ -709,12 +702,12 @@ export class PostsSideEffectsHandler implements OnModuleInit {
             // Status posts skip the followed_post notification — followers receive a
             // status_update notification instead (fired by the presence domain event).
             // Checkin posts use the checkin_post kind so followers can filter them separately.
-            // Operators of this page already posted; they still get the home-feed emit.
+            // Following a page is an explicit subscription, including for its operators.
+            // Scheduled/delegated publication need not have been performed by this follower.
             // Pages never receive checkin_post bells — person-only, both as actor and follower.
             if (
               preference !== 'off' &&
               post.kind !== 'status' &&
-              !operatorIds.has(recipientUserId) &&
               !(post.kind === 'checkin' && f.follower?.accountKind === 'page')
             ) {
               followerNotificationIds.push(recipientUserId);

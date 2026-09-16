@@ -30,6 +30,19 @@ describe('profile and publication media ownership', () => {
     return { prisma, service };
   };
 
+  it.each(['m4a', 'wav'])('protects sent voice messages and refuses stale orphan deletion (%s)', async (extension) => {
+    const voiceKey = `chat/user/voice.${extension}`;
+    const { prisma, service } = setup(voiceKey);
+    expect((await service.getById('asset')).asset.primaryType).toBe('orphan');
+    expect((await service.list({ limit: 30, cursor: null, onlyOrphans: true })).items).toHaveLength(1);
+    prisma.messageMedia.findMany.mockResolvedValue([{ id: 'voice', messageId: 'message', r2Key: voiceKey, thumbnailR2Key: null, message: { conversationId: 'chat' } }]);
+    expect((await service.getById('asset')).asset.primaryType).toBe('message');
+    expect((await service.list({ limit: 30, cursor: null, onlyOrphans: true })).items).toEqual([]);
+    await expect(service.deleteById({ id: 'asset', adminUserId: 'admin', reason: 'cleanup', onlyOrphans: true })).rejects.toThrow('no longer an orphan');
+    expect((await service.deleteManyByIds({ ids: ['asset'], adminUserId: 'admin', reason: 'cleanup', onlyOrphans: true })).deleted).toBe(0);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it('account erasure rechecks ownership and only deletes unreferenced media', async () => {
     const { prisma, service } = setup('avatars/user/photo.webp');
     const send = jest.fn(async () => ({}));

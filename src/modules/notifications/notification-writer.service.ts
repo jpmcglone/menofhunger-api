@@ -23,7 +23,6 @@ import {
 
 /** Kinds that announce the actor's own post/publish. Operators of a page actor already did the action. */
 const ACTOR_SELF_ECHO_KINDS = new Set<NotificationKind>([
-  'followed_post',
   'followed_article',
   'checkin_post',
   'status_update',
