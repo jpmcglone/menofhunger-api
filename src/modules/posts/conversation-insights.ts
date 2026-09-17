@@ -7,6 +7,7 @@ export function conversationDays(from: Date, to: Date): ConversationDayDto[] {
       date: new Date(at).toISOString().slice(0, 10),
       replies: 0,
       reposts: 0,
+      boosts: 0,
       coins: 0,
       branches: 0,
     });
@@ -16,7 +17,7 @@ export function conversationDays(from: Date, to: Date): ConversationDayDto[] {
 export function addConversationEvent(
   days: ConversationDayDto[],
   at: Date,
-  kind: "replies" | "reposts" | "coins",
+  kind: "replies" | "reposts" | "boosts" | "coins",
   amount = 1,
   branch = false,
 ) {

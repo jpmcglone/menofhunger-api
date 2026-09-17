@@ -212,6 +212,8 @@ describe('NewslettersService', () => {
         to: 'admin@x.com',
         from: 'Men of Hunger <letters@x.com>',
         subject: 'Preview — Hello',
+        html: expect.stringContaining('>Open Men of Hunger</a>'),
+        text: expect.stringContaining('Open Men of Hunger: https://menofhunger.com/home'),
         category: 'broadcast',
         userId: 'admin-1',
         headers: expect.objectContaining({

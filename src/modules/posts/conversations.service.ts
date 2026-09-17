@@ -1,4 +1,4 @@
-import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
+import { toAvatarVideoDto } from "../../common/dto/avatar-video.dto";
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -20,7 +20,9 @@ const personSelect = {
   id: true,
   username: true,
   name: true,
-  avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
+  avatarKey: true,
+  avatarVideoKey: true,
+  avatarVideoDurationMs: true,
   avatarUpdatedAt: true,
 } as const;
 type Person = Prisma.UserGetPayload<{ select: typeof personSelect }>;
@@ -41,7 +43,8 @@ export class ConversationsService {
         publicBaseUrl: this.config.r2()?.publicBaseUrl,
         key: user.avatarKey,
         updatedAt: user.avatarUpdatedAt,
-      }), avatarVideo: toAvatarVideoDto(user, this.config.r2()?.publicBaseUrl),
+      }),
+      avatarVideo: toAvatarVideoDto(user, this.config.r2()?.publicBaseUrl),
     };
   }
   async readableWhere(userId: string): Promise<Prisma.PostWhereInput> {
@@ -131,6 +134,7 @@ export class ConversationsService {
                   { replies: { some: eventWhere } },
                   { reposts: { some: eventWhere } },
                   { quotes: { some: eventWhere } },
+                  { boosts: { some: { createdAt: { gte: from, lte: to } } } },
                   {
                     coinTransfers: {
                       some: {
@@ -143,12 +147,18 @@ export class ConversationsService {
               },
         ],
       },
-      select: { id: true, body: true, createdAt: true },
+      select: { id: true, body: true, createdAt: true, totalViewCount: true },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     });
     if (postId && !roots.length) throw new NotFoundException("Post not found.");
     const ids = roots.map((p) => p.id);
-    const [events, transfers] = ids.length
+    const eligibleBooster: Prisma.UserWhereInput = {
+      isBot: false,
+      bannedAt: null,
+      blocksInitiated: { none: { blockedId: userId } },
+      blocksReceived: { none: { blockerId: userId } },
+    };
+    const [events, transfers, boosts, reachRows] = ids.length
       ? await Promise.all([
           this.prisma.post.findMany({
             where: {
@@ -186,10 +196,39 @@ export class ConversationsService {
             },
             select: { postId: true, createdAt: true, amount: true },
           }),
+          this.prisma.boost.findMany({
+            where: {
+              postId: { in: ids },
+              createdAt: { gte: from, lte: to },
+              userId: { not: userId },
+              user: eligibleBooster,
+            },
+            select: {
+              postId: true,
+              createdAt: true,
+              user: { select: personSelect },
+            },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          }),
+          // Count identities across posts, not the sum of per-post unique viewers.
+          // Linked guest browsers collapse into their signed-in identity.
+          this.prisma.$queryRaw<Array<{ people: bigint }>>(Prisma.sql`
+            SELECT COUNT(DISTINCT viewer)::bigint AS people FROM (
+              SELECT 'user:' || "userId" AS viewer FROM "PostView"
+              WHERE "postId" IN (${Prisma.join(ids)})
+              UNION ALL
+              SELECT CASE WHEN identity."userId" IS NOT NULL
+                THEN 'user:' || identity."userId" ELSE 'guest:' || views."anonId" END AS viewer
+              FROM "PostAnonView" views
+              LEFT JOIN "ViewerIdentity" identity ON identity."anonId" = views."anonId"
+              WHERE views."postId" IN (${Prisma.join(ids)})
+            ) viewers
+          `),
         ])
-      : [[], []];
+      : [[], [], [], []];
     const posts = roots.map((root) => ({
-      ...root,
+      id: root.id,
+      body: root.body,
       createdAt: root.createdAt.toISOString(),
       renewed: root.createdAt < from,
       participantCount: 0,
@@ -205,6 +244,16 @@ export class ConversationsService {
     const byId = new Map(posts.map((p) => [p.id, p]));
     const participants = new Set<string>();
     const postPeople = new Map(ids.map((id) => [id, new Set<string>()]));
+    const registerParticipant = (id: string, user: Person) => {
+      const post = byId.get(id);
+      if (!post || user.id === userId) return;
+      participants.add(user.id);
+      const people = postPeople.get(id)!;
+      if (!people.has(user.id) && post.participants.length < 6)
+        post.participants.push(this.person(user));
+      people.add(user.id);
+      post.participantCount = people.size;
+    };
     for (const e of events) {
       if (e.parentId) {
         const id = e.rootId ?? e.parentId;
@@ -218,12 +267,7 @@ export class ConversationsService {
             e.parentId === id,
           );
           if (e.userId !== userId) {
-            participants.add(e.userId);
-            const people = postPeople.get(id)!;
-            if (!people.has(e.userId) && p.participants.length < 6)
-              p.participants.push(this.person(e.user));
-            people.add(e.userId);
-            p.participantCount = people.size;
+            registerParticipant(id, e.user);
             p.replies.push({
               id: e.id,
               body: e.body.slice(0, 240),
@@ -235,12 +279,20 @@ export class ConversationsService {
         }
       }
       const shared = e.repostedPostId ?? e.quotedPostId;
-      if (shared && byId.has(shared))
+      if (shared && byId.has(shared) && !e.user.isBot) {
+        registerParticipant(shared, e.user);
         addConversationEvent(
           byId.get(shared)!.timeline,
           e.createdAt,
           "reposts",
         );
+      }
+    }
+    for (const boost of boosts) {
+      const post = byId.get(boost.postId);
+      if (!post) continue;
+      registerParticipant(boost.postId, boost.user);
+      addConversationEvent(post.timeline, boost.createdAt, "boosts");
     }
     for (const t of transfers)
       if (t.postId && byId.has(t.postId))
@@ -255,18 +307,42 @@ export class ConversationsService {
       ? await this.prisma.post.findMany({
           where: {
             userId: { in: [...participants] },
-            parentId: { not: null },
             createdAt: { lt: from },
-            OR: [{ parent: { userId } }, { root: { userId } }],
+            OR: [
+              { parent: { userId } },
+              { root: { userId } },
+              { repostedPost: { userId } },
+              { quotedPost: { userId } },
+            ],
           },
           select: { userId: true },
           distinct: ["userId"],
         })
       : [];
+    const priorBoosts = participants.size
+      ? await this.prisma.boost.findMany({
+          where: {
+            userId: { in: [...participants] },
+            createdAt: { lt: from },
+            post: { userId },
+          },
+          select: { userId: true },
+          distinct: ["userId"],
+        })
+      : [];
+    const priorPeople = new Set(
+      [...prior, ...priorBoosts].map((p) => p.userId),
+    );
     const timeline = conversationDays(from, to);
     for (const p of posts)
       p.timeline.forEach((d, i) => {
-        for (const k of ["replies", "reposts", "coins", "branches"] as const)
+        for (const k of [
+          "replies",
+          "reposts",
+          "boosts",
+          "coins",
+          "branches",
+        ] as const)
           timeline[i][k] += d[k];
       });
     return {
@@ -275,7 +351,15 @@ export class ConversationsService {
       postCount: posts.filter((p) => !p.renewed).length,
       renewedCount: posts.filter((p) => p.renewed).length,
       participantCount: participants.size,
-      newParticipantCount: participants.size - prior.length,
+      newParticipantCount: participants.size - priorPeople.size,
+      reach: {
+        people: Number(reachRows[0]?.people ?? 0),
+        impressions: roots.reduce(
+          (total, post) => total + post.totalViewCount,
+          0,
+        ),
+        scope: "lifetime",
+      },
       timeline,
       posts,
     };

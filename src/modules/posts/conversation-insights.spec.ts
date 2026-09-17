@@ -25,6 +25,7 @@ describe("Conversation insights", () => {
       date: "2026-09-01",
       replies: 1,
       reposts: 0,
+      boosts: 0,
       coins: 500,
       branches: 1,
     });
@@ -61,11 +62,13 @@ describe("Conversation insights", () => {
         {
           id: "a",
           body: "New post",
+          totalViewCount: 42,
           createdAt: new Date("2026-09-01T12:00:00Z"),
         },
         {
           id: "b",
           body: "Older post",
+          totalViewCount: 58,
           createdAt: new Date("2026-08-01T12:00:00Z"),
         },
       ])
@@ -75,20 +78,47 @@ describe("Conversation insights", () => {
         event("r3", "a", "new"),
         event("r4", "a", "owner"),
         event("r5", "a", "bot", true),
+        {
+          ...event("s1", "a", "reposter"),
+          parentId: null,
+          repostedPostId: "a",
+        },
+        { ...event("s2", "a", "friend"), parentId: null, quotedPostId: "a" },
+        {
+          ...event("s3", "a", "bot", true),
+          parentId: null,
+          repostedPostId: "a",
+        },
       ])
       .mockResolvedValueOnce([{ userId: "friend" }]);
     const prisma = {
       post: { findMany },
-      coinTransfer: {
+      $queryRaw: jest.fn().mockResolvedValue([{ people: 9n }]),
+      boost: {
         findMany: jest
           .fn()
-          .mockResolvedValue([
+          .mockResolvedValueOnce([
             {
               postId: "a",
-              amount: 10,
               createdAt: new Date("2026-09-02T12:00:00Z"),
+              user: user("booster"),
             },
-          ]),
+            {
+              postId: "b",
+              createdAt: new Date("2026-09-02T12:00:00Z"),
+              user: user("friend"),
+            },
+          ])
+          .mockResolvedValueOnce([{ userId: "friend" }, { userId: "booster" }]),
+      },
+      coinTransfer: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            postId: "a",
+            amount: 10,
+            createdAt: new Date("2026-09-02T12:00:00Z"),
+          },
+        ]),
       },
     };
     const service = new ConversationsService(
@@ -102,14 +132,63 @@ describe("Conversation insights", () => {
       undefined,
       new Date("2026-09-05T12:00:00Z"),
     );
-    expect(result.participantCount).toBe(2);
-    expect(result.newParticipantCount).toBe(1);
+    expect(result.participantCount).toBe(4);
+    expect(result.newParticipantCount).toBe(2);
     expect(result.postCount).toBe(1);
     expect(result.renewedCount).toBe(1);
-    expect(result.posts[0].participantCount).toBe(2);
+    expect(result.posts[0].participantCount).toBe(4);
     expect(result.timeline.reduce((n, d) => n + d.replies, 0)).toBe(4);
     expect(result.timeline.reduce((n, d) => n + d.coins, 0)).toBe(10);
     expect(findMany.mock.calls[2][0].where.deletedAt).toBeUndefined();
+    expect(result.timeline.reduce((n, d) => n + d.boosts, 0)).toBe(2);
+    expect(result.timeline.reduce((n, d) => n + d.reposts, 0)).toBe(2);
+    expect(result.reach).toEqual({
+      people: 9,
+      impressions: 100,
+      scope: "lifetime",
+    });
+    expect(result.posts[0]).not.toHaveProperty("totalViewCount");
+    const query = prisma.$queryRaw.mock.calls[0][0];
+    expect(query.values).toEqual(["a", "b", "a", "b"]);
+    expect(query.sql).toContain("COUNT(DISTINCT viewer)");
+    expect(query.sql).toContain('LEFT JOIN "ViewerIdentity"');
+    expect(prisma.boost.findMany.mock.calls[0][0].where).toMatchObject({
+      userId: { not: "owner" },
+      user: {
+        isBot: false,
+        bannedAt: null,
+        blocksInitiated: { none: { blockedId: "owner" } },
+        blocksReceived: { none: { blockerId: "owner" } },
+      },
+    });
+    expect(findMany.mock.calls[0][0].where.AND[2].OR).toContainEqual({
+      boosts: {
+        some: {
+          createdAt: { gte: new Date(result.from), lte: new Date(result.to) },
+        },
+      },
+    });
+  });
+
+  it("returns zero reach without querying viewer identities for an empty recap", async () => {
+    const query = jest.fn();
+    const service = new ConversationsService(
+      {
+        post: { findMany: jest.fn().mockResolvedValue([]) },
+        $queryRaw: query,
+      } as never,
+      {} as never,
+      {} as never,
+    );
+    jest.spyOn(service, "readableWhere").mockResolvedValue({ deletedAt: null });
+    const result = await service.insights("owner");
+    expect(result.reach).toEqual({
+      people: 0,
+      impressions: 0,
+      scope: "lifetime",
+    });
+    expect(result.participantCount).toBe(0);
+    expect(query).not.toHaveBeenCalled();
   });
 
   it("returns not-found when the requested root is not owned and readable", async () => {

@@ -1,9 +1,10 @@
-import type { AvatarVideoDto } from './avatar-video.dto';
+import type { AvatarVideoDto } from "./avatar-video.dto";
 export type ConversationPersonDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
 };
 export type ConversationReplyDto = {
   id: string;
@@ -15,6 +16,7 @@ export type ConversationDayDto = {
   date: string;
   replies: number;
   reposts: number;
+  boosts: number;
   coins: number;
   branches: number;
 };
@@ -28,7 +30,14 @@ export type ConversationPostDto = {
   replies: ConversationReplyDto[];
   timeline: ConversationDayDto[];
 };
-/** UTC calendar days including today. Counts describe activity within this window. */
+export type ConversationReachDto = {
+  /** Unique known viewers across recap posts; anonymous browsers are estimates. */
+  people: number;
+  /** Sum of the existing lifetime impression counters on recap posts. */
+  impressions: number;
+  scope: "lifetime";
+};
+/** UTC calendar days including today. Activity uses this window; reach is lifetime. */
 export type ConversationInsightsDto = {
   from: string;
   to: string;
@@ -36,6 +45,7 @@ export type ConversationInsightsDto = {
   renewedCount: number;
   participantCount: number;
   newParticipantCount: number;
+  reach: ConversationReachDto;
   timeline: ConversationDayDto[];
   posts: ConversationPostDto[];
 };
