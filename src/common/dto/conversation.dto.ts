@@ -37,7 +37,7 @@ export type ConversationReachDto = {
   impressions: number;
   scope: "lifetime";
 };
-/** UTC calendar days including today. Activity uses this window; reach is lifetime. */
+/** Last 7 (weekly recap) or 30 (post) Eastern calendar days including today. Reach is lifetime. */
 export type ConversationInsightsDto = {
   from: string;
   to: string;

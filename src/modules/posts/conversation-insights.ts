@@ -1,18 +1,15 @@
 import type { ConversationDayDto } from "../../common/dto/conversation.dto";
+import { easternDayKey } from "../../common/time/eastern-day-key";
 export const DAY_MS = 86_400_000;
-export function conversationDays(from: Date, to: Date): ConversationDayDto[] {
-  const days: ConversationDayDto[] = [];
-  for (let at = from.getTime(); at < to.getTime(); at += DAY_MS) {
-    days.push({
-      date: new Date(at).toISOString().slice(0, 10),
-      replies: 0,
-      reposts: 0,
-      boosts: 0,
-      coins: 0,
-      branches: 0,
-    });
-  }
-  return days;
+export function conversationDays(dayKeys: string[]): ConversationDayDto[] {
+  return dayKeys.map((date) => ({
+    date,
+    replies: 0,
+    reposts: 0,
+    boosts: 0,
+    coins: 0,
+    branches: 0,
+  }));
 }
 export function addConversationEvent(
   days: ConversationDayDto[],
@@ -21,7 +18,7 @@ export function addConversationEvent(
   amount = 1,
   branch = false,
 ) {
-  const day = days.find((d) => d.date === at.toISOString().slice(0, 10));
+  const day = days.find((d) => d.date === easternDayKey(at));
   if (!day) return;
   day[kind] += amount;
   if (branch) day.branches++;

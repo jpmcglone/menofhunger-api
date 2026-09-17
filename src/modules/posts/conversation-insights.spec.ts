@@ -6,21 +6,35 @@ import {
 import { ConversationsService } from "./conversations.service";
 
 describe("Conversation insights", () => {
-  it("keeps UTC buckets complete, with coins separate from reply counts", () => {
-    const days = conversationDays(
-      new Date("2026-08-30T00:00:00Z"),
-      new Date("2026-09-05T20:00:00Z"),
-    );
+  it("keeps Eastern day buckets complete, with coins separate from reply counts", () => {
+    const days = conversationDays([
+      "2026-08-30",
+      "2026-08-31",
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-05",
+    ]);
     expect(days).toHaveLength(7);
     addConversationEvent(
       days,
-      new Date("2026-09-01T01:00:00Z"),
+      new Date("2026-09-01T12:00:00Z"),
       "replies",
       1,
       true,
     );
     addConversationEvent(days, new Date("2026-09-01T23:59:00Z"), "coins", 500);
+    addConversationEvent(days, new Date("2026-09-01T01:00:00Z"), "replies");
     addConversationEvent(days, new Date("2026-08-29T23:59:00Z"), "replies");
+    expect(days[1]).toEqual({
+      date: "2026-08-31",
+      replies: 1,
+      reposts: 0,
+      boosts: 0,
+      coins: 0,
+      branches: 0,
+    });
     expect(days[2]).toEqual({
       date: "2026-09-01",
       replies: 1,
@@ -132,6 +146,10 @@ describe("Conversation insights", () => {
       undefined,
       new Date("2026-09-05T12:00:00Z"),
     );
+    expect(result.from).toBe("2026-08-30T04:00:00.000Z");
+    expect(result.timeline).toHaveLength(7);
+    expect(result.timeline[0]?.date).toBe("2026-08-30");
+    expect(result.timeline[6]?.date).toBe("2026-09-05");
     expect(result.participantCount).toBe(4);
     expect(result.newParticipantCount).toBe(2);
     expect(result.postCount).toBe(1);
@@ -189,6 +207,27 @@ describe("Conversation insights", () => {
     });
     expect(result.participantCount).toBe(0);
     expect(query).not.toHaveBeenCalled();
+  });
+
+  it("windows the recap to the last 7 Eastern days after UTC has rolled over", async () => {
+    const service = new ConversationsService(
+      {
+        post: { findMany: jest.fn().mockResolvedValue([]) },
+        $queryRaw: jest.fn(),
+      } as never,
+      {} as never,
+      {} as never,
+    );
+    jest.spyOn(service, "readableWhere").mockResolvedValue({ deletedAt: null });
+    const result = await service.insights(
+      "owner",
+      undefined,
+      new Date("2026-08-30T01:20:00.000Z"),
+    );
+    expect(result.from).toBe("2026-08-23T04:00:00.000Z");
+    expect(result.timeline).toHaveLength(7);
+    expect(result.timeline[0]?.date).toBe("2026-08-23");
+    expect(result.timeline[6]?.date).toBe("2026-08-29");
   });
 
   it("returns not-found when the requested root is not owned and readable", async () => {

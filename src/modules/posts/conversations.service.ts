@@ -16,6 +16,10 @@ import {
   DAY_MS,
   unansweredOpportunity,
 } from "./conversation-insights";
+import {
+  easternDayStart,
+  easternLastDayKeys,
+} from "../../common/time/eastern-day-key";
 const personSelect = {
   id: true,
   username: true,
@@ -107,10 +111,8 @@ export class ConversationsService {
     now = new Date(),
   ): Promise<ConversationInsightsDto> {
     const to = now;
-    const from = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) -
-        (postId ? 29 : 6) * DAY_MS,
-    );
+    const dayKeys = easternLastDayKeys(postId ? 30 : 7, now);
+    const from = easternDayStart(dayKeys[0]!);
     const readable = await this.readableWhere(userId);
     const eventWhere: Prisma.PostWhereInput = {
       AND: [readable, { createdAt: { gte: from, lte: to } }],
@@ -239,7 +241,7 @@ export class ConversationsService {
         createdAt: string;
         author: ConversationPersonDto;
       }>,
-      timeline: conversationDays(from, to),
+      timeline: conversationDays(dayKeys),
     }));
     const byId = new Map(posts.map((p) => [p.id, p]));
     const participants = new Set<string>();
@@ -333,7 +335,7 @@ export class ConversationsService {
     const priorPeople = new Set(
       [...prior, ...priorBoosts].map((p) => p.userId),
     );
-    const timeline = conversationDays(from, to);
+    const timeline = conversationDays(dayKeys);
     for (const p of posts)
       p.timeline.forEach((d, i) => {
         for (const k of [

@@ -1,6 +1,8 @@
 import {
   easternDayKey,
   easternWeekDayKeys,
+  easternLastDayKeys,
+  easternDayStart,
   yesterdayEasternDayKey,
   wordContentDayKey,
   quoteContentDayKey,
@@ -99,6 +101,27 @@ describe('easternWeekDayKeys', () => {
     const sundayMorningEt = new Date('2026-08-30T08:00:00.000Z'); // 04:00 EDT Sunday
     expect(easternWeekDayKeys(sundayMorningEt)[0]).toBe('2026-08-30');
     expect(easternWeekDayKeys(sundayMorningEt)[6]).toBe('2026-09-05');
+  });
+});
+
+describe('easternLastDayKeys', () => {
+  it('returns today and the previous six Eastern days', () => {
+    const afternoonEt = new Date('2026-08-29T19:00:00.000Z'); // 15:00 EDT Saturday
+    expect(easternLastDayKeys(7, afternoonEt)).toEqual([
+      '2026-08-23',
+      '2026-08-24',
+      '2026-08-25',
+      '2026-08-26',
+      '2026-08-27',
+      '2026-08-28',
+      '2026-08-29',
+    ]);
+  });
+
+  it('does not roll to Sunday after UTC midnight while it is still Saturday ET', () => {
+    const afterUtcMidnight = new Date('2026-08-30T01:20:00.000Z'); // 21:20 EDT Saturday
+    expect(easternLastDayKeys(7, afterUtcMidnight)[6]).toBe('2026-08-29');
+    expect(easternDayStart('2026-08-23').toISOString()).toBe('2026-08-23T04:00:00.000Z');
   });
 });
 

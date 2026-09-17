@@ -52,6 +52,23 @@ export function easternWeekDayKeys(now: Date = new Date()): string[] {
   return Array.from({ length: 7 }, (_, i) => easternDayKeyFromDayIndex(sundayIndex + i));
 }
 
+/**
+ * The last `count` Eastern calendar days, oldest first, including today.
+ * Conversation recap uses this — a rolling 7 days, not Sunday–Saturday.
+ */
+export function easternLastDayKeys(count: number, now: Date = new Date()): string[] {
+  const n = Math.max(1, Math.floor(count));
+  const todayIndex = dayIndexEastern(now);
+  return Array.from({ length: n }, (_, i) =>
+    easternDayKeyFromDayIndex(todayIndex - (n - 1) + i),
+  );
+}
+
+/** UTC instant of midnight Eastern on the given `YYYY-MM-DD` day key. */
+export function easternDayStart(dayKey: string): Date {
+  return new Date(etLocalToUtcMs(dayKeyToDate(dayKey), 0, 0));
+}
+
 export function easternDayKeyFromDayIndex(dayIndex: number): string {
   // Use UTC noon so the corresponding Eastern Time date is stable.
   // (UTC midnight can fall on the previous ET calendar day.)
