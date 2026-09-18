@@ -2,6 +2,7 @@ import {
   addConversationEvent,
   conversationDays,
   unansweredOpportunity,
+  uniqueReachPeople,
 } from "./conversation-insights";
 import { ConversationsService } from "./conversations.service";
 
@@ -105,9 +106,24 @@ describe("Conversation insights", () => {
         },
       ])
       .mockResolvedValueOnce([{ userId: "friend" }]);
+    const postView = {
+      findMany: jest.fn().mockResolvedValue([
+        { userId: "friend" },
+        { userId: "new" },
+        { userId: "owner" },
+      ]),
+    };
+    const postAnonView = {
+      findMany: jest.fn().mockResolvedValue([{ anonId: "guest-1" }]),
+    };
+    const viewerIdentity = {
+      findMany: jest.fn().mockResolvedValue([{ anonId: "guest-1", userId: "friend" }]),
+    };
     const prisma = {
       post: { findMany },
-      $queryRaw: jest.fn().mockResolvedValue([{ people: 9n }]),
+      postView,
+      postAnonView,
+      viewerIdentity,
       boost: {
         findMany: jest
           .fn()
@@ -161,15 +177,26 @@ describe("Conversation insights", () => {
     expect(result.timeline.reduce((n, d) => n + d.boosts, 0)).toBe(2);
     expect(result.timeline.reduce((n, d) => n + d.reposts, 0)).toBe(2);
     expect(result.reach).toEqual({
-      people: 9,
+      people: 3,
       impressions: 100,
       scope: "lifetime",
     });
     expect(result.posts[0]).not.toHaveProperty("totalViewCount");
-    const query = prisma.$queryRaw.mock.calls[0][0];
-    expect(query.values).toEqual(["a", "b", "a", "b"]);
-    expect(query.sql).toContain("COUNT(DISTINCT viewer)");
-    expect(query.sql).toContain('LEFT JOIN "ViewerIdentity"');
+    expect(postView.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { postId: { in: ["a", "b"] } },
+        distinct: ["userId"],
+      }),
+    );
+    expect(postAnonView.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { postId: { in: ["a", "b"] } },
+        distinct: ["anonId"],
+      }),
+    );
+    expect(viewerIdentity.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { anonId: { in: ["guest-1"] } } }),
+    );
     expect(prisma.boost.findMany.mock.calls[0][0].where).toMatchObject({
       userId: { not: "owner" },
       user: {
@@ -189,11 +216,11 @@ describe("Conversation insights", () => {
   });
 
   it("returns zero reach without querying viewer identities for an empty recap", async () => {
-    const query = jest.fn();
+    const postView = { findMany: jest.fn() };
     const service = new ConversationsService(
       {
         post: { findMany: jest.fn().mockResolvedValue([]) },
-        $queryRaw: query,
+        postView,
       } as never,
       {} as never,
       {} as never,
@@ -206,7 +233,7 @@ describe("Conversation insights", () => {
       scope: "lifetime",
     });
     expect(result.participantCount).toBe(0);
-    expect(query).not.toHaveBeenCalled();
+    expect(postView.findMany).not.toHaveBeenCalled();
   });
 
   it("windows the recap to the last 7 Eastern days after UTC has rolled over", async () => {
@@ -274,6 +301,35 @@ describe("Conversation insights", () => {
     expect(prisma.communityGroupMember.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { userId: "owner", status: "active" } }),
     );
+  });
+});
+
+describe("Unique reach across posts", () => {
+  it("counts a person once even when they viewed every recap post", () => {
+    expect(
+      uniqueReachPeople({
+        userIds: ["friend", "friend", "owner"],
+        anonIds: ["guest-1", "guest-1"],
+        links: [{ anonId: "guest-1", userId: "friend" }],
+      }),
+    ).toBe(2);
+  });
+
+  it("keeps unlinked guests separate and does not sum per-post identities", () => {
+    expect(
+      uniqueReachPeople({
+        userIds: ["a", "b"],
+        anonIds: ["g1", "g2"],
+        links: [],
+      }),
+    ).toBe(4);
+    expect(
+      uniqueReachPeople({
+        userIds: ["a"],
+        anonIds: ["g1"],
+        links: [{ anonId: "g1", userId: "a" }],
+      }),
+    ).toBe(1);
   });
 });
 

@@ -13,6 +13,7 @@ import { buildGreeting, getRecipientEmail, getVerifiedRecipientEmail } from '../
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { MessagesService } from '../messages/messages.service';
+import { messagePreviewText } from '../messages/message.dto';
 import { EMAIL, EMAIL_DARK, escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
@@ -1320,7 +1321,16 @@ export class NotificationsEmailCron {
             select: {
               id: true,
               lastMessageAt: true,
-              lastMessage: { select: { senderId: true, body: true, createdAt: true, sender: { select: { username: true, name: true } } } },
+              lastMessage: {
+                select: {
+                  senderId: true,
+                  body: true,
+                  createdAt: true,
+                  deletedForAll: true,
+                  media: { select: { kind: true }, take: 1, orderBy: [{ createdAt: 'asc' }] },
+                  sender: { select: { username: true, name: true } },
+                },
+              },
             },
           },
         },
@@ -1358,7 +1368,8 @@ export class NotificationsEmailCron {
             if (lastReadAt && conv.lastMessageAt.getTime() <= lastReadAt.getTime()) return null;
             if (lastMsg.senderId === userId) return null;
             const sender = (lastMsg.sender?.name ?? lastMsg.sender?.username ?? 'Someone').trim();
-            const body = truncate((lastMsg.body ?? '').trim(), 140);
+            const body = truncate(messagePreviewText(lastMsg), 140);
+            if (!body) return null;
             const href = `${chatBaseUrl}?c=${encodeURIComponent(conv.id)}`;
             return { sender, body, href };
           })

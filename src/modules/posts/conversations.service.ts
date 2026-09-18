@@ -15,6 +15,7 @@ import {
   addConversationEvent,
   DAY_MS,
   unansweredOpportunity,
+  uniqueReachPeople,
 } from "./conversation-insights";
 import {
   easternDayStart,
@@ -160,7 +161,7 @@ export class ConversationsService {
       blocksInitiated: { none: { blockedId: userId } },
       blocksReceived: { none: { blockerId: userId } },
     };
-    const [events, transfers, boosts, reachRows] = ids.length
+    const [events, transfers, boosts, userViews, anonViews] = ids.length
       ? await Promise.all([
           this.prisma.post.findMany({
             where: {
@@ -212,22 +213,25 @@ export class ConversationsService {
             },
             orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           }),
-          // Count identities across posts, not the sum of per-post unique viewers.
-          // Linked guest browsers collapse into their signed-in identity.
-          this.prisma.$queryRaw<Array<{ people: bigint }>>(Prisma.sql`
-            SELECT COUNT(DISTINCT viewer)::bigint AS people FROM (
-              SELECT 'user:' || "userId" AS viewer FROM "PostView"
-              WHERE "postId" IN (${Prisma.join(ids)})
-              UNION ALL
-              SELECT CASE WHEN identity."userId" IS NOT NULL
-                THEN 'user:' || identity."userId" ELSE 'guest:' || views."anonId" END AS viewer
-              FROM "PostAnonView" views
-              LEFT JOIN "ViewerIdentity" identity ON identity."anonId" = views."anonId"
-              WHERE views."postId" IN (${Prisma.join(ids)})
-            ) viewers
-          `),
+          this.prisma.postView.findMany({
+            where: { postId: { in: ids } },
+            distinct: ["userId"],
+            select: { userId: true },
+          }),
+          this.prisma.postAnonView.findMany({
+            where: { postId: { in: ids } },
+            distinct: ["anonId"],
+            select: { anonId: true },
+          }),
         ])
-      : [[], [], [], []];
+      : [[], [], [], [], []];
+    const anonIds = anonViews.map((view) => view.anonId);
+    const links = anonIds.length
+      ? await this.prisma.viewerIdentity.findMany({
+          where: { anonId: { in: anonIds } },
+          select: { anonId: true, userId: true },
+        })
+      : [];
     const posts = roots.map((root) => ({
       id: root.id,
       body: root.body,
@@ -355,7 +359,11 @@ export class ConversationsService {
       participantCount: participants.size,
       newParticipantCount: participants.size - priorPeople.size,
       reach: {
-        people: Number(reachRows[0]?.people ?? 0),
+        people: uniqueReachPeople({
+          userIds: userViews.map((view) => view.userId),
+          anonIds,
+          links,
+        }),
         impressions: roots.reduce(
           (total, post) => total + post.totalViewCount,
           0,

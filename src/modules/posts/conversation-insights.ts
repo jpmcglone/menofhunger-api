@@ -23,6 +23,26 @@ export function addConversationEvent(
   day[kind] += amount;
   if (branch) day.branches++;
 }
+/** Unique people across recap posts. The same signed-in person (or linked guest) counts once. */
+export function uniqueReachPeople(params: {
+  userIds: string[];
+  anonIds: string[];
+  links: Array<{ anonId: string; userId: string }>;
+}): number {
+  const linked = new Map(
+    params.links.map((link) => [link.anonId, link.userId]),
+  );
+  const people = new Set<string>();
+  for (const id of params.userIds) {
+    if (id) people.add(`user:${id}`);
+  }
+  for (const anonId of params.anonIds) {
+    if (!anonId) continue;
+    const userId = linked.get(anonId);
+    people.add(userId ? `user:${userId}` : `guest:${anonId}`);
+  }
+  return people.size;
+}
 /** Relevant, low-exposure questions only; punctuation is a conservative eligibility heuristic. */
 export function unansweredOpportunity(
   post: {

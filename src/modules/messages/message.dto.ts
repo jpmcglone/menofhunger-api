@@ -82,6 +82,11 @@ export type MessageConversationDto = {
   createdAt: string;
   updatedAt: string;
   lastMessageAt: string | null;
+  /**
+   * Last visible message. `body` is the inbox preview: the caption when present,
+   * otherwise Voice message / Photo / GIF / Video. Null when the conversation
+   * has no messages — clients show "No chats yet." only in that case.
+   */
   lastMessage: { id: string; body: string; createdAt: string; senderId: string } | null;
   participants: MessageParticipantDto[];
   viewerStatus: MessageParticipantStatus;
@@ -207,6 +212,59 @@ export function toMessageCallDto(raw: unknown): MessageCallDto | null {
   return { callId, type, outcome, durationSeconds: duration, peakParticipantCount: peak };
 }
 
+export type LastMessagePreviewRow = {
+  id: string;
+  body: string;
+  createdAt: Date;
+  senderId: string;
+  deletedForAll?: boolean;
+  media?: Array<{ kind: string }> | null;
+};
+
+/** Inbox / reply / email preview. Caption wins; media-only messages get a short label. */
+export function messagePreviewText(message: {
+  body?: string | null;
+  deletedForAll?: boolean;
+  media?: Array<{ kind: string }> | null;
+}): string {
+  if (message.deletedForAll) return 'Message deleted';
+  const body = (message.body ?? '').trim();
+  if (body) return body;
+  const kinds = message.media ?? [];
+  if (kinds.some((m) => m.kind === 'audio')) return 'Voice message';
+  if (kinds.some((m) => m.kind === 'video')) return 'Video';
+  if (kinds.some((m) => m.kind === 'gif')) return 'GIF';
+  if (kinds.length > 0) return 'Photo';
+  return '';
+}
+
+/** Lock-screen copy keeps the verb; list rows use `messagePreviewText`. */
+export function messagePushPreview(params: {
+  body?: string | null;
+  media?: Array<{ kind: string }> | null;
+}): string {
+  const body = (params.body ?? '').trim();
+  if (body) return body;
+  const kinds = params.media ?? [];
+  if (kinds.some((m) => m.kind === 'audio')) return '🎙️ Sent a voice message';
+  if (kinds.some((m) => m.kind === 'video')) return '📹 Sent a video';
+  if (kinds.some((m) => m.kind === 'gif')) return 'Sent a GIF';
+  if (kinds.length > 0) return '📷 Sent a photo';
+  return '';
+}
+
+export function toLastMessagePreviewDto(
+  message: LastMessagePreviewRow | null | undefined,
+): MessageConversationDto['lastMessage'] {
+  if (!message) return null;
+  return {
+    id: message.id,
+    body: messagePreviewText(message),
+    createdAt: message.createdAt.toISOString(),
+    senderId: message.senderId,
+  };
+}
+
 function toMessageMediaDto(m: MessageMedia, publicBaseUrl: string | null): MessageMediaDto {
   const url =
     m.source === 'upload'
@@ -268,7 +326,10 @@ export function toMessageDto(params: {
           return {
             id: message.replyTo.id,
             senderUsername: message.replyTo.sender.username,
-            bodyPreview: message.replyTo.body.slice(0, 200) || (rm ? '📷 Photo' : ''),
+            bodyPreview: messagePreviewText({
+              body: message.replyTo.body,
+              media: message.replyTo.media ?? [],
+            }).slice(0, 200),
             mediaThumbnailUrl,
           };
         })()

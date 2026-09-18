@@ -38,6 +38,8 @@ import {
   toMessageCallDto,
   toMessageParticipantDto,
   toMessageConversationCrewSummaryDto,
+  toLastMessagePreviewDto,
+  messagePushPreview,
   type MessageConversationDto,
   type MessageDto,
 } from './message.dto';
@@ -114,6 +116,15 @@ const MESSAGE_INCLUDE = {
   },
   media: true,
 } satisfies Prisma.MessageInclude;
+
+const LAST_MESSAGE_PREVIEW_SELECT = {
+  id: true,
+  body: true,
+  createdAt: true,
+  senderId: true,
+  deletedForAll: true,
+  media: { select: { kind: true }, take: 1, orderBy: [{ createdAt: 'asc' as const }] },
+} satisfies Prisma.MessageSelect;
 
 /**
  * Nested `createMany` does not populate `include: { media: true }` on the
@@ -316,7 +327,7 @@ export class MessagesService {
             },
           },
           lastMessage: {
-            select: { id: true, body: true, createdAt: true, senderId: true },
+            select: LAST_MESSAGE_PREVIEW_SELECT,
           },
           crewWall: {
             select: { id: true, slug: true, name: true, avatarImageUrl: true },
@@ -717,7 +728,7 @@ export class MessagesService {
           },
         },
         lastMessage: {
-          select: { id: true, body: true, createdAt: true, senderId: true },
+          select: LAST_MESSAGE_PREVIEW_SELECT,
         },
         crewWall: {
           select: { id: true, slug: true, name: true, avatarImageUrl: true },
@@ -771,14 +782,7 @@ export class MessagesService {
         createdAt: conversation.createdAt.toISOString(),
         updatedAt: conversation.updatedAt.toISOString(),
         lastMessageAt: conversation.lastMessageAt ? conversation.lastMessageAt.toISOString() : null,
-        lastMessage: conversation.lastMessage
-          ? {
-              id: conversation.lastMessage.id,
-              body: conversation.lastMessage.body,
-              createdAt: conversation.lastMessage.createdAt.toISOString(),
-              senderId: conversation.lastMessage.senderId,
-            }
-          : null,
+        lastMessage: toLastMessagePreviewDto(conversation.lastMessage),
         participants: conversation.participants.map((p) =>
           toMessageParticipantDto({
             user: p.user,
@@ -835,7 +839,7 @@ export class MessagesService {
         },
       },
     };
-    const lastMessageSelect = { select: { id: true, body: true, createdAt: true, senderId: true } };
+    const lastMessageSelect = { select: LAST_MESSAGE_PREVIEW_SELECT };
     const crewWallSelect = {
       select: { id: true, slug: true, name: true, avatarImageUrl: true },
     };
@@ -956,14 +960,7 @@ export class MessagesService {
           createdAt: conversation.createdAt.toISOString(),
           updatedAt: conversation.updatedAt.toISOString(),
           lastMessageAt: conversation.lastMessageAt ? conversation.lastMessageAt.toISOString() : null,
-          lastMessage: conversation.lastMessage
-            ? {
-                id: conversation.lastMessage.id,
-                body: conversation.lastMessage.body,
-                createdAt: conversation.lastMessage.createdAt.toISOString(),
-                senderId: conversation.lastMessage.senderId,
-              }
-            : null,
+          lastMessage: toLastMessagePreviewDto(conversation.lastMessage),
           participants: conversation.participants.map((p) =>
             toMessageParticipantDto({
               user: p.user,
@@ -1071,14 +1068,7 @@ export class MessagesService {
       createdAt: conversation.createdAt.toISOString(),
       updatedAt: conversation.updatedAt.toISOString(),
       lastMessageAt: conversation.lastMessageAt ? conversation.lastMessageAt.toISOString() : null,
-      lastMessage: conversation.lastMessage
-        ? {
-            id: conversation.lastMessage.id,
-            body: conversation.lastMessage.body,
-            createdAt: conversation.lastMessage.createdAt.toISOString(),
-            senderId: conversation.lastMessage.senderId,
-          }
-        : null,
+      lastMessage: toLastMessagePreviewDto(conversation.lastMessage),
       participants: conversation.participants.map((p) =>
         toMessageParticipantDto({
           user: p.user,
@@ -1569,7 +1559,7 @@ export class MessagesService {
     }
     for (const recipientId of uniqueRecipients) {
       const isPending = !followerSet.has(recipientId);
-      const pushBody = isPending ? 'Sent you a message request' : (trimmed || (media.length > 0 ? '📷 Sent a photo' : ''));
+      const pushBody = isPending ? 'Sent you a message request' : messagePushPreview({ body: trimmed, media });
       this.events.emitMessagePushRequested({
         recipientUserId: recipientId,
         senderUserId: userId,
@@ -1752,13 +1742,7 @@ export class MessagesService {
       this.presenceRealtime.emitMessageCreated(id, { conversationId, message: dto });
       this.emitUnreadCounts(id);
     }
-    const pushBody =
-      trimmed ||
-      (media.some((m) => m.kind === 'audio')
-        ? '🎙️ Sent a voice note'
-        : media.length > 0
-          ? '📷 Sent a photo'
-          : '');
+    const pushBody = messagePushPreview({ body: trimmed, media });
     const pushRecipients = conversation.participants.filter(
       (p) => p.userId !== userId && p.status !== 'pending',
     );

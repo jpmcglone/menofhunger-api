@@ -1,4 +1,4 @@
-import { toMessageDto } from './message.dto';
+import { messagePreviewText, messagePushPreview, toLastMessagePreviewDto, toMessageDto } from './message.dto';
 
 const message = (extra: Record<string, unknown> = {}): any => ({
   id: 'original', createdAt: new Date(), body: 'private text', conversationId: 'conversation',
@@ -35,5 +35,47 @@ describe('deleted message redaction', () => {
     expect(result.media[0].url).toContain('private-image');
     expect(result.replyTo?.bodyPreview).toBe('private text');
     expect(result.replyTo?.mediaThumbnailUrl).toContain('private-image');
+  });
+  it('labels a media-only reply preview by kind', () => {
+    const audio = dto(message({ body: 'caption', replyTo: message({ body: '', media: [{ id: 'a', source: 'upload', kind: 'audio', r2Key: 'voice' }] }) }));
+    expect(audio.replyTo?.bodyPreview).toBe('Voice message');
+    const gif = dto(message({ replyTo: message({ body: '', media: [{ id: 'g', source: 'giphy', kind: 'gif', url: 'https://giphy.example/x.gif' }] }) }));
+    expect(gif.replyTo?.bodyPreview).toBe('GIF');
+  });
+});
+
+describe('conversation last-message preview', () => {
+  it('keeps captions and only labels empty-body media', () => {
+    expect(messagePreviewText({ body: 'hello', media: [{ kind: 'audio' }] })).toBe('hello');
+    expect(messagePreviewText({ body: '  ', media: [{ kind: 'audio' }] })).toBe('Voice message');
+    expect(messagePreviewText({ body: '', media: [{ kind: 'video' }] })).toBe('Video');
+    expect(messagePreviewText({ body: '', media: [{ kind: 'gif' }] })).toBe('GIF');
+    expect(messagePreviewText({ body: '', media: [{ kind: 'image' }] })).toBe('Photo');
+    expect(messagePreviewText({ body: '', deletedForAll: true, media: [{ kind: 'audio' }] })).toBe('Message deleted');
+    expect(messagePreviewText({ body: '' })).toBe('');
+  });
+  it('uses verbs on lock-screen copy', () => {
+    expect(messagePushPreview({ body: '', media: [{ kind: 'audio' }] })).toBe('🎙️ Sent a voice message');
+    expect(messagePushPreview({ body: '', media: [{ kind: 'video' }] })).toBe('📹 Sent a video');
+    expect(messagePushPreview({ body: '', media: [{ kind: 'gif' }] })).toBe('Sent a GIF');
+    expect(messagePushPreview({ body: '', media: [{ kind: 'image' }] })).toBe('📷 Sent a photo');
+    expect(messagePushPreview({ body: 'hello', media: [{ kind: 'audio' }] })).toBe('hello');
+  });
+  it('fills lastMessage.body with the inbox preview', () => {
+    expect(
+      toLastMessagePreviewDto({
+        id: 'm1',
+        body: '',
+        createdAt: new Date('2026-01-02T00:00:00.000Z'),
+        senderId: 'u2',
+        media: [{ kind: 'audio' }],
+      }),
+    ).toEqual({
+      id: 'm1',
+      body: 'Voice message',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      senderId: 'u2',
+    });
+    expect(toLastMessagePreviewDto(null)).toBeNull();
   });
 });

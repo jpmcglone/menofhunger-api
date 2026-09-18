@@ -1320,7 +1320,7 @@ export type ConversationPostDto = {
 };
 
 export type ConversationReachDto = {
-  /** Unique known viewers across recap posts; anonymous browsers are estimates. */
+  /** Unique people across recap posts, not the sum of per-post unique viewers. */
   people: number;
   /** Sum of the existing lifetime impression counters on recap posts. */
   impressions: number;
