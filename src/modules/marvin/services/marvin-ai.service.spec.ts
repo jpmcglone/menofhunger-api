@@ -12,6 +12,7 @@ import {
   MARV_DEFAULT_REGULAR_MODEL,
   MARV_DEFAULT_SMART_MODEL,
 } from '../marvin-models';
+import { MARV_ADMIN_INSTRUCTIONS, MARV_SYSTEM_PROMPT, MARV_SYSTEM_PROMPT_VERSION } from '../marvin-system-prompt';
 
 // Capture the args passed to openai.responses.create so we can assert the payload shape.
 const mockResponsesCreate = jest.fn();
@@ -29,13 +30,11 @@ function makeService(opts?: {
   visionEnabled?: boolean;
   visionModes?: string[];
   webSearchEnabled?: boolean;
-  promptVersion?: string | null;
+  apiKey?: string;
 }) {
   const appConfig: any = {
     marvOpenAI: jest.fn(() => ({
-      apiKey: 'sk-test',
-      promptId: 'pmpt_test',
-      promptVersion: opts?.promptVersion ?? null,
+      apiKey: opts?.apiKey ?? 'sk-test',
       fastModel: MARV_DEFAULT_FAST_MODEL,
       regularModel: MARV_DEFAULT_REGULAR_MODEL,
       smartModel: MARV_DEFAULT_SMART_MODEL,
@@ -52,7 +51,7 @@ function makeService(opts?: {
       maxOutputTokens: 1024,
     })),
   };
-  return new MarvinAIService(appConfig, { marvinUserSettings: { findUnique: jest.fn(async () => ({ aiConsentAt: opts?.consent === false ? null : new Date(), aiConsentVersion: 1 })) }, post: { findFirst: jest.fn(async () => null) } } as any);
+  return new MarvinAIService(appConfig, { marvinUserSettings: { findUnique: jest.fn(async () => ({ aiConsentAt: opts?.consent === false ? null : new Date(), aiConsentVersion: 1 })), upsert: jest.fn(async () => ({})) }, post: { findFirst: jest.fn(async () => null) } } as any);
 }
 
 function makeSuccessResponse(text: string) {
@@ -120,7 +119,7 @@ describe('MarvinAIService multimodal payload assembly', () => {
     const svc = makeService({ visionEnabled: true, visionModes: ['regular'] });
     // Override to cap at 2
     (svc as any).appConfig.marvOpenAI.mockReturnValue({
-      apiKey: 'sk-test', promptId: 'pmpt_test', promptVersion: null,
+      apiKey: 'sk-test',
       fastModel: MARV_DEFAULT_FAST_MODEL, regularModel: MARV_DEFAULT_REGULAR_MODEL, smartModel: MARV_DEFAULT_SMART_MODEL,
       webSearchEnabled: false, webSearchModes: [], webSearchMaxOutputTokens: 4096,
       visionEnabled: true, visionModes: ['regular'], visionMaxImagesPerTurn: 2,
@@ -271,16 +270,36 @@ describe('MarvinAIService request knobs', () => {
     expect(mockResponsesCreate.mock.calls[3]?.[0]?.reasoning).toEqual({ effort: 'high' });
   });
 
-  it('pins prompt version when configured', async () => {
-    const svc = makeService({ promptVersion: '12' });
-    await svc.respond({ ...baseReq });
-    expect(mockResponsesCreate.mock.calls[0]?.[0]?.prompt).toEqual({ id: 'pmpt_test', version: '12' });
-  });
-
-  it('omits prompt version when unset so OpenAI uses latest', async () => {
+  it('sends the in-app persona as instructions and never a stored prompt id', async () => {
     const svc = makeService();
     await svc.respond({ ...baseReq });
-    expect(mockResponsesCreate.mock.calls[0]?.[0]?.prompt).toEqual({ id: 'pmpt_test' });
+    const call = mockResponsesCreate.mock.calls[0]?.[0];
+    expect(call?.prompt).toBeUndefined();
+    expect(call?.instructions).toBe(MARV_SYSTEM_PROMPT);
+    expect(call?.metadata.moh_prompt_version).toBe(MARV_SYSTEM_PROMPT_VERSION);
+  });
+
+  it('resends instructions on tool follow-ups so previous_response_id does not drop the persona', async () => {
+    mockResponsesCreate
+      .mockResolvedValueOnce({
+        id: 'resp-tools',
+        status: 'completed',
+        output: [
+          { type: 'function_call', call_id: 'c1', name: 'get_user_context_card', arguments: '{"username":"peter"}' },
+        ],
+        usage: { input_tokens: 20, output_tokens: 10, input_tokens_details: { cached_tokens: 0 } },
+      })
+      .mockResolvedValueOnce(makeSuccessResponse('Peter is a member.'));
+    const svc = makeService();
+    await svc.respond({ ...baseReq, previousResponseId: 'resp-old' });
+    expect(mockResponsesCreate.mock.calls[0]?.[0]?.instructions).toBe(MARV_SYSTEM_PROMPT);
+    expect(mockResponsesCreate.mock.calls[1]?.[0]?.instructions).toBe(MARV_SYSTEM_PROMPT);
+    expect(mockResponsesCreate.mock.calls[0]?.[0]?.previous_response_id).toBe('resp-old');
+  });
+
+  it('is configured from the API key alone', () => {
+    expect(makeService().isConfigured()).toBe(true);
+    expect(makeService({ apiKey: '' }).isConfigured()).toBe(false);
   });
 
   it('isolates admin tools and instructions from member tools and hosted web search', async () => {
@@ -289,7 +308,9 @@ describe('MarvinAIService request knobs', () => {
     await svc.respond({ ...baseReq, source: 'admin_console', adminTools });
     expect(mockResponsesCreate.mock.calls[0][0].tools).toEqual(adminTools);
     expect(mockResponsesCreate.mock.calls[0][0].prompt).toBeUndefined();
+    expect(mockResponsesCreate.mock.calls[0][0].instructions).toBe(MARV_ADMIN_INSTRUCTIONS);
     expect(mockResponsesCreate.mock.calls[0][0].metadata.moh_source).toBe('admin_console');
+    expect(mockResponsesCreate.mock.calls[0][0].metadata.moh_prompt_version).toBe('admin');
     mockResponsesCreate.mockClear();
     await svc.respond({ ...baseReq, adminTools });
     expect(mockResponsesCreate.mock.calls[0][0].tools.map((tool: any) => tool.name)).not.toContain('admin_capabilities');
@@ -410,10 +431,10 @@ describe('MarvinAIService.extractToolImageUrls', () => {
 
 describe('personal AI permission enforcement', () => {
   beforeEach(() => { mockResponsesCreate.mockReset(); mockResponsesCreate.mockResolvedValue(makeSuccessResponse('reply')); });
-  it.each(['private_session', 'public_thread', 'catch_up'] as const)('makes zero OpenAI calls for %s before permission', async source => {
+  it.each(['private_session', 'public_thread', 'catch_up'] as const)('auto-grants personal requests for %s', async source => {
     const service = makeService({ consent: false });
-    await expect(service.respond({ ...baseReq, source })).rejects.toThrow('Choose whether');
-    expect(mockResponsesCreate).not.toHaveBeenCalled();
+    await service.respond({ ...baseReq, source });
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
   });
   it('allows background processing of already-shared public content', async () => {
     const service = makeService({ consent: false });

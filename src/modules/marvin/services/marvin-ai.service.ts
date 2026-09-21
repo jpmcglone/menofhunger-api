@@ -8,6 +8,7 @@ import { AppConfigService } from '../../app/app-config.service';
 import type { ResolvedMarvinMode } from './marvin-routing.service';
 import { MARV_LOCAL_FUNCTION_TOOLS } from '../marvin-ai-tools';
 import { MARV_MODEL_RATES_USD_PER_M_TOKENS } from '../marvin-models';
+import { MARV_ADMIN_INSTRUCTIONS, MARV_SYSTEM_PROMPT, MARV_SYSTEM_PROMPT_VERSION } from '../marvin-system-prompt';
 
 /** GPT-5.6 reasoning effort. Stay on `standard` mode (omit `reasoning.mode`). */
 export type MarvReasoningEffort = 'none' | 'low' | 'medium' | 'high';
@@ -144,8 +145,9 @@ function sleep(ms: number): Promise<void> {
  * OpenAI Responses API wrapper for Marv.
  *
  * Architecture:
- *  - Personality (system prompt + tool list) lives in an OpenAI **Stored Prompt**
- *    referenced by `OPENAI_MARV_PROMPT_ID`. We don't duplicate it in code.
+ *  - Personality lives in `marvin-system-prompt.ts` and is sent as `instructions`
+ *    on every member turn, including tool follow-ups and `previous_response_id`
+ *    continuations (OpenAI does not carry previous-turn instructions forward).
  *  - Per-request, we override `model` (Fast/Regular/Smart) so the same personality
  *    runs at three quality/cost tiers.
  *  - When the model emits `function_call` items, we dispatch to local tool handlers
@@ -162,12 +164,11 @@ export class MarvinAIService {
   constructor(private readonly appConfig: AppConfigService, private readonly prisma: PrismaService) {}
 
   /**
-   * Returns true when OpenAI is configured (api key + stored prompt id).
+   * Returns true when OpenAI is configured (API key present).
    * Callers can short-circuit before scheduling a job when this is false.
    */
   isConfigured(): boolean {
-    const cfg = this.appConfig.marvOpenAI();
-    return Boolean(cfg.apiKey && cfg.promptId);
+    return Boolean(this.appConfig.marvOpenAI().apiKey);
   }
 
   modelForMode(mode: ResolvedMarvinMode): string {
@@ -197,11 +198,8 @@ export class MarvinAIService {
     const requestSignal = AbortSignal.timeout(210_000);
     const cfg = this.appConfig.marvOpenAI();
     const limits = this.appConfig.marvLimits();
-    const promptId = cfg.promptId;
-    if (!cfg.apiKey || !promptId) {
-      this.logger.warn(
-        `[marv-ai] respond() refused: not configured apiKey=${!!cfg.apiKey} promptId=${!!promptId}`,
-      );
+    if (!cfg.apiKey) {
+      this.logger.warn('[marv-ai] respond() refused: not configured (missing OPENAI_API_KEY)');
       throw new MarvinAINotConfiguredError();
     }
 
@@ -214,7 +212,7 @@ export class MarvinAIService {
     const model = this.modelForMode(req.mode);
     const reasoningEffort = marvReasoningEffort(req.mode, Boolean(req.elevateReasoning));
     this.logger.log(
-      `[marv-ai] respond start source=${req.source} mode=${req.mode} model=${model} reasoning=${reasoningEffort} elevate=${Boolean(req.elevateReasoning)} promptId=${promptId} promptVer=${cfg.promptVersion ?? 'latest'} maxOut=${limits.maxOutputTokens} prevResp=${req.previousResponseId ?? 'null'} cacheKey=${req.cacheKey ?? '-'}`,
+      `[marv-ai] respond start source=${req.source} mode=${req.mode} model=${model} reasoning=${reasoningEffort} elevate=${Boolean(req.elevateReasoning)} promptVer=${req.source === 'admin_console' ? 'admin' : MARV_SYSTEM_PROMPT_VERSION} maxOut=${limits.maxOutputTokens} prevResp=${req.previousResponseId ?? 'null'} cacheKey=${req.cacheKey ?? '-'}`,
     );
 
     // Vision: only activate when feature flag is on and mode is in allowed list.
@@ -231,8 +229,8 @@ export class MarvinAIService {
       );
     }
 
-    // Build the initial input. The personality + tool list live in the Stored Prompt; the
-    // developer note + user question travel as the "input" for this turn.
+    // Build the initial input. Personality is `instructions`; the developer
+    // note + user question travel as the "input" for this turn.
     // When images are attached, the user role uses a content-parts array; otherwise a plain string.
     // ResponseInputImage requires `detail` (non-optional in the SDK type). Omitting it causes
     // the API to silently ignore the image content — the model responds as if no image was sent.
@@ -284,12 +282,11 @@ export class MarvinAIService {
       ? Math.max(limits.maxOutputTokens, cfg.webSearchMaxOutputTokens)
       : limits.maxOutputTokens;
 
-    const prompt: { id: string; version?: string } = { id: promptId };
-    if (cfg.promptVersion) prompt.version = cfg.promptVersion;
+    const instructions = req.source === 'admin_console' ? MARV_ADMIN_INSTRUCTIONS : MARV_SYSTEM_PROMPT;
 
     const baseRequest: Record<string, unknown> = {
       model,
-      ...(req.source === 'admin_console' ? { instructions: 'You are MARV, the private Men of Hunger admin assistant. Follow the developer note for this workspace.' } : { prompt }),
+      instructions,
       max_output_tokens: effectiveMaxOutputTokens,
       reasoning: { effort: reasoningEffort },
       text: { verbosity: 'low' },
@@ -309,11 +306,11 @@ export class MarvinAIService {
           : {}),
         moh_source: req.source,
         moh_mode: req.mode,
+        moh_prompt_version: req.source === 'admin_console' ? 'admin' : MARV_SYSTEM_PROMPT_VERSION,
       },
     };
 
-    // Local tools always registered in-code so they work even if the Stored Prompt
-    // tool list drifts. Keep the OpenAI Stored Prompt in sync for documentation.
+    // Local tools always registered in-code so a prompt mention cannot drop one.
     const tools: unknown[] = req.source === 'admin_console' ? [...(req.adminTools ?? [])] : [...MARV_LOCAL_FUNCTION_TOOLS, ...(req.source === 'private_session' ? marvPersonalFunctionTools() : [])];
     if (webSearchActive) {
       // Hosted web_search (not the legacy web_search_preview). `low` context keeps
@@ -764,7 +761,7 @@ export class MarvinAIService {
 
 export class MarvinAINotConfiguredError extends Error {
   constructor() {
-    super('OpenAI / Marv is not configured (need OPENAI_API_KEY and OPENAI_MARV_PROMPT_ID).');
+    super('OpenAI / Marv is not configured (need OPENAI_API_KEY).');
     this.name = 'MarvinAINotConfiguredError';
   }
 }

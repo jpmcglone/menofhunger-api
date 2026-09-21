@@ -392,7 +392,7 @@ export class MarvinPublicReplyProcessor {
       // Post a one-shot canned reply per (user, rootPostId) so they know to contact an
       // admin instead of thinking Marv is ignoring them.
       this.logger.warn(
-        '[marv] public-reply EXIT reason=ai_not_configured (missing OPENAI_API_KEY or OPENAI_MARV_PROMPT_ID); posting canned thread reply.',
+        '[marv] public-reply EXIT reason=ai_not_configured (missing OPENAI_API_KEY); posting canned thread reply.',
       );
       try {
         await this.canned.sendNotConfiguredThreadReply({

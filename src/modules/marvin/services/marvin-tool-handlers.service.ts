@@ -98,7 +98,7 @@ const URL_FETCH_TIMEOUT_MS = 10_000;
 /**
  * Local tool handlers Marv calls back into via OpenAI Responses tool calls.
  *
- * The schemas live in the OpenAI Stored Prompt; this service implements the dispatch.
+ * Tool schemas are registered in `marvin-ai-tools.ts`; this service implements dispatch.
  * Every handler validates inputs with Zod, returns a typed object, and {@link dispatch}
  * is the JSON serialization boundary the model reads.
  *

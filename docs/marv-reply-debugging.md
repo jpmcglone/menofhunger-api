@@ -28,7 +28,7 @@ a queue job after refunding credits. Check the usage record's `errorCode` and `r
 | `ai_not_configured` | Check the deployed AI configuration through the normal secret-management workflow. |
 | `ai_error`, `generation:upstream_429`, or `generation:timeout` | Inspect the provider/network failure. AI response requests share a 210-second deadline across rounds/retries. |
 | `post_failed` or `message_failed`, with a response ID | Generation finished; saving/delivery failed. Inspect the safe delivery reason. |
-| `delivery:ai_consent_required` | Consent was checked on the wrong identity or the requesting member has not enabled Marv. |
+| `delivery:ai_consent_required` | Legacy clients only. Current Marv use records personal-request permission automatically. |
 | `delivery:post_too_long_500` / `post_too_long_1000` | A writer used the wrong body limit. Bot replies are bounded to 1,000 characters. |
 | `delivery:group_membership_required`, `premium_required`, or `blocked` | Access changed before delivery; do not bypass it. |
 | `delivery:database_P2022` | Deployed Prisma client and database schema differ; inspect migration status against the intended environment. |

@@ -750,7 +750,7 @@ describe('Marv message consent belongs to the requesting human', () => {
     const prisma: any = {
       user: { findUnique: jest.fn(async () => ({ bannedAt: null, verifiedStatus: 'manual' })) },
       userBlock: { findMany: jest.fn(async () => []) },
-      marvinUserSettings: { findUnique: jest.fn(async () => null) },
+      marvinUserSettings: { findUnique: jest.fn(async () => null), upsert: jest.fn(async () => ({})) },
       $transaction: jest.fn(async () => { throw new Error('write boundary'); }),
     };
     const { svc } = makeService({ prisma });
@@ -770,10 +770,10 @@ describe('Marv message consent belongs to the requesting human', () => {
     expect(prisma.marvinUserSettings.findUnique).not.toHaveBeenCalled();
   });
 
-  it('still blocks a human request without consent before writing anything', async () => {
+  it('lets a human talk to Marv without an enable step', async () => {
     const { svc, prisma } = makeSendService();
-    await expect(svc.sendMessage({ userId: 'human', conversationId: 'c1', body: 'Hello' })).rejects.toThrow('Choose whether to share data');
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-    expect(prisma.marvinUserSettings.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: 'human' } }));
+    await expect(svc.sendMessage({ userId: 'human', conversationId: 'c1', body: 'Hello' })).rejects.toThrow('write boundary');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.marvinUserSettings.upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: 'human' } }));
   });
 });

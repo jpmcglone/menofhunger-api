@@ -27,6 +27,7 @@ import {
 } from '../src/modules/marvin/services/marvin-prompt-builder.service';
 import { MarvinRoutingService } from '../src/modules/marvin/services/marvin-routing.service';
 import { MarvinToolHandlersService } from '../src/modules/marvin/services/marvin-tool-handlers.service';
+import { MARV_SYSTEM_PROMPT_VERSION } from '../src/modules/marvin/marvin-system-prompt';
 import type { ResolvedMarvinMode } from '../src/modules/marvin/services/marvin-routing.service';
 import type { MarvAIResult } from '../src/modules/marvin/services/marvin-ai.service';
 
@@ -531,12 +532,12 @@ async function main(): Promise<void> {
   const ctx = await boot();
   try {
     if (!ctx.ai.isConfigured()) {
-      throw new Error('Marv is not configured. Need OPENAI_API_KEY and OPENAI_MARV_PROMPT_ID in .env.');
+      throw new Error('Marv is not configured. Need OPENAI_API_KEY in .env.');
     }
     const requester = await lookupUser(ctx.prisma, args.asUsername);
     const models = ctx.appConfig.marvOpenAI();
     console.log(
-      `marv-try  as=@${requester.username}  models=${models.fastModel}/${models.regularModel}/${models.smartModel}  prompt=${models.promptVersion ?? 'latest'}`,
+      `marv-try  as=@${requester.username}  models=${models.fastModel}/${models.regularModel}/${models.smartModel}  prompt=${MARV_SYSTEM_PROMPT_VERSION}`,
     );
 
     if (args.suite) {

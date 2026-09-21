@@ -87,10 +87,6 @@ export type MarvBotConfig = {
 
 export type MarvOpenAIConfig = {
   apiKey: string;
-  /** OpenAI Stored Prompt id (e.g. "pmpt_..."). When unset, OpenAI calls are short-circuited. */
-  promptId: string | null;
-  /** Pin a Stored Prompt version for cache-stable requests. Null = latest. */
-  promptVersion: string | null;
   fastModel: string;
   regularModel: string;
   smartModel: string;
@@ -678,8 +674,6 @@ export class AppConfigService {
 
   marvOpenAI(): MarvOpenAIConfig {
     const apiKey = this.config.get<string>('OPENAI_API_KEY')?.trim() ?? '';
-    const promptId = this.config.get<string>('OPENAI_MARV_PROMPT_ID')?.trim() || null;
-    const promptVersion = this.config.get<string>('OPENAI_MARV_PROMPT_VERSION')?.trim() || null;
     const fastModel = this.config.get<string>('OPENAI_MARV_FAST_MODEL')?.trim() || MARV_DEFAULT_FAST_MODEL;
     const regularModel = this.config.get<string>('OPENAI_MARV_REGULAR_MODEL')?.trim() || MARV_DEFAULT_REGULAR_MODEL;
     const smartModel = this.config.get<string>('OPENAI_MARV_SMART_MODEL')?.trim() || MARV_DEFAULT_SMART_MODEL;
@@ -707,7 +701,7 @@ export class AppConfigService {
     // per-image vision surcharge, so cost scales with count — raise via env if a deployment
     // wants even more. 16 covers a long image-bearing thread; extras still bill per image.
     const visionMaxImagesPerTurn = this.readPositiveInt('MARV_VISION_MAX_IMAGES_PER_TURN', 16);
-    return { apiKey, promptId, promptVersion, fastModel, regularModel, smartModel, astraModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens, visionEnabled, visionModes, visionMaxImagesPerTurn };
+    return { apiKey, fastModel, regularModel, smartModel, astraModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens, visionEnabled, visionModes, visionMaxImagesPerTurn };
   }
 
   marvCredits(): MarvCreditConfig {

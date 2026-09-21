@@ -446,12 +446,14 @@ export const envSchema = z.object({
     z.string().optional().default('+10000000001'),
   ),
 
-  // OpenAI Responses API. Personality (system prompt + tool schemas) lives in a Stored
-  // Prompt on OpenAI; we override the model per request via the Fast/Regular/Smart router.
+  // OpenAI Responses API. Member Marv personality lives in code
+  // (`marvin-system-prompt.ts`) and is sent as `instructions`. Need an API key.
   OPENAI_API_KEY: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
   ),
+  // Ignored. Kept so existing deployments can leave the old stored-prompt env
+  // vars set without failing validation. Remove after the next env cleanup.
   OPENAI_MARV_PROMPT_ID: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),

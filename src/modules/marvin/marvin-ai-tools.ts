@@ -1,8 +1,8 @@
 /**
  * Local function tools registered on every Marv Responses request.
  *
- * The Stored Prompt should list the same names for documentation, but in-code
- * registration is the source of truth — a drifted prompt cannot drop a tool.
+ * Tool schemas are registered here on every request. The system prompt may
+ * mention the same names; in-code registration is the source of truth.
  * Hosted `web_search` is added separately when the mode is allowed to search.
  */
 

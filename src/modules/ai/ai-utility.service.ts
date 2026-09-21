@@ -19,9 +19,8 @@ export type AiUtilityCompleteResult = {
 /**
  * OpenAI Responses calls that are not Marv-the-character.
  *
- * Topic labeling and admin briefs must not inherit the stored Marv prompt
- * (80-word DM voice). This path sends `instructions` only and needs an API key,
- * not `OPENAI_MARV_PROMPT_ID`.
+ * Topic labeling and admin briefs must not inherit the member Marv persona
+ * (80-word DM voice). This path sends `instructions` only and needs an API key.
  */
 @Injectable()
 export class AiUtilityService {

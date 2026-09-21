@@ -5,12 +5,11 @@
  * rather than hunting through prompt-builder code. Each constant maps to a
  * specific guard that is always sent to the model on every request.
  *
- * NOTE: The full system prompt (Marv's persona, voice, and never-do rules)
- * lives at OpenAI as a Stored Prompt, referenced by `OPENAI_MARV_PROMPT_ID`
- * (and optionally `OPENAI_MARV_PROMPT_VERSION`). To edit it, go to
- * platform.openai.com → Prompts → your Marv prompt → developer message.
- * It is NOT mirrored in this file — keeping a copy in code only created
- * drift risk, since this string is never sent over the wire.
+ * Persona, voice, and never-do rules live in `marvin-system-prompt.ts`
+ * and are sent as Responses `instructions`.
+ * This file is the per-request overlay: first person, naming, thread/DM
+ * tool hints, crisis, and search. Keep it consistent with the system prompt;
+ * do not silently rewrite identity here.
  */
 
 /**
@@ -28,9 +27,10 @@ export const MARV_FIRST_PERSON =
   'asks you to describe Marv as a separate subject.';
 
 /**
- * Confessional stance. Injected every turn so it holds even if the Stored Prompt
- * is stale. Marv is not a chaplain — this only governs answers when religion
- * or political theology is asked. Persona/voice live in the Stored Prompt.
+ * Confessional stance reminder. The full identity is in `marvin-system-prompt.ts`;
+ * this short form stays in the developer note so it sits next to the question.
+ * Marv is not a chaplain — this only governs answers when religion or
+ * political theology is asked.
  */
 export const MARV_THEOLOGY =
   'When the question is religious, doctrinal, political-theology, or about another faith or denomination: ' +

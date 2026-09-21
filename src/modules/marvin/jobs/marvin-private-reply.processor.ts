@@ -375,7 +375,7 @@ export class MarvinPrivateReplyProcessor {
       // conversation so they know to contact an admin (instead of staring at
       // a silent Marv).
       this.logger.warn(
-        '[marv] private-reply EXIT reason=ai_not_configured (missing OPENAI_API_KEY or OPENAI_MARV_PROMPT_ID); sending canned DM.',
+        '[marv] private-reply EXIT reason=ai_not_configured (missing OPENAI_API_KEY); sending canned DM.',
       );
       try {
         await this.canned.sendNotConfiguredDm({

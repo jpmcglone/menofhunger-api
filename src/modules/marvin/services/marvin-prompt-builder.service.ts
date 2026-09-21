@@ -136,8 +136,8 @@ export type MarvPromptInput = {
    */
   referencedMemberCards?: Array<{ username: string; cardText: string | null }>;
   /**
-   * Set when the routing layer detected crisis / despair / self-harm signals. The system
-   * prompt on OpenAI is general; this flag injects a per-request safety instruction.
+   * Set when the routing layer detected crisis / despair / self-harm signals. The
+   * system prompt is general; this flag injects a per-request safety instruction.
    */
   crisisDetected?: boolean;
   /**
@@ -164,8 +164,8 @@ export type MarvPromptInput = {
 
 export type MarvBuiltPrompt = {
   /**
-   * Compact "developer" message we prepend to the user's question. The personality + tool
-   * schemas live in OpenAI's stored Prompt; this is just the per-request scaffolding
+   * Compact "developer" message we prepend to the user's question. Personality
+   * lives in `marvin-system-prompt.ts`; this is per-request scaffolding
    * (who's asking, where, and any safety nudges).
    */
   developerNote: string;
@@ -176,10 +176,9 @@ export type MarvBuiltPrompt = {
 /**
  * Builds the per-request scaffolding for a Marv call.
  *
- * The Marv "personality" (system prompt + tool schemas + voice rules) lives in an OpenAI
- * Stored Prompt — we never duplicate it here. This service produces the small developer
- * note that travels alongside the user's question (who's asking, where, thread history,
- * safety nudges).
+ * Personality is `marvin-system-prompt.ts`, sent as Responses `instructions`.
+ * This service produces the developer note that travels with the user's
+ * question (who's asking, where, thread history, safety nudges).
  */
 @Injectable()
 export class MarvinPromptBuilderService {
