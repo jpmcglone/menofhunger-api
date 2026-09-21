@@ -358,26 +358,26 @@ export class AdminEmailSamplesController {
       '',
       `This is a sample of the “streak reminder” email.`,
       '',
-      `You’re on a ${currentStreak}-day streak.`,
-      `Post or reply today to keep it.`,
+      `You’re on a ${currentStreak}-day check-in streak.`,
+      `Check in today before midnight ET to keep it.`,
       '',
-      `Open: ${homeUrl}`,
+      `Open: ${homeUrl}?checkin=1`,
       '',
       `Manage email notification settings: ${settingsUrl}`,
     ].join('\n');
 
     const html = renderMohEmail({
       title: `Keep your streak (sample)`,
-      preheader: `Sample: post or reply today to keep your ${currentStreak}-day streak.`,
+      preheader: `Sample: check in today to keep your ${currentStreak}-day streak.`,
       contentHtml: [
         `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:${EMAIL.text};">Keep your streak</div>`,
         `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(ctx.greeting)}</div>`,
         renderCard(
           [
             `<div style="margin-bottom:10px;">${renderPill('Streak reminder', 'warning')}</div>`,
-            `<div style="font-size:14px;line-height:1.8;color:${EMAIL.text};">You’re on a <strong>${currentStreak}</strong>-day streak.</div>`,
-            `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:${EMAIL.text};">Post or reply <strong>today</strong> to keep it.</div>`,
-            `<div style="margin-top:12px;">${renderButton({ href: homeUrl, label: 'Post now' })}</div>`,
+            `<div style="font-size:14px;line-height:1.8;color:${EMAIL.text};">You’re on a <strong>${currentStreak}</strong>-day check-in streak.</div>`,
+            `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:${EMAIL.text};">Check in <strong>today</strong> before midnight ET to keep it.</div>`,
+            `<div style="margin-top:12px;">${renderButton({ href: `${homeUrl}?checkin=1`, label: 'Check in' })}</div>`,
           ].join(''),
         ),
         `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:${EMAIL.muted};">Manage notification settings: <a href="${escapeHtml(

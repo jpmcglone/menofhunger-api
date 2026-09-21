@@ -46,7 +46,7 @@ The companion [experience review](admin-experience.md) records assistant actions
 | GET /v1/admin/intros/brief | intros | [source](../src/modules/admin/admin-intro-brief.controller.ts#L11) |
 | POST /v1/admin/intros/brief | intros | [source](../src/modules/admin/admin-intro-brief.controller.ts#L17) |
 | POST /v1/admin/jobs/auth-cleanup | jobs | [source](../src/modules/admin/admin-jobs.controller.ts#L98) |
-| POST /v1/admin/jobs/coins-reset | jobs | [source](../src/modules/admin/admin-jobs.controller.ts#L376) |
+| POST /v1/admin/jobs/coins-reset | jobs | [source](../src/modules/admin/admin-jobs.controller.ts#L375) |
 | POST /v1/admin/jobs/entitlements-backfill | jobs | [source](../src/modules/admin/admin-jobs.controller.ts#L289) |
 | POST /v1/admin/jobs/hashtags-cleanup | jobs | [source](../src/modules/admin/admin-jobs.controller.ts#L174) |
 | POST /v1/admin/jobs/hashtags-trending-refresh | jobs | [source](../src/modules/admin/admin-jobs.controller.ts#L271) |
@@ -62,7 +62,7 @@ The companion [experience review](admin-experience.md) records assistant actions
 | GET /v1/admin/jobs/queues | jobs | [source](../src/modules/admin/admin-jobs.controller.ts#L93) |
 | POST /v1/admin/jobs/search-cleanup | jobs | [source](../src/modules/admin/admin-jobs.controller.ts#L109) |
 | GET /v1/admin/jobs/status/:jobId | jobs | [source](../src/modules/admin/admin-jobs.controller.ts#L81) |
-| POST /v1/admin/jobs/streaks-backfill | jobs | [source](../src/modules/admin/admin-jobs.controller.ts#L329) |
+| POST /v1/admin/jobs/streaks-backfill | jobs | [source](../src/modules/admin/admin-jobs.controller.ts#L328) |
 | POST /v1/admin/jobs/tickers/ingest | jobs | [source](../src/modules/admin/admin-jobs.controller.ts#L57) |
 | POST /v1/admin/jobs/topics-normalize | jobs | [source](../src/modules/admin/admin-jobs.controller.ts#L214) |
 | GET /v1/admin/marvin/config | marv | [source](../src/modules/marvin/marvin.controller.ts#L215) |

@@ -1,4 +1,9 @@
-import { checkinSchedule, isCheckinOpen } from './checkin-schedule';
+import {
+  checkinReminderBody,
+  checkinSchedule,
+  crewStreakBrokenPushDelayMs,
+  isCheckinOpen,
+} from './checkin-schedule';
 import { CheckinsService } from './checkins.service';
 import { PostsMutationService } from '../posts/posts-mutation.service';
 
@@ -21,6 +26,27 @@ describe('daily check-in window', () => {
     ['2026-11-01T05:00:00Z', '2026-11-01T22:00:00.000Z', '2026-11-02T05:00:00.000Z'],
   ])('uses Eastern calendar boundaries across DST: %s', (date, opensAt, closesAt) => {
     expect(checkinSchedule(new Date(date))).toMatchObject({ opensAt, closesAt });
+  });
+});
+
+describe('check-in reminder copy', () => {
+  it('names the streak for at-risk recipients', () => {
+    expect(checkinReminderBody(7)).toBe(
+      'Answer today’s prompt before midnight ET to keep your 7-day streak alive.',
+    );
+  });
+});
+
+describe('crewStreakBrokenPushDelayMs', () => {
+  it('delays a 1am ET reset until 8am the same morning', () => {
+    const delay = crewStreakBrokenPushDelayMs(new Date('2026-09-08T05:05:00.000Z')); // 1:05am EDT
+    expect(delay).toBeGreaterThan(6 * 60 * 60 * 1000);
+    expect(delay).toBeLessThan(8 * 60 * 60 * 1000);
+  });
+
+  it('returns 0 during the morning window and null after noon ET', () => {
+    expect(crewStreakBrokenPushDelayMs(new Date('2026-09-08T13:00:00.000Z'))).toBe(0); // 9am EDT
+    expect(crewStreakBrokenPushDelayMs(new Date('2026-09-08T16:30:00.000Z'))).toBeNull(); // 12:30pm EDT
   });
 });
 

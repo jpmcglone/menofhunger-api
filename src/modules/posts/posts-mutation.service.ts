@@ -99,11 +99,11 @@ export class PostsMutationService {
 
   private async recomputeStreakFromPostsTx(tx: Prisma.TransactionClient, userId: string, now: Date): Promise<void> {
     const posts = await tx.post.findMany({
-      where: { userId, visibility: { not: 'onlyMe' }, deletedAt: null, isDraft: false },
-      select: { createdAt: true },
+      where: { userId, kind: 'checkin', visibility: { not: 'onlyMe' }, deletedAt: null, isDraft: false },
+      select: { createdAt: true, checkinDayKey: true },
       orderBy: { createdAt: 'asc' },
     });
-    const dayKeys = [...new Set(posts.map((p) => easternDayKey(p.createdAt)))].sort();
+    const dayKeys = [...new Set(posts.map((p) => p.checkinDayKey || easternDayKey(p.createdAt)))].sort();
     const stats = computeCheckinStreakStats({
       dayKeys,
       todayKey: easternDayKey(now),
@@ -1243,11 +1243,10 @@ export class PostsMutationService {
           quotedPostInfoRef.current = { quotedAuthorId: quotedExists.userId, quotedPostId: quotedExists.id };
         }
 
-        // Streak rewards: daily check + coins (transactional with post creation).
-        // Product rule: any non-onlyMe post counts (incl. replies & check-ins). Award once per ET day.
+        // Streak rewards: check-in posts only, once per ET day. Regular posts/replies do not count.
         // CAS guard: updateMany with WHERE lastCheckinDayKey = prevKey prevents a double-award when two
-        // concurrent posts run the check at the same time. Only the first writer wins count === 1.
-        const streakOp = visibility !== 'onlyMe'
+        // concurrent check-ins run the check at the same time. Only the first writer wins count === 1.
+        const streakOp = kind === 'checkin' && visibility !== 'onlyMe'
           ? (async () => {
               const todayKey = easternDayKey(now);
               const yesterdayKey = yesterdayEasternDayKey(now);

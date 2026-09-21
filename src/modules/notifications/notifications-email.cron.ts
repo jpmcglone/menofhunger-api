@@ -6,7 +6,6 @@ import type { PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { AppConfigService } from '../app/app-config.service';
-import { NotificationsService } from './notifications.service';
 import { buildProfileReminderEmail, getMissingProfileFields } from '../email/email-content';
 import { buildFollowedArticleEmail, renderTiptapPreviewHtml } from '../email/email-content-article';
 import { buildGreeting, getRecipientEmail, getVerifiedRecipientEmail } from '../email/email-send.helpers';
@@ -17,6 +16,7 @@ import { messagePreviewText } from '../messages/message.dto';
 import { EMAIL, EMAIL_DARK, escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
+import { CHECKIN_REMINDER_MINUTE } from '../checkins/checkin-schedule';
 import { SlackService } from '../../common/slack/slack.service';
 
 function safeBaseUrl(raw: string | null): string {
@@ -121,7 +121,6 @@ export class NotificationsEmailCron {
     private readonly jobs: JobsService,
     private readonly messages: MessagesService,
     private readonly slack: SlackService,
-    private readonly notifications: NotificationsService,
   ) {}
 
   private notificationsFromAddress(): string | undefined {
@@ -507,7 +506,7 @@ export class NotificationsEmailCron {
     }
   }
 
-  /** Streak reminder (send once per day; target ~4pm ET, DST-safe). */
+  /** Check-in streak reminder (send once per day at 8pm ET with the in-app nudge). */
   @Cron('*/5 * * * *')
   async sendStreakReminderEmail(): Promise<void> {
     if (!this.appConfig.runSchedulers()) return;
@@ -518,37 +517,41 @@ export class NotificationsEmailCron {
       const now = new Date();
       const et = easternYmdHm(now);
       const minuteOfDay = et.hh * 60 + et.mm;
-      // Only enqueue in the 4:00-4:59pm ET window.
-      if (minuteOfDay < 16 * 60 || minuteOfDay >= 17 * 60) return;
+      if (minuteOfDay < CHECKIN_REMINDER_MINUTE) return;
       const dayKey = easternDayKey(now);
-      await this.jobs.enqueueCron(JOBS.notificationsStreakReminderEmail, {}, `cron:notificationsStreakReminderEmail:${dayKey}`, {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5 * 60_000 },
-      });
+      await this.jobs.enqueueCron(
+        JOBS.notificationsStreakReminderEmail,
+        { dayKey },
+        `cron:notificationsStreakReminderEmail:${dayKey}`,
+        {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5 * 60_000 },
+        },
+      );
     } catch {
       // likely duplicate jobId while previous run is active; treat as no-op
     }
   }
 
-  async runSendStreakReminderEmail(): Promise<void> {
+  async runSendStreakReminderEmail(payload?: { dayKey?: string }): Promise<void> {
     const emailCfg = this.appConfig.email();
     if (!emailCfg) return;
 
     try {
       const now = new Date();
-      const et = easternYmdHm(now);
-      const minuteOfDay = et.hh * 60 + et.mm;
-      if (minuteOfDay < 16 * 60 || minuteOfDay >= 17 * 60) return;
+      const todayKey = easternDayKey(now);
+      const scheduledDayKey = String(payload?.dayKey ?? todayKey).trim() || todayKey;
+      if (scheduledDayKey !== todayKey) {
+        this.logger.warn(`[streak-reminder] skipping stale dayKey=${scheduledDayKey}`);
+        return;
+      }
 
       const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
-      const homeUrl = `${baseUrl}/home`;
+      const homeUrl = `${baseUrl}/home?checkin=1`;
       const settingsUrl = `${baseUrl}/settings/notifications`;
 
       const todayEt = easternYmd(now);
-      const windowStartUtcMs = easternUtcMsForLocal({ ...todayEt, hh: 16, mm: 0 });
-      const sendStartUtc = new Date(windowStartUtcMs);
-
-      const todayKey = easternDayKey(now);
+      const dayStartUtc = new Date(easternUtcMsForLocal({ ...todayEt, hh: 0, mm: 0 }));
       const yesterdayKey = easternDayKey(new Date(now.getTime() - 36 * 60 * 60 * 1000));
 
     type RecipientRow = {
@@ -557,7 +560,6 @@ export class NotificationsEmailCron {
       username: string | null;
       name: string | null;
       checkinStreakDays: number;
-      lastCheckinDayKey: string | null;
       notificationPreferences: { emailStreakReminder: boolean; lastEmailStreakReminderSentAt: Date | null } | null;
     };
 
@@ -568,12 +570,18 @@ export class NotificationsEmailCron {
         where: {
           email: { not: null },
           emailVerifiedAt: { not: null },
+          accountKind: 'person',
           checkinStreakDays: { gt: 0 },
-          lastCheckinDayKey: yesterdayKey, // at risk: last activity was yesterday (ET)
           ...(cursorId ? { id: { gt: cursorId } } : {}),
-          OR: [
-            { notificationPreferences: { is: null } },
-            { notificationPreferences: { is: { emailStreakReminder: true } } },
+          AND: [
+            { posts: { some: { kind: 'checkin', checkinDayKey: yesterdayKey, deletedAt: null } } },
+            { NOT: { posts: { some: { kind: 'checkin', checkinDayKey: todayKey, deletedAt: null } } } },
+            {
+              OR: [
+                { notificationPreferences: { is: null } },
+                { notificationPreferences: { is: { emailStreakReminder: true } } },
+              ],
+            },
           ],
         },
         orderBy: [{ id: 'asc' }],
@@ -584,7 +592,6 @@ export class NotificationsEmailCron {
           username: true,
           name: true,
           checkinStreakDays: true,
-          lastCheckinDayKey: true,
           notificationPreferences: { select: { emailStreakReminder: true, lastEmailStreakReminderSentAt: true } },
         },
       });
@@ -597,15 +604,11 @@ export class NotificationsEmailCron {
         if (u.notificationPreferences && !u.notificationPreferences.emailStreakReminder) continue;
 
         const lastSent = u.notificationPreferences?.lastEmailStreakReminderSentAt ?? null;
-        if (lastSent && lastSent.getTime() >= sendStartUtc.getTime()) continue;
-
-        // Defensive: if they already posted today, don't send.
-        if ((u.lastCheckinDayKey ?? null) === todayKey) continue;
+        if (lastSent && lastSent.getTime() >= dayStartUtc.getTime()) continue;
 
         const currentStreak = Math.max(0, Math.floor(u.checkinStreakDays ?? 0));
         if (currentStreak <= 0) continue;
 
-        // What they'll earn today if they post/reply at least once.
         const reward = computeCheckinRewards({
           todayKey,
           yesterdayKey,
@@ -620,10 +623,10 @@ export class NotificationsEmailCron {
         const text = [
           greeting,
           '',
-          `You’re on a ${currentStreak}-day streak.`,
-          `Post or reply today to keep it.`,
+          `You’re on a ${currentStreak}-day check-in streak.`,
+          `Check in today before midnight ET to keep it.`,
           '',
-          `Today’s multiplier: ${reward.multiplier}x (${reward.coinsAdd} coin${reward.coinsAdd === 1 ? '' : 's'} for one post/reply)`,
+          `Today’s multiplier: ${reward.multiplier}x (${reward.coinsAdd} coin${reward.coinsAdd === 1 ? '' : 's'} for today’s check-in)`,
           `If you skip today, your streak resets to 0.`,
           '',
           `Open: ${homeUrl}`,
@@ -633,18 +636,18 @@ export class NotificationsEmailCron {
 
         const html = renderMohEmail({
           title: `Keep your streak`,
-          preheader: `Post or reply today to keep your ${currentStreak}-day streak.`,
+          preheader: `Check in today to keep your ${currentStreak}-day streak.`,
           contentHtml: [
             `<div style="font-size:20px;font-weight:900;line-height:1.25;margin:0 0 6px 0;color:${EMAIL.text};">Keep your streak</div>`,
             `<div style="margin:0 0 10px 0;font-size:14px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(greeting)}</div>`,
             renderCard(
               [
                 `<div style="margin-bottom:10px;">${renderPill('Streak reminder', 'warning')}</div>`,
-                `<div style="font-size:14px;line-height:1.8;color:${EMAIL.text};">You’re on a <strong>${currentStreak}</strong>-day streak.</div>`,
-                `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:${EMAIL.text};">Post or reply <strong>today</strong> to keep it.</div>`,
+                `<div style="font-size:14px;line-height:1.8;color:${EMAIL.text};">You’re on a <strong>${currentStreak}</strong>-day check-in streak.</div>`,
+                `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:${EMAIL.text};">Check in <strong>today</strong> before midnight ET to keep it.</div>`,
                 `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:${EMAIL.muted};">Today’s multiplier: <strong style="color:${EMAIL.text};">${reward.multiplier}x</strong> (${reward.coinsAdd} coin${reward.coinsAdd === 1 ? '' : 's'}).</div>`,
                 `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:${EMAIL.muted};">If you skip today, your streak resets to 0.</div>`,
-                `<div style="margin-top:12px;">${renderButton({ href: homeUrl, label: 'Post now' })}</div>`,
+                `<div style="margin-top:12px;">${renderButton({ href: homeUrl, label: 'Check in' })}</div>`,
               ].join(''),
             ),
             `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:${EMAIL.muted};">Manage notification settings: <a href="${escapeHtml(
@@ -676,91 +679,6 @@ export class NotificationsEmailCron {
     } catch (err) {
       this.logger.error(
         `[streak-reminder] run failed: ${err instanceof Error ? err.message : String(err)}`,
-        err instanceof Error ? err.stack : undefined,
-      );
-    }
-  }
-
-  /** Streak-at-risk push notification (target ~9pm ET, once per day, per user). */
-  @Cron('*/5 * * * *')
-  async scheduleStreakReminderPush(): Promise<void> {
-    if (!this.appConfig.runSchedulers()) return;
-    if (!this.appConfig.vapidConfigured()) return;
-    const now = new Date();
-    const et = easternYmdHm(now);
-    const minuteOfDay = et.hh * 60 + et.mm;
-    // Only enqueue in the 9:00–9:59 PM ET window.
-    if (minuteOfDay < 21 * 60 || minuteOfDay >= 22 * 60) return;
-    const dayKey = easternDayKey(now);
-    try {
-      await this.jobs.enqueueCron(JOBS.checkinsStreakReminderPush, {}, `cron:checkinsStreakReminderPush:${dayKey}`, {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5 * 60_000 },
-      });
-    } catch {
-      // likely duplicate jobId; treat as no-op
-    }
-  }
-
-  async runSendStreakReminderPush(): Promise<void> {
-    if (!this.appConfig.vapidConfigured()) return;
-    const now = new Date();
-    const et = easternYmdHm(now);
-    const minuteOfDay = et.hh * 60 + et.mm;
-    if (minuteOfDay < 21 * 60 || minuteOfDay >= 22 * 60) return;
-
-    const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
-    const homeUrl = `${baseUrl}/home`;
-    const todayKey = easternDayKey(now);
-    const yesterdayKey = easternDayKey(new Date(now.getTime() - 36 * 60 * 60 * 1000));
-
-    let cursorId: string | null = null;
-    const pageSize = 400;
-    let total = 0;
-
-    try {
-      for (;;) {
-        const recipients: Array<{ id: string; checkinStreakDays: number; lastCheckinDayKey: string | null }> =
-          await this.prisma.user.findMany({
-            where: {
-              checkinStreakDays: { gt: 0 },
-              lastCheckinDayKey: yesterdayKey, // at risk: last activity was yesterday (ET)
-              ...(cursorId ? { id: { gt: cursorId } } : {}),
-              pushSubscriptions: { some: {} }, // only users with a registered push subscription
-            },
-            orderBy: [{ id: 'asc' }],
-            take: pageSize,
-            select: {
-              id: true,
-              checkinStreakDays: true,
-              lastCheckinDayKey: true,
-            },
-          });
-        if (recipients.length === 0) break;
-        cursorId = recipients[recipients.length - 1]?.id ?? null;
-
-        for (const u of recipients) {
-          // Defensive: skip if they already checked in today.
-          if ((u.lastCheckinDayKey ?? null) === todayKey) continue;
-          const streak = Math.max(0, Math.floor(u.checkinStreakDays ?? 0));
-          if (streak <= 0) continue;
-
-          try {
-            await this.notifications.sendStreakReminderPush({
-              recipientUserId: u.id,
-              streakDays: streak,
-              url: homeUrl,
-            });
-            total++;
-          } catch {
-            // best-effort per user
-          }
-        }
-      }
-      this.logger.log(`[streak-reminder-push] Sent to ${total} user(s)`);
-    } catch (err) {
-      this.logger.error(
-        `[streak-reminder-push] run failed: ${err instanceof Error ? err.message : String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
     }

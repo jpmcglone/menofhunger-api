@@ -205,6 +205,8 @@ describe('fanOutDailyContentNotifications – deduplication', () => {
 });
 
 describe('fanOutCheckinReminders – person accounts only', () => {
+  const now = new Date('2026-08-27T20:05:00-04:00');
+
   it('does not fan out to operated page accounts', async () => {
     const { service, prisma } = makeService();
 
@@ -214,11 +216,33 @@ describe('fanOutCheckinReminders – person accounts only', () => {
     });
     prisma.user.findMany.mockResolvedValue([]);
 
-    await service.fanOutCheckinReminders({ dayKey: '2026-08-27' });
+    await service.fanOutCheckinReminders({ dayKey: '2026-08-27', now });
 
     expect(prisma.user.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ accountKind: 'person', bannedAt: null }),
+        where: expect.objectContaining({
+          accountKind: 'person',
+          bannedAt: null,
+          checkinStreakDays: { gt: 0 },
+        }),
+      }),
+    );
+  });
+
+  it('skips a delayed job after midnight ET', async () => {
+    const { service, prisma, sideEffects } = makeService();
+
+    await service.fanOutCheckinReminders({
+      dayKey: '2026-08-27',
+      now: new Date('2026-08-28T00:10:00-04:00'),
+    });
+
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+    expect(sideEffects.dispatch).not.toHaveBeenCalled();
+    expect(prisma.dailyContentSnapshot.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { dayKey: '2026-08-27' },
+        update: expect.objectContaining({ checkinReminderNotifiedAt: expect.any(Date) }),
       }),
     );
   });

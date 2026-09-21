@@ -16,6 +16,8 @@ import {
   PERSON_ONLY_NOTIFICATION_KINDS,
 } from './notification-read-state.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { easternDayKey, yesterdayEasternDayKey, dayKeyToDate } from '../../common/time/eastern-day-key';
+import { checkinReminderBody } from '../checkins/checkin-schedule';
 import {
   ARTICLE_NOTIFICATION_CLICK_KINDS,
   articleNotificationClickPath,
@@ -1895,13 +1897,26 @@ export class NotificationWriterService {
   // ─── checkin_reminder fan-out ─────────────────────────────────────────────
 
   /**
-   * Fan-out 6pm ET check-in reminder to verified-or-above person accounts who
-   * have NOT already posted a check-in today. Pages are excluded — they cannot
-   * check in, and operators already get the person's copy.
-   * Cursor-paginated in chunks of 500. Guarded by `checkinReminderNotifiedAt`.
+   * Fan-out 8pm ET check-in reminder to verified-or-above person accounts who
+   * checked in yesterday and have not yet checked in today. Pages are excluded.
+   * Off `pushCheckinReminder` skips the bell and lock-screen. Cursor-paginated
+   * in chunks of 500. Guarded by `checkinReminderNotifiedAt`.
    */
-  async fanOutCheckinReminders(params: { dayKey: string }): Promise<void> {
+  async fanOutCheckinReminders(params: { dayKey: string; now?: Date }): Promise<void> {
     const { dayKey } = params;
+    const now = params.now ?? new Date();
+
+    if (!dayKey || easternDayKey(now) !== dayKey) {
+      this.logger.warn(`[checkin-reminder fan-out] skipping stale dayKey=${dayKey}`);
+      if (dayKey) {
+        await this.prisma.dailyContentSnapshot.upsert({
+          where: { dayKey },
+          create: { dayKey, checkinReminderNotifiedAt: now },
+          update: { checkinReminderNotifiedAt: now },
+        });
+      }
+      return;
+    }
 
     const snap = await this.prisma.dailyContentSnapshot.findUnique({
       where: { dayKey },
@@ -1913,42 +1928,49 @@ export class NotificationWriterService {
       return;
     }
 
+    const yesterdayKey = yesterdayEasternDayKey(dayKeyToDate(dayKey));
     const kind = 'checkin_reminder' as const;
     const title = 'Have you checked in today?';
-    const body = 'Answer today’s prompt before midnight ET to keep your streak alive.';
     const url = '/home?checkin=1';
 
     const CHUNK = 500;
     let cursor: string | undefined = snap?.checkinReminderFanoutCursor ?? undefined;
 
     while (true) {
-      // Fetch verified-or-above users who haven't yet checked in today.
       const users = await this.prisma.user.findMany({
         where: {
           bannedAt: null,
           accountKind: 'person',
+          checkinStreakDays: { gt: 0 },
           OR: [
             { verifiedStatus: { not: 'none' } },
             { premium: true },
             { premiumPlus: true },
           ],
-          // Exclude users who already have a check-in post for today.
-          NOT: {
-            posts: {
-              some: { kind: 'checkin', checkinDayKey: dayKey, deletedAt: null },
+          AND: [
+            { posts: { some: { kind: 'checkin', checkinDayKey: yesterdayKey, deletedAt: null } } },
+            { NOT: { posts: { some: { kind: 'checkin', checkinDayKey: dayKey, deletedAt: null } } } },
+            {
+              OR: [
+                { notificationPreferences: { is: null } },
+                { notificationPreferences: { is: { pushCheckinReminder: true } } },
+              ],
             },
-          },
+          ],
           ...(cursor ? { id: { gt: cursor } } : {}),
         },
         orderBy: { id: 'asc' },
         take: CHUNK,
-        select: { id: true },
+        select: { id: true, checkinStreakDays: true },
       });
 
       if (users.length === 0) break;
 
       const userIds = users.map((u) => u.id);
-      const now = new Date();
+      const bodyByUser = new Map(
+        users.map((u) => [u.id, checkinReminderBody(u.checkinStreakDays ?? 0)] as const),
+      );
+      const createdAt = new Date();
 
       // Delete any existing reminder for today so we don't double-badge.
       const existingUnread = await this.prisma.notification.findMany({
@@ -1966,8 +1988,8 @@ export class NotificationWriterService {
           recipientUserId,
           kind,
           title,
-          body,
-          createdAt: now,
+          body: bodyByUser.get(recipientUserId) ?? checkinReminderBody(1),
+          createdAt,
         })),
       });
 
@@ -1986,6 +2008,7 @@ export class NotificationWriterService {
           .catch(() => 0);
         this.emitBellAndInvalidateList(userId, { undeliveredCount });
 
+        const body = bodyByUser.get(userId) ?? checkinReminderBody(1);
         this.sideEffects.dispatch('notification.push', {
           recipientUserId: userId,
           kind,
@@ -2029,8 +2052,21 @@ export class NotificationWriterService {
    * Pages are excluded. Picks the most-recent matching year. Cursor-paginated
    * in chunks of 500. Guarded by `onThisDayNotifiedAt`.
    */
-  async fanOutOnThisDayNotifications(params: { dayKey: string }): Promise<void> {
+  async fanOutOnThisDayNotifications(params: { dayKey: string; now?: Date }): Promise<void> {
     const { dayKey } = params;
+    const now = params.now ?? new Date();
+
+    if (!dayKey || easternDayKey(now) !== dayKey) {
+      this.logger.warn(`[on-this-day fan-out] skipping stale dayKey=${dayKey}`);
+      if (dayKey) {
+        await this.prisma.dailyContentSnapshot.upsert({
+          where: { dayKey },
+          create: { dayKey, onThisDayNotifiedAt: now },
+          update: { onThisDayNotifiedAt: now },
+        });
+      }
+      return;
+    }
 
     const snap = await this.prisma.dailyContentSnapshot.findUnique({
       where: { dayKey },

@@ -8,7 +8,11 @@ describe('YouTube metadata', () => {
     `https://www.youtube.com/watch?v=${id}&t=10`, `https://youtu.be/${id}?si=tracking`,
     `https://m.youtube.com/shorts/${id}`, `https://youtube.com/live/${id}`,
     `https://www.youtube-nocookie.com/embed/${id}`, `https://music.youtube.com/watch?v=${id}`,
-  ])('recognizes %s', (url) => expect(youtubeVideoId(url)).toBe(id));
+    'https://youtu.be/-M_FVBKdWSo?si=NkXp2290rvmzs-u9',
+  ])('recognizes %s', (url) => {
+    const expected = url.includes('-M_FVBKdWSo') ? '-M_FVBKdWSo' : id;
+    expect(youtubeVideoId(url)).toBe(expected);
+  });
 
   it.each(['https://youtube.com.evil.test/watch?v=yVm8vDoMzYs', 'https://example.com/watch?v=yVm8vDoMzYs',
     'file://youtube.com/watch?v=yVm8vDoMzYs', 'https://youtube.com/playlist?list=abc', 'https://youtu.be/invalid'])

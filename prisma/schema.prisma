@@ -2266,7 +2266,7 @@ model NotificationPreferences {
    */
   pushDailyContent  Boolean @default(true)
   /**
-   * 6pm ET reminder to complete today's check-in (only sent if the user hasn't checked in yet).
+   * 8pm ET reminder to complete today's check-in (at-risk streaks only).
    */
   pushCheckinReminder Boolean @default(true)
 
@@ -2278,7 +2278,7 @@ model NotificationPreferences {
    */
   emailInstantHighSignal Boolean @default(true)
   /**
-   * Send a reminder email if you're at risk of losing your streak today.
+   * Evening reminder email when the user's check-in streak is at risk.
    */
   emailStreakReminder    Boolean @default(true)
   /**

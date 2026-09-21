@@ -266,10 +266,6 @@ export class NotificationsService {
     return this.push.sendReplyNudgePush(...args);
   }
 
-  sendStreakReminderPush(...args: Parameters<NotificationPushService['sendStreakReminderPush']>) {
-    return this.push.sendStreakReminderPush(...args);
-  }
-
   sendCrewStreakAdvancedPush(...args: Parameters<NotificationPushService['sendCrewStreakAdvancedPush']>) {
     return this.push.sendCrewStreakAdvancedPush(...args);
   }

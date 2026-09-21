@@ -750,7 +750,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       const postKind = post.kind ?? null;
       const checkinDayKey = post.checkinDayKey ?? null;
       if (postKind === 'checkin' && checkinDayKey) {
-        // Clear the 6pm check-in reminder for this user now that they've answered.
+        // Clear the evening check-in reminder for this user now that they've answered.
         await this.clearCheckinReminder(userId).catch((err) => {
           this.logger.warn(
             `[checkin-reminder] Failed to clear reminder for user ${userId}: ${err instanceof Error ? err.message : String(err)}`,

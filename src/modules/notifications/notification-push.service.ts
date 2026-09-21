@@ -13,6 +13,7 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import type { NotificationPreferencesDto } from '../../common/dto';
 import { NotificationPreferencesService } from './notification-preferences.service';
 import { ApnsPushService } from './apns-push.service';
+import { crewStreakBrokenPushBody } from './crew-streak-broken-copy';
 
 export type PushActorContext = {
   id: string;
@@ -32,16 +33,6 @@ const PUSH_COALESCE_MS: Partial<Record<string, number>> = {
   message: 30 * 1000,
 };
 const DEFAULT_COALESCE_MS = 60 * 1000;
-
-/** Render a small list of names as natural English: "A", "A and B", "A, B, and C". */
-function formatNameList(names: string[]): string {
-  const list = names.filter((n) => n && n.trim().length > 0);
-  if (list.length === 0) return '';
-  if (list.length === 1) return list[0];
-  if (list.length === 2) return `${list[0]} and ${list[1]}`;
-  const head = list.slice(0, -1).join(', ');
-  return `${head}, and ${list[list.length - 1]}`;
-}
 
 /** Sentence-case a short action phrase for lock-screen subtitles ("checked in" → "Checked in"). */
 function sentenceCaseAction(value: string): string {
@@ -106,8 +97,7 @@ function actionWithGroupName(action: string, groupName: string): string {
 
 /**
  * Web Push delivery: subscription management, VAPID setup, per-kind copy,
- * coalescing, and the system-originated pushes (streak reminders, crew
- * streaks, reply nudges, DMs).
+ * coalescing, and the system-originated pushes (crew streaks, reply nudges, DMs).
  */
 @Injectable()
 export class NotificationPushService {
@@ -982,29 +972,6 @@ export class NotificationPushService {
   }
 
   /**
-   * Send a streak-at-risk push notification to a single user.
-   * Called by the nightly streak-reminder push cron (9 PM ET).
-   * Only fires if the user has push subscriptions; silently skips if not.
-   */
-  async sendStreakReminderPush(params: {
-    recipientUserId: string;
-    streakDays: number;
-    url: string;
-  }): Promise<void> {
-    if (!this.pushChannelConfigured()) return;
-    const { streakDays } = params;
-    const title = `${streakDays}-day streak at risk`;
-    const body = `Post today before midnight ET — or your streak resets.`;
-    await this.sendWebPushToRecipient(params.recipientUserId, {
-      title,
-      body,
-      url: params.url,
-      tag: `streak-reminder-${params.recipientUserId}`,
-      kind: 'streak_reminder',
-    });
-  }
-
-  /**
    * Push every member of a crew when the strict crew streak advances. This is the
    * positive-feedback half of the crew-streak push pair. Per the design simplicity
    * skill we do not also send a "you posted today" confirmation — only the streak
@@ -1071,10 +1038,6 @@ export class NotificationPushService {
     const title = 'You lost the streak.';
     const tag = `crew-streak-broken-${params.crewId}`;
 
-    const missedNames = params.missedMembers
-      .map((m) => (m.displayName ?? m.username ?? '').trim())
-      .filter((n) => n.length > 0);
-
     for (const recipientUserId of params.recipientUserIds) {
       try {
         const prefs = await this.preferences.getPreferencesInternal(recipientUserId);
@@ -1083,23 +1046,11 @@ export class NotificationPushService {
         // Best effort: default to sending if prefs read fails.
       }
 
-      // Personalize body so the recipient knows whether *they* missed.
-      const recipientMissed = params.missedMembers.some((m) => m.id === recipientUserId);
-      const others = missedNames
-        .filter((_, idx) => params.missedMembers[idx]?.id !== recipientUserId);
-
-      let body: string;
-      if (recipientMissed && others.length === 0) {
-        body = `${crewLabel} broke the streak yesterday. You didn't check in.`;
-      } else if (recipientMissed && others.length > 0) {
-        body = `${crewLabel} broke the streak yesterday. You and ${formatNameList(others)} didn't check in.`;
-      } else if (others.length === 0) {
-        body = `${crewLabel} broke the streak yesterday.`;
-      } else if (others.length === 1) {
-        body = `${others[0]} didn't check in yesterday. ${crewLabel} lost the streak.`;
-      } else {
-        body = `${formatNameList(others)} didn't check in yesterday. ${crewLabel} lost the streak.`;
-      }
+      const body = crewStreakBrokenPushBody({
+        crewLabel,
+        recipientUserId,
+        missedMembers: params.missedMembers,
+      });
 
       try {
         await this.sendWebPushToRecipient(recipientUserId, {

@@ -48,7 +48,7 @@ export const JOBS = {
 
   // Check-ins
   checkinsStreakReset: 'checkins.streakReset',
-  checkinsStreakReminderPush: 'checkins.streakReminderPush',
+  checkinsCrewStreakBrokenPush: 'checkins.crewStreakBrokenPush',
   checkinReminderFanout: 'checkins.reminderFanout',
 
   // On This Day

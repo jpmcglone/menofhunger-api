@@ -2173,7 +2173,7 @@ export type NotificationPreferencesDto = {
   pushGroupActivity: boolean;
   /** Word of the day + quote of the day push (fires at 9:00am / 9:30am ET). */
   pushDailyContent: boolean;
-  /** 6pm ET reminder to complete today's check-in (skipped if user already checked in). */
+  /** 8pm ET reminder to complete today's check-in (at-risk streaks only). */
   pushCheckinReminder: boolean;
   emailDigestWeekly: boolean;
   emailNewNotifications: boolean;
@@ -3655,6 +3655,11 @@ export type MessageConversationDto = {
   createdAt: string;
   updatedAt: string;
   lastMessageAt: string | null;
+  /**
+   * Last visible message. `body` is the inbox preview: the caption when present,
+   * otherwise Voice message / Photo / GIF / Video. Null when the conversation
+   * has no messages — clients show "No chats yet." only in that case.
+   */
   lastMessage: { id: string; body: string; createdAt: string; senderId: string } | null;
   participants: MessageParticipantDto[];
   viewerStatus: MessageParticipantStatus;

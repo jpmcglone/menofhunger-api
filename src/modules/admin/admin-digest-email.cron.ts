@@ -8,66 +8,12 @@ import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { EMAIL, escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
 import { SlackService } from '../../common/slack/slack.service';
-
-// ─── ET helpers ───────────────────────────────────────────────────────────────
-
-const ET_ZONE = 'America/New_York';
+import { easternDayKey, easternMinuteOfDay } from '../../common/time/eastern-day-key';
+import { adminDigestActivityWindow } from './admin-digest-window';
 
 function safeBaseUrl(raw: string | null | undefined): string {
   return ((raw ?? '').trim() || 'https://menofhunger.com').replace(/\/$/, '');
 }
-
-function easternYmd(d: Date): { y: number; m: number; d: number } {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: ET_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(d);
-  return {
-    y: Number(parts.find((p) => p.type === 'year')?.value ?? 0),
-    m: Number(parts.find((p) => p.type === 'month')?.value ?? 1),
-    d: Number(parts.find((p) => p.type === 'day')?.value ?? 1),
-  };
-}
-
-function easternYmdHm(d: Date): { y: number; m: number; d: number; hh: number; mm: number } {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: ET_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).formatToParts(d);
-  const hhRaw = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
-  return {
-    y: Number(parts.find((p) => p.type === 'year')?.value ?? 0),
-    m: Number(parts.find((p) => p.type === 'month')?.value ?? 1),
-    d: Number(parts.find((p) => p.type === 'day')?.value ?? 1),
-    hh: Number.isFinite(hhRaw) ? ((hhRaw % 24) + 24) % 24 : 0,
-    mm: Number(parts.find((p) => p.type === 'minute')?.value ?? 0),
-  };
-}
-
-function easternDayKey(d: Date): string {
-  const { y, m, d: dd } = easternYmd(d);
-  return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
-}
-
-function easternUtcMsForLocal(params: { y: number; m: number; d: number; hh: number; mm: number }): number {
-  for (let utcHour = 0; utcHour <= 23; utcHour++) {
-    const cand = new Date(Date.UTC(params.y, params.m - 1, params.d, utcHour, params.mm, 0));
-    const p = easternYmdHm(cand);
-    if (p.y === params.y && p.m === params.m && p.d === params.d && p.hh === params.hh && p.mm === params.mm) {
-      return cand.getTime();
-    }
-  }
-  return Date.now();
-}
-
-// ─── Rendering helpers ────────────────────────────────────────────────────────
 
 function relativeTime(date: Date, now: Date): string {
   const diffMs = now.getTime() - date.getTime();
@@ -178,8 +124,7 @@ export class AdminDailyDigestCron {
     if (!this.appConfig.email()) return;
 
     const now = new Date();
-    const et = easternYmdHm(now);
-    const minuteOfDay = et.hh * 60 + et.mm;
+    const minuteOfDay = easternMinuteOfDay(now);
     if (minuteOfDay < 8 * 60 || minuteOfDay >= 9 * 60) return;
 
     const dayKey = easternDayKey(now);
@@ -211,14 +156,7 @@ export class AdminDailyDigestCron {
       }
 
       const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
-
-      // Yesterday's ET midnight → today's ET midnight.
-      const todayEt = easternYmd(now);
-      const yesterdayUtc = new Date(Date.UTC(todayEt.y, todayEt.m - 1, todayEt.d - 1));
-      const yesterdayEt = easternYmd(yesterdayUtc);
-      const windowStart = new Date(easternUtcMsForLocal({ ...yesterdayEt, hh: 0, mm: 0 }));
-      const windowEnd = new Date(easternUtcMsForLocal({ ...todayEt, hh: 0, mm: 0 }));
-      const sevenDaysAgo = new Date(windowEnd.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const { windowStart, windowEnd, sevenDaysAgo, dateLabel } = adminDigestActivityWindow(now);
 
       // Gather all metrics in parallel.
       const [
@@ -430,13 +368,6 @@ export class AdminDailyDigestCron {
         await this.prisma.adminEmailLog.create({ data: { kind: 'daily_digest', dayKey } }).catch(() => {});
         return;
       }
-
-      const dateLabel = windowStart.toLocaleDateString('en-US', {
-        timeZone: ET_ZONE,
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-      });
 
       // Slack digest (fires regardless of email configuration).
       this.slack.notifyDailyDigest({

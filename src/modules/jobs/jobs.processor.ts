@@ -106,7 +106,7 @@ export class JobsProcessor extends WorkerHost {
           await this.notificationsEmail.runSendInstantHighSignalEmail(job.data ?? undefined);
           return { ok: true };
         case JOBS.notificationsStreakReminderEmail:
-          await this.notificationsEmail.runSendStreakReminderEmail();
+          await this.notificationsEmail.runSendStreakReminderEmail(job.data ?? undefined);
           return { ok: true };
         case JOBS.notificationsProfileReminderEmail:
           await this.notificationsEmail.runSendProfileReminderEmail();
@@ -147,8 +147,8 @@ export class JobsProcessor extends WorkerHost {
         case JOBS.checkinsStreakReset:
           await this.checkinsStreakReset.runStreakReset();
           return { ok: true };
-        case JOBS.checkinsStreakReminderPush:
-          await this.notificationsEmail.runSendStreakReminderPush();
+        case JOBS.checkinsCrewStreakBrokenPush:
+          await this.checkinsStreakReset.runCrewStreakBrokenPush(job.data ?? {});
           return { ok: true };
         case JOBS.checkinReminderFanout:
           await this.notificationWriter.fanOutCheckinReminders({ dayKey: String(job.data?.dayKey ?? '') });

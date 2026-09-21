@@ -319,9 +319,8 @@ export class AdminJobsController {
 
   /**
    * Recompute checkinStreakDays, longestStreakDays, and lastCheckinDayKey for every
-   * user by walking their full post history (any non-onlyMe post counts, same rule
-   * as live streak awarding). Useful to backfill users who posted before the streak
-   * feature launched or whose streak fields are otherwise stale/missing.
+   * user by walking their check-in history (same rule as live streak awarding).
+   * Useful to backfill users whose streak fields are stale/missing.
    *
    * The nightly streak-reset cron will still zero out stale current streaks after
    * this runs — no double-handling needed.
@@ -340,13 +339,13 @@ export class AdminJobsController {
     for (const user of users) {
       const userId = user.id;
       const posts = await this.prisma.post.findMany({
-        where: { userId, visibility: { not: 'onlyMe' }, deletedAt: null, isDraft: false },
-        select: { createdAt: true },
+        where: { userId, kind: 'checkin', visibility: { not: 'onlyMe' }, deletedAt: null, isDraft: false },
+        select: { createdAt: true, checkinDayKey: true },
         orderBy: { createdAt: 'asc' },
       });
 
       // Deduplicate to one entry per ET calendar day then sort.
-      const dayKeys = [...new Set(posts.map((p) => easternDayKey(p.createdAt)))].sort();
+      const dayKeys = [...new Set(posts.map((p) => p.checkinDayKey || easternDayKey(p.createdAt)))].sort();
       const stats = computeCheckinStreakStats({ dayKeys, todayKey, yesterdayKey });
       const noChange =
         (user.checkinStreakDays ?? 0) === stats.currentStreakDays &&

@@ -670,17 +670,19 @@ export class AuthService {
         const rows = await this.prisma.post.findMany({
           where: {
             userId,
+            kind: 'checkin',
             deletedAt: null,
             visibility: { not: 'onlyMe' },
             createdAt: { gte: since },
           },
-          select: { createdAt: true },
+          select: { createdAt: true, checkinDayKey: true },
           orderBy: { createdAt: 'desc' },
           take: 400,
         });
         const daySet = new Set<string>();
         for (const r of rows) {
-          if (r?.createdAt) daySet.add(easternDayKey(r.createdAt));
+          const key = r.checkinDayKey || (r?.createdAt ? easternDayKey(r.createdAt) : '');
+          if (key) daySet.add(key);
         }
         const todayIndex = dayIndexEastern(now);
         let streak = 0;

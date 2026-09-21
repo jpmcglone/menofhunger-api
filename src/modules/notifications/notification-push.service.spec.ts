@@ -472,9 +472,9 @@ describe('NotificationPushService — per-channel suppression', () => {
       presence: makePresence({ iosActive: true, webActive: true }),
     });
     await svc.sendWebPushToRecipient('user-1', {
-      title: 'Streak reminder',
+      title: 'Have you checked in today?',
       tag: 'streak-reminder-user-1',
-      kind: 'streak_reminder',
+      kind: 'checkin_reminder',
       // suppressActiveChannels omitted — system push, should always fan out
     });
     expect(apnsSendToUser).toHaveBeenCalledTimes(1);
