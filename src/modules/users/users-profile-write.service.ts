@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { AuthService } from "../auth/auth.service";
 import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { PublicProfileCacheService } from "./public-profile-cache.service";
@@ -16,6 +17,7 @@ export class UsersProfileWriteService {
     }>,
     private readonly me: UsersMeRealtimeService,
     private readonly publicUpdates: UsersPublicRealtimeService,
+    private readonly auth: AuthService,
   ) {}
   async commit(
     userId: string,
@@ -26,6 +28,9 @@ export class UsersProfileWriteService {
       where: { id: userId },
       data,
     });
+    // /auth/me and auth guards cache the full user, independently of public profiles.
+    // Clear every device's snapshot before announcing or returning the saved profile.
+    await this.auth.bustSessionCachesForUser(updated.id);
     await this.cache.invalidateForUser({
       id: updated.id,
       username: updated.username ?? null,
