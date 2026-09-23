@@ -3,6 +3,8 @@ import type { RtcIceServerDto } from '../../common/dto/call.dto';
 import { AppConfigService } from '../app/app-config.service';
 
 const MINT_TTL_SECONDS = 86_400;
+/** Credentials must outlive the longest call that could start with them. */
+const CALL_HEADROOM_SECONDS = 4 * 60 * 60;
 const CACHE_MS = 10 * 60 * 1000;
 const MINT_TIMEOUT_MS = 4_000;
 const CF_TURN_CREDENTIALS_URL = (keyId: string) =>
@@ -44,7 +46,8 @@ export function parseCloudflareIceServers(body: unknown): RtcIceServerDto[] | nu
 @Injectable()
 export class RtcIceServersService {
   private readonly logger = new Logger(RtcIceServersService.name);
-  private cached: { servers: RtcIceServerDto[]; expiresAt: number } | null = null;
+  /** `expiresAt` ends reuse; `credentialsExpireAt` ends the fallback, since expired TURN auth fails silently. */
+  private cached: { servers: RtcIceServerDto[]; expiresAt: number; credentialsExpireAt: number } | null = null;
   private inflight: Promise<RtcIceServerDto[]> | null = null;
 
   constructor(private readonly appConfig: AppConfigService) {}
@@ -61,17 +64,26 @@ export class RtcIceServersService {
 
   private async load(): Promise<RtcIceServerDto[]> {
     const minted = await this.mintCloudflare();
+    const now = Date.now();
     if (minted) {
-      this.cached = { servers: minted, expiresAt: Date.now() + CACHE_MS };
+      this.cached = {
+        servers: minted,
+        expiresAt: now + CACHE_MS,
+        credentialsExpireAt: now + (MINT_TTL_SECONDS - CALL_HEADROOM_SECONDS) * 1000,
+      };
       return minted;
     }
-    if (this.cached) return this.cached.servers;
+    if (this.cached && this.cached.credentialsExpireAt > now) return this.cached.servers;
+    this.cached = null;
     return this.appConfig.rtcIceServers();
   }
 
   private async mintCloudflare(): Promise<RtcIceServerDto[] | null> {
     const cfg = this.appConfig.cloudflareTurn();
-    if (!cfg) return null;
+    if (!cfg) {
+      this.logger.warn('[calls] Cloudflare TURN is not configured; calls get STUN only');
+      return null;
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), MINT_TIMEOUT_MS);
     try {
@@ -93,6 +105,8 @@ export class RtcIceServersService {
         this.logger.warn('[calls] Cloudflare TURN mint returned no usable iceServers');
         return null;
       }
+      const relayUrls = parsed.flatMap((s) => s.urls).filter((u) => /^turns?:/.test(u)).length;
+      this.logger.log(`[calls] Cloudflare TURN minted relayUrls=${relayUrls}`);
       return parsed;
     } catch (err) {
       const reason = err instanceof Error ? err.name : 'error';

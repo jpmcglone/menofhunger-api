@@ -61,6 +61,7 @@ export const MARV_ERROR_CODES = {
   postFailed: 'post_failed',
   messageFailed: 'message_failed',
   userBanned: 'user_banned',
+  aiConsentRequired: 'ai_consent_required',
 } as const;
 
 export type MarvErrorCode = (typeof MARV_ERROR_CODES)[keyof typeof MARV_ERROR_CODES];

@@ -1,6 +1,9 @@
+import { ForbiddenException } from '@nestjs/common';
 import type { PrismaService } from '../../prisma/prisma.service';
+import { MARV_ERROR_CODES } from '../marvin.constants';
 
-export const AI_CONSENT_VERSION = 1;
+/** Bumped when the disclosure changes or consent was recorded without a prompt; older grants re-ask. */
+export const AI_CONSENT_VERSION = 2;
 
 export async function hasAiConsent(prisma: PrismaService, userId: string): Promise<boolean> {
   const settings = await prisma.marvinUserSettings.findUnique({
@@ -10,12 +13,15 @@ export async function hasAiConsent(prisma: PrismaService, userId: string): Promi
   return Boolean(settings?.aiConsentAt && settings.aiConsentVersion === AI_CONSENT_VERSION);
 }
 
-/** Marv is on. Using it records current personal-request permission without a client gate. */
+/**
+ * App Store 5.1.2(i): personal data reaches OpenAI only after explicit permission.
+ * Clients prompt on `ai_consent_required`, record the choice via PATCH /marvin/me/preferences,
+ * then retry. Never grant permission implicitly here.
+ */
 export async function requireAiConsent(prisma: PrismaService, userId: string): Promise<void> {
   if (await hasAiConsent(prisma, userId)) return;
-  await prisma.marvinUserSettings.upsert({
-    where: { userId },
-    create: { userId, aiConsentAt: new Date(), aiConsentVersion: AI_CONSENT_VERSION },
-    update: { aiConsentAt: new Date(), aiConsentVersion: AI_CONSENT_VERSION },
+  throw new ForbiddenException({
+    message: 'Allow MARV to use OpenAI before sending this.',
+    error: MARV_ERROR_CODES.aiConsentRequired,
   });
 }

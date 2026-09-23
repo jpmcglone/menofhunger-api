@@ -1,3 +1,4 @@
+import { AI_CONSENT_VERSION } from './ai-consent';
 /**
  * Unit tests for MarvinAIService multimodal payload assembly.
  *
@@ -51,7 +52,7 @@ function makeService(opts?: {
       maxOutputTokens: 1024,
     })),
   };
-  return new MarvinAIService(appConfig, { marvinUserSettings: { findUnique: jest.fn(async () => ({ aiConsentAt: opts?.consent === false ? null : new Date(), aiConsentVersion: 1 })), upsert: jest.fn(async () => ({})) }, post: { findFirst: jest.fn(async () => null) } } as any);
+  return new MarvinAIService(appConfig, { marvinUserSettings: { findUnique: jest.fn(async () => ({ aiConsentAt: opts?.consent === false ? null : new Date(), aiConsentVersion: AI_CONSENT_VERSION })), upsert: jest.fn(async () => ({})) }, post: { findFirst: jest.fn(async () => null) } } as any);
 }
 
 function makeSuccessResponse(text: string) {
@@ -431,10 +432,10 @@ describe('MarvinAIService.extractToolImageUrls', () => {
 
 describe('personal AI permission enforcement', () => {
   beforeEach(() => { mockResponsesCreate.mockReset(); mockResponsesCreate.mockResolvedValue(makeSuccessResponse('reply')); });
-  it.each(['private_session', 'public_thread', 'catch_up'] as const)('auto-grants personal requests for %s', async source => {
+  it.each(['private_session', 'public_thread', 'catch_up'] as const)('refuses personal requests without permission for %s', async source => {
     const service = makeService({ consent: false });
-    await service.respond({ ...baseReq, source });
-    expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
+    await expect(service.respond({ ...baseReq, source })).rejects.toMatchObject({ response: { error: 'ai_consent_required' } });
+    expect(mockResponsesCreate).not.toHaveBeenCalled();
   });
   it('allows background processing of already-shared public content', async () => {
     const service = makeService({ consent: false });

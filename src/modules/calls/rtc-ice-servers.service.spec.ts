@@ -116,4 +116,18 @@ describe('RtcIceServersService', () => {
     await svc.resolve();
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps the last mint through an outage, but never past its credential lifetime', async () => {
+    const { svc } = makeService({ turn: { keyId: 'key', apiToken: 'tok' } });
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    global.fetch = jest.fn(async () => ({ ok: true, json: async () => CF_BODY })) as unknown as typeof fetch;
+    const minted = await svc.resolve();
+
+    global.fetch = jest.fn(async () => ({ ok: false, status: 401 })) as unknown as typeof fetch;
+    now.mockReturnValue(1_000_000 + 60 * 60 * 1000);
+    await expect(svc.resolve()).resolves.toEqual(minted);
+
+    now.mockReturnValue(1_000_000 + 21 * 60 * 60 * 1000);
+    await expect(svc.resolve()).resolves.toEqual(STUN_FALLBACK);
+  });
 });

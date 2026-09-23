@@ -770,10 +770,12 @@ describe('Marv message consent belongs to the requesting human', () => {
     expect(prisma.marvinUserSettings.findUnique).not.toHaveBeenCalled();
   });
 
-  it('lets a human talk to Marv without an enable step', async () => {
+  it('asks a human for permission before a message reaches Marv', async () => {
     const { svc, prisma } = makeSendService();
-    await expect(svc.sendMessage({ userId: 'human', conversationId: 'c1', body: 'Hello' })).rejects.toThrow('write boundary');
-    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(prisma.marvinUserSettings.upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: 'human' } }));
+    await expect(svc.sendMessage({ userId: 'human', conversationId: 'c1', body: 'Hello' })).rejects.toMatchObject({
+      response: { error: 'ai_consent_required' },
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.marvinUserSettings.upsert).not.toHaveBeenCalled();
   });
 });

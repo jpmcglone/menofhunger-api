@@ -1,3 +1,4 @@
+import { AI_CONSENT_VERSION } from './ai-consent';
 import { ForbiddenException, HttpException } from '@nestjs/common';
 import { MarvinCatchUpService } from './marvin-catch-up.service';
 import { InsufficientMarvCreditsError } from './marvin-credit.service';
@@ -140,7 +141,7 @@ function makeService(opts?: {
     },
     marvinUserSettings: {
       findUnique: jest.fn(async () => ({
-        aiConsentAt: new Date(), aiConsentVersion: 1,
+        aiConsentAt: new Date(), aiConsentVersion: AI_CONSENT_VERSION,
         disabledByAdmin: opts?.disabledByAdmin ?? false,
         preferredMode: opts?.preferredMode ?? 'auto',
       })),
