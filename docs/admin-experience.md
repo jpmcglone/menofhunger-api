@@ -14,6 +14,13 @@ to check the [complete guarded endpoint inventory](admin-endpoints.md). The inve
 accounts for every guarded controller operation; catalog presence does not imply
 that every operation is an AI tool.
 
+The hosted `/mcp` endpoint also admits Premium and Premium+ members, but only to a
+separate read-only lodge catalog (`moh:member:read`). The member catalog has no admin tools,
+no write tools, and a daily call allowance; administrators keep the founder catalog
+and are not counted. See the MCP README's Premium members section. The admin user
+page's **AI connections** card lists a member's hosted connections and today's calls,
+and revokes one; members disconnect their own in `/settings/ai`.
+
 Admin MARV has its own private workspace and database history. It never shares
 conversation context or admin functions with public replies, member DMs, or catch-up.
 Admin usage has its own `admin_console` source in the existing usage/cost accounting.

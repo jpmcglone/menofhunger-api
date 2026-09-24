@@ -45,10 +45,12 @@ describe('native avatar video processing', () => {
       if (kind === 'hdr') expect(inputProbe.streams[0]?.color_transfer).toBe('smpte2084');
       const crop = kind === 'rotated' ? { x: 0, y: 0.25, width: 1, height: 0.5 } : { x: 0.25, y: 0, width: 0.5, height: 1 };
       const output = await transcoder.transcode(input, directory, { startSeconds: 0, durationSeconds: 1, crop });
-      expect(output.durationMs).toBe(1000);
+      // FFmpeg builds differ on whether MP4 duration includes the last frame's length.
+      expect(output.durationMs).toBeGreaterThanOrEqual(Math.floor(1000 - 1000 / 24));
+      expect(output.durationMs).toBeLessThanOrEqual(1000);
       expect(output.video.length).toBeLessThanOrEqual(512 * 1024);
       const final = await transcoder.probe(join(directory, 'avatar.mp4'));
-      expect(final.streams[0]).toMatchObject({ width: 320, height: 320, codec_name: 'h264' });
+      expect(final.streams[0]).toMatchObject({ width: 320, height: 320, codec_name: 'h264', nb_frames: '24' });
       if (kind === 'hdr') expect(final.streams[0]?.color_transfer).toBe('bt709');
     } finally { await rm(directory, { recursive: true, force: true }); }
   }, 60_000);

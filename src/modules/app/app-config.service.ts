@@ -261,6 +261,10 @@ export class AppConfigService {
     return this.config.get<string>('SESSION_HMAC_SECRET') ?? 'dev-session-secret-change-me';
   }
 
+  mcpMemberDailyCalls(): number {
+    return this.readPositiveInt('MCP_MEMBER_DAILY_CALLS', 200);
+  }
+
   cookieDomain(): string | undefined {
     const v = this.config.get<string>('COOKIE_DOMAIN');
     return v?.trim() ? v.trim() : undefined;

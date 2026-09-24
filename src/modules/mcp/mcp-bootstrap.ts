@@ -7,18 +7,35 @@ import type { RedisService } from '../redis/redis.service';
 import { getSessionCookie } from '../../common/session-cookie';
 import { localApiFetch } from './mcp-tools';
 import { isOwnAdminSession } from '../admin/admin-session';
+import type { SessionResult } from '../auth/auth.service';
+
+export type McpAccount = { id: string; username: string | null; audience: 'admin' | 'member' };
 
 type RemoteOptions = {
   redis: ReturnType<RedisService['raw']>;
   secret: string;
   baseUrl: string;
   frontendUrl: string;
-  resolveAdmin: (token: string | undefined) => Promise<{ id: string; username: string | null } | null>;
+  memberDailyCalls: number;
+  resolveAccount: (token: string | undefined) => Promise<McpAccount | null>;
   createSession: (userId: string) => Promise<{ token: string; expiresAt: string }>;
   revokeSession: (token: string) => Promise<void>;
   sessionCookie: (req: Request) => string | undefined;
   fetchImpl: typeof fetch;
 };
+
+/**
+ * Administrators get the founder catalog. Premium members (grants included) get the
+ * read-only member catalog. Impersonated, page-operated, and banned sessions get neither.
+ */
+export function mcpAccountFor(session: SessionResult | null): McpAccount | null {
+  if (!session || session.impersonatedByUserId || session.operatedByUserId) return null;
+  const { user } = session;
+  if (isOwnAdminSession(session)) return { id: user.id, username: user.username, audience: 'admin' };
+  if (user.bannedAt) return null;
+  if (user.accountKind !== 'person' || !(user.premium || user.premiumPlus)) return null;
+  return { id: user.id, username: user.username, audience: 'member' };
+}
 
 export function createMcpMiddleware(config: AppConfigService, auth: AuthService, redis: RedisService): RequestHandler {
   // Node 20.19+ loads synchronous ESM graphs from CommonJS. The same package is
@@ -32,12 +49,8 @@ export function createMcpMiddleware(config: AppConfigService, auth: AuthService,
     secret: config.sessionHmacSecret(),
     baseUrl,
     frontendUrl: config.frontendBaseUrl() || 'http://localhost:3000',
-    resolveAdmin: async (token) => {
-      const session = await auth.meFromSessionToken(token);
-      return isOwnAdminSession(session)
-        ? { id: session.user.id, username: session.user.username }
-        : null;
-    },
+    memberDailyCalls: config.mcpMemberDailyCalls(),
+    resolveAccount: async (token) => mcpAccountFor(await auth.meFromSessionToken(token)),
     createSession: async (userId) => {
       let token = '';
       // Capture a dedicated product session without replacing the browser's cookie.

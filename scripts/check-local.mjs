@@ -16,7 +16,7 @@ if (filters.status !== 0 || !filters.stdout?.includes('zscale')) {
   console.error('Local checks require ffmpeg with zscale. On macOS: brew install ffmpeg-full')
   process.exit(1)
 }
-for (const script of ['check:guidance', 'lint', 'build:typecheck', 'check:contracts', 'build', 'test:ci', 'test:e2e', 'mcp:test', 'check:database']) {
+for (const script of ['check:guidance', 'check:env-docs', 'lint', 'build:typecheck', 'check:contracts', 'build', 'test:ci', 'test:e2e', 'mcp:test', 'check:database']) {
   const result = spawnSync('npm', ['run', script], { env, stdio: 'inherit' })
   if (result.status !== 0) process.exit(result.status ?? 1)
 }

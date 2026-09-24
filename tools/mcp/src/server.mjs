@@ -5,20 +5,12 @@ import { pathToFileURL } from 'node:url';
 import { MohApi } from './api.mjs';
 import { StateStore } from './state.mjs';
 import { createTools } from './tools.mjs';
-import { instructions, metricGuide, workflows, storageGuidance } from './guidance.mjs';
+import { createMemberTools } from './member-tools.mjs';
+import { instructions, metricGuide, workflows, storageGuidance, memberInstructions, memberWorkflows } from './guidance.mjs';
 import { serverName } from './config.mjs';
 
-export function createServer({ api, store, localArtifacts = true, remoteWrites = localArtifacts } = {}) {
-  store ??= new StateStore();
-  api ??= new MohApi({ store });
-  const guide = `${instructions}\n${storageGuidance(localArtifacts, remoteWrites)}${remoteWrites ? "\nThis connection can manage delegated jobs and apply explicitly authorized proposals. Delegated jobs may continue on their saved schedule until paused or cancelled. Omitted actor means the administrator’s personal account." : ""}`;
-  const server = new McpServer(
-    { name: serverName(api.baseUrl), version: '0.1.0' },
-    {
-      instructions: `Connected to ${api.baseUrl}. Localhost data is development data, not production business metrics.\n${guide}`,
-    },
-  );
-  for (const tool of createTools({ api, store, localArtifacts, remoteWrites })) {
+function registerTools(server, tools, { beforeCall } = {}) {
+  for (const tool of tools) {
     server.registerTool(
       tool.name,
       {
@@ -33,6 +25,7 @@ export function createServer({ api, store, localArtifacts = true, remoteWrites =
       },
       async (args) => {
         try {
+          await beforeCall?.(tool);
           const result = await tool.execute(args);
           const text = JSON.stringify(result);
           if (text.length > 120_000)
@@ -54,10 +47,10 @@ export function createServer({ api, store, localArtifacts = true, remoteWrites =
       },
     );
   }
-  for (const [name, text] of Object.entries({
-    guide,
-    metrics: metricGuide,
-  })) {
+}
+
+function registerText(server, resources, prompts) {
+  for (const [name, text] of Object.entries(resources)) {
     server.registerResource(
       name,
       `moh://${name}`,
@@ -67,12 +60,38 @@ export function createServer({ api, store, localArtifacts = true, remoteWrites =
       }),
     );
   }
-  for (const [name, text] of Object.entries(workflows)) {
-    if (!localArtifacts && ['weekly_decisions', 'community_digest'].includes(name)) continue;
+  for (const [name, text] of Object.entries(prompts)) {
     server.registerPrompt(name, { description: text }, async () => ({
       messages: [{ role: 'user', content: { type: 'text', text } }],
     }));
   }
+}
+
+export function createServer({ api, store, localArtifacts = true, remoteWrites = localArtifacts } = {}) {
+  store ??= new StateStore();
+  api ??= new MohApi({ store });
+  const guide = `${instructions}\n${storageGuidance(localArtifacts, remoteWrites)}${remoteWrites ? "\nThis connection can manage delegated jobs and apply explicitly authorized proposals. Delegated jobs may continue on their saved schedule until paused or cancelled. Omitted actor means the administrator’s personal account." : ""}`;
+  const server = new McpServer(
+    { name: serverName(api.baseUrl), version: '0.1.0' },
+    {
+      instructions: `Connected to ${api.baseUrl}. Localhost data is development data, not production business metrics.\n${guide}`,
+    },
+  );
+  registerTools(server, createTools({ api, store, localArtifacts, remoteWrites }));
+  const prompts = Object.fromEntries(Object.entries(workflows)
+    .filter(([name]) => localArtifacts || !['weekly_decisions', 'community_digest'].includes(name)));
+  registerText(server, { guide, metrics: metricGuide }, prompts);
+  return server;
+}
+
+/** Read-only catalog for Premium members. `beforeCall` enforces the daily allowance. */
+export function createMemberServer({ api, webUrl, usage, beforeCall }) {
+  const server = new McpServer(
+    { name: 'menofhunger-lodge', version: '0.1.0' },
+    { instructions: `Connected to ${api.baseUrl}.\n${memberInstructions}` },
+  );
+  registerTools(server, createMemberTools({ api, webUrl, usage }), { beforeCall });
+  registerText(server, { 'member-guide': memberInstructions }, memberWorkflows);
   return server;
 }
 

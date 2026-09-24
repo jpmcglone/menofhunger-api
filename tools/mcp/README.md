@@ -118,7 +118,9 @@ MOH_MCP_STATE_DIR = "/Users/you/.local/share/menofhunger-mcp"
 Other MCP clients can launch `node` with the same absolute server path over stdio.
 Run the server directly rather than through npm: stdout is reserved for MCP JSON-RPC.
 The desktop uses stdio; ChatGPT web uses the hosted HTTPS connection below.
-Both are private administrator integrations, not ordinary member integrations.
+The desktop server is administrator-only. The hosted connection also serves Premium
+members a separate read-only catalog; see
+[Premium members](#premium-members-read-only-lodge-connection).
 
 ## Connect ChatGPT web
 
@@ -185,6 +187,50 @@ The first two should return metadata. The last should return **401** with a
 `WWW-Authenticate` header pointing at the resource metadata. A 404 means this version
 is not deployed or the proxy is not forwarding the route. These checks prove discovery;
 the final authenticated ChatGPT handshake requires your own consent in the browser.
+
+### Premium members (read-only lodge connection)
+
+The same `/mcp` URL serves Premium and Premium+ members (grants included). Consent
+decides the catalog from the signed-in account; the client's requested scope does not:
+
+| Account | Scope | Catalog |
+| --- | --- | --- |
+| Own site administrator session | `moh:read moh:write` | Founder tools above |
+| Premium/Premium+ person, not banned | `moh:member:read` | 13 read-only member tools |
+| Anyone else, impersonated, or page-operated | none | Consent shows how to get Premium |
+
+A member grant can never reach admin tools; an administrator still gets the founder
+catalog. Premium is rechecked at redemption, refresh, and every MCP request. Losing it
+returns 401 and the refresh error asks the member to renew, then reconnect.
+
+Member tools (`tools/mcp/src/member-tools.mjs`) are `connection_status`, `me`,
+`lodge_feed`, `get_post`, `post_replies`, `member_posts`, `member_profile`,
+`search_lodge`, `my_bookmarks`, `my_notifications`, `articles`, `get_article`, and
+`bible_passage`. They call the website's own `/v1` routes through a GET-only
+allowlist, so product guards decide visibility. Results are compact projections with
+website links. Contact fields are never included, and group posts, direct messages,
+and group notifications are dropped. None of these reads mark notifications seen or
+read, record views, or log search history. The server name is `menofhunger-lodge`,
+with a `member-guide` resource and the `lodge_briefing`, `catch_up_on_thread`, and
+`who_should_i_meet` prompts. The guide tells the assistant it cannot act, and it
+should link the member to the post so he replies himself.
+
+Each member gets `MCP_MEMBER_DAILY_CALLS` tool calls per UTC day (default 200) and
+30 per minute, counted in Redis before the call runs. Listing tools, prompts, and
+resources is free. Administrators are never counted. Members set up the connection
+and see today's remaining calls at **Settings → Connect your AI**
+(`/settings/ai`), which reads `GET /v1/mcp/connection`. iOS Membership links there.
+
+The same page lists each connected AI app (client name, connected, last used, and
+expiry) and disconnects one with `DELETE /v1/mcp/connections/:connectionId`. The list
+stays visible after Premium ends so old connections can still be removed. Admins see
+and revoke a member's connections, with today's member calls, in the **AI connections**
+card on the admin user page (`GET`/`DELETE /v1/admin/users/:userId/mcp-connections`).
+Revoking deletes the grant, so every access and refresh token from it stops working,
+and ends its dedicated session. Impersonated and page-operated sessions cannot list or
+revoke. Connections are indexed per person in Redis
+(`moh:mcp:oauth:user:{userId}`); the connection ID is the grant's storage hash, not a
+credential.
 
 Ask your assistant:
 
@@ -366,8 +412,7 @@ to verify readiness. The briefing retains available sections when an optional
 endpoint is not yet deployed.
 
 Not connected in this version: payment receipts/revenue accounting, release
-history, HTTP error tracking, mobile crashes, member-facing OAuth, scheduled
-monitoring, and unsupported writes. These need their actual source integrations or
+history, HTTP error tracking, mobile crashes, scheduled monitoring, and unsupported writes. These need their actual source integrations or
 separately scoped tools. The integration never infers those facts from unrelated
 metrics. See `moh definitions` for metric-specific limits.
 
@@ -389,6 +434,9 @@ on an ephemeral loopback port. CI installs the nested package and runs its tests
 Hosted tests exercise HTTP MCP initialization/tool calls, OAuth discovery, consent,
 CSRF, PKCE, callback/resource binding, single-use codes, refresh rotation, revocation,
 admin access removal, encrypted state, and exclusion of desktop filesystem tools.
+Member tests cover the read-only catalog, the GET allowlist, redaction and group
+filtering, Premium-only consent, refusal of write scopes, loss of Premium, and the
+daily and per-minute allowance.
 
 ## In-product admin MARV
 

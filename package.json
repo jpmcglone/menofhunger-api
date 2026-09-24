@@ -23,6 +23,7 @@
     "postbuild": "node scripts/check-module-graph.mjs && node scripts/admin-coverage.mjs --check",
     "check:admin-coverage": "node scripts/admin-coverage.mjs --check",
     "check:module-graph": "node scripts/check-module-graph.mjs",
+    "check:env-docs": "node scripts/check-env-docs.mjs",
     "postinstall": "prisma generate && npm run mcp:setup",
     "seed:prod": "node scripts/seed-prod.js",
     "seed:tickers": "node scripts/seed-tickers.mjs",

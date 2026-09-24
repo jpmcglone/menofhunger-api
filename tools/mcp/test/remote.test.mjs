@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createRemoteMcp } from '../src/remote.mjs';
-import { OAuthStore, MohOAuthProvider } from '../src/oauth.mjs';
+import { OAuthStore, MohOAuthProvider, connectionManager } from '../src/oauth.mjs';
 
 class TestRedis {
   values = new Map();
@@ -17,18 +17,33 @@ class TestRedis {
   }
   async getdel(key) { const value = await this.get(key); this.values.delete(key); return value; }
   async del(key) { this.values.delete(key); }
+  async incr(key) {
+    const next = (Number(await this.get(key)) || 0) + 1;
+    this.values.set(key, { value: String(next), expires: this.values.get(key)?.expires ?? Infinity });
+    return next;
+  }
+  async expire(key, ttl) { const row = this.values.get(key); if (row) row.expires = Date.now() + ttl * 1000; }
+  async hset(key, field, value) {
+    const row = this.values.get(key) ?? { value: {}, expires: Infinity };
+    row.value[field] = value; this.values.set(key, row);
+  }
+  async hgetall(key) { return { ...((await this.get(key)) ?? {}) }; }
+  async hdel(key, field) { const hash = await this.get(key); if (hash) delete hash[field]; }
 }
 
 const callback = 'https://chatgpt.com/connector/oauth/test_callback';
-async function fixture(t) {
+async function fixture(t, { memberDailyCalls } = {}) {
   const app = express();
   const http = app.listen(0, '127.0.0.1');
   await once(http, 'listening');
   t.after(() => { http.closeAllConnections(); http.close(); });
   const origin = `http://127.0.0.1:${http.address().port}`;
   const redis = new TestRedis();
-  const sessions = new Set(['browser-admin']);
+  const sessions = new Set(['browser-admin', 'browser-member']);
+  // Dedicated sessions minted during consent inherit the browser session's person.
+  const owners = new Map([['browser-admin', 'admin'], ['browser-member', 'member']]);
   let adminEnabled = true;
+  let memberPremium = true;
   let created = 0;
   app.use((req, _res, next) => {
     req.cookies = Object.fromEntries((req.headers.cookie || '').split(';').map((part) => {
@@ -37,9 +52,16 @@ async function fixture(t) {
   });
   app.use(createRemoteMcp({ redis, secret: 'test-encryption-key', baseUrl: `${origin}/v1`,
     frontendUrl: 'https://menofhunger.com',
-    resolveAdmin: async (token) => adminEnabled && sessions.has(token) ? { id: 'founder', username: '<founder>' } : null,
-    createSession: async () => {
-      const token = `dedicated-${++created}`; sessions.add(token);
+    memberDailyCalls,
+    resolveAccount: async (token) => {
+      if (!sessions.has(token)) return null;
+      const owner = owners.get(token);
+      if (owner === 'admin') return adminEnabled ? { id: 'founder', username: '<founder>', audience: 'admin' } : null;
+      if (owner === 'member') return memberPremium ? { id: 'member-1', username: 'brother', audience: 'member' } : null;
+      return null;
+    },
+    createSession: async (userId) => {
+      const token = `dedicated-${++created}`; sessions.add(token); owners.set(token, userId === 'founder' ? 'admin' : 'member');
       return { token, expiresAt: new Date(Date.now() + 30 * 86400_000).toISOString() };
     },
     revokeSession: async (token) => { sessions.delete(token); },
@@ -50,6 +72,16 @@ async function fixture(t) {
     apiReads.push(req.headers.cookie);
     if (!sessions.has(req.cookies.moh_session)) return res.status(404).json({ data: null });
     res.json({ data: [{ id: 'f1', subject: 'Test feedback', email: 'secret@example.com' }], pagination: { nextCursor: null } });
+  });
+  app.get('/v1/auth/me', (req, res) => {
+    if (!sessions.has(req.cookies.moh_session)) return res.status(401).json({ data: null });
+    res.json({ data: { id: 'member-1', username: 'brother', premium: true, phone: '+15555550100' } });
+  });
+  app.get('/v1/posts', (req, res) => {
+    apiReads.push(req.headers.cookie);
+    if (!sessions.has(req.cookies.moh_session)) return res.status(401).json({ data: null });
+    res.json({ data: [{ id: 'p1', body: 'Up early.', author: { username: 'brother', phone: '+15555550100' } }],
+      pagination: { nextCursor: null } });
   });
   app.post('/ordinary-cookie-route', (_req, res) => res.status(403).json({ error: 'csrf' }));
   const request = (path, init = {}) => fetch(`${origin}${path}`, { ...init, redirect: 'manual' });
@@ -73,18 +105,19 @@ async function fixture(t) {
   };
   const approve = async (auth, options = {}) => {
     const id = new URL(auth.path, origin).searchParams.get('request');
+    const session = options.session ?? 'browser-admin';
     return post('/mcp/consent', { request: id, csrf: auth.cookie.split('=')[1], decision: 'allow', ...options.body }, {
-      headers: { Origin: origin, Cookie: `${auth.cookie}; moh_session=browser-admin`, ...options.headers },
+      headers: { Origin: origin, Cookie: `${auth.cookie}; moh_session=${session}`, ...options.headers },
     });
   };
   const exchange = (client, code, verifier, extra = {}) => post('/token', {
     client_id: client.client_id, client_secret: client.client_secret, grant_type: 'authorization_code',
     code, code_verifier: verifier, redirect_uri: callback, resource: `${origin}/mcp`, ...extra,
   });
-  const connect = async () => {
-    const { client } = await register();
-    const auth = await authorize(client);
-    const allowed = await approve(auth);
+  const connect = async ({ session, scope } = {}) => {
+    const { client } = await register(scope ? { scope } : {});
+    const auth = await authorize(client, scope ? { scope } : {});
+    const allowed = await approve(auth, { session });
     assert.equal(allowed.status, 303);
     const redirect = new URL(allowed.headers.get('location'));
     assert.equal(redirect.searchParams.get('state'), 'keep-this-state');
@@ -94,7 +127,9 @@ async function fixture(t) {
     return { client, auth, code, tokens: await response.json() };
   };
   return { origin, redis, sessions, apiReads, request, post, register, authorize, approve, exchange, connect,
-    disableAdmin: () => { adminEnabled = false; }, createdSessions: () => created };
+    disableAdmin: () => { adminEnabled = false; }, endPremium: () => { memberPremium = false; },
+    addSession: (token, owner) => { sessions.add(token); owners.set(token, owner); },
+    createdSessions: () => created };
 }
 
 test('OAuth discovery challenges anonymous callers; protocol handling stays on exact paths', async (t) => {
@@ -349,4 +384,143 @@ test('write authorization adds delegated mutations; refresh cannot invent unknow
   const reduction = await f.post('/token', { client_id: client.client_id, client_secret: client.client_secret,
     grant_type: 'refresh_token', refresh_token: tokens.refresh_token, scope: 'moh:read', resource: `${f.origin}/mcp` });
   assert.equal((await reduction.json()).scope, 'moh:read');
+});
+
+test('connections are listed per person and revoking one ends its tokens and session', async (t) => {
+  const f = await fixture(t);
+  const manager = connectionManager({ redis: f.redis, secret: 'test-encryption-key', resourceUrl: `${f.origin}/mcp`,
+    revokeSession: async (token) => { f.sessions.delete(token); } });
+  const first = await f.connect({ session: 'browser-member' });
+  const second = await f.connect({ session: 'browser-member' });
+  await f.connect();
+  assert.deepEqual(await manager.list('nobody'), []);
+  const admin = await manager.list('founder');
+  assert.equal(admin.length, 1);
+  assert.equal(admin[0].audience, 'admin');
+
+  await f.post('/mcp', {}, { headers: { Authorization: `Bearer ${first.tokens.access_token}` } });
+  const listed = await manager.list('member-1');
+  assert.equal(listed.length, 2);
+  assert.ok(listed.every((row) => row.clientName === 'ChatGPT' && row.audience === 'member' && /^[a-f0-9]{64}$/.test(row.id)));
+  assert.equal(listed.filter((row) => row.lastUsedAt).length, 1);
+  const stored = JSON.stringify([...f.redis.values]);
+  for (const secret of [first.tokens.access_token, first.tokens.refresh_token, 'dedicated-1'])
+    assert.equal(stored.includes(secret), false);
+
+  const used = listed.find((row) => row.lastUsedAt);
+  assert.equal(await manager.revoke('founder', used.id), false);
+  assert.equal(await manager.revoke('member-1', 'not-a-connection'), false);
+  assert.equal(await manager.revoke('member-1', used.id), true);
+  assert.equal(f.sessions.has('dedicated-1'), false);
+  assert.equal(f.sessions.has('dedicated-2'), true);
+  assert.equal((await f.post('/mcp', {}, { headers: { Authorization: `Bearer ${first.tokens.access_token}` } })).status, 401);
+  const refresh = await f.post('/token', { grant_type: 'refresh_token', client_id: first.client.client_id,
+    client_secret: first.client.client_secret, refresh_token: first.tokens.refresh_token });
+  assert.equal(refresh.status, 400);
+  assert.deepEqual((await manager.list('member-1')).map((row) => row.id), listed.filter((row) => row !== used).map((row) => row.id));
+  assert.notEqual((await f.post('/mcp', {}, { headers: { Authorization: `Bearer ${second.tokens.access_token}` } })).status, 401);
+
+  const other = connectionManager({ redis: f.redis, secret: 'test-encryption-key',
+    resourceUrl: 'https://another-environment.example/mcp', revokeSession: async () => { throw new Error('wrong environment'); } });
+  assert.deepEqual(await other.list('member-1'), []);
+  assert.equal(await other.revoke('member-1', (await manager.list('member-1'))[0].id), false);
+});
+
+test('client-initiated revocation removes the connection from the list', async (t) => {
+  const f = await fixture(t);
+  const manager = connectionManager({ redis: f.redis, secret: 'test-encryption-key', resourceUrl: `${f.origin}/mcp`,
+    revokeSession: async () => {} });
+  const { client, tokens } = await f.connect({ session: 'browser-member' });
+  assert.equal((await manager.list('member-1')).length, 1);
+  await f.post('/revoke', { client_id: client.client_id, client_secret: client.client_secret,
+    token: tokens.refresh_token, token_type_hint: 'refresh_token' });
+  assert.deepEqual(await manager.list('member-1'), []);
+});
+
+const mcpClient = async (t, f, accessToken) => {
+  const mcp = new Client({ name: 'member-remote-test', version: '1' });
+  t.after(() => mcp.close());
+  await mcp.connect(new StreamableHTTPClientTransport(new URL(`${f.origin}/mcp`), {
+    requestInit: { headers: { Authorization: `Bearer ${accessToken}` } },
+  }));
+  return mcp;
+};
+
+test('Premium member consent grants only read-only lodge access, even when a client asks for write', async (t) => {
+  const f = await fixture(t);
+  const { client } = await f.register({ scope: 'moh:read moh:write' });
+  const auth = await f.authorize(client, { scope: 'moh:read moh:write' });
+  const consent = await (await f.request(auth.path, { headers: { Cookie: `${auth.cookie}; moh_session=browser-member` } })).text();
+  assert.match(consent, /Allow read-only access/);
+  assert.match(consent, /cannot post, reply, react, follow, or message/);
+  assert.match(consent, /Up to 200 requests per day/);
+  assert.doesNotMatch(consent, /delegated/);
+  assert.doesNotMatch(consent, /analytics/);
+  const allowed = await f.approve(auth, { session: 'browser-member' });
+  const code = new URL(allowed.headers.get('location')).searchParams.get('code');
+  const tokens = await (await f.exchange(client, code, auth.verifier)).json();
+  assert.equal(tokens.scope, 'moh:member:read');
+
+  const mcp = await mcpClient(t, f, tokens.access_token);
+  const { tools } = await mcp.listTools();
+  assert.equal(tools.length, 13);
+  assert.ok(tools.every((tool) => tool.annotations.readOnlyHint));
+  assert.ok(!tools.some((tool) => ['feedback', 'publish_post', 'create_delegated_job'].includes(tool.name)));
+  const feed = await mcp.callTool({ name: 'lodge_feed', arguments: {} });
+  assert.equal(feed.structuredContent.data[0].url, 'https://menofhunger.com/p/p1');
+  assert.equal(JSON.stringify(feed).includes('+15555550100'), false);
+  assert.equal((await mcp.callTool({ name: 'feedback', arguments: {} })).isError, true);
+  assert.deepEqual(f.apiReads, ['moh_session=dedicated-1']);
+
+  const escalate = await f.post('/token', { client_id: client.client_id, client_secret: client.client_secret,
+    grant_type: 'refresh_token', refresh_token: tokens.refresh_token, scope: 'moh:write', resource: `${f.origin}/mcp` });
+  assert.equal(escalate.status, 400);
+  const adminScope = await f.post('/token', { client_id: client.client_id, client_secret: client.client_secret,
+    grant_type: 'refresh_token', refresh_token: tokens.refresh_token, scope: 'moh:read', resource: `${f.origin}/mcp` });
+  assert.equal(adminScope.status, 400);
+});
+
+test('non-Premium members see an upgrade page and cannot approve', async (t) => {
+  const f = await fixture(t);
+  f.addSession('browser-free', 'free');
+  const { client } = await f.register();
+  const auth = await f.authorize(client);
+  const page = await (await f.request(auth.path, { headers: { Cookie: `${auth.cookie}; moh_session=browser-free` } })).text();
+  assert.match(page, /Sign in to connect/);
+  assert.match(page, /Premium/);
+  assert.match(page, /\/tiers/);
+  assert.equal((await f.approve(auth, { session: 'browser-free' })).status, 400);
+  assert.equal(f.createdSessions(), 0);
+});
+
+test('losing Premium blocks issued member access and refresh tokens', async (t) => {
+  const f = await fixture(t);
+  const { client, tokens } = await f.connect({ session: 'browser-member' });
+  assert.equal(tokens.scope, 'moh:member:read');
+  f.endPremium();
+  assert.equal((await f.post('/mcp', {}, { headers: { Authorization: `Bearer ${tokens.access_token}` } })).status, 401);
+  const refresh = await f.post('/token', { grant_type: 'refresh_token', client_id: client.client_id,
+    client_secret: client.client_secret, refresh_token: tokens.refresh_token });
+  assert.equal(refresh.status, 400);
+  assert.match(JSON.stringify(await refresh.json()), /Premium access ended/);
+});
+
+test('member tool calls consume the daily allowance; admin calls are not counted', async (t) => {
+  const f = await fixture(t, { memberDailyCalls: 2 });
+  const member = await f.connect({ session: 'browser-member' });
+  const mcp = await mcpClient(t, f, member.tokens.access_token);
+  const status = await mcp.callTool({ name: 'connection_status', arguments: {} });
+  assert.equal(status.structuredContent.usage.used, 1);
+  assert.equal(status.structuredContent.usage.remaining, 1);
+  assert.equal(JSON.stringify(status).includes('+15555550100'), false);
+  assert.equal((await mcp.callTool({ name: 'lodge_feed', arguments: {} })).isError, undefined);
+  const blocked = await mcp.callTool({ name: 'lodge_feed', arguments: {} });
+  assert.equal(blocked.isError, true);
+  assert.match(blocked.content[0].text, /limit of 2 requests/);
+
+  const admin = await f.connect();
+  const adminMcp = await mcpClient(t, f, admin.tokens.access_token);
+  for (let i = 0; i < 3; i += 1)
+    assert.equal((await adminMcp.callTool({ name: 'feedback', arguments: { limit: 1 } })).isError, undefined);
+  assert.equal([...f.redis.values.keys()].some((key) => key.includes(':founder:')), false);
 });

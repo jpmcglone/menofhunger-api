@@ -595,6 +595,12 @@ export const envSchema = z.object({
     .optional()
     .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true), 'MARV_QUEUE_CONCURRENCY must be a positive number'),
 
+  // Read-only member MCP: tool calls per Premium member per UTC day (default 200).
+  MCP_MEMBER_DAILY_CALLS: z
+    .string()
+    .optional()
+    .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true), 'MCP_MEMBER_DAILY_CALLS must be a positive number'),
+
   // Email quota budget — matches the Resend free-tier hard limit (100/day).
   // Upgrade Resend and raise these to remove the constraint.
   // EMAIL_DAILY_QUOTA_LIMIT: total sends allowed per UTC day (default 100).

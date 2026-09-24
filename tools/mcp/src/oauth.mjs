@@ -3,12 +3,29 @@ import {
   InvalidClientMetadataError, InvalidGrantError, InvalidScopeError,
   InvalidTargetError, InvalidTokenError, InvalidRequestError,
 } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import { forgetConnection, listConnections, recordConnection, revokeConnection, touchConnection } from './connections.mjs';
 
 export const READ_SCOPE = 'moh:read';
 export const WRITE_SCOPE = 'moh:write';
+export const MEMBER_READ_SCOPE = 'moh:member:read';
+const KNOWN_SCOPES = new Set([READ_SCOPE, WRITE_SCOPE, MEMBER_READ_SCOPE]);
 const DAY = 86400;
+
+/** Scopes are chosen by who approves, never by what the client asked for. */
+export function scopesForAudience(audience) {
+  return audience === 'member' ? [MEMBER_READ_SCOPE] : [READ_SCOPE, WRITE_SCOPE];
+}
+
+/** Older grants predate audiences and were always administrator grants. */
+export const grantAudience = (grant) => grant?.audience === 'member' ? 'member' : 'admin';
+
+// An admin can keep using a member grant; a member can never use an admin grant.
+const accountSatisfies = (account, audience) =>
+  Boolean(account) && (account.audience === 'admin' || (audience === 'member' && account.audience === 'member'));
 const opaque = () => randomBytes(32).toString('base64url');
 const digest = (value) => createHash('sha256').update(value).digest('hex');
+/** Public connection ID: the grant's storage hash, never the grant ID itself. */
+export const connectionIdFor = digest;
 
 // Redis is shared across API instances. Tokens are indexed by hash; session material
 // and OAuth client secrets are encrypted with a domain-separated application key.
@@ -17,7 +34,8 @@ export class OAuthStore {
     this.redis = redis;
     this.key = createHash('sha256').update(`moh-mcp-oauth-v1:${secret}`).digest();
   }
-  keyFor(kind, token) { return `moh:mcp:oauth:${kind}:${digest(token)}`; }
+  keyFor(kind, token) { return this.keyForDigest(kind, digest(token)); }
+  keyForDigest(kind, hash) { return `moh:mcp:oauth:${kind}:${hash}`; }
   async put(kind, token, value, ttl) {
     const key = this.keyFor(kind, token);
     const iv = randomBytes(12);
@@ -29,7 +47,11 @@ export class OAuthStore {
   }
   async get(kind, token, consume = false) {
     if (typeof token !== 'string' || token.length > 200) return null;
-    const key = this.keyFor(kind, token);
+    return this.read(this.keyFor(kind, token), consume);
+  }
+  async getByDigest(kind, hash) { return this.read(this.keyForDigest(kind, hash)); }
+  async removeByDigest(kind, hash) { await this.redis.del(this.keyForDigest(kind, hash)); }
+  async read(key, consume = false) {
     const encoded = consume
       ? await this.redis.getdel(key)
       : await this.redis.get(key);
@@ -67,13 +89,17 @@ export function isAllowedOAuthRedirectUri(uri) {
 export const MAX_OAUTH_REDIRECT_URIS = 10;
 
 export class MohOAuthProvider {
-  constructor({ store, resourceUrl, resolveAdmin, createSession, revokeSession }) {
-    Object.assign(this, { store, resourceUrl, resolveAdmin, createSession, revokeSession });
+  constructor({ store, resourceUrl, resolveAccount, resolveAdmin, createSession, revokeSession }) {
+    resolveAccount ??= async (token) => {
+      const admin = await resolveAdmin(token);
+      return admin ? { ...admin, audience: 'admin' } : null;
+    };
+    Object.assign(this, { store, resourceUrl, resolveAccount, createSession, revokeSession });
     this.clientsStore = {
       getClient: (id) => store.get('client', id),
       registerClient: async (client) => {
-        // This is a private founder integration. DCR cannot introduce arbitrary
-        // redirect hosts; each registered callback still needs an exact match.
+        // DCR cannot introduce arbitrary redirect hosts; each registered
+        // callback still needs an exact match.
         if (!client.redirect_uris?.length || client.redirect_uris.length > MAX_OAUTH_REDIRECT_URIS ||
           !client.redirect_uris.every(isAllowedOAuthRedirectUri))
           throw new InvalidClientMetadataError('Use an allowlisted ChatGPT or Cursor OAuth callback URL shown in connection settings.');
@@ -91,8 +117,8 @@ export class MohOAuthProvider {
       throw new InvalidTargetError('Resource must match this Men of Hunger MCP endpoint.');
   }
   checkScopes(scopes) {
-    if (scopes?.some((scope) => scope !== READ_SCOPE && scope !== WRITE_SCOPE))
-      throw new InvalidScopeError('Only moh:read and moh:write are supported.');
+    if (scopes?.some((scope) => !KNOWN_SCOPES.has(scope)))
+      throw new InvalidScopeError('Only moh:read, moh:write, and moh:member:read are supported.');
   }
   async authorize(client, params, res) {
     this.checkResource(params.resource, true);
@@ -104,7 +130,6 @@ export class MohOAuthProvider {
     await this.store.put('request', request, {
       clientId: client.client_id, clientName: client.client_name || 'MCP client',
       redirectUri: params.redirectUri, state: params.state,
-      scopes: [...new Set([READ_SCOPE, WRITE_SCOPE, ...(params.scopes ?? [])])],
       challenge: params.codeChallenge, csrfHash: digest(csrf), resourceUrl: this.resourceUrl,
     }, 600);
     res.cookie('moh_mcp_consent', csrf, {
@@ -121,8 +146,8 @@ export class MohOAuthProvider {
   }
   async consent(request, csrf, sessionToken, allow) {
     const pending = await this.consentRequest(request, csrf);
-    const admin = await this.resolveAdmin(sessionToken);
-    if (!admin) throw new InvalidGrantError('Sign in with your own site administrator account.');
+    const account = await this.resolveAccount(sessionToken);
+    if (!account) throw new InvalidGrantError('Sign in with your own Premium or administrator account.');
     // Consume only after auth/CSRF validation. GETDEL prevents simultaneous approvals.
     if (!(await this.store.get('request', request, true)))
       throw new InvalidRequestError('Connection request was already used.');
@@ -134,8 +159,9 @@ export class MohOAuthProvider {
     }
     const code = opaque();
     // Create the dedicated product session only when the code is redeemed.
-    // Binding the code to the approving browser session rechecks admin privileges then.
-    await this.store.put('code', code, { ...pending, sessionToken, userId: admin.id }, 120);
+    // Binding the code to the approving browser session rechecks access then.
+    await this.store.put('code', code, { ...pending, sessionToken, userId: account.id,
+      audience: account.audience, scopes: scopesForAudience(account.audience) }, 120);
     callback.searchParams.set('code', code);
     return callback.href;
   }
@@ -151,15 +177,19 @@ export class MohOAuthProvider {
     this.checkResource(resource);
     const pending = await this.codeFor(client, code);
     if (redirectUri !== pending.redirectUri) throw new InvalidGrantError('Redirect URI does not match.');
-    const admin = await this.resolveAdmin(pending.sessionToken);
-    if (!admin || admin.id !== pending.userId) throw new InvalidGrantError('Administrator session is no longer valid.');
+    const audience = grantAudience(pending);
+    const account = await this.resolveAccount(pending.sessionToken);
+    if (!accountSatisfies(account, audience) || account.id !== pending.userId)
+      throw new InvalidGrantError('Your Men of Hunger session is no longer valid.');
     if (!(await this.store.get('code', code, true))) throw new InvalidGrantError('Authorization code was already used.');
-    const session = await this.createSession(admin.id);
+    const session = await this.createSession(account.id);
     const grantId = opaque();
-    const grant = { scopes: pending.scopes ?? [READ_SCOPE], clientId: client.client_id, userId: admin.id, sessionToken: session.token, resourceUrl: this.resourceUrl,
+    const grant = { audience, scopes: pending.scopes ?? scopesForAudience(audience), clientId: client.client_id,
+      userId: account.id, sessionToken: session.token, resourceUrl: this.resourceUrl,
       expiresAt: Math.min(Date.now() / 1000 + 30 * DAY, Date.parse(session.expiresAt) / 1000) };
     try {
       await this.store.put('grant', grantId, grant, grant.expiresAt - Date.now() / 1000);
+      await recordConnection(this.store.redis, account.id, digest(grantId), { clientName: pending.clientName, audience });
       return await this.issueTokens(grantId, grant);
     } catch (error) {
       await this.revokeSession(session.token);
@@ -169,8 +199,11 @@ export class MohOAuthProvider {
   async grantFor(grantId) {
     const grant = await this.store.get('grant', grantId);
     if (!grant || grant.resourceUrl !== this.resourceUrl || grant.expiresAt <= Date.now() / 1000) throw new InvalidGrantError('Connection expired. Reconnect in your MCP client.');
-    const admin = await this.resolveAdmin(grant.sessionToken);
-    if (!admin || admin.id !== grant.userId) throw new InvalidGrantError('Administrator access was revoked.');
+    const account = await this.resolveAccount(grant.sessionToken);
+    if (!accountSatisfies(account, grantAudience(grant)) || account.id !== grant.userId)
+      throw new InvalidGrantError(grantAudience(grant) === 'member'
+        ? 'Premium access ended. Renew Premium, then reconnect.'
+        : 'Administrator access was revoked.');
     return grant;
   }
   async issueTokens(grantId, grant) {
@@ -190,7 +223,9 @@ export class MohOAuthProvider {
     if (scopes?.some(scope => !(grant.scopes ?? [READ_SCOPE]).includes(scope))) throw new InvalidScopeError('Reconnect to request additional permissions.');
     if (!(await this.store.get('refresh', token, true))) throw new InvalidGrantError('Refresh token was already used.');
     if (scopes?.length) {
-      grant.scopes = [...new Set([READ_SCOPE, ...scopes])];
+      // Narrowing keeps the audience's base read scope; it never crosses audiences.
+      const base = scopesForAudience(grantAudience(grant))[0];
+      grant.scopes = [...new Set([base, ...scopes])];
       await this.store.put('grant', refresh.grantId, grant, grant.expiresAt - Date.now() / 1000);
     }
     return this.issueTokens(refresh.grantId, grant);
@@ -201,11 +236,13 @@ export class MohOAuthProvider {
     let grant;
     try { grant = await this.grantFor(access.grantId); }
     catch (error) {
-      if (error instanceof InvalidGrantError) throw new InvalidTokenError('Connection expired or administrator access revoked.');
+      if (error instanceof InvalidGrantError) throw new InvalidTokenError('Connection expired or access was revoked.');
       throw error;
     }
+    await touchConnection(this.store.redis, grant.userId, digest(access.grantId));
     return { token, clientId: grant.clientId, scopes: grant.scopes ?? [READ_SCOPE], expiresAt: access.expiresAt,
-      resource: new URL(this.resourceUrl), extra: { sessionToken: grant.sessionToken, userId: grant.userId } };
+      resource: new URL(this.resourceUrl),
+      extra: { sessionToken: grant.sessionToken, userId: grant.userId, audience: grantAudience(grant) } };
   }
   async revokeToken(client, { token }) {
     const record = await this.store.get('refresh', token) || await this.store.get('access', token);
@@ -213,6 +250,16 @@ export class MohOAuthProvider {
     const grant = await this.store.get('grant', record.grantId);
     if (!grant || grant.resourceUrl !== this.resourceUrl || grant.clientId !== client.client_id) return;
     await this.store.remove('grant', record.grantId);
+    await forgetConnection(this.store.redis, grant.userId, digest(record.grantId));
     await this.revokeSession(grant.sessionToken);
   }
+}
+
+/** List and revoke a person's hosted connections from product settings and admin screens. */
+export function connectionManager({ redis, secret, resourceUrl, revokeSession }) {
+  const store = new OAuthStore(redis, secret);
+  return {
+    list: (userId) => listConnections(store, userId, resourceUrl),
+    revoke: (userId, connectionId) => revokeConnection(store, { userId, connectionId, resourceUrl, revokeSession }),
+  };
 }
