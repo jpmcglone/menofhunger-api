@@ -1,3 +1,4 @@
+import { PosthogService } from '../../common/posthog/posthog.service';
 import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { Prisma, VerificationRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -12,6 +13,7 @@ export class VerificationService {
     private readonly prisma: PrismaService,
     private readonly slack: SlackService,
     private readonly userVerification: UserVerificationService,
+    private readonly posthog: PosthogService,
   ) {}
 
   async createRequestForUser(params: { userId: string | null; providerHint: string | null }) {
@@ -44,8 +46,10 @@ export class VerificationService {
       },
     });
 
+    this.posthog.capture(userId, 'verification_requested', { $insert_id: `verification-request:${created.id}` });
     this.slack.notifyVerificationRequested({ userId, providerHint: provider });
     await this.userVerification.notifyAdminQueueChanged('created', created.id);
+    await this.userVerification.notifyMemberChanged(userId);
 
     return created;
   }
@@ -210,7 +214,8 @@ export class VerificationService {
       if (existing.status !== 'pending') throw new BadRequestException('This verification request is not pending.');
 
       return await tx.verificationRequest.update({
-        where: { id },
+        // A concurrent approval must never be overwritten by a stale rejection.
+        where: { id, status: 'pending' },
         data: {
           status: 'rejected',
           reviewedAt: now,
@@ -226,6 +231,7 @@ export class VerificationService {
     });
 
     await this.userVerification.notifyAdminQueueChanged('reviewed', updated.id);
+    await this.userVerification.notifyMemberChanged(updated.userId);
 
     return updated;
   }

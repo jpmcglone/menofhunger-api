@@ -382,7 +382,7 @@ export class AuthService {
     this.presence.markSeenFromHttp(user.id);
 
     if (isNewUser) {
-      this.posthog.capture(user.id, 'user_signed_up', { phone_masked: this.maskPhone(phone) });
+      this.posthog.capture(user.id, 'user_signed_up');
       this.slack.notifySignup({ userId: user.id });
 
       // Auto-verify (coins, affiliate earnings, billing hooks) never blocks a signup.

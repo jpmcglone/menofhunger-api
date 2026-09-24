@@ -1,5 +1,6 @@
 import { DelegationRunnerService } from '../admin/delegation/delegation-runner.service';
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
+import { reportJobFailure } from '../../common/sentry/report-job-failure';
 import type { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
 import { MOH_BACKGROUND_QUEUE, JOBS } from './jobs.constants';
@@ -234,6 +235,11 @@ export class JobsProcessor extends WorkerHost {
       // Keep logs concise; job-specific cron runners already log details when meaningful.
       this.logger.debug(`Job ${name} done (${ms}ms)`);
     }
+  }
+
+  @OnWorkerEvent('failed')
+  onFailed(job: Job | undefined, error: Error) {
+    reportJobFailure(MOH_BACKGROUND_QUEUE, job, error);
   }
 }
 

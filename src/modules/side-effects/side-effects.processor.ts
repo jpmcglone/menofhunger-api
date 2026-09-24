@@ -1,6 +1,7 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger, type OnModuleInit } from '@nestjs/common';
 import type { Job } from 'bullmq';
+import { reportJobFailure } from '../../common/sentry/report-job-failure';
 import { AppConfigService } from '../app/app-config.service';
 import { MOH_SIDE_EFFECTS_QUEUE, type SideEffectName } from './side-effects.constants';
 import { SideEffectsRegistry } from './side-effects.registry';
@@ -58,5 +59,10 @@ export class SideEffectsProcessor extends WorkerHost implements OnModuleInit {
     } finally {
       this.logger.debug(`[side-effects] ${name} done (${Date.now() - startedAt}ms)`);
     }
+  }
+
+  @OnWorkerEvent('failed')
+  onFailed(job: Job | undefined, error: Error) {
+    reportJobFailure(MOH_SIDE_EFFECTS_QUEUE, job, error);
   }
 }

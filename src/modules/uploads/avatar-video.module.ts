@@ -1,8 +1,9 @@
 import { Injectable, Logger, Module } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { AppConfigService } from '../app/app-config.service';
-import { BullModule, Processor, WorkerHost } from '@nestjs/bullmq';
+import { BullModule, OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import type { Job } from 'bullmq';
+import { reportJobFailure } from '../../common/sentry/report-job-failure';
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -39,6 +40,8 @@ export class AvatarVideoProcessor extends WorkerHost {
       throw error;
     }
   }
+  @OnWorkerEvent('failed')
+  onFailed(job: Job | undefined, error: Error) { reportJobFailure(AVATAR_VIDEO_QUEUE, job, error); }
 }
 
 @Module({ imports: [AvatarVideoModule], providers: [AvatarVideoProcessor] })

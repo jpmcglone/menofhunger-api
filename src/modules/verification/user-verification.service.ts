@@ -1,3 +1,4 @@
+import { PosthogService } from '../../common/posthog/posthog.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { BillingService } from '../billing/billing.service';
@@ -37,6 +38,7 @@ export class UserVerificationService {
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly posthog: PosthogService,
   ) {}
 
   async verifyUser(params: {
@@ -86,9 +88,10 @@ export class UserVerificationService {
       return { verified: false, alreadyVerified: true, userId, previousUnverifiedAt };
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.user.update({
-        where: { id: userId },
+    const newlyVerified = await this.prisma.$transaction(async (tx) => {
+      // Only one concurrent approval owns rewards and notifications.
+      const changed = await tx.user.updateMany({
+        where: { id: userId, verifiedStatus: 'none' },
         data: {
           verifiedStatus: status,
           verifiedAt: now,
@@ -108,6 +111,17 @@ export class UserVerificationService {
           rejectionReason: null,
         },
       });
+      return changed.count > 0;
+    });
+
+    if (!newlyVerified) {
+      await this.notifyAdminQueueChanged('reviewed', params.requestId);
+      await this.notifyMemberChanged(userId);
+      return { verified: false, alreadyVerified: true, userId, previousUnverifiedAt };
+    }
+
+    this.posthog.capture(userId, 'verification_approved', {
+      source: params.source, $insert_id: `verification-approved:${userId}:${now.toISOString()}`,
     });
 
     try {
@@ -149,6 +163,15 @@ export class UserVerificationService {
 
     this.logger.log(`[verification] Verified user ${userId} via ${params.source}`);
     return { verified: true, alreadyVerified: false, userId, previousUnverifiedAt };
+  }
+
+  /** Invalidate member progress even when a request changes but the badge does not. */
+  async notifyMemberChanged(userId: string): Promise<void> {
+    try {
+      await this.usersMeRealtime.emitMeUpdated(userId, 'verification_status_changed');
+    } catch (error) {
+      this.logger.warn(`Could not refresh member verification state: ${error}`);
+    }
   }
 
   /** Every admin sees queue changes, including approvals outside the request screen. */

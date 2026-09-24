@@ -414,6 +414,25 @@ export const envSchema = z.object({
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional().default('https://us.i.posthog.com'),
   ),
+  POSTHOG_FEATURE_FLAGS_KEY: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+
+  // Sentry error + performance monitoring (optional; disabled when SENTRY_DSN is unset).
+  // Read directly in src/instrument.ts, which runs before Nest config is available.
+  SENTRY_DSN: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().url().optional(),
+  ),
+  SENTRY_ENVIRONMENT: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  SENTRY_TRACES_SAMPLE_RATE: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.coerce.number().min(0).max(1).optional(),
+  ),
 
   // ─── Marv (AI helper) ────────────────────────────────────────────────────
   // Global on/off. Defaults to true; admin UI can override via MarvinGlobalSettings row.

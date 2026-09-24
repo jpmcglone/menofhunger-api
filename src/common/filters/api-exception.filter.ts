@@ -1,6 +1,15 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
+import * as Sentry from '@sentry/nestjs';
 import type { Response } from 'express';
 import { ZodError } from 'zod';
+
+function reportToSentry(exception: unknown, requestId: string | null, userId: unknown) {
+  Sentry.withScope((scope) => {
+    if (requestId) scope.setTag('request_id', requestId);
+    if (typeof userId === 'string' && userId) scope.setUser({ id: userId });
+    Sentry.captureException(exception);
+  });
+}
 
 type ApiError = {
   code: number;
@@ -64,6 +73,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
     // Nest HTTP exceptions
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
+      if (status >= 500) reportToSentry(exception, requestId, req?.user?.id);
       const { message, reason } = extractHttpMessage(exception);
       const payload: ErrorEnvelope = {
         meta: {
@@ -85,6 +95,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
     // IMPORTANT: We still return a safe error envelope, but log the underlying error for debugging.
     // eslint-disable-next-line no-console
     console.error('[API] Unhandled exception', { requestId }, exception);
+    reportToSentry(exception, requestId, req?.user?.id);
     const payload: ErrorEnvelope = {
       meta: {
         status: HttpStatus.INTERNAL_SERVER_ERROR,

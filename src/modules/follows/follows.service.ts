@@ -728,7 +728,7 @@ export class FollowsService {
     };
   }
 
-  async follow(params: { viewerUserId: string; username: string }) {
+  async follow(params: { viewerUserId: string; username: string; source?: 'starter' | 'member' }) {
     const { viewerUserId, username } = params;
     await this.viewerContext.assertUserIdNotBanned(viewerUserId);
     const target = await this.userByUsernameOrThrow(username);
@@ -750,7 +750,7 @@ export class FollowsService {
     }
 
     if (created) {
-      this.posthog.capture(viewerUserId, 'follow_created', { target_user_id: target.id });
+      this.posthog.capture(viewerUserId, 'follow_created', { target_user_id: target.id, source: params.source ?? 'member' });
       this.sideEffects.dispatch('follow.created', {
         actorUserId: viewerUserId,
         targetUserId: target.id,

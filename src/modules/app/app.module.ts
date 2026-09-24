@@ -2,6 +2,7 @@ import { AvatarVideoModule, AvatarVideoConsumersModule } from '../uploads/avatar
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
+import { SentryModule } from '@sentry/nestjs/setup';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bullmq';
@@ -76,6 +77,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
 
 @Module({
   imports: [
+    SentryModule.forRoot(),
     ScheduleModule.forRoot(),
     RequestCacheModule,
     ConfigModule.forRoot({

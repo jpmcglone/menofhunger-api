@@ -1,6 +1,7 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger, type OnModuleInit } from '@nestjs/common';
 import type { Job } from 'bullmq';
+import { reportJobFailure } from '../../common/sentry/report-job-failure';
 import { JOBS, MOH_MARVIN_QUEUE } from '../jobs/jobs.constants';
 import { MarvinPublicReplyProcessor } from './jobs/marvin-public-reply.processor';
 import { MarvinPrivateReplyProcessor } from './jobs/marvin-private-reply.processor';
@@ -94,5 +95,10 @@ export class MarvinProcessor extends WorkerHost implements OnModuleInit {
       const ms = Date.now() - startedAt;
       this.logger.debug(`Marv job ${name} done (${ms}ms)`);
     }
+  }
+
+  @OnWorkerEvent('failed')
+  onFailed(job: Job | undefined, error: Error) {
+    reportJobFailure(MOH_MARVIN_QUEUE, job, error);
   }
 }

@@ -14,7 +14,7 @@ type Deps = {
 
 function makeDeps(overrides: Partial<Deps> = {}): Deps {
   const tx = {
-    user: { update: jest.fn(async () => ({})) },
+    user: { updateMany: jest.fn(async () => ({ count: 1 })) },
     verificationRequest: { updateMany: jest.fn(async () => ({ count: 2 })) },
   };
   return {
@@ -54,6 +54,7 @@ function makeService(overrides: Partial<Deps> = {}) {
     deps.usersMeRealtime,
     deps.usersPublicRealtime,
     deps.presenceRealtime,
+    { capture: jest.fn() } as any,
   );
   return { service, deps };
 }
@@ -151,5 +152,25 @@ describe('UserVerificationService.verifyUser', () => {
       action: 'reviewed',
       id: 'vr1',
     });
+  });
+});
+
+ describe('concurrent approval', () => {
+  it('resolves pending requests without repeating rewards when another approval won', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue({ id: 'u1', verifiedStatus: 'none' });
+    deps.prisma.__tx.user.updateMany.mockResolvedValue({ count: 0 });
+    const result = await service.verifyUser({ userId: 'u1', source: 'admin_patch', adminUserId: 'a1' });
+    expect(result.alreadyVerified).toBe(true);
+    expect(deps.prisma.__tx.user.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'u1', verifiedStatus: 'none' },
+    }));
+    expect(deps.prisma.__tx.verificationRequest.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: 'u1', status: 'pending' },
+      data: expect.objectContaining({ status: 'approved', reviewedByAdminId: 'a1', reviewedAt: expect.any(Date) }),
+    }));
+    expect(deps.coins.giftVerificationCoins).not.toHaveBeenCalled();
+    expect(deps.billing.onUserVerified).not.toHaveBeenCalled();
+    expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();
   });
 });

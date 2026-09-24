@@ -57,6 +57,19 @@ export type AccountDeletionStatusDto = {
   completedAt: string | null;
 };
 
+// ─── src/common/dto/activation.dto.ts ──────────────────────────────────────────
+
+/** Confirmed, current onboarding progress. Participation uses UTC calendar days. */
+export type ActivationDto = {
+  phase: 'before_approval' | 'approved';
+  verificationRequested: boolean;
+  verificationPending: boolean;
+  followed: boolean;
+  contributed: boolean;
+  replied: boolean;
+  returned: boolean;
+};
+
 // ─── src/common/dto/admin-analytics.dto.ts ─────────────────────────────────────
 
 export type AnalyticsRange = '7d' | '30d' | '3m' | '1y' | 'all';

@@ -1,3 +1,5 @@
+import { ActivationController } from './activation.controller';
+import { ActivationService } from './activation.service';
 import { UsersProfileWriteService } from './users-profile-write.service';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
@@ -15,8 +17,9 @@ import { PublicProfilesService } from './public-profiles.service';
 
 @Module({
   imports: [AuthModule, FollowsModule, NotificationsModule, RealtimeModule, EmailModule],
-  controllers: [UsersController],
+  controllers: [ActivationController, UsersController],
   providers: [
+    ActivationService,
     UsersProfileWriteService,
     PublicProfileCacheService,
     UsersRealtimeService,

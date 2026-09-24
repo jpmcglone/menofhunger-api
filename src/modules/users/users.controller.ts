@@ -230,7 +230,7 @@ export class UsersController {
     // First: one-way follow to @menofhunger (if account exists).
     if (usernameLower !== MENOFHUNGER_USERNAME) {
       try {
-        await this.followsService.follow({ viewerUserId: userId, username: MENOFHUNGER_USERNAME });
+        await this.followsService.follow({ viewerUserId: userId, username: MENOFHUNGER_USERNAME, source: 'starter' });
         // New users: enable reply notifications for starter follows.
         await this.followsService.setPostNotificationsEnabled({
           viewerUserId: userId,
@@ -254,7 +254,7 @@ export class UsersController {
     if (!john) return;
 
     try {
-      await this.followsService.follow({ viewerUserId: userId, username: JOHN_USERNAME });
+      await this.followsService.follow({ viewerUserId: userId, username: JOHN_USERNAME, source: 'starter' });
       // New users: enable reply notifications for starter follows.
       await this.followsService.setPostNotificationsEnabled({
         viewerUserId: userId,
@@ -266,7 +266,7 @@ export class UsersController {
     }
 
     try {
-      await this.followsService.follow({ viewerUserId: john.id, username: newUsername.trim() });
+      await this.followsService.follow({ viewerUserId: john.id, username: newUsername.trim(), source: 'starter' });
     } catch {
       // Idempotent or visibility; ignore.
     }

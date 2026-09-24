@@ -1,3 +1,4 @@
+import { captureMemberParticipation } from '../../common/posthog/member-participation';
 import { assertPublishableText } from '../../common/moderation/content-filter';
 import { requireAiConsent } from '../marvin/services/ai-consent';
 import { isCheckinOpen, CHECKIN_CLOSED_MESSAGE } from '../checkins/checkin-schedule';
@@ -762,7 +763,7 @@ export class PostsMutationService {
       parentId
         ? this.prisma.post.findFirst({
             where: { id: parentId, ...notDeletedWhere() },
-            select: { id: true, userId: true, visibility: true, rootId: true, topics: true, communityGroupId: true },
+            select: { id: true, userId: true, visibility: true, rootId: true, topics: true, communityGroupId: true, user: { select: { isBot: true } } },
           })
         : Promise.resolve(null),
     ]);
@@ -1458,6 +1459,12 @@ export class PostsMutationService {
       has_media: (params.media?.length ?? 0) > 0,
       has_poll: Boolean(params.poll),
       is_reply: Boolean(parentId),
+    });
+
+    captureMemberParticipation(this.posthog, {
+      id: post.id, userId, kind, visibility, isBot: Boolean(author.isBot),
+      verifiedStatus: author.verifiedStatus, parentId,
+      parentAuthorId: parentAuthorUserId, parentIsBot: parentPost?.user?.isBot,
     });
 
     return { post, streakReward: streakRewardOut };

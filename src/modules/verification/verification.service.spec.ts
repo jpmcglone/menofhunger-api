@@ -36,7 +36,7 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
       __tx: tx,
     },
     slack: { notifyVerificationRequested: jest.fn() },
-    userVerification: { notifyAdminQueueChanged: jest.fn(async () => undefined),
+    userVerification: { notifyMemberChanged: jest.fn(async () => undefined), notifyAdminQueueChanged: jest.fn(async () => undefined),
       verifyUser: jest.fn(async () => ({ verified: true, alreadyVerified: false })) },
     ...overrides,
   };
@@ -48,6 +48,7 @@ function makeService(overrides: Partial<Deps> = {}) {
     deps.prisma,
     deps.slack,
     deps.userVerification,
+    { capture: jest.fn() } as any,
   );
   return { service, deps };
 }
@@ -240,6 +241,9 @@ describe('VerificationService.rejectAdmin', () => {
     });
 
     expect(result).toBe(updated);
+    expect(deps.prisma.__tx.verificationRequest.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'vr1', status: 'pending' },
+    }));
     expect(deps.userVerification.notifyAdminQueueChanged).toHaveBeenCalledWith('reviewed', 'vr1');
   });
 });

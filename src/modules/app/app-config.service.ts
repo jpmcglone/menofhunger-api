@@ -662,6 +662,12 @@ export class AppConfigService {
     return (this.config.get<string>('POSTHOG_HOST')?.trim() || 'https://us.i.posthog.com').trim();
   }
 
+  /** PostHog "Feature flags secure API key" (phs_…); enables local flag evaluation. */
+  posthogFeatureFlagsKey(): string | null {
+    const v = this.config.get<string>('POSTHOG_FEATURE_FLAGS_KEY')?.trim() ?? '';
+    return v ? v : null;
+  }
+
   // ─── Marv (AI helper) ────────────────────────────────────────────────────
 
   marvBot(): MarvBotConfig {

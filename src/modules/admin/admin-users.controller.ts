@@ -596,7 +596,7 @@ export class AdminUsersController {
   }
 
   @Patch(':id/profile')
-  async updateUser(@Param('id') id: string, @Body() body: unknown) {
+  async updateUser(@Param('id') id: string, @Body() body: unknown, @Req() req: AdminRequest) {
     const parsed = updateUserSchema.parse(body);
 
     const current = await this.prisma.user.findUnique({
@@ -605,6 +605,7 @@ export class AdminUsersController {
         id: true,
         username: true,
         verifiedStatus: true,
+        verifiedAt: true,
         unverifiedAt: true,
         premium: true,
         premiumPlus: true,
@@ -718,7 +719,7 @@ export class AdminUsersController {
       } else if (!isNewlyVerifying) {
         // Already verified: allow identity ↔ manual without re-running verify side effects.
         data.verifiedStatus = parsed.verifiedStatus;
-        data.verifiedAt = now;
+        data.verifiedAt = current.verifiedAt ?? now;
         data.unverifiedAt = null;
       }
       // Newly verifying: handled by UserVerificationService after the other field updates.
@@ -736,6 +737,7 @@ export class AdminUsersController {
           await this.userVerification.verifyUser({
             userId: id,
             source: 'admin_patch',
+            adminUserId: req.user?.id,
             verifiedStatus: parsed.verifiedStatus === 'identity' ? 'identity' : 'manual',
           });
         } else if (wasVerified && !nowVerified) {
@@ -743,7 +745,7 @@ export class AdminUsersController {
           await this.billingService.onUserUnverified(id);
         } else if (wasVerified && nowVerified) {
           // Keep stale requests closed without repeating verification rewards.
-          await this.userVerification.verifyUser({ userId: id, source: 'admin_patch' });
+          await this.userVerification.verifyUser({ userId: id, source: 'admin_patch', adminUserId: req.user?.id });
           await this.entitlementService.recomputeAndApply(id);
         }
       }
