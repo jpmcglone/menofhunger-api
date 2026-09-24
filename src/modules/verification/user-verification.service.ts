@@ -1,6 +1,7 @@
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuthService } from '../auth/auth.service';
 import { BillingService } from '../billing/billing.service';
 import { AffiliateService } from '../billing/affiliate.service';
 import { CoinsService } from '../coins/coins.service';
@@ -39,6 +40,7 @@ export class UserVerificationService {
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly posthog: PosthogService,
+    private readonly auth: AuthService,
   ) {}
 
   async verifyUser(params: {
@@ -84,6 +86,8 @@ export class UserVerificationService {
           ...(params.adminNote != null ? { adminNote: params.adminNote } : {}),
         },
       });
+      await this.auth.bustSessionCachesForUser(userId);
+      await this.notifyMemberChanged(userId);
       await this.notifyAdminQueueChanged('reviewed', params.requestId);
       return { verified: false, alreadyVerified: true, userId, previousUnverifiedAt };
     }
@@ -114,9 +118,13 @@ export class UserVerificationService {
       return changed.count > 0;
     });
 
+    // Guards seed posting permissions from the cached session. Clear every device's
+    // snapshot before telling the member verification has unlocked their account.
+    await this.auth.bustSessionCachesForUser(userId);
+    await this.notifyMemberChanged(userId);
+
     if (!newlyVerified) {
       await this.notifyAdminQueueChanged('reviewed', params.requestId);
-      await this.notifyMemberChanged(userId);
       return { verified: false, alreadyVerified: true, userId, previousUnverifiedAt };
     }
 
@@ -156,7 +164,6 @@ export class UserVerificationService {
     try {
       await this.notifyAdminQueueChanged('reviewed', params.requestId);
       await this.usersPublicRealtime.emitPublicProfileUpdated(userId);
-      void this.usersMeRealtime.emitMeUpdated(userId, 'verification_status_changed');
     } catch {
       // Best-effort
     }

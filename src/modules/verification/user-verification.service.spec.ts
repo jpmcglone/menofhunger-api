@@ -1,6 +1,7 @@
 import { UserVerificationService } from './user-verification.service';
 
 type Deps = {
+  auth: any;
   prisma: any;
   billing: any;
   affiliate: any;
@@ -18,6 +19,7 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
     verificationRequest: { updateMany: jest.fn(async () => ({ count: 2 })) },
   };
   return {
+    auth: { bustSessionCachesForUser: jest.fn(async () => undefined) },
     prisma: {
       user: {
         findUnique: jest.fn(),
@@ -55,6 +57,7 @@ function makeService(overrides: Partial<Deps> = {}) {
     deps.usersPublicRealtime,
     deps.presenceRealtime,
     { capture: jest.fn() } as any,
+    deps.auth,
   );
   return { service, deps };
 }
@@ -123,6 +126,7 @@ describe('UserVerificationService.verifyUser', () => {
       const { service, deps } = makeService();
       deps.prisma.user.findUnique.mockResolvedValue({ id: 'u1', verifiedStatus: 'none' });
       await service.verifyUser({ userId: 'u1', source, requestId: 'vr1' });
+      expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith('u1');
       const write = deps.prisma.__tx.verificationRequest.updateMany.mock.calls[0][0];
       expect(write.where).toEqual({ userId: 'u1', status: 'pending' });
       expect(write.data.status).toBe('approved');
@@ -130,6 +134,36 @@ describe('UserVerificationService.verifyUser', () => {
       expect(deps.presenceRealtime.emitAdminUpdated).toHaveBeenCalledTimes(2);
     },
   );
+
+  it('waits for session invalidation before publishing verification or running rewards', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue({ id: 'u1', verifiedStatus: 'none' });
+    let release!: () => void;
+    let started!: () => void;
+    const invalidating = new Promise<void>((resolve) => { started = resolve; });
+    deps.auth.bustSessionCachesForUser.mockImplementation(() => {
+      started();
+      return new Promise<void>((resolve) => { release = resolve; });
+    });
+
+    const approval = service.verifyUser({ userId: 'u1', source: 'admin_request' });
+    await invalidating;
+    expect(deps.prisma.__tx.user.updateMany).toHaveBeenCalled();
+    expect(deps.usersMeRealtime.emitMeUpdated).not.toHaveBeenCalled();
+    expect(deps.billing.onUserVerified).not.toHaveBeenCalled();
+    release();
+    await approval;
+    expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith('u1');
+    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith('u1', 'verification_status_changed');
+  });
+
+  it('delivers the member update even if public profile broadcasting fails', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue({ id: 'u1', verifiedStatus: 'none' });
+    deps.usersPublicRealtime.emitPublicProfileUpdated.mockRejectedValue(new Error('broadcast failed'));
+    await service.verifyUser({ userId: 'u1', source: 'admin_request' });
+    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith('u1', 'verification_status_changed');
+  });
 
   it('emits admin:updated when approving a request', async () => {
     const { service, deps } = makeService();

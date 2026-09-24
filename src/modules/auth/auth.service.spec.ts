@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { RedisKeys } from '../redis/redis-keys';
 import { AuthService } from './auth.service';
 import {
   AUTH_COOKIE_NAME,
@@ -131,7 +132,7 @@ function makeService(overrides?: { prisma?: any }) {
 
   const sideEffects = { dispatch: jest.fn() } as any;
   const svc = new AuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack, requestCache, presence, presenceRealtime, sideEffects);
-  return { svc, prisma, token, tokenHash, presence, posthog, sideEffects };
+  return { svc, prisma, token, tokenHash, presence, posthog, sideEffects, redis, cacheInvalidation, requestCache };
 }
 
 // ---------------------------------------------------------------------------
@@ -1240,5 +1241,38 @@ describe('revokeAllSessionsForUser', () => {
 
     expect(cacheInvalidation.deleteSessionFull).toHaveBeenCalledWith(targetHash);
     expect(cacheInvalidation.deleteSessionUser).toHaveBeenCalledWith(targetHash);
+  });
+});
+
+
+describe('verification session cache refresh', () => {
+  it('refreshes cached posting permissions on every active session without signing out', async () => {
+    const { svc, prisma, token, tokenHash, redis, cacheInvalidation, requestCache } = makeService();
+    const secondToken = 'another-device-token';
+    const secondHash = hmacSha256Hex(HMAC_SECRET, secondToken);
+    const cache = new Map<string, unknown>();
+    redis.getJson.mockImplementation(async (key: string) => cache.get(key) ?? null);
+    redis.setJson.mockImplementation(async (key: string, value: unknown) => { cache.set(key, value); });
+    cacheInvalidation.deleteSessionFull.mockImplementation(async (hash: string) => {
+      cache.delete(RedisKeys.sessionFull(hash));
+    });
+    prisma.session.findMany = jest.fn(async () => [{ tokenHash }, { tokenHash: secondHash }]);
+
+    expect((await svc.meFromSessionToken(token))?.user.verifiedStatus).toBe('none');
+    expect((await svc.meFromSessionToken(secondToken))?.user.verifiedStatus).toBe('none');
+    const session = await prisma.session.findFirst();
+    session.user.verifiedStatus = 'manual';
+    // The database has changed, but a live session still denies verified actions.
+    expect((await svc.meFromSessionToken(token))?.user.verifiedStatus).toBe('none');
+
+    await svc.bustSessionCachesForUser('user-1');
+
+    for (const activeToken of [token, secondToken]) {
+      expect((await svc.meFromSessionToken(activeToken))?.user.verifiedStatus).toBe('manual');
+    }
+    expect(requestCache.set).toHaveBeenLastCalledWith('viewerContext:user-1', expect.objectContaining({
+      verifiedStatus: 'manual',
+    }));
+    expect(prisma.session.updateMany).not.toHaveBeenCalled();
   });
 });
