@@ -8,7 +8,7 @@ import { notDeletedWhere, excludeCommunityGroupPostsWhere, mediaOnlyWhere, userN
 describe('posts-query-builders', () => {
   it('builds the shared post where-clauses', () => {
     expect(notDeletedWhere()).toEqual({ deletedAt: null });
-    expect(excludeCommunityGroupPostsWhere()).toEqual({ communityGroupId: null });
+    expect(excludeCommunityGroupPostsWhere()).toEqual({ communityGroupId: null, boardOnly: false });
     expect(mediaOnlyWhere()).toEqual({ media: { some: { deletedAt: null } } });
     expect(userNotBannedWhere()).toEqual({ user: { bannedAt: null } });
   });

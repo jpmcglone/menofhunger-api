@@ -120,6 +120,29 @@ describe('PresenceRealtimeService.emitGroupNewPost', () => {
   });
 });
 
+describe('PresenceRealtimeService.emitBoardNewThread', () => {
+  function makeRoomService() {
+    const roomEmit = jest.fn();
+    const server = { to: jest.fn().mockReturnValue({ emit: roomEmit }) };
+    const presenceRedis = { publishEmitToRoom: jest.fn().mockResolvedValue(undefined) };
+    const service = new PresenceRealtimeService({} as any, presenceRedis as any);
+    service.setServer(server as any);
+    return { service, server, roomEmit };
+  }
+
+  it.each([
+    ['public', 'board:public'],
+    ['verifiedOnly', 'board:verified'],
+    ['premiumOnly', 'board:premium'],
+  ] as const)('delivers %s threads only to the %s room', (visibility, room) => {
+    const { service, server, roomEmit } = makeRoomService();
+    const payload = { threadId: 't1', visibility, tags: ['ask'] };
+    service.emitBoardNewThread(payload);
+    expect(server.to).toHaveBeenCalledWith(room);
+    expect(roomEmit).toHaveBeenCalledWith('board:new-thread', payload);
+  });
+});
+
 /**
  * Worker processes (`RUN_HTTP=false`) never receive `setServer`, so the Redis publish is the
  * ONLY delivery path for realtime events originating from a background job. These tests pin

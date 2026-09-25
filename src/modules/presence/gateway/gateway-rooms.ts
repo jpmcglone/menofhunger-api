@@ -10,6 +10,10 @@ export function postRoom(postId: string): string {
 export function groupRoom(groupId: string): string {
   return `group:${groupId}`;
 }
+/** Board list rooms by audience tier: public for everyone, verified/premium by viewer tier. */
+export function boardRoom(tier: 'public' | 'verified' | 'premium'): string {
+  return `board:${tier}`;
+}
 export function articleRoom(articleId: string): string {
   return `article:${articleId}`;
 }

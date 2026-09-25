@@ -48,6 +48,7 @@ const listQuerySchema = z.object({
     'premium_ended',
     'status_update',
     'checkin_post',
+    'board',
     'other',
   ]).optional(),
 });

@@ -1,4 +1,5 @@
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { BOARD_THREAD_PREVIEW_INCLUDE } from '../../common/prisma-includes/post.include';
 import type { Prisma } from '@prisma/client';
 import type { CommunityGroupJoinPolicy, PostVisibility } from '@prisma/client';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
@@ -33,6 +34,14 @@ const REPLY_TITLE = {
   mentioned_in_root: "replied to a post you're mentioned in",
   mentioned_in_reply: "replied to a comment you're mentioned in",
 } as const;
+
+/** Same roles, worded for Board threads so the row and push name the Board. */
+const BOARD_REPLY_TITLE: Record<keyof typeof REPLY_TITLE, string> = {
+  root_author: 'commented on your Board thread',
+  reply_author: 'replied to your Board comment',
+  mentioned_in_root: "commented on a Board thread you're mentioned in",
+  mentioned_in_reply: "replied to a Board comment you're mentioned in",
+};
 
 type ReplyRole = keyof typeof REPLY_TITLE;
 
@@ -235,6 +244,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
         media: { orderBy: { position: 'asc' } },
         mentions: { include: { user: { select: MENTION_USER_SELECT } } },
         poll: { include: { options: { orderBy: { position: 'asc' } } } },
+        boardThread: BOARD_THREAD_PREVIEW_INCLUDE,
       },
     })) as PostWithRelations | null;
 
@@ -515,15 +525,16 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       // Notifications: parent author + thread participants get "comment" notifications.
       // Only explicit @mentions in body get "mention" notifications (and override "comment" for that user).
       let threadRoles: Map<string, ReplyRole> | null = null;
+      const replyTitles = post.kind === 'board' ? BOARD_REPLY_TITLE : REPLY_TITLE;
       if (parentId && parentAuthorUserId !== userId) {
         threadRoles = this.computeThreadRolesFromPosts(threadPostsForRoles, parentId);
         const parentRole = threadRoles.get(parentAuthorUserId ?? '');
         const parentTitle =
           parentRole === 'reply_author'
-            ? REPLY_TITLE.reply_author
+            ? replyTitles.reply_author
             : parentRole === 'root_author'
-              ? REPLY_TITLE.root_author
-              : REPLY_TITLE.reply_author;
+              ? replyTitles.root_author
+              : replyTitles.reply_author;
 
         if (parentAuthorUserId && !bodyMentionSet.has(parentAuthorUserId) && (await canNotifyForGroupPost(parentAuthorUserId))) {
           await this.notifications
@@ -557,7 +568,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
               actorUserId: userId,
               actorPostId: post.id,
               subjectPostId: parentId,
-              title: REPLY_TITLE[role],
+              title: replyTitles[role],
               body: bodySnippet || undefined,
             })
             .catch((err) => {
@@ -595,7 +606,9 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       }
       await runInBatches(mentionRecipients, FANOUT_CONCURRENCY, async (uid) => {
         let mentionTitle: string;
-        if (!parentId) {
+        if (post.kind === 'board') {
+          mentionTitle = parentId ? 'mentioned you in a Board comment' : 'mentioned you in a Board thread';
+        } else if (!parentId) {
           mentionTitle = 'mentioned you in a post';
         } else if (uid === parentAuthorUserId) {
           mentionTitle = 'mentioned you in a reply to your post';
@@ -662,7 +675,8 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       // notification row) is the only signal for new group activity on followers' home surfaces.
       const feedFollowerIds: string[] = [];
       const followerNotificationIds: string[] = [];
-      if (!postCommunityGroupId && visibility !== 'onlyMe') {
+      // Board-only rows (comments, threads not cross-posted) never reach follower feeds or bells.
+      if (!postCommunityGroupId && visibility !== 'onlyMe' && !post.boardOnly) {
         try {
           const follows = await this.prisma.follow.findMany({
             where: { followingId: userId },

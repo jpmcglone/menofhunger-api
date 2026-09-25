@@ -117,4 +117,8 @@ export type NotificationDto = {
   subjectPostVisibility?: SubjectPostVisibility | null;
   /** Tier of subject (post or user) for unseen row highlight. */
   subjectTier: SubjectTier;
+  /** Set when the causing/subject post lives on the Board: route to /b/:boardThreadId (and tag the row "Board"). */
+  boardThreadId?: string | null;
+  /** Board comment to focus (/b/:boardThreadId/c/:boardCommentId) when the event is about a comment. */
+  boardCommentId?: string | null;
 };

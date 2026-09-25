@@ -13,9 +13,17 @@ export function notDeletedWhere(): Prisma.PostWhereInput {
   return { deletedAt: null };
 }
 
-/** Community-group posts must not appear on global/profile/trending feeds. */
+/**
+ * Global/profile/trending feed scope: excludes community-group posts and Board-only rows
+ * (Board comments and threads not cross-posted to the feed).
+ */
 export function excludeCommunityGroupPostsWhere(): Prisma.PostWhereInput {
-  return { communityGroupId: null };
+  return { communityGroupId: null, boardOnly: false };
+}
+
+/** Board-only rows never appear on global feeds; see `excludeCommunityGroupPostsWhere`. */
+export function excludeBoardOnlyWhere(): Prisma.PostWhereInput {
+  return { boardOnly: false };
 }
 
 export function mediaOnlyWhere(): Prisma.PostWhereInput {

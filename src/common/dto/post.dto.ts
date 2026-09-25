@@ -95,6 +95,15 @@ export type PostVideoEmbedDto = {
   height: number;
 };
 
+/** Board thread preview carried on kind=board thread roots (feed cross-posts). */
+export type PostBoardPreviewDto = {
+  threadId: string;
+  title: string;
+  url: string | null;
+  domain: string | null;
+  tags: string[];
+};
+
 export type PostDto = {
   conversationContext?: import('./conversation.dto').ConversationContextDto;
   id: string;
@@ -103,7 +112,11 @@ export type PostDto = {
   editCount: number;
   body: string;
   deletedAt: string | null;
-  kind: 'regular' | 'checkin' | 'repost' | 'articleShare' | 'status' | 'fitnessShare';
+  kind: 'regular' | 'checkin' | 'repost' | 'articleShare' | 'status' | 'fitnessShare' | 'board';
+  /** kind=board only: the Board thread root id (equals `id` for the thread itself). Routes to /b/:rootId. */
+  boardRootId?: string;
+  /** kind=board thread roots only. Gated viewers get a trimmed title and no link. */
+  board?: PostBoardPreviewDto;
   checkinDayKey: string | null;
   checkinPrompt: string | null;
   visibility: PostVisibility;
@@ -283,6 +296,34 @@ export function toPostPollDto(
   };
 }
 
+/** Trimmed teaser title shown to viewers without access to a gated Board thread. */
+export function gatedBoardTitle(title: string, maxChars = 60): string {
+  const text = (title ?? '').trim();
+  if (text.length <= maxChars) return text;
+  const cut = text.slice(0, maxChars);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${(lastSpace > maxChars / 2 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+}
+
+type BoardThreadRow = { title: string; url: string | null; domain: string | null; tags: string[] } | null | undefined;
+
+function boardFields(post: { id: string; kind?: string | null; parentId?: string | null; rootId?: string | null }, canAccess: boolean) {
+  if (post.kind !== 'board') return {};
+  const thread = (post as { boardThread?: BoardThreadRow }).boardThread;
+  const boardRootId = post.parentId ? (post.rootId ?? post.parentId) : post.id;
+  if (!thread) return { boardRootId };
+  return {
+    boardRootId,
+    board: {
+      threadId: post.id,
+      title: canAccess ? thread.title : gatedBoardTitle(thread.title),
+      url: canAccess ? (thread.url ?? null) : null,
+      domain: canAccess ? (thread.domain ?? null) : null,
+      tags: Array.isArray(thread.tags) ? thread.tags : [],
+    } satisfies PostBoardPreviewDto,
+  };
+}
+
 /** Returns first ~22 characters (mid-word cut) + "…" if body has ≥ `minWords` words, else empty string. */
 function gatedPostBody(body: string, minWords = 10, previewChars = 22): string {
   const text = (body ?? '').trim();
@@ -452,9 +493,10 @@ export function toPostDto(
       createdAt: post.createdAt.toISOString(),
       editedAt: null,
       editCount: 0,
-      body: gatedPostBody(post.body),
+      body: post.kind === 'board' ? '' : gatedPostBody(post.body),
       deletedAt: postDeletedAt,
       kind: post.kind ?? 'regular',
+      ...boardFields(post, false),
       checkinDayKey: post.checkinDayKey ? String(post.checkinDayKey) : null,
       checkinPrompt: post.checkinPrompt ? String(post.checkinPrompt) : null,
       visibility: post.visibility,
@@ -511,6 +553,7 @@ export function toPostDto(
     body: isPostDeleted ? '' : post.body,
     deletedAt: postDeletedAt,
     kind: post.kind ?? 'regular',
+    ...boardFields(post, !isPostDeleted),
     checkinDayKey: post.checkinDayKey ? String(post.checkinDayKey) : null,
     checkinPrompt: post.checkinPrompt ? String(post.checkinPrompt) : null,
     visibility: post.visibility,

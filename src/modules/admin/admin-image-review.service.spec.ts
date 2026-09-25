@@ -43,6 +43,21 @@ describe('profile and publication media ownership', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  it('protects Board thread images (post media) and refuses stale orphan deletion', async () => {
+    const boardImageKey = 'uploads/user/images/board-thread.webp';
+    const { prisma, service } = setup(boardImageKey);
+    expect((await service.getById('asset')).asset.primaryType).toBe('orphan');
+    expect((await service.list({ limit: 30, cursor: null, onlyOrphans: true })).items).toHaveLength(1);
+    prisma.postMedia.findMany.mockResolvedValue([{
+      id: 'media', postId: 'board-thread', r2Key: boardImageKey, thumbnailR2Key: null, deletedAt: null,
+      post: { id: 'board-thread', createdAt: new Date(), visibility: 'premiumOnly', user: { id: 'user', username: 'john' } },
+    }]);
+    expect((await service.getById('asset')).asset.primaryType).toBe('post');
+    expect((await service.list({ limit: 30, cursor: null, onlyOrphans: true })).items).toEqual([]);
+    await expect(service.deleteById({ id: 'asset', adminUserId: 'admin', reason: 'cleanup', onlyOrphans: true })).rejects.toThrow('no longer an orphan');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it('account erasure rechecks ownership and only deletes unreferenced media', async () => {
     const { prisma, service } = setup('avatars/user/photo.webp');
     const send = jest.fn(async () => ({}));

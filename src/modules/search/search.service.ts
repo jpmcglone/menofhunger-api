@@ -14,6 +14,7 @@ import { TickerService } from '../cashtags/ticker.service';
 import type { UserListRelationship } from '../../common/dto/user.dto';
 import type { CashtagResultDto } from '../../common/dto';
 import { POST_BASE_INCLUDE } from '../../common/prisma-includes/post.include';
+import { excludeBoardOnlyWhere } from '../posts/posts-query-builders';
 import { articleAuthorInclude } from '../../common/dto/article.dto';
 import { toCommunityGroupShellDto, type CommunityGroupShellDto } from '../../common/dto/community-group.dto';
 
@@ -178,7 +179,12 @@ export class SearchService {
     return this.viewerContext.allowedPostVisibilities(viewer as any);
   }
 
+  /** Post search scope: readable groups only, and never Board-only rows (the Board has its own search). */
   private readableGroupPostWhere(viewer: Viewer): Prisma.PostWhereInput {
+    return { AND: [excludeBoardOnlyWhere(), this.readableGroupScopeWhere(viewer)] };
+  }
+
+  private readableGroupScopeWhere(viewer: Viewer): Prisma.PostWhereInput {
     const viewerUserId = (viewer?.id ?? '').trim();
     if (!viewerUserId) return { communityGroupId: null };
 
@@ -206,6 +212,10 @@ export class SearchService {
   }
 
   private readableGroupPostSql(viewer: Viewer): Prisma.Sql {
+    return Prisma.sql`AND p."boardOnly" = false ${this.readableGroupScopeSql(viewer)}`;
+  }
+
+  private readableGroupScopeSql(viewer: Viewer): Prisma.Sql {
     const viewerUserId = (viewer?.id ?? '').trim();
     if (!viewerUserId) return Prisma.sql`AND p."communityGroupId" IS NULL`;
 

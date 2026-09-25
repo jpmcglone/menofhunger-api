@@ -71,6 +71,7 @@ function makeService() {
     { enqueue: jest.fn() } as any,
     { dispatch: jest.fn() } as any,
     { viewerViewedArticleIds: jest.fn() } as any,
+    { syncArticleThread: jest.fn().mockResolvedValue(undefined), createArticleThread: jest.fn().mockResolvedValue(null) } as any,
   );
 
   return { service, prisma };

@@ -36,6 +36,7 @@ enum PostKind {
   articleShare
   status
   fitnessShare
+  board
 }
 
 enum FitnessProvider {
@@ -581,6 +582,15 @@ model User {
   articleReactions             ArticleReaction[]
   articleComments              ArticleComment[]
   articleCommentReactions      ArticleCommentReaction[]
+  boardHides                   BoardHide[]
+  /**
+   * Last choice for "Also post to feed" in the Board composer (remembered per account).
+   */
+  boardShareToFeedDefault      Boolean                    @default(true)
+  /**
+   * Last choice for "Also post to the Board" when publishing an article.
+   */
+  articlePostToBoardDefault    Boolean                    @default(true)
 
   // Org affiliations: orgs this user belongs to (non-org users); members of this org (org users).
   orgMemberships UserOrgMembership[] @relation("UserMemberships")
@@ -1516,6 +1526,11 @@ model Post {
   cashtags                  String[]        @default([])
   kind                      PostKind        @default(regular)
   /**
+   * Lives only on the Board: every Board comment, and Board threads not cross-posted to the feed.
+   * Global/profile/trending feeds exclude these rows.
+   */
+  boardOnly                 Boolean         @default(false)
+  /**
    * ET day key (YYYY-MM-DD) for check-ins (null for non-check-ins).
    */
   checkinDayKey             String?
@@ -1602,6 +1617,8 @@ model Post {
   notificationsAsActorPost Notification[] @relation("Notification_actorPost")
   reports                  Report[]       @relation("Report_subjectPost")
   views                    PostView[]
+  boardThread              BoardThread?
+  boardHides               BoardHide[]
 
   @@unique([userId, kind, checkinDayKey])
   @@index([userId, createdAt])
@@ -1643,6 +1660,52 @@ model Post {
   @@index([communityGroupId, pinnedInGroupAt])
   // Scheduled-post sweep: find all due holding rows efficiently.
   @@index([scheduledAt])
+  @@index([boardOnly])
+}
+
+/// Board thread metadata. The thread root is a Post with kind=board; comments are its replies.
+model BoardThread {
+  postId         String    @id
+  post           Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  title          String
+  url            String?
+  /// Lowercased scheme-less URL without tracking params, used for duplicate detection.
+  urlNormalized  String?
+  domain         String?
+  /// Lowercase slugs, at most 3.
+  tags           String[]  @default([])
+  showInFeed     Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([createdAt(sort: Desc)])
+  @@index([domain, createdAt(sort: Desc)])
+  @@index([urlNormalized, createdAt(sort: Desc)])
+  @@index([tags], type: Gin)
+}
+
+/// Autocomplete source for Board tags.
+model BoardTag {
+  slug        String   @id
+  label       String
+  threadCount Int      @default(0)
+  lastUsedAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([threadCount(sort: Desc)])
+}
+
+/// Per-user hidden Board threads.
+model BoardHide {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, postId])
+  @@index([postId])
 }
 
 model PostPoll {

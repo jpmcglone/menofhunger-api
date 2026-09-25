@@ -62,7 +62,7 @@ export class NotificationQueryService {
     recipientUserId: string;
     limit: number;
     cursor: string | null;
-    kind?: NotificationKind | 'other';
+    kind?: NotificationKind | 'other' | 'board';
   }) {
     const firstPage = !(params.cursor ?? '').trim();
     if (!firstPage || !this.cache || !this.cacheInvalidation) {
@@ -92,7 +92,7 @@ export class NotificationQueryService {
     recipientUserId: string;
     limit: number;
     cursor: string | null;
-    kind?: NotificationKind | 'other';
+    kind?: NotificationKind | 'other' | 'board';
   }) {
     const { recipientUserId, limit, cursor, kind } = params;
     const desiredItemLimit = Math.max(1, Math.min(limit, 50));
@@ -120,7 +120,8 @@ export class NotificationQueryService {
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },
       include: {
-        subjectPost: { select: { parentId: true } },
+        subjectPost: { select: { id: true, parentId: true, kind: true, rootId: true } },
+        actorPost: { select: { id: true, parentId: true, kind: true, rootId: true } },
         actor: {
           select: {
             id: true,
@@ -476,6 +477,7 @@ export class NotificationQueryService {
         latestSubjectPostPreview: newest.subjectPostPreview ?? null,
         subjectPostVisibility: newest.subjectPostVisibility ?? null,
         subjectTier: newest.subjectTier ?? null,
+        ...(newest.boardThreadId ? { boardThreadId: newest.boardThreadId } : {}),
       };
     }
 
@@ -702,7 +704,8 @@ export class NotificationQueryService {
       id: string;
       createdAt: Date;
       kind: NotificationKind;
-      subjectPost?: { parentId: string | null } | null;
+      subjectPost?: { parentId: string | null; id?: string; kind?: string; rootId?: string | null } | null;
+      actorPost?: { parentId: string | null; id: string; kind: string; rootId: string | null } | null;
       deliveredAt: Date | null;
       readAt: Date | null;
       ignoredAt: Date | null;
@@ -796,6 +799,7 @@ export class NotificationQueryService {
       subjectArticlePreview: subjectArticlePreview ?? null,
       subjectPostVisibility,
       subjectTier,
+      ...boardNotificationRefs(n.actorPost ?? null, n.subjectPost ?? null),
     };
   }
 
@@ -813,7 +817,8 @@ export class NotificationQueryService {
     const n = await this.prisma.notification.findFirst({
       where: { id, recipientUserId, ...(blockedActorIds.length ? { NOT: { AND: [{ actorUserId: { not: null } }, { actorUserId: { in: blockedActorIds } }] } } : {}) },
       include: {
-        subjectPost: { select: { parentId: true } },
+        subjectPost: { select: { id: true, parentId: true, kind: true, rootId: true } },
+        actorPost: { select: { id: true, parentId: true, kind: true, rootId: true } },
         actor: {
           select: {
             id: true,
@@ -1000,4 +1005,15 @@ export class NotificationQueryService {
       subjectSpaceOwnerUsername,
     );
   }
+}
+
+type BoardRefPost = { id?: string; parentId: string | null; kind?: string; rootId?: string | null } | null;
+
+/** Board thread/comment ids when the causing or subject post lives on the Board. */
+export function boardNotificationRefs(actorPost: BoardRefPost, subjectPost: BoardRefPost): Pick<NotificationDto, 'boardThreadId' | 'boardCommentId'> {
+  const ref = [actorPost, subjectPost].find((p) => p?.kind === 'board' && p.id);
+  if (!ref?.id) return {};
+  const threadId = ref.parentId ? (ref.rootId ?? ref.parentId) : ref.id;
+  const commentPost = actorPost?.kind === 'board' && actorPost.parentId ? actorPost : ref.parentId ? ref : null;
+  return { boardThreadId: threadId, boardCommentId: commentPost?.id ?? null };
 }

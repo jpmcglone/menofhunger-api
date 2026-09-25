@@ -46,6 +46,17 @@ export const FITNESS_SHARE_INCLUDE = {
   },
 } as const;
 
+/** Board thread fields needed for PostBoardPreviewDto (kind=board roots). */
+export const BOARD_THREAD_PREVIEW_INCLUDE = {
+  select: {
+    title: true,
+    url: true,
+    domain: true,
+    tags: true,
+    showInFeed: true,
+  },
+} as const;
+
 /**
  * Include shape for an embedded/quoted post. Deliberately shallow (no further nesting)
  * to avoid unbounded recursion and keep query cost proportional.
@@ -55,6 +66,7 @@ export const QUOTED_POST_INCLUDE = {
   poll: { include: { options: { orderBy: { position: 'asc' as const } } } },
   article: ARTICLE_SHARE_INCLUDE,
   fitnessShare: FITNESS_SHARE_INCLUDE,
+  boardThread: BOARD_THREAD_PREVIEW_INCLUDE,
 } as const;
 
 /** List/feed include: no nested quotedPost — quotes hydrate via quotedPostMap. */
@@ -63,6 +75,7 @@ export const POST_LIST_INCLUDE = {
   poll: { include: { options: { orderBy: { position: 'asc' as const } } } },
   article: ARTICLE_SHARE_INCLUDE,
   fitnessShare: FITNESS_SHARE_INCLUDE,
+  boardThread: BOARD_THREAD_PREVIEW_INCLUDE,
 } as const;
 
 export const POST_WITH_POLL_INCLUDE = {

@@ -36,6 +36,9 @@ export type NotificationGroupDto = {
 
   /** Tier of subject (post or user) for unseen row highlight. */
   subjectTier: SubjectTier;
+
+  /** Set when the grouped subject is a Board thread (route to /b/:id, tag "Board"). */
+  boardThreadId?: string | null;
 };
 
 /**

@@ -20,6 +20,7 @@ export * from './presence.dto';
 export * from './admin-email-samples.dto';
 export * from './admin-intro-brief.dto';
 export * from './article.dto';
+export * from './board.dto';
 export * from './landing.dto';
 export * from './coin-transfer.dto';
 export * from './referral.dto';

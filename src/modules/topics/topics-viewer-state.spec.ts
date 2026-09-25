@@ -21,7 +21,7 @@ describe('topic feed viewer state', () => {
       viewerUserId: 'viewer', filteredPosts: [rows[0]], collapsedItemsByItemId: new Map(),
     });
     expect(service.prisma.post.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { AND: expect.arrayContaining([{ deletedAt: null, isDraft: false }, { communityGroupId: null }]) },
+      where: { AND: expect.arrayContaining([{ deletedAt: null, isDraft: false }, { communityGroupId: null, boardOnly: false }]) },
       take: 2,
     }));
   });

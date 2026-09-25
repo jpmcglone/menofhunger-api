@@ -264,7 +264,7 @@ export class TopicsService {
       where: {
         AND: [
           { deletedAt: null, isDraft: false },
-          { communityGroupId: null },
+          { communityGroupId: null, boardOnly: false },
           { parentId: null },
           visibilityWhere,
           { topics: { hasSome: topicValues } },
@@ -336,7 +336,7 @@ export class TopicsService {
       where: {
         AND: [
           { deletedAt: null, isDraft: false },
-          { communityGroupId: null },
+          { communityGroupId: null, boardOnly: false },
           { parentId: null },
           visibilityWhere,
           { topics: { has: q } },

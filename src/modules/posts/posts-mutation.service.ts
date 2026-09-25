@@ -20,6 +20,7 @@ import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
 import { computeCheckinStreakStats } from '../checkins/checkin-streaks';
 import { toPostDto } from '../../common/dto/post.dto';
+import { BOARD_THREAD_PREVIEW_INCLUDE } from '../../common/prisma-includes/post.include';
 import { LOGGED_IN_VIEW_WEIGHT } from '../views/view-tracking.utils';
 import { PostViewsService } from '../post-views/post-views.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
@@ -34,6 +35,7 @@ import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service'
 import { SiteConfigService } from '../site-config/site-config.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { PostsTopicsClassifyService } from './posts-topics-classify.service';
+import { postRateLimitFor, postRateLimitMessage, type PostRateLimit } from './posts-rate-limit';
 
 type CreatePostParams = {
   userId: string;
@@ -60,7 +62,18 @@ type CreatePostParams = {
       image: { r2Key: string; width: number | null; height: number | null; alt: string | null } | null;
     }>;
   } | null;
-  kind?: 'regular' | 'checkin' | 'status';
+  kind?: 'regular' | 'checkin' | 'status' | 'board';
+  /** kind=board thread roots only (validated by BoardService). */
+  board?: {
+    title: string;
+    url: string | null;
+    urlNormalized: string | null;
+    domain: string | null;
+    tags: string[];
+    showInFeed: boolean;
+  } | null;
+  /** kind=board thread roots created from an article publish. */
+  articleId?: string | null;
   checkinDayKey?: string | null;
   checkinPrompt?: string | null;
   /** Top-level post only: creates a post inside this community group (membership required). */
@@ -137,12 +150,16 @@ export class PostsMutationService {
         topics: true,
         kind: true,
         parentId: true,
+        rootId: true,
         repostedPostId: true,
         quotedPostId: true,
       },
     });
     if (!post) throw new NotFoundException('Post not found.');
     if (post.userId !== userId) throw new ForbiddenException('Not allowed to delete this post.');
+    // Board threads count every comment on the root (HN-style total), not just direct replies.
+    const boardRootToDecrement =
+      post.kind === 'board' && post.parentId && post.rootId && post.rootId !== post.parentId ? post.rootId : null;
     if (post.deletedAt) return { success: true };
 
     const postTopics = post.topics ?? [];
@@ -164,6 +181,13 @@ export class PostsMutationService {
           SET "commentCount" = GREATEST(0, "commentCount" - 1)
           WHERE "id" = ${parentId}
         `.catch(() => { /* ignore if parent is gone */ });
+      }
+      if (boardRootToDecrement) {
+        await tx.$executeRaw`
+          UPDATE "Post"
+          SET "commentCount" = GREATEST(0, "commentCount" - 1)
+          WHERE "id" = ${boardRootToDecrement}
+        `.catch(() => { /* ignore if root is gone */ });
       }
 
       // Decrement repostCount (and quoteCount for quotes) on the target post when a repost/quote repost is deleted.
@@ -276,6 +300,26 @@ export class PostsMutationService {
             version: now.toISOString(),
             reason: 'comment_deleted',
             patch: { commentCount: updatedParent.commentCount },
+          });
+        }
+      } catch {
+        // Best-effort
+      }
+    }
+
+    if (boardRootToDecrement && deletedParentId) {
+      try {
+        this.presenceRealtime.emitPostsCommentDeleted(boardRootToDecrement, {
+          parentPostId: deletedParentId,
+          commentId: id,
+        });
+        const root = await this.prisma.post.findUnique({ where: { id: boardRootToDecrement }, select: { commentCount: true } });
+        if (root) {
+          this.presenceRealtime.emitPostsLiveUpdated(boardRootToDecrement, {
+            postId: boardRootToDecrement,
+            version: now.toISOString(),
+            reason: 'comment_deleted',
+            patch: { commentCount: root.commentCount },
           });
         }
       } catch {
@@ -723,11 +767,11 @@ export class PostsMutationService {
 
   private async writePost(params: CreatePostParams, marvRequesterId?: string) {
     const { userId, body, visibility: requestedVisibility, parentId, mentions: clientMentions } = params;
-    assertPublishableText(body, params.checkinPrompt, ...(params.poll?.options?.map(option => typeof option === 'string' ? option : option.text) ?? []));
+    assertPublishableText(body, params.checkinPrompt, params.board?.title, ...(params.poll?.options?.map(option => typeof option === 'string' ? option : option.text) ?? []));
     if (!marvRequesterId && this.parseMentionsFromBody(body).some(username => username.toLowerCase() === this.appConfig.marvBot().username.trim().toLowerCase())) await requireAiConsent(this.prisma, userId);
     const requestedMarvMode = params.marvMode ?? null;
     const requestedCommunityGroupId = (params.communityGroupId ?? '').trim() || null;
-    const kind = (params.kind ?? 'regular') as 'regular' | 'checkin' | 'status';
+    let kind = (params.kind ?? 'regular') as 'regular' | 'checkin' | 'status' | 'board';
     const now = new Date();
     const checkinDayKeyRaw = (params.checkinDayKey ?? null)?.trim() || null;
     const checkinPromptRaw = (params.checkinPrompt ?? null)?.trim() || null;
@@ -763,7 +807,7 @@ export class PostsMutationService {
       parentId
         ? this.prisma.post.findFirst({
             where: { id: parentId, ...notDeletedWhere() },
-            select: { id: true, userId: true, visibility: true, rootId: true, topics: true, communityGroupId: true, user: { select: { isBot: true } } },
+            select: { id: true, userId: true, visibility: true, rootId: true, topics: true, communityGroupId: true, kind: true, articleId: true, user: { select: { isBot: true } } },
           })
         : Promise.resolve(null),
     ]);
@@ -776,6 +820,19 @@ export class PostsMutationService {
       throw new ForbiddenException('Marv can only reply to the requesting member’s post.');
     }
     if (parentId && !parentPost) throw new NotFoundException('Post not found.');
+    // Every reply inside a Board thread is a Board comment, whichever client sent it.
+    if (parentPost?.kind === 'board') kind = 'board';
+    if (parentPost?.kind === 'board' && !parentPost.rootId && parentPost.articleId) {
+      throw new BadRequestException('Comment on the article instead.');
+    }
+    if (kind === 'board') {
+      if (requestedCommunityGroupId) throw new BadRequestException('Board posts cannot be posted inside a community group.');
+      if (params.poll) throw new BadRequestException('Polls are not supported on the Board.');
+      if (!parentId && !params.board?.title?.trim()) throw new BadRequestException('Board threads need a title.');
+      if (parentId && params.board) throw new BadRequestException('Board comments cannot carry thread fields.');
+      if (requestedVisibility === 'onlyMe') throw new BadRequestException('Board posts cannot be only-me.');
+    }
+    const boardOnly = kind === 'board' && (Boolean(parentId) || params.board?.showInFeed === false);
     const user = { verifiedStatus: viewer.verifiedStatus, premium: viewer.premium, premiumPlus: viewer.premiumPlus };
     const viewerIsVerified = Boolean(viewer.verifiedStatus && viewer.verifiedStatus !== 'none');
 
@@ -904,14 +961,25 @@ export class PostsMutationService {
 
     // Compute rate-limit window parameters synchronously; the actual count query is
     // batched in parallel with media-hash + mention resolution below.
-    let rateLimitParams: { postsPerWindow: number; windowSeconds: number; windowStart: Date } | null = null;
+    let rateLimitParams: (PostRateLimit & { windowStart: Date; where: Prisma.PostWhereInput }) | null = null;
     if (viewerIsVerified && !marvRequesterId) {
       const cfg = await this.siteConfig.get(); // in-memory cached; near-free
-      const isPremium = Boolean(user.premium || user.premiumPlus);
-      const postsPerWindow = isPremium ? cfg.premiumPostsPerWindow : cfg.verifiedPostsPerWindow;
-      const windowSeconds = isPremium ? cfg.premiumWindowSeconds : cfg.verifiedWindowSeconds;
-      const windowStart = new Date(Date.now() - windowSeconds * 1000);
-      rateLimitParams = { postsPerWindow, windowSeconds, windowStart };
+      const limit = postRateLimitFor({
+        isReply: Boolean(parentId),
+        isPremium: Boolean(user.premium || user.premiumPlus),
+        cfg,
+      });
+      const windowStart = new Date(Date.now() - limit.windowSeconds * 1000);
+      rateLimitParams = {
+        ...limit,
+        windowStart,
+        where: {
+          userId,
+          createdAt: { gte: windowStart },
+          visibility: { not: 'onlyMe' },
+          parentId: parentId ? { not: null } : null,
+        },
+      };
     }
 
     const viewerIsPremium = Boolean(user.premium || user.premiumPlus);
@@ -985,9 +1053,7 @@ export class PostsMutationService {
 
     const [recentPostCount, reusedKeyRows, mentionUsernameToId] = await Promise.all([
       rateLimitParams
-        ? this.prisma.post.count({
-            where: { userId, createdAt: { gte: rateLimitParams.windowStart }, visibility: { not: 'onlyMe' } },
-          })
+        ? this.prisma.post.count({ where: rateLimitParams.where })
         : Promise.resolve(0),
       uploadKeys.length
         ? this.prisma.mediaContentHash.findMany({ where: { r2Key: { in: uploadKeys } }, select: { r2Key: true } })
@@ -997,10 +1063,16 @@ export class PostsMutationService {
     ]);
 
     if (rateLimitParams && recentPostCount >= rateLimitParams.postsPerWindow) {
-      const minutes = Math.max(1, Math.round(rateLimitParams.windowSeconds / 60));
-      const minuteLabel = minutes === 1 ? 'minute' : 'minutes';
+      // The slot frees when the oldest post that still counts ages out of the window.
+      const blocking = await this.prisma.post.findFirst({
+        where: rateLimitParams.where,
+        orderBy: { createdAt: 'asc' },
+        skip: recentPostCount - rateLimitParams.postsPerWindow,
+        select: { createdAt: true },
+      });
+      const freesAt = (blocking?.createdAt.getTime() ?? Date.now()) + rateLimitParams.windowSeconds * 1000;
       throw new HttpException(
-        `You are posting too often. You can make up to ${rateLimitParams.postsPerWindow} posts every ${minutes} ${minuteLabel}.`,
+        postRateLimitMessage(rateLimitParams, (freesAt - Date.now()) / 1000),
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
@@ -1138,6 +1210,8 @@ export class PostsMutationService {
     const cashtags = this.parseCashtagsFromBody(body);
 
     let parentCommentCount: number | null = null;
+    let boardRootCommentCount: number | null = null;
+    const boardRootToBump = kind === 'board' && parentId && threadRootId && threadRootId !== parentId ? threadRootId : null;
     let didAwardStreak = false;
     let streakRewardOut: { coinsEarned: number; streakDays: number; multiplier: 1 | 2 | 3 | 4 } | null = null;
     const quotedPostInfoRef: { current: { quotedAuthorId: string; quotedPostId: string } | null } = { current: null };
@@ -1184,6 +1258,22 @@ export class PostsMutationService {
             visibility,
             userId,
             kind,
+            ...(boardOnly ? { boardOnly: true } : {}),
+            ...(kind === 'board' && !parentId && params.board
+              ? {
+                  boardThread: {
+                    create: {
+                      title: params.board.title.trim(),
+                      url: params.board.url,
+                      urlNormalized: params.board.urlNormalized,
+                      domain: params.board.domain,
+                      tags: params.board.tags,
+                      showInFeed: params.board.showInFeed,
+                    },
+                  },
+                  ...(params.articleId ? { articleId: params.articleId } : {}),
+                }
+              : {}),
             ...(resolvedCommunityGroupId ? { communityGroupId: resolvedCommunityGroupId } : {}),
             ...(kind === 'checkin'
               ? { checkinDayKey: checkinDayKeyRaw ?? undefined, checkinPrompt: checkinPromptRaw ?? undefined }
@@ -1236,6 +1326,7 @@ export class PostsMutationService {
             media: { orderBy: { position: 'asc' } },
             mentions: { include: { user: { select: MENTION_USER_SELECT } } },
             poll: { include: { options: { orderBy: { position: 'asc' } } } },
+            boardThread: BOARD_THREAD_PREVIEW_INCLUDE,
           },
         });
 
@@ -1327,6 +1418,17 @@ export class PostsMutationService {
             })
           : Promise.resolve();
 
+        // Board threads count every comment on the root, so nested replies bump it too.
+        const boardRootBumpOp = boardRootToBump
+          ? tx.post.update({
+              where: { id: boardRootToBump },
+              data: { commentCount: { increment: 1 } },
+              select: { commentCount: true },
+            }).then((rootAfter) => {
+              boardRootCommentCount = rootAfter.commentCount;
+            })
+          : Promise.resolve();
+
         // Quoted-post repost + quoteCount counter bump (only when a local quote was detected).
         const quotedBumpOp = quotedExists
           ? tx.post.update({
@@ -1354,7 +1456,7 @@ export class PostsMutationService {
           : Promise.resolve();
 
         // All post-create side effects fan out in parallel within the same transaction.
-        await Promise.all([parentBumpOp, quotedBumpOp, hashtagOps, streakOp, selfViewOp]);
+        await Promise.all([parentBumpOp, boardRootBumpOp, quotedBumpOp, hashtagOps, streakOp, selfViewOp]);
 
         return created;
       })
@@ -1402,6 +1504,26 @@ export class PostsMutationService {
         this.presenceRealtime.emitPostsCommentAdded(parentId, {
           parentPostId: parentId,
           comment: replyDto,
+        });
+      } catch {
+        // Best-effort
+      }
+    }
+
+    // Board: the thread page subscribes only to the root, so mirror nested comments there.
+    if (boardRootToBump && parentId) {
+      try {
+        if (typeof boardRootCommentCount === 'number') {
+          this.presenceRealtime.emitPostsLiveUpdated(boardRootToBump, {
+            postId: boardRootToBump,
+            version: new Date().toISOString(),
+            reason: 'comment_created',
+            patch: { commentCount: boardRootCommentCount },
+          });
+        }
+        this.presenceRealtime.emitPostsCommentAdded(boardRootToBump, {
+          parentPostId: parentId,
+          comment: toPostDto(post, this.appConfig.r2()?.publicBaseUrl ?? null, { viewerHasBoosted: false, includeInternal: false }),
         });
       } catch {
         // Best-effort

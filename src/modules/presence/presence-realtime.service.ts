@@ -10,6 +10,7 @@ import type {
   ArticlesCommentDeletedPayloadDto,
   ArticlesCommentUpdatedPayloadDto,
   ArticlesCommentReactionChangedPayloadDto,
+  BoardNewThreadPayloadDto,
   CheckinAnsweredTodayPayloadDto,
   CrewStreakAdvancedPayloadDto,
   CrewStreakBrokenPayloadDto,
@@ -369,6 +370,12 @@ export class PresenceRealtimeService {
     } else {
       this.emitToRoom(`group:${gid}`, WsEventNames.groupsNewPost, payload);
     }
+  }
+
+  /** New Board thread, delivered only to sockets whose tier can read its scope. */
+  emitBoardNewThread(payload: BoardNewThreadPayloadDto): void {
+    const tier = payload.visibility === 'premiumOnly' ? 'premium' : payload.visibility === 'verifiedOnly' ? 'verified' : 'public';
+    this.emitToRoom(`board:${tier}`, WsEventNames.boardNewThread, payload);
   }
 
   /** @marv was added to or removed from a group; pushed to the `group:{id}` room. */

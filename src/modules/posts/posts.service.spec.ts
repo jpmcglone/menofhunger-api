@@ -250,7 +250,7 @@ describe('PostsService.listFeed', () => {
 
     expect(communityGroupMember.findMany).not.toHaveBeenCalled();
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
-    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null, boardOnly: false });
     expect(where?.AND ?? []).not.toContainEqual({ kind: { not: 'repost' } });
     // Must NOT include an OR-clause that lets member-group posts through.
     expect((where?.AND ?? []).some((part: any) =>
@@ -264,7 +264,7 @@ describe('PostsService.listFeed', () => {
     await listHomeFeed(service, { followingOnly: true });
 
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
-    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null, boardOnly: false });
     // Must NOT include an OR-clause that lets member-group posts through.
     expect((where?.AND ?? []).some((part: any) =>
       Array.isArray(part?.OR) && part.OR.some((item: any) => Array.isArray(item?.communityGroupId?.in)),
@@ -283,7 +283,7 @@ describe('PostsService.listFeed', () => {
 
     expect(communityGroupMember.findMany).not.toHaveBeenCalled();
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
-    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null, boardOnly: false });
   });
 
   it('excludes group posts from the home All trending feed', async () => {
@@ -299,7 +299,7 @@ describe('PostsService.listFeed', () => {
 
     expect(communityGroupMember.findMany).not.toHaveBeenCalled();
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
-    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null, boardOnly: false });
     expect(where?.AND ?? []).not.toContainEqual({ kind: { not: 'repost' } });
     expect((where?.AND ?? []).some((part: any) =>
       Array.isArray(part?.OR) && part.OR.some((item: any) => Array.isArray(item?.communityGroupId?.in)),
@@ -318,7 +318,7 @@ describe('PostsService.listFeed', () => {
     });
 
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
-    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null, boardOnly: false });
     // Viewer is excluded from the author scope — only followed authors' posts appear.
     expect(where?.AND ?? []).toContainEqual({ userId: { in: ['followed-author'] } });
     expect(where?.AND ?? []).not.toContainEqual({ userId: { in: ['viewer', 'followed-author'] } });
@@ -338,7 +338,7 @@ describe('PostsService.listFeed', () => {
 
     expect(communityGroupMember.findMany).not.toHaveBeenCalled();
     const where = (post.findMany as jest.Mock).mock.calls[0]?.[0]?.where;
-    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null });
+    expect(where?.AND ?? []).toContainEqual({ communityGroupId: null, boardOnly: false });
   });
 
   it('falls back to recent posts when the All trending feed has no positive scores', async () => {

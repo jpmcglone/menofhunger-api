@@ -13,6 +13,7 @@ import {
   MAX_GROUP_SUBSCRIPTIONS_PER_SOCKET,
   MAX_POST_SUBSCRIPTIONS_PER_SOCKET,
   articleRoom,
+  boardRoom,
   groupRoom,
   postRoom,
 } from './gateway-rooms';
@@ -155,6 +156,21 @@ export class ContentSubscriptionsHandler {
       client.leave(groupRoom(groupId));
     }
     (client.data as any).groupSubs = subs;
+  }
+
+  /** Board list: join the public room plus every tier room the viewer can read. */
+  handleBoardSubscribe(client: Socket): void {
+    const viewer = (client.data as any)?.viewer ?? {};
+    const isAdmin = Boolean(viewer?.siteAdmin);
+    client.join(boardRoom('public'));
+    if (isAdmin || Boolean(viewer?.verified)) client.join(boardRoom('verified'));
+    if (isAdmin || Boolean(viewer?.premium) || Boolean(viewer?.premiumPlus)) client.join(boardRoom('premium'));
+  }
+
+  handleBoardUnsubscribe(client: Socket): void {
+    client.leave(boardRoom('public'));
+    client.leave(boardRoom('verified'));
+    client.leave(boardRoom('premium'));
   }
 
   async handleArticlesSubscribe(client: Socket, payload: Partial<ArticlesSubscribePayloadDto>): Promise<void> {

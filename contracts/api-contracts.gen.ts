@@ -927,6 +927,101 @@ export type AdminGrantSummaryDto = {
   premiumPlusMonthsRemaining: number;
 };
 
+// ─── src/common/dto/board.dto.ts ───────────────────────────────────────────────
+
+export type BoardVisibility = 'public' | 'verifiedOnly' | 'premiumOnly';
+
+/**
+ * A Board thread. The thread is a Post (kind=board); `id` is that post id, so boosts,
+ * bookmarks, views, and reports use the regular post endpoints.
+ *
+ * When `viewerCanAccess` is false the thread is a teaser: trimmed title, tags, scope,
+ * counts, and age only (no link, text, image, or author).
+ */
+export type BoardThreadDto = {
+  id: string;
+  title: string;
+  url: string | null;
+  domain: string | null;
+  tags: string[];
+  visibility: BoardVisibility;
+  body: string | null;
+  image: PostMediaDto | null;
+  author: PostAuthorDto | null;
+  mentions: PostMentionDto[];
+  createdAt: string;
+  editedAt: string | null;
+  points: number;
+  commentCount: number;
+  viewerCount: number;
+  showInFeed: boolean;
+  /** Set when the thread was created from an article publish; comments live on the article. */
+  articleId: string | null;
+  viewerCanAccess: boolean;
+  viewerHasBoosted: boolean;
+  viewerHasBookmarked: boolean;
+  viewerHidden: boolean;
+  viewerCanEdit: boolean;
+};
+
+/** Minimal thread reference carried by comments listed outside their thread. */
+export type BoardThreadRefDto = {
+  id: string;
+  title: string;
+  visibility: BoardVisibility;
+};
+
+export type BoardCommentDto = {
+  id: string;
+  threadId: string;
+  /** Null for top-level comments (direct replies to the thread). */
+  parentId: string | null;
+  depth: number;
+  body: string;
+  author: PostAuthorDto;
+  mentions: PostMentionDto[];
+  createdAt: string;
+  deleted: boolean;
+  points: number;
+  replyCount: number;
+  viewerHasBoosted: boolean;
+  replies: BoardCommentDto[];
+  /** Present on comments listed outside their thread (Comments tab, profiles). */
+  thread?: BoardThreadRefDto;
+};
+
+export type BoardCommentsPageDto = {
+  viewerCanAccess: boolean;
+  comments: BoardCommentDto[];
+};
+
+export type BoardCommentContextDto = {
+  thread: BoardThreadDto;
+  /** Root-first chain of parent comments (without their replies). */
+  ancestors: BoardCommentDto[];
+  /** The requested comment with its reply subtree. Null when the viewer cannot read the thread. */
+  comment: BoardCommentDto | null;
+};
+
+export type BoardTagDto = {
+  slug: string;
+  label: string;
+  threadCount: number;
+};
+
+export type BoardPreferencesDto = {
+  shareToFeedDefault: boolean;
+  articlePostToBoardDefault: boolean;
+};
+
+export type BoardThreadRowFields = {
+  title: string;
+  url: string | null;
+  domain: string | null;
+  tags: string[];
+  showInFeed: boolean;
+};
+
 // ─── src/common/dto/call.dto.ts ────────────────────────────────────────────────
 
 /**
@@ -2179,6 +2274,9 @@ export type NotificationGroupDto = {
 
   /** Tier of subject (post or user) for unseen row highlight. */
   subjectTier: SubjectTier;
+
+  /** Set when the grouped subject is a Board thread (route to /b/:id, tag "Board"). */
+  boardThreadId?: string | null;
 };
 
 /**
@@ -2325,6 +2423,15 @@ export type PostVideoEmbedDto = {
   height: number;
 };
 
+/** Board thread preview carried on kind=board thread roots (feed cross-posts). */
+export type PostBoardPreviewDto = {
+  threadId: string;
+  title: string;
+  url: string | null;
+  domain: string | null;
+  tags: string[];
+};
+
 export type PostDto = {
   conversationContext?: ConversationContextDto;
   id: string;
@@ -2333,7 +2440,11 @@ export type PostDto = {
   editCount: number;
   body: string;
   deletedAt: string | null;
-  kind: 'regular' | 'checkin' | 'repost' | 'articleShare' | 'status' | 'fitnessShare';
+  kind: 'regular' | 'checkin' | 'repost' | 'articleShare' | 'status' | 'fitnessShare' | 'board';
+  /** kind=board only: the Board thread root id (equals `id` for the thread itself). Routes to /b/:rootId. */
+  boardRootId?: string;
+  /** kind=board thread roots only. Gated viewers get a trimmed title and no link. */
+  board?: PostBoardPreviewDto;
   checkinDayKey: string | null;
   checkinPrompt: string | null;
   visibility: PostVisibility;
@@ -2744,6 +2855,13 @@ export type PresenceAnonymousCountPayloadDto = {
 export type PresencePlatformsChangedPayloadDto = {
   userId: string;
   platforms: string[];
+};
+
+/** `board:new-thread`: identity and scope only; the list refetches to apply viewer access rules. */
+export type BoardNewThreadPayloadDto = {
+  threadId: string;
+  visibility: 'public' | 'verifiedOnly' | 'premiumOnly';
+  tags: string[];
 };
 
 export type PostsSubscribePayloadDto = {
@@ -3857,6 +3975,10 @@ export type NotificationDto = {
   subjectPostVisibility?: SubjectPostVisibility | null;
   /** Tier of subject (post or user) for unseen row highlight. */
   subjectTier: SubjectTier;
+  /** Set when the causing/subject post lives on the Board: route to /b/:boardThreadId (and tag the row "Board"). */
+  boardThreadId?: string | null;
+  /** Board comment to focus (/b/:boardThreadId/c/:boardCommentId) when the event is about a comment. */
+  boardCommentId?: string | null;
 };
 
 // ─── src/common/feature-toggles.ts ─────────────────────────────────────────────

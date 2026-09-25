@@ -11,7 +11,7 @@ import { toCommunityGroupPreviewDto } from '../../common/dto/community-group.dto
 import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import { collectAncestorPostIds } from '../../common/posts/collect-ancestor-post-ids';
 import { loadPostVideoEmbeds } from '../../common/posts/post-video-embeds';
-import { ARTICLE_SHARE_INCLUDE, FITNESS_SHARE_INCLUDE, QUOTED_POST_INCLUDE } from '../../common/prisma-includes/post.include';
+import { BOARD_THREAD_PREVIEW_INCLUDE, ARTICLE_SHARE_INCLUDE, FITNESS_SHARE_INCLUDE, QUOTED_POST_INCLUDE } from '../../common/prisma-includes/post.include';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { collapseFeedByRoot, type FeedCollapsedItem } from '../../common/feed-collapse/collapse-by-root';
 import { applyCollapsedThreadSummary } from '../../common/feed-collapse/collapsed-thread-summary';
@@ -1272,7 +1272,7 @@ export class PostsFeedQueryService {
     };
     const baseWhere: Prisma.PostWhereInput = {
       ...commonWhere,
-      communityGroupId: null,
+      ...excludeCommunityGroupPostsWhere(),
     };
 
     const decodedForYouCursor = await this.decodeForYouCursor(cursor, viewerUserId);
@@ -2097,6 +2097,7 @@ export class PostsFeedQueryService {
         where: {
           deletedAt: null,
           communityGroupId: null,
+          boardOnly: false,
           trendingScore: { gt: 0 },
           parentId: null,
           createdAt: { gte: featuredMinCreatedAt },
@@ -2164,6 +2165,7 @@ export class PostsFeedQueryService {
       where: {
         deletedAt: null,
         communityGroupId: null,
+        boardOnly: false,
         trendingScore: { gt: 0 },
         parentId: null,
         createdAt: { gte: featuredMinCreatedAt },
@@ -2256,7 +2258,7 @@ export class PostsFeedQueryService {
               FROM "Post" p
               WHERE
                 p."deletedAt" IS NULL
-                AND p."communityGroupId" IS NULL
+                AND p."communityGroupId" IS NULL AND p."boardOnly" = false
                 AND p."parentId" IS NULL
                 AND p."createdAt" >= ${risingMinCreatedAt}
                 ${risingVisibilityFilterSql}
@@ -2771,7 +2773,7 @@ export class PostsFeedQueryService {
             LIMIT ${POSTS_RANKING.popularCandidatesRepliesTake}
           )
         ) u
-        JOIN "Post" _cg ON _cg."id" = u."id" AND _cg."communityGroupId" IS NULL
+        JOIN "Post" _cg ON _cg."id" = u."id" AND _cg."communityGroupId" IS NULL AND _cg."boardOnly" = false
         GROUP BY u."id"
       ),
       latest_hashtag_snapshot AS (
@@ -3315,7 +3317,7 @@ export class PostsFeedQueryService {
           LEFT JOIN comment_scores cs ON cs."postId" = p."id"
           WHERE
             p."deletedAt" IS NULL
-            AND p."communityGroupId" IS NULL
+            AND p."communityGroupId" IS NULL AND p."boardOnly" = false
             ${params.topLevelOnly ? Prisma.sql`AND p."parentId" IS NULL` : Prisma.sql``}
             AND p."createdAt" >= ${snapshotMinCreatedAt}
             AND p."userId" = ${user.id}
@@ -3615,6 +3617,7 @@ export class PostsFeedQueryService {
         mentions: { include: { user: { select: MENTION_USER_SELECT } } },
         article: ARTICLE_SHARE_INCLUDE,
         fitnessShare: FITNESS_SHARE_INCLUDE,
+        boardThread: BOARD_THREAD_PREVIEW_INCLUDE,
         quotedPost: { include: QUOTED_POST_INCLUDE },
       },
     });
@@ -3786,6 +3789,7 @@ export class PostsFeedQueryService {
         mentions: { include: { user: { select: MENTION_USER_SELECT } } },
         article: ARTICLE_SHARE_INCLUDE,
         fitnessShare: FITNESS_SHARE_INCLUDE,
+        boardThread: BOARD_THREAD_PREVIEW_INCLUDE,
         quotedPost: { include: QUOTED_POST_INCLUDE },
       },
     });
@@ -3845,6 +3849,7 @@ export class PostsFeedQueryService {
         userId: user.id,
         deletedAt: null,
         communityGroupId: null,
+        boardOnly: false,
         visibility: { in: visibilityFilter },
       },
     };

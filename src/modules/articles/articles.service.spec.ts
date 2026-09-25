@@ -37,6 +37,7 @@ function makeService(opts?: { allowedVisibilities?: Array<'public' | 'verifiedOn
     { enqueue: jest.fn().mockResolvedValue({}) } as any,
     { dispatch: jest.fn() } as any,
     { viewerViewedArticleIds: jest.fn().mockResolvedValue(new Set()) } as any,
+    { syncArticleThread: jest.fn().mockResolvedValue(undefined), createArticleThread: jest.fn().mockResolvedValue(null) } as any,
   );
 
   return { service, prisma, viewer };
@@ -116,6 +117,10 @@ function makeAuthoringService(tier: TierOpts = {}) {
       deleteMany: jest.fn().mockResolvedValue({}),
       createMany: jest.fn().mockResolvedValue({}),
     },
+    user: {
+      findUnique: jest.fn().mockResolvedValue({ articlePostToBoardDefault: true, boardShareToFeedDefault: true }),
+      update: jest.fn().mockResolvedValue({}),
+    },
     $transaction: jest.fn().mockImplementation((fn: any) =>
       fn({
         article: prisma.article,
@@ -153,6 +158,7 @@ function makeAuthoringService(tier: TierOpts = {}) {
     { enqueue: jest.fn().mockResolvedValue({}) } as any,
     { dispatch: jest.fn() } as any,
     { viewerViewedArticleIds: jest.fn().mockResolvedValue(new Set()) } as any,
+    { syncArticleThread: jest.fn().mockResolvedValue(undefined), createArticleThread: jest.fn().mockResolvedValue(null) } as any,
   );
 
   return { service, prisma, viewer };

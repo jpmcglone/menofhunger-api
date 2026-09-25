@@ -19,6 +19,7 @@ import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { ArticleViewsService } from '../article-views/article-views.service';
+import { BoardService } from '../board/board.service';
 import { stableJsonHash } from '../redis/redis-keys';
 import {
   toArticleDto,
@@ -104,6 +105,7 @@ export class ArticlesService {
     private readonly jobs: JobsService,
     private readonly sideEffects: SideEffectsService,
     private readonly articleViews: ArticleViewsService,
+    private readonly board: BoardService,
   ) {}
 
   private get r2BaseUrl(): string | null {
@@ -642,6 +644,10 @@ export class ArticlesService {
       include: this.articleIncludes(false, false),
     }) as ArticleWithAuthor;
 
+    if (updated.publishedAt && (updated.title !== article.title || updated.visibility !== article.visibility)) {
+      await this.board.syncArticleThread(articleId, { title: updated.title, visibility: updated.visibility });
+    }
+
     // Sync tags if provided (null/undefined = leave unchanged).
     if (Array.isArray(data.tags)) {
       await this.syncTags(this.prisma, articleId, data.tags);
@@ -657,7 +663,7 @@ export class ArticlesService {
 
   // ─── Publish ─────────────────────────────────────────────────────────────────
 
-  async publish(userId: string, articleId: string) {
+  async publish(userId: string, articleId: string, opts: { postToBoard?: boolean; shareToFeed?: boolean } = {}) {
     const article = await this.prisma.article.findUnique({ where: { id: articleId } });
     if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
     if (article.authorId !== userId) throw new ForbiddenException('Not your article.');
@@ -731,6 +737,10 @@ export class ArticlesService {
       return published;
     });
 
+    if (isFirstPublish) {
+      await this.crossPostToBoard(userId, updated, opts);
+    }
+
     // Fire follower notifications only on first publish. The fan-out scales with the author's
     // follower count, so it runs on the side-effects queue rather than in this process.
     if (isFirstPublish) {
@@ -760,6 +770,47 @@ export class ArticlesService {
     return toArticleDto(updated, this.r2BaseUrl, { viewerUserId: userId });
   }
 
+  /** First publish: optionally start a Board thread for the article, remembering the author's choice. */
+  private async crossPostToBoard(
+    userId: string,
+    article: ArticleWithAuthor,
+    opts: { postToBoard?: boolean; shareToFeed?: boolean },
+  ) {
+    const prefs = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { articlePostToBoardDefault: true, boardShareToFeedDefault: true },
+    });
+    const postToBoard = opts.postToBoard ?? prefs?.articlePostToBoardDefault ?? true;
+    const shareToFeed = opts.shareToFeed ?? prefs?.boardShareToFeedDefault ?? true;
+    if (typeof opts.postToBoard === 'boolean' || typeof opts.shareToFeed === 'boolean') {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          ...(typeof opts.postToBoard === 'boolean' ? { articlePostToBoardDefault: opts.postToBoard } : {}),
+          ...(postToBoard && typeof opts.shareToFeed === 'boolean' ? { boardShareToFeedDefault: opts.shareToFeed } : {}),
+        },
+      });
+    }
+    if (!postToBoard) return;
+    const tags = await this.prisma.articleTag.findMany({ where: { articleId: article.id }, select: { tag: true }, take: 3 });
+    try {
+      await this.board.createArticleThread({
+        userId,
+        article: {
+          id: article.id,
+          title: article.title,
+          excerpt: article.excerpt ?? null,
+          visibility: article.visibility,
+          commentCount: article.commentCount ?? 0,
+        },
+        tags: tags.map((t) => t.tag),
+        showInFeed: shareToFeed,
+      });
+    } catch (err) {
+      this.logger.warn(`[board] Article ${article.id} cross-post failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // ─── Unpublish ────────────────────────────────────────────────────────────────
 
   async unpublish(userId: string, articleId: string) {
@@ -776,6 +827,7 @@ export class ArticlesService {
       include: this.articleIncludes(false, false),
     }) as ArticleWithAuthor;
 
+    await this.board.syncArticleThread(articleId, { deleted: true });
     void this.cacheInvalidation.bumpFeedGlobal().catch(() => undefined);
 
     // Notify hub — feed content changed (article removed from public feed).
@@ -838,6 +890,7 @@ export class ArticlesService {
     if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
     if (article.authorId !== userId) throw new ForbiddenException('Not your article.');
     await this.prisma.article.update({ where: { id: articleId }, data: { deletedAt: new Date() } });
+    await this.board.syncArticleThread(articleId, { deleted: true });
     void this.cacheInvalidation.bumpFeedGlobal().catch(() => undefined);
     return { success: true };
   }
@@ -1149,6 +1202,9 @@ export class ArticlesService {
     }
 
     this.presenceRealtime.emitArticlesCommentAdded(articleId, { articleId, comment: commentDto });
+    if (newCommentCount !== null) {
+      void this.board.syncArticleThread(articleId, { commentCount: newCommentCount }).catch(() => undefined);
+    }
 
     this.sideEffects.dispatch('article.comment.created', {
       articleId,
@@ -1226,6 +1282,7 @@ export class ArticlesService {
         reason: 'commentCount',
         patch: { commentCount: newCommentCount },
       });
+      void this.board.syncArticleThread(comment.articleId, { commentCount: newCommentCount }).catch(() => undefined);
     }
 
     return { success: true };

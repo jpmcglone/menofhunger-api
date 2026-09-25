@@ -243,6 +243,11 @@ export const WsEventNames = {
   articlesCommentDeleted: 'articles:commentDeleted',
   articlesCommentUpdated: 'articles:commentUpdated',
   articlesCommentReactionChanged: 'articles:commentReactionChanged',
+  /** Board list rooms (tier-scoped; joined on subscribe according to the viewer's tier). */
+  boardSubscribe: 'board:subscribe',
+  boardUnsubscribe: 'board:unsubscribe',
+  /** New Board thread; carries identity + scope only so clients refetch through HTTP access rules. */
+  boardNewThread: 'board:new-thread',
   /** DM calling: client → server (acked). */
   callsStart: 'calls:start',
   callsJoin: 'calls:join',
@@ -257,6 +262,13 @@ export const WsEventNames = {
   /** SDP / ICE relay, both directions. */
   rtcSignal: 'rtc:signal',
 } as const;
+
+/** `board:new-thread`: identity and scope only; the list refetches to apply viewer access rules. */
+export type BoardNewThreadPayloadDto = {
+  threadId: string;
+  visibility: 'public' | 'verifiedOnly' | 'premiumOnly';
+  tags: string[];
+};
 
 export type PostsSubscribePayloadDto = {
   postIds: string[];

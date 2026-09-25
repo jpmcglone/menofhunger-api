@@ -53,6 +53,11 @@ const listSchema = z.object({
   includeBody: queryBoolean().optional(),
 });
 
+const publishSchema = z.object({
+  postToBoard: z.boolean().optional(),
+  shareToFeed: z.boolean().optional(),
+});
+
 const draftsListSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
@@ -211,8 +216,9 @@ export class ArticlesController {
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
   @Post(':id/publish')
-  async publish(@CurrentUserId() userId: string, @Param('id') id: string) {
-    const article = await this.articles.publish(userId, id);
+  async publish(@CurrentUserId() userId: string, @Param('id') id: string, @Body() body: unknown) {
+    const parsed = publishSchema.parse(body ?? {});
+    const article = await this.articles.publish(userId, id, parsed);
     return { data: article };
   }
 

@@ -35,10 +35,14 @@ function makeService(viewer: any = null) {
   return { service, prisma, posts, viewerContext };
 }
 
-function readableGroupFilterFromFindMany(prisma: any) {
+function searchWhereParts(prisma: any) {
   const call = prisma.post.findMany.mock.calls[0]?.[0];
   const ands = call?.where?.AND ?? [];
-  return ands.find((part: any) => part?.communityGroupId === null || Array.isArray(part?.OR));
+  return ands.flatMap((part: any) => (Array.isArray(part?.AND) ? part.AND : [part]));
+}
+
+function readableGroupFilterFromFindMany(prisma: any) {
+  return searchWhereParts(prisma).find((part: any) => part?.communityGroupId === null || Array.isArray(part?.OR));
 }
 
 describe('SearchService.searchPosts — community group visibility', () => {
@@ -48,6 +52,14 @@ describe('SearchService.searchPosts — community group visibility', () => {
     await service.searchPosts({ viewerUserId: null, q: 'go', limit: 10, cursor: null });
 
     expect(readableGroupFilterFromFindMany(prisma)).toEqual({ communityGroupId: null });
+  });
+
+  it('never returns Board-only rows (the Board has its own search)', async () => {
+    const { service, prisma } = makeService(null);
+
+    await service.searchPosts({ viewerUserId: null, q: 'go', limit: 10, cursor: null });
+
+    expect(searchWhereParts(prisma)).toContainEqual({ boardOnly: false });
   });
 
   it('lets verified signed-in viewers search open group posts', async () => {

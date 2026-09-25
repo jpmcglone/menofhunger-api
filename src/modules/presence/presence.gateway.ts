@@ -331,6 +331,16 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     this.subscriptionsHandler.handleGroupsUnsubscribe(client, payload);
   }
 
+  @SubscribeMessage('board:subscribe')
+  handleBoardSubscribe(client: Socket): void {
+    this.subscriptionsHandler.handleBoardSubscribe(client);
+  }
+
+  @SubscribeMessage('board:unsubscribe')
+  handleBoardUnsubscribe(client: Socket): void {
+    this.subscriptionsHandler.handleBoardUnsubscribe(client);
+  }
+
   @SubscribeMessage('articles:subscribe')
   handleArticlesSubscribe(client: Socket, payload: Partial<ArticlesSubscribePayloadDto>): Promise<void> {
     return this.subscriptionsHandler.handleArticlesSubscribe(client, payload);
