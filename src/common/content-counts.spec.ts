@@ -7,7 +7,12 @@ describe('canonical content count filters', () => {
       deletedAt: null,
       isDraft: false,
       visibility: { not: 'onlyMe' },
+      boardOnly: false,
     });
+  });
+
+  it('excludes Board-only rows, which no profile feed lists', () => {
+    expect(totalUserPostsWhere('user-1').boardOnly).toBe(false);
   });
 
   it('excludes only-me posts so the total matches what a profile feed can show', () => {

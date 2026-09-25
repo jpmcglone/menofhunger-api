@@ -10,6 +10,9 @@ import type { Prisma } from '@prisma/client';
  * viewer can reconcile with the list underneath it. It would also tell
  * anonymous callers of the public profile API how much private material a
  * member is keeping.
+ *
+ * `boardOnly` rows (Board comments, and threads not shared to the feed) are
+ * excluded for the same reason: no profile feed lists them.
  */
 export function totalUserPostsWhere(userId: string): Prisma.PostWhereInput {
   return {
@@ -17,6 +20,7 @@ export function totalUserPostsWhere(userId: string): Prisma.PostWhereInput {
     deletedAt: null,
     isDraft: false,
     visibility: { not: 'onlyMe' },
+    boardOnly: false,
   };
 }
 

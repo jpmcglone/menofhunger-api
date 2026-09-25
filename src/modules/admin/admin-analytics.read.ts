@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { LandingService } from "../landing/landing.service";
+import { readBoardAnalytics } from "./admin-analytics-board.read";
 import type {
   AdminAnalyticsArticlesDto,
   AdminAnalyticsCoinsDto,
@@ -1303,7 +1304,10 @@ export async function readAdminAnalytics(
   };
 
   // Same all-time landing stats shown on the public homepage (cached ~60s).
-  const landingSnapshot = await landing.getSnapshot(now);
+  const [landingSnapshot, board] = await Promise.all([
+    landing.getSnapshot(now),
+    readBoardAnalytics(prisma, { since, granularity }),
+  ]);
 
   // ── Response ──────────────────────────────────────────────────────────────
 
@@ -1350,6 +1354,7 @@ export async function readAdminAnalytics(
     },
     coins,
     articles,
+    board,
     groups: groupsBlock,
     spaces: spacesBlock,
     ai: aiBlock,

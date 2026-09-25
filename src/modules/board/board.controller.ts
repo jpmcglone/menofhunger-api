@@ -26,6 +26,7 @@ const listSchema = z.object({
   domain: z.string().trim().max(200).optional(),
   q: z.string().trim().max(120).optional(),
   author: z.string().trim().max(120).optional(),
+  hidden: z.enum(['only']).optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().max(200).optional(),
 });
@@ -98,6 +99,7 @@ export class BoardController {
       domain: parsed.domain?.trim() || null,
       q,
       authorUsername: parsed.author?.trim() || null,
+      hiddenOnly: parsed.hidden === 'only',
       limit: parsed.limit ?? 30,
       cursor: parsed.cursor ?? null,
     });

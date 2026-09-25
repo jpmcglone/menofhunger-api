@@ -50,8 +50,8 @@ const ANALYTICS_AREAS = {
     'follows',
   ],
   membership: ['summary', 'monetization'],
-  content: ['topPostsAllTime', 'postsByVisibility', 'articles'],
-  community: ['groups', 'spaces'],
+  content: ['topPostsAllTime', 'postsByVisibility', 'articles', 'board'],
+  community: ['groups', 'spaces', 'board'],
   ai: ['ai'],
   coins: ['coins'],
 };

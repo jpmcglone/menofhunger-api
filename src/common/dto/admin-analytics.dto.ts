@@ -118,6 +118,46 @@ export type AdminAnalyticsArticlesDto = {
   topArticles: AdminAnalyticsTopArticleDto[];
 };
 
+export type AdminAnalyticsBoardTopThreadDto = {
+  id: string;
+  title: string;
+  visibility: string;
+  authorUsername: string | null;
+  boostCount: number;
+  commentCount: number;
+  uniqueViewCount: number;
+  viewCount: number;
+  createdAt: string;
+};
+
+/**
+ * Board threads and comments (Post.kind = 'board'), reported apart from `posts`.
+ * Article threads are excluded — they mirror an article already counted in `articles`.
+ * Bots excluded. Range-filtered unless labelled all-time.
+ */
+export type AdminAnalyticsBoardDto = {
+  /** All-time live threads. */
+  totalThreads: number;
+  /** All-time live comments. */
+  totalComments: number;
+  threadsInRange: number;
+  commentsInRange: number;
+  /** Distinct people who started a thread or commented in range. */
+  participantsInRange: number;
+  /** Boosts on Board threads and comments in range. */
+  boostsInRange: number;
+  /** Among threads created in range: % with ≥1 comment within 24h. Null when none. */
+  pctThreadsWithCommentWithin24h: number | null;
+  /** All-time live threads by visibility tier. */
+  byVisibility: Record<string, number>;
+  /** Threads started per bucket in range. */
+  threads: TimeSeriesPoint[];
+  /** Comments per bucket in range. */
+  comments: TimeSeriesPoint[];
+  /** Threads created in range, by points then comments. */
+  topThreads: AdminAnalyticsBoardTopThreadDto[];
+};
+
 export type AdminAnalyticsMonetizationDto = {
   free: number;
   payingPremium: number;
@@ -271,6 +311,7 @@ export type AdminAnalyticsDto = {
   monetization: AdminAnalyticsMonetizationDto;
   coins: AdminAnalyticsCoinsDto;
   articles: AdminAnalyticsArticlesDto;
+  board: AdminAnalyticsBoardDto;
   groups: AdminAnalyticsGroupsDto;
   spaces: AdminAnalyticsSpacesDto;
   ai: AdminAnalyticsAIDto;

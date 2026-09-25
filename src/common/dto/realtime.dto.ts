@@ -30,6 +30,15 @@ export type NotificationsDeletedPayloadDto = {
   notificationIds: string[];
 };
 
+/**
+ * Unread (readAt null) notification counts that drive the Board and Articles nav dots.
+ * Separate from the bell, which counts unseen rows. Emitted whenever either count can change.
+ */
+export type NotificationsNavUnreadPayloadDto = {
+  boardUnreadCount: number;
+  articlesUnreadCount: number;
+};
+
 /** Drop lock-screen APNs the user already saw in the matching in-app section. */
 export type NotificationsLockScreenClearPayloadDto = {
   section: 'inbox' | 'groups';
@@ -248,6 +257,8 @@ export const WsEventNames = {
   boardUnsubscribe: 'board:unsubscribe',
   /** New Board thread; carries identity + scope only so clients refetch through HTTP access rules. */
   boardNewThread: 'board:new-thread',
+  /** Server → user room: unread Board / Articles notification counts for the nav dots. */
+  notificationsNavUnread: 'notifications:navUnreadChanged',
   /** DM calling: client → server (acked). */
   callsStart: 'calls:start',
   callsJoin: 'calls:join',

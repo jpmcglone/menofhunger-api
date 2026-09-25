@@ -25,6 +25,7 @@ import type {
   PostsTypingPayloadDto,
   UsersMeUpdatedPayloadDto,
   NotificationsDeletedPayloadDto,
+  NotificationsNavUnreadPayloadDto,
   AccountsBadgeUpdatedPayloadDto,
   NotificationsLockScreenClearPayloadDto,
   NotificationsNewPayloadDto,
@@ -175,7 +176,7 @@ export class PresenceRealtimeService {
 
   emitNotificationsUpdated(
     userId: string,
-    payload: { undeliveredCount: number; clearedPostIds?: string[] },
+    payload: { undeliveredCount: number; clearedPostIds?: string[]; clearedBoardThreadIds?: string[] },
   ): void {
     this.emitToUser(userId, 'notifications:updated', payload);
   }
@@ -198,6 +199,10 @@ export class PresenceRealtimeService {
    */
   emitNotificationsWaitingChanged(userId: string, payload: { unreadCommentCount: number }): void {
     this.emitToUser(userId, 'notifications:waitingCountChanged', payload);
+  }
+
+  emitNotificationsNavUnreadChanged(userId: string, payload: NotificationsNavUnreadPayloadDto): void {
+    this.emitToUser(userId, 'notifications:navUnreadChanged', payload);
   }
 
   emitGroupNotificationPreferencesChanged(userId: string, payload: import('../../common/dto/community-group.dto').GroupNotificationPreferencesDto): void {

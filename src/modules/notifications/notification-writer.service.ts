@@ -83,6 +83,7 @@ export class NotificationWriterService {
     payload: { undeliveredCount: number },
   ): void {
     const emit = () => this.presenceRealtime.emitNotificationsUpdated(recipientUserId, payload);
+    void this.readState.emitNavUnreadForUser(recipientUserId);
     if (!this.cacheInvalidation) {
       emit();
       return;

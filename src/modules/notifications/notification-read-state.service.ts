@@ -5,6 +5,7 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { notificationFilterWhere } from './notification-category';
 
 export type NotificationUnreadByKind = Partial<Record<NotificationKind | 'all', number>>;
 
@@ -91,12 +92,37 @@ export class NotificationReadStateService {
 
   private emitBellUpdated(
     recipientUserId: string,
-    payload: { undeliveredCount: number; clearedPostIds?: string[] },
+    payload: { undeliveredCount: number; clearedPostIds?: string[]; clearedBoardThreadIds?: string[] },
   ): void {
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, payload);
     this.dispatchBadgeSync(recipientUserId, { undeliveredBellCount: payload.undeliveredCount });
     this.sideEffects.dispatch('account.cluster.badge', { userId: recipientUserId });
     void this.cacheInvalidation?.bumpNotificationsList(recipientUserId);
+    void this.emitNavUnreadForUser(recipientUserId);
+  }
+
+  /** Unread Board and Articles notifications (readAt, not deliveredAt): opening the thread or article clears them. */
+  async getNavUnread(recipientUserId: string): Promise<{ boardUnreadCount: number; articlesUnreadCount: number }> {
+    const base: Prisma.NotificationWhereInput = {
+      recipientUserId,
+      readAt: null,
+      kind: { notIn: BELL_EXCLUDED_KINDS },
+    };
+    const [boardUnreadCount, articlesUnreadCount] = await Promise.all([
+      this.prisma.notification.count({ where: { ...base, ...notificationFilterWhere('board') } }),
+      this.prisma.notification.count({ where: { ...base, subjectArticleId: { not: null } } }),
+    ]);
+    return { boardUnreadCount, articlesUnreadCount };
+  }
+
+  /** Best-effort `notifications:navUnreadChanged` emit; never throws. */
+  async emitNavUnreadForUser(recipientUserId: string): Promise<void> {
+    try {
+      const counts = await this.getNavUnread(recipientUserId);
+      this.presenceRealtime.emitNotificationsNavUnreadChanged(recipientUserId, counts);
+    } catch (err) {
+      this.logger.debug(`[notifications] Failed to emit nav unread: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   undeliveredBellWhere(recipientUserId: string): Prisma.NotificationWhereInput {
@@ -302,15 +328,16 @@ export class NotificationReadStateService {
       articleId?: string | null;
       crewId?: string | null;
       groupId?: string | null;
+      boardThreadId?: string | null;
     },
   ): Promise<void> {
-    const { postId, userId, articleId, crewId, groupId } = params;
+    const { postId, userId, articleId, crewId, groupId, boardThreadId } = params;
     // Batch path for post-only clears (views, detail page).
-    if (postId && !userId && !articleId && !crewId && !groupId) {
+    if (postId && !userId && !articleId && !crewId && !groupId && !boardThreadId) {
       await this.markReadBySubjects(recipientUserId, [postId]);
       return;
     }
-    if (!postId && !userId && !articleId && !crewId && !groupId) return;
+    if (!postId && !userId && !articleId && !crewId && !groupId && !boardThreadId) return;
 
     // Back-compat: followed_post notifications were historically keyed only by actorUserId.
     // When visiting a user's profile we want to clear "new posts" notifications for that actor,
@@ -331,6 +358,18 @@ export class NotificationReadStateService {
     }
     if (articleId) {
       or.push({ subjectArticleId: articleId });
+    }
+    if (boardThreadId) {
+      // Opening a thread shows every comment in it, including nested replies whose
+      // subject post is a parent comment rather than the thread itself.
+      const inThread = {
+        is: {
+          kind: 'board' as const,
+          OR: [{ id: boardThreadId }, { rootId: boardThreadId }, { parentId: boardThreadId }],
+        },
+      };
+      or.push({ actorPost: inThread });
+      or.push({ subjectPost: inThread });
     }
     if (crewId) {
       // All crew_* notifications carry subjectCrewId once the crew exists. Visiting the
@@ -382,6 +421,7 @@ export class NotificationReadStateService {
     this.emitBellUpdated(recipientUserId, {
       undeliveredCount,
       ...(postId ? { clearedPostIds: [postId] } : {}),
+      ...(boardThreadId ? { clearedBoardThreadIds: [boardThreadId] } : {}),
     });
     // markReadBySubject can clear comment notifications (e.g. opening the post via tap).
     void this.emitWaitingCountForUser(recipientUserId);

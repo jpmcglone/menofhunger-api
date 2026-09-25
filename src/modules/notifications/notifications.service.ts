@@ -156,6 +156,10 @@ export class NotificationsService {
     return this.readState.getUnreadCommentCount(...args);
   }
 
+  getNavUnread(...args: Parameters<NotificationReadStateService['getNavUnread']>) {
+    return this.readState.getNavUnread(...args);
+  }
+
   markDelivered(...args: Parameters<NotificationReadStateService['markDelivered']>) {
     return this.readState.markDelivered(...args);
   }

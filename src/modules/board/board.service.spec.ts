@@ -119,6 +119,34 @@ describe('BoardService access and teasers', () => {
   });
 });
 
+describe('BoardService list scope', () => {
+  const listParams = {
+    sort: 'new' as const, range: null, visibility: 'all' as const, tags: [], domain: null, q: null,
+    authorUsername: null, limit: 30, cursor: null,
+  };
+  const viewer = { id: 'viewer', verifiedStatus: 'none', premium: false, siteAdmin: false };
+
+  it('is site-wide: only visibility and the viewer’s own hides shape the list, never follows', async () => {
+    const { service, prisma } = setup(viewer);
+    await service.listThreads({ ...listParams, viewerUserId: 'viewer' });
+    const where = JSON.stringify(prisma.post.findMany.mock.calls[0][0].where);
+    expect(where).not.toMatch(/follow/i);
+    expect(where).toContain('"boardHides":{"none":{"userId":"viewer"}}');
+  });
+
+  it('lists only the viewer’s hidden threads so they can be brought back', async () => {
+    const { service, prisma } = setup(viewer);
+    await service.listThreads({ ...listParams, viewerUserId: 'viewer', hiddenOnly: true });
+    expect(JSON.stringify(prisma.post.findMany.mock.calls[0][0].where)).toContain('"boardHides":{"some":{"userId":"viewer"}}');
+  });
+
+  it('returns nothing for a signed-out hidden view', async () => {
+    const { service, prisma } = setup(null);
+    await expect(service.listThreads({ ...listParams, viewerUserId: null, hiddenOnly: true })).resolves.toEqual({ threads: [], nextCursor: null });
+    expect(prisma.post.findMany).not.toHaveBeenCalled();
+  });
+});
+
 describe('BoardService writes', () => {
   const member = { id: 'author', verifiedStatus: 'identity', premium: true, premiumPlus: false, siteAdmin: false };
 

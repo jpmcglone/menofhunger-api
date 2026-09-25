@@ -58,6 +58,8 @@ export type BoardListParams = {
   domain: string | null;
   q: string | null;
   authorUsername: string | null;
+  /** Only threads the viewer hid, so they can be brought back. */
+  hiddenOnly?: boolean;
   limit: number;
   cursor: string | null;
 };
@@ -126,7 +128,13 @@ export class BoardService {
       ...(params.domain ? { domain: params.domain.trim().toLowerCase().replace(/^www\./, '') } : {}),
     };
     if (Object.keys(threadWhere).length) and.push({ boardThread: { is: threadWhere } });
-    if (viewer && !authorUsername) and.push({ boardHides: { none: { userId: viewer.id } } });
+    // The Board is site-wide: only visibility tier and the viewer's own hides shape the list, never follows.
+    if (params.hiddenOnly) {
+      if (!viewer) return { threads: [], nextCursor: null };
+      and.push({ boardHides: { some: { userId: viewer.id } } });
+    } else if (viewer && !authorUsername) {
+      and.push({ boardHides: { none: { userId: viewer.id } } });
+    }
     if (q) {
       and.push({
         OR: [

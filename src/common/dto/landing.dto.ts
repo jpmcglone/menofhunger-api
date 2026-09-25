@@ -84,10 +84,36 @@ export type LandingArticleBreakdownDto = {
   unique: number;
 };
 
+/**
+ * Board threads and comments by landing-eligible authors. Article threads are
+ * excluded (they mirror an article already counted above). Not part of `posts`.
+ */
+export type LandingBoardBreakdownDto = {
+  /** Thread visibility = 'public'. */
+  public: number;
+  /** Thread visibility = 'verifiedOnly'. */
+  verified: number;
+  /** Thread visibility = 'premiumOnly'. */
+  premium: number;
+  /** public + verified + premium threads. */
+  total: number;
+  /** Comments across all Board threads. */
+  comments: number;
+  /** Threads created in the last 7 days. */
+  threadsThisWeek: number;
+  /** Distinct authors of Board threads or comments. */
+  authors: number;
+  /** Sum of Post.totalViewCount on landing-eligible threads. */
+  views: number;
+  /** Sum of Post.viewerCount (unique people) on landing-eligible threads. */
+  unique: number;
+};
+
 export type LandingStatsDto = {
   men: LandingMenBreakdownDto;
   posts: LandingPostBreakdownDto;
   articles: LandingArticleBreakdownDto;
+  board: LandingBoardBreakdownDto;
   views: LandingViewsBreakdownDto;
 };
 

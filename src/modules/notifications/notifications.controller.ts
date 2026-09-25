@@ -63,9 +63,10 @@ const markReadBodySchema = z.object({
   article_id: z.string().trim().min(1).optional(),
   crew_id: z.string().trim().min(1).optional(),
   group_id: z.string().trim().min(1).optional(),
+  board_thread_id: z.string().trim().min(1).optional(),
 }).refine(
-  (d) => d.post_id ?? d.user_id ?? d.article_id ?? d.crew_id ?? d.group_id,
-  { message: 'At least one of post_id, user_id, article_id, crew_id, or group_id is required' },
+  (d) => d.post_id ?? d.user_id ?? d.article_id ?? d.crew_id ?? d.group_id ?? d.board_thread_id,
+  { message: 'At least one of post_id, user_id, article_id, crew_id, group_id, or board_thread_id is required' },
 );
 
 const pushSubscribeBodySchema = z.object({
@@ -137,11 +138,12 @@ export class NotificationsController {
   })
   @Get('unread-count')
   async unreadCount(@CurrentUserId() userId: string) {
-    const [count, unreadCommentCount] = await Promise.all([
+    const [count, unreadCommentCount, navUnread] = await Promise.all([
       this.notifications.getUndeliveredCount(userId),
       this.notifications.getUnreadCommentCount(userId),
+      this.notifications.getNavUnread(userId),
     ]);
-    return { data: { count, unreadCommentCount } };
+    return { data: { count, unreadCommentCount, ...navUnread } };
   }
 
   @UseGuards(AuthGuard)
@@ -364,6 +366,7 @@ export class NotificationsController {
       articleId: parsed.article_id ?? null,
       crewId: parsed.crew_id ?? null,
       groupId: parsed.group_id ?? null,
+      boardThreadId: parsed.board_thread_id ?? null,
     });
     return { data: {} };
   }

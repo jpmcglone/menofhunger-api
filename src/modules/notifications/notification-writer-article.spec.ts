@@ -10,7 +10,7 @@ function buildWriter(prisma: object, presenceRealtime: object, sideEffects: obje
     { buildNotificationDtoForRecipient: jest.fn(async () => null) } as never,
     {
       emitWaitingCountForUser: jest.fn(),
-      undeliveredBellWhere: (uid: string) => ({ recipientUserId: uid, deliveredAt: null }),
+      undeliveredBellWhere: (uid: string) => ({ recipientUserId: uid, deliveredAt: null }),      emitNavUnreadForUser: jest.fn(async () => undefined),
     } as never,
   );
 }

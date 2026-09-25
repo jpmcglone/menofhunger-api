@@ -1574,9 +1574,15 @@ export class PostsMutationService {
     }
     this.ranking.enqueueScoreRefresh(post.id);
 
-    const eventName = kind === 'checkin' ? 'checkin_created' : 'post_created';
+    const eventName = kind === 'checkin'
+      ? 'checkin_created'
+      : kind === 'board'
+        ? (parentId ? 'board_comment_created' : 'board_thread_created')
+        : 'post_created';
     this.posthog.capture(userId, eventName, {
       post_id: post.id,
+      kind,
+      ...(kind === 'board' ? { from_article: Boolean(params.articleId) } : {}),
       visibility,
       has_media: (params.media?.length ?? 0) > 0,
       has_poll: Boolean(params.poll),

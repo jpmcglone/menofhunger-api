@@ -58,6 +58,8 @@ export interface SlackDailyDigestPayload {
   newReplyCount: number;
   usersWhoPostedCount: number;
   newArticleCount: number;
+  newBoardThreadCount: number;
+  newBoardCommentCount: number;
   activeUserCount: number;
   wauCount: number;
   bannedUserCount: number;
@@ -281,6 +283,10 @@ export class SlackService {
       { type: 'mrkdwn', text: `*Users Who Posted*\n${p.usersWhoPostedCount}` },
       { type: 'mrkdwn', text: `*New Replies*\n${p.newReplyCount}` },
       { type: 'mrkdwn', text: `*New Articles*\n${p.newArticleCount}` },
+      {
+        type: 'mrkdwn',
+        text: `*Board*\n${base ? `<${base}/b?sort=new|${p.newBoardThreadCount} threads>` : `${p.newBoardThreadCount} threads`} · ${p.newBoardCommentCount} comments`,
+      },
       { type: 'mrkdwn', text: `*Active Users (DAU)*\n${p.activeUserCount}` },
       { type: 'mrkdwn', text: `*Active Users (7d WAU)*\n${p.wauCount}` },
     ];

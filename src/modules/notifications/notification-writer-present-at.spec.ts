@@ -25,7 +25,7 @@ function buildWriter(deps: Deps): NotificationWriterService {
   const query = { buildNotificationDtoForRecipient: jest.fn(async () => null) } as unknown as NotificationQueryService;
   const readState = {
     emitWaitingCountForUser: jest.fn(),
-    undeliveredBellWhere: (uid: string) => ({ recipientUserId: uid, deliveredAt: null, kind: { notIn: ['message', 'community_group_post'] } }),
+    undeliveredBellWhere: (uid: string) => ({ recipientUserId: uid, deliveredAt: null, kind: { notIn: ['message', 'community_group_post'] } }),    emitNavUnreadForUser: jest.fn(async () => undefined),
   } as unknown as NotificationReadStateService;
   return new NotificationWriterService(
     deps.prisma as any,

@@ -57,6 +57,14 @@ type StatsRow = {
   article_authors: bigint;
   article_views: bigint;
   article_unique: bigint;
+  public_board_threads: bigint;
+  verified_board_threads: bigint;
+  premium_board_threads: bigint;
+  board_comments: bigint;
+  board_threads_week: bigint;
+  board_authors: bigint;
+  board_views: bigint;
+  board_unique: bigint;
   total_views: bigint;
   unique_views: bigint;
   premium_views: bigint;
@@ -119,6 +127,14 @@ export class LandingService {
                articles.article_authors,
                articles.article_views,
                articles.article_unique,
+               board.public_board_threads,
+               board.verified_board_threads,
+               board.premium_board_threads,
+               board.board_comments,
+               board.board_threads_week,
+               board.board_authors,
+               board.board_views,
+               board.board_unique,
                view_totals.total_views,
                view_totals.unique_views,
                view_tiers.premium_views,
@@ -214,6 +230,30 @@ export class LandingService {
             AND u."accountKind" = 'person'
             AND u."verifiedStatus" != 'none'
         ) articles
+        CROSS JOIN (
+          -- Board threads (minus article mirrors) and comments by landing-eligible authors.
+          SELECT
+            COUNT(*) FILTER (WHERE p."parentId" IS NULL AND p."visibility" = 'public')       AS public_board_threads,
+            COUNT(*) FILTER (WHERE p."parentId" IS NULL AND p."visibility" = 'verifiedOnly') AS verified_board_threads,
+            COUNT(*) FILTER (WHERE p."parentId" IS NULL AND p."visibility" = 'premiumOnly')  AS premium_board_threads,
+            COUNT(*) FILTER (WHERE p."parentId" IS NOT NULL) AS board_comments,
+            COUNT(*) FILTER (WHERE p."parentId" IS NULL AND p."createdAt" >= ${sevenDaysAgo}) AS board_threads_week,
+            COUNT(DISTINCT p."userId")::bigint AS board_authors,
+            COALESCE(SUM(p."totalViewCount") FILTER (WHERE p."parentId" IS NULL), 0)::bigint AS board_views,
+            COALESCE(SUM(p."viewerCount") FILTER (WHERE p."parentId" IS NULL), 0)::bigint AS board_unique
+          FROM "Post" p
+          JOIN "User" u ON u.id = p."userId"
+          WHERE p."deletedAt" IS NULL
+            AND p."isDraft" = false
+            AND p."kind" = 'board'
+            AND p."articleId" IS NULL
+            AND p."visibility" IN ('public', 'verifiedOnly', 'premiumOnly')
+            AND u."bannedAt" IS NULL
+            AND u."usernameIsSet" = true
+            AND u."isOrganization" = false
+            AND u."accountKind" = 'person'
+            AND u."verifiedStatus" != 'none'
+        ) board
         CROSS JOIN (
           -- Impressions + unique people on landing-eligible posts.
           SELECT
@@ -490,6 +530,10 @@ export class LandingService {
     const articleAuthors = Number(stats?.article_authors ?? 0);
     const articleViews = Math.max(0, Math.floor(Number(stats?.article_views ?? 0)));
     const articleUnique = Math.max(0, Math.floor(Number(stats?.article_unique ?? 0)));
+    const count = (value: bigint | number | null | undefined) => Math.max(0, Math.floor(Number(value ?? 0)));
+    const publicBoardThreads = count(stats?.public_board_threads);
+    const verifiedBoardThreads = count(stats?.verified_board_threads);
+    const premiumBoardThreads = count(stats?.premium_board_threads);
     const totalViews = Math.max(0, Math.floor(Number(stats?.total_views ?? 0)));
     const uniqueViews = Math.max(0, Math.floor(Number(stats?.unique_views ?? 0)));
     const premiumViews = Math.max(0, Math.floor(Number(stats?.premium_views ?? 0)));
@@ -531,6 +575,17 @@ export class LandingService {
           authors: Math.max(0, articleAuthors),
           views: articleViews,
           unique: articleUnique,
+        },
+        board: {
+          public: publicBoardThreads,
+          verified: verifiedBoardThreads,
+          premium: premiumBoardThreads,
+          total: publicBoardThreads + verifiedBoardThreads + premiumBoardThreads,
+          comments: count(stats?.board_comments),
+          threadsThisWeek: count(stats?.board_threads_week),
+          authors: count(stats?.board_authors),
+          views: count(stats?.board_views),
+          unique: count(stats?.board_unique),
         },
         views: {
           premium: premiumViews,

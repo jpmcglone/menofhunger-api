@@ -28,6 +28,7 @@ export const metricGuide = `Men of Hunger metric interpretation (source: API adm
 - activation is any recorded activity within the first 7 days among eligible users. It is not proof of onboarding completion or first meaningful participation.
 - weekly retention w1/w4 are counts. Only show a percentage once the entire target calendar week has completed. Younger cohorts have not had a full opportunity to return.
 - posts and aiPosts separate human and bot authors. Do not combine them and describe all activity as member engagement.
+- Board (kind board) is reported only in board, never in posts, postsByVisibility, topPostsAllTime, summary.totalPublicPosts, or landing.posts. board counts human threads and comments, excluding article threads (those mirror an article already counted in articles). landing.board is the all-time public-homepage equivalent. Board threads and comments are not contributions for member_activation, member_contributed, or the attention pulse; report Board participation separately from those.
 - messages/aiMessages are aggregate counts. This integration does not read direct-message bodies.
 - referral totals are all-time; recruitsOverTime is the last 30 days regardless of the analytics range.
 - topPostsAllTime is all-time even when a shorter range is selected. Public-content research uses its own explicit since/before interval.

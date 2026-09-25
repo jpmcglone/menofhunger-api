@@ -961,7 +961,7 @@ describe('NotificationWriterService bell-counter eligibility', () => {
       { enqueueCron: jest.fn() } as any,
       { dispatch: jest.fn() } as any,
       { buildNotificationDtoForRecipient: jest.fn(async () => null) } as any,
-      { undeliveredBellWhere: jest.fn(() => ({})), emitWaitingCountForUser: jest.fn() } as any,
+      { undeliveredBellWhere: jest.fn(() => ({})), emitWaitingCountForUser: jest.fn(), emitNavUnreadForUser: jest.fn() } as any,
     );
 
     await writer.create({
@@ -1037,6 +1037,61 @@ describe('NotificationsService.markNewPostsRead', () => {
       },
     });
     expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalledWith('viewer-1', { undeliveredCount: 7 });
+  });
+});
+
+describe('NotificationReadStateService board thread read + nav dots', () => {
+  function build(counts: number[]) {
+    const notification = {
+      updateMany: jest.fn(async () => ({ count: 2 })),
+      count: jest.fn(async () => counts.shift() ?? 0),
+    };
+    const prisma = {
+      notification,
+      $transaction: jest.fn(async (fn: (tx: any) => Promise<any>) => fn({ notification, $executeRaw: jest.fn() })),
+    };
+    const presenceRealtime = {
+      emitNotificationsUpdated: jest.fn(),
+      emitNotificationsNavUnreadChanged: jest.fn(),
+      emitNotificationsWaitingChanged: jest.fn(),
+    };
+    const readState = new NotificationReadStateService(
+      prisma as any,
+      presenceRealtime as any,
+      { capture: jest.fn() } as any,
+      { dispatch: jest.fn() } as any,
+    );
+    return { readState, notification, presenceRealtime };
+  }
+
+  it('reads every notification in the thread, including nested replies, and clears the thread for other tabs', async () => {
+    const { readState, notification, presenceRealtime } = build([4, 1, 0, 3]);
+
+    await readState.markReadBySubject('viewer-1', { boardThreadId: 't1' });
+
+    const inThread = { is: { kind: 'board', OR: [{ id: 't1' }, { rootId: 't1' }, { parentId: 't1' }] } };
+    expect(notification.updateMany).toHaveBeenNthCalledWith(1, {
+      where: { recipientUserId: 'viewer-1', readAt: null, OR: [{ actorPost: inThread }, { subjectPost: inThread }] },
+      data: { readAt: expect.any(Date) },
+    });
+    expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalledWith('viewer-1', {
+      undeliveredCount: 4,
+      clearedBoardThreadIds: ['t1'],
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(presenceRealtime.emitNotificationsNavUnreadChanged).toHaveBeenCalledWith('viewer-1', {
+      boardUnreadCount: 1,
+      articlesUnreadCount: 0,
+    });
+  });
+
+  it('counts unread Board and article notifications separately from the bell', async () => {
+    const { readState, notification } = build([2, 5]);
+
+    await expect(readState.getNavUnread('viewer-1')).resolves.toEqual({ boardUnreadCount: 2, articlesUnreadCount: 5 });
+    expect(notification.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({ recipientUserId: 'viewer-1', readAt: null, subjectArticleId: { not: null } }),
+    });
   });
 });
 

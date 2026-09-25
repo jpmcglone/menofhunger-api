@@ -208,13 +208,13 @@ export class AdminDailyDigestCron {
         this.prisma.user.count({}),
         this.prisma.feedback.count({ where: { createdAt: { gte: windowStart, lt: windowEnd } } }),
         this.prisma.report.count({ where: { createdAt: { gte: windowStart, lt: windowEnd } } }),
-        // Top-level posts only (parentId: null); replies counted separately
+        // Top-level posts only (parentId: null); replies counted separately. Board is its own line.
         this.prisma.post.count({
-          where: { createdAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false, parentId: null },
+          where: { createdAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false, parentId: null, kind: { not: 'board' } },
         }),
-        // Replies / comments
+        // Replies / comments (Board comments counted separately)
         this.prisma.post.count({
-          where: { createdAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false, parentId: { not: null } },
+          where: { createdAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false, parentId: { not: null }, kind: { not: 'board' } },
         }),
         this.prisma.article.count({
           where: { publishedAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false },
@@ -227,7 +227,7 @@ export class AdminDailyDigestCron {
         // Distinct users who published at least one top-level post yesterday
         this.prisma.post.groupBy({
           by: ['userId'],
-          where: { createdAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false, parentId: null },
+          where: { createdAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false, parentId: null, kind: { not: 'board' } },
         }),
         this.prisma.report.count({ where: { status: 'pending' } }),
         this.prisma.feedback.count({ where: { status: 'new' } }),
@@ -270,6 +270,12 @@ export class AdminDailyDigestCron {
         }),
       ]);
 
+      const boardWindow = { createdAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false, kind: 'board' as const };
+      const [newBoardThreadCount, newBoardCommentCount] = await Promise.all([
+        this.prisma.post.count({ where: { ...boardWindow, parentId: null } }),
+        this.prisma.post.count({ where: { ...boardWindow, parentId: { not: null } } }),
+      ]);
+
       // Top post of yesterday: highest trendingScore among top-level posts created in window (admins see all).
       type TopPostRow = {
         id: string;
@@ -285,7 +291,7 @@ export class AdminDailyDigestCron {
       let topPost: TopPostRow | null = null;
       {
         const rawPost = await (this.prisma.post as any).findFirst({
-          where: { deletedAt: null, parentId: null, createdAt: { gte: windowStart, lt: windowEnd }, trendingScore: { gt: 0 } },
+          where: { deletedAt: null, parentId: null, kind: { not: 'board' }, createdAt: { gte: windowStart, lt: windowEnd }, trendingScore: { gt: 0 } },
           orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
           select: { id: true, body: true, boostCount: true, commentCount: true, viewerCount: true, totalViewCount: true, visibility: true, user: { select: { username: true, name: true } } },
         }) as { id: string; body: string | null; boostCount: number; commentCount: number; viewerCount: number; totalViewCount: number; visibility: string; user: { username: string | null; name: string | null } | null } | null;
@@ -354,6 +360,8 @@ export class AdminDailyDigestCron {
         newReportCount > 0 ||
         newPostCount > 0 ||
         newArticleCount > 0 ||
+        newBoardThreadCount > 0 ||
+        newBoardCommentCount > 0 ||
         pendingReportCount > 0 ||
         unreviewedFeedbackCount > 0 ||
         pendingVerificationCount > 0 ||
@@ -378,6 +386,8 @@ export class AdminDailyDigestCron {
         newReplyCount,
         usersWhoPostedCount,
         newArticleCount,
+        newBoardThreadCount,
+        newBoardCommentCount,
         activeUserCount,
         wauCount,
         bannedUserCount,
@@ -432,6 +442,8 @@ export class AdminDailyDigestCron {
             newReplyCount,
             usersWhoPostedCount,
             newArticleCount,
+            newBoardThreadCount,
+            newBoardCommentCount,
             activeUserCount,
             wauCount,
             bannedUserCount,
@@ -456,6 +468,8 @@ export class AdminDailyDigestCron {
             newReplyCount,
             usersWhoPostedCount,
             newArticleCount,
+            newBoardThreadCount,
+            newBoardCommentCount,
             activeUserCount,
             wauCount,
             bannedUserCount,
@@ -508,6 +522,8 @@ export class AdminDailyDigestCron {
     newReplyCount: number;
     usersWhoPostedCount: number;
     newArticleCount: number;
+    newBoardThreadCount: number;
+    newBoardCommentCount: number;
     activeUserCount: number;
     wauCount: number;
     bannedUserCount: number;
@@ -553,6 +569,7 @@ export class AdminDailyDigestCron {
       dateLabel, now, baseUrl,
       newUsers, totalNewUserCount, totalUserCount,
       newFeedbackCount, newReportCount, newPostCount, newReplyCount, usersWhoPostedCount, newArticleCount,
+      newBoardThreadCount, newBoardCommentCount,
       activeUserCount, wauCount, bannedUserCount,
       pendingReportCount, unreviewedFeedbackCount, pendingVerificationCount,
       activePremiumCount, activePremiumPlusCount, pendingCancellationCount,
@@ -595,6 +612,8 @@ export class AdminDailyDigestCron {
       body += renderStatRow('Users who posted', usersWhoPostedCount, { dimZero: true });
       body += renderStatRow('New replies / comments', newReplyCount, { dimZero: true });
       body += renderStatRow('New articles published', newArticleCount);
+      body += renderStatRow('New Board threads', newBoardThreadCount, { dimZero: true, href: `${baseUrl}/b?sort=new` });
+      body += renderStatRow('New Board comments', newBoardCommentCount, { dimZero: true });
       body += renderStatRow('Active users (DAU)', activeUserCount);
       body += renderStatRow('Active users (7-day WAU)', wauCount, { color: EMAIL.muted });
       if (bannedUserCount > 0) {
@@ -755,6 +774,7 @@ export class AdminDailyDigestCron {
     if (newFeedbackCount > 0) preheaderParts.push(plural(newFeedbackCount, 'new feedback'));
     if (newPostCount > 0) preheaderParts.push(plural(newPostCount, 'new post'));
     if (newArticleCount > 0) preheaderParts.push(plural(newArticleCount, 'new article'));
+    if (newBoardThreadCount > 0) preheaderParts.push(plural(newBoardThreadCount, 'new Board thread'));
     const preheader = preheaderParts.length > 0 ? preheaderParts.join(' · ') : 'Daily admin summary';
 
     return renderMohEmail({
@@ -777,6 +797,8 @@ export class AdminDailyDigestCron {
     newReplyCount: number;
     usersWhoPostedCount: number;
     newArticleCount: number;
+    newBoardThreadCount: number;
+    newBoardCommentCount: number;
     activeUserCount: number;
     wauCount: number;
     bannedUserCount: number;
@@ -794,6 +816,7 @@ export class AdminDailyDigestCron {
     const {
       dateLabel, totalNewUserCount, totalUserCount, newFeedbackCount, newReportCount,
       newPostCount, newReplyCount, usersWhoPostedCount, newArticleCount,
+      newBoardThreadCount, newBoardCommentCount,
       activeUserCount, wauCount, bannedUserCount,
       pendingReportCount, unreviewedFeedbackCount, pendingVerificationCount,
       activePremiumCount, activePremiumPlusCount, pendingCancellationCount,
@@ -809,6 +832,8 @@ export class AdminDailyDigestCron {
       `Users who posted: ${usersWhoPostedCount}`,
       `New replies:      ${newReplyCount}`,
       `New articles:     ${newArticleCount}`,
+      `Board threads:    ${newBoardThreadCount}`,
+      `Board comments:   ${newBoardCommentCount}`,
       `Active users DAU: ${activeUserCount}`,
       `Active users WAU: ${wauCount}`,
     ];
