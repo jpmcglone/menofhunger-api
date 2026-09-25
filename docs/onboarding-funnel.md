@@ -1,11 +1,15 @@
 # Onboarding and activation
 
-Design: [Welcome guide](https://www.figma.com/design/YnuRSJB7p90n9jEY4mb4RN?node-id=840-161).
+Design: [Welcome guide](https://www.figma.com/design/YnuRSJB7p90n9jEY4mb4RN?node-id=866-1202).
 Product dashboard: [Activation](https://us.posthog.com/project/326724/dashboard/2131170).
 
 ## Member experience
 
-Account setup retains its existing account, interests, and community-confirmation steps.
+Phone entry sends a code directly, with concise Terms and Privacy consent beside the action. New and returning members share the same phone/code flow; there is no signup-intro interstitial.
+
+Required setup has two saved steps: (1) username, private birthday (18+), and explicit community confirmation; (2) at least one arena, with all seven choices visible. Partial accounts resume the first incomplete step. Returning complete accounts keep their intended destination. Captured referrals are applied without blocking setup; failures remain available for retry.
+
+Completion opens the feed directly. Name, photo, recovery email, ZIP, referral code, and discovery source are optional profile details opened by the member. Signup does not automatically queue photo, email, or push-permission prompts.
 The home feed then offers an optional guide, with one primary action:
 
 - Before approval: request verification; discover and follow men beyond the two automatically followed starter accounts. Pending requests explain that an admin will contact the member in the app. Rejected requests return to the existing verification screen, which owns the explanation and retry flow.
@@ -25,7 +29,7 @@ All platforms use the immutable API user ID as PostHog `distinct_id`. Web and iO
 | --- | --- | --- |
 | `user_signed_up` | API | New account persisted; no phone property |
 | `onboarding_completed` | API | Required account setup complete; web no longer duplicates this event |
-| `onboarding_step_viewed` | web/iOS | Account setup step 1, 2, or 3 displayed |
+| `onboarding_step_viewed` | web/iOS | Account setup step 1 or 2 displayed (older clients emitted a third step) |
 | `onboarding_gate_finished` | web | Client finished the gate; distinct from server completion |
 | `verification_requested` | API | New request persisted; existing pending requests do not emit again |
 | `verification_approved` | API | Approval persisted through the central verification service; source distinguishes admin and automatic approval |
