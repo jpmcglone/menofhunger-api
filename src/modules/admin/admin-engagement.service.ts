@@ -66,7 +66,7 @@ export function summarizeAttentionPulse(input: {
       'Member posts: public regular roots from personal, non-admin, non-bot, non-banned accounts in this 7-day window. Pages and site admins are excluded.',
       'Answered in 24 hours: a published human reply arrived within 24 hours of the post. Bot replies do not count.',
       'Authors active again: those member-post authors had recorded activity on a later UTC day after at least one of those posts.',
-      'Lodge prompt: human replies to the latest public @menofhunger root in the window. Null when there is no such prompt.',
+      'Community prompt: human replies to the latest public @menofhunger root in the window. Null when there is no such prompt.',
       'Oldest verification wait: the earliest pending request from an active unverified account. Inbox unanswered counts still include official posts over 14 days.',
     ],
   };

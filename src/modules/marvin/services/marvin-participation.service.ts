@@ -30,7 +30,7 @@ export class MarvinParticipationService {
       const followed = following.has(p.userId);
       const unanswered = p._count.replies === 0;
       return { p, score: (followed ? 4 : 0) + (shared.length ? 3 : 0) + (unanswered ? 2 : 0),
-        reason: followed ? 'From someone you follow' : shared.length ? `Shared interest: ${shared.slice(0, 2).join(', ')}` : unanswered ? 'Be the first member to reply' : 'A recent conversation in the lodge' };
+        reason: followed ? 'From someone you follow' : shared.length ? `Shared interest: ${shared.slice(0, 2).join(', ')}` : unanswered ? 'Be the first member to reply' : 'A recent conversation on Men of Hunger' };
     }).sort((a, b) => b.score - a.score);
     // Diverse authors keep one prolific poster from filling every suggestion.
     const authors = new Set<string>();
