@@ -1043,6 +1043,21 @@ describe('posts:typing', () => {
     );
   });
 
+  it('relays a Board replyToId and drops malformed ones', () => {
+    const { gw, presence, presenceRedis, typerSocket, subscribeSocket } = makePostTypingFixture();
+    subscribeSocket(typerSocket);
+    jest.spyOn(presence, 'getUserIdForSocket').mockReturnValue(TYPER_ID);
+
+    (gw as any).handlePostsTyping(typerSocket, { postId: POST_ID, typing: true, replyToId: 'comment_1' });
+    expect(presenceRedis.publishEmitToRoom).toHaveBeenLastCalledWith(
+      expect.objectContaining({ payload: expect.objectContaining({ replyToId: 'comment_1' }) }),
+    );
+
+    (gw as any).handlePostsTyping(typerSocket, { postId: POST_ID, typing: true, replyToId: '<script>' });
+    const last = (presenceRedis.publishEmitToRoom as jest.Mock).mock.calls.at(-1)?.[0];
+    expect(last.payload.replyToId).toBeUndefined();
+  });
+
   it('is a no-op when the socket has not subscribed to the post', () => {
     const { gw, presence, presenceRedis, typerSocket } = makePostTypingFixture();
     // Deliberately NOT calling subscribeSocket — no postSubs entry

@@ -36,6 +36,7 @@ function setup(viewer: Record<string, unknown> | null, row = threadRow()) {
   const posts = {
     viewerBoostedPostIds: jest.fn().mockResolvedValue(new Set()),
     viewerBookmarksByPostId: jest.fn().mockResolvedValue(new Map()),
+    viewerLastSeenAtByPostId: jest.fn().mockResolvedValue(new Map([['thread-1', new Date()]])),
     createPost: jest.fn().mockResolvedValue({ post: { id: 'thread-1' } }),
   };
   const viewerContext = {
@@ -90,6 +91,22 @@ describe('BoardService access and teasers', () => {
     expect(thread.body).toContain('body only readers');
     expect(thread.author?.username).toBe('james');
     expect(thread.image?.url).toContain('uploads/author/images/a.webp');
+  });
+
+  it('carries people and impressions like posts, plus whether you have seen it', async () => {
+    const { service, prisma } = setup(
+      { id: 'p', verifiedStatus: 'identity', premium: true, premiumPlus: false, siteAdmin: false },
+      threadRow({ viewerCount: 12, totalViewCount: 40 }),
+    );
+    const thread = await service.getThread('p', 'thread-1');
+    expect(thread.viewerCount).toBe(12);
+    expect(thread.totalViewCount).toBe(40);
+    expect(thread.viewerHasViewed).toBe(true);
+
+    prisma.post.findFirst.mockResolvedValue(threadRow({ visibility: 'public', viewerCount: 3, totalViewCount: 1 }));
+    const guest = await setup(null, threadRow({ visibility: 'public', viewerCount: 3, totalViewCount: 1 })).service.getThread(null, 'thread-1');
+    expect(guest.totalViewCount).toBe(3);
+    expect(guest.viewerHasViewed).toBeUndefined();
   });
 
   it('lets anyone read public threads, but hides comments of gated threads', async () => {

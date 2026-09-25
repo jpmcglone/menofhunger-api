@@ -46,6 +46,29 @@ export class PostsEngagementService {
     return user;
   }
 
+  /**
+   * Fan the new boost count to everyone viewing the post. Board comments are also mirrored to the
+   * thread root room, which is the only room a Board thread page subscribes to.
+   */
+  private emitBoostCountLiveUpdated(
+    post: { id: string; kind?: string | null; parentId?: string | null; rootId?: string | null },
+    boostCount: number,
+  ) {
+    const payload = {
+      postId: post.id,
+      version: new Date().toISOString(),
+      reason: 'boost_changed',
+      patch: { boostCount },
+    };
+    try {
+      this.presenceRealtime.emitPostsLiveUpdated(post.id, payload);
+      const boardRootId = post.kind === 'board' && post.parentId ? (post.rootId ?? post.parentId) : null;
+      if (boardRootId && boardRootId !== post.id) this.presenceRealtime.emitPostsLiveUpdated(boardRootId, payload);
+    } catch {
+      // Best-effort
+    }
+  }
+
   async boostPost(params: { userId: string; postId: string }) {
     const { userId, postId } = params;
     const id = (postId ?? '').trim();
@@ -129,18 +152,7 @@ export class PostsEngagementService {
       boostCount: res.boostCount,
     });
 
-    // Realtime fan-out to the post room so every viewer of this post (not just
-    // the author) sees the new boost count update live.
-    try {
-      this.presenceRealtime.emitPostsLiveUpdated(id, {
-        postId: id,
-        version: new Date().toISOString(),
-        reason: 'boost_changed',
-        patch: { boostCount: res.boostCount },
-      });
-    } catch {
-      // Best-effort
-    }
+    this.emitBoostCountLiveUpdated(post, res.boostCount);
 
     // Do not bumpFeedGlobal: boost counts patch over posts:live-updated, and flushing
     // every feed cache on each tap makes home recompute composeFeedPostDtos constantly.
@@ -211,18 +223,7 @@ export class PostsEngagementService {
       boostCount: res.boostCount,
     });
 
-    // Realtime fan-out to the post room so every viewer of this post (not just
-    // the author) sees the new boost count update live.
-    try {
-      this.presenceRealtime.emitPostsLiveUpdated(id, {
-        postId: id,
-        version: new Date().toISOString(),
-        reason: 'boost_changed',
-        patch: { boostCount: res.boostCount },
-      });
-    } catch {
-      // Best-effort
-    }
+    this.emitBoostCountLiveUpdated(post, res.boostCount);
 
     // Do not bumpFeedGlobal: same reason as boostPost — counts patch over realtime.
     this.ranking.enqueueScoreRefresh(id);

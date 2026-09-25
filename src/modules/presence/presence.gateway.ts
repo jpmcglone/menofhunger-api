@@ -364,19 +364,19 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   @SubscribeMessage('posts:typing')
-  handlePostsTyping(client: Socket, payload: { postId?: string; typing?: boolean }): void {
+  handlePostsTyping(client: Socket, payload: { postId?: string; typing?: boolean; replyToId?: string }): void {
     this.messagingHandler.handlePostsTyping(client, payload);
   }
 
   // ─── DM calling (returned values are sent as Socket.IO acks) ────────────
 
   @SubscribeMessage(WsEventNames.callsStart)
-  handleCallsStart(client: Socket, payload: { conversationId?: string; type?: string }): Promise<CallsAckDto> {
+  handleCallsStart(client: Socket, payload: { conversationId?: string; type?: string; sessionId?: string }): Promise<CallsAckDto> {
     return this.callsHandler.handleCallsStart(client, payload);
   }
 
   @SubscribeMessage(WsEventNames.callsJoin)
-  handleCallsJoin(client: Socket, payload: { callId?: string }): Promise<CallsAckDto> {
+  handleCallsJoin(client: Socket, payload: { callId?: string; sessionId?: string }): Promise<CallsAckDto> {
     return this.callsHandler.handleCallsJoin(client, payload);
   }
 
@@ -388,6 +388,11 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   @SubscribeMessage(WsEventNames.callsDecline)
   handleCallsDecline(client: Socket, payload: { callId?: string }): Promise<CallsAckDto> {
     return this.callsHandler.handleCallsDecline(client, payload);
+  }
+
+  @SubscribeMessage(WsEventNames.callsStatus)
+  handleCallsStatus(client: Socket, payload: { callId?: string }): Promise<CallsAckDto> {
+    return this.callsHandler.handleCallsStatus(client, payload);
   }
 
   @SubscribeMessage(WsEventNames.callsState)

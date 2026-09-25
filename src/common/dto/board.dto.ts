@@ -25,7 +25,12 @@ export type BoardThreadDto = {
   editedAt: string | null;
   points: number;
   commentCount: number;
+  /** Unique people who saw the thread (same counter as posts). */
   viewerCount: number;
+  /** Impressions: every counted view, including repeat looks (same counter as posts). */
+  totalViewCount: number;
+  /** The signed-in viewer has seen this thread before. */
+  viewerHasViewed?: boolean;
   showInFeed: boolean;
   /** Set when the thread was created from an article publish; comments live on the article. */
   articleId: string | null;
@@ -122,6 +127,8 @@ export function toBoardThreadDto(
     points: post.boostCount,
     commentCount: post.commentCount,
     viewerCount: post.viewerCount,
+    totalViewCount: Math.max(post.viewerCount, post.totalViewCount ?? post.viewerCount),
+    ...(typeof post.viewerHasViewed === 'boolean' ? { viewerHasViewed: post.viewerHasViewed } : {}),
     showInFeed: thread.showInFeed,
     articleId: opts.articleId,
     viewerCanAccess: canAccess,

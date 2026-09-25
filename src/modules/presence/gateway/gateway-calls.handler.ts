@@ -6,6 +6,12 @@ import { PresenceService } from '../presence.service';
 
 type BoundCall = { callId: string; userId: string };
 
+/** Client tab/app instance id: opaque, relayed to peers, so bound it and never trust it for auth. */
+export function callSessionIdFrom(raw: unknown): string | null {
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  return /^[A-Za-z0-9_-]{8,64}$/.test(value) ? value : null;
+}
+
 /** `calls:state` body: any subset of the participant's own flags. */
 export type CallsStatePayload = {
   callId?: string;
@@ -44,14 +50,18 @@ export class CallsGatewayHandler {
     return ack;
   }
 
-  async handleCallsStart(client: Socket, payload: { conversationId?: string; type?: string }): Promise<CallsAckDto> {
+  async handleCallsStart(
+    client: Socket,
+    payload: { conversationId?: string; type?: string; sessionId?: string },
+  ): Promise<CallsAckDto> {
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return this.notAuthed();
     const conversationId = String(payload?.conversationId ?? '').trim();
     const type: CallType | null = payload?.type === 'audio' || payload?.type === 'video' ? payload.type : null;
     if (!conversationId || !type) return this.invalid('Missing conversation or call type.');
     try {
-      const ack = await this.calls.start({ userId, socketId: client.id, conversationId, type });
+      const sessionId = callSessionIdFrom(payload?.sessionId);
+      const ack = await this.calls.start({ userId, socketId: client.id, conversationId, type, sessionId });
       return this.bind(client, ack, userId);
     } catch (err) {
       this.logger.warn(`[calls] start failed user=${userId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -59,13 +69,14 @@ export class CallsGatewayHandler {
     }
   }
 
-  async handleCallsJoin(client: Socket, payload: { callId?: string }): Promise<CallsAckDto> {
+  async handleCallsJoin(client: Socket, payload: { callId?: string; sessionId?: string }): Promise<CallsAckDto> {
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return this.notAuthed();
     const callId = String(payload?.callId ?? '').trim();
     if (!callId) return this.invalid('Missing call id.');
     try {
-      const ack = await this.calls.join({ userId, socketId: client.id, callId });
+      const sessionId = callSessionIdFrom(payload?.sessionId);
+      const ack = await this.calls.join({ userId, socketId: client.id, callId, sessionId });
       return this.bind(client, ack, userId);
     } catch (err) {
       this.logger.warn(`[calls] join failed user=${userId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -98,6 +109,19 @@ export class CallsGatewayHandler {
     } catch (err) {
       this.logger.warn(`[calls] decline failed user=${userId}: ${err instanceof Error ? err.message : String(err)}`);
       return { call: null };
+    }
+  }
+
+  async handleCallsStatus(client: Socket, payload: { callId?: string }): Promise<CallsAckDto> {
+    const userId = this.presence.getUserIdForSocket(client.id);
+    if (!userId) return this.notAuthed();
+    const callId = String(payload?.callId ?? '').trim();
+    if (!callId) return this.invalid('Missing call id.');
+    try {
+      return await this.calls.status({ userId, callId });
+    } catch (err) {
+      this.logger.warn(`[calls] status failed user=${userId}: ${err instanceof Error ? err.message : String(err)}`);
+      return this.invalid('Could not check the call. Try again.');
     }
   }
 
@@ -139,6 +163,7 @@ export class CallsGatewayHandler {
         fromUserId: userId,
         callId,
         toUserId,
+        fromSocketId: client.id,
         description: payload?.description,
         candidate: payload?.candidate,
       });

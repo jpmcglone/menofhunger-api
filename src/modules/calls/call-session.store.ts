@@ -17,6 +17,8 @@ export type CallParticipantRecord = {
   screenSharing?: boolean;
   handRaised?: boolean;
   socketId: string | null;
+  /** Client tab/app instance holding the seat; see `CallParticipantDto.sessionId`. */
+  sessionId?: string | null;
   /** When the seat entered `reconnecting`; lets the sweep expire it even if the grace job was lost. */
   disconnectedAt?: string | null;
 };
@@ -205,6 +207,7 @@ export class CallSessionStore {
         connectionState: p.connectionState,
         ...(p.screenSharing ? { screenSharing: true } : {}),
         ...(p.handRaised ? { handRaised: true } : {}),
+        ...(p.sessionId ? { sessionId: p.sessionId } : {}),
       })),
     };
   }

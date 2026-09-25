@@ -253,6 +253,8 @@ export const WsEventNames = {
   callsJoin: 'calls:join',
   callsLeave: 'calls:leave',
   callsDecline: 'calls:decline',
+  /** Client → server (acked): current state of one call, to resync a ring after a reconnect. */
+  callsStatus: 'calls:status',
   callsState: 'calls:state',
   /** DM calling: server → client. */
   callsIncoming: 'calls:incoming',
@@ -426,6 +428,11 @@ export type PostsTypingPayloadDto = {
   };
   typing: boolean;
   status?: 'thinking' | 'replying';
+  /**
+   * Board threads: typing is sent to the thread root room, and this names the comment being
+   * answered (absent for a top-level comment) so clients can show it under that comment.
+   */
+  replyToId?: string;
 };
 
 /**

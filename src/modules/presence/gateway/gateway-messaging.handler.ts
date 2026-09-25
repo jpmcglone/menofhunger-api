@@ -59,7 +59,7 @@ export class MessagingGatewayHandler {
     }
   }
 
-  handlePostsTyping(client: Socket, payload: { postId?: string; typing?: boolean }): void {
+  handlePostsTyping(client: Socket, payload: { postId?: string; typing?: boolean; replyToId?: string }): void {
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
     const postId = String(payload?.postId ?? '').trim();
@@ -69,7 +69,11 @@ export class MessagingGatewayHandler {
     if (!(client.data as any).postSubs?.has(postId)) return;
 
     const typing = payload?.typing !== false;
-    if (!this.throttle.shouldEmitTyping(`posts:${userId}:${postId}:${typing ? '1' : '0'}`, 700)) return;
+    // Opaque id relayed to viewers of the same (already access-checked) room; bound it, never look it up.
+    const rawReplyTo = typeof payload?.replyToId === 'string' ? payload.replyToId.trim() : '';
+    const replyToId = /^[A-Za-z0-9_-]{1,64}$/.test(rawReplyTo) && rawReplyTo !== postId ? rawReplyTo : undefined;
+    const throttleKey = `posts:${userId}:${postId}:${replyToId ?? ''}:${typing ? '1' : '0'}`;
+    if (!this.throttle.shouldEmitTyping(throttleKey, 700)) return;
 
     // Reuse the user data stored on the socket during connection — no DB call needed.
     const sender = ((client.data as any)?.spaceChatUser ?? null) as { id: string; username: string | null; verifiedStatus: string; premium: boolean; premiumPlus: boolean; isOrganization: boolean } | null;
@@ -87,6 +91,7 @@ export class MessagingGatewayHandler {
         isOrganization: Boolean(sender.isOrganization),
       },
       typing,
+      ...(replyToId ? { replyToId } : {}),
     };
     // client.to() skips the sender's socket.
     client.to(room).emit(WsEventNames.postsTyping, out);

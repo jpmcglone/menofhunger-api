@@ -936,6 +936,27 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
     expect(deps.cacheInvalidation.bumpFeedGlobal).not.toHaveBeenCalled();
   });
 
+  it('mirrors a Board comment boost to the thread root room', async () => {
+    const { service, deps } = makeService();
+    setupBoostMocks(deps, { boostCount: 3 });
+    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
+      id: 'c2',
+      userId: 'author',
+      deletedAt: null,
+      visibility: 'public',
+      kind: 'board',
+      parentId: 'c1',
+      rootId: 't1',
+      user: { id: 'author' },
+    });
+
+    await service.boostPost({ userId: 'u1', postId: 'c2' });
+
+    const calls = (deps.presenceRealtime.emitPostsLiveUpdated as jest.Mock).mock.calls;
+    expect(calls.map((c) => c[0])).toEqual(['c2', 't1']);
+    expect(calls[1][1]).toEqual(expect.objectContaining({ postId: 'c2', patch: { boostCount: 3 } }));
+  });
+
   it('unboostPost emits posts:liveUpdated to the post room with the new boostCount', async () => {
     const { service, deps } = makeService();
     setupBoostMocks(deps, { boostCount: 6 });

@@ -953,7 +953,12 @@ export type BoardThreadDto = {
   editedAt: string | null;
   points: number;
   commentCount: number;
+  /** Unique people who saw the thread (same counter as posts). */
   viewerCount: number;
+  /** Impressions: every counted view, including repeat looks (same counter as posts). */
+  totalViewCount: number;
+  /** The signed-in viewer has seen this thread before. */
+  viewerHasViewed?: boolean;
   showInFeed: boolean;
   /** Set when the thread was created from an article publish; comments live on the article. */
   articleId: string | null;
@@ -1054,6 +1059,12 @@ export type CallParticipantDto = {
   screenSharing?: boolean;
   /** Raised hand. Clients only show this in calls with more than two people. */
   handRaised?: boolean;
+  /**
+   * Opaque id of the tab/app instance holding this seat (sent on start/join). It changes when the
+   * seat moves to another device, so peers rebuild their connection instead of renegotiating a
+   * dead one. Absent for clients that don't send one.
+   */
+  sessionId?: string;
 };
 
 export type CallSessionDto = {
@@ -1194,6 +1205,8 @@ export type PresenceCallChangedPayloadDto = {
 export type RtcSignalPayloadDto = {
   callId: string;
   fromUserId: string;
+  /** The sender seat's `sessionId`, so a receiver can tell a new device's signals from the old one's. */
+  fromSessionId?: string;
   description?: RtcSessionDescriptionDto;
   candidate?: RtcIceCandidateDto;
 };
@@ -3020,6 +3033,11 @@ export type PostsTypingPayloadDto = {
   };
   typing: boolean;
   status?: 'thinking' | 'replying';
+  /**
+   * Board threads: typing is sent to the thread root room, and this names the comment being
+   * answered (absent for a top-level comment) so clients can show it under that comment.
+   */
+  replyToId?: string;
 };
 
 /**

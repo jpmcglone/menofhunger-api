@@ -99,8 +99,15 @@ export class CallsService {
 
   // ─── Lifecycle (client-initiated) ────────────────────────────────────────────
 
-  async start(params: { userId: string; socketId: string; conversationId: string; type: CallType }): Promise<CallsAckDto> {
+  async start(params: {
+    userId: string;
+    socketId: string;
+    conversationId: string;
+    type: CallType;
+    sessionId?: string | null;
+  }): Promise<CallsAckDto> {
     const { userId, socketId, conversationId, type } = params;
+    const sessionId = params.sessionId ?? null;
     const iceServersPromise = this.iceServers.resolve();
     let ctx: CallConversationContext;
     try {
@@ -118,7 +125,7 @@ export class CallsService {
     // One live session per conversation: a second "start" is just a join.
     const existing = await this.store.getByConversationId(conversationId);
     if (existing && existing.status !== 'ended') {
-      return await this.join({ userId, socketId, callId: existing.id });
+      return await this.join({ userId, socketId, callId: existing.id, sessionId });
     }
 
     // One seat per member: starting here hangs up whatever they were in elsewhere.
@@ -166,7 +173,7 @@ export class CallsService {
       messageId: null,
       ringTargetUserId,
       peakParticipantCount: 1,
-      participants: [this.newParticipant(userId, socketId, nowIso, type === 'video')],
+      participants: [this.newParticipant(userId, socketId, nowIso, type === 'video', sessionId)],
     };
 
     const created = await this.store.withConversationLock(conversationId, async () => {
@@ -176,7 +183,7 @@ export class CallsService {
       return record;
     });
     if (created.id !== record.id) {
-      return await this.join({ userId, socketId, callId: created.id });
+      return await this.join({ userId, socketId, callId: created.id, sessionId });
     }
 
     const outcome: MessageCallOutcome = isDirect ? 'started' : 'active';
@@ -214,8 +221,9 @@ export class CallsService {
     return this.connectAck(record, await iceServersPromise);
   }
 
-  async join(params: { userId: string; socketId: string; callId: string }): Promise<CallsAckDto> {
+  async join(params: { userId: string; socketId: string; callId: string; sessionId?: string | null }): Promise<CallsAckDto> {
     const { userId, socketId, callId } = params;
+    const sessionId = params.sessionId ?? null;
     const initial = await this.store.getByCallId(callId);
     if (!initial) return ackError('call_not_found', 'This call has ended.');
 
@@ -272,6 +280,14 @@ export class CallsService {
           displacedSocketId = existing.socketId;
         }
         existing.socketId = socketId;
+        // A reconnect from the same tab/app keeps its id; a different device brings a new one.
+        // A fresh tab/device can't already be presenting or have its hand up: drop stale flags
+        // so peers don't show an empty presenting stage.
+        if ((existing.sessionId ?? null) !== sessionId) {
+          existing.screenSharing = false;
+          existing.handRaised = false;
+        }
+        existing.sessionId = sessionId;
         existing.connectionState = 'connected';
         existing.disconnectedAt = null;
         cancel.push(callParticipantGraceJobId(record.id, userId));
@@ -282,7 +298,7 @@ export class CallsService {
         // Joiners keep camera off until they toggle it — the starter is the only
         // side that publishes video on entry. Advertising camera-on here made the
         // far side show an empty recv tile (and hid the real late-on camera).
-        record.participants.push(this.newParticipant(userId, socketId, nowIso, false));
+        record.participants.push(this.newParticipant(userId, socketId, nowIso, false, sessionId));
         newlySeated = true;
       }
 
@@ -346,6 +362,29 @@ export class CallsService {
   }
 
   /** Direct calls only: the rung callee refuses. */
+  /**
+   * Current state of a call for a conversation member. A device that was ringing while its socket
+   * was down (PushKit woke a suspended iPhone, or the push arrived late) uses this to learn it was
+   * answered elsewhere, declined, or cancelled — the `calls:updated` it missed will not repeat.
+   */
+  async status(params: { userId: string; callId: string }): Promise<CallsAckDto> {
+    const { userId, callId } = params;
+    const record = await this.store.getByCallId(callId);
+    if (!record || record.status === 'ended') return ackError('call_ended', 'This call has ended.');
+    const seated = record.ringTargetUserId === userId || record.participants.some((p) => p.userId === userId);
+    if (!seated) {
+      try {
+        const ctx = await this.messages.getCallConversationContext({ userId, conversationId: record.conversationId });
+        const member = ctx.participants.find((p) => p.userId === userId);
+        if (!member || member.banned) return ackError('not_member', 'Conversation not found.');
+      } catch (err) {
+        if (err instanceof NotFoundException) return ackError('not_member', 'Conversation not found.');
+        throw err;
+      }
+    }
+    return { call: CallSessionStore.toDto(record) };
+  }
+
   async decline(params: { userId: string; callId: string }): Promise<CallsAckDto> {
     const { userId, callId } = params;
     const record = await this.store.getByCallId(callId);
@@ -403,15 +442,20 @@ export class CallsService {
     fromUserId: string;
     callId: string;
     toUserId: string;
+    /** Sending socket. When another socket holds the sender's seat, the signal is stale. */
+    fromSocketId?: string;
     description?: unknown;
     candidate?: unknown;
   }): Promise<void> {
-    const { fromUserId, callId, toUserId } = params;
+    const { fromUserId, callId, toUserId, fromSocketId } = params;
     if (!toUserId || toUserId === fromUserId) return;
     const record = await this.store.getByCallId(callId);
     if (!record || record.status === 'ended') return;
-    const isParticipant = (uid: string) => record.participants.some((p) => p.userId === uid);
-    if (!isParticipant(fromUserId) || !isParticipant(toUserId)) return;
+    const sender = record.participants.find((p) => p.userId === fromUserId);
+    if (!sender || !record.participants.some((p) => p.userId === toUserId)) return;
+    // A device that lost its seat (the member moved the call) must not keep renegotiating the
+    // far side's connection. A seat mid-reconnect (no socket yet) may still signal.
+    if (fromSocketId && sender.socketId && sender.socketId !== fromSocketId) return;
 
     const description = this.sanitizeDescription(params.description);
     const candidate = this.sanitizeCandidate(params.candidate);
@@ -419,6 +463,7 @@ export class CallsService {
     this.realtime.emitRtcSignal(toUserId, {
       callId,
       fromUserId,
+      ...(sender.sessionId ? { fromSessionId: sender.sessionId } : {}),
       ...(description ? { description } : {}),
       ...(candidate ? { candidate } : {}),
     });
@@ -545,8 +590,9 @@ export class CallsService {
     socketId: string,
     joinedAt: string,
     cameraEnabled: boolean,
+    sessionId: string | null = null,
   ): CallParticipantRecord {
-    return { userId, joinedAt, micEnabled: true, cameraEnabled, connectionState: 'connected', socketId };
+    return { userId, joinedAt, micEnabled: true, cameraEnabled, connectionState: 'connected', socketId, sessionId };
   }
 
   /**

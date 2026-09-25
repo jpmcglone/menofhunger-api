@@ -30,6 +30,12 @@ export type CallParticipantDto = {
   screenSharing?: boolean;
   /** Raised hand. Clients only show this in calls with more than two people. */
   handRaised?: boolean;
+  /**
+   * Opaque id of the tab/app instance holding this seat (sent on start/join). It changes when the
+   * seat moves to another device, so peers rebuild their connection instead of renegotiating a
+   * dead one. Absent for clients that don't send one.
+   */
+  sessionId?: string;
 };
 
 export type CallSessionDto = {
@@ -181,6 +187,8 @@ export type PresenceCallChangedPayloadDto = {
 export type RtcSignalPayloadDto = {
   callId: string;
   fromUserId: string;
+  /** The sender seat's `sessionId`, so a receiver can tell a new device's signals from the old one's. */
+  fromSessionId?: string;
   description?: RtcSessionDescriptionDto;
   candidate?: RtcIceCandidateDto;
 };

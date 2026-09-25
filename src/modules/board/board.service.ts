@@ -216,11 +216,14 @@ export class BoardService {
   private async hydrateThreads(viewer: ViewerContext | null, rows: ThreadRow[]): Promise<BoardThreadDto[]> {
     if (rows.length === 0) return [];
     const ids = rows.map((r) => r.id);
-    const [boosted, bookmarks, hidden] = await Promise.all([
+    const [boosted, bookmarks, lastSeen, hidden] = await Promise.all([
       viewer ? this.posts.viewerBoostedPostIds({ viewerUserId: viewer.id, postIds: ids }) : Promise.resolve(new Set<string>()),
       viewer
         ? this.posts.viewerBookmarksByPostId({ viewerUserId: viewer.id, postIds: ids })
         : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
+      viewer
+        ? this.posts.viewerLastSeenAtByPostId({ viewerUserId: viewer.id, postIds: ids })
+        : Promise.resolve(new Map<string, Date>()),
       viewer
         ? this.prisma.boardHide.findMany({ where: { userId: viewer.id, postId: { in: ids } }, select: { postId: true } })
         : Promise.resolve([] as Array<{ postId: string }>),
@@ -235,6 +238,7 @@ export class BoardService {
           viewerHasBoosted: boosted.has(row.id),
           viewerHasBookmarked: bookmarks.has(row.id),
           viewerCanAccess: canAccess,
+          ...(viewer ? { viewerHasViewed: lastSeen.has(row.id) } : {}),
         });
         const dto = toBoardThreadDto(postDto, row.boardThread!, {
           viewerCanAccess: canAccess,

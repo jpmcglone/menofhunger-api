@@ -301,6 +301,25 @@ describe('CallsService direct call lifecycle', () => {
     expect(messages.updateCallMessage).toHaveBeenLastCalledWith(expect.objectContaining({ body: 'Video call declined' }));
   });
 
+  it('status lets a ringing phone catch up: answered elsewhere, ended, and never for outsiders', async () => {
+    const { svc } = makeService({ [DIRECT.id]: DIRECT });
+    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
+    const callId = started.call!.id;
+    expect((await svc.status({ userId: 'bob', callId })).call?.status).toBe('ringing');
+
+    // Bob picks up in the browser; his phone asks after its socket reconnects.
+    await svc.join({ userId: 'bob', socketId: 'browser', callId });
+    const answered = await svc.status({ userId: 'bob', callId });
+    expect(answered.call?.status).toBe('active');
+    expect(answered.call?.participants.some((p) => p.userId === 'bob')).toBe(true);
+
+    expect((await svc.status({ userId: 'mallory', callId })).error?.code).toBe('not_member');
+
+    await svc.leave({ userId: 'alice', callId, socketId: 's1' });
+    await svc.leave({ userId: 'bob', callId, socketId: 'browser' });
+    expect((await svc.status({ userId: 'bob', callId })).error?.code).toBe('call_ended');
+  });
+
   it('caller hanging up while ringing → cancelled', async () => {
     const { svc, messages } = makeService({ [DIRECT.id]: DIRECT });
     const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
@@ -696,6 +715,43 @@ describe('CallsService signaling relay', () => {
       fromUserId: 'bob',
       candidate: { candidate: 'candidate:1 1 udp 1 1.2.3.4 5 typ host', sdpMid: '0', sdpMLineIndex: 0 },
     });
+  });
+
+  it('moving the call to another device exposes the new session and silences the old device', async () => {
+    const { svc, realtime } = makeService({ [DIRECT.id]: DIRECT });
+    const started = await svc.start({
+      userId: 'alice', socketId: 'phone', conversationId: DIRECT.id, type: 'video', sessionId: 'phone-session-1',
+    });
+    const callId = started.call!.id;
+    await svc.join({ userId: 'bob', socketId: 'bob-s', callId, sessionId: 'bob-session-1' });
+    expect(started.call!.participants[0]!.sessionId).toBe('phone-session-1');
+
+    const moved = await svc.join({ userId: 'alice', socketId: 'browser', callId, sessionId: 'browser-session' });
+    expect(moved.call!.participants.find((p) => p.userId === 'alice')!.sessionId).toBe('browser-session');
+
+    // The phone's late ICE restart never reaches Bob; the browser's offer does, tagged with its session.
+    await svc.relaySignal({ fromUserId: 'alice', callId, toUserId: 'bob', fromSocketId: 'phone', description: { type: 'offer', sdp: 'v=0' } });
+    expect(realtime.emitRtcSignal).not.toHaveBeenCalled();
+    await svc.relaySignal({ fromUserId: 'alice', callId, toUserId: 'bob', fromSocketId: 'browser', description: { type: 'offer', sdp: 'v=0' } });
+    expect(realtime.emitRtcSignal).toHaveBeenCalledWith('bob', {
+      callId,
+      fromUserId: 'alice',
+      fromSessionId: 'browser-session',
+      description: { type: 'offer', sdp: 'v=0' },
+    });
+  });
+
+  it('a new tab or device joins without the old one’s screen share; a same-tab reconnect keeps it', async () => {
+    const { svc, store } = makeService({ [GROUP.id]: GROUP });
+    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video', sessionId: 'tab-one-1234' });
+    const callId = started.call!.id;
+    await svc.updateParticipantState({ userId: 'alice', callId, socketId: 's1', screenSharing: true });
+
+    await svc.join({ userId: 'alice', socketId: 's2', callId, sessionId: 'tab-one-1234' });
+    expect(store.byConversation.get(GROUP.id)!.participants[0]!.screenSharing).toBe(true);
+
+    await svc.join({ userId: 'alice', socketId: 's3', callId, sessionId: 'tab-two-5678' });
+    expect(store.byConversation.get(GROUP.id)!.participants[0]!.screenSharing).toBe(false);
   });
 
   it('drops malformed descriptions', async () => {
