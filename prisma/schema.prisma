@@ -574,6 +574,8 @@ model User {
   messageDeletions             MessageDeletion[]          @relation("MessageDeletion_user")
   blocksInitiated              UserBlock[]                @relation("UserBlock_blocker")
   blocksReceived               UserBlock[]                @relation("UserBlock_blocked")
+  mutesInitiated               UserMute[]                 @relation("UserMute_muter")
+  mutesReceived                UserMute[]                 @relation("UserMute_muted")
   postViews                    PostView[]
   viewerIdentities             ViewerIdentity[]
   articleViews                 ArticleView[]
@@ -2648,6 +2650,21 @@ model UserBlock {
   @@id([blockerId, blockedId])
   @@index([blockerId, createdAt])
   @@index([blockedId, createdAt])
+}
+
+/// One-way mute: the muted user's posts leave the muter's feed and Board, and they stop
+/// notifying the muter. The muted user is not told and can still see the muter.
+model UserMute {
+  createdAt DateTime @default(now())
+
+  muterId String
+  mutedId String
+
+  muter User @relation("UserMute_muter", fields: [muterId], references: [id], onDelete: Cascade)
+  muted User @relation("UserMute_muted", fields: [mutedId], references: [id], onDelete: Cascade)
+
+  @@id([muterId, mutedId])
+  @@index([mutedId])
 }
 
 model Feedback {

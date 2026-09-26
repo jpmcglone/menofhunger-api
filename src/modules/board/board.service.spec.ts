@@ -28,12 +28,14 @@ function setup(viewer: Record<string, unknown> | null, row = threadRow()) {
       findFirst: jest.fn().mockResolvedValue(row),
       findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn().mockResolvedValue(0),
+      groupBy: jest.fn().mockResolvedValue([]),
     },
     boardHide: { findMany: jest.fn().mockResolvedValue([]) },
     boardTag: { upsert: jest.fn().mockResolvedValue({}) },
     user: { update: jest.fn().mockResolvedValue({}) },
   };
   const posts = {
+    viewerBlockSets: jest.fn().mockResolvedValue({ blockedByViewer: new Set(), viewerBlockedBy: new Set() }),
     viewerBoostedPostIds: jest.fn().mockResolvedValue(new Set()),
     viewerBookmarksByPostId: jest.fn().mockResolvedValue(new Map()),
     viewerLastSeenAtByPostId: jest.fn().mockResolvedValue(new Map([['thread-1', new Date()]])),
@@ -51,6 +53,7 @@ function setup(viewer: Record<string, unknown> | null, row = threadRow()) {
   };
   const realtime = { emitBoardNewThread: jest.fn(), emitPostsLiveUpdated: jest.fn() };
   const sideEffects = { dispatch: jest.fn() };
+  const mutes = { mutedIds: jest.fn().mockResolvedValue(new Set()) };
   const service = new BoardService(
     prisma as any,
     posts as any,
@@ -58,8 +61,9 @@ function setup(viewer: Record<string, unknown> | null, row = threadRow()) {
     { r2: () => ({ publicBaseUrl: 'https://cdn.example.com' }), frontendBaseUrl: () => 'https://menofhunger.com' } as any,
     realtime as any,
     sideEffects as any,
+    mutes as any,
   );
-  return { service, prisma, posts, realtime, sideEffects };
+  return { service, prisma, posts, realtime, sideEffects, mutes };
 }
 
 describe('BoardService access and teasers', () => {
@@ -140,6 +144,35 @@ describe('BoardService list scope', () => {
     const { service, prisma } = setup(viewer);
     await service.listThreads({ ...listParams, viewerUserId: 'viewer', hiddenOnly: true });
     expect(JSON.stringify(prisma.post.findMany.mock.calls[0][0].where)).toContain('"boardHides":{"some":{"userId":"viewer"}}');
+  });
+
+  it('keeps blocked (either way) and muted authors off the list, but a muted member keeps their own tab', async () => {
+    const { service, prisma, posts, mutes } = setup(viewer);
+    posts.viewerBlockSets.mockResolvedValue({ blockedByViewer: new Set(['b1']), viewerBlockedBy: new Set(['b2']) });
+    mutes.mutedIds.mockResolvedValue(new Set(['m1']));
+    await service.listThreads({ ...listParams, viewerUserId: 'viewer' });
+    expect(JSON.stringify(prisma.post.findMany.mock.calls[0][0].where)).toContain('"userId":{"notIn":["b1","b2","m1"]}');
+
+    prisma.post.findMany.mockClear();
+    await service.listThreads({ ...listParams, viewerUserId: 'viewer', authorUsername: 'muted-member' });
+    const where = JSON.stringify(prisma.post.findMany.mock.calls[0][0].where);
+    expect(where).toContain('"userId":{"notIn":["b1","b2"]}');
+    expect(where).not.toContain('m1');
+  });
+
+  it('counts comments by others since the last visit, and reports null on a first visit', async () => {
+    const { service, prisma, posts } = setup({ id: 'p', verifiedStatus: 'identity', premium: true, premiumPlus: false, siteAdmin: false });
+    const seenAt = new Date('2026-09-20T00:00:00Z');
+    posts.viewerLastSeenAtByPostId.mockResolvedValue(new Map([['thread-1', seenAt]]));
+    prisma.post.groupBy.mockResolvedValue([{ rootId: 'thread-1', _count: { _all: 4 } }]);
+    const thread = await service.getThread('p', 'thread-1');
+    expect(thread.newCommentCount).toBe(4);
+    const groupWhere = prisma.post.groupBy.mock.calls[0][0].where;
+    expect(groupWhere.userId).toEqual({ notIn: ['p'] });
+    expect(groupWhere.OR).toEqual([{ rootId: 'thread-1', createdAt: { gt: seenAt } }]);
+
+    posts.viewerLastSeenAtByPostId.mockResolvedValue(new Map());
+    expect((await service.getThread('p', 'thread-1')).newCommentCount).toBeNull();
   });
 
   it('returns nothing for a signed-out hidden view', async () => {

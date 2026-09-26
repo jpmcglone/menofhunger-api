@@ -191,6 +191,11 @@ export const RedisKeys = {
     return `viewer:blocks:${clean(userId)}`;
   },
 
+  // Users the viewer has muted (invalidated on mute/unmute)
+  viewerMutedIds(userId: string): string {
+    return `viewer:mutes:${clean(userId)}`;
+  },
+
   // Presence
   presenceSocket(instanceId: string, socketId: string): string {
     return `presence:socket:${clean(instanceId)}:${clean(socketId)}`;

@@ -8,6 +8,7 @@ import { ViewerContextService, type ViewerContext } from '../viewer/viewer-conte
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
+import { MutesService } from '../mutes/mutes.service';
 import { POST_BASE_INCLUDE, POST_LIST_INCLUDE } from '../../common/prisma-includes/post.include';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
@@ -89,7 +90,18 @@ export class BoardService implements OnModuleInit {
     private readonly appConfig: AppConfigService,
     private readonly realtime: PresenceRealtimeService,
     private readonly sideEffects: SideEffectsService,
+    private readonly mutes: MutesService,
   ) {}
+
+  /** Authors kept off the viewer's Board lists: blocks in either direction, plus people the viewer muted. */
+  private async hiddenAuthorIds(viewer: ViewerContext | null, opts: { includeMuted: boolean }): Promise<string[]> {
+    if (!viewer) return [];
+    const [blocks, muted] = await Promise.all([
+      this.posts.viewerBlockSets(viewer.id),
+      opts.includeMuted ? this.mutes.mutedIds(viewer.id) : Promise.resolve(new Set<string>()),
+    ]);
+    return [...new Set([...blocks.blockedByViewer, ...blocks.viewerBlockedBy, ...muted])];
+  }
 
   /** One-shot: repair mirrored article comment counts; drop bodies that were auto-copied from the article excerpt. */
   async onModuleInit() {
@@ -167,6 +179,9 @@ export class BoardService implements OnModuleInit {
     } else if (viewer && !authorUsername) {
       and.push({ boardHides: { none: { userId: viewer.id } } });
     }
+    // A muted member's own Board tab still lists their posts; blocks hide them everywhere.
+    const hiddenAuthors = await this.hiddenAuthorIds(viewer, { includeMuted: !authorUsername });
+    if (hiddenAuthors.length) and.push({ userId: { notIn: hiddenAuthors } });
     if (q) {
       and.push({
         OR: [
@@ -253,6 +268,27 @@ export class BoardService implements OnModuleInit {
     return row;
   }
 
+  /** Per thread: live comments by others (excluding hidden authors) newer than the viewer's last visit. */
+  private async newCommentCounts(
+    viewer: ViewerContext | null,
+    rows: ThreadRow[],
+    lastSeen: Map<string, Date>,
+  ): Promise<Map<string, number>> {
+    const visited = viewer ? rows.filter((r) => lastSeen.has(r.id) && this.canRead(viewer, r)) : [];
+    if (!viewer || visited.length === 0) return new Map();
+    const hiddenAuthors = await this.hiddenAuthorIds(viewer, { includeMuted: true });
+    const groups = await this.prisma.post.groupBy({
+      by: ['rootId'],
+      where: {
+        deletedAt: null,
+        userId: { notIn: [viewer.id, ...hiddenAuthors] },
+        OR: visited.map((r) => ({ rootId: r.id, createdAt: { gt: lastSeen.get(r.id)! } })),
+      },
+      _count: { _all: true },
+    });
+    return new Map(groups.filter((g) => g.rootId).map((g) => [g.rootId!, g._count._all]));
+  }
+
   private async hydrateThreads(viewer: ViewerContext | null, rows: ThreadRow[]): Promise<BoardThreadDto[]> {
     if (rows.length === 0) return [];
     const ids = rows.map((r) => r.id);
@@ -269,6 +305,7 @@ export class BoardService implements OnModuleInit {
         : Promise.resolve([] as Array<{ postId: string }>),
     ]);
     const hiddenIds = new Set(hidden.map((h) => h.postId));
+    const newCountById = await this.newCommentCounts(viewer, rows, lastSeen);
     const articleIds = rows.map((r) => r.articleId).filter((id): id is string => Boolean(id));
     const readingTimeByArticleId = new Map(
       articleIds.length > 0
@@ -294,7 +331,10 @@ export class BoardService implements OnModuleInit {
           viewerCanEdit: this.canEdit(viewer, row),
           articleId: row.articleId ?? null,
         });
-        if (viewer) dto.viewerLastSeenAt = lastSeen.get(row.id)?.toISOString() ?? null;
+        if (viewer) {
+          dto.viewerLastSeenAt = lastSeen.get(row.id)?.toISOString() ?? null;
+          dto.newCommentCount = canAccess && lastSeen.has(row.id) ? (newCountById.get(row.id) ?? 0) : null;
+        }
         const readingTime = canAccess && row.articleId ? readingTimeByArticleId.get(row.articleId) : undefined;
         if (readingTime) dto.readingTimeMinutes = readingTime;
         if (canAccess && !dto.image && row.article?.thumbnailR2Key) {
@@ -667,10 +707,12 @@ export class BoardService implements OnModuleInit {
     const limit = Math.max(1, Math.min(50, params.limit));
     const authorUsername = (params.authorUsername ?? '').trim();
     const readable = this.readableVisibilities(viewer);
+    const hiddenAuthors = await this.hiddenAuthorIds(viewer, { includeMuted: !authorUsername });
     const where: Prisma.PostWhereInput = {
       kind: 'board',
       parentId: { not: null },
       deletedAt: null,
+      ...(hiddenAuthors.length ? { userId: { notIn: hiddenAuthors } } : {}),
       user: authorUsername
         ? { bannedAt: null, username: { equals: authorUsername, mode: 'insensitive' } }
         : { bannedAt: null },

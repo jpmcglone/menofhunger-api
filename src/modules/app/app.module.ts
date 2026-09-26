@@ -56,6 +56,7 @@ import { PosthogModule } from '../../common/posthog/posthog.module';
 import { SlackModule } from '../../common/slack/slack.module';
 import { ArticlesModule } from '../articles/articles.module';
 import { BoardModule } from '../board/board.module';
+import { MutesModule } from '../mutes/mutes.module';
 import { CoinsModule } from '../coins/coins.module';
 import { TaxonomyModule } from '../taxonomy/taxonomy.module';
 import { GroupsModule } from '../groups/groups.module';
@@ -145,6 +146,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     SlackModule,
     ArticlesModule,
     BoardModule,
+    MutesModule,
     TaxonomyModule,
     GroupsModule,
     CrewModule,

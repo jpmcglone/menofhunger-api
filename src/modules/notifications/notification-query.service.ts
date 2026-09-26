@@ -1,6 +1,7 @@
 import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { type NotificationKind, type VerifiedStatus } from '@prisma/client';
+import { MutesService } from '../mutes/mutes.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
@@ -45,6 +46,7 @@ export class NotificationQueryService {
     private readonly readState: NotificationReadStateService,
     private readonly cache?: CacheService,
     private readonly cacheInvalidation?: CacheInvalidationService,
+    @Optional() private readonly mutes?: MutesService,
   ) {}
 
   notificationPostId(
@@ -98,7 +100,7 @@ export class NotificationQueryService {
     const desiredItemLimit = Math.max(1, Math.min(limit, 50));
     const maxGroupNotifications = 50;
     const rawFetchLimit = Math.min(desiredItemLimit * 6, 250);
-    const [cursorWhere, blockSets] = await Promise.all([
+    const [cursorWhere, blockSets, mutedIds] = await Promise.all([
       createdAtIdCursorWhere({
         cursor,
         lookup: async (id) =>
@@ -110,8 +112,9 @@ export class NotificationQueryService {
             .then((r) => (r ? { id: r.id, createdAt: r.createdAt } : null)),
       }),
       this.postVisibility.viewerBlockSets(recipientUserId),
+      this.mutes ? this.mutes.mutedIds(recipientUserId) : Promise.resolve(new Set<string>()),
     ]);
-    const blockedActorIds = [...blockSets.blockedByViewer, ...blockSets.viewerBlockedBy];
+    const blockedActorIds = [...blockSets.blockedByViewer, ...blockSets.viewerBlockedBy, ...mutedIds];
     const notifications = await this.prisma.notification.findMany({
       where: {
         recipientUserId,

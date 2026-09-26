@@ -173,6 +173,8 @@ type UserPreviewPayload = {
   followingCount: number | null;
   viewerHasBlockedUser?: boolean;
   userHasBlockedViewer?: boolean;
+  /** The viewer muted this user (their posts and notifications are hidden from the viewer). */
+  viewerHasMutedUser?: boolean;
   isBot?: boolean;
   locationDisplay: string | null;
   locationState: string | null;
@@ -823,6 +825,15 @@ export class UsersController {
         else userHasBlockedViewer = true;
       }
     }
+    const viewerHasMutedUser =
+      viewerUserId && profile.id && viewerUserId !== profile.id
+        ? Boolean(
+            await this.prisma.userMute.findUnique({
+              where: { muterId_mutedId: { muterId: viewerUserId, mutedId: profile.id } },
+              select: { mutedId: true },
+            }),
+          )
+        : false;
 
     const payload: UserPreviewPayload = {
       id: profile.id,
@@ -845,6 +856,7 @@ export class UsersController {
       followingCount,
       viewerHasBlockedUser,
       userHasBlockedViewer,
+      viewerHasMutedUser,
       isBot: Boolean((profile as any).isBot),
       locationDisplay: (profile as any).locationDisplay ?? null,
       locationState: (profile as any).locationState ?? null,

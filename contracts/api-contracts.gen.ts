@@ -1008,6 +1008,11 @@ export type BoardThreadDto = {
    * Clients mark comments created after it (by others) as new. Null on a first visit.
    */
   viewerLastSeenAt?: string | null;
+  /**
+   * Comments by other people since the viewer last opened the thread.
+   * Null when signed out, on a first visit, or without access.
+   */
+  newCommentCount?: number | null;
   /** Article Board posts only: estimated reading time of the article. */
   readingTimeMinutes?: number;
   showInFeed: boolean;

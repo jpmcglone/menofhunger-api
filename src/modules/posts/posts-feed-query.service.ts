@@ -1,5 +1,6 @@
 import { ConversationsService } from './conversations.service';
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { MutesService } from '../mutes/mutes.service';
 import { Prisma } from '@prisma/client';
 import type { CommunityGroupJoinPolicy, PostMediaKind, PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -88,7 +89,14 @@ export class PostsFeedQueryService {
     private readonly cache: CacheService,
     private readonly cacheInvalidation: CacheInvalidationService,
     private readonly conversations: ConversationsService = undefined!,
+    @Optional() private readonly mutes?: MutesService,
   ) {}
+
+  /** People the viewer muted; applied to home feeds, never to author-scoped feeds like profiles. */
+  private async viewerMutedIds(viewerUserId: string | null): Promise<string[]> {
+    if (!viewerUserId || !this.mutes) return [];
+    return [...(await this.mutes.mutedIds(viewerUserId))];
+  }
 
   /**
    * Group post read access:
@@ -439,6 +447,8 @@ export class PostsFeedQueryService {
     const locationStateWhere: Prisma.PostWhereInput[] = authorLocationState
       ? ([{ user: { locationState: authorLocationState } }] as Prisma.PostWhereInput[])
       : [];
+    const mutedIds = authorUserIds?.length ? [] : await this.viewerMutedIds(viewerUserId);
+    if (mutedIds.length) excludeSelfWhere.push({ userId: { notIn: mutedIds } });
 
     const where = followingOnly
       ? {
@@ -1238,7 +1248,8 @@ export class PostsFeedQueryService {
     const blockSets = viewerUserId
       ? await this.enrichment.viewerBlockSets(viewerUserId)
       : { blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() };
-    const blockedAuthorIds = [...new Set([...blockSets.blockedByViewer, ...blockSets.viewerBlockedBy])];
+    const mutedIds = requestedAuthorUserIds?.length ? [] : await this.viewerMutedIds(viewerUserId);
+    const blockedAuthorIds = [...new Set([...blockSets.blockedByViewer, ...blockSets.viewerBlockedBy, ...mutedIds])];
     const blockedAuthorSet = new Set(blockedAuthorIds);
 
     // Author filter: intersect requested authors (if any) with "not the viewer". We don't filter

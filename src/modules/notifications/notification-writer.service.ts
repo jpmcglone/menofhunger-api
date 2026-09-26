@@ -1,5 +1,6 @@
 import { permitsFollowNotification } from './follow-notification-policy';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { MutesService } from '../mutes/mutes.service';
 import { Prisma, type NotificationKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
@@ -76,7 +77,14 @@ export class NotificationWriterService {
     private readonly query: NotificationQueryService,
     private readonly readState: NotificationReadStateService,
     private readonly cacheInvalidation?: CacheInvalidationService,
+    @Optional() private readonly mutes?: MutesService,
   ) {}
+
+  /** A recipient who muted the actor gets no notifications from them. */
+  private async recipientMutedActor(recipientUserId: string, actorUserId: string | null | undefined): Promise<boolean> {
+    if (!this.mutes || !actorUserId) return false;
+    return this.mutes.hasMuted(recipientUserId, actorUserId);
+  }
 
   private emitBellAndInvalidateList(
     recipientUserId: string,
@@ -196,6 +204,7 @@ export class NotificationWriterService {
 
     // Never notify a user about their own actions — regardless of which call-site triggered this.
     if (actorUserId && actorUserId === recipientUserId) return;
+    if (await this.recipientMutedActor(recipientUserId, actorUserId)) return;
     if (PERSON_ONLY_NOTIFICATION_KINDS.includes(kind)) {
       const recipient = await this.prisma.user.findUnique({
         where: { id: recipientUserId },
@@ -448,6 +457,7 @@ export class NotificationWriterService {
     if (!(await this.permitsGroupActivity(recipientUserId, subjectPostId, 'boost'))) return;
     // Never notify a user about their own boost.
     if (actorUserId && actorUserId === recipientUserId) return;
+    if (await this.recipientMutedActor(recipientUserId, actorUserId)) return;
     const boostTitle =
       subjectPostKind === 'status' ? 'boosted your status' : 'boosted your post';
     const maxAttempts = 3;
@@ -596,6 +606,7 @@ export class NotificationWriterService {
     if (!(await this.permitsGroupActivity(recipientUserId, actorPostId ?? subjectPostId, 'repost'))) return;
     // Never notify a user about their own repost/quote.
     if (actorUserId && actorUserId === recipientUserId) return;
+    if (await this.recipientMutedActor(recipientUserId, actorUserId)) return;
     const isQuote = title === 'quoted your post';
     const maxAttempts = 3;
     // Resolve presence before the transaction so the Redis call doesn't extend it.
@@ -1583,6 +1594,7 @@ export class NotificationWriterService {
     const { recipientUserId, actorUserId, actorUsername, text, postId } = params;
     if (actorUserId === recipientUserId) return;
     if (await this.recipientOperatesActor(recipientUserId, actorUserId)) return;
+    if (await this.recipientMutedActor(recipientUserId, actorUserId)) return;
 
     const maxAttempts = 3;
     const presentAt = await this.presentAtForRecipient(recipientUserId);

@@ -7,7 +7,7 @@ import { NotificationWriterService } from './notification-writer.service';
  * or dispatch a push.
  */
 
-function buildWriter(prisma: object, presenceRealtime: object, sideEffects: object): NotificationWriterService {
+function buildWriter(prisma: object, presenceRealtime: object, sideEffects: object, mutes?: object): NotificationWriterService {
   return new NotificationWriterService(
     prisma as never,
     presenceRealtime as never,
@@ -19,6 +19,8 @@ function buildWriter(prisma: object, presenceRealtime: object, sideEffects: obje
       emitWaitingCountForUser: jest.fn(),
       undeliveredBellWhere: (uid: string) => ({ recipientUserId: uid, deliveredAt: null }),      emitNavUnreadForUser: jest.fn(async () => undefined),
     } as never,
+    undefined,
+    mutes as never,
   );
 }
 
@@ -54,6 +56,21 @@ function makeDeps(existing: { id: string } | null = null) {
     sideEffects,
   };
 }
+
+describe('NotificationWriterService — muted actors', () => {
+  it('writes nothing, bumps no bell, and sends no push when the recipient muted the actor', async () => {
+    const { prisma, presenceRealtime, sideEffects } = makeDeps(null);
+    const mutes = { hasMuted: jest.fn(async (muter: string, muted: string) => muter === 'user-1' && muted === 'actor-1') };
+    const writer = buildWriter(prisma, presenceRealtime, sideEffects, mutes);
+
+    await writer.create({ recipientUserId: 'user-1', kind: 'comment', actorUserId: 'actor-1', actorPostId: 'reply-1', subjectPostId: 'parent-1' });
+
+    expect(mutes.hasMuted).toHaveBeenCalledWith('user-1', 'actor-1');
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+    expect(presenceRealtime.emitNotificationsUpdated).not.toHaveBeenCalled();
+    expect(sideEffects.dispatch).not.toHaveBeenCalled();
+  });
+});
 
 describe('NotificationWriterService — post-caused create is idempotent', () => {
   it('creates a comment notification when none exists for that post', async () => {
