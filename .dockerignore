@@ -17,3 +17,5 @@ env.example
 eslint.config.mjs
 .prettierrc
 .prettierignore
+# `postbuild` runs scripts/admin-coverage.mjs --check, which reads this doc.
+!docs/admin-endpoints.md

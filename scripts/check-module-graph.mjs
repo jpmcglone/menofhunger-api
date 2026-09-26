@@ -29,6 +29,10 @@ if (!existsSync(entry)) {
   process.exit(1);
 }
 
+// Loading AppModule runs env validation, but this check never connects to anything. Docker builds
+// have no `.env` (see .dockerignore), so supply a placeholder rather than fail the build.
+process.env.DATABASE_URL ||= 'postgresql://module-graph-check@localhost:5432/unused';
+
 try {
   const require = createRequire(import.meta.url);
   const mod = require(entry);
