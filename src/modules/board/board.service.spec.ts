@@ -183,8 +183,26 @@ describe('BoardService writes', () => {
     await expect(service.createThread('author', base)).rejects.toThrow('an hour');
   });
 
-  it('keeps article-thread discussion on the article', async () => {
-    const { service } = setup(member, threadRow({ articleId: 'article-1', visibility: 'public' }));
-    await expect(service.createComment('author', 'thread-1', { body: 'hi', parentId: null })).rejects.toThrow('article');
+  it('allows Board comments on article-sourced threads', async () => {
+    const { service, posts } = setup(member, threadRow({ articleId: 'article-1', visibility: 'public' }));
+    posts.createPost.mockResolvedValue({
+      post: {
+        ...threadRow({
+          id: 'c1',
+          parentId: 'thread-1',
+          rootId: 'thread-1',
+          body: 'hi',
+          articleId: null,
+          boardThread: null,
+          boostCount: 0,
+          commentCount: 0,
+          media: [],
+        }),
+      },
+    });
+    await expect(service.createComment('author', 'thread-1', { body: 'hi', parentId: null })).resolves.toMatchObject({
+      id: 'c1',
+      threadId: 'thread-1',
+    });
   });
 });

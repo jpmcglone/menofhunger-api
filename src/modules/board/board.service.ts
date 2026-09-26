@@ -1,5 +1,5 @@
 import { estimateReadingTimeMinutes } from '../../common/dto/article.dto';
-import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -81,7 +81,7 @@ export type BoardCreateThreadInput = {
 };
 
 @Injectable()
-export class BoardService {
+export class BoardService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly posts: PostsService,
@@ -90,6 +90,15 @@ export class BoardService {
     private readonly realtime: PresenceRealtimeService,
     private readonly sideEffects: SideEffectsService,
   ) {}
+
+  /** One-shot: drop any article comment counts that were previously mirrored onto Board threads. */
+  async onModuleInit() {
+    const threads = await this.prisma.post.findMany({
+      where: { kind: 'board', articleId: { not: null }, parentId: null, deletedAt: null },
+      select: { id: true },
+    });
+    if (threads.length) await this.repairArticleBoardCommentCounts(threads.map((t) => t.id));
+  }
 
   private get publicBaseUrl(): string | null {
     return this.appConfig.r2()?.publicBaseUrl ?? null;
@@ -350,10 +359,10 @@ export class BoardService {
     return this.getThread(userId, post.id);
   }
 
-  /** Board thread created from an article publish. Comments stay on the article. */
+  /** Board thread created from an article publish. Discussion on the Board is independent of the article. */
   async createArticleThread(params: {
     userId: string;
-    article: { id: string; title: string; excerpt: string | null; visibility: PostVisibility; commentCount: number };
+    article: { id: string; title: string; excerpt: string | null; visibility: PostVisibility; commentCount?: number };
     tags: string[];
     showInFeed: boolean;
   }): Promise<string | null> {
@@ -385,16 +394,13 @@ export class BoardService {
       poll: null,
       mentions: null,
     });
-    await Promise.all([
-      this.prisma.post.update({ where: { id: post.id }, data: { commentCount: params.article.commentCount } }),
-      this.bumpTags(tags),
-    ]);
+    await this.bumpTags(tags);
     this.realtime.emitBoardNewThread({ threadId: post.id, visibility, tags });
     this.sideEffects.dispatch('board.thread.tag', { threadId: post.id }, { jobId: `board-tag-${post.id}` });
     return post.id;
   }
 
-  /** Keeps article-sourced threads aligned when the article changes. */
+  /** Keeps article-sourced threads aligned when the article changes. Board comment counts stay on the Board. */
   async syncArticleThread(articleId: string, patch: { title?: string; visibility?: PostVisibility; commentCount?: number; deleted?: boolean }) {
     const threads = await this.prisma.post.findMany({
       where: { articleId, kind: 'board', parentId: null, deletedAt: null },
@@ -411,15 +417,21 @@ export class BoardService {
     }
     const postData: Prisma.PostUpdateManyMutationInput = {};
     if (patch.visibility && patch.visibility !== 'onlyMe') postData.visibility = patch.visibility;
-    if (typeof patch.commentCount === 'number') postData.commentCount = patch.commentCount;
     if (Object.keys(postData).length) await this.prisma.post.updateMany({ where: { id: { in: ids } }, data: postData });
     if (patch.title?.trim()) {
       await this.prisma.boardThread.updateMany({ where: { postId: { in: ids } }, data: { title: patch.title.trim().slice(0, BOARD_TITLE_MAX) } });
     }
-    if (typeof patch.commentCount === 'number') {
-      for (const id of ids) {
-        this.realtime.emitPostsLiveUpdated(id, { postId: id, version: new Date().toISOString(), reason: 'comment_created', patch: { commentCount: patch.commentCount } });
-      }
+    // Drop any previously mirrored article comment counts so the Board shows its own discussion.
+    await this.repairArticleBoardCommentCounts(ids);
+  }
+
+  /** Set Board commentCount from live Board replies (not the article). */
+  private async repairArticleBoardCommentCounts(threadIds: string[]): Promise<void> {
+    for (const id of threadIds) {
+      const commentCount = await this.prisma.post.count({
+        where: { rootId: id, deletedAt: null, NOT: { id } },
+      });
+      await this.prisma.post.update({ where: { id }, data: { commentCount } });
     }
   }
 
@@ -587,7 +599,6 @@ export class BoardService {
 
   async createComment(userId: string, threadId: string, input: { body: string; parentId: string | null }): Promise<BoardCommentDto> {
     const root = await this.findThreadRow(threadId);
-    if (root.articleId) throw new BadRequestException('Comment on the article instead.');
     const body = (input.body ?? '').trim();
     if (!body) throw new BadRequestException('Write a comment first.');
     let parentId = root.id;
@@ -648,7 +659,7 @@ export class BoardService {
         ? { bannedAt: null, username: { equals: authorUsername, mode: 'insensitive' } }
         : { bannedAt: null },
       OR: [{ visibility: { in: readable } }, ...(viewer ? [{ userId: viewer.id }] : [])],
-      root: { is: { deletedAt: null, articleId: null } },
+      root: { is: { deletedAt: null } },
     };
     const cursorWhere = await createdAtIdCursorWhere({
       cursor: params.cursor,
