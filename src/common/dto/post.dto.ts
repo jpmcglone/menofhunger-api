@@ -115,6 +115,8 @@ export type PostDto = {
   kind: 'regular' | 'checkin' | 'repost' | 'articleShare' | 'status' | 'fitnessShare' | 'board';
   /** kind=board only: the Board thread root id (equals `id` for the thread itself). Routes to /b/:rootId. */
   boardRootId?: string;
+  /** kind=board comments only: the thread's title (trimmed for gated viewers). */
+  boardThreadTitle?: string;
   /** kind=board thread roots only. Gated viewers get a trimmed title and no link. */
   board?: PostBoardPreviewDto;
   checkinDayKey: string | null;
@@ -311,7 +313,11 @@ function boardFields(post: { id: string; kind?: string | null; parentId?: string
   if (post.kind !== 'board') return {};
   const thread = (post as { boardThread?: BoardThreadRow }).boardThread;
   const boardRootId = post.parentId ? (post.rootId ?? post.parentId) : post.id;
-  if (!thread) return { boardRootId };
+  if (!thread) {
+    const rootTitle = (post as { root?: { boardThread?: { title: string } | null } | null }).root?.boardThread?.title;
+    if (!post.parentId || !rootTitle) return { boardRootId };
+    return { boardRootId, boardThreadTitle: canAccess ? rootTitle : gatedBoardTitle(rootTitle) };
+  }
   return {
     boardRootId,
     board: {

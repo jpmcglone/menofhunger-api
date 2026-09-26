@@ -57,6 +57,11 @@ export const BOARD_THREAD_PREVIEW_INCLUDE = {
   },
 } as const;
 
+/** Board comments carry their thread's title so feed and notification rows can name it. */
+export const BOARD_ROOT_TITLE_INCLUDE = {
+  select: { boardThread: { select: { title: true } } },
+} as const;
+
 /**
  * Include shape for an embedded/quoted post. Deliberately shallow (no further nesting)
  * to avoid unbounded recursion and keep query cost proportional.
@@ -67,6 +72,7 @@ export const QUOTED_POST_INCLUDE = {
   article: ARTICLE_SHARE_INCLUDE,
   fitnessShare: FITNESS_SHARE_INCLUDE,
   boardThread: BOARD_THREAD_PREVIEW_INCLUDE,
+  root: BOARD_ROOT_TITLE_INCLUDE,
 } as const;
 
 /** List/feed include: no nested quotedPost — quotes hydrate via quotedPostMap. */
@@ -76,6 +82,7 @@ export const POST_LIST_INCLUDE = {
   article: ARTICLE_SHARE_INCLUDE,
   fitnessShare: FITNESS_SHARE_INCLUDE,
   boardThread: BOARD_THREAD_PREVIEW_INCLUDE,
+  root: BOARD_ROOT_TITLE_INCLUDE,
 } as const;
 
 export const POST_WITH_POLL_INCLUDE = {

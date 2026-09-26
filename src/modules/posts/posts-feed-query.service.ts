@@ -12,7 +12,7 @@ import { toCommunityGroupPreviewDto } from '../../common/dto/community-group.dto
 import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import { collectAncestorPostIds } from '../../common/posts/collect-ancestor-post-ids';
 import { loadPostVideoEmbeds } from '../../common/posts/post-video-embeds';
-import { BOARD_THREAD_PREVIEW_INCLUDE, ARTICLE_SHARE_INCLUDE, FITNESS_SHARE_INCLUDE, QUOTED_POST_INCLUDE } from '../../common/prisma-includes/post.include';
+import { BOARD_THREAD_PREVIEW_INCLUDE, BOARD_ROOT_TITLE_INCLUDE, ARTICLE_SHARE_INCLUDE, FITNESS_SHARE_INCLUDE, QUOTED_POST_INCLUDE } from '../../common/prisma-includes/post.include';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { collapseFeedByRoot, type FeedCollapsedItem } from '../../common/feed-collapse/collapse-by-root';
 import { applyCollapsedThreadSummary } from '../../common/feed-collapse/collapsed-thread-summary';
@@ -3629,6 +3629,7 @@ export class PostsFeedQueryService {
         article: ARTICLE_SHARE_INCLUDE,
         fitnessShare: FITNESS_SHARE_INCLUDE,
         boardThread: BOARD_THREAD_PREVIEW_INCLUDE,
+        root: BOARD_ROOT_TITLE_INCLUDE,
         quotedPost: { include: QUOTED_POST_INCLUDE },
       },
     });
@@ -3801,6 +3802,7 @@ export class PostsFeedQueryService {
         article: ARTICLE_SHARE_INCLUDE,
         fitnessShare: FITNESS_SHARE_INCLUDE,
         boardThread: BOARD_THREAD_PREVIEW_INCLUDE,
+        root: BOARD_ROOT_TITLE_INCLUDE,
         quotedPost: { include: QUOTED_POST_INCLUDE },
       },
     });
