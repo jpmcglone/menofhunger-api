@@ -108,6 +108,34 @@ export class FollowsService {
     return `follows:recs:v2:${viewerUserId}:${limit}:${interestsPart}:${seedPart}`;
   }
 
+  private blockExclusionSql(viewerUserId: string): Prisma.Sql {
+    return Prisma.sql`
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "UserBlock" ub
+        WHERE (ub."blockerId" = ${viewerUserId} AND ub."blockedId" = u."id")
+           OR (ub."blockerId" = u."id" AND ub."blockedId" = ${viewerUserId})
+      )
+    `;
+  }
+
+  /** Cached recommendations predate blocks made since; re-check them on every read. */
+  private async withoutBlocked(viewerUserId: string, users: FollowListUser[]): Promise<FollowListUser[]> {
+    if (users.length === 0) return users;
+    const blocks = await this.prisma.userBlock.findMany({
+      where: {
+        OR: [
+          { blockerId: viewerUserId, blockedId: { in: users.map((u) => u.id) } },
+          { blockedId: viewerUserId, blockerId: { in: users.map((u) => u.id) } },
+        ],
+      },
+      select: { blockerId: true, blockedId: true },
+    });
+    if (blocks.length === 0) return users;
+    const hidden = new Set(blocks.map((b) => (b.blockerId === viewerUserId ? b.blockedId : b.blockerId)));
+    return users.filter((u) => !hidden.has(u.id));
+  }
+
   private recommendationSeed(seed: string | undefined): string {
     const explicit = (seed ?? '').trim();
     if (explicit) return explicit.slice(0, 80);
@@ -227,7 +255,7 @@ export class FollowsService {
     const cacheKey = this.recommendationsCacheKey(viewerUserId, limit, null, seed);
     try {
       const cached = await this.redis.getJson<FollowListUser[]>(cacheKey);
-      if (cached) return { users: cached };
+      if (cached) return { users: await this.withoutBlocked(viewerUserId, cached) };
     } catch { /* Redis unavailable */ }
 
     const rows = await this.prisma.$queryRaw<RecommendationRow[]>(Prisma.sql`
@@ -431,6 +459,7 @@ export class FollowsService {
           WHERE f."followerId" = ${viewerUserId}
             AND f."followingId" = u."id"
         )
+        ${this.blockExclusionSql(viewerUserId)}
     `);
 
     const rankedRows = this.rankRecommendationRows(rows, { viewerUserId, seed, limit });
@@ -467,7 +496,7 @@ export class FollowsService {
     const cacheKey = this.recommendationsCacheKey(viewerUserId, limit, interestKeys, seed);
     try {
       const cached = await this.redis.getJson<FollowListUser[]>(cacheKey);
-      if (cached) return { users: cached };
+      if (cached) return { users: await this.withoutBlocked(viewerUserId, cached) };
     } catch { /* Redis unavailable */ }
 
     // Use Postgres array overlap (&&) and array_length of the intersection.
@@ -523,6 +552,7 @@ export class FollowsService {
           WHERE f."followerId" = ${viewerUserId}
             AND f."followingId" = u."id"
         )
+        ${this.blockExclusionSql(viewerUserId)}
       ORDER BY
         "overlapCount" DESC,
         "sameState" DESC,
@@ -585,6 +615,7 @@ export class FollowsService {
             WHERE f."followerId" = ${viewerUserId}
               AND f."followingId" = u."id"
           )
+          ${this.blockExclusionSql(viewerUserId)}
         `
       : Prisma.sql``;
 

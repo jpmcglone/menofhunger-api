@@ -18,7 +18,7 @@ import { collapseFeedByRoot, type FeedCollapsedItem } from '../../common/feed-co
 import { applyCollapsedThreadSummary } from '../../common/feed-collapse/collapsed-thread-summary';
 import { collapseRepostsByCanonical } from '../../common/feed-collapse/collapse-reposts-by-canonical';
 import { toPostDto, toPostAuthorDtoFromFeedRow, type PostAuthorDto, type PostDto } from '../../common/dto/post.dto';
-import { buildAttachParentChain } from './posts.utils';
+import { buildAttachParentChain, postChainInvolvesAuthor } from './posts.utils';
 import { friendEngagementSql } from './posts-friend-engagement.sql';
 import { POSTS_RANKING } from './posts-ranking.config';
 import { generateRandomSeed, seededUnitInterval } from '../../common/random/seeded-random';
@@ -876,11 +876,14 @@ export class PostsFeedQueryService {
 
     const contexts = params.conversationContext && viewerUserId && this.conversations
       ? await this.conversations.contexts(viewerUserId, filteredPosts.map(p => p.id)) : new Map();
-    return filteredPosts.map((p) => {
+    // Blocking promises "you won't see their posts": also drop rows that reply to, repost, or
+    // quote them. Being blocked by the author still allows read-only viewing.
+    return filteredPosts.flatMap((p) => {
       const dto = attachParentChain(p);
+      if (postChainInvolvesAuthor(dto, blockedByViewer)) return [];
       if (dto.viewerCanAccess !== false && !dto.deletedAt && contexts.has(p.id)) dto.conversationContext = contexts.get(p.id);
       applyCollapsedThreadSummary(dto, collapsedItemsByItemId.get(p.id));
-      return dto;
+      return [dto];
     });
   }
 
