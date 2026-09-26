@@ -27,5 +27,7 @@ export type NotificationPreferencesDto = {
   emailFollowedArticle: boolean;
   /** Admin-authored lodge newsletter. On by default. */
   emailNewsletter: boolean;
+  /** In-app heads-up (never push) when someone you follow comes online. Throttled server-side. */
+  inAppFollowOnline: boolean;
 };
 

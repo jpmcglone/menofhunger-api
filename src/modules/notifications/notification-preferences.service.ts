@@ -110,6 +110,7 @@ export class NotificationPreferencesService {
     emailStreakReminder: boolean;
     emailFollowedArticle: boolean;
     emailNewsletter: boolean;
+    inAppFollowOnline?: boolean;
   }): NotificationPreferencesDto {
     return {
       pushComment: Boolean(prefs.pushComment),
@@ -131,6 +132,7 @@ export class NotificationPreferencesService {
       emailStreakReminder: Boolean(prefs.emailStreakReminder),
       emailFollowedArticle: Boolean(prefs.emailFollowedArticle),
       emailNewsletter: prefs.emailNewsletter !== false,
+      inAppFollowOnline: prefs.inAppFollowOnline !== false,
     };
   }
 }

@@ -2318,6 +2318,20 @@ export type MembersMapSummaryDto = {
   asOf: string;
 };
 
+/**
+ * `members-map:changed` — someone joined, moved state, or stopped counting (banned, deleted,
+ * location cleared counts as a move to null). The `members` room also gets `user`; the
+ * `counts` room never does.
+ */
+export type MembersMapChangedPayloadDto = {
+  kind: 'joined' | 'moved' | 'left';
+  /** Where they count now; null = no location. Always null for `left`. */
+  state: string | null;
+  /** Where they counted before; null = no location. Always null for `joined`. */
+  previousState: string | null;
+  user?: UserListDto;
+};
+
 // ─── src/common/dto/metrics.dto.ts ─────────────────────────────────────────────
 
 export type ActiveUsersMetricsDto = {
@@ -2484,6 +2498,8 @@ export type NotificationPreferencesDto = {
   emailFollowedArticle: boolean;
   /** Admin-authored lodge newsletter. On by default. */
   emailNewsletter: boolean;
+  /** In-app heads-up (never push) when someone you follow comes online. Throttled server-side. */
+  inAppFollowOnline: boolean;
 };
 
 // ─── src/common/dto/post.dto.ts ────────────────────────────────────────────────
@@ -3016,6 +3032,15 @@ export type PresenceOnlineFeedSnapshotPayloadDto = {
 
 export type PresenceAnonymousCountPayloadDto = {
   anonymousOnline: number;
+};
+
+/**
+ * `presence:followed-online` — to one viewer: people they follow just came online.
+ * `users` holds up to three; `total` counts everyone in this batch.
+ */
+export type PresenceFollowedOnlinePayloadDto = {
+  users: UserListDto[];
+  total: number;
 };
 
 /** `presence:online-count` — the only live presence update count-only feed sockets receive. */

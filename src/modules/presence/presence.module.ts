@@ -20,6 +20,7 @@ import { ContentSubscriptionsHandler } from './gateway/gateway-subscriptions.han
 import { MessagingGatewayHandler } from './gateway/gateway-messaging.handler';
 import { CallsGatewayHandler } from './gateway/gateway-calls.handler';
 import { CallsModule } from '../calls/calls.module';
+import { PresenceSideEffectsHandler } from './presence-side-effects.handler';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { CallsModule } from '../calls/calls.module';
     ContentSubscriptionsHandler,
     MessagingGatewayHandler,
     CallsGatewayHandler,
+    PresenceSideEffectsHandler,
   ],
   exports: [RealtimeModule],
 })

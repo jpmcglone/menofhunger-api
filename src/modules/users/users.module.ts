@@ -16,6 +16,7 @@ import { UsersPublicRealtimeService } from './users-public-realtime.service';
 import { PublicProfilesService } from './public-profiles.service';
 import { MembersMapController } from './members-map.controller';
 import { MembersMapService } from './members-map.service';
+import { MembersMapRealtimeService } from './members-map-realtime.service';
 
 @Module({
   imports: [AuthModule, FollowsModule, NotificationsModule, RealtimeModule, EmailModule],
@@ -24,6 +25,7 @@ import { MembersMapService } from './members-map.service';
   providers: [
     ActivationService,
     MembersMapService,
+    MembersMapRealtimeService,
     UsersProfileWriteService,
     PublicProfileCacheService,
     UsersRealtimeService,

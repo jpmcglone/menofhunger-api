@@ -15,8 +15,10 @@ import {
   articleRoom,
   boardRoom,
   groupRoom,
+  membersMapRoom,
   postRoom,
 } from './gateway-rooms';
+import { canSeeMembers } from '../../auth/member-visibility';
 
 /**
  * Content room subscriptions: posts, groups, and articles. Each subscribe is
@@ -171,6 +173,17 @@ export class ContentSubscriptionsHandler {
     client.leave(boardRoom('public'));
     client.leave(boardRoom('verified'));
     client.leave(boardRoom('premium'));
+  }
+
+  /** Members map: verified viewers get the room with faces; everyone else only counts. */
+  handleMembersMapSubscribe(client: Socket): void {
+    const viewer = (client.data as any)?.viewer ?? {};
+    client.join(membersMapRoom(canSeeMembers(viewer) ? 'members' : 'counts'));
+  }
+
+  handleMembersMapUnsubscribe(client: Socket): void {
+    client.leave(membersMapRoom('members'));
+    client.leave(membersMapRoom('counts'));
   }
 
   async handleArticlesSubscribe(client: Socket, payload: Partial<ArticlesSubscribePayloadDto>): Promise<void> {

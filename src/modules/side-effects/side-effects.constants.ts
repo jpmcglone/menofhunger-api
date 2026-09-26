@@ -23,6 +23,16 @@ export const MOH_SIDE_EFFECTS_QUEUE = 'moh_side_effects';
  * or switch statement to update.
  */
 export interface SideEffectPayloads {
+  // ─── Presence ─────────────────────────────────────────────────────────
+  /** Someone just came online: tell followers who are online too (throttled, in-app only). */
+  'presence.followed-online': {
+    userId: string;
+  };
+  /** Send one viewer the follow-online pings that waited out their 5-minute quiet window. */
+  'presence.followed-online.flush': {
+    viewerUserId: string;
+  };
+
   // ─── Posts ────────────────────────────────────────────────────────────
   'post.created': {
     postId: string;

@@ -219,6 +219,15 @@ export type PresenceAnonymousCountPayloadDto = {
   anonymousOnline: number;
 };
 
+/**
+ * `presence:followed-online` — to one viewer: people they follow just came online.
+ * `users` holds up to three; `total` counts everyone in this batch.
+ */
+export type PresenceFollowedOnlinePayloadDto = {
+  users: UserListDto[];
+  total: number;
+};
+
 /** `presence:online-count` — the only live presence update count-only feed sockets receive. */
 export type PresenceOnlineCountPayloadDto = {
   totalOnline: number;
@@ -241,6 +250,8 @@ export const WsEventNames = {
   presencePlatformsChanged: 'presence:platforms-changed',
   presenceAnonymousCount: 'presence:anonymous-count',
   presenceOnlineCount: 'presence:online-count',
+  membersMapChanged: 'members-map:changed',
+  presenceFollowedOnline: 'presence:followed-online',
   postsSubscribe: 'posts:subscribe',
   postsUnsubscribe: 'posts:unsubscribe',
   postsSubscribed: 'posts:subscribed',

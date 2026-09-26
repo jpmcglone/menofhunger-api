@@ -38,6 +38,7 @@ import { SlackService } from '../../common/slack/slack.service';
 import { PresenceService } from '../presence/presence.service';
 import { totalUserArticlesWhere, totalUserBoardPoints, totalUserPostsWhere } from '../../common/content-counts';
 import type { LocationBrowseResponseDto } from './location-browse.dto';
+import { MEMBERS_MAP_SNAPSHOT_SELECT, MembersMapRealtimeService } from './members-map-realtime.service';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -198,6 +199,7 @@ export class UsersController {
     private readonly presence: PresenceService,
     private readonly auth: AuthService,
     private readonly profileWrite: UsersProfileWriteService,
+    private readonly membersMapRealtime: MembersMapRealtimeService,
   ) {}
 
   private async viewerCanSeeLastOnline(viewerUserId: string | null): Promise<boolean> {
@@ -661,6 +663,7 @@ export class UsersController {
       });
 
       await this.ensureStarterFollowsOnFirstUsernameSet(userId, updated.username ?? parsed.username);
+      this.membersMapRealtime.notifyChange(userId, user, updated);
 
       await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
       await this.emitUserSelfUpdated(updated.id);
@@ -956,7 +959,7 @@ export class UsersController {
     try {
       const existing = await this.prisma.user.findUnique({
         where: { id: userId },
-        select: { email: true, username: true, name: true },
+        select: { email: true, username: true, name: true, ...MEMBERS_MAP_SNAPSHOT_SELECT },
       });
       if (!existing) throw new NotFoundException('User not found.');
 
@@ -1034,6 +1037,7 @@ export class UsersController {
 
       const updated = await this.profileWrite.commit(userId, update, emailChanged);
       this.presence.markSeenFromHttp(userId);
+      this.membersMapRealtime.notifyChange(userId, existing, updated);
 
       if (emailChanged && nextEmail) {
         const greetingName = (updated.name ?? updated.username ?? '').trim() || null;
@@ -1234,6 +1238,7 @@ export class UsersController {
       if (usernameFirstSet && updated.username) {
         await this.ensureStarterFollowsOnFirstUsernameSet(userId, updated.username);
       }
+      this.membersMapRealtime.notifyChange(userId, user, updated);
 
       if (!wasComplete && isFullyOnboarded(updated) && updated.username) {
         this.posthog.capture(userId, 'onboarding_completed', { username: updated.username });

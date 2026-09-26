@@ -4,6 +4,9 @@ import { PresenceService } from './presence.service';
 import { PresenceRedisStateService } from './presence-redis-state.service';
 import { WsEventNames } from '../../common/dto';
 import type {
+  MembersMapChangedPayloadDto,
+  PresenceFollowedOnlinePayloadDto,
+  UserListDto,
   AdminUpdatedPayloadDto,
   ArticlesLiveUpdatedPayloadDto,
   ArticlesCommentAddedPayloadDto,
@@ -381,6 +384,17 @@ export class PresenceRealtimeService {
   emitBoardNewThread(payload: BoardNewThreadPayloadDto): void {
     const tier = payload.visibility === 'premiumOnly' ? 'premium' : payload.visibility === 'verifiedOnly' ? 'verified' : 'public';
     this.emitToRoom(`board:${tier}`, WsEventNames.boardNewThread, payload);
+  }
+
+  /** People this viewer follows came online (already throttled by the side-effects handler). */
+  emitFollowedOnline(viewerUserId: string, payload: PresenceFollowedOnlinePayloadDto): void {
+    this.emitToUser(viewerUserId, WsEventNames.presenceFollowedOnline, payload);
+  }
+
+  /** Members map membership changed. The counts room never receives the member's card. */
+  emitMembersMapChanged(payload: Omit<MembersMapChangedPayloadDto, 'user'>, user: UserListDto | null): void {
+    this.emitToRoom('members-map:counts', WsEventNames.membersMapChanged, payload);
+    this.emitToRoom('members-map:members', WsEventNames.membersMapChanged, user ? { ...payload, user } : payload);
   }
 
   /** @marv was added to or removed from a group; pushed to the `group:{id}` room. */

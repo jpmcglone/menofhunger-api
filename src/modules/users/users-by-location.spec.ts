@@ -31,6 +31,7 @@ describe('UsersController.byLocation', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
     );
 
     const result = await controller.byLocation('viewer', { state: 'va', limit: 12 });

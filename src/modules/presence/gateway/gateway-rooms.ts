@@ -14,6 +14,10 @@ export function groupRoom(groupId: string): string {
 export function boardRoom(tier: 'public' | 'verified' | 'premium'): string {
   return `board:${tier}`;
 }
+/** Members map rooms: counts for everyone, members (with faces) for verified viewers. */
+export function membersMapRoom(access: 'counts' | 'members'): string {
+  return `members-map:${access}`;
+}
 export function articleRoom(articleId: string): string {
   return `article:${articleId}`;
 }

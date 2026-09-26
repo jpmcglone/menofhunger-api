@@ -21,6 +21,7 @@ export const preferencesPatchSchema = z
     emailStreakReminder: z.boolean().optional(),
     emailFollowedArticle: z.boolean().optional(),
     emailNewsletter: z.boolean().optional(),
+    inAppFollowOnline: z.boolean().optional(),
   })
   .strict()
   .refine((d) => Object.keys(d).length > 0, { message: 'At least one preference is required.' });

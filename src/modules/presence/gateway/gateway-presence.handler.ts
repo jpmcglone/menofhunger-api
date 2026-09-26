@@ -20,6 +20,7 @@ import { AccountSwitchService } from '../../auth/account-switch.service';
 import { CallSessionStore } from '../../calls/call-session.store';
 import { canSeeMembers } from '../../auth/member-visibility';
 import { OnlineMembersService } from '../online-members.service';
+import { SideEffectsService } from '../../side-effects/side-effects.service';
 
 const COUNT_ONLY_UPDATE_DEBOUNCE_MS = 1500;
 
@@ -63,6 +64,7 @@ export class PresenceStatusHandler {
     private readonly accountSwitch: AccountSwitchService,
     private readonly callSessions: CallSessionStore,
     private readonly onlineMembers: OnlineMembersService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   // ─── Connection lifecycle ───────────────────────────────────────────
@@ -192,6 +194,8 @@ export class PresenceStatusHandler {
     if (userId && !impersonated) {
       if (isNewlyOnline) {
         await this.emitOnline(userId);
+        // Followers' "came online" pings are fan-out work: queued, throttled, never inline.
+        this.sideEffects.dispatch('presence.followed-online', { userId });
       } else {
         await this.emitPlatformsChanged(userId);
       }

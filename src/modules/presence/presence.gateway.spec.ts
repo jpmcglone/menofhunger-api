@@ -266,6 +266,7 @@ function buildGateway(deps: {
     } as any,
     { inCallByUserIds: jest.fn(async () => new Set<string>()) } as any,
     makeOnlineMembers(deps.presenceRedis),
+    { dispatch: jest.fn() } as any,
   );
   const spacesHandler = new SpacesGatewayHandler(
     deps.presence,

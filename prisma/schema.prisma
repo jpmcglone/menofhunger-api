@@ -2357,6 +2357,12 @@ model NotificationPreferences {
    */
   emailNewsletter        Boolean @default(true)
 
+  /**
+   * In-app heads-up (web toast / iOS banner, never push) when someone you follow comes online.
+   * Throttled server-side: once per person per 2h, at most one per 5 minutes.
+   */
+  inAppFollowOnline      Boolean @default(true)
+
   // Email send timestamps (rate limiting / dedupe).
   lastEmailDigestWeeklySentAt      DateTime?
   lastEmailNewNotificationsSentAt  DateTime?

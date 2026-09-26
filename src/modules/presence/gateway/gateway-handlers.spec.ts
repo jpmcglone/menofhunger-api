@@ -249,6 +249,21 @@ describe('ContentSubscriptionsHandler', () => {
     return { handler: new ContentSubscriptionsHandler(prisma, groupReadAccess), prisma };
   }
 
+  it('puts verified viewers in the members map room and everyone else in the counts room', () => {
+    const { handler } = makeSubsFixture();
+    const verified = new FakeSocket('s1', { userId: 'v', viewer: { verified: true } });
+    const unverified = new FakeSocket('s2', { userId: 'u', viewer: { verified: false } });
+    const guest = new FakeSocket('s3', {});
+
+    for (const s of [verified, unverified, guest]) handler.handleMembersMapSubscribe(s as any);
+
+    expect([...verified.joined]).toEqual(['members-map:members']);
+    expect([...unverified.joined]).toEqual(['members-map:counts']);
+    expect([...guest.joined]).toEqual(['members-map:counts']);
+    handler.handleMembersMapUnsubscribe(verified as any);
+    expect(verified.joined.size).toBe(0);
+  });
+
   it('accepts a public post and joins its room', async () => {
     const { handler } = makeSubsFixture({ posts: [{ id: 'p1', userId: 'author', visibility: 'public', communityGroupId: null }] });
     const socket = new FakeSocket('s1', { userId: 'viewer', viewer: {} });
@@ -419,6 +434,7 @@ describe('PresenceStatusHandler', () => {
       } as any,
       { inCallByUserIds: jest.fn(async () => new Set<string>()) } as any,
       makeOnlineMembers(presenceRedis),
+      { dispatch: jest.fn() } as any,
     );
     return { server, presence, presenceRedis, follows, handler };
   }
@@ -723,6 +739,7 @@ describe('PresenceStatusHandler — impersonated connections', () => {
       } as any,
       { inCallByUserIds: jest.fn(async () => new Set<string>()) } as any,
       makeOnlineMembers(presenceRedis),
+      { dispatch: jest.fn() } as any,
     );
     const emitOnline = jest.spyOn(handler, 'emitOnline').mockResolvedValue(undefined);
     const emitPlatformsChanged = jest.spyOn(handler, 'emitPlatformsChanged').mockResolvedValue(undefined);
@@ -855,6 +872,7 @@ describe('PresenceStatusHandler — anonymous guest sockets', () => {
       } as any,
       { inCallByUserIds: jest.fn(async () => new Set<string>()) } as any,
       makeOnlineMembers(presenceRedis),
+      { dispatch: jest.fn() } as any,
     );
     const emitAnonymousCount = jest.spyOn(handler, 'emitAnonymousCount').mockResolvedValue(undefined);
     const emitOnline = jest.spyOn(handler, 'emitOnline').mockResolvedValue(undefined);

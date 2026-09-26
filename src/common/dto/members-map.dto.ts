@@ -36,3 +36,17 @@ export type MembersMapSummaryDto = {
   unlocatedPreview: UserListDto[];
   asOf: string;
 };
+
+/**
+ * `members-map:changed` — someone joined, moved state, or stopped counting (banned, deleted,
+ * location cleared counts as a move to null). The `members` room also gets `user`; the
+ * `counts` room never does.
+ */
+export type MembersMapChangedPayloadDto = {
+  kind: 'joined' | 'moved' | 'left';
+  /** Where they count now; null = no location. Always null for `left`. */
+  state: string | null;
+  /** Where they counted before; null = no location. Always null for `joined`. */
+  previousState: string | null;
+  user?: UserListDto;
+};

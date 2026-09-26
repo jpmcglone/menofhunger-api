@@ -159,6 +159,18 @@ export const RedisKeys = {
   presenceOnlineList(viewerUserId: string | null): string {
     return `presence:online:list:${clean(viewerUserId ?? 'anon')}`;
   },
+  /** Follow-online pings: this viewer was already told about this person (2h). */
+  followOnlinePair(viewerUserId: string, userId: string): string {
+    return `follow-online:pair:${clean(viewerUserId)}:${clean(userId)}`;
+  },
+  /** Follow-online pings: when this viewer last got one (5-minute quiet window). */
+  followOnlineRecent(viewerUserId: string): string {
+    return `follow-online:recent:${clean(viewerUserId)}`;
+  },
+  /** Follow-online pings waiting for this viewer's quiet window to end. */
+  followOnlinePending(viewerUserId: string): string {
+    return `follow-online:pending:${clean(viewerUserId)}`;
+  },
   /** Counts-only members map summary shared by every signed-out and unverified viewer. */
   membersMapCounts(): string {
     return 'cache:members-map:counts';
