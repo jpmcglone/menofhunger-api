@@ -713,17 +713,17 @@ export class NotificationsEmailCron {
       const weeklyCreatedAtWindow = { gte: weekWindowStart, lt: weekWindowEnd };
 
       const weeklyFeaturedPostPublic = await this.prisma.post.findFirst({
-        where: { deletedAt: null, parentId: null, visibility: { in: ['public'] }, createdAt: weeklyCreatedAtWindow },
+        where: { deletedAt: null, parentId: null, kind: { not: 'board' }, visibility: { in: ['public'] }, createdAt: weeklyCreatedAtWindow },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         select: weeklyFeaturedSelect,
       });
       const weeklyFeaturedPostVerified = await this.prisma.post.findFirst({
-        where: { deletedAt: null, parentId: null, visibility: { in: ['public', 'verifiedOnly'] }, createdAt: weeklyCreatedAtWindow },
+        where: { deletedAt: null, parentId: null, kind: { not: 'board' }, visibility: { in: ['public', 'verifiedOnly'] }, createdAt: weeklyCreatedAtWindow },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         select: weeklyFeaturedSelect,
       });
       const weeklyFeaturedPostPremium = await this.prisma.post.findFirst({
-        where: { deletedAt: null, parentId: null, visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] }, createdAt: weeklyCreatedAtWindow },
+        where: { deletedAt: null, parentId: null, kind: { not: 'board' }, visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] }, createdAt: weeklyCreatedAtWindow },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         select: weeklyFeaturedSelect,
       });
@@ -775,6 +775,42 @@ export class NotificationsEmailCron {
         take: 3,
         select: weeklyTopArticleSelect,
       });
+
+      // Top of the Board (per tier): most points, then comments. Article Board posts are covered by articles.
+      const weeklyBoardSelect = {
+        id: true,
+        boostCount: true,
+        commentCount: true,
+        boardThread: { select: { title: true, domain: true } },
+      } satisfies Prisma.PostSelect;
+      const weeklyTopBoardFor = (visibilities: PostVisibility[]) =>
+        this.prisma.post.findMany({
+          where: {
+            kind: 'board',
+            parentId: null,
+            articleId: null,
+            deletedAt: null,
+            isDraft: false,
+            visibility: { in: visibilities },
+            createdAt: weeklyCreatedAtWindow,
+            user: { bannedAt: null },
+          },
+          orderBy: [{ boostCount: 'desc' }, { commentCount: 'desc' }, { createdAt: 'desc' }],
+          take: 3,
+          select: weeklyBoardSelect,
+        });
+      const [weeklyTopBoardPublic, weeklyTopBoardVerified, weeklyTopBoardPremium] = await Promise.all([
+        weeklyTopBoardFor(['public']),
+        weeklyTopBoardFor(['public', 'verifiedOnly']),
+        weeklyTopBoardFor(['public', 'verifiedOnly', 'premiumOnly']),
+      ]);
+      function pickWeeklyTopBoard(u: { verifiedStatus?: string | null; premium?: boolean | null; premiumPlus?: boolean | null }) {
+        const isPremium = Boolean(u.premium || u.premiumPlus);
+        const isVerified = (u.verifiedStatus ?? 'none') !== 'none';
+        if (isPremium) return weeklyTopBoardPremium;
+        if (isVerified) return weeklyTopBoardVerified;
+        return weeklyTopBoardPublic;
+      }
 
       function pickWeeklyFeaturedPost(u: { verifiedStatus?: string | null; premium?: boolean | null; premiumPlus?: boolean | null }) {
         const isPremium = Boolean(u.premium || u.premiumPlus);
@@ -885,6 +921,7 @@ export class NotificationsEmailCron {
           const featuredPost = pickWeeklyFeaturedPost(u);
           const featuredUrl = featuredPost ? `${baseUrl}/p/${encodeURIComponent(featuredPost.id)}` : null;
           const topArticles = pickWeeklyTopArticles(u);
+          const topBoard = pickWeeklyTopBoard(u);
           const preferredTags = preferencesByUser.get(u.id) ?? [];
           const allowedVis = allowedWeeklyVisibilities(u);
           const seenTaggedArticleIds = new Set<string>();
@@ -1006,6 +1043,29 @@ export class NotificationsEmailCron {
                 ].join(''),
               )
             : '';
+          const boardMeta = (b: (typeof topBoard)[number]) =>
+            [
+              `${b.boostCount} ${b.boostCount === 1 ? 'point' : 'points'}`,
+              `${b.commentCount} ${b.commentCount === 1 ? 'comment' : 'comments'}`,
+              b.boardThread?.domain ?? null,
+            ].filter(Boolean).join(' · ');
+          const topBoardHtml = topBoard.length > 0
+            ? renderCard(
+                [
+                  `<div style="margin-bottom:10px;">${renderPill('Top of the Board', 'info')}</div>`,
+                  ...topBoard.map((b, idx) => {
+                    const boardUrl = `${baseUrl}/b/${encodeURIComponent(b.id)}`;
+                    return [
+                      `<div style="${idx > 0 ? `margin-top:10px;padding-top:10px;border-top:1px solid ${EMAIL.border};` : ''}">`,
+                      `<a href="${escapeHtml(boardUrl)}" style="font-size:14px;line-height:1.6;color:${EMAIL.text};text-decoration:none;font-weight:700;">${escapeHtml(truncate(b.boardThread?.title ?? 'Board post', 140))}</a>`,
+                      `<div style="margin-top:4px;font-size:12px;color:${EMAIL.muted};">${escapeHtml(boardMeta(b))}</div>`,
+                      `</div>`,
+                    ].join('');
+                  }),
+                  `<div style="margin-top:12px;">${renderButton({ href: `${baseUrl}/b`, label: 'Open the Board' })}</div>`,
+                ].join(''),
+              )
+            : '';
           const pickedForYouHtml = taggedArticleGroups.length > 0
             ? renderCard(
                 [
@@ -1075,6 +1135,13 @@ export class NotificationsEmailCron {
               '',
             );
           }
+          if (topBoard.length > 0) {
+            textLines.push(
+              'Top of the Board',
+              ...topBoard.map((b, idx) => `${idx + 1}. ${truncate(b.boardThread?.title ?? 'Board post', 120)} — ${boardMeta(b)}\n${baseUrl}/b/${encodeURIComponent(b.id)}`),
+              '',
+            );
+          }
           if (taggedArticleGroups.length > 0) {
             textLines.push('Picked for you');
             for (const group of taggedArticleGroups) {
@@ -1121,6 +1188,7 @@ export class NotificationsEmailCron {
               ...(featuredPost ? [featuredHtml] : []),
               ...(taggedArticleGroups.length > 0 ? [pickedForYouHtml] : []),
               ...(topArticles.length > 0 ? [topArticlesHtml] : []),
+              ...(topBoard.length > 0 ? [topBoardHtml] : []),
               ...(newMembersBlock ? [newMembersBlock] : []),
               `<div style="margin-top:16px;font-size:13px;line-height:1.8;color:${EMAIL.muted};">Manage notification settings: <a href="${escapeHtml(
                 settingsUrl,

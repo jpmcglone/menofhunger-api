@@ -108,6 +108,13 @@ export class BoardController {
   }
 
   @UseGuards(OptionalAuthGuard)
+  @Get('leaderboard')
+  async leaderboard(@OptionalCurrentUserId() userId: string | undefined, @Query() query: unknown) {
+    const parsed = z.object({ limit: z.coerce.number().int().min(1).max(50).optional() }).parse(query);
+    return { data: await this.board.leaderboard(userId ?? null, parsed.limit ?? 25) };
+  }
+
+  @UseGuards(OptionalAuthGuard)
   @Get('threads/:id')
   async getThread(
     @OptionalCurrentUserId() userId: string | undefined,

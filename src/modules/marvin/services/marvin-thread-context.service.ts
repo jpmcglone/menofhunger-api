@@ -6,6 +6,14 @@ import { windowThreadAroundFocal } from './marvin-thread-window';
 
 /** Safety cap so a mega-thread cannot blow the prompt. Typical MOH threads fit entirely. */
 const DEFAULT_THREAD_LIMIT = 80;
+/** A Board post's title and link are its subject; put them ahead of the text Marv reads. */
+function withBoardHeading(board: { title: string; url: string | null } | null, body: string | null): string {
+  const text = body ?? '';
+  if (!board) return text;
+  const heading = [`Board post: ${board.title}`, board.url ? `Link: ${board.url}` : null].filter(Boolean).join('\n');
+  return text ? `${heading}\n\n${text}` : heading;
+}
+
 /** Match the premium post body max so we do not clip what members actually wrote. */
 const BODY_TRUNCATE = 1000;
 
@@ -136,6 +144,7 @@ export class MarvinThreadContextService {
             editedAt: true,
             checkinPrompt: true,
             userId: true,
+            boardThread: { select: { title: true, url: true } },
             communityGroupId: true,
             communityGroup: {
               select: {
@@ -183,7 +192,7 @@ export class MarvinThreadContextService {
         authorUserId: row.userId,
         authorUsername: row.user.username,
         authorDisplayName: row.user.name,
-        body: (row.body ?? '').slice(0, BODY_TRUNCATE),
+        body: withBoardHeading(row.boardThread, row.body).slice(0, BODY_TRUNCATE),
         createdAt: row.createdAt,
         editedAt: row.editedAt,
         checkinPrompt: row.checkinPrompt,

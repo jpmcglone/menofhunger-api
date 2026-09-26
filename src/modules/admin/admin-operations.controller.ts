@@ -26,6 +26,8 @@ const contentSchema = z
     before: z.string().datetime().optional(),
     q: z.string().trim().min(1).max(200).optional(),
     unanswered: z.enum(["true", "false"]).optional(),
+    /** `posts` (default, regular posts), `board` (Board posts), or `all`. */
+    source: z.enum(["posts", "board", "all"]).default("posts"),
     limit: z.coerce.number().int().min(1).max(50).default(20),
     cursor: idSchema.optional(),
   })
@@ -187,12 +189,17 @@ export class AdminOperationsController {
       visibility: "public",
       communityGroupId: null,
       parentId: null,
-      kind: "regular",
+      kind: input.source === "all" ? { in: ["regular", "board"] } : input.source === "board" ? "board" : "regular",
       isDraft: false,
       deletedAt: null,
       user: { isBot: false, bannedAt: null },
       ...(input.q
-        ? { body: { contains: input.q, mode: "insensitive" as const } }
+        ? {
+            OR: [
+              { body: { contains: input.q, mode: "insensitive" as const } },
+              { boardThread: { is: { title: { contains: input.q, mode: "insensitive" as const } } } },
+            ],
+          }
         : {}),
       ...(input.unanswered === "true"
         ? {
@@ -217,9 +224,13 @@ export class AdminOperationsController {
         throw new BadRequestException(
           "Cursor is no longer available. Restart the content query.",
         );
-      where.OR = [
-        { createdAt: { lt: cursor.createdAt } },
-        { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+      where.AND = [
+        {
+          OR: [
+            { createdAt: { lt: cursor.createdAt } },
+            { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+          ],
+        },
       ];
     }
     const rows = await this.prisma.post.findMany({
@@ -232,6 +243,8 @@ export class AdminOperationsController {
         body: true,
         commentCount: true,
         boostCount: true,
+        kind: true,
+        boardThread: { select: { title: true, url: true, tags: true } },
         user: { select: { id: true, username: true, name: true } },
       },
     });
@@ -241,10 +254,12 @@ export class AdminOperationsController {
         asOf: now.toISOString(),
         since: since.toISOString(),
         before: before.toISOString(),
-        posts: page.map(({ user, createdAt, ...post }) => ({
+        posts: page.map(({ user, createdAt, kind, boardThread, ...post }) => ({
           ...post,
           createdAt: createdAt.toISOString(),
           author: user,
+          kind: kind === "board" ? ("board" as const) : ("post" as const),
+          ...(boardThread ? { board: boardThread } : {}),
         })),
       },
       pagination: {

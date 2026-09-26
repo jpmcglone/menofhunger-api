@@ -104,7 +104,7 @@ describe('PublicProfilesService.getAnonymousProfile', () => {
     );
     service.prisma = {
       crewMember: { findFirst: jest.fn().mockResolvedValue({ crewId: 'crew-1' }) },
-      post: { count: jest.fn().mockResolvedValue(12) },
+      post: { count: jest.fn().mockResolvedValue(12), aggregate: jest.fn().mockResolvedValue({ _sum: { boostCount: 7 } }) },
       article: { count: jest.fn().mockResolvedValue(3) },
     };
 
@@ -116,6 +116,7 @@ describe('PublicProfilesService.getAnonymousProfile', () => {
         lastOnlineAt: null,
         postCount: 12,
         articleCount: 3,
+        boardPoints: 7,
         inCrew: true,
         orgAffiliations: [expect.objectContaining({ id: 'org-1' })],
       }),

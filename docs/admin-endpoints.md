@@ -88,11 +88,11 @@ The companion [experience review](admin-experience.md) records assistant actions
 | POST /v1/admin/newsletters/:id/unschedule | newsletters | [source](../src/modules/admin/admin-newsletters.controller.ts#L112) |
 | POST /v1/admin/newsletters/audience-count | newsletters | [source](../src/modules/admin/admin-newsletters.controller.ts#L72) |
 | POST /v1/admin/newsletters/preview | newsletters | [source](../src/modules/admin/admin-newsletters.controller.ts#L49) |
-| GET /v1/admin/operations/activation | activation | [source](../src/modules/admin/admin-operations.controller.ts#L46) |
-| GET /v1/admin/operations/attention | attention | [source](../src/modules/admin/admin-operations.controller.ts#L43) |
-| GET /v1/admin/operations/content | assistant | [source](../src/modules/admin/admin-operations.controller.ts#L163) |
-| GET /v1/admin/operations/health | assistant | [source](../src/modules/admin/admin-operations.controller.ts#L158) |
-| GET /v1/admin/operations/members/:id | assistant | [source](../src/modules/admin/admin-operations.controller.ts#L57) |
+| GET /v1/admin/operations/activation | activation | [source](../src/modules/admin/admin-operations.controller.ts#L48) |
+| GET /v1/admin/operations/attention | attention | [source](../src/modules/admin/admin-operations.controller.ts#L45) |
+| GET /v1/admin/operations/content | assistant | [source](../src/modules/admin/admin-operations.controller.ts#L165) |
+| GET /v1/admin/operations/health | assistant | [source](../src/modules/admin/admin-operations.controller.ts#L160) |
+| GET /v1/admin/operations/members/:id | assistant | [source](../src/modules/admin/admin-operations.controller.ts#L59) |
 | POST /v1/admin/pages | users | [source](../src/modules/admin/admin-pages.controller.ts#L18) |
 | POST /v1/admin/push/test/apns | push | [source](../src/modules/admin/admin-push.controller.ts#L28) |
 | POST /v1/admin/push/test/web | push | [source](../src/modules/admin/admin-push.controller.ts#L106) |

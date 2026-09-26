@@ -123,7 +123,7 @@ export type ArticleCommentWithAuthorAndReactions = ArticleComment & {
 
 // ─── Prisma include helpers ───────────────────────────────────────────────────
 
-function estimateReadingTimeMinutes(tiptapJson: string): number {
+export function estimateReadingTimeMinutes(tiptapJson: string): number {
   try {
     const doc = JSON.parse(tiptapJson);
     const texts: string[] = [];

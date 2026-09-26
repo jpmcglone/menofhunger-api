@@ -1,5 +1,6 @@
 import type { PostAuthorDto, PostDto, PostMediaDto, PostMentionDto } from './post.dto';
 import { gatedBoardTitle } from './post.dto';
+import type { UserListDto } from './user.dto';
 
 export type BoardVisibility = 'public' | 'verifiedOnly' | 'premiumOnly';
 
@@ -31,6 +32,13 @@ export type BoardThreadDto = {
   totalViewCount: number;
   /** The signed-in viewer has seen this thread before. */
   viewerHasViewed?: boolean;
+  /**
+   * When the signed-in viewer last opened this thread, before the current visit is recorded.
+   * Clients mark comments created after it (by others) as new. Null on a first visit.
+   */
+  viewerLastSeenAt?: string | null;
+  /** Article Board posts only: estimated reading time of the article. */
+  readingTimeMinutes?: number;
   showInFeed: boolean;
   /** Set when the thread was created from an article publish; comments live on the article. */
   articleId: string | null;
@@ -84,6 +92,16 @@ export type BoardTagDto = {
   slug: string;
   label: string;
   threadCount: number;
+};
+
+/** Member ranked by Board points: boosts received across live Board posts and comments. */
+export type BoardLeaderboardUserDto = UserListDto & { boardPoints: number };
+
+export type BoardLeaderboardDto = {
+  users: BoardLeaderboardUserDto[];
+  /** The viewer's own rank when they have points but sit outside `users`. */
+  viewerRank: { rank: number; user: BoardLeaderboardUserDto } | null;
+  generatedAt: string;
 };
 
 export type BoardPreferencesDto = {

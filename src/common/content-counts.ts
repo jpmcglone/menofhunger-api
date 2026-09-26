@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 
 /**
  * Canonical authored-post total: every published, non-deleted post regardless
@@ -44,4 +44,19 @@ export function totalPostCommentsWhere(parentId: string): Prisma.PostWhereInput 
     deletedAt: null,
     isDraft: false,
   };
+}
+
+/**
+ * Board points: boosts received across a member's live Board posts and comments
+ * (Hacker News-style karma). Shown on profiles; ranked on the Board leaderboard.
+ */
+export async function totalUserBoardPoints(
+  prisma: Pick<PrismaClient, 'post'>,
+  userId: string,
+): Promise<number> {
+  const result = await prisma.post.aggregate({
+    where: { userId, kind: 'board', deletedAt: null, isDraft: false },
+    _sum: { boostCount: true },
+  });
+  return Math.max(0, result._sum.boostCount ?? 0);
 }

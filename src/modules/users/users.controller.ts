@@ -36,7 +36,7 @@ import { EmailVerificationService } from '../email/email-verification.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
 import { PresenceService } from '../presence/presence.service';
-import { totalUserArticlesWhere, totalUserPostsWhere } from '../../common/content-counts';
+import { totalUserArticlesWhere, totalUserBoardPoints, totalUserPostsWhere } from '../../common/content-counts';
 import type { LocationBrowseResponseDto } from './location-browse.dto';
 
 const setUsernameSchema = z.object({
@@ -897,7 +897,7 @@ export class UsersController {
     if (viewerUserId) res.setHeader('Vary', 'Cookie');
 
     const profileId = (payload as any).id as string | undefined;
-    const [orgMap, crewMember, postCount, articleCount] = await Promise.all([
+    const [orgMap, crewMember, postCount, articleCount, boardPoints] = await Promise.all([
       profileId ? this.publicProfiles.batchOrgAffiliations([profileId]) : Promise.resolve(new Map()),
       profileId
         ? this.prisma.crewMember.findFirst({
@@ -913,6 +913,7 @@ export class UsersController {
             where: totalUserArticlesWhere(profileId),
           })
         : Promise.resolve(0),
+      profileId ? totalUserBoardPoints(this.prisma, profileId) : Promise.resolve(0),
     ]);
 
     if (viewerUserId && profileId) {
@@ -929,6 +930,7 @@ export class UsersController {
         orgAffiliations: orgMap.get(profileId ?? '') ?? [],
         postCount,
         articleCount,
+        boardPoints,
         inCrew: Boolean(crewMember),
       },
     };

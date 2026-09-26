@@ -125,6 +125,8 @@ export type PublicProfileDto = {
   postCount?: number;
   /** Published article total; present on full HTTP profiles and optional on realtime patches. */
   articleCount?: number;
+  /** Boosts received across the member's live Board posts and comments. */
+  boardPoints?: number;
   /** True when this user is an active member of any Crew. */
   inCrew?: boolean;
   isBot?: boolean;

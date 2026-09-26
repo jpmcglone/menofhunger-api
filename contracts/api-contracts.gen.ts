@@ -606,6 +606,9 @@ export type AdminOperationsPostDto = {
   author: { id: string; username: string | null; name: string | null };
   commentCount: number;
   boostCount: number;
+  /** `board` rows are Board posts (title, optional link, AI-set tags); `post` rows are regular posts. */
+  kind: 'post' | 'board';
+  board?: { title: string; url: string | null; tags: string[] };
 };
 
 export type AdminOperationsContentDto = {
@@ -1000,6 +1003,13 @@ export type BoardThreadDto = {
   totalViewCount: number;
   /** The signed-in viewer has seen this thread before. */
   viewerHasViewed?: boolean;
+  /**
+   * When the signed-in viewer last opened this thread, before the current visit is recorded.
+   * Clients mark comments created after it (by others) as new. Null on a first visit.
+   */
+  viewerLastSeenAt?: string | null;
+  /** Article Board posts only: estimated reading time of the article. */
+  readingTimeMinutes?: number;
   showInFeed: boolean;
   /** Set when the thread was created from an article publish; comments live on the article. */
   articleId: string | null;
@@ -1053,6 +1063,16 @@ export type BoardTagDto = {
   slug: string;
   label: string;
   threadCount: number;
+};
+
+/** Member ranked by Board points: boosts received across live Board posts and comments. */
+export type BoardLeaderboardUserDto = UserListDto & { boardPoints: number };
+
+export type BoardLeaderboardDto = {
+  users: BoardLeaderboardUserDto[];
+  /** The viewer's own rank when they have points but sit outside `users`. */
+  viewerRank: { rank: number; user: BoardLeaderboardUserDto } | null;
+  generatedAt: string;
 };
 
 export type BoardPreferencesDto = {
@@ -2862,6 +2882,8 @@ export type PublicProfileDto = {
   postCount?: number;
   /** Published article total; present on full HTTP profiles and optional on realtime patches. */
   articleCount?: number;
+  /** Boosts received across the member's live Board posts and comments. */
+  boardPoints?: number;
   /** True when this user is an active member of any Crew. */
   inCrew?: boolean;
   isBot?: boolean;

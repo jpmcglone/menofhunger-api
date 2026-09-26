@@ -325,12 +325,13 @@ export function createTools({ api, store, localArtifacts = true, remoteWrites = 
   );
   tool(
     'public_content',
-    'Research public regular top-level posts by humans, optionally unanswered or matching text. Excludes groups, restricted/private posts, drafts, and deleted content. Reuse returned since/before with nextCursor for stable pagination. Requires the operations API deployment.',
+    'Research public top-level posts by humans: regular posts and Board posts (source all, the default), or one of them. Board rows carry kind "board" with a title, optional link, and AI-set tags. Optionally unanswered or matching text (body or Board title). Excludes groups, restricted/private posts, drafts, and deleted content. Reuse returned since/before with nextCursor for stable pagination. Requires the operations API deployment.',
     {
       ...search,
       since: z.string().datetime().optional(),
       before: z.string().datetime().optional(),
       unanswered: z.boolean().default(false),
+      source: z.enum(['all', 'posts', 'board']).default('all'),
     },
     async (query) => {
       const result = await api.get('admin/operations/content', query);

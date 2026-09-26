@@ -33,6 +33,10 @@ export interface SideEffectPayloads {
   'post.deleted': {
     postId: string;
   };
+  /** Set a Board post's tags from its title, text, and links (AI). Re-run when its content changes. */
+  'board.thread.tag': {
+    threadId: string;
+  };
   /**
    * A boost or repost was added or removed. One event covers all four because the handler's
    * job is identical: reconcile the author's notification with whether the engagement still

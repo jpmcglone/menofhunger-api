@@ -50,14 +50,16 @@ function setup(viewer: Record<string, unknown> | null, row = threadRow()) {
     }),
   };
   const realtime = { emitBoardNewThread: jest.fn(), emitPostsLiveUpdated: jest.fn() };
+  const sideEffects = { dispatch: jest.fn() };
   const service = new BoardService(
     prisma as any,
     posts as any,
     viewerContext as any,
     { r2: () => ({ publicBaseUrl: 'https://cdn.example.com' }), frontendBaseUrl: () => 'https://menofhunger.com' } as any,
     realtime as any,
+    sideEffects as any,
   );
-  return { service, prisma, posts, realtime };
+  return { service, prisma, posts, realtime, sideEffects };
 }
 
 describe('BoardService access and teasers', () => {

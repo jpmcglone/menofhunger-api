@@ -33,7 +33,7 @@ export const metricGuide = `Men of Hunger metric interpretation (source: API adm
 - referral totals are all-time; recruitsOverTime is the last 30 days regardless of the analytics range.
 - topPostsAllTime is all-time even when a shorter range is selected. Public-content research uses its own explicit since/before interval.
 - Attention pulse.memberRoots are public regular roots from personal, non-admin, non-bot accounts in the last 7 days. replyRate24hPct is the share that received a human reply within 24 hours. authorsReturned is later-UTC-day activity after those posts. lodgePromptReplies is human replies to the latest public @menofhunger root in the window, or null if none. Do not use activation or d30RetentionPct as the success measure for the weekly reply experiment. The unanswered inbox count still includes official posts over 14 days.
-- Public content is regular, top-level, published, non-deleted, outside groups, from non-banned human authors. Unanswered means no published public direct reply from a non-banned author (a bot reply counts as a reply).
+- Public content is top-level, published, non-deleted, outside groups, from non-banned human authors. public_content returns regular posts and Board posts by default (source all); Board rows have kind "board", a title, an optional link, and AI-set tags. Unanswered means no published public direct reply from a non-banned author (a bot reply counts as a reply).
 - Health lists received-but-unprocessed Stripe events. An old event warrants investigation; it is not by itself a failed payment.
 - A queue with a non-null error is unavailable: its zero counts are placeholders, not measured empty queues.
 - Member billing diagnostics reuse the same BillingService.getMe as the product. Provider state is local and can lag Stripe/Apple; the call does not recompute access or verify receipts.
@@ -67,5 +67,5 @@ export const workflows = {
   weekly_decisions:
     'Review list_decisions, founder_briefing for 30d, retention analytics, and member feedback. Assess prior decisions against their stated measures. Recommend at most three next actions with evidence, alternatives, uncertainty, and a review date. Save a decision only when the user adopts it.',
   community_digest:
-    'Use public_content with explicit since/before timestamps and paginate as needed. Identify discussion themes and unanswered posts. Link sources and describe the sampled coverage. Draft a newsletter grounded only in public content; use save_draft if requested. Never include private feedback, reports, restricted content, or send anything.',
+    'Use public_content with explicit since/before timestamps and paginate as needed. It covers regular posts and Board posts; give the top Board posts of the week their own short section with links. Identify discussion themes and unanswered posts. Link sources and describe the sampled coverage. Draft a newsletter grounded only in public content; use save_draft if requested. Never include private feedback, reports, restricted content, or send anything.',
 };

@@ -13,7 +13,7 @@ import { CASHTAG_IN_TEXT_DISPLAY_RE, parseCashtagCandidatesFromText } from '../.
 import { TickerService } from '../cashtags/ticker.service';
 import type { UserListRelationship } from '../../common/dto/user.dto';
 import type { CashtagResultDto } from '../../common/dto';
-import { POST_BASE_INCLUDE } from '../../common/prisma-includes/post.include';
+import { POST_BASE_INCLUDE, POST_LIST_INCLUDE } from '../../common/prisma-includes/post.include';
 import { excludeBoardOnlyWhere } from '../posts/posts-query-builders';
 import { articleAuthorInclude } from '../../common/dto/article.dto';
 import { toCommunityGroupShellDto, type CommunityGroupShellDto } from '../../common/dto/community-group.dto';
@@ -84,7 +84,8 @@ const ARTICLE_SCORE = {
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean; premiumPlus?: boolean; siteAdmin?: boolean } | null;
 
-const SEARCH_POST_INCLUDE = POST_BASE_INCLUDE;
+// Same shape as the feed so Board, article, fitness, and poll posts render fully in results and bookmarks.
+const SEARCH_POST_INCLUDE = POST_LIST_INCLUDE;
 const SEARCH_ARTICLE_INCLUDE = {
   author: { select: articleAuthorInclude },
   reactions: true,
@@ -1660,13 +1661,7 @@ export class SearchService {
         createdAt: true,
         postId: true,
         collections: { select: { collectionId: true } },
-        post: {
-          include: {
-            user: POST_BASE_INCLUDE.user,
-            media: { orderBy: { position: 'asc' } },
-            mentions: POST_BASE_INCLUDE.mentions,
-          },
-        },
+        post: { include: SEARCH_POST_INCLUDE },
       },
     });
 

@@ -1,3 +1,4 @@
+import { estimateReadingTimeMinutes } from '../../common/dto/article.dto';
 import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { PostVisibility } from '@prisma/client';
@@ -6,16 +7,21 @@ import { PostsService } from '../posts/posts.service';
 import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { POST_BASE_INCLUDE, POST_LIST_INCLUDE } from '../../common/prisma-includes/post.include';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
+import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import {
   toBoardCommentDto,
   toBoardThreadDto,
   toPostDto,
+  toUserListDto,
   type BoardCommentContextDto,
   type BoardCommentDto,
   type BoardCommentsPageDto,
+  type BoardLeaderboardDto,
+  type BoardLeaderboardUserDto,
   type BoardPreferencesDto,
   type BoardTagDto,
   type BoardThreadDto,
@@ -82,6 +88,7 @@ export class BoardService {
     private readonly viewerContext: ViewerContextService,
     private readonly appConfig: AppConfigService,
     private readonly realtime: PresenceRealtimeService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   private get publicBaseUrl(): string | null {
@@ -237,6 +244,14 @@ export class BoardService {
         : Promise.resolve([] as Array<{ postId: string }>),
     ]);
     const hiddenIds = new Set(hidden.map((h) => h.postId));
+    const articleIds = rows.map((r) => r.articleId).filter((id): id is string => Boolean(id));
+    const readingTimeByArticleId = new Map(
+      articleIds.length > 0
+        ? (await this.prisma.article.findMany({ where: { id: { in: articleIds } }, select: { id: true, body: true } })).map(
+            (a) => [a.id, estimateReadingTimeMinutes(a.body)] as const,
+          )
+        : [],
+    );
 
     return rows
       .filter((row) => row.boardThread)
@@ -254,6 +269,9 @@ export class BoardService {
           viewerCanEdit: this.canEdit(viewer, row),
           articleId: row.articleId ?? null,
         });
+        if (viewer) dto.viewerLastSeenAt = lastSeen.get(row.id)?.toISOString() ?? null;
+        const readingTime = canAccess && row.articleId ? readingTimeByArticleId.get(row.articleId) : undefined;
+        if (readingTime) dto.readingTimeMinutes = readingTime;
         if (canAccess && !dto.image && row.article?.thumbnailR2Key) {
           const url = publicAssetUrl({ publicBaseUrl: this.publicBaseUrl, key: row.article.thumbnailR2Key });
           if (url) {
@@ -328,6 +346,7 @@ export class BoardService {
       this.prisma.user.update({ where: { id: userId }, data: { boardShareToFeedDefault: input.showInFeed } }),
     ]);
     this.realtime.emitBoardNewThread({ threadId: post.id, visibility: input.visibility, tags });
+    this.sideEffects.dispatch('board.thread.tag', { threadId: post.id }, { jobId: `board-tag-${post.id}` });
     return this.getThread(userId, post.id);
   }
 
@@ -371,6 +390,7 @@ export class BoardService {
       this.bumpTags(tags),
     ]);
     this.realtime.emitBoardNewThread({ threadId: post.id, visibility, tags });
+    this.sideEffects.dispatch('board.thread.tag', { threadId: post.id }, { jobId: `board-tag-${post.id}` });
     return post.id;
   }
 
@@ -455,6 +475,10 @@ export class BoardService {
       reason: 'post_edited',
       patch: {},
     });
+    const contentChanged = typeof input.title === 'string' || input.url !== undefined || (nextBody !== null && nextBody !== row.body);
+    if (contentChanged && !Array.isArray(input.tags)) {
+      this.sideEffects.dispatch('board.thread.tag', { threadId: row.id });
+    }
     return this.getThread(userId, row.id);
   }
 
@@ -679,6 +703,54 @@ export class BoardService {
         }),
       ),
     );
+  }
+
+  async leaderboard(viewerUserId: string | null, limit: number): Promise<BoardLeaderboardDto> {
+    const take = Math.max(1, Math.min(50, limit));
+    const eligible = Prisma.sql`
+      FROM "Post" p
+      JOIN "User" u ON u.id = p."userId"
+      WHERE p."kind" = 'board' AND p."deletedAt" IS NULL AND p."isDraft" = false
+        AND u."bannedAt" IS NULL AND u."isBot" = false
+    `;
+    const top = await this.prisma.$queryRaw<Array<{ user_id: string; points: number }>>(Prisma.sql`
+      SELECT p."userId" AS user_id, SUM(p."boostCount")::int AS points
+      ${eligible}
+      GROUP BY p."userId"
+      HAVING SUM(p."boostCount") > 0
+      ORDER BY points DESC, p."userId" ASC
+      LIMIT ${take}
+    `);
+
+    let viewer: { rank: number; points: number } | null = null;
+    if (viewerUserId && !top.some((r) => r.user_id === viewerUserId)) {
+      const [mine] = await this.prisma.$queryRaw<Array<{ points: number }>>(Prisma.sql`
+        SELECT COALESCE(SUM(p."boostCount"), 0)::int AS points ${eligible} AND p."userId" = ${viewerUserId}
+      `);
+      const points = mine?.points ?? 0;
+      if (points > 0) {
+        const [ahead] = await this.prisma.$queryRaw<Array<{ n: number }>>(Prisma.sql`
+          SELECT COUNT(*)::int AS n FROM (
+            SELECT p."userId" ${eligible} GROUP BY p."userId" HAVING SUM(p."boostCount") > ${points}
+          ) ranked
+        `);
+        viewer = { rank: (ahead?.n ?? 0) + 1, points };
+      }
+    }
+
+    const ids = [...top.map((r) => r.user_id), ...(viewer && viewerUserId ? [viewerUserId] : [])];
+    const users = await this.prisma.user.findMany({ where: { id: { in: ids } }, select: USER_LIST_SELECT });
+    const byId = new Map(users.map((u) => [u.id, u]));
+    const toRow = (id: string, points: number): BoardLeaderboardUserDto | null => {
+      const u = byId.get(id);
+      return u ? { ...toUserListDto(u, this.publicBaseUrl), boardPoints: points } : null;
+    };
+    const viewerRow = viewer && viewerUserId ? toRow(viewerUserId, viewer.points) : null;
+    return {
+      users: top.map((r) => toRow(r.user_id, r.points)).filter((r): r is BoardLeaderboardUserDto => Boolean(r)),
+      viewerRank: viewer && viewerRow ? { rank: viewer.rank, user: viewerRow } : null,
+      generatedAt: new Date().toISOString(),
+    };
   }
 
   async listTags(q: string | null, limit: number): Promise<BoardTagDto[]> {

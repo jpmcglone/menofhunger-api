@@ -61,6 +61,9 @@ export type AdminOperationsPostDto = {
   author: { id: string; username: string | null; name: string | null };
   commentCount: number;
   boostCount: number;
+  /** `board` rows are Board posts (title, optional link, AI-set tags); `post` rows are regular posts. */
+  kind: 'post' | 'board';
+  board?: { title: string; url: string | null; tags: string[] };
 };
 
 export type AdminOperationsContentDto = {

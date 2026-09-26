@@ -3,7 +3,7 @@ import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { OrgAffiliationDto } from '../../common/dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
-import { totalUserArticlesWhere, totalUserPostsWhere } from '../../common/content-counts';
+import { totalUserArticlesWhere, totalUserBoardPoints, totalUserPostsWhere } from '../../common/content-counts';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PublicProfileCacheService } from './public-profile-cache.service';
@@ -282,7 +282,7 @@ export class PublicProfilesService {
       return { payload: { banned: true }, cache: result.cache };
     }
 
-    const [orgMap, crewMember, postCount, articleCount] = await Promise.all([
+    const [orgMap, crewMember, postCount, articleCount, boardPoints] = await Promise.all([
       this.batchOrgAffiliations([payload.id]),
       this.prisma.crewMember.findFirst({
         where: { userId: payload.id, crew: { deletedAt: null } },
@@ -290,6 +290,7 @@ export class PublicProfilesService {
       }),
       this.prisma.post.count({ where: totalUserPostsWhere(payload.id) }),
       this.prisma.article.count({ where: totalUserArticlesWhere(payload.id) }),
+      totalUserBoardPoints(this.prisma, payload.id),
     ]);
 
     return {
@@ -300,6 +301,7 @@ export class PublicProfilesService {
         orgAffiliations: orgMap.get(payload.id) ?? [],
         postCount,
         articleCount,
+        boardPoints,
         inCrew: Boolean(crewMember),
       },
     };
