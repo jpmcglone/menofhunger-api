@@ -2,19 +2,25 @@ import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
-import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
 import { toUserListDto, type UserListDto } from '../../common/dto';
 import type { MembersMapStateDto, MembersMapSummaryDto } from '../../common/dto/members-map.dto';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
+import { OnlineMembersService } from '../presence/online-members.service';
 import { STATE_NAMES } from './users-location.service';
 
-export const MEMBERS_MAP_MEMBER_WHERE = {
-  usernameIsSet: true,
-  bannedAt: null,
-  isBot: false,
-} satisfies Prisma.UserWhereInput;
+/**
+ * Who counts as a member on the map: real, unbanned accounts. Bots are left out except Marv,
+ * who is counted wherever he is shown online so his bucket's numbers stay consistent.
+ */
+export function membersMapMemberWhere(marvId: string | null): Prisma.UserWhereInput {
+  return {
+    usernameIsSet: true,
+    bannedAt: null,
+    ...(marvId ? { OR: [{ isBot: false }, { id: marvId }] } : { isBot: false }),
+  };
+}
 
 export const MEMBERS_MAP_PREVIEW_SIZE = 6;
 const ONLINE_FIRST_PAGE_MAX = 200;
@@ -33,8 +39,8 @@ export class MembersMapService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
-    private readonly presenceRedis: PresenceRedisStateService,
     private readonly redis: RedisService,
+    private readonly onlineMembers: OnlineMembersService,
   ) {}
 
   private get publicBaseUrl(): string | null {
@@ -45,37 +51,32 @@ export class MembersMapService {
    * Verified viewers get faces and online ids; everyone else gets the same counts only,
    * served from a short shared cache because signed-out traffic can be heavy.
    */
-  async summary(opts: { membersVisible: boolean; now?: Date }): Promise<MembersMapSummaryDto> {
+  async summary(opts: { membersVisible: boolean; viewerUserId?: string | null; now?: Date }): Promise<MembersMapSummaryDto> {
     const now = opts.now ?? new Date();
-    if (opts.membersVisible) return this.buildSummary(now, true);
+    if (opts.membersVisible) return this.buildSummary(now, true, opts.viewerUserId ?? null);
     const key = RedisKeys.membersMapCounts();
     const cached = await this.redis.getJson<MembersMapSummaryDto>(key).catch(() => null);
     if (cached) return cached;
-    const counts = await this.buildSummary(now, false);
+    const counts = await this.buildSummary(now, false, null);
     void this.redis.setJson(key, counts, { ttlMs: COUNTS_CACHE_TTL_MS }).catch(() => undefined);
     return counts;
   }
 
-  private async buildSummary(now: Date, membersVisible: boolean): Promise<MembersMapSummaryDto> {
-    const [groups, onlineIds, recentRows] = await Promise.all([
+  private async buildSummary(now: Date, membersVisible: boolean, viewerUserId: string | null): Promise<MembersMapSummaryDto> {
+    // Same roster as /presence/online and the realtime feed, so the online numbers always match.
+    const roster = await this.onlineMembers.resolve({ viewerUserId, includeViewer: Boolean(viewerUserId) });
+    const [groups, recentRows] = await Promise.all([
       this.prisma.user.groupBy({
         by: ['locationState'],
-        where: MEMBERS_MAP_MEMBER_WHERE,
+        where: membersMapMemberWhere(roster.marvId),
         _count: { _all: true },
       }),
-      this.presenceRedis.onlineUserIds(),
       membersVisible ? this.recentPreviewRows() : Promise.resolve([]),
     ]);
 
-    const onlineRows = onlineIds.length
-      ? await this.prisma.user.findMany({
-          where: { ...MEMBERS_MAP_MEMBER_WHERE, id: { in: onlineIds } },
-          select: { id: true, locationState: true },
-        })
-      : [];
-    // Most recently connected first; the Redis set is ordered by connect time ascending.
-    const onlineOrder = new Map(onlineIds.map((id, i) => [id, i]));
-    onlineRows.sort((a, b) => (onlineOrder.get(b.id) ?? 0) - (onlineOrder.get(a.id) ?? 0));
+    // Marv first, then most recently connected (the roster is oldest connection first).
+    const onlineOrdered = [...(roster.marvId ? [roster.marvId] : []), ...[...roster.memberIds].reverse()];
+    const onlineRows = onlineOrdered.map((id) => ({ id, locationState: roster.locationById.get(id) ?? null }));
 
     const memberCounts = new Map<string | null, number>();
     for (const g of groups) {
@@ -168,23 +169,21 @@ export class MembersMapService {
         ? { OR: [{ locationState: null }, { locationState: '' }] }
         : { locationState: { equals: params.state, mode: 'insensitive' } };
 
-    const onlineIds = await this.presenceRedis.onlineUserIds();
+    const roster = await this.onlineMembers.resolve();
+    const onlineIds = [...(roster.marvId ? [roster.marvId] : []), ...roster.memberIds];
+    const memberWhere = membersMapMemberWhere(roster.marvId);
 
     const onlineUsers =
       offset === 0 && onlineIds.length
         ? await this.prisma.user.findMany({
-            where: { ...MEMBERS_MAP_MEMBER_WHERE, ...stateWhere, id: { in: onlineIds } },
+            where: { AND: [memberWhere, stateWhere, { id: { in: onlineIds } }] },
             select: USER_LIST_SELECT,
             take: ONLINE_FIRST_PAGE_MAX,
           })
         : [];
 
     const rest = await this.prisma.user.findMany({
-      where: {
-        ...MEMBERS_MAP_MEMBER_WHERE,
-        ...stateWhere,
-        ...(onlineIds.length ? { id: { notIn: onlineIds } } : {}),
-      },
+      where: { AND: [memberWhere, stateWhere, ...(onlineIds.length ? [{ id: { notIn: onlineIds } }] : [])] },
       select: USER_LIST_SELECT,
       orderBy: [{ lastOnlineAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'asc' }, { id: 'asc' }],
       skip: offset,

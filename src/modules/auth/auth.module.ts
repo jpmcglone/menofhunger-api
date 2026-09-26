@@ -12,6 +12,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { BrowserHandoffService } from './browser-handoff.service';
 import { ImpersonationService } from './impersonation.service';
 import { AccountSwitchService } from './account-switch.service';
+import { OnlineMembersService } from '../presence/online-members.service';
 
 @Module({
   imports: [RealtimeModule],
@@ -21,6 +22,8 @@ import { AccountSwitchService } from './account-switch.service';
     BrowserHandoffService,
     ImpersonationService,
     AccountSwitchService,
+    // Needs AccountSwitchService; lives here so presence, users, and the gateway can all share it.
+    OnlineMembersService,
     AccountDeletionService,
     AuthGuard,
     TwilioVerifyOtpProvider,
@@ -30,6 +33,14 @@ import { AccountSwitchService } from './account-switch.service';
     // Default OTP provider: Twilio Verify. AuthService can choose not to use it in dev.
     { provide: OTP_PROVIDER, useExisting: TwilioVerifyOtpProvider },
   ],
-  exports: [AuthService, AuthGuard, ImpersonationService, AccountSwitchService, AuthCleanupCron, AccountDeletionFinalizeCron],
+  exports: [
+    AuthService,
+    AuthGuard,
+    ImpersonationService,
+    AccountSwitchService,
+    OnlineMembersService,
+    AuthCleanupCron,
+    AccountDeletionFinalizeCron,
+  ],
 })
 export class AuthModule {}

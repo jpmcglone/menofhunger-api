@@ -19,6 +19,7 @@ import { GatewayThrottleService } from './gateway-throttle.service';
 import { AccountSwitchService } from '../../auth/account-switch.service';
 import { CallSessionStore } from '../../calls/call-session.store';
 import { canSeeMembers } from '../../auth/member-visibility';
+import { OnlineMembersService } from '../online-members.service';
 
 const COUNT_ONLY_UPDATE_DEBOUNCE_MS = 1500;
 
@@ -61,6 +62,7 @@ export class PresenceStatusHandler {
     private readonly context: GatewayContextService,
     private readonly accountSwitch: AccountSwitchService,
     private readonly callSessions: CallSessionStore,
+    private readonly onlineMembers: OnlineMembersService,
   ) {}
 
   // ─── Connection lifecycle ───────────────────────────────────────────
@@ -267,18 +269,12 @@ export class PresenceStatusHandler {
 
   // ─── Presence fan-out ───────────────────────────────────────────────
 
-  /** Same member total the full feed and /presence/online report (banned excluded, Marv included). */
   private async onlineCounts(): Promise<{ totalOnline: number; anonymousOnline: number }> {
-    const connectedIds = await this.presenceRedis.onlineUserIds();
-    const { displayedIds } = await this.accountSwitch.expandPresenceOnlineIds(connectedIds);
-    const [users, marvId, anonymousOnline] = await Promise.all([
-      displayedIds.length
-        ? this.follows.getFollowListUsersByIds({ viewerUserId: null, userIds: displayedIds })
-        : Promise.resolve([]),
-      this.appConfig.marvBot().enabled ? this.marvIdentity.getMarvUserId().catch(() => null) : Promise.resolve(null),
+    const [roster, anonymousOnline] = await Promise.all([
+      this.onlineMembers.resolve(),
       this.presenceRedis.anonymousOnlineCount(),
     ]);
-    return { totalOnline: users.length + (marvId ? 1 : 0), anonymousOnline };
+    return { totalOnline: roster.total, anonymousOnline };
   }
 
   private countOnlyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -478,21 +474,17 @@ export class PresenceStatusHandler {
       );
     }
 
-    const connectedIds = await this.presenceRedis.onlineUserIds();
-    const { displayedIds: userIds, sourceByDisplayedId } =
-      await this.accountSwitch.expandPresenceOnlineIds(connectedIds);
+    // The shared roster keeps this snapshot's total identical to REST and the map.
+    const [roster, anonymousOnline] = await Promise.all([
+      this.onlineMembers.resolve(),
+      this.presenceRedis.anonymousOnlineCount(),
+    ]);
+    const { connectedIds, memberIds: userIds, sourceByDisplayedId, marvId } = roster;
     // Per-client snapshot — include this socket's follow relationships so
     // /online does not paint "Follow" on people the viewer already follows.
     const viewerUserId = String((client.data as { userId?: string }).userId ?? '').trim() || null;
-    // Resolve Marv pin (if enabled) once. We still emit a snapshot even when
-    // there are no real online users, because Marv himself should appear as a
-    // single-row snapshot when nobody else is connected.
-    const marvId = this.appConfig.marvBot().enabled
-      ? await this.marvIdentity.getMarvUserId().catch(() => null)
-      : null;
-    const anonymousOnline = await this.presenceRedis.anonymousOnlineCount();
-    if (userIds.length === 0 && !marvId) {
-      client.emit('presence:onlineFeedSnapshot', { users: [], totalOnline: 0, anonymousOnline });
+    if (roster.total === 0) {
+      client.emit('presence:onlineFeedSnapshot', { users: [], totalOnline: 0, anonymousOnline, membersVisible: true });
       return;
     }
     try {
@@ -523,7 +515,7 @@ export class PresenceStatusHandler {
         });
 
       // Pin Marv to the front of the snapshot (consistent with REST).
-      let totalOnline = userIds.length;
+      const totalOnline = roster.total;
       if (marvId) {
         const [marvUser] = await this.follows.getFollowListUsersByIds({
           viewerUserId,
@@ -537,11 +529,10 @@ export class PresenceStatusHandler {
             status: null,
             isBot: true,
           });
-          totalOnline += 1;
         }
       }
 
-      client.emit('presence:onlineFeedSnapshot', { users: payload, totalOnline, anonymousOnline });
+      client.emit('presence:onlineFeedSnapshot', { users: payload, totalOnline, anonymousOnline, membersVisible: true });
       if (this.context.logPresenceVerbose) {
         this.logger.debug(
           `[presence] EMIT_OUT presence:onlineFeedSnapshot to socket=${client.id} users=${payload.length}`,

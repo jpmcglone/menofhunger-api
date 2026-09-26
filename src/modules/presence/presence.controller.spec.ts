@@ -1,5 +1,6 @@
 import { PresenceController } from './presence.controller';
 import { VerifiedGuard } from '../auth/verified.guard';
+import { OnlineMembersService } from './online-members.service';
 
 /**
  * Lightweight tests for the Marv "always online" injection in /presence/online and
@@ -27,6 +28,7 @@ function makeController(opts?: {
   onlineUserIds?: string[];
   inCallIds?: string[];
   viewerVerifiedStatus?: string;
+  bannedIds?: string[];
 }) {
   const onlineIds = opts?.onlineUserIds ?? ['user-a', 'user-b'];
 
@@ -103,6 +105,21 @@ function makeController(opts?: {
     posts,
     accountSwitch,
     callSessions,
+    new OnlineMembersService(
+      {
+        user: {
+          findMany: jest.fn(async ({ where }: any) =>
+            (where.id.in as string[])
+              .filter((id) => !(opts?.bannedIds ?? []).includes(id))
+              .map((id) => ({ id, locationState: null })),
+          ),
+        },
+      } as any,
+      appConfig,
+      presenceRedis,
+      accountSwitch,
+      marvIdentity,
+    ),
   );
 
   return { controller, follows, redis, marvIdentity, appConfig, presenceRedis, prisma, callSessions };

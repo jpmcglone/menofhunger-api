@@ -34,7 +34,7 @@ export class MembersMapController {
   @Get()
   async summary(@OptionalCurrentUserId() userId: string | undefined): Promise<{ data: MembersMapSummaryDto }> {
     const membersVisible = await viewerCanSeeMembers(this.prisma, userId);
-    return { data: await this.membersMap.summary({ membersVisible }) };
+    return { data: await this.membersMap.summary({ membersVisible, viewerUserId: userId ?? null }) };
   }
 
   @UseGuards(AuthGuard, VerifiedGuard)

@@ -17,6 +17,30 @@ import { ContentSubscriptionsHandler } from './gateway/gateway-subscriptions.han
 import { MessagingGatewayHandler } from './gateway/gateway-messaging.handler';
 import { CallsGatewayHandler } from './gateway/gateway-calls.handler';
 import { CommunityGroupReadAccessService } from '../viewer/community-group-read-access.service';
+import { OnlineMembersService } from './online-members.service';
+
+/** The real shared roster over the fixture's presence mocks: every connected id is a member. */
+function makeOnlineMembers(presenceRedis: any, opts: { marvId?: string | null } = {}) {
+  return new OnlineMembersService(
+    {
+      user: {
+        findMany: jest.fn(async ({ where }: any) =>
+          (where.id.in as string[]).map((id) => ({ id, locationState: null })),
+        ),
+      },
+    } as any,
+    { marvBot: () => ({ enabled: Boolean(opts.marvId) }) } as any,
+    presenceRedis,
+    {
+      expandPresenceOnlineIds: async (ids: string[]) => ({
+        displayedIds: [...ids],
+        sourceByDisplayedId: new Map(ids.map((id) => [id, id])),
+      }),
+    } as any,
+    { getMarvUserId: async () => opts.marvId ?? null } as any,
+  );
+}
+
 
 // ─── Lightweight fake socket.io infrastructure ──────────────────────────────
 
@@ -241,6 +265,7 @@ function buildGateway(deps: {
       })),
     } as any,
     { inCallByUserIds: jest.fn(async () => new Set<string>()) } as any,
+    makeOnlineMembers(deps.presenceRedis),
   );
   const spacesHandler = new SpacesGatewayHandler(
     deps.presence,

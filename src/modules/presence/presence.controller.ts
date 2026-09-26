@@ -21,6 +21,7 @@ import type {
   UserStatusDto,
 } from '../../common/dto';
 import { viewerCanSeeMembers } from '../auth/member-visibility';
+import { OnlineMembersService } from './online-members.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
@@ -138,20 +139,10 @@ export class PresenceController {
     private readonly posts: PostsService,
     private readonly accountSwitch: AccountSwitchService,
     private readonly callSessions: CallSessionStore,
+    private readonly onlineMembers: OnlineMembersService,
   ) {}
 
-  /**
-   * Connected sockets plus every operated page / operator in those clusters.
-   * Synthetic identities inherit last-connect / idle / platforms from a live member.
-   */
-  private async expandDisplayedOnlineIds(connectedIds: string[]): Promise<{
-    userIds: string[];
-    sourceByDisplayedId: Map<string, string>;
-  }> {
-    const expanded = await this.accountSwitch.expandPresenceOnlineIds(connectedIds);
-    return { userIds: expanded.displayedIds, sourceByDisplayedId: expanded.sourceByDisplayedId };
-  }
-
+  /** Operated pages shown online inherit last-connect / idle / platforms from their live operator. */
   private inheritPresenceMaps(
     displayedIds: string[],
     sourceByDisplayedId: Map<string, string>,
@@ -345,19 +336,9 @@ export class PresenceController {
       // Redis unavailable — fall through to live fetch.
     }
 
-    let userIds = await this.presenceRedis.onlineUserIds();
-    if (viewerUserId) {
-      if (!includeSelf) {
-        userIds = userIds.filter((id) => id !== viewerUserId);
-      } else if (!userIds.includes(viewerUserId)) {
-        // Race hardening: if the viewer just loaded the app, their websocket may not have
-        // registered in Redis yet. Treat the request itself as proof of current activity.
-        userIds = [viewerUserId, ...userIds];
-      }
-    }
-    const connectedIds = userIds;
-    const expanded = await this.expandDisplayedOnlineIds(connectedIds);
-    userIds = expanded.userIds;
+    const roster = await this.onlineMembers.resolve({ viewerUserId, includeViewer: includeSelf });
+    const connectedIds = roster.connectedIds;
+    let userIds = roster.memberIds;
 
     // The four downstream lookups are all keyed off the same `userIds` array
     // and don't depend on each other, so we run them concurrently. This trades
@@ -374,7 +355,7 @@ export class PresenceController {
     ]);
     this.inheritPresenceMaps(
       userIds,
-      expanded.sourceByDisplayedId,
+      roster.sourceByDisplayedId,
       lastConnectAtById,
       idleById,
       platformsById,
@@ -405,19 +386,11 @@ export class PresenceController {
       inCall: inCallIds.has(u.id),
     }));
 
-    // Pin Marv to the front when enabled, and bump totalOnline so the right-rail
-    // count stays consistent with the list. The bot is a list-time injection only —
-    // it never appears in `userIds` (Redis-tracked sockets) and we don't broadcast
-    // synthetic online/offline events for it elsewhere.
-    //
-    // Use `users.length` (post-DB-fetch) instead of `userIds.length` so banned users —
-    // which getFollowListUsersByIds filters out — don't inflate the count.
-    let totalOnline = users.length;
-    const marvRow = await this.buildMarvOnlineRow({ viewerUserId, statusesById });
-    if (marvRow) {
-      data.unshift(marvRow);
-      totalOnline += 1;
-    }
+    // Marv is pinned to the front when enabled. The total comes from the shared roster so
+    // every surface (this list, the realtime feed, the map) reports the same number.
+    const totalOnline = roster.total;
+    const marvRow = roster.marvId ? await this.buildMarvOnlineRow({ viewerUserId, statusesById }) : null;
+    if (marvRow) data.unshift(marvRow);
 
     // "Recently online" = active within the last hour but not currently connected.
     // Excludes everyone already counted in `totalOnline` so the two numbers never overlap.
@@ -620,19 +593,9 @@ export class PresenceController {
     }
 
     // ——— Online snapshot ———
-    let onlineUserIds = await this.presenceRedis.onlineUserIds();
-    if (viewerUserId) {
-      if (!includeSelf) {
-        onlineUserIds = onlineUserIds.filter((id) => id !== viewerUserId);
-      } else if (!onlineUserIds.includes(viewerUserId)) {
-        // Race hardening: keep /online consistent with right-rail count even if the
-        // viewer's websocket hasn't yet registered as online in Redis.
-        onlineUserIds = [viewerUserId, ...onlineUserIds];
-      }
-    }
-    const connectedOnlineIds = onlineUserIds;
-    const expandedOnline = await this.expandDisplayedOnlineIds(connectedOnlineIds);
-    onlineUserIds = expandedOnline.userIds;
+    const roster = await this.onlineMembers.resolve({ viewerUserId, includeViewer: includeSelf });
+    const connectedOnlineIds = roster.connectedIds;
+    let onlineUserIds = roster.memberIds;
 
     // Same parallel-fan-out optimization as `/presence/online`: the four lookups
     // below all key off `onlineUserIds` and don't depend on each other, so we
@@ -649,7 +612,7 @@ export class PresenceController {
       ]);
     this.inheritPresenceMaps(
       onlineUserIds,
-      expandedOnline.sourceByDisplayedId,
+      roster.sourceByDisplayedId,
       lastConnectAtById,
       idleById,
       platformsById,
@@ -681,19 +644,12 @@ export class PresenceController {
       inCall: inCallIds.has(u.id),
     }));
 
-    // Pin Marv to the top when enabled. Same rationale as in `online()`: the
-    // bot is a list-time injection, totalOnline gets bumped to match the list.
-    // Use `onlineUsers.length` so banned users (filtered out by getFollowListUsersByIds)
-    // don't inflate the count.
-    let totalOnline = onlineUsers.length;
-    const marvRow = await this.buildMarvOnlineRow({
-      viewerUserId,
-      statusesById: onlineStatusesById,
-    });
-    if (marvRow) {
-      onlineData.unshift(marvRow);
-      totalOnline += 1;
-    }
+    // Marv pinned to the top when enabled; the total is the shared roster's, like `online()`.
+    const totalOnline = roster.total;
+    const marvRow = roster.marvId
+      ? await this.buildMarvOnlineRow({ viewerUserId, statusesById: onlineStatusesById })
+      : null;
+    if (marvRow) onlineData.unshift(marvRow);
 
     // ——— Recently online (privacy-gated, cursor-paginated) ———
     let recentData: RecentlyOnlineUserDto[] = [];

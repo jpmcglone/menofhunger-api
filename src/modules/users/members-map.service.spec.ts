@@ -4,7 +4,7 @@ import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { VerifiedGuard } from '../auth/verified.guard';
 import { canSeeMembers } from '../auth/member-visibility';
 import { MembersMapController } from './members-map.controller';
-import { MembersMapService, MEMBERS_MAP_MEMBER_WHERE } from './members-map.service';
+import { MembersMapService, membersMapMemberWhere } from './members-map.service';
 
 describe('MembersMapController', () => {
   it('opens the summary to everyone but keeps the member list verified-only', () => {
@@ -19,8 +19,8 @@ describe('MembersMapController', () => {
     const controller = new MembersMapController(membersMap as any, prisma as any);
     await controller.summary(undefined);
     await controller.summary('unverified');
-    expect(membersMap.summary).toHaveBeenNthCalledWith(1, { membersVisible: false });
-    expect(membersMap.summary).toHaveBeenNthCalledWith(2, { membersVisible: false });
+    expect(membersMap.summary).toHaveBeenNthCalledWith(1, { membersVisible: false, viewerUserId: null });
+    expect(membersMap.summary).toHaveBeenNthCalledWith(2, { membersVisible: false, viewerUserId: 'unverified' });
   });
 
   it('rejects state values that are not a two-letter code or none', async () => {
@@ -51,15 +51,15 @@ function userRow(id: string) {
 
 function makeService(opts: {
   groups: Array<{ locationState: string | null; count: number }>;
-  onlineIds?: string[];
-  onlineRows?: Array<{ id: string; locationState: string | null }>;
+  /** Online members in connect order (oldest first), as the shared roster returns them. */
+  online?: Array<{ id: string; locationState: string | null }>;
+  marv?: { id: string; locationState: string | null } | null;
   recentRows?: Array<{ id: string; locationState: string | null }>;
   pageRows?: string[];
 }) {
   const findMany = jest.fn(async (args: any) => {
-    if (args.select?.locationState && !args.select?.username) return opts.onlineRows ?? [];
     if (args.orderBy) return (opts.pageRows ?? []).map(userRow);
-    const ids: string[] = args.where?.id?.in ?? [];
+    const ids: string[] = args.where?.id?.in ?? args.where?.AND?.find((c: any) => c.id?.in)?.id?.in ?? [];
     return ids.map(userRow);
   });
   const prisma = {
@@ -69,27 +69,37 @@ function makeService(opts: {
     },
     $queryRaw: jest.fn(async () => opts.recentRows ?? []),
   };
-  const presenceRedis = { onlineUserIds: jest.fn(async () => opts.onlineIds ?? []) };
+  const online = opts.online ?? [];
+  const marv = opts.marv ?? null;
+  const onlineMembers = {
+    resolve: jest.fn(async () => ({
+      connectedIds: online.map((o) => o.id),
+      memberIds: online.map((o) => o.id),
+      sourceByDisplayedId: new Map(online.map((o) => [o.id, o.id])),
+      locationById: new Map([...online, ...(marv ? [marv] : [])].map((o) => [o.id, o.locationState])),
+      marvId: marv?.id ?? null,
+      total: online.length + (marv ? 1 : 0),
+    })),
+  };
   const store = new Map<string, unknown>();
   const redis = {
     getJson: jest.fn(async (key: string) => store.get(key) ?? null),
     setJson: jest.fn(async (key: string, value: unknown) => void store.set(key, value)),
   };
-  const service = new MembersMapService(prisma as any, { r2: () => null } as any, presenceRedis as any, redis as any);
-  return { service, prisma, presenceRedis, redis };
+  const service = new MembersMapService(prisma as any, { r2: () => null } as any, redis as any, onlineMembers as any);
+  return { service, prisma, redis, onlineMembers };
 }
 
 describe('MembersMapService.summary', () => {
   it('groups members by state, counts online members, and separates the unlocated bucket', async () => {
-    const { service, prisma } = makeService({
+    const { service, prisma, onlineMembers } = makeService({
       groups: [
         { locationState: 'VA', count: 3 },
         { locationState: 'tx', count: 5 },
         { locationState: null, count: 2 },
         { locationState: '', count: 1 },
       ],
-      onlineIds: ['a', 'b', 'c'],
-      onlineRows: [
+      online: [
         { id: 'a', locationState: 'VA' },
         { id: 'b', locationState: null },
         { id: 'c', locationState: 'TX' },
@@ -101,9 +111,10 @@ describe('MembersMapService.summary', () => {
       ],
     });
 
-    const result = await service.summary({ membersVisible: true, now: new Date('2026-09-26T12:00:00Z') });
+    const result = await service.summary({ membersVisible: true, viewerUserId: 'viewer', now: new Date('2026-09-26T12:00:00Z') });
 
-    expect(prisma.user.groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: MEMBERS_MAP_MEMBER_WHERE }));
+    expect(onlineMembers.resolve).toHaveBeenCalledWith({ viewerUserId: 'viewer', includeViewer: true });
+    expect(prisma.user.groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: membersMapMemberWhere(null) }));
     expect(result.states.map((s) => [s.state, s.memberCount, s.onlineCount])).toEqual([
       ['TX', 5, 1],
       ['VA', 3, 1],
@@ -123,11 +134,25 @@ describe('MembersMapService.summary', () => {
     expect(result.membersVisible).toBe(true);
   });
 
+  it('reports the same online total as the shared roster, Marv included', async () => {
+    const { service, prisma } = makeService({
+      groups: [{ locationState: 'VA', count: 2 }, { locationState: null, count: 3 }],
+      online: [{ id: 'a', locationState: 'VA' }, { id: 'page-1', locationState: null }],
+      marv: { id: 'marv', locationState: null },
+    });
+
+    const result = await service.summary({ membersVisible: false });
+
+    expect(result.totals.online).toBe(3);
+    expect(result.totals.unlocatedOnline).toBe(2);
+    expect(result.states[0]?.onlineCount).toBe(1);
+    expect(prisma.user.groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: membersMapMemberWhere('marv') }));
+  });
+
   it('gives limited viewers the same counts with no faces or ids, from a shared cache', async () => {
     const { service, prisma, redis } = makeService({
       groups: [{ locationState: 'VA', count: 3 }, { locationState: null, count: 1 }],
-      onlineIds: ['a', 'b'],
-      onlineRows: [{ id: 'a', locationState: 'VA' }, { id: 'b', locationState: null }],
+      online: [{ id: 'a', locationState: 'VA' }, { id: 'b', locationState: null }],
       recentRows: [{ id: 'd', locationState: 'VA' }],
     });
 
@@ -146,45 +171,32 @@ describe('MembersMapService.summary', () => {
     expect(prisma.user.groupBy).toHaveBeenCalledTimes(1);
     expect(redis.setJson).toHaveBeenCalledTimes(1);
   });
-
-  it('only hydrates online members who pass the member filter', async () => {
-    const { service, prisma } = makeService({ groups: [], onlineIds: ['x'], onlineRows: [] });
-    const result = await service.summary({ membersVisible: true });
-    expect(prisma.user.findMany).toHaveBeenCalledWith({
-      where: { ...MEMBERS_MAP_MEMBER_WHERE, id: { in: ['x'] } },
-      select: { id: true, locationState: true },
-    });
-    expect(result.totals.online).toBe(0);
-    expect(result.states).toEqual([]);
-  });
 });
 
 describe('MembersMapService.members', () => {
   it('leads the first page with online members and excludes them from the paged remainder', async () => {
-    const { service, prisma } = makeService({ groups: [], onlineIds: ['on1'], pageRows: ['p1', 'p2', 'p3'] });
+    const { service, prisma } = makeService({ groups: [], online: [{ id: 'on1', locationState: 'VA' }], pageRows: ['p1', 'p2', 'p3'] });
     const result = await service.members({ state: 'VA', cursor: null, limit: 2 });
 
     expect(result.users.map((u) => u.id)).toEqual(['on1', 'p1', 'p2']);
     expect(result.nextCursor).toBe('2');
     const pagedCall = prisma.user.findMany.mock.calls.find(([args]: any[]) => args.orderBy)?.[0];
-    expect(pagedCall.where).toMatchObject({
-      ...MEMBERS_MAP_MEMBER_WHERE,
-      locationState: { equals: 'VA', mode: 'insensitive' },
-      id: { notIn: ['on1'] },
+    expect(pagedCall.where).toEqual({
+      AND: [membersMapMemberWhere(null), { locationState: { equals: 'VA', mode: 'insensitive' } }, { id: { notIn: ['on1'] } }],
     });
     expect(pagedCall.skip).toBe(0);
     expect(pagedCall.take).toBe(3);
   });
 
   it('selects members without a location for the none bucket and skips online on later pages', async () => {
-    const { service, prisma } = makeService({ groups: [], onlineIds: ['on1'], pageRows: ['p9'] });
+    const { service, prisma } = makeService({ groups: [], online: [{ id: 'on1', locationState: null }], pageRows: ['p9'] });
     const result = await service.members({ state: 'none', cursor: '40', limit: 20 });
 
     expect(result.users.map((u) => u.id)).toEqual(['p9']);
     expect(result.nextCursor).toBeNull();
     const calls = prisma.user.findMany.mock.calls.map(([args]: any[]) => args);
     expect(calls).toHaveLength(1);
-    expect(calls[0].where.OR).toEqual([{ locationState: null }, { locationState: '' }]);
+    expect(calls[0].where.AND[1]).toEqual({ OR: [{ locationState: null }, { locationState: '' }] });
     expect(calls[0].skip).toBe(40);
   });
 });
