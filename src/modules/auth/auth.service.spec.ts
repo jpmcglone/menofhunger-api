@@ -677,6 +677,7 @@ describe('AuthService.verifyPhoneCode — referral signup linking', () => {
       data: { followerId: 'new-user', followingId: 'recruiter-1' },
     });
     expect(result.referralApplied).toBe(true);
+    expect(result.accountDeletionCancelled).toBe(false);
   });
 
   it('does not link a recruiter for existing users even when a referral code is supplied', async () => {
@@ -974,6 +975,7 @@ describe('AuthService account deletion restore', () => {
     const result = await svc.verifyPhoneCode('+15555555555', '000000', makeResponse());
 
     expect(result.isNewUser).toBe(false);
+    expect(result.accountDeletionCancelled).toBe(true);
     expect(result.sessionId).toBe('session-restored');
     expect(userUpdate).toHaveBeenCalledWith({
       where: { id: pending.id, bannedReason: 'self_deleted_pending', deletionScheduledAt: { gt: expect.any(Date) } },

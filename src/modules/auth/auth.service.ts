@@ -401,6 +401,7 @@ export class AuthService {
     return {
       isNewUser,
       referralApplied: Boolean(isNewUser && recruitedById),
+      accountDeletionCancelled: restoredPendingDeletion,
       user: toUserDto(user, publicBaseUrl),
       sessionId: session.id,
     };
