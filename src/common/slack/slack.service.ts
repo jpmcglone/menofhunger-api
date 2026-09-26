@@ -285,7 +285,7 @@ export class SlackService {
       { type: 'mrkdwn', text: `*New Articles*\n${p.newArticleCount}` },
       {
         type: 'mrkdwn',
-        text: `*Board*\n${base ? `<${base}/b?sort=new|${p.newBoardThreadCount} threads>` : `${p.newBoardThreadCount} threads`} · ${p.newBoardCommentCount} comments`,
+        text: `*Board*\n${base ? `<${base}/b?sort=new|${p.newBoardThreadCount} posts>` : `${p.newBoardThreadCount} posts`} · ${p.newBoardCommentCount} comments`,
       },
       { type: 'mrkdwn', text: `*Active Users (DAU)*\n${p.activeUserCount}` },
       { type: 'mrkdwn', text: `*Active Users (7d WAU)*\n${p.wauCount}` },

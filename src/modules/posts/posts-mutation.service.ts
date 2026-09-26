@@ -828,7 +828,7 @@ export class PostsMutationService {
     if (kind === 'board') {
       if (requestedCommunityGroupId) throw new BadRequestException('Board posts cannot be posted inside a community group.');
       if (params.poll) throw new BadRequestException('Polls are not supported on the Board.');
-      if (!parentId && !params.board?.title?.trim()) throw new BadRequestException('Board threads need a title.');
+      if (!parentId && !params.board?.title?.trim()) throw new BadRequestException('Board posts need a title.');
       if (parentId && params.board) throw new BadRequestException('Board comments cannot carry thread fields.');
       if (requestedVisibility === 'onlyMe') throw new BadRequestException('Board posts cannot be only-me.');
     }

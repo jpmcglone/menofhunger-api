@@ -217,7 +217,7 @@ export class BoardService {
           include: POST_LIST_INCLUDE,
         })
       : null;
-    if (!row || !row.boardThread) throw new NotFoundException('Thread not found.');
+    if (!row || !row.boardThread) throw new NotFoundException('Post not found.');
     return row;
   }
 
@@ -293,7 +293,7 @@ export class BoardService {
       where: { userId, kind: 'board', parentId: null, createdAt: { gte: since } },
     });
     if (recent >= BOARD_THREADS_PER_HOUR) {
-      throw new HttpException(`You can start up to ${BOARD_THREADS_PER_HOUR} Board threads an hour.`, HttpStatus.TOO_MANY_REQUESTS);
+      throw new HttpException(`You can start up to ${BOARD_THREADS_PER_HOUR} Board posts an hour.`, HttpStatus.TOO_MANY_REQUESTS);
     }
 
     const { post } = await this.posts.createPost({
@@ -411,7 +411,7 @@ export class BoardService {
     const viewer = await this.viewerContext.getViewerOrThrow(userId);
     const row = await this.findThreadRow(threadId);
     if (row.userId !== userId && !viewer.siteAdmin) throw new ForbiddenException('Not allowed to edit this thread.');
-    if (!this.canEdit(viewer, row)) throw new ForbiddenException('This thread can no longer be edited.');
+    if (!this.canEdit(viewer, row)) throw new ForbiddenException('This post can no longer be edited.');
 
     const data: Prisma.BoardThreadUpdateInput = {};
     if (typeof input.title === 'string') {

@@ -612,7 +612,7 @@ export class AdminDailyDigestCron {
       body += renderStatRow('Users who posted', usersWhoPostedCount, { dimZero: true });
       body += renderStatRow('New replies / comments', newReplyCount, { dimZero: true });
       body += renderStatRow('New articles published', newArticleCount);
-      body += renderStatRow('New Board threads', newBoardThreadCount, { dimZero: true, href: `${baseUrl}/b?sort=new` });
+      body += renderStatRow('New Board posts', newBoardThreadCount, { dimZero: true, href: `${baseUrl}/b?sort=new` });
       body += renderStatRow('New Board comments', newBoardCommentCount, { dimZero: true });
       body += renderStatRow('Active users (DAU)', activeUserCount);
       body += renderStatRow('Active users (7-day WAU)', wauCount, { color: EMAIL.muted });
@@ -774,7 +774,7 @@ export class AdminDailyDigestCron {
     if (newFeedbackCount > 0) preheaderParts.push(plural(newFeedbackCount, 'new feedback'));
     if (newPostCount > 0) preheaderParts.push(plural(newPostCount, 'new post'));
     if (newArticleCount > 0) preheaderParts.push(plural(newArticleCount, 'new article'));
-    if (newBoardThreadCount > 0) preheaderParts.push(plural(newBoardThreadCount, 'new Board thread'));
+    if (newBoardThreadCount > 0) preheaderParts.push(plural(newBoardThreadCount, 'new Board post'));
     const preheader = preheaderParts.length > 0 ? preheaderParts.join(' · ') : 'Daily admin summary';
 
     return renderMohEmail({
@@ -832,7 +832,7 @@ export class AdminDailyDigestCron {
       `Users who posted: ${usersWhoPostedCount}`,
       `New replies:      ${newReplyCount}`,
       `New articles:     ${newArticleCount}`,
-      `Board threads:    ${newBoardThreadCount}`,
+      `Board posts:      ${newBoardThreadCount}`,
       `Board comments:   ${newBoardCommentCount}`,
       `Active users DAU: ${activeUserCount}`,
       `Active users WAU: ${wauCount}`,

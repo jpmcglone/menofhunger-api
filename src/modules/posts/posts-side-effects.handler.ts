@@ -37,9 +37,9 @@ const REPLY_TITLE = {
 
 /** Same roles, worded for Board threads so the row and push name the Board. */
 const BOARD_REPLY_TITLE: Record<keyof typeof REPLY_TITLE, string> = {
-  root_author: 'commented on your Board thread',
+  root_author: 'commented on your Board post',
   reply_author: 'replied to your Board comment',
-  mentioned_in_root: "commented on a Board thread you're mentioned in",
+  mentioned_in_root: "commented on a Board post you're mentioned in",
   mentioned_in_reply: "replied to a Board comment you're mentioned in",
 };
 
@@ -607,7 +607,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       await runInBatches(mentionRecipients, FANOUT_CONCURRENCY, async (uid) => {
         let mentionTitle: string;
         if (post.kind === 'board') {
-          mentionTitle = parentId ? 'mentioned you in a Board comment' : 'mentioned you in a Board thread';
+          mentionTitle = parentId ? 'mentioned you in a Board comment' : 'mentioned you in a Board post';
         } else if (!parentId) {
           mentionTitle = 'mentioned you in a post';
         } else if (uid === parentAuthorUserId) {
