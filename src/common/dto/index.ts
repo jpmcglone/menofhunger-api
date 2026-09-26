@@ -36,3 +36,4 @@ export * from './call.dto';
 export * from './admin-operations.dto';
 
 export * from './account-deletion.dto';
+export * from './members-map.dto';

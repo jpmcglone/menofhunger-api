@@ -14,12 +14,16 @@ import { UsersLocationService } from './users-location.service';
 import { UsersMeRealtimeService } from './users-me-realtime.service';
 import { UsersPublicRealtimeService } from './users-public-realtime.service';
 import { PublicProfilesService } from './public-profiles.service';
+import { MembersMapController } from './members-map.controller';
+import { MembersMapService } from './members-map.service';
 
 @Module({
   imports: [AuthModule, FollowsModule, NotificationsModule, RealtimeModule, EmailModule],
-  controllers: [ActivationController, UsersController],
+  // Fixed `users/...` routes must register before UsersController's `users/:username`.
+  controllers: [ActivationController, MembersMapController, UsersController],
   providers: [
     ActivationService,
+    MembersMapService,
     UsersProfileWriteService,
     PublicProfileCacheService,
     UsersRealtimeService,
