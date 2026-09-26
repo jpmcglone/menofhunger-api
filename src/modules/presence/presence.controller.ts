@@ -12,7 +12,15 @@ import { PresenceService } from './presence.service';
 import { PresenceRealtimeService } from './presence-realtime.service';
 import { PresenceRedisStateService } from './presence-redis-state.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import type { OnlinePaginationDto, OnlineUserDto, PresenceOnlinePageDto, RecentlyOnlineUserDto, UserStatusDto } from '../../common/dto';
+import type {
+  OnlinePaginationDto,
+  OnlineUserDto,
+  PresenceOnlinePageDto,
+  PresenceOnlinePagePaginationDto,
+  RecentlyOnlineUserDto,
+  UserStatusDto,
+} from '../../common/dto';
+import { viewerCanSeeMembers } from '../auth/member-visibility';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
@@ -303,13 +311,15 @@ export class PresenceController {
     // Keep the query param for backwards compatibility (includeSelf=0/false will exclude).
     const includeSelf =
       includeSelfRaw == null ? true : (includeSelfRaw === '1' || includeSelfRaw === 'true');
+    const membersVisible = await viewerCanSeeMembers(this.prisma, viewerUserId);
 
     const toResponse = (full: { data: OnlineUserDto[]; pagination: OnlinePaginationDto }) => {
       const pagination: OnlinePaginationDto = {
         ...full.pagination,
         ...onlineTierCounts(full.data),
+        membersVisible,
       };
-      if (summary) return { data: [] as OnlineUserDto[], pagination };
+      if (summary || !membersVisible) return { data: [] as OnlineUserDto[], pagination };
       return { data: full.data, pagination };
     };
 
@@ -439,8 +449,8 @@ export class PresenceController {
   ): Promise<{ data: RecentlyOnlineUserDto[]; pagination: { nextCursor: string | null } }> {
     const viewerUserId = userId ?? null;
 
-    // Require sign-in: anonymous visitors cannot see "recently online".
-    if (!viewerUserId) {
+    // Signed-out and unverified viewers get counts elsewhere, never who was recently online.
+    if (!(await viewerCanSeeMembers(this.prisma, viewerUserId))) {
       return { data: [], pagination: { nextCursor: null } };
     }
 
@@ -586,7 +596,7 @@ export class PresenceController {
     @Query() query: unknown,
   ): Promise<{
     data: PresenceOnlinePageDto;
-    pagination: { totalOnline: number; anonymousOnline: number; recentNextCursor: string | null };
+    pagination: PresenceOnlinePagePaginationDto;
   }> {
     const viewerUserId = userId ?? null;
     const parsed = onlinePageSchema.parse(query);
@@ -595,6 +605,19 @@ export class PresenceController {
     // Keep includeSelf for backwards compatibility with /presence/online.
     const includeSelfRaw = (parsed.includeSelf ?? '').trim();
     const includeSelf = includeSelfRaw ? includeSelfRaw === '1' || includeSelfRaw === 'true' : true;
+
+    if (!(await viewerCanSeeMembers(this.prisma, viewerUserId))) {
+      const counts = await this.online(userId, includeSelfRaw || undefined, '1');
+      return {
+        data: { online: [], recent: [] },
+        pagination: {
+          totalOnline: counts.pagination.totalOnline,
+          anonymousOnline: counts.pagination.anonymousOnline,
+          recentNextCursor: null,
+          membersVisible: false,
+        },
+      };
+    }
 
     // ——— Online snapshot ———
     let onlineUserIds = await this.presenceRedis.onlineUserIds();
@@ -806,6 +829,7 @@ export class PresenceController {
         totalOnline,
         anonymousOnline,
         recentNextCursor,
+        membersVisible: true,
       },
     };
   }

@@ -1,16 +1,30 @@
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { AuthGuard } from '../auth/auth.guard';
+import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { VerifiedGuard } from '../auth/verified.guard';
+import { canSeeMembers } from '../auth/member-visibility';
 import { MembersMapController } from './members-map.controller';
 import { MembersMapService, MEMBERS_MAP_MEMBER_WHERE } from './members-map.service';
 
 describe('MembersMapController', () => {
-  it('requires a signed-in, verified viewer for every route', () => {
-    expect(Reflect.getMetadata(GUARDS_METADATA, MembersMapController)).toEqual([AuthGuard, VerifiedGuard]);
+  it('opens the summary to everyone but keeps the member list verified-only', () => {
+    const proto = MembersMapController.prototype;
+    expect(Reflect.getMetadata(GUARDS_METADATA, proto.summary)).toEqual([OptionalAuthGuard]);
+    expect(Reflect.getMetadata(GUARDS_METADATA, proto.members)).toEqual([AuthGuard, VerifiedGuard]);
+  });
+
+  it('asks for the counts-only summary when the viewer is signed out or unverified', async () => {
+    const membersMap = { summary: jest.fn(async () => ({})) };
+    const prisma = { user: { findUnique: jest.fn(async () => ({ verifiedStatus: 'none', premium: false, premiumPlus: false, siteAdmin: false })) } };
+    const controller = new MembersMapController(membersMap as any, prisma as any);
+    await controller.summary(undefined);
+    await controller.summary('unverified');
+    expect(membersMap.summary).toHaveBeenNthCalledWith(1, { membersVisible: false });
+    expect(membersMap.summary).toHaveBeenNthCalledWith(2, { membersVisible: false });
   });
 
   it('rejects state values that are not a two-letter code or none', async () => {
-    const controller = new MembersMapController({ members: jest.fn() } as any);
+    const controller = new MembersMapController({ members: jest.fn() } as any, {} as any);
     await expect(controller.members({ state: 'Virginia' })).rejects.toThrow();
   });
 });
@@ -56,8 +70,13 @@ function makeService(opts: {
     $queryRaw: jest.fn(async () => opts.recentRows ?? []),
   };
   const presenceRedis = { onlineUserIds: jest.fn(async () => opts.onlineIds ?? []) };
-  const service = new MembersMapService(prisma as any, { r2: () => null } as any, presenceRedis as any);
-  return { service, prisma, presenceRedis };
+  const store = new Map<string, unknown>();
+  const redis = {
+    getJson: jest.fn(async (key: string) => store.get(key) ?? null),
+    setJson: jest.fn(async (key: string, value: unknown) => void store.set(key, value)),
+  };
+  const service = new MembersMapService(prisma as any, { r2: () => null } as any, presenceRedis as any, redis as any);
+  return { service, prisma, presenceRedis, redis };
 }
 
 describe('MembersMapService.summary', () => {
@@ -82,7 +101,7 @@ describe('MembersMapService.summary', () => {
       ],
     });
 
-    const result = await service.summary(new Date('2026-09-26T12:00:00Z'));
+    const result = await service.summary({ membersVisible: true, now: new Date('2026-09-26T12:00:00Z') });
 
     expect(prisma.user.groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: MEMBERS_MAP_MEMBER_WHERE }));
     expect(result.states.map((s) => [s.state, s.memberCount, s.onlineCount])).toEqual([
@@ -101,11 +120,36 @@ describe('MembersMapService.summary', () => {
       ]),
     );
     expect(result.asOf).toBe('2026-09-26T12:00:00.000Z');
+    expect(result.membersVisible).toBe(true);
+  });
+
+  it('gives limited viewers the same counts with no faces or ids, from a shared cache', async () => {
+    const { service, prisma, redis } = makeService({
+      groups: [{ locationState: 'VA', count: 3 }, { locationState: null, count: 1 }],
+      onlineIds: ['a', 'b'],
+      onlineRows: [{ id: 'a', locationState: 'VA' }, { id: 'b', locationState: null }],
+      recentRows: [{ id: 'd', locationState: 'VA' }],
+    });
+
+    const first = await service.summary({ membersVisible: false });
+    const second = await service.summary({ membersVisible: false });
+
+    expect(first.membersVisible).toBe(false);
+    expect(first.states).toEqual([
+      { state: 'VA', stateDisplay: 'Virginia', memberCount: 3, onlineCount: 1, preview: [] },
+    ]);
+    expect(first.online).toEqual([]);
+    expect(first.unlocatedPreview).toEqual([]);
+    expect(first.totals).toEqual({ members: 4, states: 1, online: 2, unlocated: 1, unlocatedOnline: 1 });
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    expect(second).toEqual(first);
+    expect(prisma.user.groupBy).toHaveBeenCalledTimes(1);
+    expect(redis.setJson).toHaveBeenCalledTimes(1);
   });
 
   it('only hydrates online members who pass the member filter', async () => {
     const { service, prisma } = makeService({ groups: [], onlineIds: ['x'], onlineRows: [] });
-    const result = await service.summary();
+    const result = await service.summary({ membersVisible: true });
     expect(prisma.user.findMany).toHaveBeenCalledWith({
       where: { ...MEMBERS_MAP_MEMBER_WHERE, id: { in: ['x'] } },
       select: { id: true, locationState: true },
@@ -142,5 +186,16 @@ describe('MembersMapService.members', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].where.OR).toEqual([{ locationState: null }, { locationState: '' }]);
     expect(calls[0].skip).toBe(40);
+  });
+});
+
+describe('canSeeMembers', () => {
+  it('lets verified, premium, and admin viewers see members, and nobody else', () => {
+    expect(canSeeMembers(null)).toBe(false);
+    expect(canSeeMembers({ verifiedStatus: 'none' })).toBe(false);
+    expect(canSeeMembers({ verifiedStatus: 'identity' })).toBe(true);
+    expect(canSeeMembers({ verifiedStatus: 'none', premium: true })).toBe(true);
+    expect(canSeeMembers({ verifiedStatus: 'none', premiumPlus: true })).toBe(true);
+    expect(canSeeMembers({ verifiedStatus: 'none', siteAdmin: true })).toBe(true);
   });
 });

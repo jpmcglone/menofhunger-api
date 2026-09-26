@@ -86,6 +86,8 @@ function makePresence(overrides: Record<string, unknown> = {}) {
     getSocketIdsForUser: jest.fn().mockReturnValue([]),
     getSubscribers: jest.fn().mockReturnValue(new Set<string>()),
     getOnlineFeedListeners: jest.fn().mockReturnValue(new Set<string>()),
+    getCountOnlyFeedListeners: jest.fn().mockReturnValue(new Set<string>()),
+    unsubscribeOnlineFeed: jest.fn(),
     getChatScreenSocketIdsForUser: jest.fn().mockReturnValue([]),
     setChatScreenActive: jest.fn(),
     setActiveConversation: jest.fn(),
@@ -454,7 +456,7 @@ describe('PresenceStatusHandler', () => {
         relationship: { viewerFollowsUser: true, userFollowsViewer: false, viewerPostNotificationsEnabled: true },
       },
     ]);
-    const socket = new FakeSocket('s-viewer', { userId: 'viewer-1' });
+    const socket = new FakeSocket('s-viewer', { userId: 'viewer-1', viewer: { verified: true } });
 
     await handler.handleSubscribeOnlineFeed(socket as any);
 
@@ -467,6 +469,46 @@ describe('PresenceStatusHandler', () => {
     };
     expect(snap.users[0]?.relationship?.viewerFollowsUser).toBe(true);
     expect(presence.subscribeOnlineFeed).toHaveBeenCalledWith('s-viewer');
+  });
+
+  it.each([
+    ['a signed-out guest', {}],
+    ['an unverified member', { userId: 'viewer-1', viewer: { verified: false, verifiedStatus: 'none' } }],
+  ])('gives %s a counts-only snapshot with no users', async (_label, data) => {
+    const { presence, follows, handler } = makePresenceHandlerFixture();
+    follows.getFollowListUsersByIds.mockResolvedValue([{ id: 'u-followed', username: 'marv' }]);
+    const socket = new FakeSocket('s-guest', data);
+
+    await handler.handleSubscribeOnlineFeed(socket as any);
+
+    expect(presence.subscribeOnlineFeed).toHaveBeenCalledWith('s-guest', { countOnly: true });
+    expect(socket.lastEmitted('presence:onlineFeedSnapshot')).toEqual({
+      users: [],
+      totalOnline: 1,
+      anonymousOnline: 0,
+      membersVisible: false,
+    });
+  });
+
+  it('sends count-only listeners one debounced presence:online-count and never user payloads', async () => {
+    jest.useFakeTimers();
+    try {
+      const { server, presence, follows, handler } = makePresenceHandlerFixture();
+      follows.getFollowListUsersByIds.mockResolvedValue([{ id: 'u-followed', username: 'marv' }]);
+      const guest = new FakeSocket('s-guest');
+      server.register(guest);
+      presence.getCountOnlyFeedListeners.mockReturnValue(new Set(['s-guest']));
+
+      await handler.emitOnline('u-followed');
+      await handler.emitAnonymousCount(3);
+      await jest.advanceTimersByTimeAsync(2000);
+
+      expect(guest.allEmitted('presence:online-count')).toHaveLength(1);
+      expect(guest.lastEmitted('presence:online-count')).toEqual({ totalOnline: 1, anonymousOnline: 0 });
+      expect(guest.lastEmitted('presence:online')).toBeUndefined();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('broadcast presence:online omits follow relationship (one payload for every viewer)', async () => {

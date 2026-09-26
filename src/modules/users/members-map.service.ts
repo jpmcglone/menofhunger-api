@@ -6,6 +6,8 @@ import { PresenceRedisStateService } from '../presence/presence-redis-state.serv
 import { toUserListDto, type UserListDto } from '../../common/dto';
 import type { MembersMapStateDto, MembersMapSummaryDto } from '../../common/dto/members-map.dto';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
+import { RedisService } from '../redis/redis.service';
+import { RedisKeys } from '../redis/redis-keys';
 import { STATE_NAMES } from './users-location.service';
 
 export const MEMBERS_MAP_MEMBER_WHERE = {
@@ -16,6 +18,7 @@ export const MEMBERS_MAP_MEMBER_WHERE = {
 
 export const MEMBERS_MAP_PREVIEW_SIZE = 6;
 const ONLINE_FIRST_PAGE_MAX = 200;
+const COUNTS_CACHE_TTL_MS = 10_000;
 
 /** `none` selects members without a location. */
 export type MembersMapStateKey = string | 'none';
@@ -31,13 +34,29 @@ export class MembersMapService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly presenceRedis: PresenceRedisStateService,
+    private readonly redis: RedisService,
   ) {}
 
   private get publicBaseUrl(): string | null {
     return this.appConfig.r2()?.publicBaseUrl ?? null;
   }
 
-  async summary(now: Date = new Date()): Promise<MembersMapSummaryDto> {
+  /**
+   * Verified viewers get faces and online ids; everyone else gets the same counts only,
+   * served from a short shared cache because signed-out traffic can be heavy.
+   */
+  async summary(opts: { membersVisible: boolean; now?: Date }): Promise<MembersMapSummaryDto> {
+    const now = opts.now ?? new Date();
+    if (opts.membersVisible) return this.buildSummary(now, true);
+    const key = RedisKeys.membersMapCounts();
+    const cached = await this.redis.getJson<MembersMapSummaryDto>(key).catch(() => null);
+    if (cached) return cached;
+    const counts = await this.buildSummary(now, false);
+    void this.redis.setJson(key, counts, { ttlMs: COUNTS_CACHE_TTL_MS }).catch(() => undefined);
+    return counts;
+  }
+
+  private async buildSummary(now: Date, membersVisible: boolean): Promise<MembersMapSummaryDto> {
     const [groups, onlineIds, recentRows] = await Promise.all([
       this.prisma.user.groupBy({
         by: ['locationState'],
@@ -45,18 +64,7 @@ export class MembersMapService {
         _count: { _all: true },
       }),
       this.presenceRedis.onlineUserIds(),
-      this.prisma.$queryRaw<Array<{ id: string; locationState: string | null }>>`
-        SELECT "id", "locationState" FROM (
-          SELECT "id", "locationState",
-            ROW_NUMBER() OVER (
-              PARTITION BY UPPER(COALESCE("locationState", ''))
-              ORDER BY "lastOnlineAt" DESC NULLS LAST, "createdAt" ASC
-            ) AS rn
-          FROM "User"
-          WHERE "usernameIsSet" = true AND "bannedAt" IS NULL AND "isBot" = false
-        ) ranked
-        WHERE rn <= ${MEMBERS_MAP_PREVIEW_SIZE}
-      `,
+      membersVisible ? this.recentPreviewRows() : Promise.resolve([]),
     ]);
 
     const onlineRows = onlineIds.length
@@ -85,7 +93,7 @@ export class MembersMapService {
     for (const row of onlineRows) {
       const key = stateKey(row.locationState);
       onlineCounts.set(key, (onlineCounts.get(key) ?? 0) + 1);
-      pushPreview(key, row.id);
+      if (membersVisible) pushPreview(key, row.id);
     }
     for (const row of recentRows) pushPreview(stateKey(row.locationState), row.id);
 
@@ -112,8 +120,9 @@ export class MembersMapService {
     const locatedMembers = states.reduce((n, s) => n + s.memberCount, 0);
 
     return {
+      membersVisible,
       states,
-      online: onlineRows.map((r) => ({ userId: r.id, state: stateKey(r.locationState) })),
+      online: membersVisible ? onlineRows.map((r) => ({ userId: r.id, state: stateKey(r.locationState) })) : [],
       totals: {
         members: locatedMembers + unlocated,
         states: states.length,
@@ -124,6 +133,22 @@ export class MembersMapService {
       unlocatedPreview: previewFor(null),
       asOf: now.toISOString(),
     };
+  }
+
+  /** Up to six most recently active members per state (and the no-location bucket). */
+  private recentPreviewRows() {
+    return this.prisma.$queryRaw<Array<{ id: string; locationState: string | null }>>`
+      SELECT "id", "locationState" FROM (
+        SELECT "id", "locationState",
+          ROW_NUMBER() OVER (
+            PARTITION BY UPPER(COALESCE("locationState", ''))
+            ORDER BY "lastOnlineAt" DESC NULLS LAST, "createdAt" ASC
+          ) AS rn
+        FROM "User"
+        WHERE "usernameIsSet" = true AND "bannedAt" IS NULL AND "isBot" = false
+      ) ranked
+      WHERE rn <= ${MEMBERS_MAP_PREVIEW_SIZE}
+    `;
   }
 
   /**

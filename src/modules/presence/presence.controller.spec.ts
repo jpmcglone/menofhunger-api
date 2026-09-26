@@ -26,6 +26,7 @@ function makeController(opts?: {
   marvUserId?: string | null;
   onlineUserIds?: string[];
   inCallIds?: string[];
+  viewerVerifiedStatus?: string;
 }) {
   const onlineIds = opts?.onlineUserIds ?? ['user-a', 'user-b'];
 
@@ -52,7 +53,11 @@ function makeController(opts?: {
     ),
   };
   const prisma: any = {
-    user: { count: jest.fn(async () => 0) },
+    user: {
+      count: jest.fn(async () => 0),
+      findMany: jest.fn(async () => []),
+      findUnique: jest.fn(async () => ({ verifiedStatus: opts?.viewerVerifiedStatus ?? 'identity', premium: false, premiumPlus: false, siteAdmin: false })),
+    },
   };
   const redis: any = {
     getJson: jest.fn(async () => null),
@@ -107,7 +112,7 @@ describe('PresenceController — Marv pin injection', () => {
   describe('GET /presence/online', () => {
     it('prepends Marv with isBot:true and bumps totalOnline when enabled', async () => {
       const m = makeController();
-      const res: any = await m.controller.online(undefined, undefined);
+      const res: any = await m.controller.online('viewer-v', '0');
       const data: any[] = res.data;
       expect(data[0]).toEqual(
         expect.objectContaining({ id: 'marv-id', isBot: true, idle: false }),
@@ -118,7 +123,7 @@ describe('PresenceController — Marv pin injection', () => {
 
     it('omits Marv entirely when MARV_ENABLED=false', async () => {
       const m = makeController({ marvEnabled: false });
-      const res: any = await m.controller.online(undefined, undefined);
+      const res: any = await m.controller.online('viewer-v', '0');
       const data: any[] = res.data;
       expect(data.find((u) => u.id === 'marv-id')).toBeUndefined();
       expect(res.pagination.totalOnline).toBe(2);
@@ -128,7 +133,7 @@ describe('PresenceController — Marv pin injection', () => {
 
     it('omits Marv when the bot user has not been seeded yet', async () => {
       const m = makeController({ marvUserId: null });
-      const res: any = await m.controller.online(undefined, undefined);
+      const res: any = await m.controller.online('viewer-v', '0');
       const data: any[] = res.data;
       expect(data.find((u) => u.id === 'marv-id')).toBeUndefined();
       expect(res.pagination.totalOnline).toBe(2);
@@ -143,7 +148,7 @@ describe('PresenceController — Marv pin injection', () => {
 
     it('flags members who currently hold a call seat', async () => {
       const m = makeController({ inCallIds: ['user-b'] });
-      const res: any = await m.controller.online(undefined, undefined);
+      const res: any = await m.controller.online('viewer-v', '0');
       const byId = new Map((res.data as any[]).map((u) => [u.id, u]));
       expect(byId.get('user-a').inCall).toBe(false);
       expect(byId.get('user-b').inCall).toBe(true);
@@ -154,7 +159,7 @@ describe('PresenceController — Marv pin injection', () => {
   describe('GET /presence/online-page', () => {
     it('prepends Marv on the combined online-page response and bumps totalOnline', async () => {
       const m = makeController();
-      const res: any = await m.controller.onlinePage(undefined, {});
+      const res: any = await m.controller.onlinePage('viewer-v', { includeSelf: '0' });
       expect(res.data.online[0]).toEqual(
         expect.objectContaining({ id: 'marv-id', isBot: true }),
       );
@@ -165,13 +170,13 @@ describe('PresenceController — Marv pin injection', () => {
     it('includes anonymousOnline from redis on the online-page pagination', async () => {
       const m = makeController({ marvEnabled: false });
       m.presenceRedis.anonymousOnlineCount.mockResolvedValueOnce(12);
-      const res: any = await m.controller.onlinePage(undefined, {});
+      const res: any = await m.controller.onlinePage('viewer-v', { includeSelf: '0' });
       expect(res.pagination.anonymousOnline).toBe(12);
     });
 
     it('skips Marv on online-page when disabled', async () => {
       const m = makeController({ marvEnabled: false });
-      const res: any = await m.controller.onlinePage(undefined, {});
+      const res: any = await m.controller.onlinePage('viewer-v', { includeSelf: '0' });
       expect(res.data.online.find((u: any) => u.id === 'marv-id')).toBeUndefined();
       expect(res.pagination.totalOnline).toBe(2);
     });
@@ -231,7 +236,7 @@ describe('PresenceController — online() output shape and per-call invariants',
       async (ids: string[]) => new Map(ids.map((id) => [id, id === 'user-b'])),
     );
 
-    const res: any = await m.controller.online(undefined, undefined);
+    const res: any = await m.controller.online('viewer-v', '0');
 
     expect(res.data.map((u: any) => u.id)).toEqual(['user-c', 'user-b', 'user-a']);
     expect(res.pagination.totalOnline).toBe(3);
@@ -250,7 +255,7 @@ describe('PresenceController — online() output shape and per-call invariants',
 
   it('calls each downstream collaborator exactly once per online() invocation', async () => {
     const m = makeController({ marvEnabled: false });
-    await m.controller.online(undefined, undefined);
+    await m.controller.online('viewer-v', '0');
 
     expect(m.presenceRedis.onlineUserIds).toHaveBeenCalledTimes(1);
     expect(m.presenceRedis.lastConnectAtMsByUserId).toHaveBeenCalledTimes(1);
@@ -263,7 +268,7 @@ describe('PresenceController — online() output shape and per-call invariants',
     const m = makeController({ marvEnabled: false, onlineUserIds: ['user-a', 'user-b'] });
     m.prisma.user.count.mockResolvedValueOnce(5);
 
-    const res: any = await m.controller.online(undefined, undefined);
+    const res: any = await m.controller.online('viewer-v', '0');
 
     expect(res.pagination.recentlyOnlineCount).toBe(5);
     expect(m.prisma.user.count).toHaveBeenCalledWith(
@@ -300,7 +305,7 @@ describe('PresenceController — online() output shape and per-call invariants',
 
   it('still returns the full list when summary is omitted', async () => {
     const m = makeController({ marvEnabled: false, onlineUserIds: ['user-a'] });
-    const res: any = await m.controller.online(undefined, undefined);
+    const res: any = await m.controller.online('viewer-v', '0');
     expect(res.data).toHaveLength(1);
     expect(res.data[0].id).toBe('user-a');
     expect(res.pagination.unverified).toBe(1);
@@ -309,7 +314,7 @@ describe('PresenceController — online() output shape and per-call invariants',
   it('omits the id exclusion filter when nobody is currently online', async () => {
     const m = makeController({ marvEnabled: false, onlineUserIds: [] });
 
-    await m.controller.online(undefined, undefined);
+    await m.controller.online('viewer-v', '0');
 
     const call = m.prisma.user.count.mock.calls[0]?.[0];
     expect(call.where.id).toBeUndefined();
@@ -339,10 +344,44 @@ describe('PresenceController — online() output shape and per-call invariants',
       slow(new Map(ids.map((id) => [id, false]))),
     );
 
-    await m.controller.online(undefined, undefined);
+    await m.controller.online('viewer-v', '0');
 
     // The four post-onlineUserIds awaits run in parallel, so at least 2
     // operations should have been in-flight at the same time.
     expect(maxActive).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('PresenceController — counts only for signed-out and unverified viewers', () => {
+  it('returns counts but no members to a signed-out viewer', async () => {
+    const m = makeController({ marvEnabled: false });
+    const res: any = await m.controller.online(undefined, undefined);
+    expect(res.data).toEqual([]);
+    expect(res.pagination.totalOnline).toBe(2);
+    expect(res.pagination.membersVisible).toBe(false);
+  });
+
+  it('returns counts but no members to an unverified viewer', async () => {
+    const m = makeController({ marvEnabled: false, viewerVerifiedStatus: 'none' });
+    const res: any = await m.controller.online('unverified', '0');
+    expect(res.data).toEqual([]);
+    expect(res.pagination.totalOnline).toBe(2);
+    expect(res.pagination.membersVisible).toBe(false);
+  });
+
+  it('keeps the online page and recent list empty for limited viewers', async () => {
+    const m = makeController({ marvEnabled: false, viewerVerifiedStatus: 'none' });
+    const page: any = await m.controller.onlinePage('unverified', { includeSelf: '0' });
+    expect(page.data).toEqual({ online: [], recent: [] });
+    expect(page.pagination).toMatchObject({ totalOnline: 2, recentNextCursor: null, membersVisible: false });
+    const recent: any = await m.controller.recent('unverified', {});
+    expect(recent).toEqual({ data: [], pagination: { nextCursor: null } });
+  });
+
+  it('shows members to verified viewers and says so', async () => {
+    const m = makeController({ marvEnabled: false });
+    const res: any = await m.controller.online('viewer-v', '0');
+    expect(res.data.map((u: { id: string }) => u.id)).toEqual(['user-a', 'user-b']);
+    expect(res.pagination.membersVisible).toBe(true);
   });
 });

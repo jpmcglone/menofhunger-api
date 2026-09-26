@@ -9,6 +9,7 @@ import { RedisService } from '../../redis/redis.service';
 import { RedisKeys } from '../../redis/redis-keys';
 import { SpacesPresenceService } from '../../spaces/spaces-presence.service';
 import type { RadioChatSenderDto, SpaceChatSenderDto, SpaceLobbyCountsDto } from '../../../common/dto';
+import { WsEventNames } from '../../../common/dto/realtime.dto';
 import { parseSessionCookieFromHeader } from '../../../common/session-cookie';
 import { sanitizeAnonViewerId } from '../../views/view-tracking.utils';
 import { PresenceService } from '../presence.service';
@@ -17,6 +18,9 @@ import { GatewayContextService } from './gateway-context.service';
 import { GatewayThrottleService } from './gateway-throttle.service';
 import { AccountSwitchService } from '../../auth/account-switch.service';
 import { CallSessionStore } from '../../calls/call-session.store';
+import { canSeeMembers } from '../../auth/member-visibility';
+
+const COUNT_ONLY_UPDATE_DEBOUNCE_MS = 1500;
 
 type UserTimers = {
   idleMarkTimer?: ReturnType<typeof setTimeout>;
@@ -201,6 +205,8 @@ export class PresenceStatusHandler {
   /** Presence portion of disconnect: unregister, offline fan-out, timer cleanup. */
   handleDisconnect(client: Socket): void {
     const socketId = client.id;
+    // Anonymous sockets never reach presence.unregister, so drop their feed subscription here.
+    this.presence.unsubscribeOnlineFeed(socketId);
     let result: { userId?: string | null; isNowOffline?: boolean } | null = null;
     const hadUser = Boolean((client.data as { userId?: string }).userId);
     if (hadUser) {
@@ -261,7 +267,37 @@ export class PresenceStatusHandler {
 
   // ─── Presence fan-out ───────────────────────────────────────────────
 
+  /** Same member total the full feed and /presence/online report (banned excluded, Marv included). */
+  private async onlineCounts(): Promise<{ totalOnline: number; anonymousOnline: number }> {
+    const connectedIds = await this.presenceRedis.onlineUserIds();
+    const { displayedIds } = await this.accountSwitch.expandPresenceOnlineIds(connectedIds);
+    const [users, marvId, anonymousOnline] = await Promise.all([
+      displayedIds.length
+        ? this.follows.getFollowListUsersByIds({ viewerUserId: null, userIds: displayedIds })
+        : Promise.resolve([]),
+      this.appConfig.marvBot().enabled ? this.marvIdentity.getMarvUserId().catch(() => null) : Promise.resolve(null),
+      this.presenceRedis.anonymousOnlineCount(),
+    ]);
+    return { totalOnline: users.length + (marvId ? 1 : 0), anonymousOnline };
+  }
+
+  private countOnlyTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Coalesces bursts of connects/disconnects into one count update for count-only listeners. */
+  private scheduleCountOnlyUpdate(): void {
+    if (this.countOnlyTimer || this.presence.getCountOnlyFeedListeners().size === 0) return;
+    this.countOnlyTimer = setTimeout(() => {
+      this.countOnlyTimer = null;
+      const targets = this.presence.getCountOnlyFeedListeners();
+      if (targets.size === 0) return;
+      void this.onlineCounts()
+        .then((counts) => this.context.emitToSockets(targets, WsEventNames.presenceOnlineCount, counts))
+        .catch(() => undefined);
+    }, COUNT_ONLY_UPDATE_DEBOUNCE_MS);
+  }
+
   async emitAnonymousCount(anonymousOnline?: number): Promise<void> {
+    this.scheduleCountOnlyUpdate();
     const targets = this.presence.getOnlineFeedListeners();
     if (targets.size === 0) return;
     const count =
@@ -272,6 +308,7 @@ export class PresenceStatusHandler {
   }
 
   async emitOnline(userId: string): Promise<void> {
+    this.scheduleCountOnlyUpdate();
     const cluster = await this.accountSwitch.presenceClusterByUserId([userId]);
     const displayedIds = cluster.get(userId) ?? [userId];
     for (const displayedId of displayedIds) {
@@ -361,6 +398,7 @@ export class PresenceStatusHandler {
     const members = cluster.get(userId) ?? [userId];
     const onlineById = await this.presenceRedis.onlineByUserIds(members);
     if ([...onlineById.values()].some(Boolean)) return;
+    this.scheduleCountOnlyUpdate();
     for (const displayedId of members) {
       await this.emitOfflineOne(displayedId);
     }
@@ -426,6 +464,13 @@ export class PresenceStatusHandler {
 
   async handleSubscribeOnlineFeed(client: Socket): Promise<void> {
     await ((client.data as { __ready?: Promise<void> }).__ready)?.catch?.(() => undefined);
+    const viewer = (client.data as { viewer?: Parameters<typeof canSeeMembers>[0] }).viewer;
+    if (!canSeeMembers(viewer)) {
+      this.presence.subscribeOnlineFeed(client.id, { countOnly: true });
+      const counts = await this.onlineCounts();
+      client.emit('presence:onlineFeedSnapshot', { users: [], ...counts, membersVisible: false });
+      return;
+    }
     this.presence.subscribeOnlineFeed(client.id);
     if (this.context.logPresenceVerbose) {
       this.logger.debug(

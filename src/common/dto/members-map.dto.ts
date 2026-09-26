@@ -25,6 +25,11 @@ export type MembersMapTotalsDto = {
 };
 
 export type MembersMapSummaryDto = {
+  /**
+   * False for signed-out and unverified viewers: counts only. `preview`, `unlocatedPreview`,
+   * and `online` are empty, and the members endpoint is unavailable.
+   */
+  membersVisible: boolean;
   states: MembersMapStateDto[];
   online: MembersMapOnlineEntryDto[];
   totals: MembersMapTotalsDto;

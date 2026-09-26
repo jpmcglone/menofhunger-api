@@ -61,6 +61,8 @@ export type OnlinePaginationDto = {
   premium?: number;
   verified?: number;
   unverified?: number;
+  /** False for signed-out and unverified viewers: counts only, `data` is empty. */
+  membersVisible?: boolean;
 };
 
 export type PresenceOnlinePageDto = {
@@ -73,5 +75,7 @@ export type PresenceOnlinePagePaginationDto = {
   /** Unique logged-out visitors with a live socket. Hidden in the UI when zero. */
   anonymousOnline: number;
   recentNextCursor: string | null;
+  /** False for signed-out and unverified viewers: counts only, `online`/`recent` are empty. */
+  membersVisible?: boolean;
 };
 

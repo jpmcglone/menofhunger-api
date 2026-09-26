@@ -159,6 +159,10 @@ export const RedisKeys = {
   presenceOnlineList(viewerUserId: string | null): string {
     return `presence:online:list:${clean(viewerUserId ?? 'anon')}`;
   },
+  /** Counts-only members map summary shared by every signed-out and unverified viewer. */
+  membersMapCounts(): string {
+    return 'cache:members-map:counts';
+  },
 
   // /bookmarks/collections response cache per user
   bookmarksCollections(userId: string): string {

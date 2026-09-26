@@ -2,10 +2,14 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
+import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { VerifiedGuard } from '../auth/verified.guard';
+import { viewerCanSeeMembers } from '../auth/member-visibility';
+import { PrismaService } from '../prisma/prisma.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import type { MembersMapSummaryDto, UserListDto } from '../../common/dto';
 import { MembersMapService } from './members-map.service';
+import { OptionalCurrentUserId } from './users.decorator';
 
 const membersQuerySchema = z.object({
   state: z
@@ -18,16 +22,22 @@ const membersQuerySchema = z.object({
 });
 
 @Controller('users/map')
-@UseGuards(AuthGuard, VerifiedGuard)
 export class MembersMapController {
-  constructor(private readonly membersMap: MembersMapService) {}
+  constructor(
+    private readonly membersMap: MembersMapService,
+    private readonly prisma: PrismaService,
+  ) {}
 
+  /** Public: everyone sees counts; only verified members see faces and who is online. */
+  @UseGuards(OptionalAuthGuard)
   @Throttle({ default: { limit: rateLimitLimit('publicRead', 60), ttl: rateLimitTtl('publicRead', 60) } })
   @Get()
-  async summary(): Promise<{ data: MembersMapSummaryDto }> {
-    return { data: await this.membersMap.summary() };
+  async summary(@OptionalCurrentUserId() userId: string | undefined): Promise<{ data: MembersMapSummaryDto }> {
+    const membersVisible = await viewerCanSeeMembers(this.prisma, userId);
+    return { data: await this.membersMap.summary({ membersVisible }) };
   }
 
+  @UseGuards(AuthGuard, VerifiedGuard)
   @Throttle({ default: { limit: rateLimitLimit('publicRead', 120), ttl: rateLimitTtl('publicRead', 60) } })
   @Get('members')
   async members(

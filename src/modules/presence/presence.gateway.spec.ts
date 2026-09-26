@@ -134,6 +134,8 @@ function makePresenceService(userId = OWNER_ID) {
     getSocketIdsForUser: jest.fn().mockReturnValue([]),
     getSubscribers: jest.fn().mockReturnValue(new Set<string>()),
     getOnlineFeedListeners: jest.fn().mockReturnValue(new Set<string>()),
+    getCountOnlyFeedListeners: jest.fn().mockReturnValue(new Set<string>()),
+    unsubscribeOnlineFeed: jest.fn(),
     emitToUser: jest.fn(),
     subscribe: jest.fn((socketId: string, userIds: string[]) => ({ added: userIds })),
     getActiveStatuses: jest.fn().mockResolvedValue([]),

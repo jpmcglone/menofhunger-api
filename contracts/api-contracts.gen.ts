@@ -2306,6 +2306,11 @@ export type MembersMapTotalsDto = {
 };
 
 export type MembersMapSummaryDto = {
+  /**
+   * False for signed-out and unverified viewers: counts only. `preview`, `unlocatedPreview`,
+   * and `online` are empty, and the members endpoint is unavailable.
+   */
+  membersVisible: boolean;
   states: MembersMapStateDto[];
   online: MembersMapOnlineEntryDto[];
   totals: MembersMapTotalsDto;
@@ -2737,6 +2742,8 @@ export type OnlinePaginationDto = {
   premium?: number;
   verified?: number;
   unverified?: number;
+  /** False for signed-out and unverified viewers: counts only, `data` is empty. */
+  membersVisible?: boolean;
 };
 
 export type PresenceOnlinePageDto = {
@@ -2749,6 +2756,8 @@ export type PresenceOnlinePagePaginationDto = {
   /** Unique logged-out visitors with a live socket. Hidden in the UI when zero. */
   anonymousOnline: number;
   recentNextCursor: string | null;
+  /** False for signed-out and unverified viewers: counts only, `online`/`recent` are empty. */
+  membersVisible?: boolean;
 };
 
 // ─── src/common/dto/radio.dto.ts ───────────────────────────────────────────────
@@ -2998,9 +3007,20 @@ export type PresenceOnlineFeedSnapshotPayloadDto = {
   totalOnline?: number;
   /** Unique logged-out visitors with a live socket. */
   anonymousOnline?: number;
+  /**
+   * False for signed-out and unverified sockets: `users` is always empty and the socket then
+   * receives `presence:online-count` instead of per-user presence events.
+   */
+  membersVisible?: boolean;
 };
 
 export type PresenceAnonymousCountPayloadDto = {
+  anonymousOnline: number;
+};
+
+/** `presence:online-count` — the only live presence update count-only feed sockets receive. */
+export type PresenceOnlineCountPayloadDto = {
+  totalOnline: number;
   anonymousOnline: number;
 };
 

@@ -36,6 +36,8 @@ export class PresenceService {
   private readonly userSubscribers = new Map<string, Set<string>>();
   /** socketIds that receive all online/offline events (online page viewers) */
   private readonly onlineFeedListeners = new Set<string>();
+  /** Online-feed sockets that may only see counts (signed out or unverified); never sent user payloads. */
+  private readonly countOnlyFeedListeners = new Set<string>();
   /** socketIds that are currently on chat screens */
   private readonly chatScreenListeners = new Set<string>();
   /** socketId -> conversationId the user is actively viewing */
@@ -330,6 +332,7 @@ export class PresenceService {
   forceUnregister(socketId: string): { userId: string; wasLastConnection: boolean } | null {
     this.socketSubscriptions.delete(socketId);
     this.onlineFeedListeners.delete(socketId);
+    this.countOnlyFeedListeners.delete(socketId);
     this.chatScreenListeners.delete(socketId);
     this.activeConversationBySocket.delete(socketId);
     this.removeSocketFromUserSubscribers(socketId);
@@ -358,6 +361,7 @@ export class PresenceService {
   unregister(socketId: string): { userId: string; isNowOffline: boolean } | null {
     this.socketSubscriptions.delete(socketId);
     this.onlineFeedListeners.delete(socketId);
+    this.countOnlyFeedListeners.delete(socketId);
     this.chatScreenListeners.delete(socketId);
     this.activeConversationBySocket.delete(socketId);
     this.removeSocketFromUserSubscribers(socketId);
@@ -490,12 +494,23 @@ export class PresenceService {
     }
   }
 
-  subscribeOnlineFeed(socketId: string): void {
-    this.onlineFeedListeners.add(socketId);
+  subscribeOnlineFeed(socketId: string, opts: { countOnly?: boolean } = {}): void {
+    if (opts.countOnly) {
+      this.onlineFeedListeners.delete(socketId);
+      this.countOnlyFeedListeners.add(socketId);
+    } else {
+      this.countOnlyFeedListeners.delete(socketId);
+      this.onlineFeedListeners.add(socketId);
+    }
   }
 
   unsubscribeOnlineFeed(socketId: string): void {
     this.onlineFeedListeners.delete(socketId);
+    this.countOnlyFeedListeners.delete(socketId);
+  }
+
+  getCountOnlyFeedListeners(): Set<string> {
+    return new Set(this.countOnlyFeedListeners);
   }
 
   setChatScreenActive(socketId: string, active: boolean): void {

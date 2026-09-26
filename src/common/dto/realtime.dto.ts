@@ -208,9 +208,20 @@ export type PresenceOnlineFeedSnapshotPayloadDto = {
   totalOnline?: number;
   /** Unique logged-out visitors with a live socket. */
   anonymousOnline?: number;
+  /**
+   * False for signed-out and unverified sockets: `users` is always empty and the socket then
+   * receives `presence:online-count` instead of per-user presence events.
+   */
+  membersVisible?: boolean;
 };
 
 export type PresenceAnonymousCountPayloadDto = {
+  anonymousOnline: number;
+};
+
+/** `presence:online-count` — the only live presence update count-only feed sockets receive. */
+export type PresenceOnlineCountPayloadDto = {
+  totalOnline: number;
   anonymousOnline: number;
 };
 
@@ -229,6 +240,7 @@ export const WsEventNames = {
   presenceStatusCleared: 'presence:status-cleared',
   presencePlatformsChanged: 'presence:platforms-changed',
   presenceAnonymousCount: 'presence:anonymous-count',
+  presenceOnlineCount: 'presence:online-count',
   postsSubscribe: 'posts:subscribe',
   postsUnsubscribe: 'posts:unsubscribe',
   postsSubscribed: 'posts:subscribed',
