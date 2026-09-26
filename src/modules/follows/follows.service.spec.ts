@@ -243,4 +243,32 @@ describe('FollowsService recommendations ranking', () => {
     expect(cacheKeys).toHaveLength(2);
     expect(cacheKeys[0]).not.toBe(cacheKeys[1]);
   });
+
+  it('excludes blocked members in both directions from the candidate query', async () => {
+    const { service, prisma } = makeService([makeRow({ id: 'candidate', username: 'candidate' })]);
+
+    await service.recommendUsersToFollow({ viewerUserId: 'viewer', limit: 1 });
+
+    const sql = prisma.$queryRaw.mock.calls[0][0];
+    const text = sql.strings.join('?');
+    expect(text).toContain('FROM "UserBlock" ub');
+    expect(text).toContain('ub."blockedId" = u."id"');
+    expect(text).toContain('ub."blockerId" = u."id"');
+  });
+
+  it('drops members blocked since the recommendations were cached', async () => {
+    const { service, prisma, redis } = makeService([]);
+    redis.getJson.mockResolvedValue([{ id: 'kept' }, { id: 'blocked-by-viewer' }, { id: 'blocked-viewer' }]);
+    prisma.userBlock = {
+      findMany: jest.fn(async () => [
+        { blockerId: 'viewer', blockedId: 'blocked-by-viewer' },
+        { blockerId: 'blocked-viewer', blockedId: 'viewer' },
+      ]),
+    };
+
+    const result = await service.recommendUsersToFollow({ viewerUserId: 'viewer', limit: 3 });
+
+    expect(result.users.map((u) => u.id)).toEqual(['kept']);
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
 });
