@@ -91,13 +91,29 @@ export class BoardService implements OnModuleInit {
     private readonly sideEffects: SideEffectsService,
   ) {}
 
-  /** One-shot: drop any article comment counts that were previously mirrored onto Board threads. */
+  /** One-shot: repair mirrored article comment counts; drop bodies that were auto-copied from the article excerpt. */
   async onModuleInit() {
     const threads = await this.prisma.post.findMany({
       where: { kind: 'board', articleId: { not: null }, parentId: null, deletedAt: null },
-      select: { id: true },
+      select: { id: true, body: true, articleId: true },
     });
-    if (threads.length) await this.repairArticleBoardCommentCounts(threads.map((t) => t.id));
+    if (!threads.length) return;
+    await this.repairArticleBoardCommentCounts(threads.map((t) => t.id));
+
+    const articleIds = [...new Set(threads.map((t) => t.articleId!).filter(Boolean))];
+    const articles = await this.prisma.article.findMany({
+      where: { id: { in: articleIds } },
+      select: { id: true, excerpt: true },
+    });
+    const excerptById = new Map(articles.map((a) => [a.id, (a.excerpt ?? '').trim().slice(0, 280)]));
+    const mirrored = threads.filter((t) => {
+      const excerpt = excerptById.get(t.articleId!);
+      const body = (t.body ?? '').trim();
+      return Boolean(excerpt && body && body === excerpt);
+    });
+    if (mirrored.length) {
+      await this.prisma.post.updateMany({ where: { id: { in: mirrored.map((t) => t.id) } }, data: { body: '' } });
+    }
   }
 
   private get publicBaseUrl(): string | null {
@@ -359,7 +375,7 @@ export class BoardService implements OnModuleInit {
     return this.getThread(userId, post.id);
   }
 
-  /** Board thread created from an article publish. Discussion on the Board is independent of the article. */
+  /** Board thread created from an article publish. Title + article link only — body stays optional like other link posts. */
   async createArticleThread(params: {
     userId: string;
     article: { id: string; title: string; excerpt: string | null; visibility: PostVisibility; commentCount?: number };
@@ -378,7 +394,7 @@ export class BoardService implements OnModuleInit {
     const tags = normalizeBoardTags(params.tags).slice(0, BOARD_MAX_TAGS);
     const { post } = await this.posts.createPost({
       userId: params.userId,
-      body: (params.article.excerpt ?? '').trim().slice(0, 280),
+      body: '',
       visibility,
       kind: 'board',
       articleId: params.article.id,
