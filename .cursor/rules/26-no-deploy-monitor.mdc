@@ -1,0 +1,12 @@
+---
+description: Do not monitor Render or host deploys unless the user asks.
+alwaysApply: true
+---
+
+# Deploy monitoring
+
+Read [development processes](../../docs/engineering-policy.md#development-processes).
+
+Do not poll Render (or other host) deploy status, wait for live, watch build logs, or
+list recent deploys unless the user explicitly asks. Pushing or triggering a deploy when
+requested is fine; monitoring afterward is not.

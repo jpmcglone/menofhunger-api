@@ -124,6 +124,13 @@ application source; use explicit fix commands. The existing web prebuild stamps 
 cache version to invalidate stale assets; this generated metadata is the sole current source-writing
 build exception. Keep that diff separate from application edits. Preserve unrelated changes.
 
+Do not monitor Render (or other host) deploys unless the user explicitly asks. Pushing to a
+branch that auto-deploys, or triggering a deploy when asked, is fine; polling deploy status,
+waiting for live, listing recent deploys, or watching build logs is not part of the default
+ship path. Report the commit/push (and that auto-deploy will pick it up when that is how the
+service is configured), then stop. Stagger advice in deployment docs is for humans deciding
+when to push; it does not authorize agents to sit on Render until green.
+
 ## Validation matrix
 
 This is the only task-to-check matrix. Rules and skills link here instead of restating it.
