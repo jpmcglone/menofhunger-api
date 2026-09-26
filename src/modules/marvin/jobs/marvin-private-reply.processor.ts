@@ -249,9 +249,7 @@ export class MarvinPrivateReplyProcessor {
           await this.messages.sendBotDirectMessage({
             botUserId: marvId,
             recipientUserId: requestingUserId,
-            body:
-              `I only reply for premium members right now. ` +
-              `Upgrade here: ${this.appConfig.frontendBaseUrl()?.replace(/\/+$/, '') ?? ''}/tiers.`,
+            body: 'I only reply to Premium members right now.',
             media: [],
           });
         }

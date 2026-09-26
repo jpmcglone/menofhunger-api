@@ -7,14 +7,12 @@ import { MarvinCreditService } from './marvin-credit.service';
 import { MarvinNonPremiumRepliesService } from './marvin-non-premium-replies.service';
 import { MarvinPrivateCannedRepliesService } from './marvin-private-canned-replies.service';
 
-const TIERS_PATH = '/tiers';
-
 /**
  * Builds + posts the non-AI replies Marv produces for hard error states. All flows
  * here skip OpenAI entirely and have zero AI cost.
  *
  * 1. **Non-premium user mentions @marv in a thread** → Marv posts a single canned reply
- *    in that thread linking to /tiers. Recorded in `MarvinNonPremiumThreadReply` with
+ *    in that thread. Recorded in `MarvinNonPremiumThreadReply` with
  *    `reason: 'not_premium'` so we never re-send for the same `(user, rootPostId, reason)`.
  *
  * 2. **Premium user is out of credits** → Marv DMs the user (creating the conversation
@@ -49,11 +47,6 @@ export class MarvinCannedRepliesService {
     return (this.appConfig.frontendBaseUrl() ?? '').replace(/\/+$/, '');
   }
 
-  private tiersUrl(): string {
-    const base = this.siteBaseUrl();
-    return base ? `${base}${TIERS_PATH}` : TIERS_PATH;
-  }
-
   private postUrl(postId: string): string {
     const base = this.siteBaseUrl();
     return base ? `${base}/p/${postId}` : `/p/${postId}`;
@@ -73,7 +66,8 @@ export class MarvinCannedRepliesService {
       triggeringPostId: args.triggeringPostId,
       rootPostId: args.rootPostId,
       reason: 'not_premium',
-      body: `I only reply for premium members right now. You can upgrade here: ${this.tiersUrl()}`,
+      // No upgrade link: this post is also read in the iOS app, where purchases must stay in-app.
+      body: 'I only reply to Premium members right now.',
     });
   }
 
@@ -179,7 +173,6 @@ export class MarvinCannedRepliesService {
     const lines = [
       `You're out of Marv credits — I'd reply, but I can't right now.`,
       `Credits refill over time; you'll have enough again in about ${etaText}.`,
-      `Or upgrade for more headroom: ${this.tiersUrl()}.`,
     ];
     if (args.triggeringPostId) {
       lines.push(`The thread you mentioned me in: ${this.postUrl(args.triggeringPostId)}`);
