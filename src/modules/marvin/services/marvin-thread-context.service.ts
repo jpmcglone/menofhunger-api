@@ -53,7 +53,7 @@ export type MarvThreadContextPost = {
   authorDisplayName: string | null;
   body: string;
   /** Every http(s) URL in the post, taken before the body is shortened. */
-  urls: string[];
+  urls?: string[];
   createdAt: Date;
   /** Last edit timestamp — `null` when never edited. Used by catch-up's freshness marker so edited posts bust the cache. */
   editedAt: Date | null;

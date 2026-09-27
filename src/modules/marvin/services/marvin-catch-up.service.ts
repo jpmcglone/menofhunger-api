@@ -138,7 +138,7 @@ export class MarvinCatchUpService {
 
     const previewBodies = [context.focal, ...context.descendants]
       .filter((p): p is NonNullable<typeof p> => Boolean(p))
-      .map((p) => [p.body, ...p.urls].join('\n'))
+      .map((p) => [p.body, ...(p.urls ?? [])].join('\n'))
       .filter(Boolean)
       .join('\n');
     const linkPreviews = await this.linkMetadata.previewLinks(previewBodies).catch(() => []);
