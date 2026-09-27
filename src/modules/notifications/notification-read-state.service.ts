@@ -518,6 +518,25 @@ export class NotificationReadStateService {
   }
 
   /**
+   * Visiting Board reads every Board-scoped notification so the nav dot clears.
+   * Does not deliver them — the bell still uses deliveredAt until inbox open.
+   */
+  async markReadByFilter(recipientUserId: string, filter: 'board'): Promise<void> {
+    const where = {
+      recipientUserId,
+      readAt: null,
+      kind: { notIn: BELL_EXCLUDED_KINDS },
+      ...notificationFilterWhere(filter),
+    } as const;
+    const undeliveredCount = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      await tx.notification.updateMany({ where, data: { readAt: now } });
+      return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
+    });
+    this.emitBellUpdated(recipientUserId, { undeliveredCount });
+  }
+
+  /**
    * Mark all unread notifications of the given kind as read + delivered for the recipient.
    * Used by daily-content pages (word / quote) to clear the badge when the user views them.
    */

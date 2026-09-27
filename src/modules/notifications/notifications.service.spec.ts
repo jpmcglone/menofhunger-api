@@ -1093,6 +1093,32 @@ describe('NotificationReadStateService board thread read + nav dots', () => {
       where: expect.objectContaining({ recipientUserId: 'viewer-1', readAt: null, subjectArticleId: { not: null } }),
     });
   });
+
+  it('visiting Board reads every Board notification without delivering the bell', async () => {
+    const { readState, notification, presenceRealtime } = build([7, 0, 2]);
+
+    await readState.markReadByFilter('viewer-1', 'board');
+
+    expect(notification.updateMany).toHaveBeenCalledTimes(1);
+    expect(notification.updateMany).toHaveBeenCalledWith({
+      where: {
+        recipientUserId: 'viewer-1',
+        readAt: null,
+        kind: { notIn: ['message', 'community_group_post'] },
+        OR: [
+          { actorPost: { is: { kind: 'board' } } },
+          { subjectPost: { is: { kind: 'board' } } },
+        ],
+      },
+      data: { readAt: expect.any(Date) },
+    });
+    expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalledWith('viewer-1', { undeliveredCount: 7 });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(presenceRealtime.emitNotificationsNavUnreadChanged).toHaveBeenCalledWith('viewer-1', {
+      boardUnreadCount: 0,
+      articlesUnreadCount: 2,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
