@@ -59,4 +59,28 @@ describe('UsersLocationService', () => {
       expect(result.display).toBeTruthy();
     });
   });
+
+  describe('normalizeLocation', () => {
+    it('keeps a US ZIP on the state path', () => {
+      const result = service.normalizeLocation('90210');
+      expect(result).toMatchObject({ zip: '90210', state: 'CA', country: 'US', display: 'California' });
+    });
+
+    it('accepts City, Country for a place outside the United States', () => {
+      const result = service.normalizeLocation('London, United Kingdom');
+      expect(result).toMatchObject({
+        display: 'London, United Kingdom',
+        city: 'London',
+        country: 'United Kingdom',
+        zip: null,
+        state: null,
+        county: null,
+      });
+    });
+
+    it('sends a United States place back to the ZIP', () => {
+      expect(() => service.normalizeLocation('Roanoke, VA')).toThrow('Use your ZIP code');
+      expect(() => service.normalizeLocation('Austin, United States')).toThrow('Use your ZIP code');
+    });
+  });
 });

@@ -2,7 +2,7 @@ import type { CheckinScheduleDto } from './checkin-schedule.dto';
 import { easternDayKey, easternMinuteOfDay, etLocalToUtcMs, dayIndexEastern } from '../../common/time/eastern-day-key';
 
 export const CHECKIN_OPENS_MINUTE = 17 * 60;
-export const CHECKIN_CLOSED_MESSAGE = 'Check-ins open at 5pm ET. Answer daily from 5pm–11:59pm ET.';
+export const CHECKIN_CLOSED_MESSAGE = 'The day here is Eastern. Check-ins open at 5pm.';
 
 /** Evening check-in reminder (bell + push + streak email) — 8:00pm ET. */
 export const CHECKIN_REMINDER_MINUTE = 20 * 60;

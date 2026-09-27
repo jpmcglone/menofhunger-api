@@ -63,7 +63,7 @@ const updateUserSchema = z.object({
   website: z.union([z.string().trim().max(200), z.literal('')]).optional(),
   xUsername: z.union([z.string().trim().max(200), z.literal('')]).optional(),
   pickaxUsername: z.union([z.string().trim().max(200), z.literal('')]).optional(),
-  locationQuery: z.union([z.string().trim().max(10), z.literal('')]).optional(),
+  locationQuery: z.union([z.string().trim().max(80), z.literal('')]).optional(),
   isOrganization: z.boolean().optional(),
   verifiedStatus: z.enum(['none', 'identity', 'manual']).optional(),
   featureToggles: z.array(z.string()).max(50).optional(),
@@ -682,7 +682,7 @@ export class AdminUsersController {
         data.locationState = null;
         data.locationCountry = null;
       } else {
-        const loc = await this.usersLocation.normalizeUsLocation(q);
+        const loc = this.usersLocation.normalizeLocation(q);
         data.locationInput = loc.input;
         data.locationDisplay = loc.display;
         data.locationZip = loc.zip;

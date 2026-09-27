@@ -82,7 +82,7 @@ describe('check-in schedule enforcement', () => {
   it('rejects closed submissions before accessing user data or creating posts', async () => {
     const { service, prisma, posts } = makeService();
     await expect(service.createTodayCheckin({ userId: 'user', body: 'Answer', visibility: 'verifiedOnly',
-      now: new Date('2026-09-08T04:00:00Z') })).rejects.toThrow('Check-ins open at 5pm ET');
+      now: new Date('2026-09-08T04:00:00Z') })).rejects.toThrow('The day here is Eastern. Check-ins open at 5pm.');
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
     expect(posts.createPost).not.toHaveBeenCalled();
   });
@@ -100,7 +100,7 @@ describe('check-in schedule enforcement', () => {
       const posts = Object.create(PostsMutationService.prototype) as PostsMutationService;
       await expect(posts.createPost({ userId: 'user', body: 'Answer', visibility: 'verifiedOnly',
         kind: 'checkin', checkinDayKey: '2026-09-08', checkinPrompt: 'Question' } as never))
-        .rejects.toThrow('Check-ins open at 5pm ET');
+        .rejects.toThrow('The day here is Eastern. Check-ins open at 5pm.');
     } finally { jest.useRealTimers(); }
   });
 });

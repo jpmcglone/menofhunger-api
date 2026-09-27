@@ -7,6 +7,17 @@ import { windowThreadAroundFocal } from './marvin-thread-window';
 /** Safety cap so a mega-thread cannot blow the prompt. Typical MOH threads fit entirely. */
 const DEFAULT_THREAD_LIMIT = 80;
 /** A Board post's title and link are its subject; put them ahead of the text Marv reads. */
+function extractHttpUrls(text: string): string[] {
+  const found = text.match(/https?:\/\/[^\s"'>)]+/gi) ?? [];
+  const urls: string[] = [];
+  for (const raw of found) {
+    const url = raw.replace(/[.,;:!?]+$/, '');
+    if (!urls.includes(url)) urls.push(url);
+    if (urls.length >= 12) break;
+  }
+  return urls;
+}
+
 function withBoardHeading(board: { title: string; url: string | null } | null, body: string | null): string {
   const text = body ?? '';
   if (!board) return text;
@@ -41,6 +52,8 @@ export type MarvThreadContextPost = {
   authorUsername: string | null;
   authorDisplayName: string | null;
   body: string;
+  /** Every http(s) URL in the post, taken before the body is shortened. */
+  urls: string[];
   createdAt: Date;
   /** Last edit timestamp — `null` when never edited. Used by catch-up's freshness marker so edited posts bust the cache. */
   editedAt: Date | null;
@@ -184,7 +197,10 @@ export class MarvinThreadContextService {
       const included = windowThreadAroundFocal(rows, focalPostId, threadLimit, rootId);
       const byId = new Map<string, Row>(included.map((r) => [r.id, r]));
 
-      const toPost = (row: Row, depth: number): MarvThreadContextPost => ({
+      const toPost = (row: Row, depth: number): MarvThreadContextPost => {
+        const full = withBoardHeading(row.boardThread ?? null, row.body);
+        const mediaUrls = (row.media ?? []).map((m) => m.url).filter((url): url is string => Boolean(url));
+        return {
         id: row.id,
         parentId: row.parentId,
         rootId: row.rootId,
@@ -192,7 +208,8 @@ export class MarvinThreadContextService {
         authorUserId: row.userId,
         authorUsername: row.user.username,
         authorDisplayName: row.user.name,
-        body: withBoardHeading(row.boardThread, row.body).slice(0, BODY_TRUNCATE),
+        body: full.slice(0, BODY_TRUNCATE),
+        urls: extractHttpUrls([full, ...mediaUrls].join('\n')),
         createdAt: row.createdAt,
         editedAt: row.editedAt,
         checkinPrompt: row.checkinPrompt,
@@ -211,7 +228,8 @@ export class MarvinThreadContextService {
               options: row.poll.options.map((o) => ({ text: o.text, voteCount: o.voteCount })),
             }
           : null,
-      });
+        };
+      };
 
       const focalRow = byId.get(focalPostId);
       const focal = focalRow ? toPost(focalRow, 0) : null;

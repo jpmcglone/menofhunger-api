@@ -960,6 +960,7 @@ export class MarvinPublicReplyProcessor {
         checkinPrompt: p.checkinPrompt,
         poll: p.poll ?? null,
         media: p.media,
+        urls: p.urls,
       });
 
       const ancestors = context.ancestors.map(toThreadPost);

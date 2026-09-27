@@ -83,7 +83,7 @@ const profileSchema = z.object({
   // Generous max because we also accept pasted profile URLs; the real constraint is in normalizeSocialHandle.
   xUsername: z.union([z.string().trim().max(200), z.literal('')]).optional(),
   pickaxUsername: z.union([z.string().trim().max(200), z.literal('')]).optional(),
-  locationQuery: z.union([z.string().trim().max(10), z.literal('')]).optional(),
+  locationQuery: z.union([z.string().trim().max(80), z.literal('')]).optional(),
 });
 
 const settingsSchema = z.object({
@@ -99,7 +99,7 @@ const onboardingSchema = z.object({
   birthdate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Birthdate must be a date (YYYY-MM-DD).').optional(),
   interests: z.array(z.string().trim().min(1).max(40)).min(1).max(30).optional(),
   menOnlyConfirmed: z.boolean().optional(),
-  locationQuery: z.union([z.string().trim().max(10), z.literal('')]).optional(),
+  locationQuery: z.union([z.string().trim().max(80), z.literal('')]).optional(),
   heardAboutUs: z.enum(HEARD_ABOUT_US_VALUES).optional(),
   heardAboutUsOther: z.string().trim().max(HEARD_ABOUT_US_OTHER_MAX).optional().nullable(),
 });
@@ -1008,7 +1008,7 @@ export class UsersController {
           update.locationState = null;
           update.locationCountry = null;
         } else {
-          const loc = await this.usersLocation.normalizeUsLocation(q);
+          const loc = this.usersLocation.normalizeLocation(q);
           update.locationInput = loc.input;
           update.locationDisplay = loc.display;
           update.locationZip = loc.zip;
@@ -1214,7 +1214,7 @@ export class UsersController {
     // Optional ZIP — silently ignored if invalid (non-blocking for onboarding).
     if (parsed.locationQuery) {
       try {
-        const loc = this.usersLocation.normalizeUsLocation(parsed.locationQuery);
+        const loc = this.usersLocation.normalizeLocation(parsed.locationQuery);
         data.locationInput = loc.input;
         data.locationDisplay = loc.display;
         data.locationZip = loc.zip;

@@ -325,38 +325,52 @@ export class LinkMetadataService {
   }
 
   /**
-   * Read-only URL preview lookup for Marv. Extracts up to 5 http(s) URLs from `text`,
-   * fetches any that are already cached in the `LinkMetadata` table (no external fetch,
-   * no Redis write), and returns up to 3 results with title/description/siteName.
-   *
-   * Silent-fail: any DB error returns [].
+   * URL preview lookup for Marv. Extracts http(s) URLs from `text` and returns every one,
+   * including a bare URL when metadata is not cached yet. Missing rows are fetched, with a cap.
    */
   async previewLinks(text: string): Promise<Array<{ url: string; title: string | null; description: string | null; siteName: string | null; imageUrl: string | null }>> {
     if (!text) return [];
     const urlRegex = /https?:\/\/[^\s"'>)]+/gi;
     const found = text.match(urlRegex) ?? [];
-    const urls = found
-      .map((u) => normalizeUrl(u))
-      .filter((u): u is string => Boolean(u))
-      .slice(0, 5);
+    const urls = [...new Set(
+      found.map((u) => normalizeUrl(u)).filter((u): u is string => Boolean(u)),
+    )].slice(0, 12);
     if (urls.length === 0) return [];
+    const byUrl = new Map<string, { url: string; title: string | null; description: string | null; siteName: string | null; imageUrl: string | null }>();
     try {
       const rows = await this.prisma.linkMetadata.findMany({
         where: { url: { in: urls } },
         select: { url: true, title: true, description: true, siteName: true, imageUrl: true },
-        take: 3,
       });
-      return rows.map((r) => ({
-        url: r.url,
-        title: normalizeText(r.title),
-        description: normalizeText(r.description),
-        siteName: normalizeText(r.siteName),
-        imageUrl: normalizeText(r.imageUrl),
-      }));
+      for (const r of rows) {
+        byUrl.set(r.url, {
+          url: r.url,
+          title: normalizeText(r.title),
+          description: normalizeText(r.description),
+          siteName: normalizeText(r.siteName),
+          imageUrl: normalizeText(r.imageUrl),
+        });
+      }
     } catch (err) {
       this.logger.warn(`[link-metadata] previewLinks DB error: ${err instanceof Error ? err.message : String(err)}`);
-      return [];
     }
+    const missing = urls.filter((url) => !byUrl.has(url)).slice(0, 8);
+    await Promise.all(missing.map(async (url) => {
+      try {
+        const meta = await this.getMetadata(url);
+        if (!meta) return;
+        byUrl.set(url, {
+          url: meta.url,
+          title: normalizeText(meta.title),
+          description: normalizeText(meta.description),
+          siteName: normalizeText(meta.siteName),
+          imageUrl: normalizeText(meta.imageUrl),
+        });
+      } catch {
+        // Keep the raw URL even when the fetch fails.
+      }
+    }));
+    return urls.map((url) => byUrl.get(url) ?? { url, title: null, description: null, siteName: null, imageUrl: null });
   }
 
   private async fetchAndUpsert(url: string) {

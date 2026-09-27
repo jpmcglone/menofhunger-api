@@ -54,6 +54,8 @@ export type MarvThreadPost = {
   poll?: MarvPoll | null;
   /** Attached media kinds so the text prompt names images/GIFs/videos even without vision. */
   media?: Array<{ kind: string }>;
+  /** http(s) URLs from the post, including ones clipped out of `body`. */
+  urls?: string[];
 };
 
 export type MarvLinkPreview = {
@@ -290,10 +292,10 @@ export class MarvinPromptBuilderService {
       lines.push('[Link previews from the message]');
       for (const lp of input.linkPreviews) {
         const site = lp.siteName ? ` — ${lp.siteName}` : '';
-        const desc = lp.description ? ` — ${lp.description.slice(0, 120)}` : '';
+        const desc = lp.description ? ` — ${lp.description.slice(0, 280)}` : '';
         const img = lp.imageUrl ? ' [preview image attached]' : '';
-        const title = lp.title ?? lp.url;
-        lines.push(`  - "${title}"${site}${desc}${img}`);
+        const title = lp.title ? `"${lp.title}"` : 'Link';
+        lines.push(`  - ${title}${site}${desc}${img} ${lp.url}`);
       }
     }
 
@@ -314,6 +316,7 @@ export class MarvinPromptBuilderService {
       out.push(`  [Daily check-in prompt]: "${p.checkinPrompt.slice(0, 300)}"`);
     }
     out.push(`  ${handle}${tag}: "${p.body.slice(0, 500)}"${marvMediaMarker(p.media)}`);
+    if (p.urls?.length) out.push(`  Links: ${p.urls.join(' ')}`);
     if (p.poll) {
       out.push(MarvinPromptBuilderService.renderPoll(p.poll));
     }

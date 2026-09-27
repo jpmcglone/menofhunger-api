@@ -9,6 +9,7 @@ import { ViewerContextService } from '../viewer/viewer-context.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { CHECKIN_PROMPTS } from './checkin-prompts';
+import { americanDay } from '../../common/time/american-day';
 import { dayIndexEastern, easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
@@ -25,6 +26,8 @@ function pickCheckinPrompt(now: Date): { dayKey: string; prompt: string } {
   const list = CHECKIN_PROMPTS.filter(Boolean);
   const fallback = "How are you doing today?";
   const dayKey = easternDayKey(now);
+  const holiday = americanDay(now)?.prompt;
+  if (holiday) return { dayKey, prompt: holiday };
   if (list.length === 0) return { dayKey, prompt: fallback };
 
   // Deterministic rotation by ET day index.

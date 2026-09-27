@@ -25,6 +25,12 @@ function easternHm(d: Date): { hh: number; mm: number } {
   };
 }
 
+/** Calendar year, month, and day in Eastern Time. */
+export function easternYmd(d: Date): { year: number; month: number; day: number } {
+  const p = easternParts(d);
+  return { year: p.yyyy, month: p.mm, day: p.dd };
+}
+
 export function easternDayKey(d: Date): string {
   const p = easternParts(d);
   const yyyy = String(p.yyyy).padStart(4, '0');

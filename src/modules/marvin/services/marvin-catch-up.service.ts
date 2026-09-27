@@ -136,11 +136,9 @@ export class MarvinCatchUpService {
       this.threadSummary.getSummaryText(rootPostId).catch(() => null),
     ]);
 
-    // Link previews from focal body + last 3 descendants (DB-only, no fetch cost).
-    const previewBodies = [
-      context.focal?.body ?? '',
-      ...context.descendants.slice(-3).map((p) => p.body),
-    ]
+    const previewBodies = [context.focal, ...context.descendants]
+      .filter((p): p is NonNullable<typeof p> => Boolean(p))
+      .map((p) => [p.body, ...p.urls].join('\n'))
       .filter(Boolean)
       .join('\n');
     const linkPreviews = await this.linkMetadata.previewLinks(previewBodies).catch(() => []);

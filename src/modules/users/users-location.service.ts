@@ -1,15 +1,17 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import * as zipcodes from 'zipcodes-nrviens';
 
-export type NormalizedUsLocation = {
+export type NormalizedLocation = {
   input: string;
   display: string;
   zip: string | null;
   city: string | null;
   county: string | null;
   state: string | null;
-  country: 'US';
+  country: string;
 };
+
+export type NormalizedUsLocation = NormalizedLocation & { country: 'US' };
 
 /** Maps two-letter state abbreviations to full state names. */
 export const STATE_NAMES: Record<string, string> = {
@@ -58,5 +60,40 @@ export class UsersLocationService {
       state: stateAbbr || null,
       country: 'US',
     };
+  }
+
+  /**
+   * A US ZIP, or "City, Country" for a man who lives somewhere else.
+   * The United States stays on the ZIP path.
+   */
+  normalizeLocation(rawQuery: string): NormalizedLocation {
+    const q = rawQuery.trim();
+    const compact = q.replace(/\s/g, '');
+    if (/^\d{5}$/.test(compact)) return this.normalizeUsLocation(compact);
+
+    const comma = q.indexOf(',');
+    if (comma > 0) {
+      const city = q.slice(0, comma).trim().replace(/\s+/g, ' ');
+      const country = q.slice(comma + 1).trim().replace(/\s+/g, ' ');
+      if (city.length >= 2 && city.length <= 40 && country.length >= 2 && country.length <= 40) {
+        const countryKey = country.toLowerCase();
+        const usCountry = new Set(['us', 'usa', 'u.s.', 'u.s.a.', 'united states', 'united states of america', 'america']);
+        const stateName = Object.values(STATE_NAMES).some((name) => name.toLowerCase() === countryKey);
+        if (usCountry.has(countryKey) || STATE_NAMES[country.toUpperCase()] || stateName) {
+          throw new BadRequestException('Use your ZIP code for a place in the United States.');
+        }
+        return {
+          input: `${city}, ${country}`,
+          display: `${city}, ${country}`,
+          zip: null,
+          city,
+          county: null,
+          state: null,
+          country,
+        };
+      }
+    }
+
+    throw new BadRequestException('Enter a US ZIP code, or City, Country if you live somewhere else.');
   }
 }
