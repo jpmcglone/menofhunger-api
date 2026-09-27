@@ -93,6 +93,10 @@ export interface SideEffectPayloads {
     articleId: string;
     actorUserId: string;
   };
+  'article.unboosted': {
+    articleId: string;
+    actorUserId: string;
+  };
   'article.reaction.added': {
     articleId: string;
     actorUserId: string;
@@ -210,6 +214,12 @@ export interface SideEffectPayloads {
     actorUserId: string;
     recipientUserIds: string[];
     bodySnippet: string | null;
+  };
+  /** Recorded after a member's check-in commits, so crew cache busts and streak advancement retry. */
+  'crew.checkin.recorded': {
+    userId: string;
+    dayKey: string;
+    nowIso: string;
   };
   /**
    * The crew's shared streak advanced — the highest-signal push in the product, so it gets

@@ -38,6 +38,9 @@ describe('HealthController.health', () => {
     const { controller, httpRes } = makeHealthController({ redisOk: false });
     const result = await controller.health(httpRes as never);
     expect(result.data.status).toBe('degraded');
+    expect(result.data.redis).toEqual({ status: 'down', latencyMs: expect.any(Number) });
+    expect(result.data.db).not.toHaveProperty('error');
+    expect(result.data.redis).not.toHaveProperty('error');
     expect(httpRes.status).toHaveBeenCalledWith(503);
   });
 });

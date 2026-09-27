@@ -180,29 +180,31 @@ export class PostsMutationService {
           UPDATE "Post"
           SET "commentCount" = GREATEST(0, "commentCount" - 1)
           WHERE "id" = ${parentId}
-        `.catch(() => { /* ignore if parent is gone */ });
+        `;
       }
       if (boardRootToDecrement) {
         await tx.$executeRaw`
           UPDATE "Post"
           SET "commentCount" = GREATEST(0, "commentCount" - 1)
           WHERE "id" = ${boardRootToDecrement}
-        `.catch(() => { /* ignore if root is gone */ });
+        `;
       }
 
-      // Decrement repostCount (and quoteCount for quotes) on the target post when a repost/quote repost is deleted.
+      // Decrement repostCount (and quoteCount for quotes) on the target post when a repost/quote is deleted.
+      // updateMany no-ops when the target is already gone. update() would throw inside the
+      // interactive transaction and abort every later statement, even if the error is caught.
       const repostedPostId = post.repostedPostId;
       const quotedPostId = post.quotedPostId;
       if (post.kind === 'repost' && repostedPostId) {
-        await tx.post.update({
+        await tx.post.updateMany({
           where: { id: repostedPostId },
           data: { repostCount: { decrement: 1 } },
-        }).catch(() => { /* ignore if original is gone */ });
+        });
       } else if (quotedPostId) {
-        await tx.post.update({
+        await tx.post.updateMany({
           where: { id: quotedPostId },
           data: { repostCount: { decrement: 1 }, quoteCount: { decrement: 1 } },
-        }).catch(() => { /* ignore if quoted is gone */ });
+        });
       }
 
       // Poll cleanup: once a post is deleted, we should never send "poll results ready" notifications.
@@ -221,23 +223,15 @@ export class PostsMutationService {
           const t = (tags[i] ?? '').trim().toLowerCase();
           const variant = (variants[i] ?? '').trim();
           if (!t) continue;
-          try {
-            await tx.hashtag.update({
-              where: { tag: t },
-              data: { usageCount: { decrement: 1 } },
-            });
-          } catch {
-            // ignore: missing hashtag row (best-effort counters)
-          }
+          await tx.hashtag.updateMany({
+            where: { tag: t },
+            data: { usageCount: { decrement: 1 } },
+          });
           if (variant) {
-            try {
-              await tx.hashtagVariant.update({
-                where: { tag_variant: { tag: t, variant } },
-                data: { count: { decrement: 1 } },
-              });
-            } catch {
-              // ignore
-            }
+            await tx.hashtagVariant.updateMany({
+              where: { tag: t, variant },
+              data: { count: { decrement: 1 } },
+            });
           }
         }
         await tx.hashtagVariant.deleteMany({ where: { tag: { in: tags }, count: { lte: 0 } } });

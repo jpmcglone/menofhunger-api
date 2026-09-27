@@ -1,6 +1,6 @@
 import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import type { PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PostsService } from '../posts/posts.service';
@@ -14,6 +14,7 @@ import { dayIndexEastern, easternDayKey, yesterdayEasternDayKey } from '../../co
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 
 import { checkinSchedule, isCheckinOpen, CHECKIN_CLOSED_MESSAGE } from './checkin-schedule';
@@ -37,7 +38,7 @@ function pickCheckinPrompt(now: Date): { dayKey: string; prompt: string } {
 }
 
 @Injectable()
-export class CheckinsService {
+export class CheckinsService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly posts: PostsService,
@@ -47,7 +48,18 @@ export class CheckinsService {
     private readonly posthog: PosthogService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly sideEffects: SideEffectsService,
+    private readonly registry: SideEffectsRegistry,
   ) {}
+
+  onModuleInit(): void {
+    this.registry.register('crew.checkin.recorded', (payload) =>
+      this.handleCrewSideEffectsOnCheckin({
+        userId: payload.userId,
+        dayKey: payload.dayKey,
+        now: new Date(payload.nowIso),
+      }),
+    );
+  }
 
   async getTodayState(params: { userId: string; publicBaseUrl?: string | null; now?: Date }) {
     const now = params.now ?? new Date();
@@ -253,11 +265,13 @@ export class CheckinsService {
     // the completed check-in, updated coins, and new streak.
     void this.redis.del(RedisKeys.checkinTodayState(params.userId, dayKey)).catch(() => undefined);
 
-    // Strict crew streak: if this check-in completes the crew's day, bump the
-    // streak and bust other members' cached today-state so their member-status
-    // row reflects the new check. Failures here are non-fatal — the user's own
-    // check-in already succeeded; we just won't have moved the crew counter.
-    void this.handleCrewSideEffectsOnCheckin({ userId: params.userId, dayKey, now }).catch(() => undefined);
+    // The member's check-in is already committed. Crew cache busts and the shared
+    // streak run on the queue so a process exit or a thrown error retries them.
+    this.sideEffects.dispatch('crew.checkin.recorded', {
+      userId: params.userId,
+      dayKey,
+      nowIso: now.toISOString(),
+    });
 
     return {
       post,

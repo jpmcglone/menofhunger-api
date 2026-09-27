@@ -52,6 +52,10 @@ export class NotificationsService {
     return this.writer.deleteBoostNotification(...args);
   }
 
+  deleteArticleBoostNotification(...args: Parameters<NotificationWriterService['deleteArticleBoostNotification']>) {
+    return this.writer.deleteArticleBoostNotification(...args);
+  }
+
   upsertRepostNotification(...args: Parameters<NotificationWriterService['upsertRepostNotification']>) {
     return this.writer.upsertRepostNotification(...args);
   }

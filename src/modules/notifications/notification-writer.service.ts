@@ -588,6 +588,38 @@ export class NotificationWriterService {
     if (wasUndelivered) this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount });
   }
 
+  /** Remove an article boost notification when the booster takes it back. */
+  async deleteArticleBoostNotification(
+    recipientUserId: string,
+    actorUserId: string,
+    subjectArticleId: string,
+  ): Promise<void> {
+    const existing = await this.prisma.notification.findFirst({
+      where: { recipientUserId, actorUserId, subjectArticleId, kind: 'boost' },
+      select: { id: true, deliveredAt: true },
+    });
+    if (!existing) return;
+    const wasUndelivered = existing.deliveredAt == null;
+    const undeliveredCount = await this.prisma.$transaction(async (tx) => {
+      await tx.notification.delete({ where: { id: existing.id } });
+      if (!wasUndelivered) {
+        const row = await tx.user.findUnique({
+          where: { id: recipientUserId },
+          select: { undeliveredNotificationCount: true },
+        });
+        return row?.undeliveredNotificationCount ?? 0;
+      }
+      const user = await tx.user.update({
+        where: { id: recipientUserId },
+        data: { undeliveredNotificationCount: { decrement: 1 } },
+        select: { undeliveredNotificationCount: true },
+      });
+      return user.undeliveredNotificationCount;
+    });
+    this.presenceRealtime.emitNotificationsDeleted(recipientUserId, { notificationIds: [existing.id] });
+    if (wasUndelivered) this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount });
+  }
+
   /**
    * Create or overwrite repost notification for the original post author.
    * Grouped per (recipient, subject post): if a notification already exists

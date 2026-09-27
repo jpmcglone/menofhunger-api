@@ -889,8 +889,15 @@ export class ArticlesService {
     const article = await this.prisma.article.findUnique({ where: { id: articleId } });
     if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
     if (article.authorId !== userId) throw new ForbiddenException('Not your article.');
-    await this.prisma.article.update({ where: { id: articleId }, data: { deletedAt: new Date() } });
+    const deletedAt = new Date();
+    await this.prisma.article.update({ where: { id: articleId }, data: { deletedAt } });
     await this.board.syncArticleThread(articleId, { deleted: true });
+    this.presenceRealtime.emitArticlesLiveUpdated(articleId, {
+      articleId,
+      version: deletedAt.toISOString(),
+      reason: 'article_deleted',
+      patch: { deletedAt: deletedAt.toISOString() },
+    });
     void this.cacheInvalidation.bumpFeedGlobal().catch(() => undefined);
     return { success: true };
   }
@@ -945,6 +952,7 @@ export class ArticlesService {
         patch: { boostCount: afterUnboost.boostCount },
       });
     }
+    this.sideEffects.dispatch('article.unboosted', { articleId, actorUserId: userId });
     return { boosted: false };
   }
 

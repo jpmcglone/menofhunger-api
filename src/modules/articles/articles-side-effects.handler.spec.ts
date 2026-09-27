@@ -9,7 +9,10 @@ function makeHandler() {
     userPageOperator: { findMany: jest.fn(async () => []) },
     user: { findMany: jest.fn(async () => []) },
   };
-  const notifications: any = { create: jest.fn(async () => undefined) };
+  const notifications: any = {
+    create: jest.fn(async () => undefined),
+    deleteArticleBoostNotification: jest.fn(async () => undefined),
+  };
   const registry = new SideEffectsRegistry();
   const sideEffects: any = { dispatch: jest.fn() };
   const handler = new ArticlesSideEffectsHandler(prisma, notifications, registry, sideEffects);
@@ -33,6 +36,7 @@ describe('ArticlesSideEffectsHandler registration', () => {
       'article.comment.created',
       'article.published',
       'article.reaction.added',
+      'article.unboosted',
     ]);
   });
 });
@@ -266,6 +270,15 @@ describe('ArticlesSideEffectsHandler article.boosted', () => {
     expect(notifications.create).toHaveBeenCalledWith(
       expect.objectContaining({ recipientUserId: 'author', kind: 'boost', body: 'Some Title' }),
     );
+  });
+
+  it('removes the author notification when the boost is taken back', async () => {
+    const { handler, notifications, prisma } = makeHandler();
+    prisma.article.findUnique.mockResolvedValue({ authorId: 'author' });
+
+    await (handler as any).onUnboosted({ articleId: 'a1', actorUserId: 'booster' });
+
+    expect(notifications.deleteArticleBoostNotification).toHaveBeenCalledWith('author', 'booster', 'a1');
   });
 
   it('does not notify a self-boost', async () => {

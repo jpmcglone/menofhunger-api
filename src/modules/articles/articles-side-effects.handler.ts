@@ -36,6 +36,7 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
     this.registry.register('article.published', (payload) => this.onArticlePublished(payload));
     this.registry.register('article.comment.created', (payload) => this.onCommentCreated(payload));
     this.registry.register('article.boosted', (payload) => this.onBoosted(payload));
+    this.registry.register('article.unboosted', (payload) => this.onUnboosted(payload));
     this.registry.register('article.reaction.added', (payload) => this.onReactionAdded(payload));
   }
 
@@ -213,6 +214,19 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
       title: 'boosted your article',
       body: article.title?.trim() ? article.title.trim().slice(0, 150) : null,
     });
+  }
+
+  private async onUnboosted(payload: SideEffectPayloads['article.unboosted']): Promise<void> {
+    const { articleId, actorUserId } = payload;
+    if (!articleId || !actorUserId) return;
+
+    const article = await this.prisma.article.findUnique({
+      where: { id: articleId },
+      select: { authorId: true },
+    });
+    if (!article || article.authorId === actorUserId) return;
+
+    await this.notifications.deleteArticleBoostNotification(article.authorId, actorUserId, articleId);
   }
 
   private async onReactionAdded(payload: SideEffectPayloads['article.reaction.added']): Promise<void> {

@@ -396,6 +396,7 @@ export type ArticlesLiveUpdatedPayloadDto = {
     totalViewCount: number;
     boostCount: number;
     reactions: ArticleReactionSummaryDto[];
+    deletedAt: string;
   }>;
 };
 

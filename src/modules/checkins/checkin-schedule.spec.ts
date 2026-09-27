@@ -58,7 +58,7 @@ function makeService() {
     coins: 0, checkinStreakDays: 2, allowedVisibilities: ['verifiedOnly'], crew: null, socialProof: null,
   }) };
   const service = new CheckinsService(prisma as never, posts as never, {} as never, {} as never,
-    redis as never, {} as never, {} as never, {} as never);
+    redis as never, {} as never, {} as never, {} as never, {} as never);
   return { service, prisma, posts };
 }
 

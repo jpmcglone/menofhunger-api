@@ -1,4 +1,4 @@
-import { Controller, Get, Res, UseGuards } from '@nestjs/common';
+import { Controller, Get, Logger, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -8,6 +8,8 @@ import { setReadCache } from '../../common/http-cache';
 
 @Controller('health')
 export class HealthController {
+  private readonly logger = new Logger(HealthController.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
@@ -73,31 +75,25 @@ export class HealthController {
     };
   }
 
-  private async checkDb(): Promise<{ status: 'ok' | 'down'; latencyMs: number; error?: string }> {
+  private async checkDb(): Promise<{ status: 'ok' | 'down'; latencyMs: number }> {
     const startedAt = Date.now();
     try {
       await this.prisma.$queryRaw`SELECT 1`;
       return { status: 'ok', latencyMs: Date.now() - startedAt };
     } catch (err) {
-      return {
-        status: 'down',
-        latencyMs: Date.now() - startedAt,
-        error: String((err as Error)?.message ?? err),
-      };
+      this.logger.error(`Database health check failed: ${err instanceof Error ? err.message : String(err)}`);
+      return { status: 'down', latencyMs: Date.now() - startedAt };
     }
   }
 
-  private async checkRedis(): Promise<{ status: 'ok' | 'down'; latencyMs: number; error?: string }> {
+  private async checkRedis(): Promise<{ status: 'ok' | 'down'; latencyMs: number }> {
     const startedAt = Date.now();
     try {
       await this.redis.raw().ping();
       return { status: 'ok', latencyMs: Date.now() - startedAt };
     } catch (err) {
-      return {
-        status: 'down',
-        latencyMs: Date.now() - startedAt,
-        error: String((err as Error)?.message ?? err),
-      };
+      this.logger.error(`Redis health check failed: ${err instanceof Error ? err.message : String(err)}`);
+      return { status: 'down', latencyMs: Date.now() - startedAt };
     }
   }
 }
