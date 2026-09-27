@@ -40,6 +40,7 @@ function makeService(
           post: {
             findMany: jest.fn(async () => []),
             update: jest.fn(async () => ({})),
+            updateMany: jest.fn(async () => ({ count: 0 })),
           },
           postPoll: { updateMany: jest.fn(async () => ({ count: 0 })) },
           bookmark: { deleteMany: jest.fn(async () => ({ count: 0 })) },
@@ -586,6 +587,7 @@ describe('PostsService.deletePost — comment-count integrity', () => {
           post: {
             findMany: jest.fn(async () => []),
             update: txUpdateSpy,
+            updateMany: jest.fn(async () => ({ count: 0 })),
           },
           postPoll: { updateMany: jest.fn(async () => ({ count: 0 })) },
           bookmark: { deleteMany: jest.fn(async () => ({ count: 0 })) },
