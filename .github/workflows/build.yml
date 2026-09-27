@@ -1,4 +1,4 @@
-name: Lint
+name: CI
 
 on:
   push:
@@ -20,3 +20,21 @@ jobs:
           cache: "npm"
       - run: npm ci --ignore-scripts
       - run: npm run lint
+
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -hide_banner -filters | grep -q zscale
+      - run: npm ci
+      - run: npm run build:typecheck
+      - run: npm run check:contracts
+      - run: npm run test:ci

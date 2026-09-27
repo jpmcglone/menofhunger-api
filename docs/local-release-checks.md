@@ -1,8 +1,16 @@
 # Local release checks
 
-Run these before pushing a coordinated API, web, and iOS change. GitHub Actions only
-runs lint/format checks. Render installs dependencies and builds the app; it does
-not run the local test suites. A successful deploy is not release validation.
+Run these before pushing a coordinated API, web, and iOS change.
+
+GitHub Actions, on pull requests and on `main`, runs lint and format in each
+repository. API and web also run typecheck, contract drift, and hermetic unit
+tests (`npm run test:ci`, `npm test`). That leaves out the production web build,
+API end-to-end tests, the disposable database check, web hydration, and iOS
+simulator compilation.
+
+Render installs dependencies and builds the app. The web prebuild stamps the
+service-worker version. Render does not lint or run tests. A successful deploy
+is not release validation.
 
 | Repository | Command | Coverage |
 | --- | --- | --- |

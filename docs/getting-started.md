@@ -112,7 +112,10 @@ Redis supports session caching, realtime state, and BullMQ jobs. `RUN_HTTP`, `RU
 
 ### 8. Finish a change with the existing checks
 
-Run focused tests while developing, then the checks used by [CI](../.github/workflows):
+Run focused tests while developing. Before pushing, run the local release checks
+in [local-release-checks.md](local-release-checks.md). [GitHub Actions](../.github/workflows)
+repeats lint, `npm run build:typecheck`, `npm run check:contracts`, and `npm run test:ci`.
+The commands below also cover the production build, end-to-end tests, and contract generation:
 
 ```sh
 npm run lint

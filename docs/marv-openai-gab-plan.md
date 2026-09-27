@@ -65,7 +65,7 @@ The first implementation should support public mentions, Marv DMs, and catch-up 
 
 Initially leave admin assistants, intro briefs, analytics briefs, scheduled summaries, and context-card generation on their existing routes. Inventory every caller of the AI service and every direct SDK call, then explicitly assign each workload. A shared service refactor must not move unrelated workloads by accident. Background summaries and context cards must have provenance and compatible disclosure even if their generator remains OpenAI.
 
-No public model picker, arbitrary endpoint field, model marketplace, fine-tuning project, or automatic paid-credit change is needed. Keep existing GitHub Actions limited to linting/formatting; verification runs locally. Do not introduce Playwright or visual-regression infrastructure for this migration.
+No public model picker, arbitrary endpoint field, model marketplace, fine-tuning project, or automatic paid-credit change is needed. GitHub Actions follows the hermetic checks in the engineering policy. Do not introduce Playwright or visual-regression infrastructure for this migration.
 
 ## 5. Proposed architecture
 
