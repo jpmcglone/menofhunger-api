@@ -60,7 +60,7 @@ Web tokens live in `menofhunger-www/assets/css/main.css`. iOS mirrors them in `A
 - Gutter: `moh-gutter-x` / existing screen padding. Do not invent a third inset.
 - Accent: brass for focus. Verified / Premium / check-in colors only for those meanings.
 - Serif (`moh-serif` / Literata): lodge moments only — quotes, daily prompts. Never UI chrome.
-- Font: Inter on web. System on iOS. Do not add a display face.
+- Font: Inter on web and iOS. Do not add a display face.
 
 Use the linked policy to decide when a semantic token is needed.
 
