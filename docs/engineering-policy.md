@@ -54,6 +54,10 @@ vector assets and reuse semantic components across both clients. Verify the resu
 Figma at relevant screen sizes and in both themes. Record component links in the implementation
 handoff so later changes can follow the same source.
 
+After Figma approval, implement iOS first, then web. At desktop widths, web should read like the
+iOS app on a large iPad: lodge rail, content column, and inspector, with the same headers,
+filters, and row anatomy. Web keeps browser conventions such as real links and page navigation.
+
 Behavior-only bug fixes do not require a cosmetic redesign. If a fix changes visible behavior
 or introduces a new UI state, reflect that state in Figma as part of the work. Explicit user
 instructions always take precedence over this default workflow.
