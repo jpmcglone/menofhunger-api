@@ -147,6 +147,6 @@ The companion [experience review](admin-experience.md) records assistant actions
 | PATCH /v1/admin/verification/:id/approve | verification | [source](../src/modules/admin/admin-verification.controller.ts#L52) |
 | PATCH /v1/admin/verification/:id/reject | verification | [source](../src/modules/admin/admin-verification.controller.ts#L66) |
 | GET /v1/admin/verification/count | verification | [source](../src/modules/admin/admin-verification.controller.ts#L29) |
-| GET /v1/health/config | diagnostics | [source](../src/modules/health/health.controller.ts#L52) |
+| GET /v1/health/config | diagnostics | [source](../src/modules/health/health.controller.ts#L54) |
 | GET /v1/metrics/active-users | analytics | [source](../src/modules/metrics/metrics.controller.ts#L11) |
 | POST /v1/taxonomy/backfill | jobs | [source](../src/modules/taxonomy/taxonomy.controller.ts#L49) |
