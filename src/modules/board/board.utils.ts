@@ -72,10 +72,13 @@ export function normalizeBoardTags(raw: readonly string[] | null | undefined): s
   return out;
 }
 
-/** Hacker News front-page gravity: points / (ageHours + 2)^1.8. */
+/**
+ * Hacker News front-page gravity: points / (ageHours + 2)^1.8.
+ * Unboosted threads still rank as 1 point so a brand-new post can exist on Top.
+ */
 export function boardHotScore(points: number, createdAt: Date, now: Date = new Date()): number {
   const ageHours = Math.max(0, (now.getTime() - createdAt.getTime()) / 3_600_000);
-  return Math.max(0, points) / Math.pow(ageHours + 2, 1.8);
+  return Math.max(1, points) / Math.pow(ageHours + 2, 1.8);
 }
 
 export type BoardRange = 'day' | 'week' | 'month' | 'year' | 'all';

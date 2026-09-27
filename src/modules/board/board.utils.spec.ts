@@ -39,7 +39,10 @@ describe('board utils', () => {
     const popularOld = boardHotScore(1000, new Date('2026-09-24T12:00:00Z'), now);
     expect(fresh).toBeGreaterThan(old);
     expect(popularOld).toBeGreaterThan(fresh);
-    expect(boardHotScore(0, now, now)).toBe(0);
+    expect(boardHotScore(0, now, now)).toBe(boardHotScore(1, now, now));
+    expect(boardHotScore(0, now, now)).toBeGreaterThan(
+      boardHotScore(10, new Date('2026-09-24T12:00:00Z'), now),
+    );
   });
 
   it('computes ranged Top windows and round-trips offset cursors', () => {

@@ -92,7 +92,7 @@ export class BoardController {
     const q = parsed.q?.trim() || null;
     const result = await this.board.listThreads({
       viewerUserId,
-      sort: parsed.sort ?? (q ? 'new' : 'top'),
+      sort: parsed.sort ?? 'new',
       range: parsed.range ?? null,
       visibility: parsed.visibility ?? 'all',
       tags: parsed.tags,
