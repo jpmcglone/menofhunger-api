@@ -746,6 +746,14 @@ describe('Board Marv delivery', () => {
     await m.processor.process(request);
     expect(m.posts.createMarvReply).not.toHaveBeenCalled();
   });
+  it('retries transient Board generation failures without posting an extra error reply', async () => {
+    const m = makeProcessor({ board: true });
+    m.ai.respond.mockRejectedValueOnce(new Error('temporary generation failure'));
+    await expect(m.processor.process(request)).rejects.toThrow('temporary generation failure');
+    expect(m.canned.sendTransientErrorThreadReply).not.toHaveBeenCalled();
+    await m.processor.process(request);
+    expect(m.posts.createMarvReply).toHaveBeenCalledTimes(1);
+  });
   it('releases the claim on a failed Board delivery so a retry can succeed', async () => {
     const m = makeProcessor({ board: true });
     m.posts.createMarvReply.mockRejectedValueOnce(new Error('temporarily unavailable'));
