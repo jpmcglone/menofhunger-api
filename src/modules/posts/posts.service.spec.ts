@@ -760,11 +760,20 @@ describe('PostsService.updatePost', () => {
     },
   };
 
-  it('rejects empty body with BadRequestException', async () => {
-    const { service } = makeService();
+  it('rejects empty body on an existing regular post with BadRequestException', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.post.findUnique.mockResolvedValue({ ...baseFindUniqueResult, kind: 'regular' });
     await expect(
       service.updatePost({ userId: 'u1', postId: 'p1', body: '   ' }),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects an empty-body edit of a missing post with NotFoundException', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.post.findUnique.mockResolvedValue(null);
+    await expect(
+      service.updatePost({ userId: 'u1', postId: 'p1', body: '   ' }),
+    ).rejects.toThrow(NotFoundException);
   });
 
   it('rejects missing postId with NotFoundException', async () => {
