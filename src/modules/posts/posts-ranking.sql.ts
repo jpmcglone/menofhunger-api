@@ -111,15 +111,10 @@ export function postRankingSql(
             CAST(
               (
               (
+                -- boostScore already halves each boost every 24 hours.
                 CASE
                 WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
-                ELSE p."boostScore" * POWER(
-                  0.5,
-                  GREATEST(
-                    0,
-                    EXTRACT(EPOCH FROM (${asOf}::timestamptz - p."createdAt"))
-                  ) / (12 * 60 * 60)
-                )
+                ELSE p."boostScore"
                 END
               )
               +

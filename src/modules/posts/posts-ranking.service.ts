@@ -44,9 +44,9 @@ export class PostsRankingService {
             SUM(
               (
                 CASE
-                  WHEN u."premium" THEN 3
-                  WHEN u."verifiedStatus" <> 'none' THEN 2
-                  ELSE 1
+                  WHEN u."premium" THEN ${POSTS_RANKING.boostWeightPremium}
+                  WHEN u."verifiedStatus" <> 'none' THEN ${POSTS_RANKING.boostWeightVerified}
+                  ELSE ${POSTS_RANKING.boostWeightBase}
                 END
               )
               * POWER(

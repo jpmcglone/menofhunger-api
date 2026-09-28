@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PostsDraftsService } from './posts-drafts.service';
 import { PostsMutationService } from './posts-mutation.service';
+import { POSTS_RANKING } from './posts-ranking.config';
 import { PostsRankingService } from './posts-ranking.service';
 import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
 import { notDeletedWhere, excludeCommunityGroupPostsWhere, mediaOnlyWhere, userNotBannedWhere } from './posts-query-builders';
@@ -35,6 +36,32 @@ describe('PostsRankingService', () => {
     service.enqueueScoreRefresh('');
 
     expect(jobs.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('weights a fresh boost premium 1.25, verified 1, everyone else 0.5', async () => {
+    const queryRaw: any = jest.fn(async () => []);
+    const prisma = {
+      post: {
+        findMany: jest
+          .fn()
+          .mockResolvedValueOnce([{ id: 'p1', boostScoreUpdatedAt: null }])
+          .mockResolvedValueOnce([]),
+      },
+      $queryRaw: queryRaw,
+      $executeRaw: jest.fn(async () => 0),
+    };
+    const service = new PostsRankingService(prisma as any, { enqueue: jest.fn() } as any);
+
+    await service.ensureBoostScoresFresh(['p1']);
+
+    const query = queryRaw.mock.calls[0][0] as { values: unknown[] };
+    expect(query.values).toEqual(
+      expect.arrayContaining([
+        POSTS_RANKING.boostWeightPremium,
+        POSTS_RANKING.boostWeightVerified,
+        POSTS_RANKING.boostWeightBase,
+      ]),
+    );
   });
 
   it('ensureBoostScoresFresh returns an empty map for no ids', async () => {

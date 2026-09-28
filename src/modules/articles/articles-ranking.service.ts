@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { POSTS_RANKING } from '../posts/posts-ranking.config';
 
 /** Refresh tier-weighted article boost scores at most this often. */
 const ARTICLE_BOOST_SCORE_TTL_MS = 10 * 60 * 1000;
@@ -9,8 +10,8 @@ const ARTICLE_BOOST_SCORE_TTL_MS = 10 * 60 * 1000;
  * Article ranking scores: tier-weighted boost-score freshness.
  *
  * Mirrors PostsRankingService.ensureBoostScoresFresh but for articles. The
- * weighted score is a tier-weighted COUNT of boosts (premium 3 / verified 2 /
- * unverified 1) — no per-boost time decay — so the article trending cron's
+ * weighted score is a tier-weighted COUNT of boosts (premium 1.25 / verified 1 /
+ * everyone else 0.5) — no per-boost time decay — so the article trending cron's
  * existing article-age decay model is unchanged; only the magnitude of the
  * boost signal is discounted for unverified boosters.
  */
@@ -46,9 +47,9 @@ export class ArticlesRankingService {
         CAST(
           SUM(
             CASE
-              WHEN u."premium" THEN 3
-              WHEN u."verifiedStatus" <> 'none' THEN 2
-              ELSE 1
+              WHEN u."premium" THEN ${POSTS_RANKING.boostWeightPremium}
+              WHEN u."verifiedStatus" <> 'none' THEN ${POSTS_RANKING.boostWeightVerified}
+              ELSE ${POSTS_RANKING.boostWeightBase}
             END
           ) AS DOUBLE PRECISION
         ) as "score"

@@ -1,43 +1,86 @@
-import { ConversationsService } from './conversations.service';
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
-import { MutesService } from '../mutes/mutes.service';
-import { Prisma } from '@prisma/client';
-import type { CommunityGroupJoinPolicy, PostMediaKind, PostVisibility } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-import { RequestCacheService } from '../../common/cache/request-cache.service';
-import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
-import { AppConfigService } from '../app/app-config.service';
-import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
-import { toCommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
-import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
-import { collectAncestorPostIds } from '../../common/posts/collect-ancestor-post-ids';
-import { loadPostVideoEmbeds } from '../../common/posts/post-video-embeds';
-import { BOARD_THREAD_PREVIEW_INCLUDE, BOARD_ROOT_TITLE_INCLUDE, ARTICLE_SHARE_INCLUDE, FITNESS_SHARE_INCLUDE, QUOTED_POST_INCLUDE } from '../../common/prisma-includes/post.include';
-import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
-import { collapseFeedByRoot, type FeedCollapsedItem } from '../../common/feed-collapse/collapse-by-root';
-import { applyCollapsedThreadSummary } from '../../common/feed-collapse/collapsed-thread-summary';
-import { collapseRepostsByCanonical } from '../../common/feed-collapse/collapse-reposts-by-canonical';
-import { toPostDto, toPostAuthorDtoFromFeedRow, type PostAuthorDto, type PostDto } from '../../common/dto/post.dto';
-import { buildAttachParentChain, postChainInvolvesAuthor } from './posts.utils';
-import { friendEngagementSql } from './posts-friend-engagement.sql';
-import { POSTS_RANKING } from './posts-ranking.config';
-import { generateRandomSeed, seededUnitInterval } from '../../common/random/seeded-random';
+import { ConversationsService } from "./conversations.service";
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+  Optional,
+} from "@nestjs/common";
+import { MutesService } from "../mutes/mutes.service";
+import { Prisma } from "@prisma/client";
+import type {
+  CommunityGroupJoinPolicy,
+  PostMediaKind,
+  PostVisibility,
+} from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { RequestCacheService } from "../../common/cache/request-cache.service";
+import {
+  ViewerContextService,
+  type ViewerContext,
+} from "../viewer/viewer-context.service";
+import { AppConfigService } from "../app/app-config.service";
+import { createdAtIdCursorWhere } from "../../common/pagination/created-at-id-cursor";
+import { toCommunityGroupPreviewDto } from "../../common/dto/community-group.dto";
+import type { CommunityGroupPreviewDto } from "../../common/dto/community-group.dto";
+import { collectAncestorPostIds } from "../../common/posts/collect-ancestor-post-ids";
+import { loadPostVideoEmbeds } from "../../common/posts/post-video-embeds";
+import {
+  BOARD_THREAD_PREVIEW_INCLUDE,
+  BOARD_ROOT_TITLE_INCLUDE,
+  ARTICLE_SHARE_INCLUDE,
+  FITNESS_SHARE_INCLUDE,
+  QUOTED_POST_INCLUDE,
+} from "../../common/prisma-includes/post.include";
+import {
+  MENTION_USER_SELECT,
+  USER_LIST_SELECT,
+} from "../../common/prisma-selects/user.select";
+import {
+  collapseFeedByRoot,
+  type FeedCollapsedItem,
+} from "../../common/feed-collapse/collapse-by-root";
+import { applyCollapsedThreadSummary } from "../../common/feed-collapse/collapsed-thread-summary";
+import { collapseRepostsByCanonical } from "../../common/feed-collapse/collapse-reposts-by-canonical";
+import {
+  toPostDto,
+  toPostAuthorDtoFromFeedRow,
+  type PostAuthorDto,
+  type PostDto,
+} from "../../common/dto/post.dto";
+import { buildAttachParentChain, postChainInvolvesAuthor } from "./posts.utils";
+import { friendEngagementSql } from "./posts-friend-engagement.sql";
+import { POSTS_RANKING } from "./posts-ranking.config";
+import {
+  generateRandomSeed,
+  seededUnitInterval,
+} from "../../common/random/seeded-random";
 import {
   excludeCommunityGroupPostsWhere,
   mediaOnlyWhere,
   notDeletedWhere,
   userNotBannedWhere,
-} from './posts-query-builders';
-import { feedPostInclude, mediaFeedPostInclude, type FeedPost, type FeedResult, type PopularFeedResult, type PostCounts } from './posts-feed.types';
-import { PostsRankingService } from './posts-ranking.service';
-import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
-import { CommunityGroupReadAccessService } from '../viewer/community-group-read-access.service';
-import { CacheService } from '../redis/cache.service';
-import { CacheInvalidationService } from '../redis/cache-invalidation.service';
-import { CacheTtl } from '../redis/cache-ttl';
-import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
-import { totalPostCommentsWhere, totalUserPostsWhere } from '../../common/content-counts';
-import { excludeMarvFromParticipants } from './posts-mentions.helpers';
+} from "./posts-query-builders";
+import {
+  feedPostInclude,
+  mediaFeedPostInclude,
+  type FeedPost,
+  type FeedResult,
+  type PopularFeedResult,
+  type PostCounts,
+} from "./posts-feed.types";
+import { PostsRankingService } from "./posts-ranking.service";
+import { PostsViewerEnrichmentService } from "./posts-viewer-enrichment.service";
+import { CommunityGroupReadAccessService } from "../viewer/community-group-read-access.service";
+import { CacheService } from "../redis/cache.service";
+import { CacheInvalidationService } from "../redis/cache-invalidation.service";
+import { CacheTtl } from "../redis/cache-ttl";
+import { RedisKeys, stableJsonHash } from "../redis/redis-keys";
+import {
+  totalPostCommentsWhere,
+  totalUserPostsWhere,
+} from "../../common/content-counts";
+import { excludeMarvFromParticipants } from "./posts-mentions.helpers";
 
 type ReadablePostShell = {
   id: string;
@@ -57,8 +100,8 @@ type ForYouFeedParams = {
   viewerUserId: string | null;
   limit: number;
   cursor: string | null;
-  visibility: 'all' | PostVisibility;
-  kind?: 'regular' | 'checkin' | null;
+  visibility: "all" | PostVisibility;
+  kind?: "regular" | "checkin" | null;
   checkinDayKey?: string | null;
   /** When true, include the viewer's own posts (overrides home-feed self-exclusion). */
   includeSelf?: boolean;
@@ -109,7 +152,10 @@ export class PostsFeedQueryService {
     post: { userId: string; communityGroupId: string | null },
     viewerUserId: string | null,
     viewer: ViewerContext | null,
-    opts?: { knownActiveMember?: boolean; knownGroupJoinPolicy?: CommunityGroupJoinPolicy },
+    opts?: {
+      knownActiveMember?: boolean;
+      knownGroupJoinPolicy?: CommunityGroupJoinPolicy;
+    },
   ): Promise<void> {
     const gid = post.communityGroupId;
     if (!gid) return;
@@ -117,23 +163,24 @@ export class PostsFeedQueryService {
     if (viewerUserId && post.userId === viewerUserId) return;
     // Anonymous users can never join an approval group — treat as not found so the
     // permalink fallback path does not leak author/body metadata to unauthenticated callers.
-    if (!viewerUserId) throw new NotFoundException('Post not found.');
+    if (!viewerUserId) throw new NotFoundException("Post not found.");
     if (opts?.knownActiveMember) return;
 
-    let joinPolicy: CommunityGroupJoinPolicy | null = opts?.knownGroupJoinPolicy ?? null;
+    let joinPolicy: CommunityGroupJoinPolicy | null =
+      opts?.knownGroupJoinPolicy ?? null;
     if (!joinPolicy) {
       const g = await this.prisma.communityGroup.findUnique({
         where: { id: gid },
         select: { joinPolicy: true },
       });
-      joinPolicy = g?.joinPolicy ?? 'approval';
+      joinPolicy = g?.joinPolicy ?? "approval";
     }
 
-    if (joinPolicy === 'open') {
+    if (joinPolicy === "open") {
       if (this.viewerContextService.isVerified(viewer)) return;
       // Unverified users hitting an open group: keep as Forbidden (verifying grants access,
       // similar to verifiedOnly tier). The permalink will show the verify-prompt preview.
-      throw new ForbiddenException('Verify your account to view group posts.');
+      throw new ForbiddenException("Verify your account to view group posts.");
     }
 
     const m = await this.prisma.communityGroupMember.findUnique({
@@ -142,8 +189,8 @@ export class PostsFeedQueryService {
     });
     // Approval-group non-members: 404 so the permalink returns not-found instead of
     // leaking author identity, engagement counts, and a body snippet via getByIdNoAccess.
-    if (!m || m.status !== 'active') {
-      throw new NotFoundException('Post not found.');
+    if (!m || m.status !== "active") {
+      throw new NotFoundException("Post not found.");
     }
   }
 
@@ -165,20 +212,23 @@ export class PostsFeedQueryService {
         where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
         select: { status: true },
       });
-      knownActiveGroupMember = m?.status === 'active';
+      knownActiveGroupMember = m?.status === "active";
     }
 
     if (!isSelf) {
-      if (post.visibility === 'onlyMe' && !viewer?.siteAdmin) {
-        throw new ForbiddenException('This post is private.');
+      if (post.visibility === "onlyMe" && !viewer?.siteAdmin) {
+        throw new ForbiddenException("This post is private.");
       }
       const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
       if (!allowed.includes(post.visibility)) {
-        if (post.visibility === 'verifiedOnly') throw new ForbiddenException('Verify to view verified-only posts.');
-        if (post.visibility === 'premiumOnly') {
-          throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+        if (post.visibility === "verifiedOnly")
+          throw new ForbiddenException("Verify to view verified-only posts.");
+        if (post.visibility === "premiumOnly") {
+          throw new ForbiddenException(
+            "Upgrade to premium to view premium-only posts.",
+          );
         }
-        throw new ForbiddenException('Not allowed to view this post.');
+        throw new ForbiddenException("Not allowed to view this post.");
       }
     }
 
@@ -195,14 +245,14 @@ export class PostsFeedQueryService {
     id: string;
   }): Promise<ReadablePostShell> {
     const { viewerUserId, id } = params;
-    const postId = (id ?? '').trim();
-    if (!postId) throw new NotFoundException('Post not found.');
+    const postId = (id ?? "").trim();
+    if (!postId) throw new NotFoundException("Post not found.");
 
-    const shellKey = `posts.readShell:${viewerUserId ?? 'anon'}:${postId}`;
+    const shellKey = `posts.readShell:${viewerUserId ?? "anon"}:${postId}`;
     const cachedShell = this.requestCache.get<ReadablePostShell>(shellKey);
     if (cachedShell) return cachedShell;
 
-    const fullKey = `posts.getById:${viewerUserId ?? 'anon'}:${postId}`;
+    const fullKey = `posts.getById:${viewerUserId ?? "anon"}:${postId}`;
     const cachedFull = this.requestCache.get<FeedPost>(fullKey);
     if (cachedFull) {
       const fromFull: ReadablePostShell = {
@@ -210,7 +260,9 @@ export class PostsFeedQueryService {
         userId: cachedFull.userId,
         visibility: cachedFull.visibility,
         rootId: (cachedFull as { rootId?: string | null }).rootId ?? null,
-        communityGroupId: (cachedFull as { communityGroupId?: string | null }).communityGroupId ?? null,
+        communityGroupId:
+          (cachedFull as { communityGroupId?: string | null })
+            .communityGroupId ?? null,
       };
       this.requestCache.set(shellKey, fromFull);
       return fromFull;
@@ -219,9 +271,15 @@ export class PostsFeedQueryService {
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const post = await this.prisma.post.findFirst({
       where: { id: postId, ...(viewer?.siteAdmin ? {} : notDeletedWhere()) },
-      select: { id: true, userId: true, visibility: true, rootId: true, communityGroupId: true },
+      select: {
+        id: true,
+        userId: true,
+        visibility: true,
+        rootId: true,
+        communityGroupId: true,
+      },
     });
-    if (!post) throw new NotFoundException('Post not found.');
+    if (!post) throw new NotFoundException("Post not found.");
 
     await this.assertViewerCanReadListedPost({ post, viewerUserId, viewer });
     this.requestCache.set(shellKey, post);
@@ -237,7 +295,9 @@ export class PostsFeedQueryService {
     const groupIds = [
       ...new Set(
         posts
-          .map((p) => (p as { communityGroupId?: string | null }).communityGroupId)
+          .map(
+            (p) => (p as { communityGroupId?: string | null }).communityGroupId,
+          )
           .filter((x): x is string => Boolean(x)),
       ),
     ];
@@ -250,12 +310,18 @@ export class PostsFeedQueryService {
       where: { id: { in: groupIds } },
       select: { id: true, joinPolicy: true },
     });
-    const policyByGroup = new Map(groups.map((g) => [g.id, g.joinPolicy] as const));
+    const policyByGroup = new Map(
+      groups.map((g) => [g.id, g.joinPolicy] as const),
+    );
 
     let memberGroupIds = new Set<string>();
     if (viewerUserId) {
       const rows = await this.prisma.communityGroupMember.findMany({
-        where: { userId: viewerUserId, groupId: { in: groupIds }, status: 'active' },
+        where: {
+          userId: viewerUserId,
+          groupId: { in: groupIds },
+          status: "active",
+        },
         select: { groupId: true },
       });
       memberGroupIds = new Set(rows.map((r) => r.groupId));
@@ -264,30 +330,46 @@ export class PostsFeedQueryService {
     const viewerVerified = this.viewerContextService.isVerified(viewer);
 
     return posts.filter((p) => {
-      const gid = (p as { communityGroupId?: string | null }).communityGroupId ?? null;
+      const gid =
+        (p as { communityGroupId?: string | null }).communityGroupId ?? null;
       if (!gid) return true;
       if (viewer?.siteAdmin) return true;
       if (viewerUserId && p.userId === viewerUserId) return true;
       if (memberGroupIds.has(gid)) return true;
-      if (viewerVerified && policyByGroup.get(gid) === 'open') return true;
+      if (viewerVerified && policyByGroup.get(gid) === "open") return true;
       return false;
     });
   }
 
-  private encodePopularCursor(cursor: { score: number; createdAt: string; id: string }) {
-    return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+  private encodePopularCursor(cursor: {
+    score: number;
+    createdAt: string;
+    id: string;
+  }) {
+    return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
   }
 
-  private decodePopularCursor(token: string | null): { score: number; createdAt: string; id: string } | null {
-    const t = (token ?? '').trim();
+  private decodePopularCursor(
+    token: string | null,
+  ): { score: number; createdAt: string; id: string } | null {
+    const t = (token ?? "").trim();
     if (!t) return null;
     try {
-      const raw = Buffer.from(t, 'base64url').toString('utf8');
+      const raw = Buffer.from(t, "base64url").toString("utf8");
       // Accept both old cursors (with asOf field) and new cursors (without).
-      const parsed = JSON.parse(raw) as Partial<{ asOf: string; score: number; createdAt: string; id: string }>;
-      const createdAt = typeof parsed.createdAt === 'string' ? parsed.createdAt : '';
-      const id = typeof parsed.id === 'string' ? parsed.id : '';
-      const score = typeof parsed.score === 'number' && Number.isFinite(parsed.score) ? parsed.score : NaN;
+      const parsed = JSON.parse(raw) as Partial<{
+        asOf: string;
+        score: number;
+        createdAt: string;
+        id: string;
+      }>;
+      const createdAt =
+        typeof parsed.createdAt === "string" ? parsed.createdAt : "";
+      const id = typeof parsed.id === "string" ? parsed.id : "";
+      const score =
+        typeof parsed.score === "number" && Number.isFinite(parsed.score)
+          ? parsed.score
+          : NaN;
       if (!createdAt || !id) return null;
       if (!Number.isFinite(score)) return null;
       return { score, createdAt, id };
@@ -296,75 +378,142 @@ export class PostsFeedQueryService {
     }
   }
 
-  private async encodeForYouCursor(servedIds: string[], seed: string, viewerUserId: string | null) {
+  private async encodeForYouCursor(
+    servedIds: string[],
+    seed: string,
+    viewerUserId: string | null,
+  ) {
     const ids = [...new Set(servedIds.filter(Boolean))];
-    if (!ids.length || ids.length >= POSTS_RANKING.forYouSessionMaxPosts) return null;
+    if (!ids.length || ids.length >= POSTS_RANKING.forYouSessionMaxPosts)
+      return null;
     // Immutable records keep retries and concurrent pagination from advancing each other.
     const ref = stableJsonHash({ ids, seed, viewerUserId });
     try {
-      await this.cache.setJson(`feed:foryou:cursor:v4:${ref}`, { ids, seed, viewerUserId }, {
-        ttlSeconds: POSTS_RANKING.forYouSessionTtlSeconds,
-      });
-      return Buffer.from(JSON.stringify({ v: 4, ref, seed })).toString('base64url');
+      await this.cache.setJson(
+        `feed:foryou:cursor:v4:${ref}`,
+        { ids, seed, viewerUserId },
+        {
+          ttlSeconds: POSTS_RANKING.forYouSessionTtlSeconds,
+        },
+      );
+      return Buffer.from(JSON.stringify({ v: 4, ref, seed })).toString(
+        "base64url",
+      );
     } catch {
       // During a Redis outage, continue a short session without losing exclusion history.
       if (ids.length > POSTS_RANKING.forYouInlineCursorMaxPosts) return null;
-      return Buffer.from(JSON.stringify({ v: 3, s: ids, seed })).toString('base64url');
+      return Buffer.from(JSON.stringify({ v: 3, s: ids, seed })).toString(
+        "base64url",
+      );
     }
   }
 
   private async decodeForYouCursor(
-    token: string | null, viewerUserId: string | null,
-  ): Promise<{ servedIds: string[]; seed: string | null; legacyPopular: { score: number; createdAt: string; id: string } | null }> {
+    token: string | null,
+    viewerUserId: string | null,
+  ): Promise<{
+    servedIds: string[];
+    seed: string | null;
+    legacyPopular: { score: number; createdAt: string; id: string } | null;
+  }> {
     const empty = { servedIds: [], seed: null, legacyPopular: null };
-    const t = (token ?? '').trim();
+    const t = (token ?? "").trim();
     if (!t) return empty;
     let parsed: { v?: number; ref?: string; s?: unknown; seed?: string };
-    try { parsed = JSON.parse(Buffer.from(t, 'base64url').toString('utf8')); }
-    catch { throw new BadRequestException('Feed session expired. Refresh your feed to continue.'); }
-    if (!parsed || typeof parsed !== 'object') throw new BadRequestException('Refresh your feed to continue.');
+    try {
+      parsed = JSON.parse(Buffer.from(t, "base64url").toString("utf8"));
+    } catch {
+      throw new BadRequestException(
+        "Feed session expired. Refresh your feed to continue.",
+      );
+    }
+    if (!parsed || typeof parsed !== "object")
+      throw new BadRequestException("Refresh your feed to continue.");
     if (parsed.v === 4) {
-      const state = typeof parsed.ref === 'string' && /^[a-f0-9]{20}$/.test(parsed.ref)
-        ? await this.cache.getJson<{ ids: string[]; seed: string; viewerUserId: string | null }>(`feed:foryou:cursor:v4:${parsed.ref}`).catch(() => null)
-        : null;
-      if (!state || state.viewerUserId !== viewerUserId || !Array.isArray(state.ids) || state.ids.length > POSTS_RANKING.forYouSessionMaxPosts) {
-        throw new BadRequestException('Feed session expired. Refresh your feed to continue.');
+      const state =
+        typeof parsed.ref === "string" && /^[a-f0-9]{20}$/.test(parsed.ref)
+          ? await this.cache
+              .getJson<{
+                ids: string[];
+                seed: string;
+                viewerUserId: string | null;
+              }>(`feed:foryou:cursor:v4:${parsed.ref}`)
+              .catch(() => null)
+          : null;
+      if (
+        !state ||
+        state.viewerUserId !== viewerUserId ||
+        !Array.isArray(state.ids) ||
+        state.ids.length > POSTS_RANKING.forYouSessionMaxPosts
+      ) {
+        throw new BadRequestException(
+          "Feed session expired. Refresh your feed to continue.",
+        );
       }
       return { servedIds: state.ids, seed: state.seed, legacyPopular: null };
     }
     if ((parsed.v === 3 || parsed.v === 2) && Array.isArray(parsed.s)) {
       // Preserve old in-flight sessions, but never truncate IDs and make them eligible again.
-      const ids = [...new Set(parsed.s.filter((id): id is string => typeof id === 'string' && Boolean(id.trim())))];
-      if (ids.length > POSTS_RANKING.forYouCursorServedIdMax) throw new BadRequestException('Refresh your feed to continue.');
-      return { servedIds: ids, seed: typeof parsed.seed === 'string' ? parsed.seed : null, legacyPopular: null };
+      const ids = [
+        ...new Set(
+          parsed.s.filter(
+            (id): id is string => typeof id === "string" && Boolean(id.trim()),
+          ),
+        ),
+      ];
+      if (ids.length > POSTS_RANKING.forYouCursorServedIdMax)
+        throw new BadRequestException("Refresh your feed to continue.");
+      return {
+        servedIds: ids,
+        seed: typeof parsed.seed === "string" ? parsed.seed : null,
+        legacyPopular: null,
+      };
     }
     const legacyPopular = this.decodePopularCursor(t);
-    if (!legacyPopular) throw new BadRequestException('Feed session expired. Refresh your feed to continue.');
+    if (!legacyPopular)
+      throw new BadRequestException(
+        "Feed session expired. Refresh your feed to continue.",
+      );
     return { ...empty, legacyPopular };
   }
 
-  async listOnlyMe(params: { userId: string; limit: number; cursor: string | null }) {
+  async listOnlyMe(params: {
+    userId: string;
+    limit: number;
+    cursor: string | null;
+  }) {
     const { userId, limit, cursor } = params;
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,
-      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+      lookup: async (id) =>
+        await this.prisma.post.findUnique({
+          where: { id },
+          select: { id: true, createdAt: true },
+        }),
     });
 
     const posts = await this.prisma.post.findMany({
       where: {
         AND: [
-          { userId, visibility: 'onlyMe', parentId: null, isDraft: false, ...notDeletedWhere() },
+          {
+            userId,
+            visibility: "onlyMe",
+            parentId: null,
+            isDraft: false,
+            ...notDeletedWhere(),
+          },
           ...(cursorWhere ? [cursorWhere] : []),
         ],
       },
       include: feedPostInclude,
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
     });
 
     const slice = posts.slice(0, limit);
-    const nextCursor = posts.length > limit ? slice[slice.length - 1]?.id ?? null : null;
+    const nextCursor =
+      posts.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
     return { posts: slice, nextCursor };
   }
 
@@ -372,9 +521,9 @@ export class PostsFeedQueryService {
     viewerUserId: string | null;
     limit: number;
     cursor: string | null;
-    visibility: 'all' | PostVisibility;
+    visibility: "all" | PostVisibility;
     followingOnly: boolean;
-    kind?: 'regular' | 'checkin' | null;
+    kind?: "regular" | "checkin" | null;
     checkinDayKey?: string | null;
     /** When true, include the viewer's own posts (overrides home-feed self-exclusion). */
     includeSelf?: boolean;
@@ -383,23 +532,30 @@ export class PostsFeedQueryService {
     authorUserIds?: string[] | null;
     /** Filter to posts whose author has a matching US state code (e.g. "VA"). */
     authorLocationState?: string | null;
-  }  ): Promise<FeedResult> {
+  }): Promise<FeedResult> {
     const { viewerUserId, limit, cursor, visibility, followingOnly } = params;
-    const authorUserIds = (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean) ?? null;
-    const authorLocationState = (params.authorLocationState ?? '').trim() || null;
-    const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
+    const authorUserIds =
+      (params.authorUserIds ?? null)
+        ?.map((s) => (s ?? "").trim())
+        .filter(Boolean) ?? null;
+    const authorLocationState =
+      (params.authorLocationState ?? "").trim() || null;
+    const kind = (params.kind ?? null) as "regular" | "checkin" | null;
     const checkinDayKey = (params.checkinDayKey ?? null)?.trim() || null;
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
 
     const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
 
-    if (visibility === 'verifiedOnly') {
-      if (!viewer || viewer.verifiedStatus === 'none') throw new ForbiddenException('Verify to view verified-only posts.');
+    if (visibility === "verifiedOnly") {
+      if (!viewer || viewer.verifiedStatus === "none")
+        throw new ForbiddenException("Verify to view verified-only posts.");
     }
-    if (visibility === 'premiumOnly') {
+    if (visibility === "premiumOnly") {
       if (!viewer || !this.viewerContextService.isPremium(viewer)) {
-        throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+        throw new ForbiddenException(
+          "Upgrade to premium to view premium-only posts.",
+        );
       }
     }
 
@@ -409,21 +565,21 @@ export class PostsFeedQueryService {
 
     // Author always sees own posts (e.g. after tier downgrade); others filtered by allowed visibility.
     const baseVisibility =
-      visibility === 'all'
+      visibility === "all"
         ? ({ visibility: { in: allowed } } as Prisma.PostWhereInput)
-        : visibility === 'public'
-          ? ({ visibility: 'public' } as Prisma.PostWhereInput)
+        : visibility === "public"
+          ? ({ visibility: "public" } as Prisma.PostWhereInput)
           : ({ visibility } as Prisma.PostWhereInput);
-    
+
     // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
     // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
     const visibilityWhere =
-      viewerUserId && visibility === 'all'
+      viewerUserId && visibility === "all"
         ? ({
             OR: [
               baseVisibility,
               // Author sees own posts (e.g. after tier downgrade), but never include only-me outside /only-me.
-              { userId: viewerUserId, visibility: { not: 'onlyMe' } },
+              { userId: viewerUserId, visibility: { not: "onlyMe" } },
             ],
           } as Prisma.PostWhereInput)
         : baseVisibility;
@@ -434,7 +590,8 @@ export class PostsFeedQueryService {
 
     // Group posts are excluded from all home feeds; they appear only on the group wall
     // and permalink (/p/:id). The Groups badge is the primary signal for new group activity.
-    const communityScopeWhere: Prisma.PostWhereInput = excludeCommunityGroupPostsWhere();
+    const communityScopeWhere: Prisma.PostWhereInput =
+      excludeCommunityGroupPostsWhere();
 
     // Exclude the viewer's own posts from home feeds (Following + All) unless the feed
     // is explicitly scoped to a set of author IDs (e.g. profile view, crew feed),
@@ -445,9 +602,13 @@ export class PostsFeedQueryService {
         : [];
 
     const locationStateWhere: Prisma.PostWhereInput[] = authorLocationState
-      ? ([{ user: { locationState: authorLocationState } }] as Prisma.PostWhereInput[])
+      ? ([
+          { user: { locationState: authorLocationState } },
+        ] as Prisma.PostWhereInput[])
       : [];
-    const mutedIds = authorUserIds?.length ? [] : await this.viewerMutedIds(viewerUserId);
+    const mutedIds = authorUserIds?.length
+      ? []
+      : await this.viewerMutedIds(viewerUserId);
     if (mutedIds.length) excludeSelfWhere.push({ userId: { notIn: mutedIds } });
 
     const where = followingOnly
@@ -458,13 +619,23 @@ export class PostsFeedQueryService {
             communityScopeWhere,
             userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
-            ...(checkinDayKey ? ([{ checkinDayKey }] as Prisma.PostWhereInput[]) : []),
+            ...(checkinDayKey
+              ? ([{ checkinDayKey }] as Prisma.PostWhereInput[])
+              : []),
             ...(params.mediaOnly ? [mediaOnlyWhere()] : []),
-            ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
-            ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
+            ...(params.topLevelOnly
+              ? ([{ parentId: null }] as Prisma.PostWhereInput[])
+              : []),
+            ...(authorUserIds?.length
+              ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[])
+              : []),
             ...locationStateWhere,
             ...excludeSelfWhere,
-            { user: { followers: { some: { followerId: viewerUserId as string } } } },
+            {
+              user: {
+                followers: { some: { followerId: viewerUserId as string } },
+              },
+            },
           ],
         }
       : {
@@ -474,10 +645,16 @@ export class PostsFeedQueryService {
             communityScopeWhere,
             userNotBannedWhere(),
             ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
-            ...(checkinDayKey ? ([{ checkinDayKey }] as Prisma.PostWhereInput[]) : []),
+            ...(checkinDayKey
+              ? ([{ checkinDayKey }] as Prisma.PostWhereInput[])
+              : []),
             ...(params.mediaOnly ? [mediaOnlyWhere()] : []),
-            ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
-            ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
+            ...(params.topLevelOnly
+              ? ([{ parentId: null }] as Prisma.PostWhereInput[])
+              : []),
+            ...(authorUserIds?.length
+              ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[])
+              : []),
             ...locationStateWhere,
             ...excludeSelfWhere,
           ],
@@ -485,27 +662,36 @@ export class PostsFeedQueryService {
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,
-      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+      lookup: async (id) =>
+        await this.prisma.post.findUnique({
+          where: { id },
+          select: { id: true, createdAt: true },
+        }),
     });
-    const whereWithCursor = cursorWhere ? ({ AND: [where, cursorWhere] } as Prisma.PostWhereInput) : where;
+    const whereWithCursor = cursorWhere
+      ? ({ AND: [where, cursorWhere] } as Prisma.PostWhereInput)
+      : where;
     const include = params.mediaOnly ? mediaFeedPostInclude : feedPostInclude;
 
     const posts = (await this.prisma.post.findMany({
       where: whereWithCursor,
       include,
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
     })) as FeedPost[];
 
     const slice = posts.slice(0, limit);
-    const nextCursor = posts.length > limit ? slice[slice.length - 1]?.id ?? null : null;
+    const nextCursor =
+      posts.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
 
     return { posts: slice, nextCursor };
   }
 
-  async listActiveCommunityGroupIdsForUser(viewerUserId: string): Promise<string[]> {
+  async listActiveCommunityGroupIdsForUser(
+    viewerUserId: string,
+  ): Promise<string[]> {
     const rows = await this.prisma.communityGroupMember.findMany({
-      where: { userId: viewerUserId, status: 'active' },
+      where: { userId: viewerUserId, status: "active" },
       select: { groupId: true },
     });
     return rows.map((r) => r.groupId);
@@ -518,7 +704,10 @@ export class PostsFeedQueryService {
    * Composer / write paths use their own membership check — do not call this
    * from those paths.
    */
-  async assertCanReadCommunityGroup(viewerUserId: string | null, groupId: string): Promise<void> {
+  async assertCanReadCommunityGroup(
+    viewerUserId: string | null,
+    groupId: string,
+  ): Promise<void> {
     return this.groupReadAccess.assertCanRead(viewerUserId, groupId);
   }
 
@@ -531,7 +720,7 @@ export class PostsFeedQueryService {
     groupIds: string[];
     limit: number;
     cursor: string | null;
-    sort: 'new' | 'trending';
+    sort: "new" | "trending";
     applyPinnedHead: boolean;
     topLevelOnly?: boolean;
     allowedVisibilities: PostVisibility[];
@@ -540,12 +729,21 @@ export class PostsFeedQueryService {
     if (groupIds.length === 0) return { posts: [], nextCursor: null };
 
     const groupWhere: Prisma.PostWhereInput =
-      groupIds.length === 1 ? { communityGroupId: groupIds[0]! } : { communityGroupId: { in: groupIds } };
+      groupIds.length === 1
+        ? { communityGroupId: groupIds[0]! }
+        : { communityGroupId: { in: groupIds } };
 
-    const topLevelFilter: Prisma.PostWhereInput = params.topLevelOnly ? { parentId: null } : {};
+    const topLevelFilter: Prisma.PostWhereInput = params.topLevelOnly
+      ? { parentId: null }
+      : {};
 
     const applyPin =
-      Boolean(params.applyPinnedHead && sort === 'new' && !cursor && groupIds.length === 1) && groupIds[0];
+      Boolean(
+        params.applyPinnedHead &&
+        sort === "new" &&
+        !cursor &&
+        groupIds.length === 1,
+      ) && groupIds[0];
 
     let pinned: FeedPost | null = null;
     let pinnedId: string | null = null;
@@ -558,7 +756,7 @@ export class PostsFeedQueryService {
           pinnedInGroupAt: { not: null },
           visibility: { in: params.allowedVisibilities },
         },
-        orderBy: { pinnedInGroupAt: 'desc' },
+        orderBy: { pinnedInGroupAt: "desc" },
         include: feedPostInclude,
       });
       pinned = p as FeedPost | null;
@@ -576,7 +774,7 @@ export class PostsFeedQueryService {
     if (pinnedId) baseAnd.push({ id: { not: pinnedId } });
     if (params.topLevelOnly) baseAnd.push(topLevelFilter);
 
-    if (sort === 'trending') {
+    if (sort === "trending") {
       // Two-phase trending feed:
       //   1. Trending head: posts with trendingScore > 0, ordered by score then recency.
       //   2. Chronological tail: when trending doesn't fill the page (sparse engagement,
@@ -590,7 +788,8 @@ export class PostsFeedQueryService {
             select: { id: true, createdAt: true, trendingScore: true },
           })
         : null;
-      const fallbackOnly = Boolean(cursor) && (!cursorRow || cursorRow.trendingScore == null);
+      const fallbackOnly =
+        Boolean(cursor) && (!cursorRow || cursorRow.trendingScore == null);
 
       // Chronological-tail filter: only rows that DIDN'T appear in any earlier trending page.
       // (Earlier trending pages all matched `trendingScore > 0`, so excluding that here
@@ -605,36 +804,62 @@ export class PostsFeedQueryService {
           fAnd.push({
             OR: [
               { createdAt: { lt: cursorRow.createdAt } },
-              { AND: [{ createdAt: cursorRow.createdAt }, { id: { lt: cursorRow.id } }] },
+              {
+                AND: [
+                  { createdAt: cursorRow.createdAt },
+                  { id: { lt: cursorRow.id } },
+                ],
+              },
             ],
           });
         }
         const fPosts = await this.prisma.post.findMany({
           where: { AND: fAnd },
           include: feedPostInclude,
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: takeMain + 1,
         });
         const fSlice = fPosts.slice(0, takeMain);
-        const nextCursor = fPosts.length > takeMain ? fSlice[fSlice.length - 1]?.id ?? null : null;
+        const nextCursor =
+          fPosts.length > takeMain
+            ? (fSlice[fSlice.length - 1]?.id ?? null)
+            : null;
         return { posts: fSlice, nextCursor };
       }
 
-      const trendingAnd: Prisma.PostWhereInput[] = [...baseAnd, { trendingScore: { gt: 0 } }];
+      const trendingAnd: Prisma.PostWhereInput[] = [
+        ...baseAnd,
+        { trendingScore: { gt: 0 } },
+      ];
       if (cursorRow && cursorRow.trendingScore != null) {
         const s = cursorRow.trendingScore;
         trendingAnd.push({
           OR: [
             { trendingScore: { lt: s } },
-            { AND: [{ trendingScore: s }, { createdAt: { lt: cursorRow.createdAt } }] },
-            { AND: [{ trendingScore: s }, { createdAt: cursorRow.createdAt }, { id: { lt: cursorRow.id } }] },
+            {
+              AND: [
+                { trendingScore: s },
+                { createdAt: { lt: cursorRow.createdAt } },
+              ],
+            },
+            {
+              AND: [
+                { trendingScore: s },
+                { createdAt: cursorRow.createdAt },
+                { id: { lt: cursorRow.id } },
+              ],
+            },
           ],
         });
       }
       const tPosts = await this.prisma.post.findMany({
         where: { AND: trendingAnd },
         include: feedPostInclude,
-        orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [
+          { trendingScore: "desc" },
+          { createdAt: "desc" },
+          { id: "desc" },
+        ],
         take: takeMain + 1,
       });
 
@@ -644,7 +869,8 @@ export class PostsFeedQueryService {
       // Trending fully occupies the page → just paginate trending.
       if (haveMoreTrending) {
         const nextCursor = tSlice[tSlice.length - 1]?.id ?? null;
-        const out: FeedPost[] = pinned && !cursor ? [pinned, ...tSlice] : tSlice;
+        const out: FeedPost[] =
+          pinned && !cursor ? [pinned, ...tSlice] : tSlice;
         return { posts: out, nextCursor };
       }
 
@@ -657,7 +883,7 @@ export class PostsFeedQueryService {
         const cf = await this.prisma.post.findMany({
           where: { AND: [...baseAnd, chronoOnlyWhere] },
           include: feedPostInclude,
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: fillCount + 1,
         });
         chronoFill = cf.slice(0, fillCount) as FeedPost[];
@@ -667,7 +893,8 @@ export class PostsFeedQueryService {
       }
 
       const combined: FeedPost[] = [...(tSlice as FeedPost[]), ...chronoFill];
-      const out: FeedPost[] = pinned && !cursor ? [pinned, ...combined] : combined;
+      const out: FeedPost[] =
+        pinned && !cursor ? [pinned, ...combined] : combined;
       return { posts: out, nextCursor };
     }
 
@@ -684,11 +911,12 @@ export class PostsFeedQueryService {
     const posts = await this.prisma.post.findMany({
       where: { AND: baseAnd },
       include: feedPostInclude,
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: takeMain + 1,
     });
     const slice = posts.slice(0, takeMain);
-    const nextCursor = posts.length > takeMain ? slice[slice.length - 1]?.id ?? null : null;
+    const nextCursor =
+      posts.length > takeMain ? (slice[slice.length - 1]?.id ?? null) : null;
     const out: FeedPost[] = pinned && !cursor ? [pinned, ...slice] : slice;
     return { posts: out, nextCursor };
   }
@@ -704,8 +932,15 @@ export class PostsFeedQueryService {
     return new Map(rows.map((p) => [p.id, p] as const));
   }
 
-  async collectRepostedMapForFeed(viewerUserId: string | null, repostedPostIds: string[]): Promise<Map<string, FeedPost>> {
-    const ids = [...new Set((repostedPostIds ?? []).map((id) => (id ?? '').trim()).filter(Boolean))];
+  async collectRepostedMapForFeed(
+    viewerUserId: string | null,
+    repostedPostIds: string[],
+  ): Promise<Map<string, FeedPost>> {
+    const ids = [
+      ...new Set(
+        (repostedPostIds ?? []).map((id) => (id ?? "").trim()).filter(Boolean),
+      ),
+    ];
     if (!ids.length) return new Map<string, FeedPost>();
     const rows = await this.getByIds({ viewerUserId, ids });
     return new Map(rows.map((p) => [p.id, p] as const));
@@ -715,7 +950,11 @@ export class PostsFeedQueryService {
     viewerUserId: string | null,
     groupIds: string[],
   ): Promise<Map<string, CommunityGroupPreviewDto>> {
-    const uniq = [...new Set((groupIds ?? []).map((id) => (id ?? '').trim()).filter(Boolean))];
+    const uniq = [
+      ...new Set(
+        (groupIds ?? []).map((id) => (id ?? "").trim()).filter(Boolean),
+      ),
+    ];
     if (uniq.length === 0) return new Map<string, CommunityGroupPreviewDto>();
 
     // Single batched fetch for all groups + viewer memberships instead of
@@ -752,7 +991,11 @@ export class PostsFeedQueryService {
   }): Promise<PostDto[]> {
     const { viewerUserId, filteredPosts, collapsedItemsByItemId } = params;
     const repostedPostIds = filteredPosts
-      .filter((p) => (p as { kind?: string }).kind === 'repost' && (p as { repostedPostId?: string }).repostedPostId)
+      .filter(
+        (p) =>
+          (p as { kind?: string }).kind === "repost" &&
+          (p as { repostedPostId?: string }).repostedPostId,
+      )
       .map((p) => (p as { repostedPostId: string }).repostedPostId);
 
     const quotedPostIds = filteredPosts
@@ -768,32 +1011,64 @@ export class PostsFeedQueryService {
     const fetchIds = ancestorAndEmbedIds.filter((id) => !pageIdSet.has(id));
     const allPostIds = [...pageIdSet, ...ancestorAndEmbedIds];
 
-    const [viewer, fetchedEmbeds, boosted, bookmarksByPostId, votedPollOptionIdByPostId, blockSets, repostedByPostId, lastSeenAtByPostId, commentedByPostId] =
-      await Promise.all([
-        this.enrichment.viewerContext(viewerUserId),
-        fetchIds.length ? this.getByIds({ viewerUserId, ids: fetchIds }) : Promise.resolve([] as FeedPost[]),
-        viewerUserId
-          ? this.enrichment.viewerBoostedPostIds({ viewerUserId, postIds: allPostIds })
-          : Promise.resolve(new Set<string>()),
-        viewerUserId
-          ? this.enrichment.viewerBookmarksByPostId({ viewerUserId, postIds: allPostIds })
-          : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
-        viewerUserId
-          ? this.enrichment.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds: allPostIds })
-          : Promise.resolve(new Map<string, string>()),
-        viewerUserId
-          ? this.enrichment.viewerBlockSets(viewerUserId)
-          : Promise.resolve({ blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() }),
-        viewerUserId
-          ? this.enrichment.viewerRepostedPostIds({ viewerUserId, postIds: allPostIds })
-          : Promise.resolve(new Set<string>()),
-        viewerUserId
-          ? this.enrichment.viewerLastSeenAtByPostId({ viewerUserId, postIds: allPostIds })
-          : Promise.resolve(new Map<string, Date>()),
-        viewerUserId
-          ? this.enrichment.viewerCommentedPostIds({ viewerUserId, postIds: allPostIds })
-          : Promise.resolve(new Set<string>()),
-      ]);
+    const [
+      viewer,
+      fetchedEmbeds,
+      boosted,
+      bookmarksByPostId,
+      votedPollOptionIdByPostId,
+      blockSets,
+      repostedByPostId,
+      lastSeenAtByPostId,
+      commentedByPostId,
+    ] = await Promise.all([
+      this.enrichment.viewerContext(viewerUserId),
+      fetchIds.length
+        ? this.getByIds({ viewerUserId, ids: fetchIds })
+        : Promise.resolve([] as FeedPost[]),
+      viewerUserId
+        ? this.enrichment.viewerBoostedPostIds({
+            viewerUserId,
+            postIds: allPostIds,
+          })
+        : Promise.resolve(new Set<string>()),
+      viewerUserId
+        ? this.enrichment.viewerBookmarksByPostId({
+            viewerUserId,
+            postIds: allPostIds,
+          })
+        : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
+      viewerUserId
+        ? this.enrichment.viewerVotedPollOptionIdByPostId({
+            viewerUserId,
+            postIds: allPostIds,
+          })
+        : Promise.resolve(new Map<string, string>()),
+      viewerUserId
+        ? this.enrichment.viewerBlockSets(viewerUserId)
+        : Promise.resolve({
+            blockedByViewer: new Set<string>(),
+            viewerBlockedBy: new Set<string>(),
+          }),
+      viewerUserId
+        ? this.enrichment.viewerRepostedPostIds({
+            viewerUserId,
+            postIds: allPostIds,
+          })
+        : Promise.resolve(new Set<string>()),
+      viewerUserId
+        ? this.enrichment.viewerLastSeenAtByPostId({
+            viewerUserId,
+            postIds: allPostIds,
+          })
+        : Promise.resolve(new Map<string, Date>()),
+      viewerUserId
+        ? this.enrichment.viewerCommentedPostIds({
+            viewerUserId,
+            postIds: allPostIds,
+          })
+        : Promise.resolve(new Set<string>()),
+    ]);
     const viewedByPostId = new Set(lastSeenAtByPostId.keys());
 
     const byId = new Map<string, FeedPost>();
@@ -836,16 +1111,24 @@ export class PostsFeedQueryService {
     }
 
     const communityGroupIdsForPage = new Set<string>();
-    const accCommunityGroupId = (row: { communityGroupId?: string | null } | null | undefined) => {
-      const g = String(row?.communityGroupId ?? '').trim();
+    const accCommunityGroupId = (
+      row: { communityGroupId?: string | null } | null | undefined,
+    ) => {
+      const g = String(row?.communityGroupId ?? "").trim();
       if (g) communityGroupIdsForPage.add(g);
     };
-    for (const p of filteredPosts) accCommunityGroupId(p as { communityGroupId?: string | null });
-    for (const p of parentMap.values()) accCommunityGroupId(p as { communityGroupId?: string | null });
-    for (const p of repostedPostMap.values()) accCommunityGroupId(p as { communityGroupId?: string | null });
-    for (const p of quotedPostMap.values()) accCommunityGroupId(p as { communityGroupId?: string | null });
+    for (const p of filteredPosts)
+      accCommunityGroupId(p as { communityGroupId?: string | null });
+    for (const p of parentMap.values())
+      accCommunityGroupId(p as { communityGroupId?: string | null });
+    for (const p of repostedPostMap.values())
+      accCommunityGroupId(p as { communityGroupId?: string | null });
+    for (const p of quotedPostMap.values())
+      accCommunityGroupId(p as { communityGroupId?: string | null });
     const [groupPreviewByGroupId, videoEmbedByPostId] = await Promise.all([
-      this.communityGroupPreviewMapForFeed(viewerUserId, [...communityGroupIdsForPage]),
+      this.communityGroupPreviewMapForFeed(viewerUserId, [
+        ...communityGroupIdsForPage,
+      ]),
       loadPostVideoEmbeds(this.prisma, byId.values()),
     ]);
 
@@ -874,14 +1157,20 @@ export class PostsFeedQueryService {
       videoEmbedByPostId,
     });
 
-    const contexts = params.conversationContext && viewerUserId && this.conversations
-      ? await this.conversations.contexts(viewerUserId, filteredPosts.map(p => p.id)) : new Map();
+    const contexts =
+      params.conversationContext && viewerUserId && this.conversations
+        ? await this.conversations.contexts(
+            viewerUserId,
+            filteredPosts.map((p) => p.id),
+          )
+        : new Map();
     // Blocking promises "you won't see their posts": also drop rows that reply to, repost, or
     // quote them. Being blocked by the author still allows read-only viewing.
     return filteredPosts.flatMap((p) => {
       const dto = attachParentChain(p);
       if (postChainInvolvesAuthor(dto, blockedByViewer)) return [];
-      if (dto.viewerCanAccess !== false && !dto.deletedAt && contexts.has(p.id)) dto.conversationContext = contexts.get(p.id);
+      if (dto.viewerCanAccess !== false && !dto.deletedAt && contexts.has(p.id))
+        dto.conversationContext = contexts.get(p.id);
       applyCollapsedThreadSummary(dto, collapsedItemsByItemId.get(p.id));
       return [dto];
     });
@@ -892,16 +1181,19 @@ export class PostsFeedQueryService {
     groupIds: string[];
     limit: number;
     cursor: string | null;
-    sort: 'new' | 'trending';
+    sort: "new" | "trending";
     applyPinnedHead: boolean;
     collapseByRoot: boolean;
-    collapseMode: 'root' | 'parent';
-    prefer: 'reply' | 'root';
+    collapseMode: "root" | "parent";
+    prefer: "reply" | "root";
     collapseMaxPerRoot: number;
     topLevelOnly?: boolean;
   }): Promise<{ data: PostDto[]; pagination: { nextCursor: string | null } }> {
-    const viewer = await this.viewerContextService.getViewer(params.viewerUserId);
-    const allowedVisibilities = this.enrichment.allowedVisibilitiesForViewer(viewer);
+    const viewer = await this.viewerContextService.getViewer(
+      params.viewerUserId,
+    );
+    const allowedVisibilities =
+      this.enrichment.allowedVisibilitiesForViewer(viewer);
     const raw = await this.listCommunityGroupsTimelinePosts({
       groupIds: params.groupIds,
       limit: params.limit,
@@ -918,21 +1210,20 @@ export class PostsFeedQueryService {
       items: groupDedupedPosts,
       repostedByAuthorsByItemId: groupRepostedByAuthors,
       repostedByCountByItemId: groupRepostedByCount,
-    } = collapseRepostsByCanonical(
-      raw.posts,
-      (p) => toPostAuthorDtoFromFeedRow(p, groupBaseUrl),
+    } = collapseRepostsByCanonical(raw.posts, (p) =>
+      toPostAuthorDtoFromFeedRow(p, groupBaseUrl),
     );
     const { items: filteredPosts, collapsedItemsByItemId } = collapseFeedByRoot(
       groupDedupedPosts,
       {
-      collapseByRoot: params.collapseByRoot,
-      collapseMode: params.collapseMode,
-      prefer: params.prefer,
-      maxPerRoot: params.collapseMaxPerRoot,
-      getId: (p) => p.id,
-      getParentId: (p) => p.parentId ?? null,
-      getAuthorPreview: (p) => toPostAuthorDtoFromFeedRow(p, groupBaseUrl),
-    },
+        collapseByRoot: params.collapseByRoot,
+        collapseMode: params.collapseMode,
+        prefer: params.prefer,
+        maxPerRoot: params.collapseMaxPerRoot,
+        getId: (p) => p.id,
+        getParentId: (p) => p.parentId ?? null,
+        getAuthorPreview: (p) => toPostAuthorDtoFromFeedRow(p, groupBaseUrl),
+      },
     );
     const data = await this.composeFeedPostDtos({
       viewerUserId: params.viewerUserId,
@@ -949,15 +1240,20 @@ export class PostsFeedQueryService {
   }
 
   /** Public-ish group shell for gated permalink + join CTAs (viewer may be null). */
-  async communityGroupPreviewForGroup(groupId: string, viewerUserId: string | null) {
-    const gid = (groupId ?? '').trim();
+  async communityGroupPreviewForGroup(
+    groupId: string,
+    viewerUserId: string | null,
+  ) {
+    const gid = (groupId ?? "").trim();
     if (!gid) return null;
     const g = await this.prisma.communityGroup.findFirst({
       where: { id: gid, deletedAt: null },
     });
     if (!g) return null;
-    let viewerMembership: { status: 'active' | 'pending'; role: 'owner' | 'moderator' | 'member' } | null =
-      null;
+    let viewerMembership: {
+      status: "active" | "pending";
+      role: "owner" | "moderator" | "member";
+    } | null = null;
     if (viewerUserId) {
       const row = await this.prisma.communityGroupMember.findUnique({
         where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
@@ -974,7 +1270,9 @@ export class PostsFeedQueryService {
    * the home Following/All feeds (only other people's posts are returned).
    * Used by trending (popular) feed when followingOnly is true.
    */
-  private async getAuthorIdsForFollowingFilter(viewerUserId: string): Promise<string[]> {
+  private async getAuthorIdsForFollowingFilter(
+    viewerUserId: string,
+  ): Promise<string[]> {
     const follows = await this.prisma.follow.findMany({
       where: { followerId: viewerUserId },
       select: { followingId: true },
@@ -987,10 +1285,10 @@ export class PostsFeedQueryService {
     viewerUserId: string | null;
     limit: number;
     decodedCursor: { score: number; createdAt: string; id: string } | null;
-    visibility: 'all' | PostVisibility;
+    visibility: "all" | PostVisibility;
     allowed: PostVisibility[];
     authorUserIds: string[] | null;
-    kind: 'regular' | 'checkin' | null;
+    kind: "regular" | "checkin" | null;
     mediaOnly?: boolean;
     topLevelOnly?: boolean;
     memberGroupIds?: string[];
@@ -998,44 +1296,75 @@ export class PostsFeedQueryService {
     /** Filter to posts whose author has a matching US state code (e.g. "VA"). */
     authorLocationState?: string | null;
   }): Promise<PopularFeedResult> {
-    const { viewerUserId, limit, decodedCursor, visibility, allowed, authorUserIds, kind } = params;
+    const {
+      viewerUserId,
+      limit,
+      decodedCursor,
+      visibility,
+      allowed,
+      authorUserIds,
+      kind,
+    } = params;
     const memberGroupIds = params.memberGroupIds ?? [];
 
     const baseVisibilityWhere: Prisma.PostWhereInput =
-      visibility === 'all'
+      visibility === "all"
         ? { visibility: { in: allowed } }
-        : visibility === 'public'
-          ? { visibility: 'public' }
+        : visibility === "public"
+          ? { visibility: "public" }
           : { visibility };
 
     // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
     const visibilityWhere: Prisma.PostWhereInput =
-      viewerUserId && visibility === 'all'
-        ? { OR: [baseVisibilityWhere, { userId: viewerUserId, visibility: { not: 'onlyMe' } }] }
+      viewerUserId && visibility === "all"
+        ? {
+            OR: [
+              baseVisibilityWhere,
+              { userId: viewerUserId, visibility: { not: "onlyMe" } },
+            ],
+          }
         : baseVisibilityWhere;
 
     const cursorScore = decodedCursor?.score ?? null;
-    const cursorCreatedAt = decodedCursor ? new Date(decodedCursor.createdAt) : null;
+    const cursorCreatedAt = decodedCursor
+      ? new Date(decodedCursor.createdAt)
+      : null;
     const cursorId = decodedCursor?.id ?? null;
 
     const communityScopeWhere: Prisma.PostWhereInput =
       memberGroupIds.length > 0
-        ? { OR: [excludeCommunityGroupPostsWhere(), { communityGroupId: { in: memberGroupIds } }] }
+        ? {
+            OR: [
+              excludeCommunityGroupPostsWhere(),
+              { communityGroupId: { in: memberGroupIds } },
+            ],
+          }
         : excludeCommunityGroupPostsWhere();
 
-    const locationStateFilter: Prisma.PostWhereInput[] = params.authorLocationState
-      ? ([{ user: { locationState: params.authorLocationState } }] as Prisma.PostWhereInput[])
-      : [];
+    const locationStateFilter: Prisma.PostWhereInput[] =
+      params.authorLocationState
+        ? ([
+            { user: { locationState: params.authorLocationState } },
+          ] as Prisma.PostWhereInput[])
+        : [];
 
     const baseAnd: Prisma.PostWhereInput[] = [
       { deletedAt: null },
       { user: { bannedAt: null } },
       communityScopeWhere,
       ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
-      ...(authorUserIds?.length ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[]) : []),
-      ...(params.excludeAuthorUserId ? ([{ NOT: { userId: params.excludeAuthorUserId } }] as Prisma.PostWhereInput[]) : []),
+      ...(authorUserIds?.length
+        ? ([{ userId: { in: authorUserIds } }] as Prisma.PostWhereInput[])
+        : []),
+      ...(params.excludeAuthorUserId
+        ? ([
+            { NOT: { userId: params.excludeAuthorUserId } },
+          ] as Prisma.PostWhereInput[])
+        : []),
       ...(params.mediaOnly ? [mediaOnlyWhere()] : []),
-      ...(params.topLevelOnly ? ([{ parentId: null }] as Prisma.PostWhereInput[]) : []),
+      ...(params.topLevelOnly
+        ? ([{ parentId: null }] as Prisma.PostWhereInput[])
+        : []),
       ...locationStateFilter,
       visibilityWhere,
     ];
@@ -1048,13 +1377,18 @@ export class PostsFeedQueryService {
         ? {
             OR: [
               { createdAt: { lt: cursorCreatedAt } },
-              { AND: [{ createdAt: cursorCreatedAt }, { id: { lt: cursorId } }] },
+              {
+                AND: [{ createdAt: cursorCreatedAt }, { id: { lt: cursorId } }],
+              },
             ],
           }
         : {};
 
-    const toResult = (posts: FeedPost[], hasMore: boolean): PopularFeedResult => {
-      const nextPost = hasMore ? posts[posts.length - 1] ?? null : null;
+    const toResult = (
+      posts: FeedPost[],
+      hasMore: boolean,
+    ): PopularFeedResult => {
+      const nextPost = hasMore ? (posts[posts.length - 1] ?? null) : null;
       const nextCursor = nextPost
         ? this.encodePopularCursor({
             score: nextPost.trendingScore ?? 0,
@@ -1073,11 +1407,14 @@ export class PostsFeedQueryService {
         where: {
           AND: [...baseAnd, chronologicalScoreWhere, chronologicalCursorWhere],
         },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: limit + 1,
         include,
       })) as FeedPost[];
-      return toResult(fallbackPosts.slice(0, limit), fallbackPosts.length > limit);
+      return toResult(
+        fallbackPosts.slice(0, limit),
+        fallbackPosts.length > limit,
+      );
     }
 
     const trendingCursorWhere: Prisma.PostWhereInput =
@@ -1091,7 +1428,12 @@ export class PostsFeedQueryService {
                   {
                     OR: [
                       { createdAt: { lt: cursorCreatedAt } },
-                      { AND: [{ createdAt: cursorCreatedAt }, { id: { lt: cursorId } }] },
+                      {
+                        AND: [
+                          { createdAt: cursorCreatedAt },
+                          { id: { lt: cursorId } },
+                        ],
+                      },
                     ],
                   },
                 ],
@@ -1102,13 +1444,13 @@ export class PostsFeedQueryService {
 
     const trendingPosts = (await this.prisma.post.findMany({
       where: {
-        AND: [
-          ...baseAnd,
-          { trendingScore: { gt: 0 } },
-          trendingCursorWhere,
-        ],
+        AND: [...baseAnd, { trendingScore: { gt: 0 } }, trendingCursorWhere],
       },
-      orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [
+        { trendingScore: "desc" },
+        { createdAt: "desc" },
+        { id: "desc" },
+      ],
       take: limit + 1,
       include,
     })) as FeedPost[];
@@ -1122,11 +1464,12 @@ export class PostsFeedQueryService {
       where: {
         AND: [...baseAnd, chronologicalScoreWhere],
       },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: Math.max(1, remaining + 1),
       include,
     })) as FeedPost[];
-    const fallbackSlice = remaining > 0 ? fallbackPosts.slice(0, remaining) : [];
+    const fallbackSlice =
+      remaining > 0 ? fallbackPosts.slice(0, remaining) : [];
     const hasMoreFallback = fallbackPosts.length > remaining;
     return toResult([...trendingPosts, ...fallbackSlice], hasMoreFallback);
   }
@@ -1152,9 +1495,10 @@ export class PostsFeedQueryService {
     }
 
     const feedVer = await this.cacheInvalidation.feedGlobalVersion();
-    const forYouUserVer = await this.cacheInvalidation.forYouUserVersion(viewerUserId);
+    const forYouUserVer =
+      await this.cacheInvalidation.forYouUserVersion(viewerUserId);
     const paramsHash = stableJsonHash({
-      endpoint: 'posts:forYou:ranked-page1',
+      endpoint: "posts:forYou:ranked-page1",
       limit: params.limit,
       visibility: params.visibility,
       kind: params.kind ?? null,
@@ -1162,12 +1506,20 @@ export class PostsFeedQueryService {
       includeSelf: params.includeSelf ?? false,
       mediaOnly: params.mediaOnly ?? false,
       topLevelOnly: params.topLevelOnly ?? false,
-      authorUserIds: (params.authorUserIds ?? []).map((id) => id.trim()).filter(Boolean).sort(),
-      authorLocationState: params.authorLocationState?.trim().toUpperCase() || null,
+      authorUserIds: (params.authorUserIds ?? [])
+        .map((id) => id.trim())
+        .filter(Boolean)
+        .sort(),
+      authorLocationState:
+        params.authorLocationState?.trim().toUpperCase() || null,
       forYouUserVer,
     });
     const key = RedisKeys.forYouRankedPage1(viewerUserId, paramsHash, feedVer);
-    const lockKey = RedisKeys.forYouRankedPage1Lock(viewerUserId, paramsHash, feedVer);
+    const lockKey = RedisKeys.forYouRankedPage1Lock(
+      viewerUserId,
+      paramsHash,
+      feedVer,
+    );
     let computed: PopularFeedResult | null = null;
 
     const computeShell = async (): Promise<ForYouRankedShell> => {
@@ -1199,7 +1551,9 @@ export class PostsFeedQueryService {
         })) as FeedPost[])
       : [];
     const byId = new Map(rows.map((post) => [post.id, post] as const));
-    const ordered = shell.ids.map((id) => byId.get(id)).filter((post): post is FeedPost => Boolean(post));
+    const ordered = shell.ids
+      .map((id) => byId.get(id))
+      .filter((post): post is FeedPost => Boolean(post));
     return {
       posts: ordered,
       nextCursor: shell.nextCursor,
@@ -1208,7 +1562,11 @@ export class PostsFeedQueryService {
   }
 
   /** Ranking signals only: permissions and block filters are always read fresh. */
-  private rankingInput<T>(viewerUserId: string | null, name: string, compute: () => Promise<T>): Promise<T> {
+  private rankingInput<T>(
+    viewerUserId: string | null,
+    name: string,
+    compute: () => Promise<T>,
+  ): Promise<T> {
     if (!viewerUserId) return compute();
     return this.cache.getOrSetJson({
       enabled: true,
@@ -1218,13 +1576,18 @@ export class PostsFeedQueryService {
     });
   }
 
-  private async listForYouFeedUncached(params: ForYouFeedParams): Promise<PopularFeedResult> {
+  private async listForYouFeedUncached(
+    params: ForYouFeedParams,
+  ): Promise<PopularFeedResult> {
     const { viewerUserId, cursor, visibility } = params;
     let limit = params.limit;
-    const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
+    const kind = (params.kind ?? null) as "regular" | "checkin" | null;
     const checkinDayKey = (params.checkinDayKey ?? null)?.trim() || null;
     const requestedAuthorUserIds =
-      (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
+      (params.authorUserIds ?? null)
+        ?.map((s) => (s ?? "").trim())
+        .filter(Boolean)
+        .slice(0, 50) ?? null;
     if (requestedAuthorUserIds && requestedAuthorUserIds.length === 0) {
       return { posts: [], nextCursor: null, scoreByPostId: new Map() };
     }
@@ -1232,45 +1595,70 @@ export class PostsFeedQueryService {
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
 
-    if (visibility === 'verifiedOnly') {
-      if (!viewer || viewer.verifiedStatus === 'none') throw new ForbiddenException('Verify to view verified-only posts.');
+    if (visibility === "verifiedOnly") {
+      if (!viewer || viewer.verifiedStatus === "none")
+        throw new ForbiddenException("Verify to view verified-only posts.");
     }
-    if (visibility === 'premiumOnly') {
+    if (visibility === "premiumOnly") {
       if (!viewer || !this.viewerContextService.isPremium(viewer)) {
-        throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+        throw new ForbiddenException(
+          "Upgrade to premium to view premium-only posts.",
+        );
       }
     }
 
     const baseVisibilityWhere: Prisma.PostWhereInput =
-      visibility === 'all'
+      visibility === "all"
         ? { visibility: { in: allowed } }
-        : visibility === 'public'
-          ? { visibility: 'public' }
+        : visibility === "public"
+          ? { visibility: "public" }
           : { visibility };
 
     const blockSets = viewerUserId
       ? await this.enrichment.viewerBlockSets(viewerUserId)
-      : { blockedByViewer: new Set<string>(), viewerBlockedBy: new Set<string>() };
-    const mutedIds = requestedAuthorUserIds?.length ? [] : await this.viewerMutedIds(viewerUserId);
-    const blockedAuthorIds = [...new Set([...blockSets.blockedByViewer, ...blockSets.viewerBlockedBy, ...mutedIds])];
+      : {
+          blockedByViewer: new Set<string>(),
+          viewerBlockedBy: new Set<string>(),
+        };
+    const mutedIds = requestedAuthorUserIds?.length
+      ? []
+      : await this.viewerMutedIds(viewerUserId);
+    const blockedAuthorIds = [
+      ...new Set([
+        ...blockSets.blockedByViewer,
+        ...blockSets.viewerBlockedBy,
+        ...mutedIds,
+      ]),
+    ];
     const blockedAuthorSet = new Set(blockedAuthorIds);
 
     // Author filter: intersect requested authors (if any) with "not the viewer". We don't filter
     // `parentId IS NULL` so engaged replies stay first-class trending candidates — the controller's
     // `collapseFeedByRoot` rolls them up to their root for display.
     // When includeSelf is true (e.g. per-day check-in feeds), the viewer's own posts are kept.
-    const userIdWhere: Prisma.PostWhereInput['userId'] =
+    const userIdWhere: Prisma.PostWhereInput["userId"] =
       requestedAuthorUserIds?.length
-        ? { in: requestedAuthorUserIds.filter((id) => id !== viewerUserId && !blockedAuthorSet.has(id)) }
+        ? {
+            in: requestedAuthorUserIds.filter(
+              (id) => id !== viewerUserId && !blockedAuthorSet.has(id),
+            ),
+          }
         : blockedAuthorIds.length > 0
           ? params.includeSelf
             ? { notIn: blockedAuthorIds }
-            : { notIn: viewerUserId ? [viewerUserId, ...blockedAuthorIds] : blockedAuthorIds }
+            : {
+                notIn: viewerUserId
+                  ? [viewerUserId, ...blockedAuthorIds]
+                  : blockedAuthorIds,
+              }
           : viewerUserId && !params.includeSelf
             ? { not: viewerUserId }
             : undefined;
 
-    if (requestedAuthorUserIds?.length && (userIdWhere as { in: string[] }).in.length === 0) {
+    if (
+      requestedAuthorUserIds?.length &&
+      (userIdWhere as { in: string[] }).in.length === 0
+    ) {
       return { posts: [], nextCursor: null, scoreByPostId: new Map() };
     }
 
@@ -1289,10 +1677,17 @@ export class PostsFeedQueryService {
       ...excludeCommunityGroupPostsWhere(),
     };
 
-    const decodedForYouCursor = await this.decodeForYouCursor(cursor, viewerUserId);
+    const decodedForYouCursor = await this.decodeForYouCursor(
+      cursor,
+      viewerUserId,
+    );
     const servedIds = decodedForYouCursor.servedIds;
-    limit = Math.min(limit, POSTS_RANKING.forYouSessionMaxPosts - servedIds.length);
-    if (limit <= 0) return { posts: [], nextCursor: null, scoreByPostId: new Map() };
+    limit = Math.min(
+      limit,
+      POSTS_RANKING.forYouSessionMaxPosts - servedIds.length,
+    );
+    if (limit <= 0)
+      return { posts: [], nextCursor: null, scoreByPostId: new Map() };
     const isPage1 = servedIds.length === 0;
     const servedWhere: Prisma.PostWhereInput[] =
       servedIds.length > 0 ? [{ id: { notIn: servedIds } }] : [];
@@ -1311,10 +1706,12 @@ export class PostsFeedQueryService {
           AND: [
             baseWhere,
             ...servedWhere,
-            ...(excludeIds.length > 0 ? ([{ id: { notIn: excludeIds } }] as Prisma.PostWhereInput[]) : []),
+            ...(excludeIds.length > 0
+              ? ([{ id: { notIn: excludeIds } }] as Prisma.PostWhereInput[])
+              : []),
           ],
         },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: take + 1,
         include: mediaFeedPostInclude,
       })) as FeedPost[];
@@ -1329,13 +1726,22 @@ export class PostsFeedQueryService {
           select: { id: true, createdAt: true, trendingScore: true },
         })
       : null;
-    const inTrendingHead =
-      Boolean(cursorRow && cursorRow.trendingScore != null && cursorRow.trendingScore > 0);
+    const inTrendingHead = Boolean(
+      cursorRow &&
+      cursorRow.trendingScore != null &&
+      cursorRow.trendingScore > 0,
+    );
     const fallbackOnly = Boolean(legacyCursor) && !inTrendingHead;
 
     const scanTake = isPage1
-      ? Math.min(POSTS_RANKING.forYouPage1ScanTakeMax, Math.max(limit + 10, limit * 2))
-      : Math.min(POSTS_RANKING.forYouScanTakeMax, Math.max(limit + 10, limit * 4));
+      ? Math.min(
+          POSTS_RANKING.forYouPage1ScanTakeMax,
+          Math.max(limit + 10, limit * 2),
+        )
+      : Math.min(
+          POSTS_RANKING.forYouScanTakeMax,
+          Math.max(limit + 10, limit * 4),
+        );
 
     type ScannedRow = {
       id: string;
@@ -1359,21 +1765,43 @@ export class PostsFeedQueryService {
     let discoveryOverflow = false;
 
     const viewerFollowingRows = viewerUserId
-      ? await this.rankingInput(viewerUserId, 'following', () => this.prisma.follow.findMany({
-          where: { followerId: viewerUserId },
-          select: { followingId: true },
-        }))
+      ? await this.rankingInput(viewerUserId, "following", () =>
+          this.prisma.follow.findMany({
+            where: { followerId: viewerUserId },
+            select: { followingId: true },
+          }),
+        )
       : [];
-    const viewerFollowingIds = [...new Set(viewerFollowingRows.map((r) => r.followingId).filter(Boolean))];
+    const viewerFollowingIds = [
+      ...new Set(viewerFollowingRows.map((r) => r.followingId).filter(Boolean)),
+    ];
     const followingCandidateIds = requestedAuthorUserIds
-      ? viewerFollowingIds.filter((id) => requestedAuthorUserIds.includes(id) && id !== viewerUserId)
+      ? viewerFollowingIds.filter(
+          (id) => requestedAuthorUserIds.includes(id) && id !== viewerUserId,
+        )
       : viewerFollowingIds.filter((id) => id !== viewerUserId);
 
-    const followedSince = new Date(Date.now() - POSTS_RANKING.forYouRecentFollowedWindowHours * 60 * 60 * 1000);
-    const secondDegreeSince = new Date(Date.now() - POSTS_RANKING.forYouSecondDegreeWindowHours * 60 * 60 * 1000);
-    const groupSince = new Date(Date.now() - POSTS_RANKING.forYouGroupWindowHours * 60 * 60 * 1000);
-    const engagedWithSince = new Date(Date.now() - POSTS_RANKING.forYouEngagedWithWindowDays * 24 * 60 * 60 * 1000);
-    const directNetworkExcludedIds = [...new Set([...(viewerUserId ? [viewerUserId] : []), ...viewerFollowingIds, ...blockedAuthorIds])];
+    const followedSince = new Date(
+      Date.now() -
+        POSTS_RANKING.forYouRecentFollowedWindowHours * 60 * 60 * 1000,
+    );
+    const secondDegreeSince = new Date(
+      Date.now() - POSTS_RANKING.forYouSecondDegreeWindowHours * 60 * 60 * 1000,
+    );
+    const groupSince = new Date(
+      Date.now() - POSTS_RANKING.forYouGroupWindowHours * 60 * 60 * 1000,
+    );
+    const engagedWithSince = new Date(
+      Date.now() -
+        POSTS_RANKING.forYouEngagedWithWindowDays * 24 * 60 * 60 * 1000,
+    );
+    const directNetworkExcludedIds = [
+      ...new Set([
+        ...(viewerUserId ? [viewerUserId] : []),
+        ...viewerFollowingIds,
+        ...blockedAuthorIds,
+      ]),
+    ];
     // Group posts are excluded from home feeds. These lanes are intentionally dormant:
     // memberGroupIds and viewerCanReadOpenGroups are forced to empty/false so the
     // member-group and open-follow-group candidate queries (below) always resolve to [].
@@ -1381,19 +1809,31 @@ export class PostsFeedQueryService {
     const viewerCanReadOpenGroups = false;
     const secondDegreePathCountByAuthor = new Map<string, number>();
     if (viewerFollowingIds.length > 0) {
-      const secondDegreeRows = await this.rankingInput(viewerUserId, `secondDegree:${isPage1 ? 300 : 1000}:${stableJsonHash({ viewerFollowingIds, directNetworkExcludedIds, requestedAuthorUserIds })}`, () => this.prisma.follow.findMany({
-        where: {
-          followerId: { in: viewerFollowingIds },
-          followingId: requestedAuthorUserIds?.length
-            ? { in: requestedAuthorUserIds.filter((id) => !directNetworkExcludedIds.includes(id)) }
-            : { notIn: directNetworkExcludedIds },
-        },
-        select: { followingId: true },
-        take: isPage1 ? 300 : 1000,
-      }));
+      const secondDegreeRows = await this.rankingInput(
+        viewerUserId,
+        `secondDegree:${isPage1 ? 300 : 1000}:${stableJsonHash({ viewerFollowingIds, directNetworkExcludedIds, requestedAuthorUserIds })}`,
+        () =>
+          this.prisma.follow.findMany({
+            where: {
+              followerId: { in: viewerFollowingIds },
+              followingId: requestedAuthorUserIds?.length
+                ? {
+                    in: requestedAuthorUserIds.filter(
+                      (id) => !directNetworkExcludedIds.includes(id),
+                    ),
+                  }
+                : { notIn: directNetworkExcludedIds },
+            },
+            select: { followingId: true },
+            take: isPage1 ? 300 : 1000,
+          }),
+      );
       for (const row of secondDegreeRows) {
         const authorId = row.followingId;
-        secondDegreePathCountByAuthor.set(authorId, (secondDegreePathCountByAuthor.get(authorId) ?? 0) + 1);
+        secondDegreePathCountByAuthor.set(
+          authorId,
+          (secondDegreePathCountByAuthor.get(authorId) ?? 0) + 1,
+        );
       }
     }
     const secondDegreeAuthorIds = [...secondDegreePathCountByAuthor.entries()]
@@ -1426,7 +1866,7 @@ export class PostsFeedQueryService {
         ? this.prisma.boost.findMany({
             where: { userId: { in: viewerFollowingIds } },
             select: { postId: true },
-            orderBy: { createdAt: 'desc' },
+            orderBy: { createdAt: "desc" },
             take: prefetchTake,
           })
         : Promise.resolve([] as Array<{ postId: string }>),
@@ -1438,7 +1878,7 @@ export class PostsFeedQueryService {
               deletedAt: null,
             },
             select: { parentId: true },
-            orderBy: { createdAt: 'desc' },
+            orderBy: { createdAt: "desc" },
             take: prefetchTake,
           })
         : Promise.resolve([] as Array<{ parentId: string | null }>),
@@ -1446,12 +1886,12 @@ export class PostsFeedQueryService {
         ? this.prisma.post.findMany({
             where: {
               userId: { in: viewerFollowingIds },
-              kind: 'repost',
+              kind: "repost",
               deletedAt: null,
               repostedPostId: { not: null },
             },
             select: { repostedPostId: true },
-            orderBy: { createdAt: 'desc' },
+            orderBy: { createdAt: "desc" },
             take: prefetchTake,
           })
         : Promise.resolve([] as Array<{ repostedPostId: string | null }>),
@@ -1459,7 +1899,9 @@ export class PostsFeedQueryService {
 
     if (!fallbackOnly) {
       const trendingCursorWhere: Prisma.PostWhereInput[] =
-        cursorRow && cursorRow.trendingScore != null && cursorRow.trendingScore > 0
+        cursorRow &&
+        cursorRow.trendingScore != null &&
+        cursorRow.trendingScore > 0
           ? [
               {
                 OR: [
@@ -1486,22 +1928,53 @@ export class PostsFeedQueryService {
       const trendingTake = scanTake;
       const [tRows, cRows] = await Promise.all([
         this.prisma.post.findMany({
-          where: { AND: [baseWhere, ...servedWhere, { trendingScore: { gt: 0 } }, ...trendingCursorWhere] },
-          orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          where: {
+            AND: [
+              baseWhere,
+              ...servedWhere,
+              { trendingScore: { gt: 0 } },
+              ...trendingCursorWhere,
+            ],
+          },
+          orderBy: [
+            { trendingScore: "desc" },
+            { createdAt: "desc" },
+            { id: "desc" },
+          ],
           take: trendingTake + 1,
-          select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
+          select: {
+            id: true,
+            userId: true,
+            parentId: true,
+            communityGroupId: true,
+            createdAt: true,
+            trendingScore: true,
+          },
         }),
         this.prisma.post.findMany({
-          where: { AND: [baseWhere, ...servedWhere, { createdAt: { lte: new Date() } }] },
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          where: {
+            AND: [
+              baseWhere,
+              ...servedWhere,
+              { createdAt: { lte: new Date() } },
+            ],
+          },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: recentTake + 1,
-          select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
+          select: {
+            id: true,
+            userId: true,
+            parentId: true,
+            communityGroupId: true,
+            createdAt: true,
+            trendingScore: true,
+          },
         }),
       ]);
       trendingScanned = tRows.slice(0, trendingTake);
       chronoScanned = cRows.slice(0, recentTake);
-      discoveryOverflow = tRows.length > trendingTake || cRows.length > recentTake;
-
+      discoveryOverflow =
+        tRows.length > trendingTake || cRows.length > recentTake;
     } else {
       const chronoCursorWhere: Prisma.PostWhereInput[] = cursorRow
         ? [
@@ -1509,7 +1982,10 @@ export class PostsFeedQueryService {
               OR: [
                 { createdAt: { lt: cursorRow.createdAt } },
                 {
-                  AND: [{ createdAt: cursorRow.createdAt }, { id: { lt: cursorRow.id } }],
+                  AND: [
+                    { createdAt: cursorRow.createdAt },
+                    { id: { lt: cursorRow.id } },
+                  ],
                 },
               ],
             },
@@ -1525,9 +2001,16 @@ export class PostsFeedQueryService {
             ...chronoCursorWhere,
           ],
         },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: scanTake + 1,
-        select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
+        select: {
+          id: true,
+          userId: true,
+          parentId: true,
+          communityGroupId: true,
+          createdAt: true,
+          trendingScore: true,
+        },
       })) as ScannedRow[];
 
       const haveMoreChrono = cRows.length > scanTake;
@@ -1535,36 +2018,63 @@ export class PostsFeedQueryService {
       discoveryOverflow = discoveryOverflow || haveMoreChrono;
     }
 
-    const [viewedFromFollowed, friendBoostPrefetch, friendReplyPrefetch, friendRepostPrefetch] =
-      await laneIdPrefetch;
+    const [
+      viewedFromFollowed,
+      friendBoostPrefetch,
+      friendReplyPrefetch,
+      friendRepostPrefetch,
+    ] = await laneIdPrefetch;
     const viewedPostIds = [...new Set(viewedFromFollowed.map((r) => r.postId))];
-    const friendEngagedPostIds = [...new Set([
-      ...friendBoostPrefetch.map((r) => r.postId),
-      ...friendReplyPrefetch.map((r) => r.parentId).filter((id): id is string => Boolean(id)),
-      ...friendRepostPrefetch.map((r) => r.repostedPostId).filter((id): id is string => Boolean(id)),
-    ])];
+    const friendEngagedPostIds = [
+      ...new Set([
+        ...friendBoostPrefetch.map((r) => r.postId),
+        ...friendReplyPrefetch
+          .map((r) => r.parentId)
+          .filter((id): id is string => Boolean(id)),
+        ...friendRepostPrefetch
+          .map((r) => r.repostedPostId)
+          .filter((id): id is string => Boolean(id)),
+      ]),
+    ];
 
     const friendTake = isPage1 ? Math.min(scanTake, limit) : scanTake;
-    const secondDegreeTake = isPage1 ? Math.min(scanTake, Math.max(5, Math.ceil(limit / 2))) : scanTake;
-    const [followedRowsRaw, friendRowsRaw, secondDegreeRowsRaw, memberGroupRowsRaw, openFollowGroupRowsRaw] = await Promise.all([
+    const secondDegreeTake = isPage1
+      ? Math.min(scanTake, Math.max(5, Math.ceil(limit / 2)))
+      : scanTake;
+    const [
+      followedRowsRaw,
+      friendRowsRaw,
+      secondDegreeRowsRaw,
+      memberGroupRowsRaw,
+      openFollowGroupRowsRaw,
+    ] = await Promise.all([
       followingCandidateIds.length > 0
-        ? this.prisma.post.findMany({
+        ? (this.prisma.post.findMany({
             where: {
               AND: [
                 baseWhere,
                 ...servedWhere,
                 { userId: { in: followingCandidateIds } },
                 { createdAt: { gte: followedSince } },
-                ...(viewedPostIds.length > 0 ? [{ id: { notIn: viewedPostIds } }] : []),
+                ...(viewedPostIds.length > 0
+                  ? [{ id: { notIn: viewedPostIds } }]
+                  : []),
               ],
             },
-            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
             take: scanTake + 1,
-            select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
-          }) as Promise<ScannedRow[]>
+            select: {
+              id: true,
+              userId: true,
+              parentId: true,
+              communityGroupId: true,
+              createdAt: true,
+              trendingScore: true,
+            },
+          }) as Promise<ScannedRow[]>)
         : Promise.resolve([] as ScannedRow[]),
       friendEngagedPostIds.length > 0
-        ? this.prisma.post.findMany({
+        ? (this.prisma.post.findMany({
             where: {
               AND: [
                 baseWhere,
@@ -1572,13 +2082,20 @@ export class PostsFeedQueryService {
                 { id: { in: friendEngagedPostIds } },
               ],
             },
-            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
             take: friendTake + 1,
-            select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
-          }) as Promise<ScannedRow[]>
+            select: {
+              id: true,
+              userId: true,
+              parentId: true,
+              communityGroupId: true,
+              createdAt: true,
+              trendingScore: true,
+            },
+          }) as Promise<ScannedRow[]>)
         : Promise.resolve([] as ScannedRow[]),
       secondDegreeAuthorIds.length > 0
-        ? this.prisma.post.findMany({
+        ? (this.prisma.post.findMany({
             where: {
               AND: [
                 baseWhere,
@@ -1587,13 +2104,24 @@ export class PostsFeedQueryService {
                 { createdAt: { gte: secondDegreeSince } },
               ],
             },
-            orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            orderBy: [
+              { trendingScore: "desc" },
+              { createdAt: "desc" },
+              { id: "desc" },
+            ],
             take: secondDegreeTake + 1,
-            select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
-          }) as Promise<ScannedRow[]>
+            select: {
+              id: true,
+              userId: true,
+              parentId: true,
+              communityGroupId: true,
+              createdAt: true,
+              trendingScore: true,
+            },
+          }) as Promise<ScannedRow[]>)
         : Promise.resolve([] as ScannedRow[]),
       memberGroupIds.length > 0
-        ? this.prisma.post.findMany({
+        ? (this.prisma.post.findMany({
             where: {
               AND: [
                 commonWhere,
@@ -1602,13 +2130,24 @@ export class PostsFeedQueryService {
                 { createdAt: { gte: groupSince } },
               ],
             },
-            orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            orderBy: [
+              { trendingScore: "desc" },
+              { createdAt: "desc" },
+              { id: "desc" },
+            ],
             take: scanTake + 1,
-            select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
-          }) as Promise<ScannedRow[]>
+            select: {
+              id: true,
+              userId: true,
+              parentId: true,
+              communityGroupId: true,
+              createdAt: true,
+              trendingScore: true,
+            },
+          }) as Promise<ScannedRow[]>)
         : Promise.resolve([] as ScannedRow[]),
       viewerCanReadOpenGroups && followingCandidateIds.length > 0
-        ? this.prisma.post.findMany({
+        ? (this.prisma.post.findMany({
             where: {
               AND: [
                 commonWhere,
@@ -1617,14 +2156,29 @@ export class PostsFeedQueryService {
                 memberGroupIds.length > 0
                   ? { communityGroupId: { notIn: memberGroupIds } }
                   : { communityGroupId: { not: null } },
-                { communityGroup: { is: { deletedAt: null, joinPolicy: 'open' } } },
+                {
+                  communityGroup: {
+                    is: { deletedAt: null, joinPolicy: "open" },
+                  },
+                },
                 { createdAt: { gte: groupSince } },
               ],
             },
-            orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            orderBy: [
+              { trendingScore: "desc" },
+              { createdAt: "desc" },
+              { id: "desc" },
+            ],
             take: scanTake + 1,
-            select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true },
-          }) as Promise<ScannedRow[]>
+            select: {
+              id: true,
+              userId: true,
+              parentId: true,
+              communityGroupId: true,
+              createdAt: true,
+              trendingScore: true,
+            },
+          }) as Promise<ScannedRow[]>)
         : Promise.resolve([] as ScannedRow[]),
     ]);
 
@@ -1640,59 +2194,154 @@ export class PostsFeedQueryService {
     const openFollowGroupRows = openFollowGroupRowsRaw.slice(0, scanTake);
 
     const candidateById = new Map<string, Candidate>();
-    const addRows = (rows: ScannedRow[], lane: 'following' | 'friend' | 'secondDegree' | 'memberGroup' | 'openFollowGroup' | 'discovery') => {
+    const addRows = (
+      rows: ScannedRow[],
+      lane:
+        | "following"
+        | "friend"
+        | "secondDegree"
+        | "memberGroup"
+        | "openFollowGroup"
+        | "discovery",
+    ) => {
       for (const row of rows) {
         const existing = candidateById.get(row.id);
         if (existing) {
-          if (lane === 'following') existing.followingUnseen = true;
-          if (lane === 'friend') existing.friendEngaged = true;
-          if (lane === 'secondDegree') {
+          if (lane === "following") existing.followingUnseen = true;
+          if (lane === "friend") existing.friendEngaged = true;
+          if (lane === "secondDegree") {
             existing.secondDegree = true;
-            existing.secondDegreePaths = Math.max(existing.secondDegreePaths, secondDegreePathCountByAuthor.get(row.userId) ?? 1);
+            existing.secondDegreePaths = Math.max(
+              existing.secondDegreePaths,
+              secondDegreePathCountByAuthor.get(row.userId) ?? 1,
+            );
           }
-          if (lane === 'memberGroup') existing.memberGroup = true;
-          if (lane === 'openFollowGroup') existing.openFollowGroup = true;
+          if (lane === "memberGroup") existing.memberGroup = true;
+          if (lane === "openFollowGroup") existing.openFollowGroup = true;
           continue;
         }
         candidateById.set(row.id, {
           ...row,
-          followingUnseen: lane === 'following',
-          friendEngaged: lane === 'friend',
-          secondDegree: lane === 'secondDegree',
-          secondDegreePaths: lane === 'secondDegree' ? (secondDegreePathCountByAuthor.get(row.userId) ?? 1) : 0,
-          memberGroup: lane === 'memberGroup',
-          openFollowGroup: lane === 'openFollowGroup',
+          followingUnseen: lane === "following",
+          friendEngaged: lane === "friend",
+          secondDegree: lane === "secondDegree",
+          secondDegreePaths:
+            lane === "secondDegree"
+              ? (secondDegreePathCountByAuthor.get(row.userId) ?? 1)
+              : 0,
+          memberGroup: lane === "memberGroup",
+          openFollowGroup: lane === "openFollowGroup",
           lastFriendEngagementAt: null,
         });
       }
     };
 
-    addRows(followedRows, 'following');
-    addRows(friendRows, 'friend');
-    addRows(secondDegreeRows, 'secondDegree');
-    addRows(memberGroupRows, 'memberGroup');
-    addRows(openFollowGroupRows, 'openFollowGroup');
-    addRows(trendingScanned, 'discovery');
-    addRows(chronoScanned, 'discovery');
+    addRows(followedRows, "following");
+    addRows(friendRows, "friend");
+    addRows(secondDegreeRows, "secondDegree");
+    addRows(memberGroupRows, "memberGroup");
+    addRows(openFollowGroupRows, "openFollowGroup");
+    addRows(trendingScanned, "discovery");
+    addRows(chronoScanned, "discovery");
 
     if (viewerUserId && this.conversations) {
-      const participated = await this.prisma.post.findMany({ where: { userId: viewerUserId, parentId: { not: null }, deletedAt: null, createdAt: { gte: engagedWithSince } }, select: { rootId: true, parentId: true }, orderBy: { createdAt: 'desc' }, take: 100 });
-      const roots = [...new Set(participated.map(p => p.rootId ?? p.parentId).filter((id): id is string => !!id))];
-      const linkedUpdates = await this.prisma.post.findMany({
-        where: { AND: [baseWhere, ...servedWhere, { parentId: null, createdAt: { gte: followedSince }, quotedPost: { OR: [
-          { boosts: { some: { userId: viewerUserId } } }, { bookmarks: { some: { userId: viewerUserId } } },
-          { replies: { some: { userId: viewerUserId, deletedAt: null } } },
-          { threadReplies: { some: { userId: viewerUserId, deletedAt: null } } },
-        ] } }] },
-        select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true, quotedPost: { select: { userId: true } } },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 20,
+      const participated = await this.prisma.post.findMany({
+        where: {
+          userId: viewerUserId,
+          parentId: { not: null },
+          deletedAt: null,
+          createdAt: { gte: engagedWithSince },
+        },
+        select: { rootId: true, parentId: true },
+        orderBy: { createdAt: "desc" },
+        take: 100,
       });
-      addRows(linkedUpdates.filter(p => p.quotedPost?.userId === p.userId), 'discovery');
+      const roots = [
+        ...new Set(
+          participated
+            .map((p) => p.rootId ?? p.parentId)
+            .filter((id): id is string => !!id),
+        ),
+      ];
+      const linkedUpdates = await this.prisma.post.findMany({
+        where: {
+          AND: [
+            baseWhere,
+            ...servedWhere,
+            {
+              parentId: null,
+              createdAt: { gte: followedSince },
+              quotedPost: {
+                OR: [
+                  { boosts: { some: { userId: viewerUserId } } },
+                  { bookmarks: { some: { userId: viewerUserId } } },
+                  {
+                    replies: {
+                      some: { userId: viewerUserId, deletedAt: null },
+                    },
+                  },
+                  {
+                    threadReplies: {
+                      some: { userId: viewerUserId, deletedAt: null },
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        select: {
+          id: true,
+          userId: true,
+          parentId: true,
+          communityGroupId: true,
+          createdAt: true,
+          trendingScore: true,
+          quotedPost: { select: { userId: true } },
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 20,
+      });
+      addRows(
+        linkedUpdates.filter((p) => p.quotedPost?.userId === p.userId),
+        "discovery",
+      );
 
       if (roots.length) {
         const readable = await this.conversations.readableWhere(viewerUserId);
-        const active = await this.prisma.post.findMany({ where: { AND: [baseWhere, ...servedWhere, { id: { in: roots }, replies: { some: { AND: [readable, { createdAt: { gte: followedSince }, userId: { not: viewerUserId }, body: { not: '' } }] } } }] }, select: { id: true, userId: true, parentId: true, communityGroupId: true, createdAt: true, trendingScore: true }, take: 20 });
-        addRows(active, 'discovery');
+        const active = await this.prisma.post.findMany({
+          where: {
+            AND: [
+              baseWhere,
+              ...servedWhere,
+              {
+                id: { in: roots },
+                replies: {
+                  some: {
+                    AND: [
+                      readable,
+                      {
+                        createdAt: { gte: followedSince },
+                        userId: { not: viewerUserId },
+                        body: { not: "" },
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+          select: {
+            id: true,
+            userId: true,
+            parentId: true,
+            communityGroupId: true,
+            createdAt: true,
+            trendingScore: true,
+          },
+          take: 20,
+        });
+        addRows(active, "discovery");
       }
     }
     const candidates = [...candidateById.values()];
@@ -1702,7 +2351,13 @@ export class PostsFeedQueryService {
         const fallbackIds = fallback.posts.map((p) => p.id);
         return {
           posts: fallback.posts,
-          nextCursor: fallback.overflow ? await this.encodeForYouCursor([...servedIds, ...fallbackIds], jitterSeed, viewerUserId) : null,
+          nextCursor: fallback.overflow
+            ? await this.encodeForYouCursor(
+                [...servedIds, ...fallbackIds],
+                jitterSeed,
+                viewerUserId,
+              )
+            : null,
           scoreByPostId: new Map(fallbackIds.map((id) => [id, 0])),
         };
       }
@@ -1710,11 +2365,22 @@ export class PostsFeedQueryService {
     }
 
     const candidateIds = candidates.map((c) => c.id);
-    const conversationContexts = viewerUserId && this.conversations ? await this.conversations.contexts(viewerUserId, candidateIds) : new Map();
+    const conversationContexts =
+      viewerUserId && this.conversations
+        ? await this.conversations.contexts(viewerUserId, candidateIds)
+        : new Map();
     const authorIds = [...new Set(candidates.map((c) => c.userId))];
-    const friendEngagedIds = candidates.filter((c) => c.friendEngaged).map((c) => c.id);
+    const friendEngagedIds = candidates
+      .filter((c) => c.friendEngaged)
+      .map((c) => c.id);
 
-    const [followerRows, viewedRows, friendEngagementRows, viewerBoostRows, viewerReplyRows] = await Promise.all([
+    const [
+      followerRows,
+      viewedRows,
+      friendEngagementRows,
+      viewerBoostRows,
+      viewerReplyRows,
+    ] = await Promise.all([
       // Who follows the viewer — used for mutual-follow scoring. Skip when anonymous.
       viewerUserId
         ? this.prisma.follow.findMany({
@@ -1726,31 +2392,58 @@ export class PostsFeedQueryService {
       viewerUserId
         ? this.prisma.postView.findMany({
             where: { userId: viewerUserId, postId: { in: candidateIds } },
-            select: { postId: true, createdAt: true, lastSeenAt: true, seenCount: true, lastSource: true },
+            select: {
+              postId: true,
+              createdAt: true,
+              lastSeenAt: true,
+              seenCount: true,
+              lastSource: true,
+            },
           })
-        : Promise.resolve([] as Array<{ postId: string; createdAt: Date; lastSeenAt: Date | null; seenCount: bigint | number | null; lastSource: string | null }>),
+        : Promise.resolve(
+            [] as Array<{
+              postId: string;
+              createdAt: Date;
+              lastSeenAt: Date | null;
+              seenCount: bigint | number | null;
+              lastSource: string | null;
+            }>,
+          ),
       // Aggregate in SQL so prolific friends cannot inflate proof or response size.
       friendEngagedIds.length > 0 && viewerFollowingIds.length > 0
-        ? this.prisma.$queryRaw<Array<{ postId: string; people: number; latestAt: Date }>>(
-            friendEngagementSql(friendEngagedIds, viewerFollowingIds),
-          )
-        : Promise.resolve([] as Array<{ postId: string; people: number; latestAt: Date }>),
+        ? this.prisma.$queryRaw<
+            Array<{ postId: string; people: number; latestAt: Date }>
+          >(friendEngagementSql(friendEngagedIds, viewerFollowingIds))
+        : Promise.resolve(
+            [] as Array<{ postId: string; people: number; latestAt: Date }>,
+          ),
       // Viewer's own recent boosts — used to identify A+ tier authors (people you actively engage with).
       // Boost has @@unique([postId, userId]) so _count is effectively distinct users.
       viewerUserId
-        ? this.rankingInput(viewerUserId, 'engagedBoostAuthors', () => this.prisma.boost.findMany({
-            where: { userId: viewerUserId, createdAt: { gte: engagedWithSince } },
-            select: { post: { select: { userId: true } } },
-            take: 200,
-          }))
+        ? this.rankingInput(viewerUserId, "engagedBoostAuthors", () =>
+            this.prisma.boost.findMany({
+              where: {
+                userId: viewerUserId,
+                createdAt: { gte: engagedWithSince },
+              },
+              select: { post: { select: { userId: true } } },
+              take: 200,
+            }),
+          )
         : Promise.resolve([] as Array<{ post: { userId: string } }>),
       // Viewer's own recent replies — surfaces authors the viewer actively talks to.
       viewerUserId
-        ? this.rankingInput(viewerUserId, 'engagedReplyAuthors', () => this.prisma.post.findMany({
-            where: { userId: viewerUserId, parentId: { not: null }, createdAt: { gte: engagedWithSince } },
-            select: { parent: { select: { userId: true } } },
-            take: 200,
-          }))
+        ? this.rankingInput(viewerUserId, "engagedReplyAuthors", () =>
+            this.prisma.post.findMany({
+              where: {
+                userId: viewerUserId,
+                parentId: { not: null },
+                createdAt: { gte: engagedWithSince },
+              },
+              select: { parent: { select: { userId: true } } },
+              take: 200,
+            }),
+          )
         : Promise.resolve([] as Array<{ parent: { userId: string } | null }>),
     ]);
 
@@ -1760,12 +2453,19 @@ export class PostsFeedQueryService {
     // A+ tier: authors the viewer has recently boosted or replied to (explicit engagement history).
     const engagedWithAuthorIds = new Set<string>([
       ...viewerBoostRows.map((r) => r.post.userId).filter(Boolean),
-      ...viewerReplyRows.map((r) => r.parent?.userId).filter((id): id is string => Boolean(id)),
+      ...viewerReplyRows
+        .map((r) => r.parent?.userId)
+        .filter((id): id is string => Boolean(id)),
     ]);
 
-    const socialProofCountById = new Map(friendEngagementRows.map(r => [r.postId, Number(r.people)]));
+    const socialProofCountById = new Map(
+      friendEngagementRows.map((r) => [r.postId, Number(r.people)]),
+    );
 
-    const seenById = new Map<string, { lastSeenAt: Date; seenCount: number; lastSource: string | null }>(
+    const seenById = new Map<
+      string,
+      { lastSeenAt: Date; seenCount: number; lastSource: string | null }
+    >(
       viewedRows.map((r) => [
         r.postId,
         {
@@ -1776,7 +2476,9 @@ export class PostsFeedQueryService {
       ]),
     );
 
-    const lastFriendEngagementAt = new Map(friendEngagementRows.map(r => [r.postId, r.latestAt]));
+    const lastFriendEngagementAt = new Map(
+      friendEngagementRows.map((r) => [r.postId, r.latestAt]),
+    );
     for (const c of candidates) {
       if (c.friendEngaged) {
         c.lastFriendEngagementAt = lastFriendEngagementAt.get(c.id) ?? null;
@@ -1788,8 +2490,12 @@ export class PostsFeedQueryService {
     // deterministic (the existing ranking already surfaces recent/unseen content well),
     // while a saturated pool ("I've seen everything") gets a real reshuffle so refresh
     // stops returning the same order every time.
-    const seenCandidateCount = candidates.reduce((count, c) => (seenById.has(c.id) ? count + 1 : count), 0);
-    const saturation = candidates.length > 0 ? seenCandidateCount / candidates.length : 0;
+    const seenCandidateCount = candidates.reduce(
+      (count, c) => (seenById.has(c.id) ? count + 1 : count),
+      0,
+    );
+    const saturation =
+      candidates.length > 0 ? seenCandidateCount / candidates.length : 0;
     const saturationRamp = Math.max(
       0,
       (saturation - POSTS_RANKING.forYouSeenSaturationJitterThreshold) /
@@ -1799,19 +2505,24 @@ export class PostsFeedQueryService {
     const now = Date.now();
     // Anon always jitters (no seen-history). Authed first paint stays deterministic for unseen
     // rows; pull-to-refresh uses a floor so a new seed actually moves the page.
-    const refreshJitterFloor = params.refresh && isPage1 ? POSTS_RANKING.forYouRefreshJitterFloor : 0;
-    const jitterStrengthBase = viewerUserId == null
-      ? POSTS_RANKING.forYouAnonJitterStrength
-      : Math.max(POSTS_RANKING.forYouSeenJitterBase, refreshJitterFloor);
+    const refreshJitterFloor =
+      params.refresh && isPage1 ? POSTS_RANKING.forYouRefreshJitterFloor : 0;
+    const jitterStrengthBase =
+      viewerUserId == null
+        ? POSTS_RANKING.forYouAnonJitterStrength
+        : Math.max(POSTS_RANKING.forYouSeenJitterBase, refreshJitterFloor);
     const jitterStrength = Math.min(
       1,
-      jitterStrengthBase + (POSTS_RANKING.forYouSeenSaturationJitterMax - jitterStrengthBase) * saturationRamp,
+      jitterStrengthBase +
+        (POSTS_RANKING.forYouSeenSaturationJitterMax - jitterStrengthBase) *
+          saturationRamp,
     );
     const ranked = candidates.map((c) => {
       const conversation = conversationContexts.get(c.id);
       const youFollowThem = youFollow.has(c.userId);
       const theyFollowYou = followsYou.has(c.userId);
-      const youEngagedWithThem = youFollowThem && engagedWithAuthorIds.has(c.userId);
+      const youEngagedWithThem =
+        youFollowThem && engagedWithAuthorIds.has(c.userId);
       // Relationship tiers (A+ > A > B > E > C > D):
       //   A+ (2.0) — you follow them AND recently boosted/replied to their content
       //   A  (1.8) — mutual follow
@@ -1834,14 +2545,27 @@ export class PostsFeedQueryService {
       const seen = seenById.get(c.id);
       let seenMult = 1.0;
       if (seen) {
-        const hours = Math.max(0, (now - seen.lastSeenAt.getTime()) / (60 * 60 * 1000));
-        const recovery = 1 - Math.exp(-hours / POSTS_RANKING.forYouSeenHalfLifeHours);
-        seenMult = POSTS_RANKING.forYouSeenFloor + (1 - POSTS_RANKING.forYouSeenFloor) * recovery;
+        const hours = Math.max(
+          0,
+          (now - seen.lastSeenAt.getTime()) / (60 * 60 * 1000),
+        );
+        const recovery =
+          1 - Math.exp(-hours / POSTS_RANKING.forYouSeenHalfLifeHours);
+        seenMult =
+          POSTS_RANKING.forYouSeenFloor +
+          (1 - POSTS_RANKING.forYouSeenFloor) * recovery;
         if (seen.seenCount > 1) {
-          const repeatPenalty = 1 / (1 + Math.log2(seen.seenCount) * POSTS_RANKING.forYouSeenRepeatPenaltyStrength);
+          const repeatPenalty =
+            1 /
+            (1 +
+              Math.log2(seen.seenCount) *
+                POSTS_RANKING.forYouSeenRepeatPenaltyStrength);
           seenMult *= repeatPenalty;
         }
-        if (seen.lastSource === 'feed_scroll' && hours < POSTS_RANKING.forYouRecentFeedSeenExtraPenaltyHours) {
+        if (
+          seen.lastSource === "feed_scroll" &&
+          hours < POSTS_RANKING.forYouRecentFeedSeenExtraPenaltyHours
+        ) {
           seenMult *= POSTS_RANKING.forYouRecentFeedSeenExtraPenaltyMult;
         }
       }
@@ -1849,12 +2573,22 @@ export class PostsFeedQueryService {
       // Only compound the 2.2x bonus when you already follow the author (tiers A/B). For the
       // E tier (friend engaged, stranger/follower author) the social proof is fully captured in
       // forYouFriendCommentedMult — stacking would over-reward the same signal twice.
-      const friendMult = c.friendEngaged && youFollowThem ? POSTS_RANKING.forYouFriendEngagementMult : 1.0;
-      const followedUnseenMult = c.followingUnseen ? POSTS_RANKING.forYouFollowedUnseenMult : 1.0;
-      const secondDegreePathBonus = c.secondDegree
-        ? Math.min(POSTS_RANKING.forYouSecondDegreePathBonusMax, 1 + Math.max(0, c.secondDegreePaths - 1) * 0.15)
+      const friendMult =
+        c.friendEngaged && youFollowThem
+          ? POSTS_RANKING.forYouFriendEngagementMult
+          : 1.0;
+      const followedUnseenMult = c.followingUnseen
+        ? POSTS_RANKING.forYouFollowedUnseenMult
         : 1.0;
-      const secondDegreeMult = c.secondDegree ? POSTS_RANKING.forYouSecondDegreeMult * secondDegreePathBonus : 1.0;
+      const secondDegreePathBonus = c.secondDegree
+        ? Math.min(
+            POSTS_RANKING.forYouSecondDegreePathBonusMax,
+            1 + Math.max(0, c.secondDegreePaths - 1) * 0.15,
+          )
+        : 1.0;
+      const secondDegreeMult = c.secondDegree
+        ? POSTS_RANKING.forYouSecondDegreeMult * secondDegreePathBonus
+        : 1.0;
       const groupMult = c.memberGroup
         ? POSTS_RANKING.forYouMemberGroupMult
         : c.openFollowGroup
@@ -1863,11 +2597,16 @@ export class PostsFeedQueryService {
       // Effective age uses the freshest of (post createdAt, latest friend engagement) — a months-old
       // post with a 2h-ago reply from someone the viewer follows ranks like fresh content.
       const friendEngagementMs = c.lastFriendEngagementAt?.getTime() ?? 0;
-      const effectiveAtMs = Math.max(c.createdAt.getTime(), friendEngagementMs, conversation?.reply ? Date.parse(conversation.reply.createdAt) : 0);
+      const effectiveAtMs = Math.max(
+        c.createdAt.getTime(),
+        friendEngagementMs,
+        conversation?.reply ? Date.parse(conversation.reply.createdAt) : 0,
+      );
       const ageHours = Math.max(0, (now - effectiveAtMs) / (60 * 60 * 1000));
       const decay =
         POSTS_RANKING.forYouRecencyFloor +
-        (1 - POSTS_RANKING.forYouRecencyFloor) * Math.exp(-ageHours / POSTS_RANKING.forYouRecencyHalfLifeHours);
+        (1 - POSTS_RANKING.forYouRecencyFloor) *
+          Math.exp(-ageHours / POSTS_RANKING.forYouRecencyHalfLifeHours);
       const freshBoost =
         ageHours < 24
           ? POSTS_RANKING.forYouFreshBoost24h
@@ -1889,24 +2628,46 @@ export class PostsFeedQueryService {
       //     has a social connection and must NOT be demoted.
       //   - All other cases (author in social graph, second-degree, groups): use trendingScore as-is.
       const rawTrending = 1 + Math.max(0, c.trendingScore ?? 0);
-      const socialProofCount = Math.min(POSTS_RANKING.forYouSocialProofMaxPeople, socialProofCountById.get(c.id) ?? 0);
-      const noSocialConnection = !youFollowThem && !theyFollowYou && !c.secondDegree && !c.memberGroup && !c.openFollowGroup;
+      const socialProofCount = Math.min(
+        POSTS_RANKING.forYouSocialProofMaxPeople,
+        socialProofCountById.get(c.id) ?? 0,
+      );
+      const noSocialConnection =
+        !youFollowThem &&
+        !theyFollowYou &&
+        !c.secondDegree &&
+        !c.memberGroup &&
+        !c.openFollowGroup;
       let rawBase: number;
       if (c.friendEngaged) {
-        const socialBase = socialProofCount * POSTS_RANKING.forYouSocialProofBaseWeight;
+        const socialBase =
+          socialProofCount * POSTS_RANKING.forYouSocialProofBaseWeight;
         rawBase = Math.max(socialBase, rawTrending);
       } else if (noSocialConnection) {
         rawBase = rawTrending * 0.4;
       } else {
         rawBase = rawTrending;
       }
-      const conversationBonus = conversation?.kind === 'unanswered' ? 1.5 : conversation?.kind === 'newReplies' ? 3 : conversation?.kind === 'followUp' ? 1 : 0;
-      const base = conversationBonus + (c.friendEngaged ? Math.max(rawBase, POSTS_RANKING.forYouFriendEngagementBaseFloor) : rawBase);
+      const conversationBonus =
+        conversation?.kind === "unanswered"
+          ? 1.5
+          : conversation?.kind === "newReplies"
+            ? 3
+            : conversation?.kind === "followUp"
+              ? 1
+              : 0;
+      const base =
+        conversationBonus +
+        (c.friendEngaged
+          ? Math.max(rawBase, POSTS_RANKING.forYouFriendEngagementBaseFloor)
+          : rawBase);
       // Saturation jitter reshuffles already-seen rows so a "seen everything" refresh is not
       // identical. Unseen authed posts keep only the refresh/anon floor — otherwise ±90% jitter
       // can bury a brand-new discovery item under a just-seen trending post.
-      const postJitterStrength = seen || viewerUserId == null ? jitterStrength : jitterStrengthBase;
-      const jitter = 1 + (seededUnitInterval(jitterSeed, c.id) * 2 - 1) * postJitterStrength;
+      const postJitterStrength =
+        seen || viewerUserId == null ? jitterStrength : jitterStrengthBase;
+      const jitter =
+        1 + (seededUnitInterval(jitterSeed, c.id) * 2 - 1) * postJitterStrength;
       const adjusted =
         base *
         recencyMult *
@@ -1923,8 +2684,10 @@ export class PostsFeedQueryService {
 
     ranked.sort((a, b) => {
       if (b.adjusted !== a.adjusted) return b.adjusted - a.adjusted;
-      if (a.candidate.followingUnseen !== b.candidate.followingUnseen) return a.candidate.followingUnseen ? -1 : 1;
-      if (a.candidate.friendEngaged !== b.candidate.friendEngaged) return a.candidate.friendEngaged ? -1 : 1;
+      if (a.candidate.followingUnseen !== b.candidate.followingUnseen)
+        return a.candidate.followingUnseen ? -1 : 1;
+      if (a.candidate.friendEngaged !== b.candidate.friendEngaged)
+        return a.candidate.friendEngaged ? -1 : 1;
       const aBase = a.candidate.trendingScore ?? 0;
       const bBase = b.candidate.trendingScore ?? 0;
       if (bBase !== aBase) return bBase - aBase;
@@ -1953,7 +2716,9 @@ export class PostsFeedQueryService {
       for (const r of source) {
         if (picked.length >= maxPicked) break;
         if (pickedIdSet.has(r.candidate.id)) continue;
-        const resurfaced = seenById.has(r.candidate.id) && conversationContexts.get(r.candidate.id)?.kind === 'newReplies';
+        const resurfaced =
+          seenById.has(r.candidate.id) &&
+          conversationContexts.get(r.candidate.id)?.kind === "newReplies";
         if (resurfaced && resurfacedCount >= 2) continue;
         const rootKey = r.candidate.parentId ?? r.candidate.id;
         const isReply = Boolean(r.candidate.parentId);
@@ -1985,11 +2750,14 @@ export class PostsFeedQueryService {
     const paginationDepth = servedIds.length;
     const followedUnseenRatio =
       paginationDepth === 0
-        ? 0.70  // page 1: strongly user-first (people you follow dominate)
+        ? 0.7 // page 1: strongly user-first (people you follow dominate)
         : paginationDepth <= 50
-          ? 0.55  // page 2: still follow-heavy but opens discovery
-          : 0.40; // page 3+: fans out into friend-engaged + second-degree
-    const followedQuota = Math.min(limit, Math.ceil(limit * followedUnseenRatio));
+          ? 0.55 // page 2: still follow-heavy but opens discovery
+          : 0.4; // page 3+: fans out into friend-engaged + second-degree
+    const followedQuota = Math.min(
+      limit,
+      Math.ceil(limit * followedUnseenRatio),
+    );
     // The followed-unseen quota is the "tippy top" of the feed. Order it by recency bucket with
     // preference for authors the viewer actively engages with, then mutuals, then recency.
     // Using `ranked`'s `adjusted` score here would bury a brand-new follow post under older
@@ -2000,8 +2768,14 @@ export class PostsFeedQueryService {
       .filter((r) => r.candidate.followingUnseen)
       .slice()
       .sort((a, b) => {
-        const aAgeH = Math.max(0, (now - a.candidate.createdAt.getTime()) / (60 * 60 * 1000));
-        const bAgeH = Math.max(0, (now - b.candidate.createdAt.getTime()) / (60 * 60 * 1000));
+        const aAgeH = Math.max(
+          0,
+          (now - a.candidate.createdAt.getTime()) / (60 * 60 * 1000),
+        );
+        const bAgeH = Math.max(
+          0,
+          (now - b.candidate.createdAt.getTime()) / (60 * 60 * 1000),
+        );
         const aBucket = Math.floor(aAgeH / bucketHours);
         const bBucket = Math.floor(bAgeH / bucketHours);
         if (aBucket !== bBucket) return aBucket - bBucket;
@@ -2009,21 +2783,38 @@ export class PostsFeedQueryService {
         const aEngaged = engagedWithAuthorIds.has(a.candidate.userId);
         const bEngaged = engagedWithAuthorIds.has(b.candidate.userId);
         if (aEngaged !== bEngaged) return aEngaged ? -1 : 1;
-        const aMutual = youFollow.has(a.candidate.userId) && followsYou.has(a.candidate.userId);
-        const bMutual = youFollow.has(b.candidate.userId) && followsYou.has(b.candidate.userId);
+        const aMutual =
+          youFollow.has(a.candidate.userId) &&
+          followsYou.has(a.candidate.userId);
+        const bMutual =
+          youFollow.has(b.candidate.userId) &&
+          followsYou.has(b.candidate.userId);
         if (aMutual !== bMutual) return aMutual ? -1 : 1;
-        return b.candidate.createdAt.getTime() - a.candidate.createdAt.getTime();
+        return (
+          b.candidate.createdAt.getTime() - a.candidate.createdAt.getTime()
+        );
       });
     pickFrom(followedUnseenSorted, followedQuota);
     if (params.refresh && isPage1) {
-      const exploration = ranked.filter(r => !r.candidate.followingUnseen)
+      const exploration = ranked
+        .filter((r) => !r.candidate.followingUnseen)
         .sort((a, b) => {
           const aSeen = seenById.has(a.candidate.id);
           const bSeen = seenById.has(b.candidate.id);
           if (aSeen !== bSeen) return aSeen ? 1 : -1;
-          return seededUnitInterval(jitterSeed, b.candidate.id) - seededUnitInterval(jitterSeed, a.candidate.id);
+          return (
+            seededUnitInterval(jitterSeed, b.candidate.id) -
+            seededUnitInterval(jitterSeed, a.candidate.id)
+          );
         });
-      pickFrom(exploration, Math.min(limit, picked.length + Math.ceil(limit * POSTS_RANKING.forYouRefreshExplorationRatio)));
+      pickFrom(
+        exploration,
+        Math.min(
+          limit,
+          picked.length +
+            Math.ceil(limit * POSTS_RANKING.forYouRefreshExplorationRatio),
+        ),
+      );
     }
     pickFrom(ranked, limit);
 
@@ -2031,7 +2822,9 @@ export class PostsFeedQueryService {
       for (const r of skipped) {
         if (picked.length >= limit) break;
         if (pickedIdSet.has(r.candidate.id)) continue;
-        const resurfaced = seenById.has(r.candidate.id) && conversationContexts.get(r.candidate.id)?.kind === 'newReplies';
+        const resurfaced =
+          seenById.has(r.candidate.id) &&
+          conversationContexts.get(r.candidate.id)?.kind === "newReplies";
         if (resurfaced && resurfacedCount >= 2) continue;
         if (resurfaced) resurfacedCount++;
         picked.push(r);
@@ -2047,8 +2840,13 @@ export class PostsFeedQueryService {
         })) as FeedPost[])
       : [];
     const byId = new Map(posts.map((p) => [p.id, p] as const));
-    let ordered = pickedIds.map((id) => byId.get(id)).filter((p): p is FeedPost => Boolean(p));
-    const fallback = await fetchChronologicalMediaFallback(limit - ordered.length, pickedIds);
+    let ordered = pickedIds
+      .map((id) => byId.get(id))
+      .filter((p): p is FeedPost => Boolean(p));
+    const fallback = await fetchChronologicalMediaFallback(
+      limit - ordered.length,
+      pickedIds,
+    );
     if (fallback.posts.length > 0) {
       ordered = [...ordered, ...fallback.posts];
     }
@@ -2063,9 +2861,17 @@ export class PostsFeedQueryService {
       openFollowGroupOverflow ||
       discoveryOverflow ||
       fallback.overflow;
-    const nextCursor = moreAvailable ? await this.encodeForYouCursor([...servedIds, ...orderedIds], jitterSeed, viewerUserId) : null;
+    const nextCursor = moreAvailable
+      ? await this.encodeForYouCursor(
+          [...servedIds, ...orderedIds],
+          jitterSeed,
+          viewerUserId,
+        )
+      : null;
 
-    const scoreByPostId = new Map<string, number>(picked.map((p) => [p.candidate.id, p.adjusted]));
+    const scoreByPostId = new Map<string, number>(
+      picked.map((p) => [p.candidate.id, p.adjusted]),
+    );
     for (const post of fallback.posts) scoreByPostId.set(post.id, 0);
 
     return { posts: ordered, nextCursor, scoreByPostId };
@@ -2076,38 +2882,55 @@ export class PostsFeedQueryService {
     viewerUserId: string | null;
     limit: number;
     decodedCursor: { score: number; createdAt: string; id: string } | null;
-    visibility: 'all' | PostVisibility;
+    visibility: "all" | PostVisibility;
     allowed: PostVisibility[];
     authorUserIds: string[] | null;
     mediaOnly?: boolean;
     topLevelOnly?: boolean;
   }): Promise<PopularFeedResult> {
-    const { viewerUserId, limit, decodedCursor, visibility, allowed, authorUserIds } = params;
+    const {
+      viewerUserId,
+      limit,
+      decodedCursor,
+      visibility,
+      allowed,
+      authorUserIds,
+    } = params;
     const now = new Date();
 
     const baseVisibilityWhere: Prisma.PostWhereInput =
-      visibility === 'all'
+      visibility === "all"
         ? { visibility: { in: allowed } }
-        : visibility === 'public'
-          ? { visibility: 'public' }
+        : visibility === "public"
+          ? { visibility: "public" }
           : { visibility };
 
     const visibilityWhere: Prisma.PostWhereInput =
-      viewerUserId && visibility === 'all'
-        ? { OR: [baseVisibilityWhere, { userId: viewerUserId, visibility: { not: 'onlyMe' } }] }
+      viewerUserId && visibility === "all"
+        ? {
+            OR: [
+              baseVisibilityWhere,
+              { userId: viewerUserId, visibility: { not: "onlyMe" } },
+            ],
+          }
         : baseVisibilityWhere;
 
     const lookbackMs = POSTS_RANKING.featuredLookbackDays * 24 * 60 * 60 * 1000;
     const featuredMinCreatedAt = new Date(now.getTime() - lookbackMs);
 
     const cursorScore = decodedCursor?.score ?? null;
-    const cursorCreatedAt = decodedCursor ? new Date(decodedCursor.createdAt) : null;
+    const cursorCreatedAt = decodedCursor
+      ? new Date(decodedCursor.createdAt)
+      : null;
     const cursorId = decodedCursor?.id ?? null;
 
     // Subsequent pages: trendingScore-ordered fetch with per-author diversity.
     if (decodedCursor && cursorScore != null && cursorCreatedAt && cursorId) {
-      const scanTake = Math.min(POSTS_RANKING.featuredScanTakeMax, Math.max(limit * 40, limit + 1));
-      const rows = await this.prisma.post.findMany({
+      const scanTake = Math.min(
+        POSTS_RANKING.featuredScanTakeMax,
+        Math.max(limit * 40, limit + 1),
+      );
+      const rows = (await this.prisma.post.findMany({
         where: {
           deletedAt: null,
           communityGroupId: null,
@@ -2129,17 +2952,36 @@ export class PostsFeedQueryService {
                 {
                   OR: [
                     { createdAt: { lt: cursorCreatedAt } },
-                    { AND: [{ createdAt: cursorCreatedAt }, { id: { lt: cursorId } }] },
+                    {
+                      AND: [
+                        { createdAt: cursorCreatedAt },
+                        { id: { lt: cursorId } },
+                      ],
+                    },
                   ],
                 },
               ],
             },
           ],
         },
-        orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [
+          { trendingScore: "desc" },
+          { createdAt: "desc" },
+          { id: "desc" },
+        ],
         take: scanTake,
-        select: { id: true, createdAt: true, trendingScore: true, userId: true },
-      }) as Array<{ id: string; createdAt: Date; trendingScore: number; userId: string }>;
+        select: {
+          id: true,
+          createdAt: true,
+          trendingScore: true,
+          userId: true,
+        },
+      })) as Array<{
+        id: string;
+        createdAt: Date;
+        trendingScore: number;
+        userId: string;
+      }>;
 
       const picked: typeof rows = [];
       const perAuthor = new Map<string, number>();
@@ -2153,29 +2995,50 @@ export class PostsFeedQueryService {
 
       const sliceRows = picked.slice(0, limit);
       const ids = sliceRows.map((r) => r.id);
-      const boundaryRow = sliceRows.length > 0 ? sliceRows[sliceRows.length - 1] : null;
+      const boundaryRow =
+        sliceRows.length > 0 ? sliceRows[sliceRows.length - 1] : null;
 
       const posts = ids.length
-        ? await this.prisma.post.findMany({ where: { id: { in: ids }, ...notDeletedWhere() }, include: feedPostInclude })
+        ? await this.prisma.post.findMany({
+            where: { id: { in: ids }, ...notDeletedWhere() },
+            include: feedPostInclude,
+          })
         : [];
       const byId = new Map(posts.map((p) => [p.id, p] as const));
-      const ordered = ids.map((id) => byId.get(id)).filter((p): p is (typeof posts)[number] => Boolean(p));
+      const ordered = ids
+        .map((id) => byId.get(id))
+        .filter((p): p is (typeof posts)[number] => Boolean(p));
 
       const nextCursor =
         picked.length > limit && boundaryRow
-          ? this.encodePopularCursor({ score: boundaryRow.trendingScore, createdAt: boundaryRow.createdAt.toISOString(), id: boundaryRow.id })
+          ? this.encodePopularCursor({
+              score: boundaryRow.trendingScore,
+              createdAt: boundaryRow.createdAt.toISOString(),
+              id: boundaryRow.id,
+            })
           : null;
 
-      const scoreByPostId = new Map<string, number>(sliceRows.map((r) => [r.id, r.trendingScore]));
+      const scoreByPostId = new Map<string, number>(
+        sliceRows.map((r) => [r.id, r.trendingScore]),
+      );
       return { posts: ordered, nextCursor, scoreByPostId };
     }
 
     // First page: blend top-scored posts + "rising" fresh posts for variety.
-    const topTake = Math.max(1, Math.min(limit, Math.round(limit * POSTS_RANKING.featuredRisingMixTopRatio)));
+    const topTake = Math.max(
+      1,
+      Math.min(
+        limit,
+        Math.round(limit * POSTS_RANKING.featuredRisingMixTopRatio),
+      ),
+    );
     const risingTake = Math.max(0, limit - topTake);
-    const scanTake = Math.min(POSTS_RANKING.featuredScanTakeMax, Math.max(topTake * 10, topTake + 1));
+    const scanTake = Math.min(
+      POSTS_RANKING.featuredScanTakeMax,
+      Math.max(topTake * 10, topTake + 1),
+    );
 
-    const topRows = await this.prisma.post.findMany({
+    const topRows = (await this.prisma.post.findMany({
       where: {
         deletedAt: null,
         communityGroupId: null,
@@ -2190,10 +3053,19 @@ export class PostsFeedQueryService {
         ...(params.topLevelOnly ? { parentId: null } : {}),
         ...visibilityWhere,
       },
-      orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [
+        { trendingScore: "desc" },
+        { createdAt: "desc" },
+        { id: "desc" },
+      ],
       take: scanTake,
       select: { id: true, createdAt: true, trendingScore: true, userId: true },
-    }) as Array<{ id: string; createdAt: Date; trendingScore: number; userId: string }>;
+    })) as Array<{
+      id: string;
+      createdAt: Date;
+      trendingScore: number;
+      userId: string;
+    }>;
 
     const perAuthor = new Map<string, number>();
     const topPicked: typeof topRows = [];
@@ -2206,10 +3078,15 @@ export class PostsFeedQueryService {
     }
 
     const topSlice = topPicked.slice(0, topTake);
-    const topBoundaryRow = topSlice.length > 0 ? topSlice[topSlice.length - 1] : null;
+    const topBoundaryRow =
+      topSlice.length > 0 ? topSlice[topSlice.length - 1] : null;
     const nextCursor =
       topPicked.length > topTake && topBoundaryRow
-        ? this.encodePopularCursor({ score: topBoundaryRow.trendingScore, createdAt: topBoundaryRow.createdAt.toISOString(), id: topBoundaryRow.id })
+        ? this.encodePopularCursor({
+            score: topBoundaryRow.trendingScore,
+            createdAt: topBoundaryRow.createdAt.toISOString(),
+            id: topBoundaryRow.id,
+          })
         : null;
 
     const excludePostIds = topSlice.map((r) => r.id);
@@ -2224,27 +3101,44 @@ export class PostsFeedQueryService {
         ? Prisma.sql`AND p."userId" NOT IN (${Prisma.join(excludeAuthorIds.map((id) => Prisma.sql`${id}`))})`
         : Prisma.sql``;
 
-    const excludeSelfSql = viewerUserId ? Prisma.sql`AND p."userId" <> ${viewerUserId}` : Prisma.sql``;
-    const authorFilterSql =
-      authorUserIds?.length
-        ? Prisma.sql`AND p."userId" IN (${Prisma.join(authorUserIds.map((id) => Prisma.sql`${id}`))})`
-        : Prisma.sql``;
+    const excludeSelfSql = viewerUserId
+      ? Prisma.sql`AND p."userId" <> ${viewerUserId}`
+      : Prisma.sql``;
+    const authorFilterSql = authorUserIds?.length
+      ? Prisma.sql`AND p."userId" IN (${Prisma.join(authorUserIds.map((id) => Prisma.sql`${id}`))})`
+      : Prisma.sql``;
     const mediaOnlySql = params.mediaOnly
       ? Prisma.sql`AND EXISTS (SELECT 1 FROM "PostMedia" pm WHERE pm."postId" = p."id" AND pm."deletedAt" IS NULL)`
       : Prisma.sql``;
-    const featuredTopLevelOnlySql = params.topLevelOnly ? Prisma.sql`AND p."parentId" IS NULL` : Prisma.sql``;
+    const featuredTopLevelOnlySql = params.topLevelOnly
+      ? Prisma.sql`AND p."parentId" IS NULL`
+      : Prisma.sql``;
 
-    const risingWindowMs = POSTS_RANKING.featuredRisingWindowHours * 60 * 60 * 1000;
+    const risingWindowMs =
+      POSTS_RANKING.featuredRisingWindowHours * 60 * 60 * 1000;
     const risingMinCreatedAt = new Date(now.getTime() - risingWindowMs);
 
     const risingVisibilitiesForQuery: PostVisibility[] =
-      visibility === 'all' ? allowed : visibility === 'public' ? (['public'] as PostVisibility[]) : ([visibility] as PostVisibility[]);
-    const risingVisibilitiesForQuerySql = risingVisibilitiesForQuery.map((v) => Prisma.sql`${v}::"PostVisibility"`);
+      visibility === "all"
+        ? allowed
+        : visibility === "public"
+          ? (["public"] as PostVisibility[])
+          : ([visibility] as PostVisibility[]);
+    const risingVisibilitiesForQuerySql = risingVisibilitiesForQuery.map(
+      (v) => Prisma.sql`${v}::"PostVisibility"`,
+    );
     const risingVisibilityFilterSql = Prisma.sql`AND p."visibility" IN (${Prisma.join(risingVisibilitiesForQuerySql)})`;
 
     const risingRows =
       risingTake > 0
-        ? await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date; score: number; userId: string }>>(Prisma.sql`
+        ? await this.prisma.$queryRaw<
+            Array<{
+              id: string;
+              createdAt: Date;
+              score: number;
+              userId: string;
+            }>
+          >(Prisma.sql`
             WITH
             comment_scores AS (
               SELECT
@@ -2327,15 +3221,10 @@ export class PostsFeedQueryService {
                 p."userId" as "userId",
                 CAST(
                   (
+                    -- boostScore already halves each boost every 24 hours.
                     CASE
                     WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
-                    ELSE p."boostScore" * POWER(
-                      0.5,
-                      GREATEST(
-                        0,
-                        EXTRACT(EPOCH FROM (${now}::timestamptz - p."createdAt"))
-                      ) / ${POSTS_RANKING.featuredRisingHalfLifeSeconds}
-                    )
+                    ELSE p."boostScore"
                     END
                   )
                   +
@@ -2387,7 +3276,7 @@ export class PostsFeedQueryService {
                       ${POSTS_RANKING.popularEngagementRateWeight} * (
                         (
                           CASE WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
-                          ELSE p."boostScore" * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${now}::timestamptz - p."createdAt")) / ${POSTS_RANKING.featuredRisingHalfLifeSeconds})) END
+                          ELSE p."boostScore" END
                         )
                         +
                         ((p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${now}::timestamptz - p."createdAt")) / ${POSTS_RANKING.featuredRisingHalfLifeSeconds})))
@@ -2413,21 +3302,37 @@ export class PostsFeedQueryService {
           `)
         : [];
 
-    const risingPicked: Array<{ id: string; createdAt: Date; score: number; userId: string }> = [];
+    const risingPicked: Array<{
+      id: string;
+      createdAt: Date;
+      score: number;
+      userId: string;
+    }> = [];
     for (const r of risingRows) {
       if (risingPicked.length >= risingTake) break;
       const n = perAuthor.get(r.userId) ?? 0;
       if (n >= POSTS_RANKING.featuredMaxPerAuthor) continue;
       perAuthor.set(r.userId, n + 1);
-      risingPicked.push({ id: r.id, createdAt: r.createdAt, score: r.score, userId: r.userId });
+      risingPicked.push({
+        id: r.id,
+        createdAt: r.createdAt,
+        score: r.score,
+        userId: r.userId,
+      });
     }
 
     // Interleave so Explore doesn't show "2 old + 1 new" clumped.
     // topSlice entries have `trendingScore`; normalize to a unified `score` field.
     const combined: Array<{ id: string; score: number }> = [];
-    const topQueue = topSlice.map((r) => ({ id: r.id, score: r.trendingScore }));
+    const topQueue = topSlice.map((r) => ({
+      id: r.id,
+      score: r.trendingScore,
+    }));
     const risingQueue = risingPicked.map((r) => ({ id: r.id, score: r.score }));
-    while (combined.length < limit && (topQueue.length > 0 || risingQueue.length > 0)) {
+    while (
+      combined.length < limit &&
+      (topQueue.length > 0 || risingQueue.length > 0)
+    ) {
       if (topQueue.length > 0) combined.push(topQueue.shift()!);
       if (combined.length >= limit) break;
       if (risingQueue.length > 0) combined.push(risingQueue.shift()!);
@@ -2441,9 +3346,13 @@ export class PostsFeedQueryService {
         })
       : [];
     const byId = new Map(posts.map((p) => [p.id, p] as const));
-    const ordered = ids.map((id) => byId.get(id)).filter((p): p is (typeof posts)[number] => Boolean(p));
+    const ordered = ids
+      .map((id) => byId.get(id))
+      .filter((p): p is (typeof posts)[number] => Boolean(p));
 
-    const scoreByPostId = new Map<string, number>(combined.map((r) => [r.id, r.score]));
+    const scoreByPostId = new Map<string, number>(
+      combined.map((r) => [r.id, r.score]),
+    );
     return { posts: ordered, nextCursor, scoreByPostId };
   }
 
@@ -2455,9 +3364,9 @@ export class PostsFeedQueryService {
     viewerUserId: string | null;
     limit: number;
     cursor: string | null;
-    visibility: 'all' | PostVisibility;
+    visibility: "all" | PostVisibility;
     followingOnly?: boolean;
-    kind?: 'regular' | 'checkin' | null;
+    kind?: "regular" | "checkin" | null;
     checkinDayKey?: string | null;
     /** When true, include the viewer's own posts (overrides home-feed self-exclusion). */
     includeSelf?: boolean;
@@ -2467,21 +3376,33 @@ export class PostsFeedQueryService {
     /** Filter to posts whose author has a matching US state code (e.g. "VA"). */
     authorLocationState?: string | null;
   }): Promise<PopularFeedResult> {
-    const { viewerUserId, limit, cursor, visibility, followingOnly = false } = params;
+    const {
+      viewerUserId,
+      limit,
+      cursor,
+      visibility,
+      followingOnly = false,
+    } = params;
     const requestedAuthorUserIds =
-      (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
-    const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
+      (params.authorUserIds ?? null)
+        ?.map((s) => (s ?? "").trim())
+        .filter(Boolean)
+        .slice(0, 50) ?? null;
+    const kind = (params.kind ?? null) as "regular" | "checkin" | null;
     const checkinDayKey = (params.checkinDayKey ?? null)?.trim() || null;
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
 
-    if (visibility === 'verifiedOnly') {
-      if (!viewer || viewer.verifiedStatus === 'none') throw new ForbiddenException('Verify to view verified-only posts.');
+    if (visibility === "verifiedOnly") {
+      if (!viewer || viewer.verifiedStatus === "none")
+        throw new ForbiddenException("Verify to view verified-only posts.");
     }
-    if (visibility === 'premiumOnly') {
+    if (visibility === "premiumOnly") {
       if (!viewer || !this.viewerContextService.isPremium(viewer)) {
-        throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+        throw new ForbiddenException(
+          "Upgrade to premium to view premium-only posts.",
+        );
       }
     }
 
@@ -2490,7 +3411,9 @@ export class PostsFeedQueryService {
     }
 
     const followingAuthorIds: string[] | null =
-      followingOnly && viewerUserId ? await this.getAuthorIdsForFollowingFilter(viewerUserId) : null;
+      followingOnly && viewerUserId
+        ? await this.getAuthorIdsForFollowingFilter(viewerUserId)
+        : null;
 
     const authorUserIds: string[] | null = requestedAuthorUserIds?.length
       ? followingAuthorIds?.length
@@ -2511,15 +3434,21 @@ export class PostsFeedQueryService {
     const memberGroupIds: string[] = [];
 
     const visibilityWhere =
-      visibility === 'all'
+      visibility === "all"
         ? ({ visibility: { in: allowed } } as Prisma.PostWhereInput)
-        : visibility === 'public'
-          ? ({ visibility: 'public' } as Prisma.PostWhereInput)
+        : visibility === "public"
+          ? ({ visibility: "public" } as Prisma.PostWhereInput)
           : ({ visibility } as Prisma.PostWhereInput);
 
     const visibilitiesForQuery: PostVisibility[] =
-      visibility === 'all' ? allowed : visibility === 'public' ? (['public'] as PostVisibility[]) : ([visibility] as PostVisibility[]);
-    const visibilitiesForQuerySql = visibilitiesForQuery.map((v) => Prisma.sql`${v}::"PostVisibility"`);
+      visibility === "all"
+        ? allowed
+        : visibility === "public"
+          ? (["public"] as PostVisibility[])
+          : ([visibility] as PostVisibility[]);
+    const visibilitiesForQuerySql = visibilitiesForQuery.map(
+      (v) => Prisma.sql`${v}::"PostVisibility"`,
+    );
 
     const decoded = this.decodePopularCursor(cursor);
 
@@ -2529,7 +3458,10 @@ export class PostsFeedQueryService {
     // Use requestedAuthorUserIds (not authorUserIds) as the gate so the trending Following
     // path (where authorUserIds already excludes the viewer via getAuthorIdsForFollowingFilter)
     // doesn't double-apply the exclusion.
-    const excludeViewerAuthor = Boolean(viewerUserId) && !requestedAuthorUserIds?.length && !params.includeSelf;
+    const excludeViewerAuthor =
+      Boolean(viewerUserId) &&
+      !requestedAuthorUserIds?.length &&
+      !params.includeSelf;
 
     // Fast path: use the stored trendingScore column (set by the popular-score cron every ~10 min).
     // For kind-filtered views (e.g. check-ins) or day-scoped views, fall back to real-time scoring
@@ -2558,24 +3490,32 @@ export class PostsFeedQueryService {
     const lookbackMs = POSTS_RANKING.popularLookbackDays * 24 * 60 * 60 * 1000;
     // When scoped to a specific check-in day the day key is the natural date bound —
     // skip the rolling lookback window so historical day feeds are never empty.
-    const minCreatedAt = checkinDayKey ? new Date(0) : new Date(asOfMs - lookbackMs);
+    const minCreatedAt = checkinDayKey
+      ? new Date(0)
+      : new Date(asOfMs - lookbackMs);
 
     const warmupAuthorFilter = authorUserIds?.length
       ? ({ userId: { in: authorUserIds } } as Prisma.PostWhereInput)
       : undefined;
-    const warmupKindFilter = kind ? ({ kind } as Prisma.PostWhereInput) : undefined;
-    const warmupCheckinDayKeyFilter = checkinDayKey ? ({ checkinDayKey } as Prisma.PostWhereInput) : undefined;
-    const warmupTopLevelFilter = params.topLevelOnly ? ({ parentId: null } as Prisma.PostWhereInput) : undefined;
+    const warmupKindFilter = kind
+      ? ({ kind } as Prisma.PostWhereInput)
+      : undefined;
+    const warmupCheckinDayKeyFilter = checkinDayKey
+      ? ({ checkinDayKey } as Prisma.PostWhereInput)
+      : undefined;
+    const warmupTopLevelFilter = params.topLevelOnly
+      ? ({ parentId: null } as Prisma.PostWhereInput)
+      : undefined;
 
     // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
     // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
     const popularVisibilityWhere =
-      viewerUserId && visibility === 'all'
+      viewerUserId && visibility === "all"
         ? ({
             OR: [
               visibilityWhere,
               // Author sees own posts (e.g. after tier downgrade), but never include only-me outside /only-me.
-              { userId: viewerUserId, visibility: { not: 'onlyMe' } },
+              { userId: viewerUserId, visibility: { not: "onlyMe" } },
             ],
           } as Prisma.PostWhereInput)
         : visibilityWhere;
@@ -2589,7 +3529,9 @@ export class PostsFeedQueryService {
             { parentId: null },
             excludeCommunityGroupPostsWhere(),
             ...(warmupAuthorFilter ? [warmupAuthorFilter] : []),
-            ...(excludeViewerAuthor && viewerUserId ? ([{ NOT: { userId: viewerUserId } }] as Prisma.PostWhereInput[]) : []),
+            ...(excludeViewerAuthor && viewerUserId
+              ? ([{ NOT: { userId: viewerUserId } }] as Prisma.PostWhereInput[])
+              : []),
             ...(warmupKindFilter ? [warmupKindFilter] : []),
             ...(warmupCheckinDayKeyFilter ? [warmupCheckinDayKeyFilter] : []),
             ...(warmupTopLevelFilter ? [warmupTopLevelFilter] : []),
@@ -2597,10 +3539,19 @@ export class PostsFeedQueryService {
             userNotBannedWhere(),
             { createdAt: { gte: minCreatedAt } },
             { boostCount: { gt: 0 } },
-            { OR: [{ boostScoreUpdatedAt: null }, { boostScoreUpdatedAt: { lt: staleBefore } }] },
+            {
+              OR: [
+                { boostScoreUpdatedAt: null },
+                { boostScoreUpdatedAt: { lt: staleBefore } },
+              ],
+            },
           ],
         },
-        orderBy: [{ boostCount: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [
+          { boostCount: "desc" },
+          { createdAt: "desc" },
+          { id: "desc" },
+        ],
         take: POSTS_RANKING.popularWarmupTake,
         select: { id: true },
       });
@@ -2611,39 +3562,52 @@ export class PostsFeedQueryService {
     // Snapshot `asOf` *after* any warmup updates, so we never "amplify" scores.
     const snapshotAsOf = decoded ? asOf : new Date();
     // For day-scoped feeds the lookback is irrelevant — use epoch so no posts are dropped.
-    const snapshotMinCreatedAt = checkinDayKey ? new Date(0) : new Date(snapshotAsOf.getTime() - lookbackMs);
+    const snapshotMinCreatedAt = checkinDayKey
+      ? new Date(0)
+      : new Date(snapshotAsOf.getTime() - lookbackMs);
     // recentCutoff is only meaningful for the "recency bucket" on global feeds.
     // For day-scoped feeds set it to epoch so the recency bucket captures everything.
     const recentCutoff = checkinDayKey
       ? new Date(0)
-      : new Date(snapshotAsOf.getTime() - POSTS_RANKING.popularRecentWindowHours * 60 * 60 * 1000);
+      : new Date(
+          snapshotAsOf.getTime() -
+            POSTS_RANKING.popularRecentWindowHours * 60 * 60 * 1000,
+        );
 
     const cursorCreatedAt = decoded ? new Date(decoded.createdAt) : null;
     const cursorScore = decoded?.score ?? null;
     const cursorId = decoded?.id ?? null;
 
-    const authorFilterSql =
-      authorUserIds?.length
-        ? Prisma.sql`AND p."userId" IN (${Prisma.join(authorUserIds.map((id) => Prisma.sql`${id}`))})`
-        : Prisma.sql``;
-    const excludeSelfSql = excludeViewerAuthor && viewerUserId
-      ? Prisma.sql`AND p."userId" <> ${viewerUserId}`
+    const authorFilterSql = authorUserIds?.length
+      ? Prisma.sql`AND p."userId" IN (${Prisma.join(authorUserIds.map((id) => Prisma.sql`${id}`))})`
       : Prisma.sql``;
+    const excludeSelfSql =
+      excludeViewerAuthor && viewerUserId
+        ? Prisma.sql`AND p."userId" <> ${viewerUserId}`
+        : Prisma.sql``;
     // NOTE: Postgres enum compare requires matching enum type. Cast to text to safely compare against our string param.
-    const kindFilterSql = kind ? Prisma.sql`AND (p."kind"::text = ${kind})` : Prisma.sql``;
-    const checkinDayKeyFilterSql = checkinDayKey ? Prisma.sql`AND p."checkinDayKey" = ${checkinDayKey}` : Prisma.sql``;
-    const topLevelOnlySql = params.topLevelOnly ? Prisma.sql`AND p."parentId" IS NULL` : Prisma.sql``;
+    const kindFilterSql = kind
+      ? Prisma.sql`AND (p."kind"::text = ${kind})`
+      : Prisma.sql``;
+    const checkinDayKeyFilterSql = checkinDayKey
+      ? Prisma.sql`AND p."checkinDayKey" = ${checkinDayKey}`
+      : Prisma.sql``;
+    const topLevelOnlySql = params.topLevelOnly
+      ? Prisma.sql`AND p."parentId" IS NULL`
+      : Prisma.sql``;
 
     // IMPORTANT: Only apply "author sees own posts" override when visibility='all'.
     // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
     const visibilityFilterSql =
-      viewerUserId && visibility === 'all'
+      viewerUserId && visibility === "all"
         ? Prisma.sql`AND (p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)}) OR (p."userId" = ${viewerUserId} AND p."visibility" <> 'onlyMe'))`
         : Prisma.sql`AND p."visibility" IN (${Prisma.join(visibilitiesForQuerySql)})`;
 
     const bannedAuthorSql = Prisma.sql`AND (SELECT u."bannedAt" FROM "User" u WHERE u."id" = p."userId") IS NULL`;
 
-    const rows = await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date; score: number }>>(Prisma.sql`
+    const rows = await this.prisma.$queryRaw<
+      Array<{ id: string; createdAt: Date; score: number }>
+    >(Prisma.sql`
       WITH
       comment_scores AS (
         SELECT
@@ -2830,16 +3794,10 @@ export class PostsFeedQueryService {
           p."createdAt" as "createdAt",
           CAST(
             (
-              -- Decay by post age so score reflects "recent engagement on this post," not cache refresh time.
+              -- boostScore already halves each boost every 24 hours.
               CASE
               WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
-              ELSE p."boostScore" * POWER(
-                0.5,
-                GREATEST(
-                  0,
-                  EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
-                ) / ${POSTS_RANKING.popularHalfLifeSeconds}
-              )
+              ELSE p."boostScore"
               END
             )
             +
@@ -2927,7 +3885,7 @@ export class PostsFeedQueryService {
                 ${POSTS_RANKING.popularEngagementRateWeight} * (
                   (
                     CASE WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
-                    ELSE p."boostScore" * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${POSTS_RANKING.popularHalfLifeSeconds})) END
+                    ELSE p."boostScore" END
                   )
                   +
                   ((p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${POSTS_RANKING.popularHalfLifeSeconds})))
@@ -2974,7 +3932,8 @@ export class PostsFeedQueryService {
 
     const sliceRows = rows.slice(0, limit);
     const ids = sliceRows.map((r) => r.id);
-    const nextRow = rows.length > limit ? sliceRows[sliceRows.length - 1] ?? null : null;
+    const nextRow =
+      rows.length > limit ? (sliceRows[sliceRows.length - 1] ?? null) : null;
 
     const posts = ids.length
       ? await this.prisma.post.findMany({
@@ -2983,7 +3942,9 @@ export class PostsFeedQueryService {
         })
       : [];
     const byId = new Map(posts.map((p) => [p.id, p] as const));
-    const ordered = ids.map((id) => byId.get(id)).filter((p): p is (typeof posts)[number] => Boolean(p));
+    const ordered = ids
+      .map((id) => byId.get(id))
+      .filter((p): p is (typeof posts)[number] => Boolean(p));
 
     const nextCursor =
       rows.length > limit && nextRow
@@ -2994,7 +3955,9 @@ export class PostsFeedQueryService {
           })
         : null;
 
-    const scoreByPostId = new Map<string, number>(sliceRows.map((r) => [r.id, r.score]));
+    const scoreByPostId = new Map<string, number>(
+      sliceRows.map((r) => [r.id, r.score]),
+    );
     return { posts: ordered, nextCursor, scoreByPostId };
   }
 
@@ -3005,9 +3968,9 @@ export class PostsFeedQueryService {
     viewerUserId: string | null;
     limit: number;
     cursor: string | null;
-    visibility: 'all' | PostVisibility;
+    visibility: "all" | PostVisibility;
     followingOnly?: boolean;
-    kind?: 'regular' | 'checkin' | null;
+    kind?: "regular" | "checkin" | null;
     checkinDayKey?: string | null;
     /** When true, include the viewer's own posts (overrides home-feed self-exclusion). */
     includeSelf?: boolean;
@@ -3017,21 +3980,33 @@ export class PostsFeedQueryService {
     /** Filter to posts whose author has a matching US state code (e.g. "VA"). */
     authorLocationState?: string | null;
   }): Promise<PopularFeedResult> {
-    const { viewerUserId, limit, cursor, visibility, followingOnly = false } = params;
+    const {
+      viewerUserId,
+      limit,
+      cursor,
+      visibility,
+      followingOnly = false,
+    } = params;
     const requestedAuthorUserIds =
-      (params.authorUserIds ?? null)?.map((s) => (s ?? '').trim()).filter(Boolean).slice(0, 50) ?? null;
-    const kind = (params.kind ?? null) as 'regular' | 'checkin' | null;
+      (params.authorUserIds ?? null)
+        ?.map((s) => (s ?? "").trim())
+        .filter(Boolean)
+        .slice(0, 50) ?? null;
+    const kind = (params.kind ?? null) as "regular" | "checkin" | null;
     const checkinDayKey = (params.checkinDayKey ?? null)?.trim() || null;
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
 
-    if (visibility === 'verifiedOnly') {
-      if (!viewer || viewer.verifiedStatus === 'none') throw new ForbiddenException('Verify to view verified-only posts.');
+    if (visibility === "verifiedOnly") {
+      if (!viewer || viewer.verifiedStatus === "none")
+        throw new ForbiddenException("Verify to view verified-only posts.");
     }
-    if (visibility === 'premiumOnly') {
+    if (visibility === "premiumOnly") {
       if (!viewer || !this.viewerContextService.isPremium(viewer)) {
-        throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+        throw new ForbiddenException(
+          "Upgrade to premium to view premium-only posts.",
+        );
       }
     }
 
@@ -3040,7 +4015,9 @@ export class PostsFeedQueryService {
     }
 
     const followingAuthorIds: string[] | null =
-      followingOnly && viewerUserId ? await this.getAuthorIdsForFollowingFilter(viewerUserId) : null;
+      followingOnly && viewerUserId
+        ? await this.getAuthorIdsForFollowingFilter(viewerUserId)
+        : null;
 
     const authorUserIds: string[] | null = requestedAuthorUserIds?.length
       ? followingAuthorIds?.length
@@ -3085,7 +4062,6 @@ export class PostsFeedQueryService {
       mediaOnly: params.mediaOnly,
       topLevelOnly: params.topLevelOnly,
     });
-
   }
 
   async listForUsername(params: {
@@ -3093,23 +4069,31 @@ export class PostsFeedQueryService {
     username: string;
     limit: number;
     cursor: string | null;
-    visibility: 'all' | PostVisibility;
+    visibility: "all" | PostVisibility;
     includeCounts: boolean;
-    sort: 'new' | 'popular';
+    sort: "new" | "popular";
     topLevelOnly?: boolean;
     /** When true, include posts of all visibility tiers.
      *  Posts the viewer cannot access are returned with viewerCanAccess=false and stripped body/media. */
     includeRestricted?: boolean;
   }) {
-    const { viewerUserId, username, limit, cursor, visibility, includeCounts, sort } = params;
-    const normalized = (username ?? '').trim();
-    if (!normalized) throw new NotFoundException('User not found.');
+    const {
+      viewerUserId,
+      username,
+      limit,
+      cursor,
+      visibility,
+      includeCounts,
+      sort,
+    } = params;
+    const normalized = (username ?? "").trim();
+    if (!normalized) throw new NotFoundException("User not found.");
 
     const user = await this.prisma.user.findFirst({
-      where: { username: { equals: normalized, mode: 'insensitive' } },
+      where: { username: { equals: normalized, mode: "insensitive" } },
       select: { id: true },
     });
-    if (!user) throw new NotFoundException('User not found.');
+    if (!user) throw new NotFoundException("User not found.");
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
 
@@ -3118,7 +4102,7 @@ export class PostsFeedQueryService {
     const counts: PostCounts | null = includeCounts
       ? await (async () => {
           const grouped = await this.prisma.post.groupBy({
-            by: ['visibility'],
+            by: ["visibility"],
             where: totalUserPostsWhere(user.id),
             _count: { _all: true },
           });
@@ -3132,36 +4116,48 @@ export class PostsFeedQueryService {
           for (const g of grouped) {
             const n = g._count._all;
             out.all += n;
-            if (g.visibility === 'public') out.public = n;
-            if (g.visibility === 'verifiedOnly') out.verifiedOnly = n;
-            if (g.visibility === 'premiumOnly') out.premiumOnly = n;
+            if (g.visibility === "public") out.public = n;
+            if (g.visibility === "verifiedOnly") out.verifiedOnly = n;
+            if (g.visibility === "premiumOnly") out.premiumOnly = n;
           }
           return out;
         })()
       : null;
 
-    const allowed =
-      isSelf ? (['public', 'verifiedOnly', 'premiumOnly'] as PostVisibility[]) : this.enrichment.allowedVisibilitiesForViewer(viewer);
+    const allowed = isSelf
+      ? (["public", "verifiedOnly", "premiumOnly"] as PostVisibility[])
+      : this.enrichment.allowedVisibilitiesForViewer(viewer);
 
     if (!params.includeRestricted) {
-      if (visibility === 'verifiedOnly' && !isSelf) {
-        if (!viewer || viewer.verifiedStatus === 'none') throw new ForbiddenException('Verify to view verified-only posts.');
+      if (visibility === "verifiedOnly" && !isSelf) {
+        if (!viewer || viewer.verifiedStatus === "none")
+          throw new ForbiddenException("Verify to view verified-only posts.");
       }
-      if (visibility === 'premiumOnly' && !isSelf) {
+      if (visibility === "premiumOnly" && !isSelf) {
         if (!viewer || !this.viewerContextService.isPremium(viewer)) {
-          throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
+          throw new ForbiddenException(
+            "Upgrade to premium to view premium-only posts.",
+          );
         }
       }
     }
 
-    const topLevelFilter: Prisma.PostWhereInput = params.topLevelOnly ? { parentId: null } : {};
+    const topLevelFilter: Prisma.PostWhereInput = params.topLevelOnly
+      ? { parentId: null }
+      : {};
 
     // When includeRestricted=true, omit visibility filter so all tiers are returned.
-    const allVisibilities: PostVisibility[] = ['public', 'verifiedOnly', 'premiumOnly'];
-    const effectiveAllowed = params.includeRestricted ? allVisibilities : allowed;
+    const allVisibilities: PostVisibility[] = [
+      "public",
+      "verifiedOnly",
+      "premiumOnly",
+    ];
+    const effectiveAllowed = params.includeRestricted
+      ? allVisibilities
+      : allowed;
 
     const baseWhere =
-      params.includeRestricted || visibility === 'all'
+      params.includeRestricted || visibility === "all"
         ? ({
             userId: user.id,
             visibility: { in: effectiveAllowed },
@@ -3177,16 +4173,23 @@ export class PostsFeedQueryService {
             ...topLevelFilter,
           } as Prisma.PostWhereInput);
 
-    if (sort === 'popular') {
-      // Trending for profile: same half-life boost + bookmark scoring as home feed, scoped to this user.
+    if (sort === "popular") {
+      // Trending for profile: same boost and bookmark scoring as the home feed, scoped to this user.
       const visibilitiesForQuery: PostVisibility[] =
-        visibility === 'all' ? allowed : visibility === 'public' ? (['public'] as PostVisibility[]) : ([visibility] as PostVisibility[]);
-      const visibilitiesForQuerySql = visibilitiesForQuery.map((v) => Prisma.sql`${v}::"PostVisibility"`);
+        visibility === "all"
+          ? allowed
+          : visibility === "public"
+            ? (["public"] as PostVisibility[])
+            : ([visibility] as PostVisibility[]);
+      const visibilitiesForQuerySql = visibilitiesForQuery.map(
+        (v) => Prisma.sql`${v}::"PostVisibility"`,
+      );
 
       const decoded = this.decodePopularCursor(cursor);
       const asOf = new Date();
       const asOfMs = asOf.getTime();
-      const lookbackMs = POSTS_RANKING.popularLookbackDays * 24 * 60 * 60 * 1000;
+      const lookbackMs =
+        POSTS_RANKING.popularLookbackDays * 24 * 60 * 60 * 1000;
       const minCreatedAt = new Date(asOfMs - lookbackMs);
 
       if (!decoded) {
@@ -3201,10 +4204,19 @@ export class PostsFeedQueryService {
               excludeCommunityGroupPostsWhere(),
               { createdAt: { gte: minCreatedAt } },
               { boostCount: { gt: 0 } },
-              { OR: [{ boostScoreUpdatedAt: null }, { boostScoreUpdatedAt: { lt: staleBefore } }] },
+              {
+                OR: [
+                  { boostScoreUpdatedAt: null },
+                  { boostScoreUpdatedAt: { lt: staleBefore } },
+                ],
+              },
             ],
           },
-          orderBy: [{ boostCount: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          orderBy: [
+            { boostCount: "desc" },
+            { createdAt: "desc" },
+            { id: "desc" },
+          ],
           take: POSTS_RANKING.popularWarmupTake,
           select: { id: true },
         });
@@ -3212,13 +4224,17 @@ export class PostsFeedQueryService {
       }
 
       const snapshotAsOf = decoded ? asOf : new Date();
-      const snapshotMinCreatedAt = new Date(snapshotAsOf.getTime() - lookbackMs);
+      const snapshotMinCreatedAt = new Date(
+        snapshotAsOf.getTime() - lookbackMs,
+      );
 
       const cursorCreatedAt = decoded ? new Date(decoded.createdAt) : null;
       const cursorScore = decoded?.score ?? null;
       const cursorId = decoded?.id ?? null;
 
-      const rows = await this.prisma.$queryRaw<Array<{ id: string; createdAt: Date; score: number }>>(Prisma.sql`
+      const rows = await this.prisma.$queryRaw<
+        Array<{ id: string; createdAt: Date; score: number }>
+      >(Prisma.sql`
         WITH
         comment_scores AS (
           SELECT
@@ -3247,15 +4263,10 @@ export class PostsFeedQueryService {
             p."createdAt" as "createdAt",
             CAST(
               (
+                -- boostScore already halves each boost every 24 hours.
                 CASE
                 WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
-                ELSE p."boostScore" * POWER(
-                  0.5,
-                  GREATEST(
-                    0,
-                    EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt"))
-                  ) / ${POSTS_RANKING.popularHalfLifeSeconds}
-                )
+                ELSE p."boostScore"
                 END
               )
               +
@@ -3313,7 +4324,7 @@ export class PostsFeedQueryService {
                   ${POSTS_RANKING.popularEngagementRateWeight} * (
                     (
                       CASE WHEN p."boostScore" IS NULL OR p."boostScoreUpdatedAt" IS NULL THEN 0
-                      ELSE p."boostScore" * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${POSTS_RANKING.popularHalfLifeSeconds})) END
+                      ELSE p."boostScore" END
                     )
                     +
                     ((p."bookmarkCount"::DOUBLE PRECISION) * 0.5 * POWER(0.5, GREATEST(0, EXTRACT(EPOCH FROM (${snapshotAsOf}::timestamptz - p."createdAt")) / ${POSTS_RANKING.popularHalfLifeSeconds})))
@@ -3363,7 +4374,8 @@ export class PostsFeedQueryService {
 
       const sliceRows = rows.slice(0, limit);
       const ids = sliceRows.map((r) => r.id);
-      const nextRow = rows.length > limit ? sliceRows[sliceRows.length - 1] ?? null : null;
+      const nextRow =
+        rows.length > limit ? (sliceRows[sliceRows.length - 1] ?? null) : null;
 
       const posts = ids.length
         ? await this.prisma.post.findMany({
@@ -3372,7 +4384,9 @@ export class PostsFeedQueryService {
           })
         : [];
       const byId = new Map(posts.map((p) => [p.id, p] as const));
-      const ordered = ids.map((id) => byId.get(id)).filter((p): p is (typeof posts)[number] => Boolean(p));
+      const ordered = ids
+        .map((id) => byId.get(id))
+        .filter((p): p is (typeof posts)[number] => Boolean(p));
 
       const nextCursor =
         rows.length > limit && nextRow
@@ -3383,42 +4397,53 @@ export class PostsFeedQueryService {
             })
           : null;
 
-      const scoreByPostId = new Map<string, number>(sliceRows.map((r) => [r.id, r.score]));
+      const scoreByPostId = new Map<string, number>(
+        sliceRows.map((r) => [r.id, r.score]),
+      );
       return { posts: ordered, nextCursor, counts, scoreByPostId };
     }
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,
-      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+      lookup: async (id) =>
+        await this.prisma.post.findUnique({
+          where: { id },
+          select: { id: true, createdAt: true },
+        }),
     });
 
     const posts = await this.prisma.post.findMany({
       where: { AND: [baseWhere, ...(cursorWhere ? [cursorWhere] : [])] },
       include: feedPostInclude,
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
     });
 
     const slice = posts.slice(0, limit);
-    const nextCursor = posts.length > limit ? slice[slice.length - 1]?.id ?? null : null;
+    const nextCursor =
+      posts.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
 
     return { posts: slice, nextCursor, counts };
   }
 
   private encodeCommentCursor(cursor: { createdAt: string; id: string }) {
-    return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+    return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
   }
 
   private decodeCommentCursor(
     token: string | null,
   ): { createdAt: string; id: string } | null {
-    const t = (token ?? '').trim();
+    const t = (token ?? "").trim();
     if (!t) return null;
     try {
-      const raw = Buffer.from(t, 'base64url').toString('utf8');
-      const parsed = JSON.parse(raw) as Partial<{ createdAt: string; id: string }>;
-      const createdAt = typeof parsed.createdAt === 'string' ? parsed.createdAt : '';
-      const id = typeof parsed.id === 'string' ? parsed.id : '';
+      const raw = Buffer.from(t, "base64url").toString("utf8");
+      const parsed = JSON.parse(raw) as Partial<{
+        createdAt: string;
+        id: string;
+      }>;
+      const createdAt =
+        typeof parsed.createdAt === "string" ? parsed.createdAt : "";
+      const id = typeof parsed.id === "string" ? parsed.id : "";
       if (!createdAt || !id) return null;
       return { createdAt, id };
     } catch {
@@ -3435,44 +4460,63 @@ export class PostsFeedQueryService {
     postId: string;
     limit: number;
     cursor: string | null;
-    visibility?: 'all' | PostVisibility;
-    sort?: 'new' | 'popular';
+    visibility?: "all" | PostVisibility;
+    sort?: "new" | "popular";
   }) {
-    const { viewerUserId, postId, limit, cursor, visibility = 'all', sort = 'new' } = params;
-    const parent = await this.requireReadablePostShell({ viewerUserId, id: postId });
-    if (parent.visibility === 'onlyMe') {
-      throw new ForbiddenException('This post is private.');
+    const {
+      viewerUserId,
+      postId,
+      limit,
+      cursor,
+      visibility = "all",
+      sort = "new",
+    } = params;
+    const parent = await this.requireReadablePostShell({
+      viewerUserId,
+      id: postId,
+    });
+    if (parent.visibility === "onlyMe") {
+      throw new ForbiddenException("This post is private.");
     }
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
     const baseVisibilityWhere: Prisma.PostWhereInput =
-      visibility === 'all'
+      visibility === "all"
         ? { visibility: { in: allowed } }
-        : visibility === 'public'
-          ? { visibility: 'public' }
+        : visibility === "public"
+          ? { visibility: "public" }
           : { visibility };
     // Author always sees own replies (e.g. after tier downgrade).
-    const visibilityWhere: Prisma.PostWhereInput =
-      viewerUserId
-        ? { OR: [baseVisibilityWhere, { userId: viewerUserId }] }
-        : baseVisibilityWhere;
+    const visibilityWhere: Prisma.PostWhereInput = viewerUserId
+      ? { OR: [baseVisibilityWhere, { userId: viewerUserId }] }
+      : baseVisibilityWhere;
 
     const decoded = this.decodeCommentCursor(cursor);
-    const isDesc = sort === 'new';
+    const isDesc = sort === "new";
     const cursorWhere =
       decoded != null
         ? isDesc
           ? ({
               OR: [
                 { createdAt: { lt: new Date(decoded.createdAt) } },
-                { AND: [{ createdAt: new Date(decoded.createdAt) }, { id: { lt: decoded.id } }] },
+                {
+                  AND: [
+                    { createdAt: new Date(decoded.createdAt) },
+                    { id: { lt: decoded.id } },
+                  ],
+                },
               ],
             } as Prisma.PostWhereInput)
           : ({
               OR: [
                 { createdAt: { gt: new Date(decoded.createdAt) } },
-                { AND: [{ createdAt: new Date(decoded.createdAt) }, { id: { gt: decoded.id } }] },
+                {
+                  AND: [
+                    { createdAt: new Date(decoded.createdAt) },
+                    { id: { gt: decoded.id } },
+                  ],
+                },
               ],
             } as Prisma.PostWhereInput)
         : undefined;
@@ -3485,28 +4529,32 @@ export class PostsFeedQueryService {
 
     const commentInclude = {
       user: { select: USER_LIST_SELECT },
-      media: { orderBy: { position: 'asc' as const } },
+      media: { orderBy: { position: "asc" as const } },
       mentions: { include: { user: { select: MENTION_USER_SELECT } } },
     };
 
-    if (sort === 'popular') {
+    if (sort === "popular") {
       const candidateIds = (
         await this.prisma.post.findMany({
-          where: { ...baseWhere, OR: [{ boostCount: { gt: 0 } }, { bookmarkCount: { gt: 0 } }] },
+          where: {
+            ...baseWhere,
+            OR: [{ boostCount: { gt: 0 } }, { bookmarkCount: { gt: 0 } }],
+          },
           select: { id: true },
           take: 500,
         })
       ).map((p) => p.id);
-      if (candidateIds.length > 0) await this.ranking.ensureBoostScoresFresh(candidateIds);
+      if (candidateIds.length > 0)
+        await this.ranking.ensureBoostScoresFresh(candidateIds);
       const [comments, countMap] = await Promise.all([
         this.prisma.post.findMany({
           where: cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere,
           include: commentInclude,
           orderBy: [
-            { boostScore: 'desc' },
-            { boostCount: 'desc' },
-            { createdAt: 'desc' },
-            { id: 'desc' },
+            { boostScore: "desc" },
+            { boostCount: "desc" },
+            { createdAt: "desc" },
+            { id: "desc" },
           ],
           take: limit + 1,
         }),
@@ -3527,7 +4575,9 @@ export class PostsFeedQueryService {
       this.prisma.post.findMany({
         where: cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere,
         include: commentInclude,
-        orderBy: isDesc ? [{ createdAt: 'desc' }, { id: 'desc' }] : [{ createdAt: 'asc' }, { id: 'asc' }],
+        orderBy: isDesc
+          ? [{ createdAt: "desc" }, { id: "desc" }]
+          : [{ createdAt: "asc" }, { id: "asc" }],
         take: limit + 1,
       }),
       this.commentVisibilityCounts(postId),
@@ -3547,16 +4597,17 @@ export class PostsFeedQueryService {
 
   private async commentVisibilityCounts(postId: string) {
     const counts = await this.prisma.post.groupBy({
-      by: ['visibility'],
+      by: ["visibility"],
       where: totalPostCommentsWhere(postId),
       _count: { _all: true },
     });
     const countMap = { all: 0, public: 0, verifiedOnly: 0, premiumOnly: 0 };
     for (const g of counts) {
       countMap.all += g._count._all;
-      if (g.visibility === 'public') countMap.public = g._count._all;
-      if (g.visibility === 'verifiedOnly') countMap.verifiedOnly = g._count._all;
-      if (g.visibility === 'premiumOnly') countMap.premiumOnly = g._count._all;
+      if (g.visibility === "public") countMap.public = g._count._all;
+      if (g.visibility === "verifiedOnly")
+        countMap.verifiedOnly = g._count._all;
+      if (g.visibility === "premiumOnly") countMap.premiumOnly = g._count._all;
     }
     return countMap;
   }
@@ -3566,15 +4617,23 @@ export class PostsFeedQueryService {
    * (except Marv — he only answers an explicit @marv, so we don't prefill him on later replies).
    * Used to pre-fill mentions and show "Replying to @userA, @userB" when composing a reply.
    */
-  async getThreadParticipants(params: { viewerUserId: string | null; postId: string }) {
+  async getThreadParticipants(params: {
+    viewerUserId: string | null;
+    postId: string;
+  }) {
     const { viewerUserId, postId } = params;
-    const post = await this.requireReadablePostShell({ viewerUserId, id: postId });
-    if (post.visibility === 'onlyMe') {
-      throw new ForbiddenException('This post is private.');
+    const post = await this.requireReadablePostShell({
+      viewerUserId,
+      id: postId,
+    });
+    if (post.visibility === "onlyMe") {
+      throw new ForbiddenException("This post is private.");
     }
 
     const rootId = post.rootId ?? post.id;
-    const cached = await this.cache.getOrSetJson<{ id: string; username: string }[]>({
+    const cached = await this.cache.getOrSetJson<
+      { id: string; username: string }[]
+    >({
       enabled: true,
       key: RedisKeys.threadParticipants(rootId),
       ttlSeconds: CacheTtl.threadParticipantsSeconds,
@@ -3586,25 +4645,36 @@ export class PostsFeedQueryService {
     };
   }
 
-  private async loadThreadParticipantUsers(rootId: string): Promise<Array<{ id: string; username: string }>> {
-    const threadWhere = { OR: [{ id: rootId }, { rootId }], ...notDeletedWhere() };
+  private async loadThreadParticipantUsers(
+    rootId: string,
+  ): Promise<Array<{ id: string; username: string }>> {
+    const threadWhere = {
+      OR: [{ id: rootId }, { rootId }],
+      ...notDeletedWhere(),
+    };
     const [authorRows, mentionRows] = await Promise.all([
       this.prisma.post.findMany({
         where: threadWhere,
         select: { userId: true },
-        distinct: ['userId'],
+        distinct: ["userId"],
       }),
       this.prisma.postMention.findMany({
         where: { post: threadWhere },
         select: { userId: true },
-        distinct: ['userId'],
+        distinct: ["userId"],
       }),
     ]);
-    const participantIds = [...new Set([...authorRows, ...mentionRows].map((r) => r.userId))];
+    const participantIds = [
+      ...new Set([...authorRows, ...mentionRows].map((r) => r.userId)),
+    ];
     if (participantIds.length === 0) return [];
 
     const users = await this.prisma.user.findMany({
-      where: { id: { in: participantIds }, usernameIsSet: true, bannedAt: null },
+      where: {
+        id: { in: participantIds },
+        usernameIsSet: true,
+        bannedAt: null,
+      },
       select: { id: true, username: true },
     });
     return users
@@ -3614,10 +4684,10 @@ export class PostsFeedQueryService {
 
   async getById(params: { viewerUserId: string | null; id: string }) {
     const { viewerUserId, id } = params;
-    const postId = (id ?? '').trim();
-    if (!postId) throw new NotFoundException('Post not found.');
+    const postId = (id ?? "").trim();
+    if (!postId) throw new NotFoundException("Post not found.");
 
-    const cacheKey = `posts.getById:${viewerUserId ?? 'anon'}:${postId}`;
+    const cacheKey = `posts.getById:${viewerUserId ?? "anon"}:${postId}`;
     const cached = this.requestCache.get<FeedPost>(cacheKey);
     if (cached) return cached;
 
@@ -3626,8 +4696,8 @@ export class PostsFeedQueryService {
       where: { id: postId, ...(viewer?.siteAdmin ? {} : notDeletedWhere()) },
       include: {
         user: { select: USER_LIST_SELECT },
-        media: { orderBy: { position: 'asc' } },
-        poll: { include: { options: { orderBy: { position: 'asc' } } } },
+        media: { orderBy: { position: "asc" } },
+        poll: { include: { options: { orderBy: { position: "asc" } } } },
         mentions: { include: { user: { select: MENTION_USER_SELECT } } },
         article: ARTICLE_SHARE_INCLUDE,
         fitnessShare: FITNESS_SHARE_INCLUDE,
@@ -3636,19 +4706,27 @@ export class PostsFeedQueryService {
         quotedPost: { include: QUOTED_POST_INCLUDE },
       },
     });
-    if (!post) throw new NotFoundException('Post not found.');
+    if (!post) throw new NotFoundException("Post not found.");
 
     const shell: ReadablePostShell = {
       id: post.id,
       userId: post.userId,
       visibility: post.visibility,
       rootId: (post as { rootId?: string | null }).rootId ?? null,
-      communityGroupId: (post as { communityGroupId?: string | null }).communityGroupId ?? null,
+      communityGroupId:
+        (post as { communityGroupId?: string | null }).communityGroupId ?? null,
     };
-    await this.assertViewerCanReadListedPost({ post: shell, viewerUserId, viewer });
+    await this.assertViewerCanReadListedPost({
+      post: shell,
+      viewerUserId,
+      viewer,
+    });
 
     this.requestCache.set(cacheKey, post as FeedPost);
-    this.requestCache.set(`posts.readShell:${viewerUserId ?? 'anon'}:${postId}`, shell);
+    this.requestCache.set(
+      `posts.readShell:${viewerUserId ?? "anon"}:${postId}`,
+      shell,
+    );
     return post;
   }
 
@@ -3661,49 +4739,51 @@ export class PostsFeedQueryService {
       where: {
         deletedAt: null,
         isDraft: false,
-        visibility: 'public',
+        visibility: "public",
         communityGroupId: null,
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
       include: feedPostInclude,
     });
-    if (!post) throw new NotFoundException('Post not found.');
+    if (!post) throw new NotFoundException("Post not found.");
 
     const [dto] = await this.composeFeedPostDtos({
       viewerUserId: null,
       filteredPosts: [post],
       collapsedItemsByItemId: new Map(),
     });
-    if (!dto) throw new NotFoundException('Post not found.');
+    if (!dto) throw new NotFoundException("Post not found.");
     return dto;
   }
 
   async getPublicById(id: string): Promise<PostDto> {
-    const postId = (id ?? '').trim();
-    if (!postId) throw new NotFoundException('Post not found.');
+    const postId = (id ?? "").trim();
+    if (!postId) throw new NotFoundException("Post not found.");
 
     const post = await this.prisma.post.findFirst({
       where: {
         id: postId,
         deletedAt: null,
         isDraft: false,
-        visibility: 'public',
+        visibility: "public",
         communityGroupId: null,
       },
       include: feedPostInclude,
     });
-    if (!post) throw new NotFoundException('Post not found.');
+    if (!post) throw new NotFoundException("Post not found.");
 
     const [dto] = await this.composeFeedPostDtos({
       viewerUserId: null,
       filteredPosts: [post],
       collapsedItemsByItemId: new Map(),
     });
-    if (!dto) throw new NotFoundException('Post not found.');
+    if (!dto) throw new NotFoundException("Post not found.");
     return dto;
   }
 
-  collectAncestorPostIds(seedIds: Array<string | null | undefined>): Promise<string[]> {
+  collectAncestorPostIds(
+    seedIds: Array<string | null | undefined>,
+  ): Promise<string[]> {
     return collectAncestorPostIds(this.prisma, seedIds);
   }
 
@@ -3716,9 +4796,16 @@ export class PostsFeedQueryService {
    * Batch variant of getById used by feed controllers to reduce per-id round trips.
    * Applies the same visibility rules as getById and omits inaccessible/missing ids.
    */
-  async getByIds(params: { viewerUserId: string | null; ids: string[] }): Promise<FeedPost[]> {
+  async getByIds(params: {
+    viewerUserId: string | null;
+    ids: string[];
+  }): Promise<FeedPost[]> {
     const viewerUserId = params.viewerUserId ?? null;
-    const ids = [...new Set((params.ids ?? []).map((id) => (id ?? '').trim()).filter(Boolean))];
+    const ids = [
+      ...new Set(
+        (params.ids ?? []).map((id) => (id ?? "").trim()).filter(Boolean),
+      ),
+    ];
     if (!ids.length) return [];
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
@@ -3727,7 +4814,7 @@ export class PostsFeedQueryService {
     const cached: FeedPost[] = [];
     const missingIds: string[] = [];
     for (const id of ids) {
-      const cacheKey = `posts.getById:${viewerUserId ?? 'anon'}:${id}`;
+      const cacheKey = `posts.getById:${viewerUserId ?? "anon"}:${id}`;
       const cachedPost = this.requestCache.get<FeedPost>(cacheKey);
       if (cachedPost) {
         cached.push(cachedPost);
@@ -3746,14 +4833,20 @@ export class PostsFeedQueryService {
     const groupIdsForVis = [
       ...new Set(
         fetched
-          .map((p) => (p as { communityGroupId?: string | null }).communityGroupId)
+          .map(
+            (p) => (p as { communityGroupId?: string | null }).communityGroupId,
+          )
           .filter((x): x is string => Boolean(x)),
       ),
     ];
     let memberGroupIdsForVis = new Set<string>();
     if (viewerUserId && groupIdsForVis.length > 0) {
       const memRows = await this.prisma.communityGroupMember.findMany({
-        where: { userId: viewerUserId, groupId: { in: groupIdsForVis }, status: 'active' },
+        where: {
+          userId: viewerUserId,
+          groupId: { in: groupIdsForVis },
+          status: "active",
+        },
         select: { groupId: true },
       });
       memberGroupIdsForVis = new Set(memRows.map((r) => r.groupId));
@@ -3762,20 +4855,22 @@ export class PostsFeedQueryService {
     const visibleFetched = fetched.filter((post) => {
       const isSelf = Boolean(viewer && viewer.id === post.userId);
       if (isSelf) return true;
-      if (post.visibility === 'onlyMe') return Boolean(viewer?.siteAdmin);
-      const pg = (post as { communityGroupId?: string | null }).communityGroupId ?? null;
+      if (post.visibility === "onlyMe") return Boolean(viewer?.siteAdmin);
+      const pg =
+        (post as { communityGroupId?: string | null }).communityGroupId ?? null;
       if (pg && memberGroupIdsForVis.has(pg)) return true;
       return allowed.includes(post.visibility);
     });
 
-    const visibleFetchedGroupScoped = await this.filterPostsByCommunityGroupAccess({
-      viewerUserId,
-      viewer,
-      posts: visibleFetched,
-    });
+    const visibleFetchedGroupScoped =
+      await this.filterPostsByCommunityGroupAccess({
+        viewerUserId,
+        viewer,
+        posts: visibleFetched,
+      });
 
     for (const post of visibleFetchedGroupScoped) {
-      const cacheKey = `posts.getById:${viewerUserId ?? 'anon'}:${post.id}`;
+      const cacheKey = `posts.getById:${viewerUserId ?? "anon"}:${post.id}`;
       this.requestCache.set(cacheKey, post as FeedPost);
     }
 
@@ -3783,7 +4878,9 @@ export class PostsFeedQueryService {
       ...cached.map((p) => [p.id, p] as const),
       ...visibleFetchedGroupScoped.map((p) => [p.id, p as FeedPost] as const),
     ]);
-    return ids.map((id) => byId.get(id)).filter((p): p is FeedPost => Boolean(p));
+    return ids
+      .map((id) => byId.get(id))
+      .filter((p): p is FeedPost => Boolean(p));
   }
 
   /**
@@ -3792,15 +4889,15 @@ export class PostsFeedQueryService {
    * The caller is responsible for passing `viewerCanAccess: false` to toPostDto.
    */
   async getByIdNoAccess(id: string): Promise<FeedPost> {
-    const postId = (id ?? '').trim();
-    if (!postId) throw new NotFoundException('Post not found.');
+    const postId = (id ?? "").trim();
+    if (!postId) throw new NotFoundException("Post not found.");
 
     const post = await this.prisma.post.findFirst({
-      where: { id: postId, visibility: { not: 'onlyMe' }, deletedAt: null },
+      where: { id: postId, visibility: { not: "onlyMe" }, deletedAt: null },
       include: {
         user: { select: USER_LIST_SELECT },
-        media: { orderBy: { position: 'asc' } },
-        poll: { include: { options: { orderBy: { position: 'asc' } } } },
+        media: { orderBy: { position: "asc" } },
+        poll: { include: { options: { orderBy: { position: "asc" } } } },
         mentions: { include: { user: { select: MENTION_USER_SELECT } } },
         article: ARTICLE_SHARE_INCLUDE,
         fitnessShare: FITNESS_SHARE_INCLUDE,
@@ -3809,7 +4906,7 @@ export class PostsFeedQueryService {
         quotedPost: { include: QUOTED_POST_INCLUDE },
       },
     });
-    if (!post) throw new NotFoundException('Post not found.');
+    if (!post) throw new NotFoundException("Post not found.");
     return post as FeedPost;
   }
 
@@ -3818,48 +4915,72 @@ export class PostsFeedQueryService {
     username: string;
     limit: number;
     cursor: string | null;
-    visibility: 'all' | PostVisibility;
-    sort: 'new' | 'trending';
+    visibility: "all" | PostVisibility;
+    sort: "new" | "trending";
     includeRestricted?: boolean;
   }) {
-    const { viewerUserId, username, limit, cursor, visibility, sort, includeRestricted } = params;
-    const normalized = (username ?? '').trim();
-    if (!normalized) throw new NotFoundException('User not found.');
+    const {
+      viewerUserId,
+      username,
+      limit,
+      cursor,
+      visibility,
+      sort,
+      includeRestricted,
+    } = params;
+    const normalized = (username ?? "").trim();
+    if (!normalized) throw new NotFoundException("User not found.");
 
     const user = await this.prisma.user.findFirst({
-      where: { username: { equals: normalized, mode: 'insensitive' } },
+      where: { username: { equals: normalized, mode: "insensitive" } },
       select: { id: true },
     });
-    if (!user) throw new NotFoundException('User not found.');
+    if (!user) throw new NotFoundException("User not found.");
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const isSelf = Boolean(viewer && viewer.id === user.id);
     const allowed = isSelf
-      ? (['public', 'verifiedOnly', 'premiumOnly'] as PostVisibility[])
+      ? (["public", "verifiedOnly", "premiumOnly"] as PostVisibility[])
       : this.enrichment.allowedVisibilitiesForViewer(viewer);
 
     // When includeRestricted, fetch all tiers and compute access per item.
     // When a specific visibility is requested via filter, honour it even in restricted mode.
-    const allVisibilities: PostVisibility[] = ['public', 'verifiedOnly', 'premiumOnly'];
+    const allVisibilities: PostVisibility[] = [
+      "public",
+      "verifiedOnly",
+      "premiumOnly",
+    ];
     const visibilityFilter: PostVisibility[] = includeRestricted
-      ? (visibility !== 'all' ? [visibility as PostVisibility] : allVisibilities)
-      : (visibility === 'all'
-          ? allowed
-          : allowed.includes(visibility as PostVisibility)
-            ? [visibility as PostVisibility]
-            : []);
+      ? visibility !== "all"
+        ? [visibility as PostVisibility]
+        : allVisibilities
+      : visibility === "all"
+        ? allowed
+        : allowed.includes(visibility as PostVisibility)
+          ? [visibility as PostVisibility]
+          : [];
 
     const r2BaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
     // Trending sort: join through post.trendingScore. Use numeric offset cursor
     // (encoded as base64) because score order is volatile and ID-lt breaks pages.
-    const offset = sort === 'trending' && cursor ? (() => {
-      try { return parseInt(Buffer.from(cursor, 'base64').toString('utf8'), 10) || 0; } catch { return 0; }
-    })() : 0;
+    const offset =
+      sort === "trending" && cursor
+        ? (() => {
+            try {
+              return (
+                parseInt(Buffer.from(cursor, "base64").toString("utf8"), 10) ||
+                0
+              );
+            } catch {
+              return 0;
+            }
+          })()
+        : 0;
 
     const baseWhere: Prisma.PostMediaWhereInput = {
-      kind: { in: ['image', 'video'] },
-      source: 'upload',
+      kind: { in: ["image", "video"] },
+      source: "upload",
       deletedAt: null,
       post: {
         userId: user.id,
@@ -3883,30 +5004,50 @@ export class PostsFeedQueryService {
     };
     let mediaRows: MediaRow[];
 
-    if (sort === 'trending') {
+    if (sort === "trending") {
       // Include all media (including zero/unscored posts), but rank by parent post score.
       // Unscored/null scores sort to the bottom so "trending" remains score-first.
       mediaRows = await this.prisma.postMedia.findMany({
         where: baseWhere,
         orderBy: [
-          { post: { trendingScore: { sort: 'desc', nulls: 'last' } } },
-          { post: { boostCount: 'desc' } },
-          { post: { bookmarkCount: 'desc' } },
-          { post: { repostCount: 'desc' } },
-          { post: { commentCount: 'desc' } },
-          { post: { createdAt: 'desc' } },
-          { id: 'desc' },
+          { post: { trendingScore: { sort: "desc", nulls: "last" } } },
+          { post: { boostCount: "desc" } },
+          { post: { bookmarkCount: "desc" } },
+          { post: { repostCount: "desc" } },
+          { post: { commentCount: "desc" } },
+          { post: { createdAt: "desc" } },
+          { id: "desc" },
         ],
         skip: offset,
         take: limit + 1,
-        select: { id: true, kind: true, r2Key: true, thumbnailR2Key: true, width: true, height: true, durationSeconds: true, postId: true, post: { select: { visibility: true } } },
+        select: {
+          id: true,
+          kind: true,
+          r2Key: true,
+          thumbnailR2Key: true,
+          width: true,
+          height: true,
+          durationSeconds: true,
+          postId: true,
+          post: { select: { visibility: true } },
+        },
       });
     } else {
       mediaRows = await this.prisma.postMedia.findMany({
         where: { ...baseWhere, ...(cursor ? { id: { lt: cursor } } : {}) },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: limit + 1,
-        select: { id: true, kind: true, r2Key: true, thumbnailR2Key: true, width: true, height: true, durationSeconds: true, postId: true, post: { select: { visibility: true } } },
+        select: {
+          id: true,
+          kind: true,
+          r2Key: true,
+          thumbnailR2Key: true,
+          width: true,
+          height: true,
+          durationSeconds: true,
+          postId: true,
+          post: { select: { visibility: true } },
+        },
       });
     }
 
@@ -3915,8 +5056,8 @@ export class PostsFeedQueryService {
 
     let nextCursor: string | null = null;
     if (hasMore) {
-      if (sort === 'trending') {
-        nextCursor = Buffer.from(String(offset + limit)).toString('base64');
+      if (sort === "trending") {
+        nextCursor = Buffer.from(String(offset + limit)).toString("base64");
       } else {
         nextCursor = items[items.length - 1]?.id ?? null;
       }
@@ -3926,14 +5067,17 @@ export class PostsFeedQueryService {
       items: items.map((m) => {
         const vis = m.post.visibility as PostVisibility;
         const viewerCanAccess = includeRestricted
-          ? (isSelf || allowed.includes(vis))
+          ? isSelf || allowed.includes(vis)
           : true;
         return {
           id: m.id,
           postId: m.postId,
-          kind: m.kind as 'image' | 'video',
+          kind: m.kind as "image" | "video",
           url: r2BaseUrl && m.r2Key ? `${r2BaseUrl}/${m.r2Key}` : null,
-          thumbnailUrl: r2BaseUrl && m.thumbnailR2Key ? `${r2BaseUrl}/${m.thumbnailR2Key}` : null,
+          thumbnailUrl:
+            r2BaseUrl && m.thumbnailR2Key
+              ? `${r2BaseUrl}/${m.thumbnailR2Key}`
+              : null,
           width: m.width,
           height: m.height,
           durationSeconds: m.durationSeconds ?? null,
@@ -3951,20 +5095,22 @@ export class PostsFeedQueryService {
     viewerUserId: string;
     limit: number;
     cursor: string | null;
-    sort: 'new' | 'trending';
+    sort: "new" | "trending";
   }) {
     const { viewerUserId, limit, cursor, sort } = params;
-    const groupIds = await this.listActiveCommunityGroupIdsForUser(viewerUserId);
+    const groupIds =
+      await this.listActiveCommunityGroupIdsForUser(viewerUserId);
     if (!groupIds.length) return { items: [], nextCursor: null };
 
     const r2BaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
-    const allowedVisibilities = this.enrichment.allowedVisibilitiesForViewer(viewer);
+    const allowedVisibilities =
+      this.enrichment.allowedVisibilitiesForViewer(viewer);
 
     const baseWhere: Prisma.PostMediaWhereInput = {
-      kind: { in: ['image', 'video'] },
-      source: 'upload',
+      kind: { in: ["image", "video"] },
+      source: "upload",
       deletedAt: null,
       post: {
         communityGroupId: { in: groupIds },
@@ -3987,27 +5133,30 @@ export class PostsFeedQueryService {
     let mediaRows: MediaRow[];
 
     const offset =
-      sort === 'trending' && cursor
+      sort === "trending" && cursor
         ? (() => {
             try {
-              return parseInt(Buffer.from(cursor, 'base64').toString('utf8'), 10) || 0;
+              return (
+                parseInt(Buffer.from(cursor, "base64").toString("utf8"), 10) ||
+                0
+              );
             } catch {
               return 0;
             }
           })()
         : 0;
 
-    if (sort === 'trending') {
+    if (sort === "trending") {
       mediaRows = await this.prisma.postMedia.findMany({
         where: baseWhere,
         orderBy: [
-          { post: { trendingScore: { sort: 'desc', nulls: 'last' } } },
-          { post: { boostCount: 'desc' } },
-          { post: { bookmarkCount: 'desc' } },
-          { post: { repostCount: 'desc' } },
-          { post: { commentCount: 'desc' } },
-          { post: { createdAt: 'desc' } },
-          { id: 'desc' },
+          { post: { trendingScore: { sort: "desc", nulls: "last" } } },
+          { post: { boostCount: "desc" } },
+          { post: { bookmarkCount: "desc" } },
+          { post: { repostCount: "desc" } },
+          { post: { commentCount: "desc" } },
+          { post: { createdAt: "desc" } },
+          { id: "desc" },
         ],
         skip: offset,
         take: limit + 1,
@@ -4025,7 +5174,7 @@ export class PostsFeedQueryService {
     } else {
       mediaRows = await this.prisma.postMedia.findMany({
         where: { ...baseWhere, ...(cursor ? { id: { lt: cursor } } : {}) },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: limit + 1,
         select: {
           id: true,
@@ -4045,8 +5194,8 @@ export class PostsFeedQueryService {
 
     let nextCursor: string | null = null;
     if (hasMore) {
-      if (sort === 'trending') {
-        nextCursor = Buffer.from(String(offset + limit)).toString('base64');
+      if (sort === "trending") {
+        nextCursor = Buffer.from(String(offset + limit)).toString("base64");
       } else {
         nextCursor = items[items.length - 1]?.id ?? null;
       }
@@ -4056,9 +5205,12 @@ export class PostsFeedQueryService {
       items: items.map((m) => ({
         id: m.id,
         postId: m.postId,
-        kind: m.kind as 'image' | 'video',
+        kind: m.kind as "image" | "video",
         url: r2BaseUrl && m.r2Key ? `${r2BaseUrl}/${m.r2Key}` : null,
-        thumbnailUrl: r2BaseUrl && m.thumbnailR2Key ? `${r2BaseUrl}/${m.thumbnailR2Key}` : null,
+        thumbnailUrl:
+          r2BaseUrl && m.thumbnailR2Key
+            ? `${r2BaseUrl}/${m.thumbnailR2Key}`
+            : null,
         width: m.width,
         height: m.height,
         durationSeconds: m.durationSeconds ?? null,
@@ -4072,7 +5224,7 @@ export class PostsFeedQueryService {
     groupId: string;
     limit: number;
     cursor: string | null;
-    sort: 'new' | 'trending';
+    sort: "new" | "trending";
   }) {
     const { viewerUserId, groupId, limit, cursor, sort } = params;
     await this.assertCanReadCommunityGroup(viewerUserId, groupId);
@@ -4080,8 +5232,8 @@ export class PostsFeedQueryService {
     const r2BaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
     const baseWhere: Prisma.PostMediaWhereInput = {
-      kind: { in: ['image', 'video'] },
-      source: 'upload',
+      kind: { in: ["image", "video"] },
+      source: "upload",
       deletedAt: null,
       post: {
         communityGroupId: groupId,
@@ -4103,27 +5255,30 @@ export class PostsFeedQueryService {
     let mediaRows: MediaRow[];
 
     const offset =
-      sort === 'trending' && cursor
+      sort === "trending" && cursor
         ? (() => {
             try {
-              return parseInt(Buffer.from(cursor, 'base64').toString('utf8'), 10) || 0;
+              return (
+                parseInt(Buffer.from(cursor, "base64").toString("utf8"), 10) ||
+                0
+              );
             } catch {
               return 0;
             }
           })()
         : 0;
 
-    if (sort === 'trending') {
+    if (sort === "trending") {
       mediaRows = await this.prisma.postMedia.findMany({
         where: baseWhere,
         orderBy: [
-          { post: { trendingScore: { sort: 'desc', nulls: 'last' } } },
-          { post: { boostCount: 'desc' } },
-          { post: { bookmarkCount: 'desc' } },
-          { post: { repostCount: 'desc' } },
-          { post: { commentCount: 'desc' } },
-          { post: { createdAt: 'desc' } },
-          { id: 'desc' },
+          { post: { trendingScore: { sort: "desc", nulls: "last" } } },
+          { post: { boostCount: "desc" } },
+          { post: { bookmarkCount: "desc" } },
+          { post: { repostCount: "desc" } },
+          { post: { commentCount: "desc" } },
+          { post: { createdAt: "desc" } },
+          { id: "desc" },
         ],
         skip: offset,
         take: limit + 1,
@@ -4141,7 +5296,7 @@ export class PostsFeedQueryService {
     } else {
       mediaRows = await this.prisma.postMedia.findMany({
         where: { ...baseWhere, ...(cursor ? { id: { lt: cursor } } : {}) },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: limit + 1,
         select: {
           id: true,
@@ -4161,8 +5316,8 @@ export class PostsFeedQueryService {
 
     let nextCursor: string | null = null;
     if (hasMore) {
-      if (sort === 'trending') {
-        nextCursor = Buffer.from(String(offset + limit)).toString('base64');
+      if (sort === "trending") {
+        nextCursor = Buffer.from(String(offset + limit)).toString("base64");
       } else {
         nextCursor = items[items.length - 1]?.id ?? null;
       }
@@ -4172,9 +5327,12 @@ export class PostsFeedQueryService {
       items: items.map((m) => ({
         id: m.id,
         postId: m.postId,
-        kind: m.kind as 'image' | 'video',
+        kind: m.kind as "image" | "video",
         url: r2BaseUrl && m.r2Key ? `${r2BaseUrl}/${m.r2Key}` : null,
-        thumbnailUrl: r2BaseUrl && m.thumbnailR2Key ? `${r2BaseUrl}/${m.thumbnailR2Key}` : null,
+        thumbnailUrl:
+          r2BaseUrl && m.thumbnailR2Key
+            ? `${r2BaseUrl}/${m.thumbnailR2Key}`
+            : null,
         width: m.width,
         height: m.height,
         durationSeconds: m.durationSeconds ?? null,
@@ -4197,29 +5355,35 @@ export class PostsFeedQueryService {
 
     const post = await this.prisma.post.findFirst({
       where: { id: postId, deletedAt: null },
-      select: { id: true, visibility: true, userId: true, communityGroupId: true },
+      select: {
+        id: true,
+        visibility: true,
+        userId: true,
+        communityGroupId: true,
+      },
     });
-    if (!post) throw new NotFoundException('Post not found.');
+    if (!post) throw new NotFoundException("Post not found.");
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
-    if (!allowed.includes(post.visibility)) throw new NotFoundException('Post not found.');
+    if (!allowed.includes(post.visibility))
+      throw new NotFoundException("Post not found.");
 
     // Enforce group membership — non-members must not enumerate reposters of a private group post.
     try {
       await this.assertReadableCommunityGroupPost(post, viewerUserId, viewer);
     } catch {
-      throw new NotFoundException('Post not found.');
+      throw new NotFoundException("Post not found.");
     }
 
     const reposts = await this.prisma.post.findMany({
       where: {
-        kind: 'repost',
+        kind: "repost",
         repostedPostId: postId,
         deletedAt: null,
         ...(cursor ? { createdAt: { lt: new Date(cursor) } } : {}),
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
       take: limit + 1,
       include: { user: { select: USER_LIST_SELECT } },
     });
@@ -4230,7 +5394,9 @@ export class PostsFeedQueryService {
     const authors = page
       .map((r) => toPostAuthorDtoFromFeedRow(r as any, r2BaseUrl))
       .filter((a): a is PostAuthorDto => a !== null);
-    const nextCursor = hasMore ? page[page.length - 1].createdAt.toISOString() : null;
+    const nextCursor = hasMore
+      ? page[page.length - 1].createdAt.toISOString()
+      : null;
     return { authors, nextCursor };
   }
 
@@ -4248,19 +5414,25 @@ export class PostsFeedQueryService {
 
     const post = await this.prisma.post.findFirst({
       where: { id: postId, deletedAt: null, isDraft: false },
-      select: { id: true, visibility: true, userId: true, communityGroupId: true },
+      select: {
+        id: true,
+        visibility: true,
+        userId: true,
+        communityGroupId: true,
+      },
     });
-    if (!post) throw new NotFoundException('Post not found.');
+    if (!post) throw new NotFoundException("Post not found.");
 
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
-    if (!allowed.includes(post.visibility)) throw new NotFoundException('Post not found.');
+    if (!allowed.includes(post.visibility))
+      throw new NotFoundException("Post not found.");
 
     // Enforce group membership — non-members must not list quotes of a private group post.
     try {
       await this.assertReadableCommunityGroupPost(post, viewerUserId, viewer);
     } catch {
-      throw new NotFoundException('Post not found.');
+      throw new NotFoundException("Post not found.");
     }
 
     const quotes = await this.prisma.post.findMany({
@@ -4269,21 +5441,23 @@ export class PostsFeedQueryService {
         deletedAt: null,
         isDraft: false,
         visibility: { in: allowed },
-        kind: { not: 'repost' },
+        kind: { not: "repost" },
         ...(cursor ? { createdAt: { lt: new Date(cursor) } } : {}),
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
       take: limit + 1,
       include: {
         user: { select: USER_LIST_SELECT },
-        media: { orderBy: { position: 'asc' } },
+        media: { orderBy: { position: "asc" } },
         mentions: { include: { user: { select: MENTION_USER_SELECT } } },
       },
     });
 
     const hasMore = quotes.length > limit;
     const page = hasMore ? quotes.slice(0, limit) : quotes;
-    const nextCursor = hasMore ? page[page.length - 1].createdAt.toISOString() : null;
+    const nextCursor = hasMore
+      ? page[page.length - 1].createdAt.toISOString()
+      : null;
     const visibleQuotes = await this.filterPostsByCommunityGroupAccess({
       viewerUserId,
       viewer,

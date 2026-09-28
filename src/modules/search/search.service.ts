@@ -879,7 +879,7 @@ export class SearchService {
     };
 
     // Refresh tier-weighted boost scores so popularity discounts unverified boosters
-    // (premium 3 / verified 2 / unverified 1); falls back to raw boostCount when not yet computed.
+    // (premium 1.25 / verified 1 / everyone else 0.5); falls back to raw boostCount when not yet computed.
     await this.articlesRanking.ensureArticleBoostScoresFresh(raw.map((a) => a.id));
     const refreshedBoostScore = raw.length
       ? new Map(

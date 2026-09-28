@@ -5,6 +5,14 @@
  */
 export const POSTS_RANKING = {
   boostScoreTtlMs: 10 * 60 * 1000,
+  /**
+   * Weight of one boost. Verified is the baseline. Premium includes Premium+.
+   * Each post boost halves every 24 hours inside boostScore. Trending uses that
+   * score as-is. Articles apply age decay later.
+   */
+  boostWeightPremium: 1.25,
+  boostWeightVerified: 1,
+  boostWeightBase: 0.5,
   /** 12h half-life so trending favors recent engagement. */
   popularHalfLifeSeconds: 12 * 60 * 60,
   popularLookbackDays: 30,

@@ -36,7 +36,7 @@ export class ArticlesTrendingScoreCron {
    * Compute trending scores for articles every 10 minutes.
    * Score formula uses a 36-hour half-life (articles trend longer than posts).
    * Components: weightedBoost * decay + commentCount * 0.8 * decay + shareCount * 0.5 * decay + ln(1+weightedViewCount) * 0.35 * decay
-   * where weightedBoost is the tier-weighted boost total (premium 3 / verified 2 / unverified 1).
+   * where weightedBoost is the tier-weighted boost total (premium 1.25 / verified 1 / everyone else 0.5).
    * We use a logarithmic view term so views inform ranking without overpowering stronger engagement signals.
    */
   @Cron('*/10 * * * *')
@@ -52,7 +52,7 @@ export class ArticlesTrendingScoreCron {
       const minPublishedAt = new Date(asOf.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
 
       // Refresh tier-weighted boost scores for the candidate set so the boost term
-      // below reads a fresh `boostScore` (premium 3 / verified 2 / unverified 1).
+      // below reads a fresh `boostScore` (premium 1.25 / verified 1 / everyone else 0.5).
       const candidates = await this.prisma.article.findMany({
         where: {
           isDraft: false,

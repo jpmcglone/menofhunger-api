@@ -29,9 +29,25 @@ postgresTests("post ranking on PostgreSQL", () => {
         : `'${(value instanceof Date ? value.toISOString() : String(value)).replace(/'/g, "''")}'`;
   async function sql(query: string) {
     if (process.env.POST_RANKING_FIXTURE_CONTAINER) {
-      return execFileSync('docker', ['exec', process.env.POST_RANKING_FIXTURE_CONTAINER,
-        'psql', '-X', '-qAt', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres',
-        '-d', 'moh_ranking_fixture', '-c', query], { encoding: 'utf8' }).trim();
+      return execFileSync(
+        "docker",
+        [
+          "exec",
+          process.env.POST_RANKING_FIXTURE_CONTAINER,
+          "psql",
+          "-X",
+          "-qAt",
+          "-v",
+          "ON_ERROR_STOP=1",
+          "-U",
+          "postgres",
+          "-d",
+          "moh_ranking_fixture",
+          "-c",
+          query,
+        ],
+        { encoding: "utf8" },
+      ).trim();
     }
     if (embedded) {
       const results = await embedded.exec(query);
@@ -186,14 +202,21 @@ postgresTests("post ranking on PostgreSQL", () => {
     );
   });
 
+  it("keeps a half-day-old boost at full boostScore", async () => {
+    await sql(
+      `INSERT INTO "Post" ("id", "createdAt", "boostScore") VALUES ('aged', '2026-09-08T00:00:00Z', 1);`,
+    );
+    expect((await scores(["aged"])).get("aged")).toBeCloseTo(1.15);
+  });
+
   it("returns zero to clear stale scores after engagement is removed", async () => {
     await sql(`INSERT INTO "Post" ("id", "boostScore") VALUES ('zero', 0);`);
     expect((await scores(["zero"])).get("zero")).toBe(0);
   });
 
-  it('caps the engagement-rate multiplier on the whole score', async () => {
+  it("caps the engagement-rate multiplier on the whole score", async () => {
     await sql(`INSERT INTO "Post" ("id", "boostCount") VALUES ('rate', 1000);`);
-    expect((await scores(['rate'])).get('rate')).toBeCloseTo(1.15 * 1.06);
+    expect((await scores(["rate"])).get("rate")).toBeCloseTo(1.15 * 1.06);
   });
 
   it("counts a friend once across repeated replies, boosts, and reposts", async () => {

@@ -1,3 +1,4 @@
+import { POSTS_RANKING } from '../posts/posts-ranking.config';
 import { ArticlesRankingService } from './articles-ranking.service';
 
 function makeService(prismaOverrides: Record<string, any> = {}) {
@@ -28,11 +29,16 @@ describe('ArticlesRankingService.ensureArticleBoostScoresFresh', () => {
 
     expect(queryRaw).toHaveBeenCalledTimes(1);
     expect(executeRaw).toHaveBeenCalledTimes(1);
-    // The tier weights (premium 3 / verified 2 / unverified 1) must live in the SQL.
-    const sql = (queryRaw.mock.calls[0][0] as any).strings.join('');
-    expect(sql).toContain('THEN 3');
-    expect(sql).toContain('THEN 2');
-    expect(sql).toContain('ELSE 1');
+    // Verified is 1, everyone else is half, premium (including Premium+) is 1.25.
+    const query = queryRaw.mock.calls[0][0] as { strings: string[]; values: unknown[] };
+    expect(query.strings.join('')).toContain('WHEN u."premium" THEN');
+    expect(query.values).toEqual(
+      expect.arrayContaining([
+        POSTS_RANKING.boostWeightPremium,
+        POSTS_RANKING.boostWeightVerified,
+        POSTS_RANKING.boostWeightBase,
+      ]),
+    );
   });
 
   it('skips recomputation when scores are still fresh', async () => {
