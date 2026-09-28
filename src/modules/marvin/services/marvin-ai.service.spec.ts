@@ -32,6 +32,7 @@ function makeService(opts?: {
   visionModes?: string[];
   webSearchEnabled?: boolean;
   apiKey?: string;
+  memory?: { prepare: jest.Mock; recall: jest.Mock };
 }) {
   const appConfig: any = {
     marvOpenAI: jest.fn(() => ({
@@ -52,7 +53,7 @@ function makeService(opts?: {
       maxOutputTokens: 1024,
     })),
   };
-  return new MarvinAIService(appConfig, { marvinUserSettings: { findUnique: jest.fn(async () => ({ aiConsentAt: opts?.consent === false ? null : new Date(), aiConsentVersion: AI_CONSENT_VERSION })), upsert: jest.fn(async () => ({})) }, post: { findFirst: jest.fn(async () => null) } } as any);
+  return new MarvinAIService(appConfig, { marvinUserSettings: { findUnique: jest.fn(async () => ({ aiConsentAt: opts?.consent === false ? null : new Date(), aiConsentVersion: AI_CONSENT_VERSION })), upsert: jest.fn(async () => ({})) }, post: { findFirst: jest.fn(async () => null) } } as any, (opts?.memory ?? { prepare: jest.fn(async () => null), recall: jest.fn(async () => ({ memories: [] })) }) as any);
 }
 
 function makeSuccessResponse(text: string) {
@@ -441,5 +442,51 @@ describe('personal AI permission enforcement', () => {
     const service = makeService({ consent: false });
     await service.respond({ ...baseReq, sharedContentOnly: true, source: 'public_thread', toolContext: { requesterUserId: '' } });
     expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('scoped memory in the response pipeline', () => {
+  beforeEach(() => mockResponsesCreate.mockReset());
+  it('does not inject remembered happenings into a self-contained answer', async () => {
+    const memory = { prepare: jest.fn(async () => null), recall: jest.fn(async () => ({ memories: [{ statement: 'Picnic tomorrow' }] })) };
+    mockResponsesCreate.mockResolvedValueOnce(makeSuccessResponse('12'));
+    await makeService({ memory }).respond({ ...baseReq, memoryQuestion: 'What is 15% of 80?' });
+    expect(memory.prepare).toHaveBeenCalled();
+    expect(memory.recall).not.toHaveBeenCalled();
+    const sent = mockResponsesCreate.mock.calls[0][0];
+    expect(JSON.stringify(sent.input)).not.toContain('Picnic tomorrow');
+    expect(sent.input[0].content).toContain('Before responding, check that every memory reference helps');
+    expect(sent.tools.find((t: any) => t.name === 'recall_relevant_memory').parameters.additionalProperties).toBe(false);
+  });
+  it('binds recall to the actual current question and trusted context, ignoring model-supplied scopes', async () => {
+    const memory = { prepare: jest.fn(async () => null), recall: jest.fn(async () => ({ memories: [] })) };
+    mockResponsesCreate.mockResolvedValueOnce({ id: 'r1', status: 'completed', output: [
+      { type: 'function_call', call_id: 'm1', name: 'recall_relevant_memory', arguments: '{"scope":"conversation:someone-else","query":"secret"}' },
+    ] }).mockResolvedValueOnce(makeSuccessResponse('No relevant memory.'));
+    await makeService({ memory }).respond({ ...baseReq, memoryQuestion: 'What did we decide about marathon training?' });
+    expect(memory.recall).toHaveBeenCalledWith(baseReq.toolContext, 'private_session', 'What did we decide about marathon training?');
+  });
+  it('rebuilds private context from live messages and never chains previous-turn retrieved data', async () => {
+    const memory = { prepare: jest.fn(async () => '[{"statement":"live message"}]'), recall: jest.fn() };
+    mockResponsesCreate.mockResolvedValueOnce(makeSuccessResponse('Answer'));
+    await makeService({ memory }).respond({ ...baseReq, memoryQuestion: 'Follow up', previousResponseId: 'stale-private-chain' });
+    const sent = mockResponsesCreate.mock.calls[0][0];
+    expect(sent.previous_response_id).toBeUndefined();
+    expect(sent.input[1]).toMatchObject({ role: 'user' });
+    expect(sent.input[1].content).toContain('untrusted quoted data');
+    expect(sent.input.at(-1).content).toBe(baseReq.userMessage);
+  });
+  it.each([{ source: 'admin_console' as const }, { source: 'public_thread' as const, sharedContentOnly: true }])('does not collect or expose member memory to %j', async extra => {
+    const memory = { prepare: jest.fn(), recall: jest.fn() };
+    mockResponsesCreate.mockResolvedValueOnce(makeSuccessResponse('Answer'));
+    await makeService({ memory }).respond({ ...baseReq, ...extra, memoryQuestion: 'marathon training' });
+    expect(memory.prepare).not.toHaveBeenCalled();
+    expect(mockResponsesCreate.mock.calls[0][0].tools.some((t: any) => t.name === 'recall_relevant_memory')).toBe(false);
+  });
+  it('answers without stale memory after memory preparation fails', async () => {
+    const memory = { prepare: jest.fn().mockRejectedValue(new Error('database unavailable')), recall: jest.fn() };
+    mockResponsesCreate.mockResolvedValueOnce(makeSuccessResponse('Answer'));
+    await makeService({ memory }).respond({ ...baseReq, memoryQuestion: 'Follow up', previousResponseId: 'stale-chain' });
+    expect(mockResponsesCreate.mock.calls[0][0].previous_response_id).toBeUndefined();
   });
 });

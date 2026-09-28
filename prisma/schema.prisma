@@ -1466,6 +1466,7 @@ model SpaceScheduleSubscriber {
 }
 
 model Post {
+  marvinMemorySource MarvinMemorySource?
   id                        String          @id @default(cuid())
   createdAt                 DateTime        @default(now())
   editedAt                  DateTime?
@@ -2550,6 +2551,7 @@ model MessageParticipant {
 }
 
 model Message {
+  marvinMemorySource MarvinMemorySource?
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
   body      String   @db.Text
@@ -3759,4 +3761,17 @@ model DelegationAction {
   startedAt   DateTime?
   completedAt DateTime?
   @@index([runId, createdAt])
+}
+
+/** Source-backed Marv memory. No copied message bodies or cross-scope summaries. */
+model MarvinMemorySource {
+  id        String   @id @default(cuid())
+  scopeKey  String
+  learnedAt DateTime @default(now())
+  postId    String?  @unique
+  messageId String?  @unique
+  post      Post?    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  message   Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([scopeKey, learnedAt])
 }

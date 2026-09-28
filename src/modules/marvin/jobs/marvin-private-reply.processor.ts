@@ -41,7 +41,7 @@ export type MarvinPrivateReplyJobPayload = {
  *
  *  - source = `private_session`
  *  - reply is sent via `MessagesService.sendBotDirectMessage` (existing direct conversation)
- *  - chains `previous_response_id` from `MarvinPrivateSessionState.lastResponseId` for memory
+ *  - rebuilds recent private history from live messages, with scoped recall for older context
  *  - rate limits use the private knobs in `marvLimits()`
  *  - non-premium → out-of-credits-style canned DM (same author flow, different copy)
  *
@@ -447,7 +447,7 @@ export class MarvinPrivateReplyProcessor {
       });
     };
 
-    // Pull previous response id for chain memory.
+    // Keep response metadata for compatibility; member replies rebuild live history in the AI service.
     const sessionState = await this.prisma.marvinPrivateSessionState.findUnique({
       where: { conversationId },
       select: { lastResponseId: true },
@@ -536,6 +536,7 @@ export class MarvinPrivateReplyProcessor {
         mode: effectiveMode,
         developerNote: built.developerNote,
         userMessage: built.userMessage,
+        memoryQuestion: text,
         imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
         dispatchTool: (name, args, ctx) => this.tools.dispatch(name, args, ctx),
         toolContext: {

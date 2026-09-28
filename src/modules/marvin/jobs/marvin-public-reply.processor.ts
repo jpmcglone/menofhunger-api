@@ -563,6 +563,7 @@ export class MarvinPublicReplyProcessor {
         mode: effectiveMode,
         developerNote: built.developerNote,
         userMessage: built.userMessage,
+        memoryQuestion: post.body ?? '',
         imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
         dispatchTool: (name, args, ctx) => this.tools.dispatch(name, args, ctx),
         toolContext: {

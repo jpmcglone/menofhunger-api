@@ -1,3 +1,4 @@
+import { MarvinMemoryService } from './services/marvin-memory.service';
 import { BookmarksModule } from '../bookmarks/bookmarks.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { MarvinPersonalController } from './marvin-personal.controller';
@@ -68,6 +69,7 @@ import { ScriptureModule } from '../scripture/scripture.module';
   ],
   controllers: [MarvinController, MarvinPersonalController],
   providers: [
+    MarvinMemoryService,
     MarvinPersonalService, MarvinParticipationService,
     AdminGuard,
     MarvinThreadContextService,
