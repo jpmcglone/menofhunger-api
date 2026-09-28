@@ -825,7 +825,7 @@ export class BoardService implements OnModuleInit {
     }
 
     const nextBody = typeof input.body === "string" ? input.body.trim() : null;
-    if (nextBody !== null && nextBody !== row.body && nextBody) {
+    if (nextBody !== null && nextBody !== row.body) {
       await this.posts.updatePost({
         userId: row.userId,
         postId: row.id,

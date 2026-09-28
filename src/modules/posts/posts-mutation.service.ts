@@ -332,7 +332,6 @@ export class PostsMutationService {
 
     const nextBody = (params.body ?? '').trim();
     assertPublishableText(nextBody);
-    if (!nextBody) throw new BadRequestException('Post must include text.');
 
     const post = await this.prisma.post.findUnique({
       where: { id },
@@ -347,6 +346,7 @@ export class PostsMutationService {
     if (post.userId !== userId) throw new ForbiddenException('Not allowed to edit this post.');
     if (post.deletedAt) throw new ForbiddenException('Cannot edit a deleted post.');
     if (post.parentId) throw new ForbiddenException('Replies cannot be edited.');
+    if (!nextBody && post.kind !== 'board') throw new BadRequestException('Post must include text.');
 
     // Product rule: posts with polls cannot be edited once voting begins.
     if (post.poll && (post.poll.totalVoteCount ?? 0) > 0) {
@@ -817,7 +817,7 @@ export class PostsMutationService {
       parentId
         ? this.prisma.post.findFirst({
             where: { id: parentId, ...notDeletedWhere() },
-            select: { id: true, userId: true, visibility: true, rootId: true, topics: true, communityGroupId: true, kind: true, articleId: true, user: { select: { isBot: true } } },
+            select: { id: true, body: true, mentions: { select: { userId: true } }, userId: true, visibility: true, rootId: true, topics: true, communityGroupId: true, kind: true, articleId: true, user: { select: { isBot: true } } },
           })
         : Promise.resolve(null),
     ]);
@@ -831,7 +831,15 @@ export class PostsMutationService {
     }
     if (parentId && !parentPost) throw new NotFoundException('Post not found.');
     // Every reply inside a Board thread is a Board comment, whichever client sent it.
-    if (parentPost?.kind === 'board') kind = 'board';
+    if (parentPost?.kind === 'board') {
+      kind = 'board';
+      if (marvRequesterId) {
+        const explicit = this.parseMentionsFromBody(parentPost.body).some(name => name.toLowerCase() === this.appConfig.marvBot().username.trim().toLowerCase());
+        if (!explicit || !parentPost.mentions.some(mention => mention.userId === userId)) {
+          throw new ForbiddenException('This Board item no longer mentions Marv.');
+        }
+      }
+    }
     if (parentPost?.kind === 'board' && !parentPost.rootId && parentPost.articleId) {
       throw new BadRequestException('Comment on the article instead.');
     }

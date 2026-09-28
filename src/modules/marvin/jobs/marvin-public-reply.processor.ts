@@ -600,7 +600,7 @@ export class MarvinPublicReplyProcessor {
           );
         }
       }
-      if (!isNotConfigured) {
+      if (!isNotConfigured && post.kind !== 'board') {
         await this.canned.sendTransientErrorThreadReply({ requestingUserId, triggeringPostId: postId, rootPostId })
           .catch(() => undefined);
       }
@@ -617,6 +617,7 @@ export class MarvinPublicReplyProcessor {
         errorCode: code,
         latencyMs: Date.now() - startedAt,
       });
+      if (!isNotConfigured && post.kind === 'board') throw err;
       return;
     }
 
@@ -627,6 +628,7 @@ export class MarvinPublicReplyProcessor {
       this.logger.warn(
         `[marv] public-reply EXIT reason=ai_no_text errorCode=${aiResult.errorCode ?? 'no_text'} resp=${aiResult.responseId} model=${aiResult.modelUsed} — posting transient-error thread reply`,
       );
+      if (post.kind === 'board') throw new Error('Marv returned no reply text; retrying Board request.');
       // Post a visible "try again" reply so the user isn't left in silence.
       // Deduplicated once per (user, rootPostId) — they see at most one error notice per thread.
       try {
