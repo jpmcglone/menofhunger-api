@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUserId } from './users.decorator';
 import { ActivationService } from './activation.service';
@@ -7,6 +7,11 @@ import { ActivationService } from './activation.service';
 @UseGuards(AuthGuard)
 export class ActivationController {
   constructor(private readonly activation: ActivationService) {}
+
+  @Post('completion')
+  async claimCompletion(@CurrentUserId() userId: string) {
+    return { data: await this.activation.claimCompletion(userId) };
+  }
 
   @Get()
   async get(@CurrentUserId() userId: string) {

@@ -1,15 +1,32 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
-import type { ActivationDto } from '../../common/dto/activation.dto';
+import type { ActivationCompletionDto, ActivationDto } from '../../common/dto/activation.dto';
+import { UsersMeRealtimeService } from './users-me-realtime.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class ActivationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly realtime: UsersMeRealtimeService,
+  ) {}
+
+  async claimCompletion(userId: string): Promise<ActivationCompletionDto> {
+    const progress = await this.get(userId);
+    if (progress.completionSeen || progress.phase !== 'approved'
+      || !progress.contributed || !progress.replied || !progress.returned) return { present: false };
+    // Compare-and-set makes simultaneous web/iOS requests mutually exclusive.
+    const claimed = await this.prisma.user.updateMany({
+      where: { id: userId, activationCelebratedAt: null },
+      data: { activationCelebratedAt: new Date() },
+    });
+    if (claimed.count === 1) await this.realtime.emitMeUpdated(userId, 'activation-completed');
+    return { present: claimed.count === 1 };
+  }
 
   async get(userId: string): Promise<ActivationDto> {
     const user = await this.prisma.user.findUnique({
-      where: { id: userId }, select: { verifiedStatus: true, verifiedAt: true },
+      where: { id: userId }, select: { verifiedStatus: true, verifiedAt: true, activationCelebratedAt: true },
     });
     if (!user) throw new NotFoundException('User not found.');
     const approved = user.verifiedStatus !== 'none';
@@ -27,6 +44,7 @@ export class ActivationService {
       }, select: { id: true } }),
     ]);
     const result: ActivationDto = {
+      completionSeen: Boolean(user.activationCelebratedAt),
       phase: approved ? 'approved' : 'before_approval',
       verificationRequested: approved || request?.status === 'pending' || request?.status === 'approved',
       verificationPending: !approved && request?.status === 'pending',

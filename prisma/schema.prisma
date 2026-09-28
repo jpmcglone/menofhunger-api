@@ -380,6 +380,8 @@ model User {
   locationCountry              String?
   // True when the user has dismissed the location prompt and does not want to be asked again.
   locationPromptSkipped        Boolean            @default(false)
+  // Account-wide, atomically claimed when the activation completion is first presented.
+  activationCelebratedAt        DateTime?
   // Required onboarding fields (gates app access).
   // Stored as DateTime (UTC midnight) to keep Prisma portable.
   birthdate                    DateTime?
