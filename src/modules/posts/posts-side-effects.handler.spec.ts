@@ -104,7 +104,7 @@ describe('PostsSideEffectsHandler registration', () => {
 
     handler.onModuleInit();
 
-    expect(deps.registry.names()).toEqual(['post.created', 'post.deleted', 'post.engagement.changed', 'post.quote.changed']);
+    expect(deps.registry.names()).toEqual(['post.created', 'board.mentions.added', 'post.deleted', 'post.engagement.changed', 'post.quote.changed']);
   });
 });
 
@@ -893,5 +893,25 @@ describe('PostsSideEffectsHandler maybeEnqueueMarvReply', () => {
     });
 
     expect(deps.jobs.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('Board mention edits', () => {
+  it('notifies only new, still-present recipients without repeating comment or feed events', async () => {
+    const { handler, deps } = makeHandler();
+    deps.prisma.post.findFirst.mockResolvedValue({
+      id: 'board', kind: 'board', body: '@existing @new @author', userId: 'author',
+      visibility: 'public', parentId: null, boardOnly: false, mentions: [],
+    });
+    jest.spyOn(handler as any, 'loadBodyMentionIds').mockResolvedValue(['existing', 'new', 'author']);
+    jest.spyOn(handler as any, 'loadThreadPostsForRoles').mockResolvedValue([]);
+    await (handler as any).onPostCreated({ postId: 'board', actorUserId: 'author' }, ['new', 'removed', 'author']);
+    expect(deps.notifications.create).toHaveBeenCalledTimes(1);
+    expect(deps.notifications.create).toHaveBeenCalledWith(expect.objectContaining({
+      recipientUserId: 'new', kind: 'mention', title: 'mentioned you in a Board post',
+    }));
+    expect(deps.prisma.follow.findMany).not.toHaveBeenCalled();
+    expect(deps.presenceRealtime.emitFeedNewPost).not.toHaveBeenCalled();
   });
 });

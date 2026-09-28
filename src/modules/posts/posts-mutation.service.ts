@@ -385,7 +385,8 @@ export class PostsMutationService {
     const fromBodyMentions = this.parseMentionsFromBody(nextBody);
     const bodyMentionIds = await this.resolveMentionUsernames(fromBodyMentions);
     const existingMentionIds = (post.mentions ?? []).map((m) => m.userId);
-    const mentionUserIds = Array.from(new Set([...existingMentionIds, ...bodyMentionIds])).filter(Boolean);
+    const mentionUserIds = Array.from(new Set(post.kind === 'board' ? bodyMentionIds : [...existingMentionIds, ...bodyMentionIds])).filter(Boolean);
+    const addedMentionIds = bodyMentionIds.filter(id => !existingMentionIds.includes(id));
 
     // Detect whether the quoted post link changed so we can adjust repostCount.
     const prevQuotedPostId: string | null = (post as any).quotedPostId ?? null;
@@ -479,6 +480,12 @@ export class PostsMutationService {
         });
       }
 
+      if (post.kind === 'board') {
+        next.mentions = await tx.postMention.findMany({
+          where: { postId: post.id }, include: { user: { select: MENTION_USER_SELECT } },
+        });
+      }
+
       // If hashtags changed, best-effort adjust counters by recomputing counts deltas.
       // We keep it simple for v1: decrement old and increment new based on tokens.
       const prevTags = post.hashtags ?? [];
@@ -532,6 +539,11 @@ export class PostsMutationService {
 
       return next;
     });
+    if (post.kind === 'board' && addedMentionIds.length) {
+      this.sideEffects.dispatch('board.mentions.added', {
+        postId: id, actorUserId: userId, recipientIds: addedMentionIds,
+      });
+    }
     const nextTopics = updated.topics ?? [];
     await this.cacheInvalidation.bumpForPostWrite({ topics: [...prevTopics, ...nextTopics] });
     void this.topicsClassify.enqueueIfNeeded(id);

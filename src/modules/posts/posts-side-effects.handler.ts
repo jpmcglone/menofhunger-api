@@ -90,6 +90,10 @@ export class PostsSideEffectsHandler implements OnModuleInit {
 
   onModuleInit(): void {
     this.registry.register('post.created', (payload) => this.onPostCreated(payload));
+    this.registry.register('board.mentions.added', (payload) => this.onPostCreated({
+      postId: payload.postId, actorUserId: payload.actorUserId, didAwardStreak: false,
+      requestedMarvMode: null,
+    }, payload.recipientIds));
     this.registry.register('post.deleted', (payload) => this.onPostDeleted(payload));
     this.registry.register('post.engagement.changed', (payload) => this.onEngagementChanged(payload));
     this.registry.register('post.quote.changed', (payload) => this.onQuoteChanged(payload));
@@ -232,7 +236,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
 
   // ─── post.created ─────────────────────────────────────────────────────
 
-  private async onPostCreated(payload: SideEffectPayloads['post.created']): Promise<void> {
+  private async onPostCreated(payload: SideEffectPayloads['post.created'], mentionRecipients?: string[]): Promise<void> {
     const postId = (payload.postId ?? '').trim();
     const actorUserId = (payload.actorUserId ?? '').trim();
     if (!postId || !actorUserId) return;
@@ -267,14 +271,16 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       this.loadQuotedInfo(post.quotedPostId ?? null),
     ]);
 
+    const currentMentionIds = mentionRecipients ? bodyMentionIds.filter(id => mentionRecipients.includes(id)) : bodyMentionIds;
     await this.runPostCreateSideEffects({
+      mentionsOnly: mentionRecipients !== undefined,
       actorUserId,
       post,
       parentId,
       parentAuthorUserId,
       threadPostsForRoles,
-      bodyMentionIds,
-      bodyMentionSet: new Set(bodyMentionIds),
+      bodyMentionIds: currentMentionIds,
+      bodyMentionSet: new Set(currentMentionIds),
       bodySnippet,
       visibility,
       quotedInfo,
@@ -282,7 +288,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       requestedMarvMode: payload.requestedMarvMode ?? null,
     });
 
-    await this.emitTierScopedGroupNewPost(post);
+    if (!mentionRecipients) await this.emitTierScopedGroupNewPost(post);
   }
 
   private async loadParentAuthorUserId(parentId: string | null): Promise<string | null> {
@@ -410,6 +416,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
    * stops the others — best-effort always.
    */
   private async runPostCreateSideEffects(args: {
+    mentionsOnly?: boolean;
     actorUserId: string;
     post: PostWithRelations;
     parentId: string | null;
@@ -506,7 +513,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
 
     try {
       // Quote repost notification: notify the quoted post's author (skip self-quotes).
-      if (quotedInfo && quotedInfo.quotedAuthorId !== userId && (await canNotifyForGroupPost(quotedInfo.quotedAuthorId))) {
+      if (!args.mentionsOnly && quotedInfo && quotedInfo.quotedAuthorId !== userId && (await canNotifyForGroupPost(quotedInfo.quotedAuthorId))) {
         await this.notifications
           .upsertRepostNotification({
             recipientUserId: quotedInfo.quotedAuthorId,
@@ -526,7 +533,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       // Only explicit @mentions in body get "mention" notifications (and override "comment" for that user).
       let threadRoles: Map<string, ReplyRole> | null = null;
       const replyTitles = post.kind === 'board' ? BOARD_REPLY_TITLE : REPLY_TITLE;
-      if (parentId && parentAuthorUserId !== userId) {
+      if (!args.mentionsOnly && parentId && parentAuthorUserId !== userId) {
         threadRoles = this.computeThreadRolesFromPosts(threadPostsForRoles, parentId);
         const parentRole = threadRoles.get(parentAuthorUserId ?? '');
         const parentTitle =
@@ -631,6 +638,8 @@ export class PostsSideEffectsHandler implements OnModuleInit {
             );
           });
       });
+
+      if (args.mentionsOnly) return;
 
       // Badge-only notifications for all active group members when a top-level post is created in a group.
       if (!parentId && postCommunityGroupId) {

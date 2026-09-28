@@ -40,6 +40,11 @@ export interface SideEffectPayloads {
     didAwardStreak: boolean;
     requestedMarvMode: 'fast' | 'regular' | 'smart' | null;
   };
+  'board.mentions.added': {
+    postId: string;
+    actorUserId: string;
+    recipientIds: string[];
+  };
   'post.deleted': {
     postId: string;
   };
