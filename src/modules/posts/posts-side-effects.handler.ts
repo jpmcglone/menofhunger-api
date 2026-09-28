@@ -639,7 +639,11 @@ export class PostsSideEffectsHandler implements OnModuleInit {
           });
       });
 
-      if (args.mentionsOnly) return;
+      if (args.mentionsOnly) {
+        await this.maybeEnqueueMarvReply({ post, actorUserId, bodySnippet, visibility,
+          requestedMarvMode, parentAuthorUserId, addedMentionIds: bodyMentionIds });
+        return;
+      }
 
       // Badge-only notifications for all active group members when a top-level post is created in a group.
       if (!parentId && postCommunityGroupId) {
@@ -995,6 +999,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     visibility: PostVisibility;
     requestedMarvMode: 'fast' | 'regular' | 'smart' | null;
     parentAuthorUserId?: string | null;
+    addedMentionIds?: string[];
   }): Promise<void> {
     const { post, actorUserId, bodySnippet, visibility, requestedMarvMode } = args;
     try {
@@ -1009,6 +1014,13 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       const bodyMentionUsernamesLower = new Set(bodyMentions);
       let resolvedMarvId = this.marvIdentity.cachedMarvUserId() ?? marvCfg.userId ?? null;
       const mentionsMarv = bodyMentionUsernamesLower.has(marvUsernameLower);
+
+      if (post.kind === 'board') {
+        resolvedMarvId ??= await this.marvIdentity.getMarvUserId().catch(() => null);
+        const resolvedMention = post.mentions?.some(mention => mention.user.id === resolvedMarvId);
+        if (!mentionsMarv || !resolvedMarvId || !resolvedMention ||
+            (args.addedMentionIds && !args.addedMentionIds.includes(resolvedMarvId))) return;
+      }
 
       let parentAuthorUserId = args.parentAuthorUserId ?? null;
       if (!mentionsMarv) {

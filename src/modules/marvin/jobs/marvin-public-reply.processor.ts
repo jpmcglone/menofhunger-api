@@ -1,3 +1,5 @@
+import { parseMentionsFromBody } from '../../../common/mentions/mention-regex';
+import { boardMarvReplyId } from '../services/board-marv-reply-id';
 import { marvinFailureReason, fitMarvinPost } from '../services/marvin-failure';
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, type MarvinMode } from '@prisma/client';
@@ -155,6 +157,7 @@ export class MarvinPublicReplyProcessor {
       select: {
         id: true,
         body: true,
+        kind: true,
         visibility: true,
         rootId: true,
         userId: true,
@@ -188,6 +191,14 @@ export class MarvinPublicReplyProcessor {
     if (!post) {
       this.logger.log(`[marv] public-reply EXIT reason=post_missing post=${postId}`);
       return;
+    }
+    if (post.kind === 'board') {
+      const explicit = parseMentionsFromBody(post.body ?? '').some(name => name.toLowerCase() === cfg.username.trim().toLowerCase());
+      if (!explicit || !marvUserIdForTyping || post.userId === marvUserIdForTyping ||
+          !post.mentions.some(mention => mention.user.id === marvUserIdForTyping)) return;
+      // A delivery may have committed before the worker lost its connection.
+      const existing = await this.prisma.post.findUnique({ where: { id: boardMarvReplyId(postId) }, select: { id: true } });
+      if (existing) return;
     }
     if (post.user.bannedAt) {
       this.logger.log(`[marv] public-reply EXIT reason=user_banned user=${requestingUserId}`);
@@ -765,8 +776,8 @@ export class MarvinPublicReplyProcessor {
         err instanceof Error ? err.stack : undefined,
       );
       await refundSettled();
-      // Mark as delivered to prevent key deletion / retry that would re-run AI.
-      delivered = true;
+      // Board replies have a stable database ID, so an ambiguous write is safe to retry.
+      delivered = post.kind !== 'board';
       await this.usage.recordEvent({
         userId: requestingUserId,
         source: 'public_thread',
@@ -781,6 +792,7 @@ export class MarvinPublicReplyProcessor {
         errorCode: MARV_ERROR_CODES.postFailed,
         latencyMs: Date.now() - startedAt,
       }).catch(() => undefined);
+      if (post.kind === 'board') throw err;
       return;
     }
 

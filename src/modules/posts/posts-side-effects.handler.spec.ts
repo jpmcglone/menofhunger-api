@@ -104,7 +104,7 @@ describe('PostsSideEffectsHandler registration', () => {
 
     handler.onModuleInit();
 
-    expect(deps.registry.names()).toEqual(['post.created', 'board.mentions.added', 'post.deleted', 'post.engagement.changed', 'post.quote.changed']);
+    expect(deps.registry.names()).toEqual(['board.mentions.added', 'post.created', 'post.deleted', 'post.engagement.changed', 'post.quote.changed']);
   });
 });
 
@@ -913,5 +913,34 @@ describe('Board mention edits', () => {
     }));
     expect(deps.prisma.follow.findMany).not.toHaveBeenCalled();
     expect(deps.presenceRealtime.emitFeedNewPost).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('explicit Board Marv requests', () => {
+  it.each([
+    ['thanks', [], 'alice', false],
+    ['Marv, help', [], 'alice', false],
+    ['@marv help', [], 'alice', false],
+    ['@marv @MARV help', [{ user: { id: 'marv-id' } }], 'alice', true],
+    ['@marv help', [{ user: { id: 'marv-id' } }], 'marv-id', false],
+  ])('gates %s by resolved mention and actor', async (body, mentions, actorUserId, expected) => {
+    const { handler, deps } = makeHandler();
+    deps.appConfig.marvBot.mockReturnValue({ enabled: true, username: 'marv', userId: 'marv-id' });
+    await (handler as any).maybeEnqueueMarvReply({
+      post: { id: 'board-comment', kind: 'board', body, mentions, parentId: 'marv-parent', rootId: 'board-root' },
+      actorUserId, parentAuthorUserId: 'marv-id', visibility: 'public', requestedMarvMode: null,
+    });
+    expect(deps.jobs.enqueue).toHaveBeenCalledTimes(expected ? 1 : 0);
+  });
+
+  it('does not repeat Marv on edits that add somebody else', async () => {
+    const { handler, deps } = makeHandler();
+    deps.appConfig.marvBot.mockReturnValue({ enabled: true, username: 'marv', userId: 'marv-id' });
+    await (handler as any).maybeEnqueueMarvReply({
+      post: { id: 'board', kind: 'board', body: '@marv @bob', mentions: [{ user: { id: 'marv-id' } }] },
+      actorUserId: 'alice', addedMentionIds: ['bob'], visibility: 'public', requestedMarvMode: null,
+    });
+    expect(deps.jobs.enqueue).not.toHaveBeenCalled();
   });
 });

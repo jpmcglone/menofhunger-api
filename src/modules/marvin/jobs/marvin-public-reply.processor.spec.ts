@@ -15,6 +15,7 @@ function p2002(): Error {
 }
 
 function makeProcessor(opts?: {
+  board?: boolean;
   premium?: boolean;
   credits?: number;
   visibility?: string;
@@ -34,6 +35,7 @@ function makeProcessor(opts?: {
   const post = {
     findFirst: jest.fn(async () => ({
       id: 'p-1',
+      kind: opts?.board ? 'board' : 'regular',
       body: 'Hey @marv, what do you think about this?',
       visibility: opts?.visibility ?? 'public',
       rootId: 'r-1',
@@ -46,15 +48,16 @@ function makeProcessor(opts?: {
         premiumPlus: false,
         bannedAt: null,
       },
-      mentions: [],
+      mentions: opts?.board ? [{ user: { id: 'marv-id', username: 'marv' } }] : [],
       media: [],
       poll: null,
     })),
+    findUnique: jest.fn(async (): Promise<any> => null),
     findMany: jest.fn(async () => []),
   };
 
   const prisma: any = {
-    marvinIdempotencyKey: { create: idempotencyCreate },
+    marvinIdempotencyKey: { create: idempotencyCreate, delete: jest.fn(async ({ where }: any) => { claimedKeys.delete(where.key); }) },
     marvinUserSettings: { findUnique: jest.fn(async () => null) },
     post,
     marvinUsageEvent: {
@@ -726,5 +729,29 @@ describe('MarvinPublicReplyProcessor', () => {
       expect(m.credits.settle).toHaveBeenCalledWith('u-requester', 3, 4);
       expect(m.usage.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ creditsSpent: 4 }));
     });
+  });
+});
+
+
+describe('Board Marv delivery', () => {
+  const request = { postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' };
+  it('replies directly to the triggering Board item', async () => {
+    const m = makeProcessor({ board: true });
+    await m.processor.process(request);
+    expect(m.posts.createMarvReply).toHaveBeenCalledWith(expect.objectContaining({ parentId: 'p-1' }));
+  });
+  it('skips an already committed reply after an ambiguous delivery failure', async () => {
+    const m = makeProcessor({ board: true });
+    m.prisma.post.findUnique.mockResolvedValue({ id: 'existing' });
+    await m.processor.process(request);
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
+  });
+  it('releases the claim on a failed Board delivery so a retry can succeed', async () => {
+    const m = makeProcessor({ board: true });
+    m.posts.createMarvReply.mockRejectedValueOnce(new Error('temporarily unavailable'));
+    await expect(m.processor.process(request)).rejects.toThrow('temporarily unavailable');
+    expect(m.prisma.marvinIdempotencyKey.delete).toHaveBeenCalled();
+    await m.processor.process(request);
+    expect(m.posts.createMarvReply).toHaveBeenCalledTimes(2);
   });
 });

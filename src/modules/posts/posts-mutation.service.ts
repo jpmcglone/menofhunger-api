@@ -1,3 +1,4 @@
+import { boardMarvReplyId } from '../marvin/services/board-marv-reply-id';
 import { captureMemberParticipation } from '../../common/posthog/member-participation';
 import { assertPublishableText } from '../../common/moderation/content-filter';
 import { requireAiConsent } from '../marvin/services/ai-consent';
@@ -387,6 +388,9 @@ export class PostsMutationService {
     const existingMentionIds = (post.mentions ?? []).map((m) => m.userId);
     const mentionUserIds = Array.from(new Set(post.kind === 'board' ? bodyMentionIds : [...existingMentionIds, ...bodyMentionIds])).filter(Boolean);
     const addedMentionIds = bodyMentionIds.filter(id => !existingMentionIds.includes(id));
+    if (post.kind === 'board' && fromBodyMentions.some(name => name.toLowerCase() === this.appConfig.marvBot().username.trim().toLowerCase())) {
+      await requireAiConsent(this.prisma, userId);
+    }
 
     // Detect whether the quoted post link changed so we can adjust repostCount.
     const prevQuotedPostId: string | null = (post as any).quotedPostId ?? null;
@@ -1256,6 +1260,7 @@ export class PostsMutationService {
 
         const created = await tx.post.create({
           data: {
+            ...(marvRequesterId && kind === 'board' && parentId ? { id: boardMarvReplyId(parentId) } : {}),
             body,
             topics,
             hashtags,
