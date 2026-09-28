@@ -12,6 +12,7 @@ import { queryBoolean } from '../../common/validation/query-boolean';
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
+  unreadOnly: queryBoolean().optional(),
   collapseByRoot: queryBoolean().optional(),
   collapseMode: z.enum(['root', 'parent']).optional(),
   prefer: z.enum(['reply', 'root']).optional(),
@@ -167,6 +168,7 @@ export class NotificationsController {
       limit,
       cursor,
       kind: parsed.kind,
+      unreadOnly: parsed.unreadOnly,
     });
     return {
       data: res.items,

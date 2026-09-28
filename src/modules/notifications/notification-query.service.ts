@@ -65,6 +65,7 @@ export class NotificationQueryService {
     limit: number;
     cursor: string | null;
     kind?: NotificationKind | 'other' | 'board';
+    unreadOnly?: boolean;
   }) {
     const firstPage = !(params.cursor ?? '').trim();
     if (!firstPage || !this.cache || !this.cacheInvalidation) {
@@ -75,6 +76,7 @@ export class NotificationQueryService {
     const paramsHash = stableJsonHash({
       limit: params.limit,
       kind: params.kind ?? null,
+      unreadOnly: params.unreadOnly === true,
       // Bump when Posts/Replies chip predicates change so stale page-1 caches miss.
       categories: 2,
     });
@@ -95,6 +97,7 @@ export class NotificationQueryService {
     limit: number;
     cursor: string | null;
     kind?: NotificationKind | 'other' | 'board';
+    unreadOnly?: boolean;
   }) {
     const { recipientUserId, limit, cursor, kind } = params;
     const desiredItemLimit = Math.max(1, Math.min(limit, 50));
@@ -119,6 +122,7 @@ export class NotificationQueryService {
       where: {
         recipientUserId,
         ...notificationFilterWhere(kind),
+        ...(params.unreadOnly ? { readAt: null } : {}),
         ...(blockedActorIds.length > 0 ? { NOT: { AND: [{ actorUserId: { not: null } }, { actorUserId: { in: blockedActorIds } }] } } : {}),
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },

@@ -149,6 +149,26 @@ function makePost(id: string, overrides: Record<string, any> = {}) {
   };
 }
 
+describe('Board unread activity filtering', () => {
+  it('filters unread rows before pagination without changing the default inbox query', async () => {
+    const { svc, prisma } = makeService();
+    await svc.list({ recipientUserId: 'viewer', limit: 1, cursor: null, kind: 'board', unreadOnly: true });
+    expect(prisma.notification.findMany.mock.calls[0][0].where).toEqual(expect.objectContaining({ recipientUserId: 'viewer', readAt: null }));
+    await svc.list({ recipientUserId: 'viewer', limit: 1, cursor: null, kind: 'board' });
+    expect(prisma.notification.findMany.mock.calls[1][0].where).not.toHaveProperty('readAt');
+  });
+
+  it('partitions unread and all-activity first-page caches', async () => {
+    const keys: string[] = [];
+    const cache = { getOrSetJsonWithLock: jest.fn(async (args: { key: string }) => { keys.push(args.key); return { items: [] }; }) };
+    const query = new NotificationQueryService({} as any, {} as any, {} as any, {} as any, cache as any,
+      { notificationsListVersion: async () => 1 } as any);
+    for (const unreadOnly of [true, false, undefined]) await query.list({ recipientUserId: 'viewer', limit: 30, cursor: null, kind: 'board', unreadOnly });
+    expect(keys[0]).not.toBe(keys[1]);
+    expect(keys[1]).toBe(keys[2]);
+  });
+});
+
 describe('NotificationsService.list batching', () => {
   it('batch loads subject posts/users (no per-notification findUnique/DTO builder)', async () => {
     const { svc, prisma, query } = makeService({
