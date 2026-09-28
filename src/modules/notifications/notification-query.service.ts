@@ -64,7 +64,7 @@ export class NotificationQueryService {
     recipientUserId: string;
     limit: number;
     cursor: string | null;
-    kind?: NotificationKind | 'other' | 'board';
+    kind?: NotificationKind | 'other' | 'board' | 'articles';
     unreadOnly?: boolean;
   }) {
     const firstPage = !(params.cursor ?? '').trim();
@@ -96,7 +96,7 @@ export class NotificationQueryService {
     recipientUserId: string;
     limit: number;
     cursor: string | null;
-    kind?: NotificationKind | 'other' | 'board';
+    kind?: NotificationKind | 'other' | 'board' | 'articles';
     unreadOnly?: boolean;
   }) {
     const { recipientUserId, limit, cursor, kind } = params;

@@ -19,6 +19,10 @@ describe('notification category contract', () => {
     expect(!other.notIn.includes(kind)).toBe(expected === 'other');
   });
 
+  it('filters article activity by subject, including replies and boosts', () => {
+    expect(notificationFilterWhere('articles')).toEqual({ subjectArticleId: { not: null } });
+  });
+
   it('classifies by event even when the referenced post is a reply', () => {
     expect(notificationCategory('followed_post', 'parent')).toBe('replies');
     expect(notificationCategory('mention', 'parent')).toBe('mentions');

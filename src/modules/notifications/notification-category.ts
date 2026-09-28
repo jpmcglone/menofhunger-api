@@ -24,9 +24,10 @@ export function notificationCategory(kind: string, parentId?: string | null): No
 }
 
 /** Existing query values remain compatible while the primary filters cover categories. */
-export function notificationFilterWhere(kind?: NotificationKind | 'other' | 'board'): Prisma.NotificationWhereInput {
+export function notificationFilterWhere(kind?: NotificationKind | 'other' | 'board' | 'articles'): Prisma.NotificationWhereInput {
   switch (kind) {
     case undefined: return {};
+    case 'articles': return { subjectArticleId: { not: null } };
     case 'board': return { OR: [
       { actorPost: { is: { kind: 'board' } } },
       { subjectPost: { is: { kind: 'board' } } },

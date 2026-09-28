@@ -149,7 +149,14 @@ function makePost(id: string, overrides: Record<string, any> = {}) {
   };
 }
 
-describe('Board unread activity filtering', () => {
+describe('Board and article unread activity filtering', () => {
+  it('filters article subjects before paging without including ordinary post activity', async () => {
+    const { svc, prisma } = makeService();
+    await svc.list({ recipientUserId: 'viewer', limit: 1, cursor: null, kind: 'articles', unreadOnly: true });
+    expect(prisma.notification.findMany.mock.calls[0][0].where).toEqual(expect.objectContaining({
+      recipientUserId: 'viewer', readAt: null, subjectArticleId: { not: null },
+    }));
+  });
   it('filters unread rows before pagination without changing the default inbox query', async () => {
     const { svc, prisma } = makeService();
     await svc.list({ recipientUserId: 'viewer', limit: 1, cursor: null, kind: 'board', unreadOnly: true });

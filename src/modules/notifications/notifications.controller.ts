@@ -50,6 +50,7 @@ const listQuerySchema = z.object({
     'status_update',
     'checkin_post',
     'board',
+    'articles',
     'other',
   ]).optional(),
 });
