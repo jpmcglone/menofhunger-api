@@ -13,7 +13,13 @@ Two clocks. Do not collapse them.
 | **Unseen** | `deliveredAt == null` | Has not opened/seen the inbox since it arrived | **Badge** (app icon, bell count, `undeliveredCount`) |
 | **Unread** | `readAt == null` | Has not opened the item / marked it read | **Highlight** on the row |
 
-Opening the notifications surface marks **seen** (`deliveredAt`). That clears the badge. Rows stay highlighted until **read** (`readAt`).
+Opening the notifications surface marks **seen** (`deliveredAt`). That clears the badge. Row unread state comes from **read** (`readAt`).
+
+Post previews can be marked read automatically while visible. Retain their unread highlight
+for the current inbox visit even after that acknowledgement. Seed the highlight from actual
+unread rows, never from the badge count or list position. Preserve it through refresh,
+pagination, and filter changes; reset on leaving/re-entering or account changes. Explicit
+"Mark all as read" clears it immediately. Keep server read state and badge updates live.
 
 Clicking through (or mark-read) sets `readAt` and should also set `deliveredAt` if it was still null.
 
