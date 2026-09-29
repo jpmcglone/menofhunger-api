@@ -215,7 +215,7 @@ export class BoardController {
         : null,
       tags: parsed.tags ?? [],
       visibility: parsed.visibility ?? 'public',
-      showInFeed: parsed.showInFeed ?? true,
+      showInFeed: parsed.showInFeed ?? false,
     });
     return { data };
   }

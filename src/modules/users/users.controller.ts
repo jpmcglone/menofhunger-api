@@ -82,7 +82,6 @@ const profileSchema = z.object({
   website: z.union([z.string().trim().max(200), z.literal('')]).optional(),
   // Generous max because we also accept pasted profile URLs; the real constraint is in normalizeSocialHandle.
   xUsername: z.union([z.string().trim().max(200), z.literal('')]).optional(),
-  pickaxUsername: z.union([z.string().trim().max(200), z.literal('')]).optional(),
   locationQuery: z.union([z.string().trim().max(80), z.literal('')]).optional(),
 });
 
@@ -990,11 +989,6 @@ export class UsersController {
       if (parsed.xUsername !== undefined) {
         const raw = (parsed.xUsername ?? '').trim();
         update.xUsername = raw ? normalizeSocialHandle('x', raw) : null;
-      }
-
-      if (parsed.pickaxUsername !== undefined) {
-        const raw = (parsed.pickaxUsername ?? '').trim();
-        update.pickaxUsername = raw ? normalizeSocialHandle('pickax', raw) : null;
       }
 
       if (parsed.locationQuery !== undefined) {

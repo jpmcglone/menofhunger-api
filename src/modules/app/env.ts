@@ -154,6 +154,11 @@ export const envSchema = z.object({
     z.string().optional(),
   ),
 
+  // SFU rollout is opt-in; credentials alone must never change live call routing.
+  CLOUDFLARE_SFU_APP_ID: z.string().optional(),
+  CLOUDFLARE_SFU_APP_SECRET: z.string().optional(),
+  CALLS_SFU_ENABLED: z.enum(['true', 'false']).optional().default('false'),
+
   // Cloudflare R2 (S3-compatible) for public assets (avatars/banners).
   R2_ACCOUNT_ID: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
@@ -404,6 +409,12 @@ export const envSchema = z.object({
   STRAVA_WEBHOOK_VERIFY_TOKEN: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
+  ),
+
+  // Encrypts members' Pickax API credentials at rest (min 32 chars). Cross-posting is off when unset.
+  PICKAX_SECRET_ENCRYPTION_KEY: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().min(32).optional(),
   ),
 
   POSTHOG_API_KEY: z.preprocess(

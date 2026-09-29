@@ -62,7 +62,6 @@ const updateUserSchema = z.object({
   bio: z.string().trim().max(160).nullable().optional(),
   website: z.union([z.string().trim().max(200), z.literal('')]).optional(),
   xUsername: z.union([z.string().trim().max(200), z.literal('')]).optional(),
-  pickaxUsername: z.union([z.string().trim().max(200), z.literal('')]).optional(),
   locationQuery: z.union([z.string().trim().max(80), z.literal('')]).optional(),
   isOrganization: z.boolean().optional(),
   verifiedStatus: z.enum(['none', 'identity', 'manual']).optional(),
@@ -664,11 +663,6 @@ export class AdminUsersController {
     if (parsed.xUsername !== undefined) {
       const raw = (parsed.xUsername ?? '').trim();
       data.xUsername = raw ? normalizeSocialHandle('x', raw) : null;
-    }
-
-    if (parsed.pickaxUsername !== undefined) {
-      const raw = (parsed.pickaxUsername ?? '').trim();
-      data.pickaxUsername = raw ? normalizeSocialHandle('pickax', raw) : null;
     }
 
     if (parsed.locationQuery !== undefined) {

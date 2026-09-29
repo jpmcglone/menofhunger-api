@@ -148,6 +148,11 @@ function makeAuthoringService(tier: TierOpts = {}) {
     bumpFeedGlobal: jest.fn().mockResolvedValue(undefined),
   } as any;
 
+  const board = {
+    syncArticleThread: jest.fn().mockResolvedValue(undefined),
+    createArticleThread: jest.fn().mockResolvedValue(null),
+  } as any;
+
   const service = new ArticlesService(
     prisma,
     viewer,
@@ -158,10 +163,10 @@ function makeAuthoringService(tier: TierOpts = {}) {
     { enqueue: jest.fn().mockResolvedValue({}) } as any,
     { dispatch: jest.fn() } as any,
     { viewerViewedArticleIds: jest.fn().mockResolvedValue(new Set()) } as any,
-    { syncArticleThread: jest.fn().mockResolvedValue(undefined), createArticleThread: jest.fn().mockResolvedValue(null) } as any,
+    board,
   );
 
-  return { service, prisma, viewer };
+  return { service, prisma, viewer, board };
 }
 
 describe('ArticlesService.listPublished visibility filters', () => {
@@ -345,6 +350,19 @@ describe('ArticlesService.publish tier gates and daily limit', () => {
     prisma.articleView.createMany.mockResolvedValue({ count: 1 });
     prisma.article.update.mockResolvedValueOnce(makePublishableArticle({ isDraft: false, publishedAt: new Date(), viewCount: 1, weightedViewCount: 1 }));
     await expect(service.publish('user-1', 'article-1')).resolves.toBeDefined();
+  });
+
+  it('keeps a first-publish Board post off the feed when no feed choice is saved', async () => {
+    const { service, prisma, board } = makeAuthoringService({ isVerified: true });
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.article.findUnique.mockResolvedValue(makePublishableArticle());
+    prisma.article.findMany.mockResolvedValue([]);
+    prisma.article.update.mockResolvedValue(makePublishableArticle({ isDraft: false, publishedAt: new Date() }));
+    prisma.articleView.createMany.mockResolvedValue({ count: 1 });
+    await service.publish('user-1', 'article-1');
+    expect(board.createArticleThread).toHaveBeenCalledWith(
+      expect.objectContaining({ showInFeed: false }),
+    );
   });
 
   it('blocks a verified non-premium user from publishing a second article on the same ET day', async () => {

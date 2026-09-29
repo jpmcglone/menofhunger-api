@@ -355,6 +355,9 @@ model User {
   bio                          String?
   website                      String?
   xUsername                    String?
+  /**
+   * Verified Pickax handle. Written only by the Pickax connection service; never user-editable.
+   */
   pickaxUsername               String?
   /**
    * Raw user-entered location query (zip/city/state text).
@@ -588,9 +591,10 @@ model User {
   articleCommentReactions      ArticleCommentReaction[]
   boardHides                   BoardHide[]
   /**
-   * Last choice for "Also post to feed" in the Board composer (remembered per account).
+   * Last choice for "Also post to feed" on Board posts and article publishes.
+   * New accounts start off.
    */
-  boardShareToFeedDefault      Boolean                    @default(true)
+  boardShareToFeedDefault      Boolean                    @default(false)
   /**
    * Last choice for "Also post to the Board" when publishing an article.
    */
@@ -658,6 +662,8 @@ model User {
   // Fitness
   fitnessUnits                 FitnessUnits   @default(us)
   fitnessConnections           FitnessConnection[]
+  pickaxConnection             PickaxConnection?
+  pickaxCrossposts             PickaxCrosspost[]
   fitnessActivities            FitnessActivity[]
   fitnessDailySummaries        FitnessDailySummary[]
   fitnessBodyMetrics           FitnessBodyMetric[]
@@ -1681,7 +1687,7 @@ model BoardThread {
   domain         String?
   /// Lowercase slugs, at most 3.
   tags           String[]  @default([])
-  showInFeed     Boolean   @default(true)
+  showInFeed     Boolean   @default(false)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -3253,6 +3259,58 @@ model AccountDeletionReceipt {
   mediaKeys String[] @default([])
   expiresAt DateTime
   @@index([scheduledAt, completedAt])
+}
+
+// ─── Pickax cross-post ───────────────────────────────────────────────────────
+
+enum PickaxCrosspostKind {
+  post
+  article
+}
+
+/**
+ * A member's Pickax third-party API key. Secrets and tokens are encrypted at the
+ * application layer. `username` is only stored after Pickax has proven it belongs to the key.
+ */
+model PickaxConnection {
+  id                   String    @id @default(cuid())
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  userId               String    @unique
+  pickaxUserId         String?
+  username             String
+  clientId             String
+  clientSecretEnc      String
+  accessTokenEnc       String?
+  refreshTokenEnc      String?
+  accessTokenExpiresAt DateTime?
+  /**
+   * active | error
+   */
+  status               String    @default("active")
+  lastError            String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/**
+ * Forward-only link between a local post/article and its Pickax copy.
+ */
+model PickaxCrosspost {
+  id          String              @id @default(cuid())
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  userId      String
+  kind        PickaxCrosspostKind
+  localId     String
+  remoteId    String?
+  contentHash String?
+  lastError   String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([kind, localId])
+  @@index([userId])
 }
 
 // ─── Fitness ─────────────────────────────────────────────────────────────────

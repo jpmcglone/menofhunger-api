@@ -380,13 +380,18 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
   // ─── DM calling (returned values are sent as Socket.IO acks) ────────────
 
+  @SubscribeMessage(WsEventNames.callsSfu)
+  handleSfu(client: Socket, payload: unknown) {
+    return this.callsHandler.handleSfu(client, payload);
+  }
+
   @SubscribeMessage(WsEventNames.callsStart)
-  handleCallsStart(client: Socket, payload: { conversationId?: string; type?: string; sessionId?: string }): Promise<CallsAckDto> {
+  handleCallsStart(client: Socket, payload: { conversationId?: string; type?: string; sessionId?: string; sfuCapable?: boolean }): Promise<CallsAckDto> {
     return this.callsHandler.handleCallsStart(client, payload);
   }
 
   @SubscribeMessage(WsEventNames.callsJoin)
-  handleCallsJoin(client: Socket, payload: { callId?: string; sessionId?: string }): Promise<CallsAckDto> {
+  handleCallsJoin(client: Socket, payload: { callId?: string; sessionId?: string; sfuCapable?: boolean }): Promise<CallsAckDto> {
     return this.callsHandler.handleCallsJoin(client, payload);
   }
 

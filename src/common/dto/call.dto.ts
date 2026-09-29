@@ -9,6 +9,25 @@ import type { UserListDto } from './user.dto';
  */
 
 export type CallType = 'audio' | 'video';
+export type CallMediaTransport = 'p2p' | 'sfu';
+export type SfuTrackKind = 'audio' | 'video' | 'screen';
+
+/** All SFU operations go through our authenticated signaling socket; no provider secret leaves the API. */
+export type SfuRequestDto = {
+  callId: string;
+  connectionId: string;
+  action: 'open' | 'publish' | 'subscribe' | 'answer' | 'close' | 'data' | 'unpublish' | 'ready';
+  data?: string;
+  sessionDescription?: RtcSessionDescriptionDto;
+  tracks?: Array<{ kind: SfuTrackKind; mid: string }>;
+  remoteUserId?: string;
+};
+export type SfuAckDto = {
+  sessionDescription?: RtcSessionDescriptionDto;
+  tracks?: Array<{ kind: SfuTrackKind; mid: string }>;
+  revision?: string;
+  error?: { code: string; message: string };
+};
 
 /**
  * ringing: direct call, callee has not answered yet (caller is the only participant).
@@ -39,6 +58,8 @@ export type CallParticipantDto = {
 };
 
 export type CallSessionDto = {
+  /** Absent on legacy calls means p2p. Fixed for the lifetime of a call. */
+  mediaTransport?: CallMediaTransport;
   id: string;
   conversationId: string;
   type: CallType;
@@ -99,7 +120,8 @@ export type CallsAckErrorCode =
   | 'call_not_found'
   | 'call_ended'
   | 'call_full'
-  | 'invalid_payload';
+  | 'invalid_payload'
+  | 'client_update_required';
 
 export type CallsAckErrorDto = {
   code: CallsAckErrorCode;
@@ -185,6 +207,9 @@ export type PresenceCallChangedPayloadDto = {
 
 /** Relayed SDP / ICE between two current participants. Exactly one of description/candidate is set. */
 export type RtcSignalPayloadDto = {
+  /** Server-originated invalidation: resubscribe to this participant’s SFU publication. */
+  sfuChanged?: boolean;
+  data?: string;
   callId: string;
   fromUserId: string;
   /** The sender seat's `sessionId`, so a receiver can tell a new device's signals from the old one's. */

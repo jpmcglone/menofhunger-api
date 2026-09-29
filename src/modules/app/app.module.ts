@@ -69,6 +69,7 @@ import { ExploreModule } from '../explore/explore.module';
 import { PublicModule } from '../public/public.module';
 import { ScriptureModule } from '../scripture/scripture.module';
 import { FitnessModule } from '../fitness/fitness.module';
+import { PickaxModule } from '../pickax/pickax.module';
 import { AnnouncementsModule } from '../announcements/announcements.module';
 import { NewslettersModule } from '../newsletters/newsletters.module';
 import { McpModule } from '../mcp/mcp.module';
@@ -159,6 +160,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     PublicModule,
     ScriptureModule,
     FitnessModule,
+    PickaxModule,
     AnnouncementsModule,
     NewslettersModule,
     ...(RUN_JOB_CONSUMERS ? [JobsConsumersModule, SideEffectsConsumersModule, AvatarVideoConsumersModule] : []),

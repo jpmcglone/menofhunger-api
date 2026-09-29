@@ -1,0 +1,202 @@
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import type { PickaxConnection } from '@prisma/client';
+import { AppConfigService } from '../app/app-config.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { PublicProfileCacheService } from '../users/public-profile-cache.service';
+import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
+import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
+import { normalizeSocialHandle } from '../users/social-handles';
+import { PickaxApiClient, PickaxApiError, type PickaxTokenPair } from './pickax-api.client';
+import { fetchPickaxProfileTexts, profileMatchesIdentity, readTokenIdentity } from './pickax-identity';
+import { openSecret, sealSecret } from './pickax-secret-box';
+
+export type PickaxConnectionStatus = {
+  available: boolean;
+  connected: boolean;
+  username: string | null;
+  needsAttention: boolean;
+};
+
+export type PickaxConnectResult =
+  | { needsUsername: false; status: PickaxConnectionStatus }
+  | { needsUsername: true; status: PickaxConnectionStatus };
+
+/** Refresh slightly early so an in-flight request never carries an expired token. */
+const EXPIRY_SKEW_MS = 90_000;
+
+@Injectable()
+export class PickaxConnectionService {
+  private readonly logger = new Logger(PickaxConnectionService.name);
+  private readonly inflightTokens = new Map<string, Promise<string>>();
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly appConfig: AppConfigService,
+    private readonly api: PickaxApiClient,
+    private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
+    private readonly usersPublicRealtime: UsersPublicRealtimeService,
+    private readonly usersMeRealtime: UsersMeRealtimeService,
+  ) {}
+
+  isAvailable(): boolean {
+    return this.appConfig.pickaxSecretEncryptionKey() !== null;
+  }
+
+  async getStatus(userId: string): Promise<PickaxConnectionStatus> {
+    const conn = await this.prisma.pickaxConnection.findUnique({ where: { userId } });
+    return this.toStatus(conn);
+  }
+
+  async connect(
+    userId: string,
+    input: { clientId: string; clientSecret: string; username?: string | null },
+  ): Promise<PickaxConnectResult> {
+    const key = this.requireKey();
+
+    let tokens: PickaxTokenPair;
+    try {
+      tokens = await this.api.exchangeCredentials(input.clientId, input.clientSecret);
+    } catch (err) {
+      if (err instanceof PickaxApiError && (err.isAuthFailure || err.status === 400 || err.status === 422)) {
+        throw new BadRequestException('Pickax rejected that Client ID and Client Secret.');
+      }
+      throw new ServiceUnavailableException('Could not reach Pickax. Try again in a moment.');
+    }
+
+    const identity = readTokenIdentity(tokens.accessToken);
+    const suppliedHandle = input.username?.trim() ? normalizeSocialHandle('pickax', input.username) : null;
+    const handle = identity.handle ?? suppliedHandle;
+
+    if (!handle) {
+      if (identity.userId) return { needsUsername: true, status: this.toStatus(null) };
+      throw new BadRequestException(
+        'Your key works, but Pickax did not say which account it belongs to, so we cannot verify it.',
+      );
+    }
+
+    const texts = await fetchPickaxProfileTexts(handle);
+    const verified = texts.some((t) => profileMatchesIdentity(t, { handle, userId: identity.userId }));
+    if (!verified) {
+      throw new BadRequestException(`We could not confirm that @${handle} is the account this key belongs to.`);
+    }
+
+    const taken = await this.prisma.pickaxConnection.findFirst({
+      where: { username: { equals: handle, mode: 'insensitive' }, userId: { not: userId } },
+      select: { id: true },
+    });
+    if (taken) throw new ConflictException(`@${handle} on Pickax is already connected to another account.`);
+
+    const data = {
+      pickaxUserId: identity.userId,
+      username: handle,
+      clientId: input.clientId,
+      clientSecretEnc: sealSecret(input.clientSecret, key),
+      accessTokenEnc: sealSecret(tokens.accessToken, key),
+      refreshTokenEnc: tokens.refreshToken ? sealSecret(tokens.refreshToken, key) : null,
+      accessTokenExpiresAt: new Date(Date.now() + tokens.expiresInSeconds * 1000),
+      status: 'active',
+      lastError: null,
+    };
+    const [conn] = await this.prisma.$transaction([
+      this.prisma.pickaxConnection.upsert({ where: { userId }, create: { userId, ...data }, update: data }),
+      this.prisma.user.update({ where: { id: userId }, data: { pickaxUsername: handle }, select: { id: true } }),
+    ]);
+    await this.afterProfileChange(userId);
+    return { needsUsername: false, status: this.toStatus(conn) };
+  }
+
+  async disconnect(userId: string): Promise<PickaxConnectionStatus> {
+    await this.prisma.$transaction([
+      this.prisma.pickaxConnection.deleteMany({ where: { userId } }),
+      this.prisma.user.update({ where: { id: userId }, data: { pickaxUsername: null }, select: { id: true } }),
+    ]);
+    await this.afterProfileChange(userId);
+    return this.toStatus(null);
+  }
+
+  /** Connection for cross-posting, or null when absent or in need of a new key. */
+  async getActiveConnection(userId: string): Promise<PickaxConnection | null> {
+    const conn = await this.prisma.pickaxConnection.findUnique({ where: { userId } });
+    return conn && conn.status === 'active' ? conn : null;
+  }
+
+  async markError(userId: string, message: string, needsNewKey: boolean): Promise<void> {
+    await this.prisma.pickaxConnection.updateMany({
+      where: { userId },
+      data: { lastError: message.slice(0, 500), ...(needsNewKey ? { status: 'error' } : {}) },
+    });
+  }
+
+  /** A valid access token, refreshing (or re-exchanging the stored key) when it has expired. */
+  async accessTokenFor(conn: PickaxConnection): Promise<string> {
+    const key = this.requireKey();
+    if (conn.accessTokenEnc && conn.accessTokenExpiresAt && conn.accessTokenExpiresAt.getTime() - EXPIRY_SKEW_MS > Date.now()) {
+      return openSecret(conn.accessTokenEnc, key);
+    }
+    const pending = this.inflightTokens.get(conn.userId);
+    if (pending) return pending;
+    const next = this.renewTokens(conn, key).finally(() => this.inflightTokens.delete(conn.userId));
+    this.inflightTokens.set(conn.userId, next);
+    return next;
+  }
+
+  /** Discard a token Pickax rejected so the next call renews it. */
+  async invalidateAccessToken(userId: string): Promise<void> {
+    await this.prisma.pickaxConnection.updateMany({ where: { userId }, data: { accessTokenExpiresAt: null } });
+  }
+
+  private async renewTokens(conn: PickaxConnection, key: string): Promise<string> {
+    let tokens: PickaxTokenPair | null = null;
+    if (conn.refreshTokenEnc) {
+      try {
+        tokens = await this.api.refresh(openSecret(conn.refreshTokenEnc, key));
+      } catch (err) {
+        this.logger.debug(`Pickax refresh failed for ${conn.userId}; re-exchanging stored key (${String(err)})`);
+      }
+    }
+    if (!tokens) {
+      tokens = await this.api.exchangeCredentials(conn.clientId, openSecret(conn.clientSecretEnc, key));
+    }
+    await this.prisma.pickaxConnection.update({
+      where: { userId: conn.userId },
+      data: {
+        accessTokenEnc: sealSecret(tokens.accessToken, key),
+        refreshTokenEnc: tokens.refreshToken ? sealSecret(tokens.refreshToken, key) : null,
+        accessTokenExpiresAt: new Date(Date.now() + tokens.expiresInSeconds * 1000),
+      },
+    });
+    return tokens.accessToken;
+  }
+
+  private requireKey(): string {
+    const key = this.appConfig.pickaxSecretEncryptionKey();
+    if (!key) throw new ServiceUnavailableException('Pickax connections are not available right now.');
+    return key;
+  }
+
+  private toStatus(conn: PickaxConnection | null): PickaxConnectionStatus {
+    return {
+      available: this.isAvailable(),
+      connected: Boolean(conn),
+      username: conn?.username ?? null,
+      needsAttention: conn?.status === 'error',
+    };
+  }
+
+  private async afterProfileChange(userId: string): Promise<void> {
+    try {
+      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, username: true } });
+      if (user) await this.publicProfileCache.invalidateForUser({ id: user.id, username: user.username ?? null });
+      await this.usersPublicRealtime.emitPublicProfileUpdated(userId);
+      void this.usersMeRealtime.emitMeUpdated(userId, 'pickax_changed');
+    } catch (err) {
+      this.logger.warn(`Pickax profile refresh failed for ${userId}: ${String(err)}`);
+    }
+  }
+}

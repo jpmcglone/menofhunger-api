@@ -1,3 +1,4 @@
+import { SfuService } from './sfu.service';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import * as crypto from 'node:crypto';
 import type {
@@ -90,6 +91,7 @@ export class CallsService {
     private readonly iceServers: RtcIceServersService,
     private readonly sideEffects: SideEffectsService,
     private readonly presenceRedis: PresenceRedisStateService,
+    private readonly sfu?: SfuService,
   ) {}
 
   /** Fields every successful start/join ack carries so a client can connect and knows when to stop retrying. */
@@ -105,6 +107,7 @@ export class CallsService {
     conversationId: string;
     type: CallType;
     sessionId?: string | null;
+    sfuCapable?: boolean;
   }): Promise<CallsAckDto> {
     const { userId, socketId, conversationId, type } = params;
     const sessionId = params.sessionId ?? null;
@@ -125,7 +128,7 @@ export class CallsService {
     // One live session per conversation: a second "start" is just a join.
     const existing = await this.store.getByConversationId(conversationId);
     if (existing && existing.status !== 'ended') {
-      return await this.join({ userId, socketId, callId: existing.id, sessionId });
+      return await this.join({ userId, socketId, callId: existing.id, sessionId, sfuCapable: params.sfuCapable });
     }
 
     // One seat per member: starting here hangs up whatever they were in elsewhere.
@@ -161,6 +164,7 @@ export class CallsService {
       id: crypto.randomUUID(),
       conversationId,
       conversationType: ctx.type,
+      mediaTransport: !isDirect && params.sfuCapable && sessionId && this.sfu?.enabled() ? 'sfu' : 'p2p',
       type,
       status: isDirect ? 'ringing' : 'active',
       startedByUserId: userId,
@@ -183,7 +187,7 @@ export class CallsService {
       return record;
     });
     if (created.id !== record.id) {
-      return await this.join({ userId, socketId, callId: created.id, sessionId });
+      return await this.join({ userId, socketId, callId: created.id, sessionId, sfuCapable: params.sfuCapable });
     }
 
     const outcome: MessageCallOutcome = isDirect ? 'started' : 'active';
@@ -221,11 +225,14 @@ export class CallsService {
     return this.connectAck(record, await iceServersPromise);
   }
 
-  async join(params: { userId: string; socketId: string; callId: string; sessionId?: string | null }): Promise<CallsAckDto> {
+  async join(params: { userId: string; socketId: string; callId: string; sessionId?: string | null; sfuCapable?: boolean }): Promise<CallsAckDto> {
     const { userId, socketId, callId } = params;
     const sessionId = params.sessionId ?? null;
     const initial = await this.store.getByCallId(callId);
     if (!initial) return ackError('call_not_found', 'This call has ended.');
+    if (initial.mediaTransport === 'sfu' && (!params.sfuCapable || !sessionId)) {
+      return ackError('client_update_required', 'Update the app to join this call.');
+    }
 
     let ctx: CallConversationContext;
     try {
@@ -319,6 +326,7 @@ export class CallsService {
     });
 
     if (!result.record) return result.ack;
+    if (result.record.mediaTransport === 'sfu') await this.sfu?.revokeStale(callId, userId);
     for (const jobId of result.cancel) await this.cancelTimer(jobId);
     if (result.becameActiveFromRinging && result.record.messageId) {
       await this.safeUpdateMessage(result.record, 'active', null);
@@ -630,6 +638,7 @@ export class CallsService {
     if (!outcome.record) return null;
     if (outcome.removed) {
       await this.store.releaseSeat(userId, callId);
+      await this.sfu?.revokeStale(callId, userId);
       this.realtime.emitPresenceCallChanged(userId, { userId, inCall: false });
     }
     if (outcome.endAs) return await this.endCall(conversationId, callId, outcome.endAs);
@@ -660,6 +669,7 @@ export class CallsService {
       this.cancelTimer(callEmptyGraceJobId(callId)),
       ...seated.map((uid) => this.store.releaseSeat(uid, callId)),
     ]);
+    await Promise.all(seated.map((uid) => this.sfu?.revokeStale(callId, uid)));
     for (const uid of seated) this.realtime.emitPresenceCallChanged(uid, { userId: uid, inCall: false });
 
     const durationSeconds =

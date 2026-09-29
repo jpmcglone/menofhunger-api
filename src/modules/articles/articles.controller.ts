@@ -1,3 +1,4 @@
+import { PickaxCrosspostService } from '../pickax/pickax-crosspost.service';
 import {
   Body,
   Controller,
@@ -56,6 +57,8 @@ const listSchema = z.object({
 const publishSchema = z.object({
   postToBoard: z.boolean().optional(),
   shareToFeed: z.boolean().optional(),
+  /** Also publish to the author's connected Pickax account when the article is public. */
+  crossPostToPickax: z.boolean().optional(),
 });
 
 const draftsListSchema = z.object({
@@ -104,7 +107,10 @@ const readThrottle = {
 @ApiTags('Articles')
 @Controller('articles')
 export class ArticlesController {
-  constructor(private readonly articles: ArticlesService) {}
+  constructor(
+    private readonly articles: ArticlesService,
+    private readonly pickax: PickaxCrosspostService,
+  ) {}
 
   // ─── Tag autocomplete ──────────────────────────────────────────────────────
 
@@ -208,6 +214,7 @@ export class ArticlesController {
       ...parsed,
       tags: parsed.tags ?? undefined,
     });
+    await this.pickax.requestArticleUpdate(userId, id);
     return { data: article };
   }
 
@@ -218,7 +225,10 @@ export class ArticlesController {
   @Post(':id/publish')
   async publish(@CurrentUserId() userId: string, @Param('id') id: string, @Body() body: unknown) {
     const parsed = publishSchema.parse(body ?? {});
-    const article = await this.articles.publish(userId, id, parsed);
+    const { crossPostToPickax, ...publishInput } = parsed;
+    const article = await this.articles.publish(userId, id, publishInput);
+    if (crossPostToPickax) await this.pickax.requestArticleCrosspost(userId, id);
+    else await this.pickax.requestArticleUpdate(userId, id);
     return { data: article };
   }
 

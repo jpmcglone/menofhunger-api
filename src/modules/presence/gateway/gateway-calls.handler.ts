@@ -1,3 +1,5 @@
+import { SfuService } from '../../calls/sfu.service';
+import type { SfuAckDto } from '../../../common/dto/call.dto';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Socket } from 'socket.io';
 import type { CallsAckDto, CallType } from '../../../common/dto';
@@ -35,7 +37,14 @@ export class CallsGatewayHandler {
   constructor(
     private readonly presence: PresenceService,
     private readonly calls: CallsService,
+    private readonly sfu?: SfuService,
   ) {}
+
+  async handleSfu(client: Socket, payload: unknown): Promise<SfuAckDto> {
+    const userId = this.presence.getUserIdForSocket(client.id);
+    if (!userId || !this.sfu) return { error: { code: 'not_authenticated', message: 'Sign in to use calls.' } };
+    return this.sfu.handle(userId, client.id, payload);
+  }
 
   private notAuthed(): CallsAckDto {
     return { call: null, error: { code: 'not_authenticated', message: 'Sign in to use calls.' } };
@@ -52,7 +61,7 @@ export class CallsGatewayHandler {
 
   async handleCallsStart(
     client: Socket,
-    payload: { conversationId?: string; type?: string; sessionId?: string },
+    payload: { conversationId?: string; type?: string; sessionId?: string; sfuCapable?: boolean },
   ): Promise<CallsAckDto> {
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return this.notAuthed();
@@ -61,7 +70,7 @@ export class CallsGatewayHandler {
     if (!conversationId || !type) return this.invalid('Missing conversation or call type.');
     try {
       const sessionId = callSessionIdFrom(payload?.sessionId);
-      const ack = await this.calls.start({ userId, socketId: client.id, conversationId, type, sessionId });
+      const ack = await this.calls.start({ userId, socketId: client.id, conversationId, type, sessionId, sfuCapable: payload?.sfuCapable === true });
       return this.bind(client, ack, userId);
     } catch (err) {
       this.logger.warn(`[calls] start failed user=${userId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -69,14 +78,14 @@ export class CallsGatewayHandler {
     }
   }
 
-  async handleCallsJoin(client: Socket, payload: { callId?: string; sessionId?: string }): Promise<CallsAckDto> {
+  async handleCallsJoin(client: Socket, payload: { callId?: string; sessionId?: string; sfuCapable?: boolean }): Promise<CallsAckDto> {
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return this.notAuthed();
     const callId = String(payload?.callId ?? '').trim();
     if (!callId) return this.invalid('Missing call id.');
     try {
       const sessionId = callSessionIdFrom(payload?.sessionId);
-      const ack = await this.calls.join({ userId, socketId: client.id, callId, sessionId });
+      const ack = await this.calls.join({ userId, socketId: client.id, callId, sessionId, sfuCapable: payload?.sfuCapable === true });
       return this.bind(client, ack, userId);
     } catch (err) {
       this.logger.warn(`[calls] join failed user=${userId}: ${err instanceof Error ? err.message : String(err)}`);

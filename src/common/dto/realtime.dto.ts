@@ -286,6 +286,7 @@ export const WsEventNames = {
   notificationsNavUnread: 'notifications:navUnreadChanged',
   /** DM calling: client → server (acked). */
   callsStart: 'calls:start',
+  callsSfu: 'calls:sfu',
   callsJoin: 'calls:join',
   callsLeave: 'calls:leave',
   callsDecline: 'calls:decline',

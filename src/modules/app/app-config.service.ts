@@ -307,6 +307,15 @@ export class AppConfigService {
    * Cloudflare Realtime TURN key. Used to mint short-lived ICE credentials on start/join.
    * The key itself is never sent to clients.
    */
+  callsSfuEnabled(): boolean { return this.config.get<string>('CALLS_SFU_ENABLED') === 'true'; }
+
+  cloudflareSfu(): { appId: string; secret: string } | null {
+    const appId = this.config.get<string>('CLOUDFLARE_SFU_APP_ID')?.trim() ?? '';
+    const secret = this.config.get<string>('CLOUDFLARE_SFU_APP_SECRET')?.trim() ?? '';
+    if (!appId || !secret) return null;
+    return { appId, secret };
+  }
+
   cloudflareTurn(): { keyId: string; apiToken: string } | null {
     const keyId = this.config.get<string>('CF_TURN_KEY_ID')?.trim() ?? '';
     const apiToken = this.config.get<string>('CF_TURN_API_TOKEN')?.trim() ?? '';
@@ -371,6 +380,12 @@ export class AppConfigService {
     const webhookVerifyToken = this.config.get<string>('STRAVA_WEBHOOK_VERIFY_TOKEN')?.trim() ?? '';
     if (!clientId || !clientSecret) return null;
     return { clientId, clientSecret, webhookVerifyToken: webhookVerifyToken || 'moh-strava-verify' };
+  }
+
+  /** Key material for encrypting members' Pickax credentials; null disables the integration. */
+  pickaxSecretEncryptionKey(): string | null {
+    const v = this.config.get<string>('PICKAX_SECRET_ENCRYPTION_KEY')?.trim() ?? '';
+    return v.length >= 32 ? v : null;
   }
 
   /** bible.helloao.org translation ID. Defaults to BSB (public domain, modern English). */

@@ -1,3 +1,4 @@
+import { PickaxCrosspostService } from '../pickax/pickax-crosspost.service';
 import { Body, Controller, Delete, ForbiddenException, Get, Headers, Logger, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
@@ -179,6 +180,8 @@ const createSchema = z
     mentions: z.array(z.string().min(1).max(120)).max(20).optional(),
     media: z.array(createMediaItemSchema).max(4).optional(),
     poll: createPollSchema.optional(),
+    /** Also publish to the author's connected Pickax account when the post qualifies. */
+    crossPostToPickax: z.boolean().optional(),
   })
   .superRefine((val, ctx) => {
     const body = (val.body ?? '').trim();
@@ -306,6 +309,7 @@ export class PostsController {
     private readonly appConfig: AppConfigService,
     private readonly cache: CacheService,
     private readonly cacheInvalidation: CacheInvalidationService,
+    private readonly pickax: PickaxCrosspostService,
   ) {}
 
   private async communityGroupPreviewMapForIds(
@@ -1312,10 +1316,13 @@ export class PostsController {
       marvMode,
     });
 
+    const pickax = parsed.crossPostToPickax ? await this.pickax.requestPostCrosspost(userId, created.id) : null;
+
     const viewer = await this.posts.viewerContext(userId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
     return {
       data: {
+        pickax,
         post: toPostDto(created, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: false,
           includeInternal: viewerHasAdmin,
@@ -1351,6 +1358,7 @@ export class PostsController {
     const viewer = await this.posts.viewerContext(userId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
     const updated = await this.posts.updatePost({ userId, postId: id, body: (parsed.body ?? '').trim(), isSiteAdmin: viewerHasAdmin });
+    await this.pickax.requestPostUpdate(userId, id);
 
     return {
       data: toPostDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null, {

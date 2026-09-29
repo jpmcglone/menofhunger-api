@@ -6,6 +6,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { PostViewsModule } from '../post-views/post-views.module';
 import { CashtagsModule } from '../cashtags/cashtags.module';
 import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
+import { PickaxModule } from '../pickax/pickax.module';
 import { DraftsController } from './drafts.controller';
 import { PollsService } from './polls.service';
 import { PostsController } from './posts.controller';
@@ -27,7 +28,7 @@ import { ScheduledPostsController } from './scheduled-posts.controller';
 import { ScheduledPostsPublishCron } from './scheduled-posts-publish.cron';
 
 @Module({
-  imports: [ConversationsModule, AuthModule, NotificationsModule, RealtimeModule, PostViewsModule, CashtagsModule, LinkMetadataModule],
+  imports: [ConversationsModule, AuthModule, NotificationsModule, RealtimeModule, PostViewsModule, CashtagsModule, LinkMetadataModule, PickaxModule],
   // ScheduledPostsController must precede PostsController so the static
   // `/posts/scheduled` routes register before PostsController's `/posts/:id`
   // catch-all (otherwise GET /posts/scheduled resolves as id="scheduled" → 404).

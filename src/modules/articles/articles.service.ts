@@ -781,7 +781,7 @@ export class ArticlesService {
       select: { articlePostToBoardDefault: true, boardShareToFeedDefault: true },
     });
     const postToBoard = opts.postToBoard ?? prefs?.articlePostToBoardDefault ?? true;
-    const shareToFeed = opts.shareToFeed ?? prefs?.boardShareToFeedDefault ?? true;
+    const shareToFeed = opts.shareToFeed ?? prefs?.boardShareToFeedDefault ?? false;
     if (typeof opts.postToBoard === 'boolean' || typeof opts.shareToFeed === 'boolean') {
       await this.prisma.user.update({
         where: { id: userId },

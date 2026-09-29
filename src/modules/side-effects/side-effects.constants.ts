@@ -404,6 +404,16 @@ export interface SideEffectPayloads {
     spaceId: string;
     recipientUserIds: string[];
   };
+  /** Push a public feed post to the author's connected Pickax account (`create`) or update the copy. */
+  'pickax.post.sync': {
+    postId: string;
+    create: boolean;
+  };
+  /** Push a published article to Pickax (`create`) or update the existing Pickax copy. */
+  'pickax.article.sync': {
+    articleId: string;
+    create: boolean;
+  };
 }
 
 export type SideEffectName = keyof SideEffectPayloads;

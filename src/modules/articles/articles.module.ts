@@ -4,6 +4,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { ArticleViewsModule } from '../article-views/article-views.module';
 import { BoardModule } from '../board/board.module';
+import { PickaxModule } from '../pickax/pickax.module';
 import { ArticlesController } from './articles.controller';
 import { ArticlesService } from './articles.service';
 import { ArticlesRankingService } from './articles-ranking.service';
@@ -11,7 +12,7 @@ import { ArticlesSideEffectsHandler } from './articles-side-effects.handler';
 import { ArticlesTrendingScoreCron } from './articles-trending-score.cron';
 
 @Module({
-  imports: [AuthModule, NotificationsModule, RealtimeModule, ArticleViewsModule, BoardModule],
+  imports: [AuthModule, NotificationsModule, RealtimeModule, ArticleViewsModule, BoardModule, PickaxModule],
   controllers: [ArticlesController],
   providers: [ArticlesService, ArticlesRankingService, ArticlesSideEffectsHandler, ArticlesTrendingScoreCron],
   exports: [ArticlesService, ArticlesRankingService, ArticlesTrendingScoreCron],

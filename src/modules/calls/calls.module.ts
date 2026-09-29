@@ -1,3 +1,5 @@
+import { SfuService } from './sfu.service';
+import { SfuProviderService } from './sfu-provider.service';
 import { Module } from '@nestjs/common';
 import { MessagesModule } from '../messages/messages.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -16,7 +18,7 @@ import { RtcIceServersService } from './rtc-ice-servers.service';
  */
 @Module({
   imports: [MessagesModule, NotificationsModule, RealtimeModule, CallSessionStoreModule],
-  providers: [CallsService, RtcIceServersService, CallsSideEffectsHandler, CallsSweepCron],
-  exports: [CallsService, CallSessionStoreModule],
+  providers: [SfuService, SfuProviderService, CallsService, RtcIceServersService, CallsSideEffectsHandler, CallsSweepCron],
+  exports: [SfuService, CallsService, CallSessionStoreModule],
 })
 export class CallsModule {}

@@ -51,16 +51,16 @@ describe('CallsGatewayHandler', () => {
     const { handler, calls } = makeHandler({ s1: 'u1' });
     const ack = await handler.handleCallsStart(socket('s1'), { conversationId: 'conv-1', type: 'video' });
     expect(ack.call?.id).toBe('call-1');
-    expect(calls.start).toHaveBeenCalledWith({ userId: 'u1', socketId: 's1', conversationId: 'conv-1', type: 'video', sessionId: null });
+    expect(calls.start).toHaveBeenCalledWith({ userId: 'u1', socketId: 's1', conversationId: 'conv-1', type: 'video', sessionId: null, sfuCapable: false });
     expect(handler.isSocketBound('s1')).toBe(true);
   });
 
   it('passes a well-formed session id and drops junk', async () => {
     const { handler, calls } = makeHandler({ s1: 'u1' });
     await handler.handleCallsJoin(socket('s1'), { callId: 'call-1', sessionId: 'web-3f9a2c1d' });
-    expect(calls.join).toHaveBeenLastCalledWith({ userId: 'u1', socketId: 's1', callId: 'call-1', sessionId: 'web-3f9a2c1d' });
+    expect(calls.join).toHaveBeenLastCalledWith({ userId: 'u1', socketId: 's1', callId: 'call-1', sessionId: 'web-3f9a2c1d', sfuCapable: false });
     await handler.handleCallsJoin(socket('s1'), { callId: 'call-1', sessionId: '<script>alert(1)</script>' });
-    expect(calls.join).toHaveBeenLastCalledWith({ userId: 'u1', socketId: 's1', callId: 'call-1', sessionId: null });
+    expect(calls.join).toHaveBeenLastCalledWith({ userId: 'u1', socketId: 's1', callId: 'call-1', sessionId: null, sfuCapable: false });
   });
 
   it('does not bind on an error ack', async () => {

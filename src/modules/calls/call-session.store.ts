@@ -24,6 +24,7 @@ export type CallParticipantRecord = {
 };
 
 export type CallSessionRecord = {
+  mediaTransport?: 'p2p' | 'sfu';
   id: string;
   conversationId: string;
   conversationType: 'direct' | 'group' | 'crew_wall';
@@ -190,6 +191,7 @@ export class CallSessionStore {
   static toDto(record: CallSessionRecord): CallSessionDto {
     return {
       id: record.id,
+      mediaTransport: record.mediaTransport ?? 'p2p',
       conversationId: record.conversationId,
       type: record.type,
       status: record.status,
