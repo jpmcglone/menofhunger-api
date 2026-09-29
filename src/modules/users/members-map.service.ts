@@ -15,10 +15,17 @@ import { STATE_NAMES } from './users-location.service';
  * who is counted wherever he is shown online so his bucket's numbers stay consistent.
  */
 export function membersMapMemberWhere(marvId: string | null): Prisma.UserWhereInput {
+  // Same definition of "men" as the landing page: verified, unbanned person accounts.
+  const man: Prisma.UserWhereInput = {
+    isBot: false,
+    isOrganization: false,
+    accountKind: 'person',
+    verifiedStatus: { not: 'none' },
+  };
   return {
     usernameIsSet: true,
     bannedAt: null,
-    ...(marvId ? { OR: [{ isBot: false }, { id: marvId }] } : { isBot: false }),
+    ...(marvId ? { OR: [man, { id: marvId }] } : man),
   };
 }
 
