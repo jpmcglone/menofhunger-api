@@ -88,6 +88,10 @@ export type ArticleDto = {
   visibility: PostVisibility;
   isDraft: boolean;
   lastSavedAt: string;
+  /** Public Pickax permalink when the author cross-posted this to Pickax. */
+  pickaxUrl?: string | null;
+  /** Author-only: why Pickax rejected the last cross-post attempt. */
+  pickaxError?: string | null;
   boostCount: number;
   commentCount: number;
   /** Unique people (person × article). */
@@ -267,6 +271,11 @@ export function toArticleDto(
     visibility: article.visibility,
     isDraft: article.isDraft,
     lastSavedAt: article.lastSavedAt.toISOString(),
+    pickaxUrl: (article as { pickaxUrl?: string | null }).pickaxUrl ?? null,
+    pickaxError:
+      opts?.viewerUserId && opts.viewerUserId === article.authorId
+        ? ((article as { pickaxError?: string | null }).pickaxError ?? null)
+        : null,
     boostCount: article.boostCount,
     commentCount: article.commentCount,
     viewCount: article.viewCount,

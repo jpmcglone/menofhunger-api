@@ -1544,6 +1544,15 @@ model Post {
    */
   boardOnly                 Boolean         @default(false)
   /**
+   * Public Pickax URL when this post was cross-posted there. Denormalized so every feed row can
+   * link out without an extra lookup.
+   */
+  pickaxUrl                 String?
+  /**
+   * Last Pickax rejection for this post, shown to the author only. Cleared on success.
+   */
+  pickaxError               String?
+  /**
    * ET day key (YYYY-MM-DD) for check-ins (null for non-check-ins).
    */
   checkinDayKey             String?
@@ -2853,6 +2862,15 @@ model Article {
   visibility  PostVisibility @default(public)
   isDraft     Boolean        @default(true)
   lastSavedAt DateTime       @default(now())
+
+  /**
+   * Public Pickax URL when this article was cross-posted there.
+   */
+  pickaxUrl String?
+  /**
+   * Last Pickax rejection for this article, shown to the author only. Cleared on success.
+   */
+  pickaxError String?
 
   boostCount        Int   @default(0)
   commentCount      Int   @default(0)

@@ -123,6 +123,10 @@ export type PostDto = {
   checkinPrompt: string | null;
   visibility: PostVisibility;
   isDraft: boolean;
+  /** Public Pickax permalink when the author cross-posted this to Pickax. */
+  pickaxUrl?: string | null;
+  /** Author-only: why Pickax rejected the last cross-post attempt. */
+  pickaxError?: string | null;
   topics: string[];
   /** User-created hashtags parsed from body text (lowercase, without '#'). */
   hashtags: string[];
@@ -365,6 +369,8 @@ export function toPostDto(
     };
     /** When false, body/media/mentions/poll are stripped (viewer tier too low). */
     viewerCanAccess?: boolean;
+    /** True when the viewer wrote this post; unlocks author-only fields like `pickaxError`. */
+    viewerIsAuthor?: boolean;
     /** Join CTA for gated group posts (permalink). */
     groupPreview?: CommunityGroupPreviewDto | null;
     /** Cached embed for the body's preview link (see `loadPostVideoEmbeds`). */
@@ -564,6 +570,10 @@ export function toPostDto(
     checkinPrompt: post.checkinPrompt ? String(post.checkinPrompt) : null,
     visibility: post.visibility,
     isDraft: Boolean(post.isDraft),
+    pickaxUrl: isPostDeleted ? null : ((post as { pickaxUrl?: string | null }).pickaxUrl ?? null),
+    pickaxError: opts?.viewerIsAuthor
+      ? ((post as { pickaxError?: string | null }).pickaxError ?? null)
+      : null,
     topics: Array.isArray(post.topics) ? post.topics : [],
     hashtags: isPostDeleted ? [] : (Array.isArray(post.hashtags) ? post.hashtags : []),
     cashtags: isPostDeleted ? [] : (Array.isArray((post as any).cashtags) ? (post as any).cashtags : []),

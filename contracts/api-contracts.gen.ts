@@ -788,6 +788,10 @@ export type ArticleDto = {
   visibility: PostVisibility;
   isDraft: boolean;
   lastSavedAt: string;
+  /** Public Pickax permalink when the author cross-posted this to Pickax. */
+  pickaxUrl?: string | null;
+  /** Author-only: why Pickax rejected the last cross-post attempt. */
+  pickaxError?: string | null;
   boostCount: number;
   commentCount: number;
   /** Unique people (person × article). */
@@ -2643,6 +2647,10 @@ export type PostDto = {
   checkinPrompt: string | null;
   visibility: PostVisibility;
   isDraft: boolean;
+  /** Public Pickax permalink when the author cross-posted this to Pickax. */
+  pickaxUrl?: string | null;
+  /** Author-only: why Pickax rejected the last cross-post attempt. */
+  pickaxError?: string | null;
   topics: string[];
   /** User-created hashtags parsed from body text (lowercase, without '#'). */
   hashtags: string[];

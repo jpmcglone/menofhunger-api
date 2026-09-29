@@ -4,6 +4,8 @@ import {
   articleCrosspostBlocker,
   buildPickaxArticlePayload,
   buildPickaxPostPayload,
+  pickaxArticleUrl,
+  pickaxPostUrl,
   postCrosspostBlocker,
   tiptapBodyToHtml,
   type PickaxArticleSource,
@@ -36,6 +38,13 @@ function post(overrides: Partial<PickaxPostSource> = {}): PickaxPostSource {
     ...overrides,
   };
 }
+
+describe('Pickax public links', () => {
+  it('builds post and article permalinks', () => {
+    expect(pickaxPostUrl('794776')).toBe('https://pickax.com/post/794776');
+    expect(pickaxArticleUrl('249026')).toBe('https://pickax.com/articles/249026');
+  });
+});
 
 describe('pickax secret box', () => {
   it('round-trips and rejects a different key', () => {

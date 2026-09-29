@@ -1326,6 +1326,7 @@ export class PostsController {
         post: toPostDto(created, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: false,
           includeInternal: viewerHasAdmin,
+          viewerIsAuthor: true,
         }),
         streakReward: streakReward ?? null,
       },

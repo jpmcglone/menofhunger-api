@@ -3,6 +3,17 @@ import type { PostKind, PostMediaKind, PostMediaSource, PostVisibility } from '@
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import type { PickaxArticlePayload, PickaxPostPayload } from './pickax-api.client';
 
+/** Public web host. Post permalinks live at /post/:id, articles at /articles/:id. */
+export const PICKAX_WEB_BASE = 'https://pickax.com';
+
+export function pickaxPostUrl(remoteId: string): string {
+  return `${PICKAX_WEB_BASE}/post/${encodeURIComponent(remoteId)}`;
+}
+
+export function pickaxArticleUrl(remoteId: string): string {
+  return `${PICKAX_WEB_BASE}/articles/${encodeURIComponent(remoteId)}`;
+}
+
 export const PICKAX_POST_MAX_LENGTH = 1000;
 export const PICKAX_POST_MAX_ATTACHMENTS = 10;
 

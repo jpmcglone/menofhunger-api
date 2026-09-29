@@ -9,6 +9,8 @@ import {
   buildPickaxArticlePayload,
   buildPickaxPostPayload,
   contentHash,
+  pickaxArticleUrl,
+  pickaxPostUrl,
   postCrosspostBlocker,
   type PickaxArticleSource,
   type PickaxPostSource,
@@ -201,6 +203,7 @@ export class PickaxCrosspostService {
         where: { kind: target.kind, localId: target.localId },
         data: { lastError: message.slice(0, 500) },
       });
+      await this.recordRowError(target, message.slice(0, 500));
     }
   }
 
@@ -216,7 +219,29 @@ export class PickaxCrosspostService {
       create: { userId, kind, localId, remoteId, contentHash: hash },
       update: { remoteId, contentHash: hash, lastError: null },
     });
+    // Denormalize the public link so readers can jump to the Pickax copy, and clear any
+    // earlier rejection now that Pickax has accepted the content.
+    if (remoteId) {
+      const pickaxUrl = kind === 'post' ? pickaxPostUrl(remoteId) : pickaxArticleUrl(remoteId);
+      if (kind === 'post') {
+        await this.prisma.post.updateMany({ where: { id: localId }, data: { pickaxUrl, pickaxError: null } });
+      } else {
+        await this.prisma.article.updateMany({ where: { id: localId }, data: { pickaxUrl, pickaxError: null } });
+      }
+    }
     await this.connections.clearError(userId);
+  }
+
+  /** Author-facing failure note on the post/article itself, so the error is visible where they published. */
+  private async recordRowError(
+    target: { kind: 'post' | 'article'; localId: string },
+    message: string,
+  ): Promise<void> {
+    if (target.kind === 'post') {
+      await this.prisma.post.updateMany({ where: { id: target.localId }, data: { pickaxError: message } });
+    } else {
+      await this.prisma.article.updateMany({ where: { id: target.localId }, data: { pickaxError: message } });
+    }
   }
 
   private siteBaseUrl(): string {

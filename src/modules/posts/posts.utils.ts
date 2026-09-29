@@ -144,6 +144,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
       viewerBookmarkCollectionIds: bookmarksByPostId.get(post.id)?.collectionIds ?? [],
       viewerVotedPollOptionId: votedPollOptionIdByPostId.get(post.id) ?? null,
       viewerCreatorSkipped: viewerCreatorSkipped || undefined,
+      viewerIsAuthor: Boolean(viewerUserId) && authorId === viewerUserId,
       viewerBlockStatus: viewerBlockStatus ?? undefined,
       viewerHasReposted: repostedByPostId ? repostedByPostId.has(post.id) : undefined,
       viewerHasCommented: commentedByPostId ? commentedByPostId.has(post.id) : undefined,
