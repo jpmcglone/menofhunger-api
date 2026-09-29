@@ -20,7 +20,7 @@ export class PickaxController {
 
   @Get()
   async status(@CurrentUserId() userId: string) {
-    return { data: { ...(await this.connections.getStatus(userId)), needsUsername: false } };
+    return { data: { ...(await this.connections.getStatus(userId)), needsUsername: false, verificationCode: null } };
   }
 
   @Post()
@@ -29,11 +29,13 @@ export class PickaxController {
   async connect(@CurrentUserId() userId: string, @Body() body: unknown) {
     const input = connectSchema.parse(body);
     const result = await this.connections.connect(userId, input);
-    return { data: { ...result.status, needsUsername: result.needsUsername } };
+    return {
+      data: { ...result.status, needsUsername: result.needsUsername, verificationCode: result.verificationCode },
+    };
   }
 
   @Delete()
   async disconnect(@CurrentUserId() userId: string) {
-    return { data: { ...(await this.connections.disconnect(userId)), needsUsername: false } };
+    return { data: { ...(await this.connections.disconnect(userId)), needsUsername: false, verificationCode: null } };
   }
 }

@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { normalizeSocialHandle } from '../users/social-handles';
 
 export type PickaxTokenIdentity = {
@@ -19,6 +20,16 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Stateless proof-of-ownership code for accounts whose token names no identity. The member
+ * pastes it into their Pickax bio; only the account owner can, so finding it on the public
+ * profile proves ownership. Bound to our user and the handle, so it cannot be reused.
+ */
+export function profileVerificationCode(userId: string, handle: string, secret: string): string {
+  const digest = createHmac('sha256', secret).update(`pickax-profile:${userId}:${handle.toLowerCase()}`).digest('hex');
+  return `moh-verify-${digest.slice(0, 10)}`;
 }
 
 /** Claim names present in the token (names only), for diagnostics. */

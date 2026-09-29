@@ -1,5 +1,5 @@
 import { openSecret, sealSecret } from './pickax-secret-box';
-import { profileMatchesIdentity, readTokenIdentity } from './pickax-identity';
+import { profileMatchesIdentity, profileVerificationCode, readTokenIdentity } from './pickax-identity';
 import {
   articleCrosspostBlocker,
   buildPickaxArticlePayload,
@@ -49,6 +49,14 @@ describe('pickax secret box', () => {
 describe('pickax identity', () => {
   it('reads a handle and numeric id from token claims', () => {
     expect(readTokenIdentity(jwt({ username: '@alice', sub: 'user-42' }))).toEqual({ handle: 'alice', userId: '42' });
+  });
+
+  it('derives a stable profile code bound to the user and handle', () => {
+    const code = profileVerificationCode('u1', 'Alice', KEY);
+    expect(code).toMatch(/^moh-verify-[0-9a-f]{10}$/);
+    expect(profileVerificationCode('u1', 'alice', KEY)).toBe(code);
+    expect(profileVerificationCode('u2', 'alice', KEY)).not.toBe(code);
+    expect(profileVerificationCode('u1', 'bob', KEY)).not.toBe(code);
   });
 
   it('yields nothing for opaque tokens', () => {

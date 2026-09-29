@@ -13,7 +13,13 @@ import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
 import { normalizeSocialHandle } from '../users/social-handles';
 import { PickaxApiClient, PickaxApiError, type PickaxTokenPair } from './pickax-api.client';
-import { fetchPickaxProfileTexts, profileMatchesIdentity, readTokenClaimKeys, readTokenIdentity } from './pickax-identity';
+import {
+  fetchPickaxProfileTexts,
+  profileMatchesIdentity,
+  profileVerificationCode,
+  readTokenClaimKeys,
+  readTokenIdentity,
+} from './pickax-identity';
 import { openSecret, sealSecret } from './pickax-secret-box';
 
 export type PickaxConnectionStatus = {
@@ -24,8 +30,8 @@ export type PickaxConnectionStatus = {
 };
 
 export type PickaxConnectResult =
-  | { needsUsername: false; status: PickaxConnectionStatus }
-  | { needsUsername: true; status: PickaxConnectionStatus };
+  | { needsUsername: false; verificationCode: null; status: PickaxConnectionStatus }
+  | { needsUsername: true; verificationCode: string | null; status: PickaxConnectionStatus };
 
 /** Refresh slightly early so an in-flight request never carries an expired token. */
 const EXPIRY_SKEW_MS = 90_000;
@@ -73,22 +79,27 @@ export class PickaxConnectionService {
     const suppliedHandle = input.username?.trim() ? normalizeSocialHandle('pickax', input.username) : null;
     const handle = identity.handle ?? suppliedHandle;
 
-    if (!handle) {
-      if (identity.userId) return { needsUsername: true, status: this.toStatus(null) };
+    const tokenNamesAccount = Boolean(identity.handle || identity.userId);
+    if (!tokenNamesAccount) {
       this.logger.warn(
         `Pickax token carried no identity. response keys=${tokens.responseKeys.join(',')} claim keys=${
           readTokenClaimKeys(tokens.accessToken)?.join(',') ?? 'not-a-jwt'
         }`,
       );
-      throw new BadRequestException(
-        'Your key works, but Pickax did not say which account it belongs to, so we cannot verify it.',
-      );
     }
+    if (!handle) return { needsUsername: true, verificationCode: null, status: this.toStatus(null) };
 
     const texts = await fetchPickaxProfileTexts(handle);
-    const verified = texts.some((t) => profileMatchesIdentity(t, { handle, userId: identity.userId }));
-    if (!verified) {
-      throw new BadRequestException(`We could not confirm that @${handle} is the account this key belongs to.`);
+    if (tokenNamesAccount) {
+      const verified = texts.some((t) => profileMatchesIdentity(t, { handle, userId: identity.userId }));
+      if (!verified) {
+        throw new BadRequestException(`We could not confirm that @${handle} is the account this key belongs to.`);
+      }
+    } else {
+      const code = profileVerificationCode(userId, handle, key);
+      if (!texts.some((t) => t.toLowerCase().includes(code))) {
+        return { needsUsername: true, verificationCode: code, status: this.toStatus(null) };
+      }
     }
 
     const taken = await this.prisma.pickaxConnection.findFirst({
@@ -113,7 +124,7 @@ export class PickaxConnectionService {
       this.prisma.user.update({ where: { id: userId }, data: { pickaxUsername: handle }, select: { id: true } }),
     ]);
     await this.afterProfileChange(userId);
-    return { needsUsername: false, status: this.toStatus(conn) };
+    return { needsUsername: false, verificationCode: null, status: this.toStatus(conn) };
   }
 
   async disconnect(userId: string): Promise<PickaxConnectionStatus> {
