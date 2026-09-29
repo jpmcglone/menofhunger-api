@@ -68,7 +68,24 @@ export type FollowSummary = FollowRelationship & {
   followerCount: number | null;
   followingCount: number | null;
   nudge: NudgeStateDto | null;
+  /** Social proof: accounts the viewer follows who also follow this user. Null when signed out or self. */
+  followedBy: FollowedByPreview | null;
 };
+
+/** Up to `FOLLOWED_BY_PREVIEW_LIMIT` names/avatars plus the full count behind them. */
+export type FollowedByPreview = {
+  users: Array<{
+    id: string;
+    username: string | null;
+    name: string | null;
+    avatarUrl: string | null;
+    avatarVideo?: AvatarVideoDto | null;
+    isOrganization: boolean;
+  }>;
+  total: number;
+};
+
+export const FOLLOWED_BY_PREVIEW_LIMIT = 3;
 
 export type FollowListUser = {
   id: string;
@@ -695,7 +712,7 @@ export class FollowsService {
         bannedAt: null,
         username: { equals: normalized, mode: 'insensitive' },
       },
-      select: { id: true, username: true, followVisibility: true, accountKind: true },
+      select: { id: true, username: true, followVisibility: true, accountKind: true, isOrganization: true },
     });
     if (!user) throw new NotFoundException('User not found.');
     return user;
@@ -986,12 +1003,14 @@ export class FollowsService {
         followerCount: null,
         followingCount: null,
         nudge,
+        followedBy: null,
       };
     }
 
-    const [followerCount, followingCount] = await Promise.all([
+    const [followerCount, followingCount, followedBy] = await Promise.all([
       this.prisma.follow.count({ where: { followingId: target.id, follower: { usernameIsSet: true } } }),
       this.prisma.follow.count({ where: { followerId: target.id, following: { usernameIsSet: true } } }),
+      this.followedByViewerFollows({ viewerUserId, targetUserId: target.id }),
     ]);
 
     return {
@@ -1000,6 +1019,57 @@ export class FollowsService {
       followerCount,
       followingCount,
       nudge,
+      followedBy,
+    };
+  }
+
+  /**
+   * "Followed by X, Y and N others you follow": the intersection of the viewer's following list
+   * and this user's followers. Preview names come from the same order the count is taken in, so
+   * the copy and the number always agree.
+   */
+  private async followedByViewerFollows(params: {
+    viewerUserId: string | null;
+    targetUserId: string;
+  }): Promise<FollowedByPreview | null> {
+    const { viewerUserId, targetUserId } = params;
+    if (!viewerUserId || viewerUserId === targetUserId) return null;
+
+    const where: Prisma.FollowWhereInput = {
+      followingId: targetUserId,
+      followerId: { not: viewerUserId },
+      follower: {
+        usernameIsSet: true,
+        bannedAt: null,
+        followers: { some: { followerId: viewerUserId } },
+      },
+    };
+
+    const [total, rows] = await Promise.all([
+      this.prisma.follow.count({ where }),
+      this.prisma.follow.findMany({
+        where,
+        select: { follower: { select: USER_LIST_SELECT } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: FOLLOWED_BY_PREVIEW_LIMIT,
+      }),
+    ]);
+    if (total === 0) return { users: [], total: 0 };
+
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    return {
+      users: rows.map((row) => {
+        const dto = toUserListDto(row.follower, publicBaseUrl);
+        return {
+          id: dto.id,
+          username: dto.username,
+          name: dto.name,
+          avatarUrl: dto.avatarUrl,
+          avatarVideo: dto.avatarVideo,
+          isOrganization: dto.isOrganization,
+        };
+      }),
+      total,
     };
   }
 
@@ -1065,6 +1135,68 @@ export class FollowsService {
       map.set(m.userId, list);
     }
     return map;
+  }
+
+  /**
+   * Members of an organization account ("Affiliates"). Ordered newest first, cursored on the
+   * member id so the list stays stable while memberships are added.
+   */
+  async listOrgAffiliates(params: {
+    viewerUserId: string | null;
+    username: string;
+    limit: number;
+    cursor: string | null;
+  }): Promise<{ users: FollowListUser[]; nextCursor: string | null }> {
+    const { viewerUserId, username, limit, cursor } = params;
+    const org = await this.userByUsernameOrThrow(username);
+    if (!org.isOrganization) throw new NotFoundException('Not found.');
+
+    const after = cursor
+      ? await this.prisma.userOrgMembership.findUnique({
+          where: { userId_orgId: { userId: cursor, orgId: org.id } },
+          select: { createdAt: true, userId: true },
+        })
+      : null;
+
+    const rows = await this.prisma.userOrgMembership.findMany({
+      where: {
+        orgId: org.id,
+        user: { usernameIsSet: true, bannedAt: null },
+        ...(after
+          ? {
+              OR: [
+                { createdAt: { lt: after.createdAt } },
+                { createdAt: after.createdAt, userId: { lt: after.userId } },
+              ],
+            }
+          : {}),
+      },
+      select: { userId: true, user: { select: USER_LIST_SELECT } },
+      orderBy: [{ createdAt: 'desc' }, { userId: 'desc' }],
+      take: limit + 1,
+    });
+
+    const slice = rows.slice(0, limit);
+    const nextCursor = rows.length > limit ? (slice[slice.length - 1]?.userId ?? null) : null;
+
+    const rel = await this.batchRelationshipForUserIds({
+      viewerUserId,
+      userIds: slice.map((row) => row.userId),
+    });
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+
+    const users: FollowListUser[] = slice.map((row) =>
+      toUserListDto(row.user, publicBaseUrl, {
+        relationship: {
+          viewerFollowsUser: rel.viewerFollows.has(row.userId),
+          userFollowsViewer: rel.followsViewer.has(row.userId),
+          viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(row.userId),
+          viewerNotificationPreference: rel.viewerNotificationPreferences.get(row.userId) ?? 'off',
+        },
+      }) as FollowListUser,
+    );
+
+    return { users, nextCursor };
   }
 
   async listFollowers(params: {

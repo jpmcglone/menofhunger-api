@@ -10,7 +10,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AuthService } from '../auth/auth.service';
 import { AppConfigService } from '../app/app-config.service';
-import { FollowsService } from '../follows/follows.service';
+import { FollowsService, type FollowListUser } from '../follows/follows.service';
 import { CurrentUserId, OptionalCurrentUserId } from './users.decorator';
 import { validateUsername } from './users.utils';
 import {
@@ -179,6 +179,11 @@ type UserPreviewPayload = {
   locationDisplay: string | null;
   locationState: string | null;
 };
+
+const affiliatesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  cursor: z.string().min(1).optional(),
+});
 
 @ApiTags('Profiles & Social')
 @Controller('users')
@@ -883,6 +888,29 @@ export class UsersController {
     },
   })
   @UseGuards(OptionalAuthGuard)
+  @Throttle({
+    default: {
+      limit: rateLimitLimit('publicRead', 120),
+      ttl: rateLimitTtl('publicRead', 60),
+    },
+  })
+  @UseGuards(OptionalAuthGuard)
+  @Get(':username/affiliates')
+  async affiliates(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Param('username') username: string,
+    @Query() query: unknown,
+  ): Promise<{ data: FollowListUser[]; pagination: { nextCursor: string | null } }> {
+    const parsed = affiliatesQuerySchema.parse(query);
+    const result = await this.followsService.listOrgAffiliates({
+      viewerUserId: userId ?? null,
+      username,
+      limit: parsed.limit ?? 30,
+      cursor: parsed.cursor ?? null,
+    });
+    return { data: result.users, pagination: { nextCursor: result.nextCursor } };
+  }
+
   @Get(':username')
   async publicProfile(
     @OptionalCurrentUserId() userId: string | undefined,
@@ -911,7 +939,8 @@ export class UsersController {
     if (viewerUserId) res.setHeader('Vary', 'Cookie');
 
     const profileId = (payload as any).id as string | undefined;
-    const [orgMap, crewMember, postCount, articleCount, boardPoints] = await Promise.all([
+    const isOrg = Boolean((payload as { isOrganization?: boolean }).isOrganization);
+    const [orgMap, crewMember, postCount, articleCount, boardPoints, affiliateCount] = await Promise.all([
       profileId ? this.publicProfiles.batchOrgAffiliations([profileId]) : Promise.resolve(new Map()),
       profileId
         ? this.prisma.crewMember.findFirst({
@@ -928,6 +957,12 @@ export class UsersController {
           })
         : Promise.resolve(0),
       profileId ? totalUserBoardPoints(this.prisma, profileId) : Promise.resolve(0),
+      // Only organizations have affiliates; everyone else gets null so clients can hide the count.
+      profileId && isOrg
+        ? this.prisma.userOrgMembership.count({
+            where: { orgId: profileId, user: { usernameIsSet: true, bannedAt: null } },
+          })
+        : Promise.resolve(null),
     ]);
 
     if (viewerUserId && profileId) {
@@ -945,6 +980,7 @@ export class UsersController {
         postCount,
         articleCount,
         boardPoints,
+        affiliateCount,
         inCrew: Boolean(crewMember),
       },
     };
