@@ -21,6 +21,12 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   }
 }
 
+/** Claim names present in the token (names only), for diagnostics. */
+export function readTokenClaimKeys(accessToken: string): string[] | null {
+  const claims = decodeJwtPayload(accessToken);
+  return claims ? Object.keys(claims) : null;
+}
+
 /** Reads the identity Pickax itself put in the access token. Never trusts client input. */
 export function readTokenIdentity(accessToken: string): PickaxTokenIdentity {
   const claims = decodeJwtPayload(accessToken);

@@ -13,7 +13,7 @@ import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
 import { normalizeSocialHandle } from '../users/social-handles';
 import { PickaxApiClient, PickaxApiError, type PickaxTokenPair } from './pickax-api.client';
-import { fetchPickaxProfileTexts, profileMatchesIdentity, readTokenIdentity } from './pickax-identity';
+import { fetchPickaxProfileTexts, profileMatchesIdentity, readTokenClaimKeys, readTokenIdentity } from './pickax-identity';
 import { openSecret, sealSecret } from './pickax-secret-box';
 
 export type PickaxConnectionStatus = {
@@ -75,6 +75,11 @@ export class PickaxConnectionService {
 
     if (!handle) {
       if (identity.userId) return { needsUsername: true, status: this.toStatus(null) };
+      this.logger.warn(
+        `Pickax token carried no identity. response keys=${tokens.responseKeys.join(',')} claim keys=${
+          readTokenClaimKeys(tokens.accessToken)?.join(',') ?? 'not-a-jwt'
+        }`,
+      );
       throw new BadRequestException(
         'Your key works, but Pickax did not say which account it belongs to, so we cannot verify it.',
       );

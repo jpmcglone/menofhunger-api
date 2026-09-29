@@ -26,6 +26,8 @@ export type PickaxTokenPair = {
   accessToken: string;
   refreshToken: string | null;
   expiresInSeconds: number;
+  /** Top-level field names of the token response, for diagnosing missing identity. Never values. */
+  responseKeys: string[];
 };
 
 export type PickaxPostPayload = {
@@ -92,6 +94,7 @@ export class PickaxApiClient {
       accessToken,
       refreshToken: typeof o.refreshToken === 'string' && o.refreshToken ? o.refreshToken : null,
       expiresInSeconds: expiresIn,
+      responseKeys: Object.keys(o),
     };
   }
 
