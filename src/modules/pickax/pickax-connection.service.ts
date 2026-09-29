@@ -27,6 +27,8 @@ export type PickaxConnectionStatus = {
   connected: boolean;
   username: string | null;
   needsAttention: boolean;
+  /** Latest failure Pickax reported for a cross-post, cleared by the next success. */
+  lastError: string | null;
 };
 
 export type PickaxConnectResult =
@@ -142,6 +144,10 @@ export class PickaxConnectionService {
     return conn && conn.status === 'active' ? conn : null;
   }
 
+  async clearError(userId: string): Promise<void> {
+    await this.prisma.pickaxConnection.updateMany({ where: { userId, lastError: { not: null } }, data: { lastError: null } });
+  }
+
   async markError(userId: string, message: string, needsNewKey: boolean): Promise<void> {
     await this.prisma.pickaxConnection.updateMany({
       where: { userId },
@@ -202,6 +208,7 @@ export class PickaxConnectionService {
       connected: Boolean(conn),
       username: conn?.username ?? null,
       needsAttention: conn?.status === 'error',
+      lastError: conn?.lastError ?? null,
     };
   }
 

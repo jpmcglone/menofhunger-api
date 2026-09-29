@@ -216,6 +216,7 @@ export class PickaxCrosspostService {
       create: { userId, kind, localId, remoteId, contentHash: hash },
       update: { remoteId, contentHash: hash, lastError: null },
     });
+    await this.connections.clearError(userId);
   }
 
   private siteBaseUrl(): string {

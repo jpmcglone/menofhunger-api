@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 export const PICKAX_API_BASE = 'https://api.pickax.com/third-party/v1';
 
@@ -59,6 +59,8 @@ export function extractRemoteId(json: unknown): string | null {
 /** Thin HTTP wrapper over the Pickax third-party API. Holds no credentials. */
 @Injectable()
 export class PickaxApiClient {
+  private readonly logger = new Logger(PickaxApiClient.name);
+
   async exchangeCredentials(clientId: string, clientSecret: string): Promise<PickaxTokenPair> {
     const json = await this.request('POST', '/auth/token', { body: { clientId, clientSecret } });
     return this.parseTokens(json);
@@ -137,6 +139,8 @@ export class PickaxApiClient {
         Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
       );
     }
+    // Auth responses carry tokens, so only content writes are logged.
+    if (!path.startsWith('/auth/')) this.logger.log(`${method} ${path} -> ${res.status} ${text.slice(0, 400)}`);
     return json;
   }
 }
