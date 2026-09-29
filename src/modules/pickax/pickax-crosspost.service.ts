@@ -190,6 +190,8 @@ export class PickaxCrosspostService {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof PickaxApiError && err.isRetryable) {
         this.logger.warn(`Pickax ${target.kind} ${target.localId} will retry: ${message}`);
+        // Show the author what happened while the queue retries; a later success clears it.
+        await this.recordRowError(target, `${message} Retrying.`.slice(0, 500));
         throw err;
       }
       const authFailure = err instanceof PickaxApiError && err.isAuthFailure;

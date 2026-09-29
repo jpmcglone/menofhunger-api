@@ -132,6 +132,11 @@ export class PickaxApiClient {
     if (!res.ok) {
       const err = (json as { error?: { code?: string; message?: string } } | null)?.error;
       const retryAfter = Number(res.headers.get('retry-after'));
+      // Log rejections too (never for /auth/, whose bodies carry tokens): a bare "Internal server
+      // error" from Pickax is undiagnosable without the response body.
+      if (!path.startsWith('/auth/')) {
+        this.logger.warn(`${method} ${path} -> ${res.status} ${text.slice(0, 400)}`);
+      }
       throw new PickaxApiError(
         res.status,
         err?.code ?? 'request_failed',
