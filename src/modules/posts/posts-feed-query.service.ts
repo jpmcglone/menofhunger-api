@@ -1733,15 +1733,19 @@ export class PostsFeedQueryService {
     );
     const fallbackOnly = Boolean(legacyCursor) && !inTrendingHead;
 
-    const scanTake = isPage1
-      ? Math.min(
-          POSTS_RANKING.forYouPage1ScanTakeMax,
-          Math.max(limit + 10, limit * 2),
-        )
-      : Math.min(
-          POSTS_RANKING.forYouScanTakeMax,
-          Math.max(limit + 10, limit * 4),
-        );
+    // A pull-to-refresh pays for the wider scan so refreshing can actually reach posts the
+    // narrow first-paint pool never contained. First paint keeps the tighter budget.
+    const isRefreshPage = Boolean(params.refresh) && isPage1;
+    const scanTake =
+      isPage1 && !isRefreshPage
+        ? Math.min(
+            POSTS_RANKING.forYouPage1ScanTakeMax,
+            Math.max(limit + 10, limit * 2),
+          )
+        : Math.min(
+            POSTS_RANKING.forYouScanTakeMax,
+            Math.max(limit + 10, limit * 4),
+          );
 
     type ScannedRow = {
       id: string;
@@ -2485,39 +2489,10 @@ export class PostsFeedQueryService {
       }
     }
 
-    // Saturation: how much of the current candidate pool the viewer has already seen.
-    // Drives the jitter strength below — a fresh pool (low saturation) stays close to
-    // deterministic (the existing ranking already surfaces recent/unseen content well),
-    // while a saturated pool ("I've seen everything") gets a real reshuffle so refresh
-    // stops returning the same order every time.
-    const seenCandidateCount = candidates.reduce(
-      (count, c) => (seenById.has(c.id) ? count + 1 : count),
-      0,
-    );
-    const saturation =
-      candidates.length > 0 ? seenCandidateCount / candidates.length : 0;
-    const saturationRamp = Math.max(
-      0,
-      (saturation - POSTS_RANKING.forYouSeenSaturationJitterThreshold) /
-        (1 - POSTS_RANKING.forYouSeenSaturationJitterThreshold),
-    );
-
     const now = Date.now();
-    // Anon always jitters (no seen-history). Authed first paint stays deterministic for unseen
-    // rows; pull-to-refresh uses a floor so a new seed actually moves the page.
-    const refreshJitterFloor =
-      params.refresh && isPage1 ? POSTS_RANKING.forYouRefreshJitterFloor : 0;
-    const jitterStrengthBase =
-      viewerUserId == null
-        ? POSTS_RANKING.forYouAnonJitterStrength
-        : Math.max(POSTS_RANKING.forYouSeenJitterBase, refreshJitterFloor);
-    const jitterStrength = Math.min(
-      1,
-      jitterStrengthBase +
-        (POSTS_RANKING.forYouSeenSaturationJitterMax - jitterStrengthBase) *
-          saturationRamp,
-    );
-    const ranked = candidates.map((c) => {
+    // Score without jitter first: jitter strength depends on how saturated the resulting page
+    // is, which we can only know once the candidates are ordered.
+    const scored = candidates.map((c) => {
       const conversation = conversationContexts.get(c.id);
       const youFollowThem = youFollow.has(c.userId);
       const theyFollowYou = followsYou.has(c.userId);
@@ -2543,12 +2518,12 @@ export class PostsFeedQueryService {
                 : POSTS_RANKING.forYouRelMultStranger;
 
       const seen = seenById.get(c.id);
+      const seenHoursAgo = seen
+        ? Math.max(0, (now - seen.lastSeenAt.getTime()) / (60 * 60 * 1000))
+        : Number.POSITIVE_INFINITY;
       let seenMult = 1.0;
       if (seen) {
-        const hours = Math.max(
-          0,
-          (now - seen.lastSeenAt.getTime()) / (60 * 60 * 1000),
-        );
+        const hours = seenHoursAgo;
         const recovery =
           1 - Math.exp(-hours / POSTS_RANKING.forYouSeenHalfLifeHours);
         seenMult =
@@ -2661,14 +2636,15 @@ export class PostsFeedQueryService {
         (c.friendEngaged
           ? Math.max(rawBase, POSTS_RANKING.forYouFriendEngagementBaseFloor)
           : rawBase);
-      // Saturation jitter reshuffles already-seen rows so a "seen everything" refresh is not
-      // identical. Unseen authed posts keep only the refresh/anon floor — otherwise ±90% jitter
-      // can bury a brand-new discovery item under a just-seen trending post.
-      const postJitterStrength =
-        seen || viewerUserId == null ? jitterStrength : jitterStrengthBase;
-      const jitter =
-        1 + (seededUnitInterval(jitterSeed, c.id) * 2 - 1) * postJitterStrength;
-      const adjusted =
+      // A pull-to-refresh is the viewer saying "I've read these". The ordinary seen decay
+      // recovers over days, which is the right call for a passive reload but far too slow for
+      // a deliberate refresh, so hand those slots to unseen candidates.
+      const refreshSeenMult =
+        isRefreshPage &&
+        seenHoursAgo < POSTS_RANKING.forYouRefreshSeenDemotionHours
+          ? POSTS_RANKING.forYouRefreshSeenDemotionMult
+          : 1.0;
+      const unjittered =
         base *
         recencyMult *
         relMult *
@@ -2678,8 +2654,54 @@ export class PostsFeedQueryService {
         secondDegreeMult *
         groupMult *
         replyMult *
-        jitter;
-      return { candidate: c, adjusted };
+        refreshSeenMult;
+      return { candidate: c, unjittered, seen: Boolean(seen) };
+    });
+
+    // Saturation: how much of the page the viewer would actually be served has it already
+    // seen. Measuring the whole candidate pool understates this badly — the discovery scan is
+    // mostly low-scoring posts that never reach the page, so the pool reads as fresh while
+    // every visible row is something the viewer read hours ago, and the reshuffle that exists
+    // for exactly that case never engages.
+    const servedSlice = [...scored]
+      .sort((a, b) => b.unjittered - a.unjittered)
+      .slice(0, limit);
+    const saturation = servedSlice.length
+      ? servedSlice.filter((r) => r.seen).length / servedSlice.length
+      : 0;
+    const saturationRamp = Math.max(
+      0,
+      (saturation - POSTS_RANKING.forYouSeenSaturationJitterThreshold) /
+        (1 - POSTS_RANKING.forYouSeenSaturationJitterThreshold),
+    );
+
+    // Anon always jitters (no seen-history). Authed first paint stays deterministic for unseen
+    // rows; pull-to-refresh uses a floor so a new seed actually moves the page.
+    const refreshJitterFloor = isRefreshPage
+      ? POSTS_RANKING.forYouRefreshJitterFloor
+      : 0;
+    const jitterStrengthBase =
+      viewerUserId == null
+        ? POSTS_RANKING.forYouAnonJitterStrength
+        : Math.max(POSTS_RANKING.forYouSeenJitterBase, refreshJitterFloor);
+    const jitterStrength = Math.min(
+      1,
+      jitterStrengthBase +
+        (POSTS_RANKING.forYouSeenSaturationJitterMax - jitterStrengthBase) *
+          saturationRamp,
+    );
+
+    // Saturation jitter reshuffles already-seen rows so a "seen everything" refresh is not
+    // identical. Unseen authed posts keep only the refresh/anon floor — otherwise ±90% jitter
+    // can bury a brand-new discovery item under a just-seen trending post.
+    const ranked = scored.map(({ candidate, unjittered, seen }) => {
+      const postJitterStrength =
+        seen || viewerUserId == null ? jitterStrength : jitterStrengthBase;
+      const jitter =
+        1 +
+        (seededUnitInterval(jitterSeed, candidate.id) * 2 - 1) *
+          postJitterStrength;
+      return { candidate, adjusted: unjittered * jitter };
     });
 
     ranked.sort((a, b) => {
@@ -2794,8 +2816,15 @@ export class PostsFeedQueryService {
           b.candidate.createdAt.getTime() - a.candidate.createdAt.getTime()
         );
       });
-    pickFrom(followedUnseenSorted, followedQuota);
-    if (params.refresh && isPage1) {
+    // First paint keeps the followed-unseen block so people you follow land at the top.
+    // An explicit refresh is "I've read this" — pinning 70% of the page to the same recency
+    // order is why pull-to-refresh used to return the identical old posts. Those rows still
+    // enter through ranked scoring if they are actually new; they just do not get a reserved
+    // block that exploration cannot touch.
+    if (!isRefreshPage) {
+      pickFrom(followedUnseenSorted, followedQuota);
+    }
+    if (isRefreshPage) {
       const exploration = ranked
         .filter((r) => !r.candidate.followingUnseen)
         .sort((a, b) => {
@@ -2807,14 +2836,14 @@ export class PostsFeedQueryService {
             seededUnitInterval(jitterSeed, a.candidate.id)
           );
         });
-      pickFrom(
-        exploration,
-        Math.min(
-          limit,
-          picked.length +
-            Math.ceil(limit * POSTS_RANKING.forYouRefreshExplorationRatio),
+      const explorationSlots = Math.min(
+        limit,
+        Math.max(
+          Math.ceil(limit * POSTS_RANKING.forYouRefreshExplorationRatio),
+          Math.ceil(limit * saturation),
         ),
       );
+      pickFrom(exploration, explorationSlots);
     }
     pickFrom(ranked, limit);
 

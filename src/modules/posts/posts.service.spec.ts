@@ -3094,6 +3094,114 @@ describe('PostsService.listForYouFeed', () => {
     expect(sawDifferentOrder).toBe(true);
   });
 
+  it('authed: refresh does not reserve the page-1 followed-unseen block', async () => {
+    const followedCandidates = Array.from({ length: 10 }, (_, i) =>
+      cand(`fu${i}`, `u-followed-${i}`, 2, 1),
+    );
+    const strangerCandidates = Array.from({ length: 5 }, (_, i) =>
+      cand(`st${i}`, `u-stranger-${i}`, 1000, 1),
+    );
+    const youFollowAuthorIds = followedCandidates.map((c) => c.userId);
+    const { service } = setupForYou({
+      candidates: [...followedCandidates, ...strangerCandidates],
+      youFollowAuthorIds,
+    });
+    const params = { viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' as const };
+
+    const firstPaint = await service.listForYouFeed(params);
+    expect(firstPaint.posts.filter((p: any) => youFollowAuthorIds.includes(p.userId)).length).toBeGreaterThanOrEqual(7);
+
+    const refreshed = await service.listForYouFeed({ ...params, refresh: true });
+    const refreshedStrangers = refreshed.posts.filter((p: any) => !youFollowAuthorIds.includes(p.userId)).length;
+    expect(refreshedStrangers).toBeGreaterThan(3);
+  });
+
+  it('authed: refresh demotes posts last seen earlier today, not only in the last few hours', async () => {
+    const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000);
+    const seenPosts = Array.from({ length: 5 }, (_, i) => cand(`seen${i}`, `u${i}`, 150 - i, 1));
+    const unseen = Array.from({ length: 5 }, (_, i) => cand(`unseen${i}`, `v${i}`, 14 - i, 1));
+    const { service } = setupForYou({
+      candidates: [...seenPosts, ...unseen],
+      seenAtByPostId: Object.fromEntries(
+        seenPosts.map((c) => [
+          c.id,
+          { lastSeenAt: twelveHoursAgo, lastSource: 'feed_scroll' },
+        ]),
+      ),
+    });
+    const params = { viewerUserId: 'viewer', limit: 5, cursor: null, visibility: 'all' as const };
+
+    const stale = await service.listForYouFeed(params);
+    expect(stale.posts.some((p: any) => p.id.startsWith('seen'))).toBe(true);
+
+    const refreshed = await service.listForYouFeed({ ...params, refresh: true });
+    expect(refreshed.posts.every((p: any) => p.id.startsWith('unseen'))).toBe(true);
+  });
+
+  it('authed: refresh gives slots taken by just-seen posts to unseen candidates', async () => {
+    // The seen posts out-score the unseen ones by a wide margin, so only the refresh demotion
+    // can dislodge them. This is the "I keep refreshing and it's the same old posts" case.
+    const seenPosts = Array.from({ length: 5 }, (_, i) => cand(`seen${i}`, `u${i}`, 150 - i, 1));
+    const unseen = Array.from({ length: 5 }, (_, i) => cand(`unseen${i}`, `v${i}`, 10 - i, 1));
+    const { service } = setupForYou({
+      candidates: [...seenPosts, ...unseen],
+      seenAtByPostId: Object.fromEntries(seenPosts.map((c) => [c.id, new Date()])),
+    });
+    const params = { viewerUserId: 'viewer', limit: 5, cursor: null, visibility: 'all' as const };
+
+    // Their trending lead outweighs the ordinary seen decay, so a plain reload keeps showing
+    // them however many times the viewer asks.
+    const stale = await service.listForYouFeed(params);
+    expect(stale.posts.some((p: any) => p.id.startsWith('seen'))).toBe(true);
+
+    // An explicit refresh hands the whole page to content the viewer has not read.
+    const refreshed = await service.listForYouFeed({ ...params, refresh: true });
+    expect(refreshed.posts.every((p: any) => p.id.startsWith('unseen'))).toBe(true);
+  });
+
+  it('authed: a fully seen page reshuffles even when the wider candidate pool is unseen', async () => {
+    // Saturation must describe the page the viewer gets, not the scan behind it. The five
+    // rows that fit are all seen; the 40 unseen posts below them score too low to surface,
+    // so pool-wide saturation (5/45) would leave the feed frozen.
+    const topSeen = Array.from({ length: 5 }, (_, i) => cand(`seen${i}`, `u${i}`, 500 - i, 1));
+    const buried = Array.from({ length: 40 }, (_, i) => cand(`buried${i}`, `v${i}`, 1, 200));
+    const { service } = setupForYou({
+      candidates: [...topSeen, ...buried],
+      seenAtByPostId: Object.fromEntries(topSeen.map((c) => [c.id, new Date()])),
+    });
+    const params = { viewerUserId: 'viewer', limit: 5, cursor: null, visibility: 'all' as const };
+
+    let sawDifferentOrder = false;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const a = await service.listForYouFeed(params);
+      const b = await service.listForYouFeed(params);
+      if (a.posts.map((p: any) => p.id).join(',') !== b.posts.map((p: any) => p.id).join(',')) {
+        sawDifferentOrder = true;
+        break;
+      }
+    }
+    expect(sawDifferentOrder).toBe(true);
+  });
+
+  it('authed: refresh scans deeper than first paint so new candidates can enter the pool', async () => {
+    const candidates = Array.from({ length: 300 }, (_, i) => cand(`p${i}`, `u${i}`, 1000 - i));
+    const { service, post } = setupForYou({ candidates });
+    const params = { viewerUserId: 'viewer', limit: 30, cursor: null, visibility: 'all' as const };
+    const trendingScanTake = () =>
+      Math.max(
+        ...(post.findMany as jest.Mock).mock.calls
+          .filter((call: any) => isTrendingScan(call[0]))
+          .map((call: any) => Number(call[0]?.take ?? 0)),
+      );
+
+    await service.listForYouFeed(params);
+    const firstPaintTake = trendingScanTake();
+    (post.findMany as jest.Mock).mockClear();
+
+    await service.listForYouFeed({ ...params, refresh: true });
+    expect(trendingScanTake()).toBeGreaterThan(firstPaintTake);
+  });
+
   it('authed: below the saturation threshold, ordering stays deterministic even with some seen posts', async () => {
     // 10 candidates, only 3 seen (saturation 0.3 — below the 0.6 jitter threshold), so
     // jitterStrength stays at forYouSeenJitterBase (0) and ordering must not vary.

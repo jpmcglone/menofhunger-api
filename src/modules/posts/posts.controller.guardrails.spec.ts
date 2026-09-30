@@ -42,5 +42,8 @@ describe('PostsController media feed guardrails', () => {
     expect(controller).toContain('refresh: wantsForYouRefresh');
     expect(feed).toContain('params.refresh');
     expect(feed).toContain('forYouRefreshJitterFloor');
+    expect(feed).toContain('if (!isRefreshPage)');
+    expect(feed).toContain('pickFrom(followedUnseenSorted, followedQuota)');
+    expect(feed).toContain('Math.ceil(limit * saturation)');
   });
 });

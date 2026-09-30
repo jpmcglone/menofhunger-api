@@ -73,7 +73,12 @@ export const POSTS_RANKING = {
 
   // For You: blends followed-unseen posts, friend-engaged discovery, and broader trending.
   forYouScanTakeMax: 240,
-  /** Keep the latency-sensitive first page bounded; deeper pages retain the wider discovery scan. */
+  /**
+   * Keep the latency-sensitive first paint bounded; deeper pages retain the wider discovery scan.
+   * An explicit pull-to-refresh also uses the wider scan: each lane takes its top N by a fixed
+   * ordering, so a narrow scan hands back the same candidates every time and no amount of
+   * re-ranking can produce a post the pool never contained.
+   */
   forYouPage1ScanTakeMax: 80,
   /** Legacy inline cursor limit; new sessions keep immutable history in Redis. */
   forYouCursorServedIdMax: 300,
@@ -81,7 +86,7 @@ export const POSTS_RANKING = {
   forYouSessionTtlSeconds: 60 * 60,
   forYouInlineCursorMaxPosts: 100,
   forYouSocialProofMaxPeople: 10,
-  forYouRefreshExplorationRatio: 0.2,
+  forYouRefreshExplorationRatio: 0.45,
   forYouRecentFollowedWindowHours: 48,
   /**
    * Followed-unseen quota ratio is now depth-aware (see listForYouFeed):
@@ -184,6 +189,15 @@ export const POSTS_RANKING = {
    * this jitter so a new seed actually moves rows. First paint stays at forYouSeenJitterBase.
    */
   forYouRefreshJitterFloor: 0.2,
+  /**
+   * A pull-to-refresh means "I've read this, show me something else", so posts the viewer saw
+   * today give up their slots to unseen candidates. The ordinary seen decay recovers over days,
+   * which is the right call for a passive reload but far too slow for a deliberate refresh.
+   * When every candidate is already seen it scales the whole page equally and changes nothing,
+   * so it can never empty the feed.
+   */
+  forYouRefreshSeenDemotionHours: 24,
+  forYouRefreshSeenDemotionMult: 0.25,
   /** For You thread rollup: hide a seen middle post when lastSeenAt is within this many hours. */
   forYouSeenCollapseHotHours: 24,
   /** After this many hours, a seen middle post is treated as unread for display collapse. */

@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/nestjs';
+import { isExpectedFailure } from './common/sentry/expected-failure';
 import { scrubSentryEvent } from './common/sentry/sentry-scrub';
 
 // Loaded before Nest so auto-instrumentation can patch http, express, Prisma, and ioredis.
@@ -9,21 +10,6 @@ const isProd = nodeEnv === 'production';
 const configuredRate = Number(process.env.SENTRY_TRACES_SAMPLE_RATE?.trim() || NaN);
 const tracesSampleRate = Number.isFinite(configuredRate) ? configuredRate : isProd ? 0.05 : 1;
 const UNSAMPLED_PATH = /^\/(?:v\d+\/)?(?:health|socket\.io)(?:[/?]|$)/;
-
-/**
- * Failures we raise on purpose and already surface to the user are not Sentry issues:
- *  - Nest `HttpException`s carry a user-facing message and go through the global exception filter
- *    (including the 503s we return when an upstream provider is briefly unavailable).
- *  - `PickaxApiError` is a third-party rejection; we store it on the post/article and in Settings,
- *    and the queue retries on its own.
- * Unexpected bugs (TypeError, Prisma errors, and anything else) still report normally.
- */
-function isExpectedFailure(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const candidate = error as { getStatus?: unknown; constructor?: { name?: string } };
-  if (typeof candidate.getStatus === 'function') return true;
-  return candidate.constructor?.name === 'PickaxApiError';
-}
 
 if (dsn) {
   Sentry.init({

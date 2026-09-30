@@ -7,9 +7,12 @@ block, ban, and group filters before ranking.
 
 ## Request cost and refresh
 
-- Page one scans at most 120 discovery rows total (80 trending, 40 chronological),
+- First paint scans at most 120 discovery rows total (80 trending, 40 chronological),
   80 followed rows, one page of friend-engaged posts, and half a page of second-degree
   posts. Each lane reads one extra row to detect overflow.
+- An explicit refresh uses the deeper per-lane budget instead. Every lane takes its top N
+  by a fixed ordering, so the narrow first-paint scan returns the same candidates every
+  time and no amount of re-ranking can surface a post the pool never contained.
 - Deeper scans are capped at 240 rows per lane (120 chronological). Second-degree edges are capped at
   300 on page one and 1,000 deeper. Graph and recent engagement-author inputs are
   cached for 15 seconds, including on explicit refresh; candidates and permissions
@@ -23,8 +26,18 @@ block, ban, and group filters before ranking.
   seeded discovery, preferring unseen candidates. Remaining slots use relevance,
   seen penalties, recency, author diversity, and saturation-aware jitter. This can
   change page membership even when multiplying scores by jitter would not.
+- Refresh also demotes posts seen in the last 24 hours to a quarter of their score.
+  The ordinary seen decay recovers over days, which suits a passive reload but leaves a
+  deliberate refresh showing the same rows. When every candidate is already seen this
+  scales the page equally and changes nothing, so it cannot empty the feed.
+- Saturation, which drives jitter strength, is measured over the rows that would actually
+  be served rather than the whole candidate pool. A wide discovery scan is mostly
+  low-scoring posts that never reach the page, so a pool-wide measure reads as fresh while
+  every visible row is something the viewer read hours ago.
 - Both clients already flush pending view reports before refresh. Viewing content
-  affects the next ranking; merely receiving it does not mark it read.
+  affects the next ranking; merely receiving it does not mark it read. Clients tag each
+  report with a `source`; `feed_scroll` is what the extra 24-hour scroll-past demotion
+  keys off, so a client that omits it loses that demotion entirely.
 
 ## Pagination
 
