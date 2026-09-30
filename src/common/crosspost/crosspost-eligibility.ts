@@ -88,39 +88,11 @@ export function xPostCostMicros(text: string): number {
   return /https?:\/\//i.test(text) ? X_LINK_COST_MICROS : X_NATIVE_COST_MICROS;
 }
 
-function measureOf(weighted: boolean): (text: string) => number {
-  return weighted ? xWeightedLength : (text) => text.length;
-}
+/** Link shares point at the original. They do not copy its words. */
+export const SHARE_LINK_BLURB = 'Check this out on Men of Hunger';
 
-/**
- * Excerpt plus the Men of Hunger URL, shortened so the result fits `max`.
- * On X the URL always costs 23, whatever its real length.
- */
-export function buildShareText(text: string, url: string, opts: { max: number; weighted: boolean }): string {
-  const measure = measureOf(opts.weighted);
-  const body = text.trim().replace(/\s+/g, ' ');
-  const urlCost = opts.weighted ? X_URL_WEIGHT : url.length;
-  if (!body || opts.max - urlCost - 1 < 1) {
-    return !opts.weighted && url.length > opts.max ? url.slice(0, opts.max) : url;
-  }
-  if (measure(`${body} ${url}`) <= opts.max) return `${body} ${url}`;
-
-  let best = '';
-  let lo = 0;
-  let hi = body.length;
-  while (lo <= hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    const slice = body.slice(0, mid).replace(/\s+\S*$/, '').replace(/[.,;:\s]+$/, '');
-    const trial = slice ? `${slice}...` : '';
-    const candidate = trial ? `${trial} ${url}` : url;
-    if (measure(candidate) <= opts.max && trial) {
-      best = candidate;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  return best || url;
+export function buildShareText(url: string): string {
+  return `${SHARE_LINK_BLURB} ${url}`;
 }
 
 /** Why even a link-back post is impossible, or null when a link is fine. */

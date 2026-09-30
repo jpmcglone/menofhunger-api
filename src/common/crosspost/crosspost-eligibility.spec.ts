@@ -47,23 +47,11 @@ describe('x weighted length', () => {
 });
 
 describe('share text', () => {
-  it('keeps a short post and appends the url', () => {
-    expect(buildShareText('Hello there', 'https://menofhunger.com/p/1', { max: 280, weighted: true })).toBe(
-      'Hello there https://menofhunger.com/p/1',
+  it('points at the original without copying it', () => {
+    expect(buildShareText('https://menofhunger.com/p/1')).toBe(
+      'Check this out on Men of Hunger https://menofhunger.com/p/1',
     );
-  });
-
-  it('shortens a long post so the url still fits on X', () => {
-    const text = buildShareText('word '.repeat(200), 'https://menofhunger.com/p/1', { max: 280, weighted: true });
-    expect(xWeightedLength(text)).toBeLessThanOrEqual(280);
-    expect(text.endsWith('https://menofhunger.com/p/1')).toBe(true);
-    expect(text).toContain('...');
-  });
-
-  it('fits a pickax link inside 1000 characters', () => {
-    const text = buildShareText('a'.repeat(2000), 'https://menofhunger.com/p/1', { max: 1000, weighted: false });
-    expect(text.length).toBeLessThanOrEqual(1000);
-    expect(text.endsWith('https://menofhunger.com/p/1')).toBe(true);
+    expect(buildShareText('https://menofhunger.com/a/1')).not.toContain('Hello');
   });
 });
 

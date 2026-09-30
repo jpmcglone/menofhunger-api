@@ -86,7 +86,7 @@ export class XCrosspostService {
     if (article.deletedAt || article.isDraft || !article.publishedAt) return { status: 'skipped', reason: 'not_published' };
     if (article.visibility !== 'public') return { status: 'skipped', reason: 'not_public' };
     if (!article.title.trim()) return { status: 'skipped', reason: 'no_title' };
-    const text = buildShareText(article.title, this.articleUrl(articleId), { max: X_POST_MAX_WEIGHTED, weighted: true });
+    const text = buildShareText(this.articleUrl(articleId));
     return this.reserveAndQueue({
       userId,
       kind: 'article',
@@ -123,7 +123,7 @@ export class XCrosspostService {
       await this.fail('article', articleId, article.authorId, 'This article can no longer be shared to X.');
       return;
     }
-    const text = buildShareText(article.title, this.articleUrl(articleId), { max: X_POST_MAX_WEIGHTED, weighted: true });
+    const text = buildShareText(this.articleUrl(articleId));
     await this.publish(article.authorId, 'article', articleId, text, []);
   }
 
@@ -345,7 +345,7 @@ export class XCrosspostService {
 
   private postText(post: LoadedPost, mode: CrosspostMode, postId: string): string {
     if (mode === 'link') {
-      return buildShareText(post.body, this.postUrl(postId), { max: X_POST_MAX_WEIGHTED, weighted: true });
+      return buildShareText(this.postUrl(postId));
     }
     return post.body.trim();
   }

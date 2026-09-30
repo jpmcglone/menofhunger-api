@@ -90,8 +90,8 @@ export function buildPickaxPostPayload(
 }
 
 /** Link: a short post whose text points back at Men of Hunger. */
-export function buildPickaxLinkPayload(text: string, mohUrl: string): PickaxPostPayload {
-  return { content: buildShareText(text, mohUrl, { max: PICKAX_POST_MAX_LENGTH, weighted: false }), link: mohUrl };
+export function buildPickaxLinkPayload(mohUrl: string): PickaxPostPayload {
+  return { content: buildShareText(mohUrl), link: mohUrl };
 }
 
 // ─── Articles ────────────────────────────────────────────────────────────────

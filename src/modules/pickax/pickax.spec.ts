@@ -124,8 +124,8 @@ describe('pickax post eligibility and payload', () => {
   });
 
   it('puts the Men of Hunger url in a link post', () => {
-    const payload = buildPickaxLinkPayload('Hello', 'https://menofhunger.com/p/p1');
-    expect(payload.content).toBe('Hello https://menofhunger.com/p/p1');
+    const payload = buildPickaxLinkPayload('https://menofhunger.com/p/p1');
+    expect(payload.content).toBe('Check this out on Men of Hunger https://menofhunger.com/p/p1');
     expect(payload.link).toBe('https://menofhunger.com/p/p1');
   });
 });

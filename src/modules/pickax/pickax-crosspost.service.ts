@@ -149,7 +149,7 @@ export class PickaxCrosspostService {
 
     const mohPostUrl = `${this.siteBaseUrl()}/p/${encodeURIComponent(postId)}`;
     const payload = mode === 'link'
-      ? buildPickaxLinkPayload(loaded.source.body, mohPostUrl)
+      ? buildPickaxLinkPayload(mohPostUrl)
       : buildPickaxPostPayload(loaded.source, { publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null });
     const hash = contentHash(mode, payload.content);
     if (!create && row?.contentHash === hash) return;
@@ -189,7 +189,7 @@ export class PickaxCrosspostService {
 
     const siteBaseUrl = this.siteBaseUrl();
     const articleUrl = `${siteBaseUrl}/a/${encodeURIComponent(articleId)}`;
-    const linkPayload = buildPickaxLinkPayload(loaded.source.title, articleUrl);
+    const linkPayload = buildPickaxLinkPayload(articleUrl);
     const articlePayload = buildPickaxArticlePayload(loaded.source, {
       publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
       author: loaded.author,
