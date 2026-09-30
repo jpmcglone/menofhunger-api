@@ -1,4 +1,6 @@
+import type { CrosspostMode } from '@prisma/client';
 import { PickaxCrosspostService } from '../pickax/pickax-crosspost.service';
+import { XCrosspostService } from '../x/x-crosspost.service';
 import {
   Body,
   Controller,
@@ -59,6 +61,11 @@ const publishSchema = z.object({
   shareToFeed: z.boolean().optional(),
   /** Also publish to the author's connected Pickax account when the article is public. */
   crossPostToPickax: z.boolean().optional(),
+  /** Per-destination choice. Articles on X are always a link. */
+  crosspost: z.object({
+    pickax: z.enum(['link', 'native']).optional(),
+    x: z.literal('link').optional(),
+  }).optional(),
 });
 
 const draftsListSchema = z.object({
@@ -110,6 +117,7 @@ export class ArticlesController {
   constructor(
     private readonly articles: ArticlesService,
     private readonly pickax: PickaxCrosspostService,
+    private readonly x: XCrosspostService,
   ) {}
 
   // ─── Tag autocomplete ──────────────────────────────────────────────────────
@@ -225,11 +233,15 @@ export class ArticlesController {
   @Post(':id/publish')
   async publish(@CurrentUserId() userId: string, @Param('id') id: string, @Body() body: unknown) {
     const parsed = publishSchema.parse(body ?? {});
-    const { crossPostToPickax, ...publishInput } = parsed;
+    const { crossPostToPickax, crosspost, ...publishInput } = parsed;
     const article = await this.articles.publish(userId, id, publishInput);
-    if (crossPostToPickax) await this.pickax.requestArticleCrosspost(userId, id);
-    else await this.pickax.requestArticleUpdate(userId, id);
-    return { data: article };
+    const pickaxMode: CrosspostMode | null = crosspost?.pickax ?? (crossPostToPickax ? 'native' : null);
+    const pickax = pickaxMode
+      ? await this.pickax.requestArticleCrosspost(userId, id, pickaxMode)
+      : null;
+    if (!pickaxMode) await this.pickax.requestArticleUpdate(userId, id);
+    const x = crosspost?.x ? await this.x.requestArticleCrosspost(userId, id) : null;
+    return { data: article, crossposts: { pickax, x } };
   }
 
   // ─── Unpublish ────────────────────────────────────────────────────────────

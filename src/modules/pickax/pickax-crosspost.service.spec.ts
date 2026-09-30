@@ -90,7 +90,7 @@ function harness(opts: { post?: PostRow; connected?: boolean } = {}) {
 describe('Pickax cross-post requests', () => {
   it('queues a public post when the author asked for it', async () => {
     const h = harness();
-    await expect(h.service.requestPostCrosspost('user-1', 'post-1')).resolves.toEqual({ status: 'queued' });
+    await expect(h.service.requestPostCrosspost('user-1', 'post-1')).resolves.toEqual({ status: 'queued', mode: 'native' });
     expect(h.dispatched).toEqual([
       { name: 'pickax.post.sync', payload: { postId: 'post-1', create: true } },
     ]);
@@ -156,8 +156,7 @@ describe('Pickax cross-post worker', () => {
 describe('Posts controller cross-post wiring', () => {
   it('only asks for a cross-post when the client opted in', () => {
     const src = readFileSync(resolve(process.cwd(), 'src/modules/posts/posts.controller.ts'), 'utf8');
-    expect(src).toContain(
-      'const pickax = parsed.crossPostToPickax ? await this.pickax.requestPostCrosspost(userId, created.id) : null;',
-    );
+    expect(src).toContain('this.pickax.requestPostCrosspost(userId, created.id, pickaxMode)');
+    expect(src).toContain("parsed.crossPostToPickax ? 'native'");
   });
 });

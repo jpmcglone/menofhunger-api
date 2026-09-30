@@ -792,6 +792,10 @@ export type ArticleDto = {
   pickaxUrl?: string | null;
   /** Author-only: why Pickax rejected the last cross-post attempt. */
   pickaxError?: string | null;
+  /** Public X status URL when the author shared this article on X. */
+  xUrl?: string | null;
+  /** Author-only: why X rejected the last cross-post attempt. */
+  xError?: string | null;
   boostCount: number;
   commentCount: number;
   /** Unique people (person × article). */
@@ -2651,6 +2655,10 @@ export type PostDto = {
   pickaxUrl?: string | null;
   /** Author-only: why Pickax rejected the last cross-post attempt. */
   pickaxError?: string | null;
+  /** Public X status URL when the author cross-posted this to X. */
+  xUrl?: string | null;
+  /** Author-only: why X rejected the last cross-post attempt. */
+  xError?: string | null;
   topics: string[];
   /** User-created hashtags parsed from body text (lowercase, without '#'). */
   hashtags: string[];
@@ -3784,6 +3792,7 @@ export type UserDto = {
   name: string | null;
   bio: string | null;
   website: string | null;
+  /** Verified X handle. Written only when the member connects X. */
   xUsername: string | null;
   pickaxUsername: string | null;
   locationInput: string | null;

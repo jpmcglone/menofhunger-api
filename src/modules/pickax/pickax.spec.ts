@@ -1,8 +1,9 @@
-import { openSecret, sealSecret } from './pickax-secret-box';
+import { openSecret, sealSecret } from '../../common/crypto/secret-box';
 import { profileMatchesIdentity, profileVerificationCode, readTokenIdentity } from './pickax-identity';
 import {
   articleCrosspostBlocker,
   buildPickaxArticlePayload,
+  buildPickaxLinkPayload,
   buildPickaxPostPayload,
   pickaxArticleUrl,
   pickaxPostUrl,
@@ -114,10 +115,18 @@ describe('pickax post eligibility and payload', () => {
     expect(postCrosspostBlocker(post({ media: [{ ...image, kind: 'video' }] }))).toBe('unsupported_media');
   });
 
-  it('links back to the post only when the body has no link', () => {
-    const ctx = { publicBaseUrl: 'https://cdn.example.com', mohPostUrl: 'https://menofhunger.com/p/p1' };
-    expect(buildPickaxPostPayload(post(), ctx).link).toBe(ctx.mohPostUrl);
-    expect(buildPickaxPostPayload(post({ body: 'see https://example.com' }), ctx).link).toBeUndefined();
+  it('posts the words and photos without a link in full-post mode', () => {
+    const payload = buildPickaxPostPayload(post({ body: 'see https://example.com' }), {
+      publicBaseUrl: 'https://cdn.example.com',
+    });
+    expect(payload.content).toBe('see https://example.com');
+    expect(payload.link).toBeUndefined();
+  });
+
+  it('puts the Men of Hunger url in a link post', () => {
+    const payload = buildPickaxLinkPayload('Hello', 'https://menofhunger.com/p/p1');
+    expect(payload.content).toBe('Hello https://menofhunger.com/p/p1');
+    expect(payload.link).toBe('https://menofhunger.com/p/p1');
   });
 });
 

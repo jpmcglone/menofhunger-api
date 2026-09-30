@@ -127,6 +127,10 @@ export type PostDto = {
   pickaxUrl?: string | null;
   /** Author-only: why Pickax rejected the last cross-post attempt. */
   pickaxError?: string | null;
+  /** Public X status URL when the author cross-posted this to X. */
+  xUrl?: string | null;
+  /** Author-only: why X rejected the last cross-post attempt. */
+  xError?: string | null;
   topics: string[];
   /** User-created hashtags parsed from body text (lowercase, without '#'). */
   hashtags: string[];
@@ -574,6 +578,8 @@ export function toPostDto(
     pickaxError: opts?.viewerIsAuthor
       ? ((post as { pickaxError?: string | null }).pickaxError ?? null)
       : null,
+    xUrl: isPostDeleted ? null : ((post as { xUrl?: string | null }).xUrl ?? null),
+    xError: opts?.viewerIsAuthor ? ((post as { xError?: string | null }).xError ?? null) : null,
     topics: Array.isArray(post.topics) ? post.topics : [],
     hashtags: isPostDeleted ? [] : (Array.isArray(post.hashtags) ? post.hashtags : []),
     cashtags: isPostDeleted ? [] : (Array.isArray((post as any).cashtags) ? (post as any).cashtags : []),

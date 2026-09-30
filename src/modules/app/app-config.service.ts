@@ -41,6 +41,14 @@ export type StravaConfig = {
   webhookVerifyToken: string;
 };
 
+export type XConfig = {
+  clientId: string;
+  clientSecret: string;
+  encryptionKey: string;
+  /** Per-member monthly cross-post budget, in cents. */
+  monthlyBudgetCents: number;
+};
+
 export type StripeConfig = {
   secretKey: string;
   webhookSecret: string;
@@ -386,6 +394,18 @@ export class AppConfigService {
   pickaxSecretEncryptionKey(): string | null {
     const v = this.config.get<string>('PICKAX_SECRET_ENCRYPTION_KEY')?.trim() ?? '';
     return v.length >= 32 ? v : null;
+  }
+
+  /** X OAuth app. Null disables the integration. */
+  x(): XConfig | null {
+    const clientId = this.config.get<string>('X_CLIENT_ID')?.trim() ?? '';
+    const clientSecret = this.config.get<string>('X_CLIENT_SECRET')?.trim() ?? '';
+    const encryptionKey = this.config.get<string>('X_TOKEN_ENCRYPTION_KEY')?.trim() ?? '';
+    if (!clientId || !clientSecret || encryptionKey.length < 32) return null;
+    const rawBudget = this.config.get<string | number>('X_MONTHLY_BUDGET_CENTS');
+    const parsed = typeof rawBudget === 'number' ? rawBudget : Number(rawBudget);
+    const monthlyBudgetCents = Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 300;
+    return { clientId, clientSecret, encryptionKey, monthlyBudgetCents };
   }
 
   /** bible.helloao.org translation ID. Defaults to BSB (public domain, modern English). */

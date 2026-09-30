@@ -1,0 +1,168 @@
+/**
+ * Shared rules for "link back" vs "full post" cross-posting.
+ * X's length matches twitter-text v3: most characters count as 1, characters
+ * outside the BMP Latin/punctuation ranges (CJK, emoji) count as 2, and each
+ * http(s) URL counts as 23. Clients must keep the same vectors.
+ */
+
+export const X_POST_MAX_WEIGHTED = 280;
+export const X_POST_MAX_IMAGES = 4;
+export const X_URL_WEIGHT = 23;
+
+/** $0.015 and $0.20, in millionths of a dollar. */
+export const X_NATIVE_COST_MICROS = 15_000;
+export const X_LINK_COST_MICROS = 200_000;
+
+export type CrosspostMode = 'link' | 'native';
+
+export type CrosspostMedia = {
+  kind: string;
+  source: string;
+  r2Key: string | null;
+  deletedAt: Date | null;
+};
+
+export type CrosspostPost = {
+  body: string;
+  visibility: string;
+  kind: string;
+  boardOnly: boolean;
+  isDraft: boolean;
+  deletedAt: Date | null;
+  scheduledAt: Date | null;
+  parentId: string | null;
+  communityGroupId: string | null;
+  quotedPostId: string | null;
+  repostedPostId: string | null;
+  hasPoll: boolean;
+  media: CrosspostMedia[];
+};
+
+export type NativeLimits = {
+  maxChars: number;
+  /** When true, `maxChars` is an X weighted length. Otherwise it is `string.length`. */
+  weighted: boolean;
+  maxImages: number;
+};
+
+const URL_RE = /https?:\/\/\S+/gi;
+
+/** twitter-text v3 ranges that weigh 1. Everything else weighs 2. */
+function codePointWeight(cp: number): number {
+  if (
+    (cp >= 0 && cp <= 4351) ||
+    (cp >= 8192 && cp <= 8205) ||
+    (cp >= 8208 && cp <= 8223) ||
+    (cp >= 8242 && cp <= 8247)
+  ) {
+    return 1;
+  }
+  return 2;
+}
+
+export function xWeightedLength(text: string): number {
+  const spans: Array<[number, number]> = [];
+  for (const match of text.matchAll(URL_RE)) {
+    if (match.index === undefined) continue;
+    spans.push([match.index, match.index + match[0].length]);
+  }
+  let weight = 0;
+  let i = 0;
+  let spanIdx = 0;
+  while (i < text.length) {
+    const span = spans[spanIdx];
+    if (span && i >= span[0] && i < span[1]) {
+      weight += X_URL_WEIGHT;
+      i = span[1];
+      spanIdx += 1;
+      continue;
+    }
+    const cp = text.codePointAt(i)!;
+    weight += codePointWeight(cp);
+    i += cp > 0xffff ? 2 : 1;
+  }
+  return weight;
+}
+
+export function xPostCostMicros(text: string): number {
+  return /https?:\/\//i.test(text) ? X_LINK_COST_MICROS : X_NATIVE_COST_MICROS;
+}
+
+function measureOf(weighted: boolean): (text: string) => number {
+  return weighted ? xWeightedLength : (text) => text.length;
+}
+
+/**
+ * Excerpt plus the Men of Hunger URL, shortened so the result fits `max`.
+ * On X the URL always costs 23, whatever its real length.
+ */
+export function buildShareText(text: string, url: string, opts: { max: number; weighted: boolean }): string {
+  const measure = measureOf(opts.weighted);
+  const body = text.trim().replace(/\s+/g, ' ');
+  const urlCost = opts.weighted ? X_URL_WEIGHT : url.length;
+  if (!body || opts.max - urlCost - 1 < 1) {
+    return !opts.weighted && url.length > opts.max ? url.slice(0, opts.max) : url;
+  }
+  if (measure(`${body} ${url}`) <= opts.max) return `${body} ${url}`;
+
+  let best = '';
+  let lo = 0;
+  let hi = body.length;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const slice = body.slice(0, mid).replace(/\s+\S*$/, '').replace(/[.,;:\s]+$/, '');
+    const trial = slice ? `${slice}...` : '';
+    const candidate = trial ? `${trial} ${url}` : url;
+    if (measure(candidate) <= opts.max && trial) {
+      best = candidate;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best || url;
+}
+
+/** Why even a link-back post is impossible, or null when a link is fine. */
+export function linkBlocker(post: CrosspostPost): string | null {
+  if (post.deletedAt || post.isDraft || post.scheduledAt) return 'not_published';
+  if (post.visibility !== 'public') return 'not_public';
+  if (post.communityGroupId) return 'group_post';
+  if (post.boardOnly || post.kind !== 'regular') return 'unsupported_kind';
+  if (post.parentId) return 'reply';
+  if (post.quotedPostId || post.repostedPostId) return 'quote_or_repost';
+  return null;
+}
+
+function liveMedia(post: CrosspostPost): CrosspostMedia[] {
+  return post.media.filter((media) => !media.deletedAt);
+}
+
+/** Why a full native post is impossible. Assumes a link would otherwise be allowed. */
+export function nativeBlocker(post: CrosspostPost, limits: NativeLimits): string | null {
+  if (post.hasPoll) return 'poll';
+  const text = post.body.trim();
+  const media = liveMedia(post);
+  if (!text && media.length === 0) return 'empty';
+  const length = limits.weighted ? xWeightedLength(text) : text.length;
+  if (length > limits.maxChars) return 'too_long';
+  if (media.some((item) => item.kind !== 'image' || item.source !== 'upload' || !item.r2Key)) return 'unsupported_media';
+  if (media.length > limits.maxImages) return 'too_many_images';
+  return null;
+}
+
+/**
+ * Native falls back to a link when the post cannot be copied as-is.
+ * A link blocker still skips the cross-post entirely.
+ */
+export function resolveCrosspostMode(
+  post: CrosspostPost,
+  requested: CrosspostMode,
+  limits: NativeLimits,
+): { mode: CrosspostMode } | { skip: string } {
+  const link = linkBlocker(post);
+  if (link) return { skip: link };
+  if (requested === 'link') return { mode: 'link' };
+  if (nativeBlocker(post, limits)) return { mode: 'link' };
+  return { mode: 'native' };
+}

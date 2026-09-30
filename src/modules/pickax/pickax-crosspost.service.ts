@@ -1,12 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
+import type { CrosspostMode } from '@prisma/client';
+import { linkBlocker, resolveCrosspostMode } from '../../common/crosspost/crosspost-eligibility';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { PickaxApiClient, PickaxApiError } from './pickax-api.client';
 import { PickaxConnectionService } from './pickax-connection.service';
 import {
+  PICKAX_NATIVE_LIMITS,
   articleCrosspostBlocker,
   buildPickaxArticlePayload,
+  buildPickaxLinkPayload,
   buildPickaxPostPayload,
   contentHash,
   pickaxArticleUrl,
@@ -17,7 +21,7 @@ import {
 } from './pickax-content';
 
 export type PickaxQueueResult =
-  | { status: 'queued' }
+  | { status: 'queued'; mode: CrosspostMode }
   | { status: 'skipped'; reason: string };
 
 const POST_UPDATE_DELAY_MS = 5_000;
@@ -38,14 +42,32 @@ export class PickaxCrosspostService {
 
   // ─── Request path ──────────────────────────────────────────────────────────
 
-  async requestPostCrosspost(userId: string, postId: string): Promise<PickaxQueueResult> {
+  async requestPostCrosspost(
+    userId: string,
+    postId: string,
+    requested: CrosspostMode = 'native',
+  ): Promise<PickaxQueueResult> {
     if (!(await this.connections.getActiveConnection(userId))) return { status: 'skipped', reason: 'not_connected' };
     const post = await this.loadPost(postId);
     if (!post || post.userId !== userId) return { status: 'skipped', reason: 'not_found' };
-    const blocker = postCrosspostBlocker(post.source);
-    if (blocker) return { status: 'skipped', reason: blocker };
+    const resolved = resolveCrosspostMode(post.source, requested, PICKAX_NATIVE_LIMITS);
+    if ('skip' in resolved) return { status: 'skipped', reason: resolved.skip };
+    const existing = await this.prisma.pickaxCrosspost.findUnique({
+      where: { kind_localId: { kind: 'post', localId: postId } },
+      select: { userId: true, remoteId: true, mode: true },
+    });
+    if (existing?.remoteId) {
+      if (existing.userId !== userId) return { status: 'skipped', reason: 'not_found' };
+      await this.requestPostUpdate(userId, postId);
+      return { status: 'queued', mode: existing.mode };
+    }
+    await this.prisma.pickaxCrosspost.upsert({
+      where: { kind_localId: { kind: 'post', localId: postId } },
+      create: { userId, kind: 'post', localId: postId, mode: resolved.mode },
+      update: { mode: resolved.mode, lastError: null },
+    });
     this.sideEffects.dispatch('pickax.post.sync', { postId, create: true }, { jobId: `pickax-post-${postId}-create` });
-    return { status: 'queued' };
+    return { status: 'queued', mode: resolved.mode };
   }
 
   async requestPostUpdate(userId: string, postId: string): Promise<void> {
@@ -60,7 +82,11 @@ export class PickaxCrosspostService {
     });
   }
 
-  async requestArticleCrosspost(userId: string, articleId: string): Promise<PickaxQueueResult> {
+  async requestArticleCrosspost(
+    userId: string,
+    articleId: string,
+    requested: CrosspostMode = 'native',
+  ): Promise<PickaxQueueResult> {
     if (!(await this.connections.getActiveConnection(userId))) return { status: 'skipped', reason: 'not_connected' };
     const article = await this.loadArticle(articleId);
     if (!article || article.authorId !== userId) return { status: 'skipped', reason: 'not_found' };
@@ -68,14 +94,20 @@ export class PickaxCrosspostService {
     if (blocker) return { status: 'skipped', reason: blocker };
     const already = await this.prisma.pickaxCrosspost.findUnique({
       where: { kind_localId: { kind: 'article', localId: articleId } },
-      select: { remoteId: true },
+      select: { userId: true, remoteId: true, mode: true },
     });
     if (already?.remoteId) {
+      if (already.userId !== userId) return { status: 'skipped', reason: 'not_found' };
       await this.requestArticleUpdate(userId, articleId);
-      return { status: 'queued' };
+      return { status: 'queued', mode: already.mode };
     }
+    await this.prisma.pickaxCrosspost.upsert({
+      where: { kind_localId: { kind: 'article', localId: articleId } },
+      create: { userId, kind: 'article', localId: articleId, mode: requested },
+      update: { mode: requested, lastError: null },
+    });
     this.sideEffects.dispatch('pickax.article.sync', { articleId, create: true }, { jobId: `pickax-article-${articleId}-create` });
-    return { status: 'queued' };
+    return { status: 'queued', mode: requested };
   }
 
   async requestArticleUpdate(userId: string, articleId: string): Promise<void> {
@@ -102,26 +134,27 @@ export class PickaxCrosspostService {
     const row = await this.prisma.pickaxCrosspost.findUnique({
       where: { kind_localId: { kind: 'post', localId: postId } },
     });
+    const mode: CrosspostMode = row?.mode ?? 'native';
     // Forward-only: an update never creates, and a create never runs twice.
     if (create ? Boolean(row?.remoteId) : !row?.remoteId) return;
-    if (postCrosspostBlocker(loaded.source)) return;
+    if (mode === 'link' ? linkBlocker(loaded.source) : postCrosspostBlocker(loaded.source)) return;
 
-    const payload = buildPickaxPostPayload(loaded.source, {
-      publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
-      mohPostUrl: `${this.siteBaseUrl()}/p/${encodeURIComponent(postId)}`,
-    });
-    const hash = contentHash(payload.content);
+    const mohPostUrl = `${this.siteBaseUrl()}/p/${encodeURIComponent(postId)}`;
+    const payload = mode === 'link'
+      ? buildPickaxLinkPayload(loaded.source.body, mohPostUrl)
+      : buildPickaxPostPayload(loaded.source, { publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null });
+    const hash = contentHash(mode, payload.content);
     if (!create && row?.contentHash === hash) return;
 
     await this.runWithToken(userId, async (token) => {
       if (create) {
         const remoteId = await this.api.createPost(token, `moh-post-${postId}-create`, payload);
-        await this.saveRow(userId, 'post', postId, remoteId, hash);
+        await this.saveRow(userId, 'post', postId, mode, remoteId, hash);
       } else {
         await this.api.updatePost(token, `moh-post-${postId}-u-${hash.slice(0, 16)}`, row!.remoteId!, {
           content: payload.content,
         });
-        await this.saveRow(userId, 'post', postId, row!.remoteId, hash);
+        await this.saveRow(userId, 'post', postId, mode, row!.remoteId, hash);
       }
     }, { kind: 'post', localId: postId });
   }
@@ -136,28 +169,46 @@ export class PickaxCrosspostService {
     const row = await this.prisma.pickaxCrosspost.findUnique({
       where: { kind_localId: { kind: 'article', localId: articleId } },
     });
+    const mode: CrosspostMode = row?.mode ?? 'native';
     if (create ? Boolean(row?.remoteId) : !row?.remoteId) return;
     if (articleCrosspostBlocker(loaded.source)) return;
 
-    const payload = buildPickaxArticlePayload(loaded.source, {
+    const siteBaseUrl = this.siteBaseUrl();
+    const articleUrl = `${siteBaseUrl}/a/${encodeURIComponent(articleId)}`;
+    const linkPayload = buildPickaxLinkPayload(loaded.source.title, articleUrl);
+    const articlePayload = buildPickaxArticlePayload(loaded.source, {
       publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
       author: loaded.author,
-      siteBaseUrl: this.siteBaseUrl(),
+      siteBaseUrl,
     });
-    const hash = contentHash(payload.title, payload.content, payload.thumbnail ?? null);
+    const hash = mode === 'link'
+      ? contentHash('link', linkPayload.content)
+      : contentHash('native', articlePayload.title, articlePayload.content, articlePayload.thumbnail ?? null);
     if (!create && row?.contentHash === hash) return;
 
     await this.runWithToken(userId, async (token) => {
+      if (mode === 'link') {
+        if (create) {
+          const remoteId = await this.api.createPost(token, `moh-article-${articleId}-link`, linkPayload);
+          await this.saveRow(userId, 'article', articleId, mode, remoteId, hash);
+        } else {
+          await this.api.updatePost(token, `moh-article-${articleId}-u-${hash.slice(0, 16)}`, row!.remoteId!, {
+            content: linkPayload.content,
+          });
+          await this.saveRow(userId, 'article', articleId, mode, row!.remoteId, hash);
+        }
+        return;
+      }
       if (create) {
-        const remoteId = await this.api.createArticle(token, `moh-article-${articleId}-create`, payload);
-        await this.saveRow(userId, 'article', articleId, remoteId, hash);
+        const remoteId = await this.api.createArticle(token, `moh-article-${articleId}-create`, articlePayload);
+        await this.saveRow(userId, 'article', articleId, mode, remoteId, hash);
       } else {
         await this.api.updateArticle(token, `moh-article-${articleId}-u-${hash.slice(0, 16)}`, row!.remoteId!, {
-          title: payload.title,
-          content: payload.content,
-          thumbnail: payload.thumbnail ?? null,
+          title: articlePayload.title,
+          content: articlePayload.content,
+          thumbnail: articlePayload.thumbnail ?? null,
         });
-        await this.saveRow(userId, 'article', articleId, row!.remoteId, hash);
+        await this.saveRow(userId, 'article', articleId, mode, row!.remoteId, hash);
       }
     }, { kind: 'article', localId: articleId });
   }
@@ -213,18 +264,19 @@ export class PickaxCrosspostService {
     userId: string,
     kind: 'post' | 'article',
     localId: string,
+    mode: CrosspostMode,
     remoteId: string | null,
     hash: string,
   ): Promise<void> {
     await this.prisma.pickaxCrosspost.upsert({
       where: { kind_localId: { kind, localId } },
-      create: { userId, kind, localId, remoteId, contentHash: hash },
+      create: { userId, kind, localId, mode, remoteId, contentHash: hash },
       update: { remoteId, contentHash: hash, lastError: null },
     });
     // Denormalize the public link so readers can jump to the Pickax copy, and clear any
     // earlier rejection now that Pickax has accepted the content.
     if (remoteId) {
-      const pickaxUrl = kind === 'post' ? pickaxPostUrl(remoteId) : pickaxArticleUrl(remoteId);
+      const pickaxUrl = mode === 'link' || kind === 'post' ? pickaxPostUrl(remoteId) : pickaxArticleUrl(remoteId);
       if (kind === 'post') {
         await this.prisma.post.updateMany({ where: { id: localId }, data: { pickaxUrl, pickaxError: null } });
       } else {

@@ -417,6 +417,24 @@ export const envSchema = z.object({
     z.string().min(32).optional(),
   ),
 
+  // X (Twitter) OAuth cross-posting. Off until the client id, secret, and encryption key are set.
+  X_CLIENT_ID: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  X_CLIENT_SECRET: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  X_TOKEN_ENCRYPTION_KEY: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().min(32).optional(),
+  ),
+  X_MONTHLY_BUDGET_CENTS: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.coerce.number().int().min(0).max(100_000).optional().default(300),
+  ),
+
   POSTHOG_API_KEY: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),

@@ -20,7 +20,7 @@ import {
   readTokenClaimKeys,
   readTokenIdentity,
 } from './pickax-identity';
-import { openSecret, sealSecret } from './pickax-secret-box';
+import { openSecret, sealSecret } from '../../common/crypto/secret-box';
 
 export type PickaxConnectionStatus = {
   available: boolean;

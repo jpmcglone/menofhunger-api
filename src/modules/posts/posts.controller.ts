@@ -1,4 +1,6 @@
+import type { CrosspostMode } from '@prisma/client';
 import { PickaxCrosspostService } from '../pickax/pickax-crosspost.service';
+import { XCrosspostService } from '../x/x-crosspost.service';
 import { Body, Controller, Delete, ForbiddenException, Get, Headers, Logger, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
@@ -182,6 +184,11 @@ const createSchema = z
     poll: createPollSchema.optional(),
     /** Also publish to the author's connected Pickax account when the post qualifies. */
     crossPostToPickax: z.boolean().optional(),
+    /** Per-destination choice. `crossPostToPickax: true` still means a full Pickax post. */
+    crosspost: z.object({
+      pickax: z.enum(['link', 'native']).optional(),
+      x: z.enum(['link', 'native']).optional(),
+    }).optional(),
   })
   .superRefine((val, ctx) => {
     const body = (val.body ?? '').trim();
@@ -310,6 +317,7 @@ export class PostsController {
     private readonly cache: CacheService,
     private readonly cacheInvalidation: CacheInvalidationService,
     private readonly pickax: PickaxCrosspostService,
+    private readonly x: XCrosspostService,
   ) {}
 
   private async communityGroupPreviewMapForIds(
@@ -1316,13 +1324,17 @@ export class PostsController {
       marvMode,
     });
 
-    const pickax = parsed.crossPostToPickax ? await this.pickax.requestPostCrosspost(userId, created.id) : null;
+    const pickaxMode: CrosspostMode | null = parsed.crosspost?.pickax ?? (parsed.crossPostToPickax ? 'native' : null);
+    const xMode = parsed.crosspost?.x ?? null;
+    const pickax = pickaxMode ? await this.pickax.requestPostCrosspost(userId, created.id, pickaxMode) : null;
+    const x = xMode ? await this.x.requestPostCrosspost(userId, created.id, xMode) : null;
 
     const viewer = await this.posts.viewerContext(userId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
     return {
       data: {
         pickax,
+        crossposts: { pickax, x },
         post: toPostDto(created, this.appConfig.r2()?.publicBaseUrl ?? null, {
           viewerHasBoosted: false,
           includeInternal: viewerHasAdmin,

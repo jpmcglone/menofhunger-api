@@ -1,6 +1,12 @@
 import { createHash } from 'crypto';
 import type { PostKind, PostMediaKind, PostMediaSource, PostVisibility } from '@prisma/client';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
+import {
+  buildShareText,
+  linkBlocker,
+  nativeBlocker,
+  type NativeLimits,
+} from '../../common/crosspost/crosspost-eligibility';
 import type { PickaxArticlePayload, PickaxPostPayload } from './pickax-api.client';
 
 /** Public web host. Post permalinks live at /post/:id, articles at /articles/:id. */
@@ -16,6 +22,12 @@ export function pickaxArticleUrl(remoteId: string): string {
 
 export const PICKAX_POST_MAX_LENGTH = 1000;
 export const PICKAX_POST_MAX_ATTACHMENTS = 10;
+
+export const PICKAX_NATIVE_LIMITS: NativeLimits = {
+  maxChars: PICKAX_POST_MAX_LENGTH,
+  weighted: false,
+  maxImages: PICKAX_POST_MAX_ATTACHMENTS,
+};
 
 export function contentHash(...parts: Array<string | null | undefined>): string {
   return createHash('sha256').update(parts.map((p) => p ?? '').join('\u0000')).digest('hex');
@@ -47,42 +59,39 @@ export type PickaxPostSource = {
   }>;
 };
 
-/** Why Pickax cannot hold this post, or null when it can. */
+/** Why a full Pickax copy cannot hold this post, or null when it can. */
 export function postCrosspostBlocker(post: PickaxPostSource): string | null {
-  if (post.deletedAt || post.isDraft || post.scheduledAt) return 'not_published';
-  if (post.visibility !== 'public') return 'not_public';
-  if (post.communityGroupId) return 'group_post';
-  if (post.boardOnly || post.kind !== 'regular') return 'unsupported_kind';
-  if (post.parentId) return 'reply';
-  if (post.quotedPostId || post.repostedPostId) return 'quote_or_repost';
-  if (post.hasPoll) return 'poll';
-  const text = post.body.trim();
-  if (!text && post.media.length === 0) return 'empty';
-  if (text.length > PICKAX_POST_MAX_LENGTH) return 'too_long';
-  const media = post.media.filter((m) => !m.deletedAt);
-  if (media.some((m) => m.kind !== 'image' || m.source !== 'upload' || !m.r2Key)) return 'unsupported_media';
-  if (media.length > PICKAX_POST_MAX_ATTACHMENTS) return 'too_many_images';
-  return null;
+  return linkBlocker(post) ?? nativeBlocker(post, PICKAX_NATIVE_LIMITS);
 }
 
-export function buildPickaxPostPayload(
+function pickaxAttachments(
   post: PickaxPostSource,
-  ctx: { publicBaseUrl: string | null; mohPostUrl: string },
-): PickaxPostPayload {
-  const content = post.body.trim();
-  const attachments = post.media
+  publicBaseUrl: string | null,
+): Array<{ url: string; name?: string }> {
+  return post.media
     .filter((m) => !m.deletedAt)
     .sort((a, b) => a.position - b.position)
     .flatMap((m, i) => {
-      const url = publicAssetUrl({ publicBaseUrl: ctx.publicBaseUrl, key: m.r2Key });
+      const url = publicAssetUrl({ publicBaseUrl, key: m.r2Key });
       return url ? [{ url, name: (m.alt ?? '').trim() || `image-${i + 1}` }] : [];
     });
-  const bodyHasLink = /https?:\/\//i.test(content);
+}
+
+/** Full post: the words and photos, with no link back. */
+export function buildPickaxPostPayload(
+  post: PickaxPostSource,
+  ctx: { publicBaseUrl: string | null },
+): PickaxPostPayload {
+  const attachments = pickaxAttachments(post, ctx.publicBaseUrl);
   return {
-    content,
-    ...(bodyHasLink ? {} : { link: ctx.mohPostUrl }),
+    content: post.body.trim(),
     ...(attachments.length ? { attachments } : {}),
   };
+}
+
+/** Link: a short post whose text points back at Men of Hunger. */
+export function buildPickaxLinkPayload(text: string, mohUrl: string): PickaxPostPayload {
+  return { content: buildShareText(text, mohUrl, { max: PICKAX_POST_MAX_LENGTH, weighted: false }), link: mohUrl };
 }
 
 // ─── Articles ────────────────────────────────────────────────────────────────

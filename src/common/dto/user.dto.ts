@@ -144,6 +144,7 @@ export type UserDto = {
   name: string | null;
   bio: string | null;
   website: string | null;
+  /** Verified X handle. Written only when the member connects X. */
   xUsername: string | null;
   pickaxUsername: string | null;
   locationInput: string | null;
@@ -282,6 +283,7 @@ export type UserDtoRow = {
   name: string | null;
   bio: string | null;
   website: string | null;
+  /** Verified X handle. Written only when the member connects X. */
   xUsername: string | null;
   pickaxUsername: string | null;
   locationInput: string | null;

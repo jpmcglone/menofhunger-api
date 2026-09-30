@@ -354,6 +354,9 @@ model User {
   name                         String?
   bio                          String?
   website                      String?
+  /**
+   * Verified X handle. Written only by the X connection service; never user-editable.
+   */
   xUsername                    String?
   /**
    * Verified Pickax handle. Written only by the Pickax connection service; never user-editable.
@@ -664,6 +667,8 @@ model User {
   fitnessConnections           FitnessConnection[]
   pickaxConnection             PickaxConnection?
   pickaxCrossposts             PickaxCrosspost[]
+  xConnection                  XConnection?
+  xCrossposts                  XCrosspost[]
   fitnessActivities            FitnessActivity[]
   fitnessDailySummaries        FitnessDailySummary[]
   fitnessBodyMetrics           FitnessBodyMetric[]
@@ -1552,6 +1557,14 @@ model Post {
    * Last Pickax rejection for this post, shown to the author only. Cleared on success.
    */
   pickaxError               String?
+  /**
+   * Public X status URL when this post was cross-posted there.
+   */
+  xUrl                      String?
+  /**
+   * Last X rejection for this post, shown to the author only. Cleared on success.
+   */
+  xError                    String?
   /**
    * ET day key (YYYY-MM-DD) for check-ins (null for non-check-ins).
    */
@@ -2871,6 +2884,14 @@ model Article {
    * Last Pickax rejection for this article, shown to the author only. Cleared on success.
    */
   pickaxError String?
+  /**
+   * Public X status URL when this article was shared there as a link.
+   */
+  xUrl String?
+  /**
+   * Last X rejection for this article, shown to the author only. Cleared on success.
+   */
+  xError String?
 
   boostCount        Int   @default(0)
   commentCount      Int   @default(0)
@@ -3287,6 +3308,15 @@ enum PickaxCrosspostKind {
 }
 
 /**
+ * How a cross-post was sent. `native` is the post itself; `link` is a short post
+ * pointing back at the Men of Hunger original.
+ */
+enum CrosspostMode {
+  link
+  native
+}
+
+/**
  * A member's Pickax third-party API key. Secrets and tokens are encrypted at the
  * application layer. `username` is only stored after Pickax has proven it belongs to the key.
  */
@@ -3321,6 +3351,7 @@ model PickaxCrosspost {
   userId      String
   kind        PickaxCrosspostKind
   localId     String
+  mode        CrosspostMode       @default(native)
   remoteId    String?
   contentHash String?
   lastError   String?
@@ -3329,6 +3360,55 @@ model PickaxCrosspost {
 
   @@unique([kind, localId])
   @@index([userId])
+}
+
+// ─── X cross-post ────────────────────────────────────────────────────────────
+
+/**
+ * A member's X (Twitter) OAuth 2.0 connection. Tokens are encrypted at the
+ * application layer. `username` is the handle X returned for the token.
+ */
+model XConnection {
+  id                   String    @id @default(cuid())
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  userId               String    @unique
+  xUserId              String    @unique
+  username             String
+  accessTokenEnc       String
+  refreshTokenEnc      String?
+  accessTokenExpiresAt DateTime?
+  scopes               String    @default("")
+  /**
+   * active | error
+   */
+  status               String    @default("active")
+  lastError            String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/**
+ * Forward-only link between a local post/article and its X copy.
+ * `costMicros` is reserved when the cross-post is requested and refunded on failure.
+ */
+model XCrosspost {
+  id          String              @id @default(cuid())
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  userId      String
+  kind        PickaxCrosspostKind
+  localId     String
+  mode        CrosspostMode
+  remoteId    String?
+  costMicros  Int                 @default(0)
+  refundedAt  DateTime?
+  lastError   String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([kind, localId])
+  @@index([userId, createdAt])
 }
 
 // ─── Fitness ─────────────────────────────────────────────────────────────────

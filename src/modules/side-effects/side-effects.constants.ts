@@ -414,6 +414,14 @@ export interface SideEffectPayloads {
     articleId: string;
     create: boolean;
   };
+  /** Create the X copy of a public feed post. X posts are not edited after creation. */
+  'x.post.sync': {
+    postId: string;
+  };
+  /** Share a published article on X as a link back to Men of Hunger. */
+  'x.article.sync': {
+    articleId: string;
+  };
 }
 
 export type SideEffectName = keyof SideEffectPayloads;

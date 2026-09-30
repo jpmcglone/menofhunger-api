@@ -92,6 +92,10 @@ export type ArticleDto = {
   pickaxUrl?: string | null;
   /** Author-only: why Pickax rejected the last cross-post attempt. */
   pickaxError?: string | null;
+  /** Public X status URL when the author shared this article on X. */
+  xUrl?: string | null;
+  /** Author-only: why X rejected the last cross-post attempt. */
+  xError?: string | null;
   boostCount: number;
   commentCount: number;
   /** Unique people (person × article). */
@@ -275,6 +279,11 @@ export function toArticleDto(
     pickaxError:
       opts?.viewerUserId && opts.viewerUserId === article.authorId
         ? ((article as { pickaxError?: string | null }).pickaxError ?? null)
+        : null,
+    xUrl: (article as { xUrl?: string | null }).xUrl ?? null,
+    xError:
+      opts?.viewerUserId && opts.viewerUserId === article.authorId
+        ? ((article as { xError?: string | null }).xError ?? null)
         : null,
     boostCount: article.boostCount,
     commentCount: article.commentCount,
