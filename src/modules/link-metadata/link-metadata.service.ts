@@ -1,3 +1,4 @@
+import { featurePageForPath } from '../../common/feature-pages';
 import { spotifyContent, isSpotifyShareUrl, resolveSpotifyShareUrl, fetchSpotifyMetadata } from './spotify-link-metadata';
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -101,11 +102,12 @@ function getMohPageTitle(pathname: string): string {
 function buildMohSyntheticMeta(url: string): LinkMetadataDto {
   try {
     const u = new URL(url);
+    const feature = featurePageForPath(u.pathname + u.search);
     return {
       url,
-      title: getMohPageTitle(u.pathname),
-      description: null,
-      imageUrl: null,
+      title: feature?.title ?? getMohPageTitle(u.pathname),
+      description: feature?.description ?? null,
+      imageUrl: feature ? new URL(feature.image, 'https://menofhunger.com').href : null,
       siteName: 'Men of Hunger',
       socialPost: null,
       videoEmbed: null,
