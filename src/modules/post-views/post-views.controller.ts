@@ -1,6 +1,20 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+  Req,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
+import type { Request } from 'express';
+import { getSessionCookie } from '../../common/session-cookie';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { OptionalCurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
@@ -8,6 +22,7 @@ import { PostViewsService } from './post-views.service';
 
 const markViewedBatchSchema = z.object({
   postIds: z.array(z.string().trim().min(1)).min(1).max(50),
+  require_auth: z.boolean().optional(),
   anon_id: z.string().trim().min(12).max(128).optional(),
   source: z.string().trim().min(1).max(80).optional(),
 });
@@ -29,8 +44,12 @@ export class PostViewsController {
   })
   @Post('posts/views')
   @HttpCode(HttpStatus.OK)
-  async markViewed(@OptionalCurrentUserId() userId: string | undefined, @Body() body: unknown) {
+  async markViewed(@OptionalCurrentUserId() userId: string | undefined, @Body() body: unknown, @Req() req: Request) {
     const parsed = markViewedBatchSchema.parse(body);
+    // An expired/missing session must never turn a signed-in view into a guest.
+    if (!userId && (parsed.require_auth || getSessionCookie(req))) {
+      throw new UnauthorizedException();
+    }
     const data = await this.postViews.markViewedBatch(
       userId ?? null,
       parsed.postIds,
@@ -58,7 +77,9 @@ export class PostViewsController {
     @Query('fresh') fresh: string | undefined,
   ) {
     const forceFresh = fresh === '1' || fresh === 'true';
-    const result = await this.postViews.getBreakdown(postId, userId ?? null, { fresh: forceFresh });
+    const result = await this.postViews.getBreakdown(postId, userId ?? null, {
+      fresh: forceFresh,
+    });
     return { data: result };
   }
 }

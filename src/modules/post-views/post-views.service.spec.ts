@@ -341,6 +341,21 @@ describe('PostViewsService.markViewedBatch', () => {
     };
   }
 
+  it.each([0, 60_000])('never adds a person or a guest for John revisiting with a browser ID after %sms', async (age) => {
+    const last = new Date(Date.now() - age);
+    const { service, detailRows, prisma, tx } = makeBatchService({
+      existingViews: [{ postId: 'seen', lastSeenAt: last, lastImpressionAt: last }],
+    });
+    detailRows.push({ id: 'seen', visibility: 'public', userId: 'author', viewerCount: 4, totalViewCount: 7 });
+    const acks = await service.markViewedBatch('john', ['seen'], 'anonymous_browser', 'feed_scroll');
+    expect(acks).toEqual([{ id: 'seen', uniqueCounted: false, totalCounted: age > 0, viewerCount: 4, totalViewCount: age > 0 ? 8 : 7 }]);
+    expect(prisma.postAnonView.createMany).not.toHaveBeenCalled();
+    expect(tx.postView.createManyAndReturn).not.toHaveBeenCalled();
+    for (const [args] of tx.post.updateMany.mock.calls as unknown as Array<[{ data: object }]>) {
+      expect(args.data).not.toHaveProperty('viewerCount');
+    }
+  });
+
   it('does not increment totals when another overlapping batch already claimed the impression', async () => {
     const { service, detailRows, tx } = makeBatchService({ existingViews: [{ postId: 'plain', lastSeenAt: new Date(0), lastImpressionAt: new Date(0) }] });
     detailRows.push({ id: 'plain', userId: 'author', visibility: 'public', viewerCount: 1, totalViewCount: 1 });
