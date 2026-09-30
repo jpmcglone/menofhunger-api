@@ -75,6 +75,12 @@ function harness(opts: { post?: PostRow; connected?: boolean } = {}) {
   };
 
   const appConfig = { frontendBaseUrl: () => 'https://menofhunger.com', r2: () => ({ publicBaseUrl: null }) };
+  const realtime = {
+    emitPostsLiveUpdated: jest.fn(),
+    emitPostsLiveUpdatedToUser: jest.fn(),
+    emitArticlesLiveUpdated: jest.fn(),
+    emitArticlesLiveUpdatedToUser: jest.fn(),
+  };
 
   const service = new PickaxCrosspostService(
     prisma as never,
@@ -82,9 +88,10 @@ function harness(opts: { post?: PostRow; connected?: boolean } = {}) {
     connections as never,
     api as never,
     sideEffects as never,
+    realtime as never,
   );
 
-  return { service, prisma, api, connections, sideEffects, dispatched, postUpdates, crosspostUpserts };
+  return { service, prisma, api, connections, sideEffects, dispatched, postUpdates, crosspostUpserts, realtime };
 }
 
 describe('Pickax cross-post requests', () => {
@@ -136,6 +143,10 @@ describe('Pickax cross-post worker', () => {
     expect(h.api.createPost).toHaveBeenCalledTimes(1);
     expect(h.crosspostUpserts[0]).toMatchObject({ kind: 'post', localId: 'post-1', remoteId: '794776' });
     expect(h.postUpdates).toContainEqual({ pickaxUrl: 'https://pickax.com/post/794776', pickaxError: null });
+    expect(h.realtime.emitPostsLiveUpdated).toHaveBeenCalledWith(
+      'post-1',
+      expect.objectContaining({ reason: 'crosspost', patch: { pickaxUrl: 'https://pickax.com/post/794776' } }),
+    );
   });
 
   it('records the Pickax rejection on the post so the author sees it', async () => {
@@ -143,6 +154,11 @@ describe('Pickax cross-post worker', () => {
     h.api.createPost.mockRejectedValueOnce(new PickaxApiError(400, 'bad_request', 'Pickax says no.'));
     await h.service.syncPost('post-1', true);
     expect(h.postUpdates).toContainEqual({ pickaxError: 'Pickax says no.' });
+    expect(h.realtime.emitPostsLiveUpdated).not.toHaveBeenCalled();
+    expect(h.realtime.emitPostsLiveUpdatedToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ patch: { pickaxError: 'Pickax says no.' } }),
+    );
     expect(h.connections.markError).toHaveBeenCalled();
   });
 

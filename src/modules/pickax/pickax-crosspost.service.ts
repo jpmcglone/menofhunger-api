@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { CrosspostMode } from '@prisma/client';
 import { linkBlocker, resolveCrosspostMode } from '../../common/crosspost/crosspost-eligibility';
 import { AppConfigService } from '../app/app-config.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { PickaxApiClient, PickaxApiError } from './pickax-api.client';
@@ -38,6 +39,7 @@ export class PickaxCrosspostService {
     private readonly connections: PickaxConnectionService,
     private readonly api: PickaxApiClient,
     private readonly sideEffects: SideEffectsService,
+    private readonly realtime: PresenceRealtimeService,
   ) {}
 
   // ─── Request path ──────────────────────────────────────────────────────────
@@ -129,7 +131,10 @@ export class PickaxCrosspostService {
     if (!loaded) return;
     const userId = loaded.userId;
     const conn = await this.connections.getActiveConnection(userId);
-    if (!conn) return;
+    if (!conn) {
+      await this.recordRowError({ kind: 'post', localId: postId }, userId, 'Pickax is not connected.');
+      return;
+    }
 
     const row = await this.prisma.pickaxCrosspost.findUnique({
       where: { kind_localId: { kind: 'post', localId: postId } },
@@ -137,7 +142,10 @@ export class PickaxCrosspostService {
     const mode: CrosspostMode = row?.mode ?? 'native';
     // Forward-only: an update never creates, and a create never runs twice.
     if (create ? Boolean(row?.remoteId) : !row?.remoteId) return;
-    if (mode === 'link' ? linkBlocker(loaded.source) : postCrosspostBlocker(loaded.source)) return;
+    if (mode === 'link' ? linkBlocker(loaded.source) : postCrosspostBlocker(loaded.source)) {
+      await this.recordRowError({ kind: 'post', localId: postId }, userId, 'This post can no longer be shared to Pickax.');
+      return;
+    }
 
     const mohPostUrl = `${this.siteBaseUrl()}/p/${encodeURIComponent(postId)}`;
     const payload = mode === 'link'
@@ -164,14 +172,20 @@ export class PickaxCrosspostService {
     if (!loaded) return;
     const userId = loaded.authorId;
     const conn = await this.connections.getActiveConnection(userId);
-    if (!conn) return;
+    if (!conn) {
+      await this.recordRowError({ kind: 'article', localId: articleId }, userId, 'Pickax is not connected.');
+      return;
+    }
 
     const row = await this.prisma.pickaxCrosspost.findUnique({
       where: { kind_localId: { kind: 'article', localId: articleId } },
     });
     const mode: CrosspostMode = row?.mode ?? 'native';
     if (create ? Boolean(row?.remoteId) : !row?.remoteId) return;
-    if (articleCrosspostBlocker(loaded.source)) return;
+    if (articleCrosspostBlocker(loaded.source)) {
+      await this.recordRowError({ kind: 'article', localId: articleId }, userId, 'This article can no longer be shared to Pickax.');
+      return;
+    }
 
     const siteBaseUrl = this.siteBaseUrl();
     const articleUrl = `${siteBaseUrl}/a/${encodeURIComponent(articleId)}`;
@@ -226,7 +240,10 @@ export class PickaxCrosspostService {
     target: { kind: 'post' | 'article'; localId: string },
   ): Promise<void> {
     const conn = await this.connections.getActiveConnection(userId);
-    if (!conn) return;
+    if (!conn) {
+      await this.recordRowError(target, userId, 'Pickax is not connected.');
+      return;
+    }
     try {
       try {
         await fn(await this.connections.accessTokenFor(conn));
@@ -234,15 +251,16 @@ export class PickaxCrosspostService {
         if (!(err instanceof PickaxApiError) || !err.isAuthFailure) throw err;
         await this.connections.invalidateAccessToken(userId);
         const fresh = await this.connections.getActiveConnection(userId);
-        if (!fresh) return;
+        if (!fresh) {
+          await this.recordRowError(target, userId, 'Pickax is not connected.');
+          return;
+        }
         await fn(await this.connections.accessTokenFor(fresh));
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof PickaxApiError && err.isRetryable) {
         this.logger.warn(`Pickax ${target.kind} ${target.localId} will retry: ${message}`);
-        // Show the author what happened while the queue retries; a later success clears it.
-        await this.recordRowError(target, `${message} Retrying.`.slice(0, 500));
         throw err;
       }
       const authFailure = err instanceof PickaxApiError && err.isAuthFailure;
@@ -256,7 +274,7 @@ export class PickaxCrosspostService {
         where: { kind: target.kind, localId: target.localId },
         data: { lastError: message.slice(0, 500) },
       });
-      await this.recordRowError(target, message.slice(0, 500));
+      await this.recordRowError(target, userId, message.slice(0, 500));
     }
   }
 
@@ -282,6 +300,7 @@ export class PickaxCrosspostService {
       } else {
         await this.prisma.article.updateMany({ where: { id: localId }, data: { pickaxUrl, pickaxError: null } });
       }
+      this.announce(kind, localId, userId, { pickaxUrl }, true);
     }
     await this.connections.clearError(userId);
   }
@@ -289,13 +308,36 @@ export class PickaxCrosspostService {
   /** Author-facing failure note on the post/article itself, so the error is visible where they published. */
   private async recordRowError(
     target: { kind: 'post' | 'article'; localId: string },
+    userId: string,
     message: string,
   ): Promise<void> {
+    const note = message.slice(0, 500);
     if (target.kind === 'post') {
-      await this.prisma.post.updateMany({ where: { id: target.localId }, data: { pickaxError: message } });
+      await this.prisma.post.updateMany({ where: { id: target.localId }, data: { pickaxError: note } });
     } else {
-      await this.prisma.article.updateMany({ where: { id: target.localId }, data: { pickaxError: message } });
+      await this.prisma.article.updateMany({ where: { id: target.localId }, data: { pickaxError: note } });
     }
+    this.announce(target.kind, target.localId, userId, { pickaxError: note }, false);
+  }
+
+  /** Public link goes to the post/article room and the author. Failures stay on the author's socket. */
+  private announce(
+    kind: 'post' | 'article',
+    localId: string,
+    userId: string,
+    patch: { pickaxUrl?: string; pickaxError?: string },
+    isPublic: boolean,
+  ): void {
+    const version = new Date().toISOString();
+    if (kind === 'post') {
+      const payload = { postId: localId, version, reason: 'crosspost', patch };
+      if (isPublic) this.realtime.emitPostsLiveUpdated(localId, payload);
+      this.realtime.emitPostsLiveUpdatedToUser(userId, payload);
+      return;
+    }
+    const payload = { articleId: localId, version, reason: 'crosspost', patch };
+    if (isPublic) this.realtime.emitArticlesLiveUpdated(localId, payload);
+    this.realtime.emitArticlesLiveUpdatedToUser(userId, payload);
   }
 
   private siteBaseUrl(): string {

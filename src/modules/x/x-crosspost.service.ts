@@ -11,6 +11,7 @@ import {
   type NativeLimits,
 } from '../../common/crosspost/crosspost-eligibility';
 import { AppConfigService } from '../app/app-config.service';
+import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { XApiClient, XApiError } from './x-api.client';
@@ -57,6 +58,7 @@ export class XCrosspostService {
     private readonly connections: XConnectionService,
     private readonly api: XApiClient,
     private readonly sideEffects: SideEffectsService,
+    private readonly realtime: PresenceRealtimeService,
   ) {}
 
   async requestPostCrosspost(userId: string, postId: string, requested: CrosspostMode): Promise<XQueueResult> {
@@ -103,7 +105,7 @@ export class XCrosspostService {
     const native = resolveCrosspostMode(post, 'native', X_LIMITS);
     const stillOk = row.mode === 'link' ? !linkBlocker(post) : !('skip' in native) && native.mode === 'native';
     if (!stillOk) {
-      await this.fail('post', postId, 'This post can no longer be shared to X.');
+      await this.fail('post', postId, post.userId, 'This post can no longer be shared to X.');
       return;
     }
     const text = this.postText(post, row.mode, postId);
@@ -118,7 +120,7 @@ export class XCrosspostService {
     const row = await this.prisma.xCrosspost.findUnique({ where: { kind_localId: { kind: 'article', localId: articleId } } });
     if (!article || !row || row.remoteId || row.refundedAt || row.userId !== article.authorId) return;
     if (article.deletedAt || article.isDraft || !article.publishedAt || article.visibility !== 'public') {
-      await this.fail('article', articleId, 'This article can no longer be shared to X.');
+      await this.fail('article', articleId, article.authorId, 'This article can no longer be shared to X.');
       return;
     }
     const text = buildShareText(article.title, this.articleUrl(articleId), { max: X_POST_MAX_WEIGHTED, weighted: true });
@@ -204,7 +206,7 @@ export class XCrosspostService {
   ): Promise<void> {
     const conn = await this.connections.getActiveConnection(userId);
     if (!conn) {
-      await this.fail(kind, localId, 'X is not connected.');
+      await this.fail(kind, localId, userId, 'X is not connected.');
       return;
     }
     try {
@@ -223,19 +225,19 @@ export class XCrosspostService {
       } else {
         await this.prisma.article.updateMany({ where: { id: localId }, data: { xUrl, xError: null } });
       }
+      this.announce(kind, localId, userId, { xUrl }, true);
       await this.connections.clearError(userId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof XApiError && err.isRetryable) {
         this.logger.warn(`X ${kind} ${localId} will retry: ${message}`);
-        await this.writeError(kind, localId, `${message} Retrying.`.slice(0, 500));
         throw err;
       }
       const authFailure = err instanceof XApiError && err.isAuthFailure;
       if (authFailure) {
         await this.connections.markError(userId, 'X needs to be connected again.', true);
       }
-      await this.fail(kind, localId, message.slice(0, 500));
+      await this.fail(kind, localId, userId, message.slice(0, 500));
     }
   }
 
@@ -302,13 +304,35 @@ export class XCrosspostService {
     return { bytes, contentType };
   }
 
-  private async fail(kind: PickaxCrosspostKind, localId: string, message: string): Promise<void> {
+  private async fail(kind: PickaxCrosspostKind, localId: string, userId: string, message: string): Promise<void> {
     this.logger.warn(`X ${kind} ${localId} failed: ${message}`);
+    const note = message.slice(0, 500);
     await this.prisma.xCrosspost.updateMany({
       where: { kind, localId, remoteId: null },
-      data: { lastError: message.slice(0, 500), refundedAt: new Date() },
+      data: { lastError: note, refundedAt: new Date() },
     });
-    await this.writeError(kind, localId, message.slice(0, 500));
+    await this.writeError(kind, localId, note);
+    this.announce(kind, localId, userId, { xError: note }, false);
+  }
+
+  /** Public link goes to the post/article room and the author. Failures stay on the author's socket. */
+  private announce(
+    kind: PickaxCrosspostKind,
+    localId: string,
+    userId: string,
+    patch: { xUrl?: string; xError?: string },
+    isPublic: boolean,
+  ): void {
+    const version = new Date().toISOString();
+    if (kind === 'post') {
+      const payload = { postId: localId, version, reason: 'crosspost', patch };
+      if (isPublic) this.realtime.emitPostsLiveUpdated(localId, payload);
+      this.realtime.emitPostsLiveUpdatedToUser(userId, payload);
+      return;
+    }
+    const payload = { articleId: localId, version, reason: 'crosspost', patch };
+    if (isPublic) this.realtime.emitArticlesLiveUpdated(localId, payload);
+    this.realtime.emitArticlesLiveUpdatedToUser(userId, payload);
   }
 
   private async writeError(kind: PickaxCrosspostKind, localId: string, message: string): Promise<void> {

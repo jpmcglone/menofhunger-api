@@ -85,8 +85,21 @@ function harness(opts: { post?: Record<string, unknown>; premium?: boolean; spen
     frontendBaseUrl: () => 'https://menofhunger.com',
     r2: () => ({ publicBaseUrl: null }),
   };
-  const service = new XCrosspostService(prisma as never, appConfig as never, connections as never, api as never, sideEffects as never);
-  return { service, prisma, api, connections, postUpdates, dispatched, row: () => row };
+  const realtime = {
+    emitPostsLiveUpdated: jest.fn(),
+    emitPostsLiveUpdatedToUser: jest.fn(),
+    emitArticlesLiveUpdated: jest.fn(),
+    emitArticlesLiveUpdatedToUser: jest.fn(),
+  };
+  const service = new XCrosspostService(
+    prisma as never,
+    appConfig as never,
+    connections as never,
+    api as never,
+    sideEffects as never,
+    realtime as never,
+  );
+  return { service, prisma, api, connections, postUpdates, dispatched, realtime, row: () => row };
 }
 
 describe('X cross-post requests', () => {
@@ -146,6 +159,11 @@ describe('X cross-post worker', () => {
     await h.service.syncPost('post-1');
     expect(h.api.createPost).toHaveBeenCalledWith('token', expect.objectContaining({ text: 'hello world' }));
     expect(h.postUpdates).toContainEqual({ xUrl: 'https://x.com/hunter/status/99', xError: null });
+    expect(h.realtime.emitPostsLiveUpdated).toHaveBeenCalledWith(
+      'post-1',
+      expect.objectContaining({ reason: 'crosspost', patch: { xUrl: 'https://x.com/hunter/status/99' } }),
+    );
+    expect(h.realtime.emitPostsLiveUpdatedToUser).toHaveBeenCalledWith('user-1', expect.objectContaining({ postId: 'post-1' }));
     expect(h.row()?.remoteId).toBe('99');
   });
 
@@ -156,6 +174,11 @@ describe('X cross-post worker', () => {
     await expect(h.service.syncPost('post-1')).resolves.toBeUndefined();
     expect(h.row()?.refundedAt).toBeInstanceOf(Date);
     expect(h.postUpdates.at(-1)).toEqual({ xError: 'timed out' });
+    expect(h.realtime.emitPostsLiveUpdated).not.toHaveBeenCalled();
+    expect(h.realtime.emitPostsLiveUpdatedToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ patch: { xError: 'timed out' } }),
+    );
   });
 
   it('rethrows a server error so the queue can retry', async () => {
