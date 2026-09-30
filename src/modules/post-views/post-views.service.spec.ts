@@ -350,6 +350,17 @@ describe('PostViewsService.markViewedBatch', () => {
     expect(tx.post.updateMany).not.toHaveBeenCalled();
   });
 
+  it('counts quoted content as an impression without claiming its thread was opened', async () => {
+    const { service, expandRows, detailRows } = makeBatchService();
+    expandRows.push({ id: 'opened', kind: 'board', repostedPostId: null, quotedPostId: 'embedded' });
+    for (const id of ['opened', 'embedded']) detailRows.push({ id, visibility: 'public', userId: 'author', viewerCount: 0, totalViewCount: 0 });
+    const opens = jest.spyOn(service as any, 'recordOpen').mockResolvedValue(undefined);
+    const acks = await service.markViewedBatch('viewer', ['opened'], null, 'post_open');
+    expect(acks.map(ack => ack.id)).toEqual(['opened', 'embedded']);
+    expect(opens).toHaveBeenCalledTimes(1);
+    expect(opens).toHaveBeenCalledWith('viewer', 'opened', null, 'post_open');
+  });
+
   it('expands flat repost and quoted post IDs into one authenticated write', async () => {
     const { service, prisma, expandRows, detailRows, notifications, tx } = makeBatchService();
     expandRows.push(

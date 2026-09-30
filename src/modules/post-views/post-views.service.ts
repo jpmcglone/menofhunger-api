@@ -451,7 +451,8 @@ export class PostViewsService {
     }
     if (uid) {
       const acks = await this.markAuthenticatedViewsBatch(uid, expanded, anonId, source);
-      await Promise.all(acks.map((ack) => this.recordOpen(uid, ack.id, null, source)));
+      // Embedded quotes receive impressions, but only explicitly opened IDs receive opens.
+      await Promise.all(acks.filter((ack) => ids.includes(ack.id)).map((ack) => this.recordOpen(uid, ack.id, null, source)));
       try {
         const readableIds = acks.map((ack) => ack.id);
         const readIds = source === 'feed_scroll'
@@ -468,7 +469,7 @@ export class PostViewsService {
     }
 
     const acks = (await Promise.all(
-      expanded.map((pid) => this.markViewed(null, pid, anonId, source, { skipMarkRead: true })),
+      expanded.map((pid) => this.markViewed(null, pid, anonId, ids.includes(pid) ? source : 'embedded', { skipMarkRead: true })),
     )).filter((ack): ack is PostViewAckDto => ack != null);
     return acks;
   }
