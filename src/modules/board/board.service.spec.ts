@@ -295,6 +295,7 @@ describe("BoardService list scope", () => {
     ]);
     const thread = await service.getThread("p", "thread-1");
     expect(thread.newCommentCount).toBe(4);
+    expect(posts.viewerLastSeenAtByPostId).toHaveBeenCalledWith({ viewerUserId: "p", postIds: ["thread-1"], openedOnly: true });
     const groupWhere = prisma.post.groupBy.mock.calls[0][0].where;
     expect(groupWhere.userId).toEqual({ notIn: ["p"] });
     expect(groupWhere.OR).toEqual([

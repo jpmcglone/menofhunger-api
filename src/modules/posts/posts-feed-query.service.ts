@@ -1,3 +1,4 @@
+import { selectFreshForYou } from './for-you-freshness';
 import { ConversationsService } from "./conversations.service";
 import {
   BadRequestException,
@@ -1961,6 +1962,7 @@ export class PostsFeedQueryService {
               baseWhere,
               ...servedWhere,
               { createdAt: { lte: new Date() } },
+              ...(viewerUserId ? [{ views: { none: { userId: viewerUserId } } }] : []),
             ],
           },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -2719,54 +2721,9 @@ export class PostsFeedQueryService {
       return a.candidate.id < b.candidate.id ? 1 : -1;
     });
 
-    // Per-author diversity is a SOFT constraint: first-pass respects the window so a single
-    // prolific author can't dominate when there's a populated universe; second-pass fills any
-    // leftover slots from the skipped pile in rank order so a sparse universe (e.g.
-    // verifiedOnly with few authors) never returns near-empty pages or churns its single
-    // visible row as the seen-decay shuffles things between requests.
-    const window = Math.max(1, POSTS_RANKING.forYouMaxPerAuthorWindow);
-    const replyWindow = Math.max(1, POSTS_RANKING.forYouMaxReplyWindow);
-    const picked: typeof ranked = [];
-    const pickedIdSet = new Set<string>();
-    const skipped: typeof ranked = [];
-
-    let resurfacedCount = 0;
-    const recentAuthors: string[] = [];
-    const recentRoots: string[] = [];
-    const recentWasReply: boolean[] = [];
-    const pickFrom = (source: typeof ranked, maxPicked: number) => {
-      for (const r of source) {
-        if (picked.length >= maxPicked) break;
-        if (pickedIdSet.has(r.candidate.id)) continue;
-        const resurfaced =
-          seenById.has(r.candidate.id) &&
-          conversationContexts.get(r.candidate.id)?.kind === "newReplies";
-        if (resurfaced && resurfacedCount >= 2) continue;
-        const rootKey = r.candidate.parentId ?? r.candidate.id;
-        const isReply = Boolean(r.candidate.parentId);
-        const hasUnpickedOriginal = source.some(
-          (x) => !x.candidate.parentId && !pickedIdSet.has(x.candidate.id),
-        );
-        if (
-          recentAuthors.includes(r.candidate.userId) ||
-          recentRoots.includes(rootKey) ||
-          (isReply && recentWasReply.includes(true) && hasUnpickedOriginal)
-        ) {
-          skipped.push(r);
-          continue;
-        }
-        picked.push(r);
-        if (resurfaced) resurfacedCount++;
-        pickedIdSet.add(r.candidate.id);
-        recentAuthors.push(r.candidate.userId);
-        recentRoots.push(rootKey);
-        recentWasReply.push(isReply);
-        if (recentAuthors.length >= window) recentAuthors.shift();
-        if (recentRoots.length >= window) recentRoots.shift();
-        if (recentWasReply.length >= replyWindow) recentWasReply.shift();
-      }
-    };
-
+    // Freshness is a priority tier, never just a multiplier: a very popular seen
+    // board must not displace an unseen candidate. Diversity is relaxed within
+    // each tier before advancing to the next one.
     // Depth-aware quota: the feed fans out from user-first toward social discovery as the viewer
     // scrolls deeper. servedIds.length is the number of posts already served in this session.
     const paginationDepth = servedIds.length;
@@ -2816,50 +2773,16 @@ export class PostsFeedQueryService {
           b.candidate.createdAt.getTime() - a.candidate.createdAt.getTime()
         );
       });
-    // First paint keeps the followed-unseen block so people you follow land at the top.
-    // An explicit refresh is "I've read this" — pinning 70% of the page to the same recency
-    // order is why pull-to-refresh used to return the identical old posts. Those rows still
-    // enter through ranked scoring if they are actually new; they just do not get a reserved
-    // block that exploration cannot touch.
-    if (!isRefreshPage) {
-      pickFrom(followedUnseenSorted, followedQuota);
-    }
-    if (isRefreshPage) {
-      const exploration = ranked
-        .filter((r) => !r.candidate.followingUnseen)
-        .sort((a, b) => {
-          const aSeen = seenById.has(a.candidate.id);
-          const bSeen = seenById.has(b.candidate.id);
-          if (aSeen !== bSeen) return aSeen ? 1 : -1;
-          return (
-            seededUnitInterval(jitterSeed, b.candidate.id) -
-            seededUnitInterval(jitterSeed, a.candidate.id)
-          );
-        });
-      const explorationSlots = Math.min(
-        limit,
-        Math.max(
-          Math.ceil(limit * POSTS_RANKING.forYouRefreshExplorationRatio),
-          Math.ceil(limit * saturation),
-        ),
-      );
-      pickFrom(exploration, explorationSlots);
-    }
-    pickFrom(ranked, limit);
-
-    if (picked.length < limit && skipped.length > 0) {
-      for (const r of skipped) {
-        if (picked.length >= limit) break;
-        if (pickedIdSet.has(r.candidate.id)) continue;
-        const resurfaced =
-          seenById.has(r.candidate.id) &&
-          conversationContexts.get(r.candidate.id)?.kind === "newReplies";
-        if (resurfaced && resurfacedCount >= 2) continue;
-        if (resurfaced) resurfacedCount++;
-        picked.push(r);
-        pickedIdSet.add(r.candidate.id);
-      }
-    }
+    // The followed-unseen preference is identical on reload and explicit refresh.
+    const preferred = followedUnseenSorted.slice(0, followedQuota);
+    const preferredIds = new Set(preferred.map((r) => r.candidate.id));
+    const picked = selectFreshForYou([...preferred, ...ranked.filter((r) => !preferredIds.has(r.candidate.id))], {
+      limit,
+      seenById,
+      hasNewReplies: (id) => conversationContexts.get(id)?.kind === "newReplies",
+      authorWindow: POSTS_RANKING.forYouMaxPerAuthorWindow,
+    });
+    const pickedIdSet = new Set(picked.map((row) => row.candidate.id));
 
     const pickedIds = picked.map((p) => p.candidate.id);
     const posts = pickedIds.length

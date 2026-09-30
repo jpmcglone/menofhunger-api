@@ -3145,6 +3145,15 @@ export type PostsLiveUpdatedPayloadDto = {
     repostCount: number;
     /** Updated poll state (vote counts + viewer flags) after a vote is cast. */
     poll: PostPollDto | null;
+    /** Public permalink of a cross-posted copy. Omitted means unchanged. */
+    pickaxUrl: string | null;
+    xUrl: string | null;
+    /**
+     * Author-only failure notes. Delivered on the user room, not the post room.
+     * A successful link clears these on the client.
+     */
+    pickaxError: string | null;
+    xError: string | null;
   }>;
 };
 
@@ -3198,6 +3207,10 @@ export type ArticlesLiveUpdatedPayloadDto = {
     boostCount: number;
     reactions: ArticleReactionSummaryDto[];
     deletedAt: string;
+    pickaxUrl: string | null;
+    xUrl: string | null;
+    pickaxError: string | null;
+    xError: string | null;
   }>;
 };
 

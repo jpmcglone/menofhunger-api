@@ -2002,7 +2002,7 @@ describe('PostsService.listForYouFeed', () => {
     expect(out.posts[0].id).toBe('social');
   });
 
-  it('refresh rotates discovery membership even when scores differ greatly', async () => {
+  it('refresh preserves relevance among unseen discovery candidates', async () => {
     jest.spyOn(Date, 'now').mockReturnValue(1788868800000);
     jest.spyOn(Math, 'random').mockReturnValueOnce(0.123).mockReturnValueOnce(0.789);
     try {
@@ -2010,7 +2010,7 @@ describe('PostsService.listForYouFeed', () => {
       const params = { viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' as const, refresh: true };
       const a = await service.listForYouFeed(params);
       const b = await service.listForYouFeed(params);
-      expect(new Set(a.posts.map((p: any) => p.id))).not.toEqual(new Set(b.posts.map((p: any) => p.id)));
+      expect(new Set(a.posts.map((p: any) => p.id))).toEqual(new Set(b.posts.map((p: any) => p.id)));
     } finally { jest.restoreAllMocks(); }
   });
 
@@ -2885,7 +2885,7 @@ describe('PostsService.listForYouFeed', () => {
     expect(ids.indexOf('p-friend-boosted')).toBeLessThan(ids.indexOf('p-viral-stranger'));
   });
 
-  it('does not demote posts from authors in the social graph (followed/follower) even when seen', async () => {
+  it('prioritizes unseen discovery ahead of seen followed posts', async () => {
     // A seen post from a followed author should keep its trendingScore base (not get 40% demotion)
     // because the author IS in the viewer's social graph. Only authors with no relationship at all
     // get the pure-discovery penalty.
@@ -2903,7 +2903,7 @@ describe('PostsService.listForYouFeed', () => {
     // Even with the seen penalty, followed-author's post beats the demoted stranger.
     const out = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 10, cursor: null, visibility: 'all' });
     const ids = out.posts.map((p: any) => p.id);
-    expect(ids.indexOf('p-seen-follow')).toBeLessThan(ids.indexOf('p-stranger'));
+    expect(ids.indexOf('p-stranger')).toBeLessThan(ids.indexOf('p-seen-follow'));
   });
 
   it('null viewerUserId: skips postView query, skips follow queries, returns discovery posts', async () => {
@@ -3094,7 +3094,7 @@ describe('PostsService.listForYouFeed', () => {
     expect(sawDifferentOrder).toBe(true);
   });
 
-  it('authed: refresh does not reserve the page-1 followed-unseen block', async () => {
+  it('authed: reload and refresh share the followed-unseen relevance preference', async () => {
     const followedCandidates = Array.from({ length: 10 }, (_, i) =>
       cand(`fu${i}`, `u-followed-${i}`, 2, 1),
     );
@@ -3113,7 +3113,7 @@ describe('PostsService.listForYouFeed', () => {
 
     const refreshed = await service.listForYouFeed({ ...params, refresh: true });
     const refreshedStrangers = refreshed.posts.filter((p: any) => !youFollowAuthorIds.includes(p.userId)).length;
-    expect(refreshedStrangers).toBeGreaterThan(3);
+    expect(refreshedStrangers).toBe(firstPaint.posts.filter((p: any) => !youFollowAuthorIds.includes(p.userId)).length);
   });
 
   it('authed: refresh demotes posts last seen earlier today, not only in the last few hours', async () => {
@@ -3132,7 +3132,7 @@ describe('PostsService.listForYouFeed', () => {
     const params = { viewerUserId: 'viewer', limit: 5, cursor: null, visibility: 'all' as const };
 
     const stale = await service.listForYouFeed(params);
-    expect(stale.posts.some((p: any) => p.id.startsWith('seen'))).toBe(true);
+    expect(stale.posts.every((p: any) => p.id.startsWith('unseen'))).toBe(true);
 
     const refreshed = await service.listForYouFeed({ ...params, refresh: true });
     expect(refreshed.posts.every((p: any) => p.id.startsWith('unseen'))).toBe(true);
@@ -3152,35 +3152,21 @@ describe('PostsService.listForYouFeed', () => {
     // Their trending lead outweighs the ordinary seen decay, so a plain reload keeps showing
     // them however many times the viewer asks.
     const stale = await service.listForYouFeed(params);
-    expect(stale.posts.some((p: any) => p.id.startsWith('seen'))).toBe(true);
+    expect(stale.posts.every((p: any) => p.id.startsWith('unseen'))).toBe(true);
 
     // An explicit refresh hands the whole page to content the viewer has not read.
     const refreshed = await service.listForYouFeed({ ...params, refresh: true });
     expect(refreshed.posts.every((p: any) => p.id.startsWith('unseen'))).toBe(true);
   });
 
-  it('authed: a fully seen page reshuffles even when the wider candidate pool is unseen', async () => {
-    // Saturation must describe the page the viewer gets, not the scan behind it. The five
-    // rows that fit are all seen; the 40 unseen posts below them score too low to surface,
-    // so pool-wide saturation (5/45) would leave the feed frozen.
+  it('authed: unseen candidates surface even when seen posts dominate relevance scores', async () => {
     const topSeen = Array.from({ length: 5 }, (_, i) => cand(`seen${i}`, `u${i}`, 500 - i, 1));
     const buried = Array.from({ length: 40 }, (_, i) => cand(`buried${i}`, `v${i}`, 1, 200));
-    const { service } = setupForYou({
-      candidates: [...topSeen, ...buried],
-      seenAtByPostId: Object.fromEntries(topSeen.map((c) => [c.id, new Date()])),
-    });
-    const params = { viewerUserId: 'viewer', limit: 5, cursor: null, visibility: 'all' as const };
-
-    let sawDifferentOrder = false;
-    for (let attempt = 0; attempt < 6; attempt++) {
-      const a = await service.listForYouFeed(params);
-      const b = await service.listForYouFeed(params);
-      if (a.posts.map((p: any) => p.id).join(',') !== b.posts.map((p: any) => p.id).join(',')) {
-        sawDifferentOrder = true;
-        break;
-      }
+    const { service } = setupForYou({ candidates: [...topSeen, ...buried], seenAtByPostId: Object.fromEntries(topSeen.map(c => [c.id, new Date()])) });
+    for (const refresh of [false, true]) {
+      const result = await service.listForYouFeed({ viewerUserId: 'viewer', limit: 5, cursor: null, visibility: 'all', refresh });
+      expect(result.posts.every((p: any) => p.id.startsWith('buried'))).toBe(true);
     }
-    expect(sawDifferentOrder).toBe(true);
   });
 
   it('authed: refresh scans deeper than first paint so new candidates can enter the pool', async () => {

@@ -103,7 +103,14 @@ export class PostsViewerEnrichmentService {
   }
 
   /** Viewer's lastSeenAt per post (only posts they have actually viewed). */
-  async viewerLastSeenAtByPostId(params: { viewerUserId: string; postIds: string[] }) {
+  async viewerLastSeenAtByPostId(params: { viewerUserId: string; postIds: string[]; openedOnly?: boolean }) {
+    if (params.openedOnly) {
+      const rows = await this.prisma.postView.findMany({
+        where: { userId: params.viewerUserId, postId: { in: params.postIds }, lastOpenedAt: { not: null } },
+        select: { postId: true, lastOpenedAt: true },
+      });
+      return new Map(rows.filter((r) => r.lastOpenedAt).map((r) => [r.postId, r.lastOpenedAt!]));
+    }
     const map = await this.loadViewerViewedLastSeen(params);
     const out = new Map<string, Date>();
     for (const id of params.postIds ?? []) {

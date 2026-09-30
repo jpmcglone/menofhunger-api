@@ -115,9 +115,13 @@ export class PostViewsService {
       }
 
       if (uid) {
-        return await this.markAuthenticatedView(uid, pid, anonId, source, opts);
+        const ack = await this.markAuthenticatedView(uid, pid, anonId, source, opts);
+        if (ack) await this.recordOpen(uid, pid, null, source);
+        return ack;
       }
-      return await this.markAnonView(pid, anonId as string);
+      const ack = await this.markAnonView(pid, anonId as string);
+      if (ack) await this.recordOpen(null, pid, anonId, source);
+      return ack;
     } catch (err) {
       this.logger.warn(`markViewed failed for postId=${pid} userId=${uid}: ${String(err)}`);
       return null;
@@ -146,9 +150,14 @@ export class PostViewsService {
         }],
         skipDuplicates: true,
       });
+      const anonOpen = anonId ? await tx.postAnonView.findUnique({
+        where: { postId_anonId: { postId: pid, anonId } }, select: { openCount: true, lastOpenedAt: true },
+      }) : null;
       const consumedAnonCount = anonId
         ? (await tx.postAnonView.deleteMany({ where: { postId: pid, anonId } })).count
         : 0;
+      if (consumedAnonCount && anonOpen) await this.mergeOpenHistory(tx, uid, pid, anonOpen);
+
 
       let viewerIncrementLocal = 0;
       let weightedIncrementLocal = 0;
@@ -231,7 +240,7 @@ export class PostViewsService {
       });
     }
     if (result.lastSeenRefreshed) {
-      void this.cacheInvalidation.bumpForYouUser(uid).catch(() => undefined);
+      await this.cacheInvalidation.bumpForYouUser(uid).catch(() => undefined);
     }
 
     const uniqueCounted = result.viewerIncrementLocal !== 0;
@@ -246,7 +255,9 @@ export class PostViewsService {
         actorUserId: uid,
       });
     }
-    if (!opts?.skipMarkRead) {
+    if (!opts?.skipMarkRead && (source !== 'feed_scroll' || await this.prisma.post.findFirst({
+      where: { id: pid, kind: { not: 'board' } }, select: { id: true },
+    }))) {
       await this.notifications.markReadBySubject(uid, { postId: pid });
     }
     return {
@@ -351,6 +362,40 @@ export class PostViewsService {
     };
   }
 
+  private async mergeOpenHistory(
+    tx: import('@prisma/client').Prisma.TransactionClient,
+    uid: string, pid: string, history: { openCount: number; lastOpenedAt: Date | null },
+  ) {
+    if (history.openCount > 0) await tx.postView.updateMany({
+      where: { userId: uid, postId: pid }, data: { openCount: { increment: history.openCount } },
+    });
+    if (history.lastOpenedAt) await tx.postView.updateMany({
+      where: { userId: uid, postId: pid, OR: [{ lastOpenedAt: null }, { lastOpenedAt: { lt: history.lastOpenedAt } }] },
+      data: { lastOpenedAt: history.lastOpenedAt },
+    });
+  }
+
+  /** Detail opens have their own 30s gate: a preceding feed impression cannot swallow one. */
+  private async recordOpen(uid: string | null, pid: string, anonId: string | null, source?: string | null) {
+    // permalink_engaged is retained for shipped Board clients; new clients send post_open.
+    if (source !== 'post_open' && source !== 'permalink_engaged') return;
+    if (!uid && anonId) {
+      const linked = await this.prisma.viewerIdentity.findUnique({ where: { anonId }, select: { userId: true } });
+      if (linked?.userId && await this.prisma.postView.findUnique({ where: { postId_userId: { postId: pid, userId: linked.userId } }, select: { postId: true } })) uid = linked.userId;
+    }
+    const now = new Date();
+    const where = {
+      postId: pid,
+      post: { kind: 'board' as const },
+      OR: [{ lastOpenedAt: null }, { lastOpenedAt: { lt: cutoffForTotalViewRecount(now) } }],
+    };
+    const data = { lastOpenedAt: now, openCount: { increment: 1 } };
+    const updated = uid
+      ? await this.prisma.postView.updateMany({ where: { ...where, userId: uid }, data })
+      : anonId ? await this.prisma.postAnonView.updateMany({ where: { ...where, anonId }, data }) : null;
+    if (updated?.count) this.posthog.capture(uid ?? anonId!, 'board_thread_opened', { post_id: pid, viewer_type: uid ? 'user' : 'guest' });
+  }
+
   private async emitViewCounts(
     postId: string,
     opts: {
@@ -406,8 +451,16 @@ export class PostViewsService {
     }
     if (uid) {
       const acks = await this.markAuthenticatedViewsBatch(uid, expanded, anonId, source);
+      await Promise.all(acks.map((ack) => this.recordOpen(uid, ack.id, null, source)));
       try {
-        await this.notifications.markReadBySubjects(uid, expanded);
+        const readableIds = acks.map((ack) => ack.id);
+        const readIds = source === 'feed_scroll'
+          ? (await this.prisma.post.findMany({
+              where: { id: { in: readableIds }, kind: { not: 'board' } },
+              select: { id: true },
+            })).map((post) => post.id)
+          : readableIds;
+        if (readIds.length) await this.notifications.markReadBySubjects(uid, readIds);
       } catch (err) {
         this.logger.warn(`markViewedBatch mark-read failed userId=${uid}: ${String(err)}`);
       }
@@ -470,9 +523,9 @@ export class PostViewsService {
         anonId
           ? this.prisma.postAnonView.findMany({
               where: { anonId, postId: { in: accessibleIds } },
-              select: { postId: true },
+              select: { postId: true, openCount: true, lastOpenedAt: true },
             })
-          : Promise.resolve([] as Array<{ postId: string }>),
+          : Promise.resolve([] as Array<{ postId: string; openCount: number; lastOpenedAt: Date | null }>),
       ]);
 
       const existingByPostId = new Map(existingViews.map((row) => [row.postId, row]));
@@ -485,7 +538,7 @@ export class PostViewsService {
         .filter((row) => row.lastImpressionAt < impressionCutoff)
         .map((row) => row.postId);
 
-      const createdRows = await this.prisma.$transaction(async (tx) => {
+      const counted = await this.prisma.$transaction(async (tx) => {
         const created =
           toCreate.length > 0
             ? await tx.postView.createManyAndReturn({
@@ -513,26 +566,24 @@ export class PostViewsService {
             data: { lastSeenAt: now, seenCount: { increment: 1 }, lastSource },
           });
         }
-        if (toRefreshImpression.length > 0) {
-          await tx.postView.updateMany({
-            where: {
-              userId: uid,
-              postId: { in: toRefreshImpression },
-              lastImpressionAt: { lt: impressionCutoff },
-            },
-            data: { lastImpressionAt: now, impressionCount: { increment: 1 } },
-          });
-        }
-        if (anonId && anonPostIds.size > 0) {
-          await tx.postAnonView.deleteMany({
-            where: { anonId, postId: { in: [...anonPostIds] } },
-          });
+        const impressed = toRefreshImpression.length > 0
+          ? await tx.postView.updateManyAndReturn({
+              where: { userId: uid, postId: { in: toRefreshImpression }, lastImpressionAt: { lt: impressionCutoff } },
+              data: { lastImpressionAt: now, impressionCount: { increment: 1 } },
+              select: { postId: true },
+            })
+          : [];
+        if (anonId) {
+          for (const anon of anonRows) {
+            const consumed = await tx.postAnonView.deleteMany({ where: { postId: anon.postId, anonId } });
+            if (consumed.count) await this.mergeOpenHistory(tx, uid, anon.postId, anon);
+          }
         }
 
         const createdIds = new Set(created.map((row) => row.postId));
         const firstNoAnon = [...createdIds].filter((id) => !anonPostIds.has(id));
         const firstConsumedAnon = [...createdIds].filter((id) => anonPostIds.has(id));
-        const impressionOnly = toRefreshImpression.filter((id) => !createdIds.has(id));
+        const impressionOnly = impressed.map((row) => row.postId).filter((id) => !createdIds.has(id));
 
         if (firstNoAnon.length > 0) {
           await tx.post.updateMany({
@@ -560,19 +611,19 @@ export class PostViewsService {
           });
         }
 
-        return created;
+        return { created, impressionOnly };
       });
 
-      const createdIds = new Set(createdRows.map((row) => row.postId));
+      const createdIds = new Set(counted.created.map((row) => row.postId));
       if (createdIds.size > 0 || toRefreshLastSeen.length > 0) {
-        void this.cacheInvalidation.bumpForYouUser(uid).catch(() => undefined);
+        await this.cacheInvalidation.bumpForYouUser(uid).catch(() => undefined);
       }
 
       const incrementByPostId = new Map<string, { viewer: number; total: number }>();
       for (const id of createdIds) {
         incrementByPostId.set(id, { viewer: anonPostIds.has(id) ? 0 : 1, total: 1 });
       }
-      for (const id of toRefreshImpression) {
+      for (const id of counted.impressionOnly) {
         if (!createdIds.has(id)) incrementByPostId.set(id, { viewer: 0, total: 1 });
       }
 

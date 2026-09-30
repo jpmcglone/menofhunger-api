@@ -2080,6 +2080,9 @@ model PostView {
   createdAt         DateTime @default(now())
   lastSeenAt        DateTime @default(now())
   seenCount         Int      @default(1)
+  /// Explicit detail opens, independent of feed impressions.
+  openCount         Int      @default(0)
+  lastOpenedAt      DateTime?
   impressionCount   Int      @default(1)
   lastImpressionAt  DateTime @default(now())
   lastSource        String?
@@ -2098,6 +2101,9 @@ model PostAnonView {
   anonId           String
   createdAt        DateTime @default(now())
   lastViewedAt     DateTime @default(now())
+  /// Explicit detail opens, independent of feed impressions.
+  openCount         Int      @default(0)
+  lastOpenedAt      DateTime?
   impressionCount  Int      @default(1)
   lastImpressionAt DateTime @default(now())
 

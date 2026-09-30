@@ -484,6 +484,7 @@ export class BoardService implements OnModuleInit {
         : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
       viewer
         ? this.posts.viewerLastSeenAtByPostId({
+            openedOnly: true,
             viewerUserId: viewer.id,
             postIds: ids,
           })

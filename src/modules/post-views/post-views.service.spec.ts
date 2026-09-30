@@ -15,6 +15,7 @@ describe('PostViewsService.markViewed', () => {
         }),
       },
       postAnonView: {
+        findUnique: jest.fn(async () => null),
         deleteMany: jest.fn(async () => ({ count: 0 })),
       },
       post: {
@@ -41,6 +42,7 @@ describe('PostViewsService.markViewed', () => {
         findUnique: jest.fn(async () => null),
       },
       postView: {
+        updateMany: jest.fn(async () => ({ count: 1 })),
         findUnique: jest.fn(async () => null),
       },
       postAnonView: {
@@ -75,6 +77,24 @@ describe('PostViewsService.markViewed', () => {
     );
     return { service, prisma, tx, redis, cacheInvalidation, presenceRealtime, posthog, notifications };
   }
+
+  it('records a Board open even immediately after an impression, with an independent 30s gate', async () => {
+    const { service, prisma, posthog } = makeService();
+    await service.markViewed('viewer', 'p1', null, 'post_open');
+    expect(prisma.postView.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ postId: 'p1', userId: 'viewer', post: { kind: 'board' }, OR: expect.any(Array) }),
+      data: { lastOpenedAt: expect.any(Date), openCount: { increment: 1 } },
+    });
+    expect(posthog.capture).toHaveBeenCalledWith('viewer', 'board_thread_opened', expect.any(Object));
+  });
+
+  it('feed impressions never update Board open history or mark its notifications read', async () => {
+    const { service, prisma, notifications } = makeService();
+    prisma.post.findFirst.mockImplementation(async (args?: any) => args.where.kind ? null as any : { id: 'p1', visibility: 'public', userId: 'author' });
+    await service.markViewed('viewer', 'p1', null, 'feed_scroll');
+    expect(prisma.postView.updateMany).not.toHaveBeenCalled();
+    expect(notifications.markReadBySubject).not.toHaveBeenCalled();
+  });
 
   it('updates repeat authenticated views without incrementing unique viewer count', async () => {
     const { service, tx, redis, cacheInvalidation, presenceRealtime, posthog, notifications } = makeService({
@@ -255,6 +275,7 @@ describe('PostViewsService.markViewedBatch', () => {
           return ids.map((postId) => ({ postId }));
         }),
         updateMany: jest.fn(async () => ({ count: 0 })),
+        updateManyAndReturn: jest.fn(async (args: any) => args.where.postId.in.map((postId: string) => ({ postId }))),
       },
       postAnonView: { deleteMany: jest.fn(async () => ({ count: 0 })) },
       post: { updateMany: jest.fn(async () => ({ count: 1 })) },
@@ -319,6 +340,15 @@ describe('PostViewsService.markViewedBatch', () => {
       presenceRealtime,
     };
   }
+
+  it('does not increment totals when another overlapping batch already claimed the impression', async () => {
+    const { service, detailRows, tx } = makeBatchService({ existingViews: [{ postId: 'plain', lastSeenAt: new Date(0), lastImpressionAt: new Date(0) }] });
+    detailRows.push({ id: 'plain', userId: 'author', visibility: 'public', viewerCount: 1, totalViewCount: 1 });
+    tx.postView.updateManyAndReturn.mockResolvedValue([]);
+    const acks = await service.markViewedBatch('viewer', ['plain'], null, 'feed_scroll');
+    expect(acks[0]?.totalCounted).toBe(false);
+    expect(tx.post.updateMany).not.toHaveBeenCalled();
+  });
 
   it('expands flat repost and quoted post IDs into one authenticated write', async () => {
     const { service, prisma, expandRows, detailRows, notifications, tx } = makeBatchService();
