@@ -67,6 +67,42 @@ export class PickaxConnectionService {
     return this.toStatus(conn);
   }
 
+  /** Reauthenticate an already verified connection without sending its secrets to the client. */
+  async reconnect(userId: string, operatorUserId = userId): Promise<PickaxConnectionStatus> {
+    const key = this.requireKey();
+    const conn = await this.prisma.pickaxConnection.findUnique({ where: { userId } });
+    if (!conn) throw new BadRequestException('Connect Pickax before reconnecting.');
+    if (conn.authKind !== 'credentials') throw new BadRequestException('Authorize your Pickax account again.');
+    let tokens: PickaxTokenPair;
+    try {
+      tokens = await this.api.exchangeCredentials(conn.clientId, openSecret(conn.clientSecretEnc, key));
+    } catch (err) {
+      if (err instanceof PickaxApiError && (err.isAuthFailure || err.status === 400 || err.status === 422)) {
+        throw new BadRequestException('Pickax rejected the saved key. Disconnect, then connect with a new key.');
+      }
+      throw new ServiceUnavailableException('Could not reach Pickax. Try again in a moment.');
+    }
+    const identity = readTokenIdentity(tokens.accessToken);
+    if ((identity.userId && conn.pickaxUserId && identity.userId !== conn.pickaxUserId)
+      || (identity.handle && identity.handle.toLowerCase() !== conn.username.toLowerCase())) {
+      throw new ConflictException('The saved key no longer matches your connected Pickax account. Disconnect before connecting another account.');
+    }
+    // Ownership was verified when these credentials were saved. Do not require the
+    // temporary bio code again, or recreate a connection disconnected during this call.
+    const updated = await this.prisma.pickaxConnection.updateMany({
+      where: { userId, generation: conn.generation, clientSecretEnc: conn.clientSecretEnc },
+      data: {
+        accessTokenEnc: sealSecret(tokens.accessToken, key),
+        refreshTokenEnc: tokens.refreshToken ? sealSecret(tokens.refreshToken, key) : null,
+        accessTokenExpiresAt: new Date(Date.now() + tokens.expiresInSeconds * 1000),
+        authorizedByUserId: operatorUserId, status: 'active', lastError: null,
+      },
+    });
+    if (!updated.count) throw new ConflictException('Your Pickax connection changed. Refresh and try again.');
+    await this.afterProfileChange(userId);
+    return this.getStatus(userId);
+  }
+
   async connect(
     userId: string,
     input: { clientId: string; clientSecret: string; username?: string | null },

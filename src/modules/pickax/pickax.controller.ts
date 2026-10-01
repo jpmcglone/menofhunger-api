@@ -37,6 +37,16 @@ export class PickaxController {
     };
   }
 
+  @Post('reconnect')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 8, ttl: 60_000 } })
+  async reconnect(@CurrentUserId() userId: string, @Req() req: AuthedRequest) {
+    if (req.user?.impersonatedByUserId) throw new ForbiddenException('End impersonation before reconnecting an account.');
+    const status = await this.idempotency.run(userId, req.path, req.get('Idempotency-Key'), {},
+      () => this.connections.reconnect(userId, req.user?.operatedByUserId ?? userId));
+    return { data: { ...status, needsUsername: false, verificationCode: null } };
+  }
+
   @Post('authorize')
   async authorizeOAuth(@CurrentUserId() userId: string, @Req() req: AuthedRequest, @Body() body: unknown) {
     if (req.user?.impersonatedByUserId) throw new ForbiddenException();
